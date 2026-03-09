@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "bash -c 'if [ -f package.json ] && (grep -q react-native package.json 2>/dev/null || [ -f app.json ]); then echo \"React Native project detected. Use /rn-dev-agent:test-feature to test features, /rn-dev-agent:debug-screen to debug, or /rn-dev-agent:check-env to verify setup.\"; fi'",
+      "description": "Detect React Native project and hint available commands"
+    }
+  ]
+}

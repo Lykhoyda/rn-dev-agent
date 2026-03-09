@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rn-dev-agent-cdp": {
+      "command": "node",
+      "args": ["scripts/cdp-bridge/dist/index.js"],
+      "env": {}
+    }
+  }
+}
