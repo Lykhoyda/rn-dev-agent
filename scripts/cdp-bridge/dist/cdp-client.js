@@ -2,7 +2,8 @@ import WebSocket from 'ws';
 import { RingBuffer } from './ring-buffer.js';
 import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from './injected-helpers.js';
 const CDP_TIMEOUT_MS = 5000;
-const REACT_READY_TIMEOUT_MS = 8000;
+const REACT_READY_TIMEOUT_MS = 30000;
+const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
 const RECONNECT_ATTEMPTS = 10;
 const RECONNECT_RETRY_MS = 1000;
@@ -40,7 +41,7 @@ export class CDPClient {
     get networkBuffer() { return this._networkBuffer; }
     get connectionGeneration() { return this._connectionGeneration; }
     async autoConnect(portHint) {
-        if (this._state === 'connecting') {
+        if (this._state === 'connecting' || this.reconnecting) {
             throw new Error('Already connecting to Metro...');
         }
         if (this.disposed) {
@@ -75,10 +76,22 @@ export class CDPClient {
                 '. Is the dev server running? Try: npx expo start or npx react-native start');
         }
         this._port = metroPort;
-        const targetsResp = await fetch(`http://127.0.0.1:${metroPort}/json/list`);
-        const targets = (await targetsResp.json());
+        const listCtrl = new AbortController();
+        const listTimer = setTimeout(() => listCtrl.abort(), DISCOVERY_TIMEOUT_MS * 2);
+        let targets;
+        try {
+            const targetsResp = await fetch(`http://127.0.0.1:${metroPort}/json/list`, { signal: listCtrl.signal });
+            targets = (await targetsResp.json());
+        }
+        catch (err) {
+            this._state = 'disconnected';
+            throw new Error(`Failed to list CDP targets on port ${metroPort}: ${err instanceof Error ? err.message : err}`);
+        }
+        finally {
+            clearTimeout(listTimer);
+        }
         const validTargets = targets
-            .filter(t => t.vm === 'Hermes' && !t.title?.includes('Experimental'))
+            .filter(t => t.vm === 'Hermes' && !!t.webSocketDebuggerUrl && !t.title?.includes('Experimental'))
             .map(t => ({
             ...t,
             webSocketDebuggerUrl: t.webSocketDebuggerUrl
@@ -199,7 +212,7 @@ export class CDPClient {
                     pending.reject(new Error(msg.error.message));
                 }
                 else {
-                    pending.resolve(msg);
+                    pending.resolve(msg.result);
                 }
             }
             else if (msg.method) {
@@ -211,8 +224,8 @@ export class CDPClient {
                 }
             }
         }
-        catch {
-            // Malformed message, ignore
+        catch (err) {
+            console.error('CDP: malformed message:', err instanceof Error ? err.message : err);
         }
     }
     parseNetworkHookMessage(params) {
@@ -284,7 +297,7 @@ export class CDPClient {
             const p = params;
             this._consoleBuffer.push({
                 level: p.type,
-                text: p.args?.map(a => a.value ?? a.description ?? '').join(' ') ?? '',
+                text: p.args?.map(a => a.value !== undefined ? String(a.value) : (a.description ?? '')).join(' ') ?? '',
                 timestamp: new Date().toISOString(),
             });
         });
@@ -302,6 +315,14 @@ export class CDPClient {
             const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
             if (entry) {
                 entry.status = p.response?.status;
+                entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
+            }
+        });
+        this.eventHandlers.set('Network.loadingFailed', (params) => {
+            const p = params;
+            const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
+            if (entry) {
+                entry.status = 0;
                 entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
             }
         });
@@ -328,12 +349,14 @@ export class CDPClient {
             catch {
                 // Not ready yet
             }
-            await this.sleep(500);
+            await this.sleep(REACT_READY_POLL_MS);
         }
+        console.error(`CDP: React not ready after ${timeout}ms — helpers will be injected anyway`);
     }
     handleClose(code) {
         this._state = 'disconnected';
         this._helpersInjected = false;
+        this._connectedTarget = null;
         if (this.disposed || this.reconnecting)
             return;
         if (code === 1006) {

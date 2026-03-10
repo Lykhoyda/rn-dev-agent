@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **feature verification pipeline**, not a generic automation tool.
 
-**Status:** Pre-implementation (architecture and research complete, no code written yet).
+**Status:** Implemented (Phases 1-7 complete, reviewed by Gemini + Codex).
 
 ## Architecture
 
@@ -34,13 +34,13 @@ rn-dev-agent/
 │   └── rn-debugger.md                # Diagnostic flow
 ├── commands/                         # User-facing slash commands
 │   ├── test-feature.md
+│   ├── build-and-test.md
 │   ├── debug-screen.md
 │   └── check-env.md
 ├── hooks/hooks.json                  # SessionStart: detect RN project
-├── .mcp.json                         # CDP bridge MCP server config
 └── scripts/
     ├── cdp-bridge/                   # MCP server (~400 lines TypeScript)
-    │   ├── src/index.ts              # Entry + 11 tool definitions
+    │   ├── src/index.ts              # Entry + 10 tool definitions
     │   ├── src/cdp-client.ts         # WebSocket lifecycle, auto-discovery, reconnect
     │   ├── src/injected-helpers.ts   # globalThis.__RN_AGENT (fiber walker, nav, store, errors)
     │   └── src/ring-buffer.ts        # Buffered events (console/network/error)
@@ -49,7 +49,7 @@ rn-dev-agent/
 
 ### MCP Server (cdp-bridge)
 
-11 tools exposed via MCP, all communicating with the React Native app through Chrome DevTools Protocol over WebSocket to Metro/Hermes:
+10 tools exposed via MCP, all communicating with the React Native app through Chrome DevTools Protocol over WebSocket to Metro/Hermes:
 
 - `cdp_status` — health check (Metro, CDP, app info, errors, RedBox)
 - `cdp_component_tree` — React fiber tree (filtered, depth-limited, RedBox-aware)

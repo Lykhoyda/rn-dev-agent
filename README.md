@@ -32,39 +32,30 @@ You need at least one platform (iOS or Android) set up. Both are not required.
 
 ## Installation
 
-### Step 1: Clone the plugin
+### Option A: From Plugin Tab (Recommended)
 
-```bash
-git clone https://github.com/anthropics/claude-react-native-dev-plugin.git
-cd claude-react-native-dev-plugin
+```
+/plugin marketplace add Lykhoyda/react-native-dev-claude-plugin
+/plugin install rn-dev-agent
 ```
 
-### Step 2: Build the CDP bridge MCP server
+Then navigate to your React Native project and start Claude Code — the plugin activates automatically.
+
+### Option B: From Source
 
 ```bash
-cd scripts/cdp-bridge
-npm install
-npm run build
-cd ../..
+git clone https://github.com/Lykhoyda/react-native-dev-claude-plugin.git
+cd react-native-dev-claude-plugin
+
+# Install MCP server dependencies (dist/ is pre-built, but rebuild after modifying source)
+cd scripts/cdp-bridge && npm install && npm run build && cd ../..
 ```
 
-This compiles the TypeScript MCP server to `scripts/cdp-bridge/dist/`. The `prepare` script also runs `tsc` automatically on `npm install`.
-
-### Step 3: Verify the build
-
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"test","version":"1.0"},"protocolVersion":"2024-11-05"}}' | node scripts/cdp-bridge/dist/index.js
-```
-
-You should see a JSON response with `"serverInfo":{"name":"rn-dev-agent-cdp","version":"0.1.0"}`.
-
-### Step 4: Launch Claude Code with the plugin
-
-Navigate to your React Native project and start Claude Code with the plugin directory:
+Launch Claude Code with the plugin:
 
 ```bash
 cd /path/to/your-react-native-app
-claude --plugin-dir /path/to/claude-react-native-dev-plugin
+claude --plugin-dir /path/to/react-native-dev-claude-plugin
 ```
 
 On startup, if a React Native project is detected (via `package.json` + `metro.config.js`/`app.json`/`app.config.js`/`app.config.ts`), you'll see a message listing available commands.
@@ -137,7 +128,7 @@ The plugin uses `testID` to filter the component tree efficiently, avoiding full
 4. **Start Claude Code with the plugin:**
    ```bash
    cd /path/to/your-rn-app
-   claude --plugin-dir /path/to/claude-react-native-dev-plugin
+   claude --plugin-dir /path/to/react-native-dev-claude-plugin
    ```
 
 5. **Verify the environment:**
@@ -150,6 +141,7 @@ The plugin uses `testID` to filter the component tree efficiently, avoiding full
 | Command | Description |
 |---------|-------------|
 | `/rn-dev-agent:test-feature <description>` | Test a feature end-to-end on the simulator/emulator |
+| `/rn-dev-agent:build-and-test <description>` | Build/install app, then test (supports `--eas [profile]`) |
 | `/rn-dev-agent:debug-screen` | Diagnose and fix the current screen |
 | `/rn-dev-agent:check-env` | Verify environment is ready (Metro, CDP, app status) |
 
@@ -269,8 +261,7 @@ Three layers working together:
 
 ```
 rn-dev-agent/
-├── .claude-plugin/plugin.json          # Plugin manifest
-├── .mcp.json                           # MCP server configuration
+├── .claude-plugin/plugin.json          # Plugin manifest (MCP servers, skills, agents, commands)
 ├── skills/
 │   ├── rn-device-control/SKILL.md      # simctl, adb, screenshots, UI hierarchy
 │   ├── rn-testing/SKILL.md             # Maestro patterns, timing, testID usage
@@ -280,6 +271,7 @@ rn-dev-agent/
 │   └── rn-debugger.md                  # Diagnostic evidence-gathering flow
 ├── commands/
 │   ├── test-feature.md                 # /rn-dev-agent:test-feature
+│   ├── build-and-test.md               # /rn-dev-agent:build-and-test
 │   ├── debug-screen.md                 # /rn-dev-agent:debug-screen
 │   └── check-env.md                    # /rn-dev-agent:check-env
 ├── hooks/hooks.json                    # SessionStart: auto-detect RN projects
@@ -294,7 +286,12 @@ rn-dev-agent/
 │   │   │   └── tools/                  # Individual tool handlers
 │   │   ├── package.json
 │   │   └── tsconfig.json
+│   ├── eas_resolve_artifact.sh          # EAS build artifact resolver
+│   ├── expo_ensure_running.sh          # App install + Metro start
 │   └── snapshot_state.sh               # Screenshot + UI hierarchy capture
+├── hooks/
+│   ├── hooks.json                      # SessionStart hook config
+│   └── detect-rn-project.sh            # Auto-detect RN projects
 └── docs/
     ├── ROADMAP.md                      # Implementation phases
     ├── DECISIONS.md                    # Architectural decision records

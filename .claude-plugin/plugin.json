@@ -2,6 +2,23 @@
   "name": "rn-dev-agent",
   "version": "0.1.0",
   "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
+  "author": {
+    "name": "Anton Lykhoyda",
+    "url": "https://github.com/Lykhoyda"
+  },
+  "homepage": "https://github.com/Lykhoyda/react-native-dev-claude-plugin",
+  "repository": "https://github.com/Lykhoyda/react-native-dev-claude-plugin",
+  "license": "MIT",
+  "keywords": [
+    "react-native",
+    "expo",
+    "testing",
+    "debugging",
+    "simulator",
+    "emulator",
+    "cdp",
+    "maestro"
+  ],
   "skills": [
     "skills/rn-device-control",
     "skills/rn-testing",

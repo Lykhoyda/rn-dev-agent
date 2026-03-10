@@ -1,4 +1,16 @@
-import { textResult, errorResult } from '../types.js';
+import { textResult, errorResult } from '../utils.js';
+const STATUS_PROBE_EXPRESSION = `
+(function() {
+  var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false };
+  var agent = globalThis.__RN_AGENT;
+  if (!agent) return JSON.stringify(result);
+  try { result.appInfo = JSON.parse(agent.getAppInfo()); } catch(e) {}
+  try { result.errorCount = JSON.parse(agent.getErrors()).length; } catch(e) {}
+  try { result.fiberTree = agent.isReady(); } catch(e) {}
+  try { result.hasRedBox = JSON.parse(agent.getTree(1)).warning === 'APP_HAS_REDBOX'; } catch(e) {}
+  return JSON.stringify(result);
+})()
+`;
 export function createStatusHandler(getClient, setClient, createClient) {
     return async (args) => {
         try {
@@ -16,23 +28,19 @@ export function createStatusHandler(getClient, setClient, createClient) {
             let fiberTree = false;
             let hasRedBox = false;
             if (client.helpersInjected) {
-                const appResult = await client.evaluate('__RN_AGENT.getAppInfo()');
-                if (appResult.value && typeof appResult.value === 'string') {
+                const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
+                if (probeResult.value && typeof probeResult.value === 'string') {
                     try {
-                        appInfo = JSON.parse(appResult.value);
+                        const probe = JSON.parse(probeResult.value);
+                        appInfo = probe.appInfo;
+                        errorCount = probe.errorCount;
+                        fiberTree = probe.fiberTree;
+                        hasRedBox = probe.hasRedBox;
                     }
                     catch {
-                        appInfo = null;
+                        // Probe failed, use defaults
                     }
                 }
-                const errorResult_ = await client.evaluate('JSON.parse(__RN_AGENT.getErrors()).length');
-                if (typeof errorResult_.value === 'number') {
-                    errorCount = errorResult_.value;
-                }
-                const readyResult = await client.evaluate('__RN_AGENT.isReady()');
-                fiberTree = readyResult.value === true;
-                const treeCheck = await client.evaluate('JSON.parse(__RN_AGENT.getTree(1)).warning');
-                hasRedBox = treeCheck.value === 'APP_HAS_REDBOX';
             }
             const status = {
                 metro: {

@@ -3,21 +3,27 @@ export const INJECTED_HELPERS = `
   if (globalThis.__RN_AGENT) return;
 
   function safeStringify(obj, maxLen) {
-    var seen = new WeakSet();
-    var str = JSON.stringify(obj, function(key, val) {
-      if (typeof val === 'function') return '[Function]';
-      if (typeof val === 'symbol') return val.toString();
-      if (val instanceof Error) return { message: val.message, stack: val.stack };
-      if (typeof val === 'object' && val !== null) {
-        if (seen.has(val)) return '[Circular]';
-        seen.add(val);
+    try {
+      var seen = new WeakSet();
+      var str = JSON.stringify(obj, function(key, val) {
+        try {
+          if (typeof val === 'function') return '[Function]';
+          if (typeof val === 'symbol') return val.toString();
+          if (val instanceof Error) return { message: val.message, stack: val.stack };
+          if (typeof val === 'object' && val !== null) {
+            if (seen.has(val)) return '[Circular]';
+            seen.add(val);
+          }
+          return val;
+        } catch(e) { return '[Unserializable]'; }
+      });
+      if (str && str.length > (maxLen || 50000)) {
+        return str.substring(0, maxLen || 50000) + '...[TRUNCATED]';
       }
-      return val;
-    });
-    if (str && str.length > (maxLen || 50000)) {
-      return str.substring(0, maxLen || 50000) + '...[TRUNCATED]';
+      return str;
+    } catch(e) {
+      return JSON.stringify({ __agent_error: 'Serialization failed: ' + (e && e.message || String(e)) });
     }
-    return str;
   }
 
   // Fiber Tree Walker
@@ -37,11 +43,16 @@ export const INJECTED_HELPERS = `
     var visited = new WeakSet();
     var totalNodes = 0;
 
-    function hasErrorOverlay(fiber) {
-      if (!fiber) return false;
-      var name = fiber.type && (fiber.type.displayName || fiber.type.name);
-      if (name === 'LogBox' || name === 'ErrorWindow' || name === 'RedBox') return true;
-      return hasErrorOverlay(fiber.child) || hasErrorOverlay(fiber.sibling);
+    function hasErrorOverlay(fiber, depth) {
+      var current = fiber;
+      while (current) {
+        if ((depth || 0) > 15) return false;
+        var name = current.type && (current.type.displayName || current.type.name);
+        if (name === 'LogBox' || name === 'ErrorWindow' || name === 'RedBox') return true;
+        if (current.child && hasErrorOverlay(current.child, (depth || 0) + 1)) return true;
+        current = current.sibling;
+      }
+      return false;
     }
 
     if (hasErrorOverlay(root.current)) {
@@ -97,6 +108,16 @@ export const INJECTED_HELPERS = `
           if (k === 'children' || k === 'testID' || k === 'style' || k === 'accessibilityLabel' || k === 'nativeID') continue;
           var v = fiber.memoizedProps[k];
           if (typeof v === 'function') { props[k] = '[Function]'; continue; }
+          if (Array.isArray(v)) { props[k] = '[Array(' + v.length + ')]'; continue; }
+          if (typeof v === 'object' && v !== null) {
+            try {
+              var objKeys = Object.keys(v);
+              props[k] = objKeys.length > 5
+                ? '{' + objKeys.slice(0, 5).join(', ') + ', ...(' + (objKeys.length - 5) + ' more)}'
+                : '{' + objKeys.join(', ') + '}';
+            } catch(e) { props[k] = '[Object]'; }
+            continue;
+          }
           try {
             var s = JSON.stringify(v);
             props[k] = s && s.length > 200 ? s.substring(0, 200) + '...' : v;
@@ -148,12 +169,12 @@ export const INJECTED_HELPERS = `
   function getNavState() {
     try {
       var state = globalThis.__expo_router_state__;
-      if (state) return JSON.stringify(state);
+      if (state) return safeStringify(state, 50000);
     } catch(e) {}
 
     try {
       var devtools = globalThis.__REACT_NAVIGATION_DEVTOOLS__;
-      if (devtools && devtools.getNavState) return JSON.stringify(devtools.getNavState());
+      if (devtools && devtools.getNavState) return safeStringify(devtools.getNavState(), 50000);
     } catch(e) {}
 
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -163,14 +184,20 @@ export const INJECTED_HELPERS = `
     var roots = hook.getFiberRoots(rendererId);
     var root = roots && roots.values().next().value;
 
-    function findNav(fiber) {
-      if (!fiber) return null;
-      var name = fiber.type && (fiber.type.displayName || fiber.type.name);
-      if (name === 'NavigationContainer' || name === 'ExpoRoot') {
-        var s = fiber.memoizedState && fiber.memoizedState.memoizedState;
-        if (s && s[0]) return s[0];
+    function findNav(fiber, depth) {
+      var current = fiber;
+      while (current) {
+        if ((depth || 0) > 30) return null;
+        var name = current.type && (current.type.displayName || current.type.name);
+        if (name === 'NavigationContainer' || name === 'ExpoRoot') {
+          var s = current.memoizedState && current.memoizedState.memoizedState;
+          if (s && s[0]) return s[0];
+        }
+        var found = findNav(current.child, (depth || 0) + 1);
+        if (found) return found;
+        current = current.sibling;
       }
-      return findNav(fiber.child) || findNav(fiber.sibling);
+      return null;
     }
 
     var navState = findNav(root && root.current);
@@ -221,12 +248,18 @@ export const INJECTED_HELPERS = `
         var roots = hook.getFiberRoots(rendererId);
         var root = roots && roots.values().next().value;
 
-        function findStore(fiber) {
-          if (!fiber) return null;
-          if (fiber.type && fiber.type.displayName === 'Provider' && fiber.memoizedProps && fiber.memoizedProps.store && fiber.memoizedProps.store.getState) {
-            return { store: fiber.memoizedProps.store.getState(), type: 'redux' };
+        function findStore(fiber, depth) {
+          var current = fiber;
+          while (current) {
+            if ((depth || 0) > 30) return null;
+            if (current.type && current.type.displayName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.getState) {
+              return { store: current.memoizedProps.store.getState(), type: 'redux' };
+            }
+            var found = findStore(current.child, (depth || 0) + 1);
+            if (found) return found;
+            current = current.sibling;
           }
-          return findStore(fiber.child) || findStore(fiber.sibling);
+          return null;
         }
 
         var found = findStore(root && root.current);
@@ -236,7 +269,7 @@ export const INJECTED_HELPERS = `
 
     if (!state) {
       return JSON.stringify({
-        error: 'No store found.',
+        __agent_error: 'No store found.',
         hint: 'For Zustand, add to app entry: if (__DEV__) global.__ZUSTAND_STORES__ = { myStore }',
         hint2: 'For Redux, the Provider is auto-detected. Check it is mounted.'
       });
@@ -248,7 +281,7 @@ export const INJECTED_HELPERS = `
       for (var i = 0; i < parts.length; i++) {
         current = current && current[parts[i]];
         if (current === undefined) {
-          return JSON.stringify({ error: 'Path not found: ' + path, availableKeys: Object.keys(state) });
+          return JSON.stringify({ __agent_error: 'Path not found: ' + path, availableKeys: Object.keys(state) });
         }
       }
       state = current;
@@ -336,21 +369,30 @@ export const NETWORK_HOOK_SCRIPT = `
       globalThis.__RN_AGENT_NETWORK_CB__('request', { id: id, method: method, url: String(url) });
     }
 
-    return origFetch.apply(this, arguments).then(function(response) {
-      if (globalThis.__RN_AGENT_NETWORK_CB__) {
-        globalThis.__RN_AGENT_NETWORK_CB__('response', {
-          id: id, status: response.status, duration_ms: Date.now() - start
-        });
-      }
-      return response;
-    }).catch(function(err) {
+    try {
+      return origFetch.apply(this, arguments).then(function(response) {
+        if (globalThis.__RN_AGENT_NETWORK_CB__) {
+          globalThis.__RN_AGENT_NETWORK_CB__('response', {
+            id: id, status: response.status, duration_ms: Date.now() - start
+          });
+        }
+        return response;
+      }).catch(function(err) {
+        if (globalThis.__RN_AGENT_NETWORK_CB__) {
+          globalThis.__RN_AGENT_NETWORK_CB__('response', {
+            id: id, status: 0, duration_ms: Date.now() - start
+          });
+        }
+        throw err;
+      });
+    } catch(syncErr) {
       if (globalThis.__RN_AGENT_NETWORK_CB__) {
         globalThis.__RN_AGENT_NETWORK_CB__('response', {
           id: id, status: 0, duration_ms: Date.now() - start
         });
       }
-      throw err;
-    });
+      throw syncErr;
+    }
   };
 
   var OrigXHR = globalThis.XMLHttpRequest;
