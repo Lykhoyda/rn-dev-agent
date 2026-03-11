@@ -6,6 +6,7 @@ import HomeScreen from '../screens/HomeScreen';
 import FeedScreen from '../screens/FeedScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import ReloadTestScreen from '../screens/ReloadTestScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParams>();
@@ -27,6 +28,7 @@ function ProfileStackNavigator() {
     <ProfileStack.Navigator>
       <ProfileStack.Screen name="ProfileMain" component={ProfileScreen} options={{ title: 'Profile' }} />
       <ProfileStack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+      <ProfileStack.Screen name="ReloadTest" component={ReloadTestScreen} options={{ title: 'Reload Test' }} />
     </ProfileStack.Navigator>
   );
 }
