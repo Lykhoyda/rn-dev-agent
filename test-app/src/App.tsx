@@ -8,7 +8,9 @@ import RootNavigator, { linking } from './navigation/RootNavigator';
 import type { RootStackParams } from './navigation/types';
 import { server } from './mocks/server';
 
-server.listen({ onUnhandledRequest: 'bypass' });
+if (__DEV__) {
+  server.listen({ onUnhandledRequest: 'bypass' });
+}
 
 const navigationRef = createNavigationContainerRef<RootStackParams>();
 

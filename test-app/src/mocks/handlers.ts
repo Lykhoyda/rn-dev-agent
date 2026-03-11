@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 const BASE_URL = 'https://api.testapp.local';
 
 export const handlers = [
-  http.get(`${BASE_URL}/api/feed`, async ({ request }) => {
+  http.get(`${BASE_URL}/api/feed`, ({ request }) => {
     const url = new URL(request.url);
     if (url.searchParams.get('error') === 'true') {
       return HttpResponse.json(
