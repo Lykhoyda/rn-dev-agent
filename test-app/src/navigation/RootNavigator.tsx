@@ -8,6 +8,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ReloadTestScreen from '../screens/ReloadTestScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
+import ErrorLabModal from '../screens/ErrorLabModal';
 
 const RootStack = createNativeStackNavigator<RootStackParams>();
 const Tab = createBottomTabNavigator<TabParams>();
@@ -73,6 +74,7 @@ export default function RootNavigator() {
   return (
     <RootStack.Navigator>
       <RootStack.Screen name="Tabs" component={TabNavigator} options={{ headerShown: false }} />
+      <RootStack.Screen name="ErrorLab" component={ErrorLabModal} options={{ presentation: 'modal', title: 'Error Lab' }} />
     </RootStack.Navigator>
   );
 }
