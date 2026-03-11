@@ -449,3 +449,12 @@ A simple `throw` in an event handler is caught by ErrorUtils and appears in erro
 
 ### D138: Harness suite timeout of 15 seconds
 Each suite has a 15-second timeout to prevent hangs from failed CDP connections or unresponsive tools. Matches the plugin's own 15-second reconnect timeout on reload.
+
+### D139: MSW server.listen guarded by __DEV__
+The MSW mock server is only started in development mode (`if (__DEV__)`). Even though the test app only runs in dev, the guard prevents accidental interception in production builds and is consistent with the `__NAV_REF__` and `__REDUX_STORE__` exposure pattern.
+
+### D140: Timer cleanup in harness runSuite
+The `Promise.race` timeout pattern in `runSuite` clears the `setTimeout` timer on both success and failure paths. Without cleanup, up to 10 orphaned timers accumulate across the sequential suite runs, which would keep the process alive if `process.exit` were removed.
+
+### D141: try/finally for MCP client lifecycle
+The harness runner wraps suite execution in `try/finally` to ensure `client.close()` is called even if `connect()` or a suite throws an unexpected error, preventing orphaned child processes.
