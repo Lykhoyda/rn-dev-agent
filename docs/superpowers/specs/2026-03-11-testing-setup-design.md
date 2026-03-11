@@ -38,7 +38,7 @@ Each screen is deliberately simple — just enough UI to exercise specific MCP t
 | **Settings** | Profile > push | `cdp_dev_settings` | `settings-theme-toggle`, `settings-language-toggle` |
 | **Notifications** | Notifications tab | `cdp_console_log` (deliberate log/warn/error on mount) | `notif-item-0/1/2`, `notif-mark-read-btn` |
 | **Error Lab** | Modal from any tab | `cdp_error_log` (JS errors, unhandled rejections, RedBox) | `error-lab-throw`, `error-lab-rejection`, `error-lab-redbox` |
-| **Deep Link Target** | Via `myapp://deeplink?id=123` | `cdp_navigation_state` (deep link routing + params) | `deeplink-id`, `deeplink-params` |
+| **Deep Link Target** | Via `rndatest://deeplink?id=123` | `cdp_navigation_state` (deep link routing + params) | `deeplink-id`, `deeplink-params` |
 | **Reload Test** | Settings > push | `cdp_reload` (full reload + reconnect) | `reload-counter`, `reload-btn` |
 
 ### Global Test Helpers
@@ -96,7 +96,7 @@ The harness navigates between screens via `cdp_evaluate` calling `__NAV_REF__.na
 - "Unhandled Rejection" — `Promise.reject(new Error('test-unhandled-rejection'))`
 - "Trigger RedBox" — Sets a state flag `crashChild: true` which conditionally renders a `<CrashComponent />` that throws in its render method, producing a React render-phase error (RedBox). After this test, `cdp_reload` is required to recover.
 
-**Deep Link Target** — Reached via `myapp://deeplink?id=123`. Displays received params. Validates `cdp_navigation_state` shows correct route + params.
+**Deep Link Target** — Reached via `rndatest://deeplink?id=123`. Displays received params. Validates `cdp_navigation_state` shows correct route + params.
 
 **Reload Test** — Mount counter (using `useRef` persisted across fast refresh but reset on full reload) to verify `cdp_reload` triggers a real reload and helpers get re-injected.
 
