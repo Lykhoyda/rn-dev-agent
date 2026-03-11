@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "rn-dev-agent-test",
+    "slug": "rn-dev-agent-test",
+    "version": "1.0.0",
+    "scheme": "rndatest",
+    "orientation": "portrait",
+    "platforms": ["ios"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rndevagent.testapp"
+    },
+    "newArchEnabled": true,
+    "entryPoint": "./src/App.tsx"
+  }
+}
