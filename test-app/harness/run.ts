@@ -1,5 +1,4 @@
-import type { McpTestClient } from './lib/mcp-client.js';
-import { McpTestClient as McpTestClientImpl } from './lib/mcp-client.js';
+import { McpTestClient } from './lib/mcp-client.js';
 
 export interface SuiteResult {
   name: string;
@@ -54,7 +53,7 @@ async function main(): Promise<void> {
   ];
 
   console.log('Connecting to cdp-bridge MCP server...');
-  const client = new McpTestClientImpl();
+  const client = new McpTestClient();
   await client.connect();
   console.log('Connected. Running suites...\n');
 
