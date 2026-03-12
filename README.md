@@ -1,4 +1,4 @@
-# rn-dev-agent
+# rn-dev-agent (WORK IN PROGRESS)
 
 A Claude Code plugin that lets an AI agent fully test React Native features on iOS Simulator / Android Emulator. The agent navigates the app, verifies UI, walks user flows, and confirms internal state (component tree, store data, network responses, navigation stack).
 
