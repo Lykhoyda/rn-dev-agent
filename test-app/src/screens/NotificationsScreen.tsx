@@ -22,9 +22,9 @@ export default function NotificationsScreen({ navigation }: Props) {
     console.error('notification parse failed');
   }, []);
 
-  const handleMarkAllRead = async () => {
-    await fetch(`${API_BASE}/api/notifications/read`, { method: 'POST' });
+  const handleMarkAllRead = () => {
     dispatch(markAllRead());
+    fetch(`${API_BASE}/api/notifications/read`, { method: 'POST' }).catch(() => {});
   };
 
   const handleClearAll = () => {

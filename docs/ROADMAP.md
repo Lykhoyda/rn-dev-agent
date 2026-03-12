@@ -646,3 +646,25 @@ Development-time evaluation protocol that captures structured data during
 - D207: Evaluator lives in dev/, outside plugin manifest
 - D208: Inline capture during rn-feature-dev, not post-run analysis
 - D209: Confidence-gated bug logging to BUGS.md
+
+## Phase 19: Gemini + Codex Review Fixes — Self-Evaluator (Complete)
+
+**Status:** Complete (2026-03-12)
+
+Fixed 5 issues from parallel Gemini + Codex reviews of the self-evaluator and related changes.
+
+### Fixes Applied
+| # | Severity | Fix | Decision |
+|---|----------|-----|----------|
+| 1 | HIGH | Architect Verification Parameters extended with navigationAction + interaction metadata | D210 |
+| 2 | HIGH | Test app dispatches Redux before fire-and-forget fetch | D211 |
+| 3 | HIGH | Evaluator Phase 7 checks Phase 6 deferred findings for bugs | D212 |
+| 4 | MEDIUM | Evaluator increments agent counters in Phases 2, 4, 6 | D213 |
+| 5 | MEDIUM | Evaluator increments phases_completed before writing report | D214 |
+
+### Decisions (D210-D214)
+- D210: Architect Verification Parameters include navigation action and interaction metadata
+- D211: Dispatch Redux state before network call in test app
+- D212: Evaluator Phase 7 checks Phase 6 deferred findings
+- D213: Evaluator increments agent counters
+- D214: Evaluator increments phases_completed before writing

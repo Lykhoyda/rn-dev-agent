@@ -80,6 +80,13 @@ This section is mandatory. Provide exact values for live verification:
 ```
 primaryComponent: <main component name or testID to filter in cdp_component_tree>
 storeQueryPath: <dot-path for cdp_store_state, e.g. "cart.items", or "none">
-entryRoute: <deep link URI to navigate to the feature screen, e.g. "myapp://cart", or "none" if feature is on the initial screen>
+entryRoute: <deep link URI as fallback, e.g. "myapp://cart", or "none" if on initial screen>
+navigationAction: <cdp_evaluate expression for in-app navigation, e.g. "globalThis.__NAV_REF__?.navigate('CartTab')", or "none">
+primaryInteractionTestID: <testID of the main interactive element to exercise, e.g. "add-to-cart-btn", or "none">
+expectedInteractionEffect: <what happens after interaction — "state: cart.items.length increases", "navigation: navigates to CartConfirm", or "none">
 requiresFullReload: <true if navigation structure changed, false if Fast Refresh sufficient>
 ```
+Note: `navigationAction` is preferred over `entryRoute` because deep links
+trigger native confirmation dialogs in Expo Go (see B56). The agent uses
+`cdp_evaluate` with the `navigationAction` expression first, falling back
+to `entryRoute` deep link only if `__NAV_REF__` is unavailable.

@@ -51,6 +51,7 @@ After all explorer agents return:
    | Phase | Agent | Aspect | Useful |
    - **Useful** = yes if agent returned 3+ actionable files OR 1+ findings
      with confidence >= 80
+   - Increment `agents.launched` for each agent. If useful, also increment `agents.useful`
 2. Record total files identified across all agents
 3. Add a Phase Results entry:
    ```
@@ -82,6 +83,7 @@ After user answers all questions:
 After architect agent returns:
 
 1. For each agent launched, add a row to **Agent Launches**
+   - Increment `agents.launched`. If useful, also increment `agents.useful`
 2. Check blueprint completeness:
    - Does it include the **Verification Parameters** section?
    - Does it have `primaryComponent`, `storeQueryPath`, `entryRoute`,
@@ -171,6 +173,7 @@ If Phase 6 triggers re-verification after applying fixes:
 After all reviewer agents return:
 
 1. For each agent launched, add a row to **Agent Launches**
+   - Increment `agents.launched`. If useful, also increment `agents.useful`
 2. Record findings count by severity and fixes applied
 3. Record whether re-verification was triggered
 4. Add a Phase Results entry:
@@ -196,7 +199,17 @@ notable warnings/failures, recovery actions, bugs found.
 
 ### Step 2: Check for new bugs
 
-For each FAIL result in CDP Tool Results:
+Check two sources for potential new bugs:
+
+**Source A: CDP tool FAILs** — for each FAIL result in CDP Tool Results:
+
+**Source B: Phase 6 deferred findings** — for each high-confidence (>= 80)
+review finding that was NOT fixed during Phase 6 (deferred by the user),
+evaluate whether it represents a real bug. Code quality suggestions and
+style issues are report-only; logic errors, null safety, and crash risks
+are candidates for BUGS.md.
+
+For each candidate from either source:
 
 1. Read `docs/BUGS.md` and extract all `### B<N>:` entries
 2. Check if the failure matches an existing bug using 3-criteria matching:
@@ -230,6 +243,9 @@ If a file with that name already exists, append `-2`, `-3`, etc.
 
 ### Step 4: Write the report file
 
+Mark Phase 7 complete and increment `phases_completed` BEFORE writing, so the
+report reflects the final state (8/8 on a fully completed run).
+
 Assemble the full report with:
 1. YAML frontmatter (all counters from the accumulated data)
 2. `# Evaluation Report: <feature-slug>`
@@ -243,8 +259,6 @@ Assemble the full report with:
 ### Step 5: Report the file path
 
 Tell the user: "Evaluation report written to `<path>`"
-
-Mark Phase 7 complete, increment `phases_completed`.
 
 ---
 

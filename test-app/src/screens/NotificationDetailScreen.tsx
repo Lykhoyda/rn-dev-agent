@@ -36,10 +36,10 @@ export default function NotificationDetailScreen({ route, navigation }: Props) {
     );
   }
 
-  const handleMarkRead = async () => {
+  const handleMarkRead = () => {
     console.log(`[NotificationDetail] marking ${id} as read`);
-    await fetch(`${API_BASE}/api/notifications/read`, { method: 'POST' });
     dispatch(markRead(id));
+    fetch(`${API_BASE}/api/notifications/read`, { method: 'POST' }).catch(() => {});
   };
 
   return (

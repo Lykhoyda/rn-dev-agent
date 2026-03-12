@@ -681,3 +681,20 @@ Capturing data inline during the run (via one-line evaluator references per phas
 
 ### D209: Confidence-gated bug logging to BUGS.md
 Only high-confidence failures (tool errors, timeouts, crashes, failed recoveries) are auto-appended to BUGS.md. Warnings and ambiguous observations go to the report only, avoiding noise in the bug tracker. 3-criteria deduplication (tool + error pattern + context) prevents duplicate entries.
+
+## 2026-03-12: Gemini + Codex Review Fixes (Self-Evaluator)
+
+### D210: Architect Verification Parameters include navigation action and interaction metadata
+Both Gemini and Codex flagged that `entryRoute` (deep link URI) is incompatible with the Phase 5.5 `cdp_evaluate` navigation strategy. Extended Verification Parameters with `navigationAction` (literal `__NAV_REF__` expression), `primaryInteractionTestID`, and `expectedInteractionEffect`. `entryRoute` retained as deep link fallback only.
+
+### D211: Dispatch Redux state before network call in test app
+`fetch()` to `api.testapp.local` rejects since MSW is removed (B22). Moving `dispatch()` before the fire-and-forget `fetch().catch(() => {})` ensures state updates are immediate and the mark-read/clear-all flows work without a backend.
+
+### D212: Evaluator Phase 7 checks Phase 6 deferred findings for bugs
+Evaluator only checked CDP tool FAILs for bug logging. Gemini flagged that deferred Phase 6 reviewer findings (logic errors, null safety, crash risks) are also bug candidates. Added Source B to Step 2.
+
+### D213: Evaluator increments agent counters in Phases 2, 4, 6
+Codex found `agents.launched` and `agents.useful` were initialized but never incremented. Added increment instructions to each phase that launches agents.
+
+### D214: Evaluator increments phases_completed before writing report
+Codex found report always showed 7/8 because Phase 7 was marked complete after writing. Moved increment before the write step.
