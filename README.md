@@ -5,8 +5,9 @@ A Claude Code plugin that turns Claude into a React Native development partner. 
 ## Quick Start
 
 ```bash
-# Install the plugin
-claude plugin add Lykhoyda/react-native-dev-claude-plugin
+# Add the marketplace and install the plugin
+claude mcp add-marketplace Lykhoyda/react-native-dev-claude-plugin
+claude plugin install rn-dev-agent
 
 # Navigate to your React Native project
 cd /path/to/your-rn-app
