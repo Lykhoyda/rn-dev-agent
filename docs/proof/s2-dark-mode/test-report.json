@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "updateSeq": 27,
+  "status": "passed",
+  "startTime": "2026-03-12T23:15:33.192183+01:00",
+  "endTime": "2026-03-12T23:16:03.419185+01:00",
+  "lastUpdated": "2026-03-12T23:16:03.422625+01:00",
+  "device": {
+    "id": "FC78646A-56D5-4737-9CD0-A360D622F3B3",
+    "name": "iPhone 17 Pro",
+    "platform": "ios",
+    "osVersion": "26.3",
+    "isSimulator": true
+  },
+  "app": {
+    "id": "host.exp.Exponent",
+    "version": "2.32.18"
+  },
+  "maestroRunner": {
+    "version": "1.0.9",
+    "driver": "wda"
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "running": 0,
+    "pending": 0
+  },
+  "flows": [
+    {
+      "index": 0,
+      "id": "flow-000",
+      "name": "s2-dark-mode",
+      "sourceFile": "e2e/s2-dark-mode.yaml",
+      "device": {
+        "id": "FC78646A-56D5-4737-9CD0-A360D622F3B3",
+        "name": "iPhone 17 Pro",
+        "platform": "ios",
+        "osVersion": "26.3",
+        "isSimulator": true
+      },
+      "dataFile": "flows/flow-000.json",
+      "assetsDir": "assets/flow-000",
+      "status": "passed",
+      "updateSeq": 22,
+      "endTime": "2026-03-12T23:16:03.414698+01:00",
+      "duration": 26878,
+      "lastUpdated": "2026-03-12T23:16:03.415018+01:00",
+      "commands": {
+        "total": 29,
+        "passed": 29,
+        "failed": 0,
+        "skipped": 0,
+        "running": 0,
+        "pending": 0
+      },
+      "attempts": 0
+    }
+  ]
+}

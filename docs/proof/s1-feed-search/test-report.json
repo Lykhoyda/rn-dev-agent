@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "updateSeq": 23,
+  "status": "passed",
+  "startTime": "2026-03-12T23:14:34.681667+01:00",
+  "endTime": "2026-03-12T23:15:09.894428+01:00",
+  "lastUpdated": "2026-03-12T23:15:09.897214+01:00",
+  "device": {
+    "id": "FC78646A-56D5-4737-9CD0-A360D622F3B3",
+    "name": "iPhone 17 Pro",
+    "platform": "ios",
+    "osVersion": "26.3",
+    "isSimulator": true
+  },
+  "app": {
+    "id": "host.exp.Exponent",
+    "version": "2.32.18"
+  },
+  "maestroRunner": {
+    "version": "1.0.9",
+    "driver": "wda"
+  },
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "running": 0,
+    "pending": 0
+  },
+  "flows": [
+    {
+      "index": 0,
+      "id": "flow-000",
+      "name": "s1-feed-search",
+      "sourceFile": "e2e/s1-feed-search.yaml",
+      "device": {
+        "id": "FC78646A-56D5-4737-9CD0-A360D622F3B3",
+        "name": "iPhone 17 Pro",
+        "platform": "ios",
+        "osVersion": "26.3",
+        "isSimulator": true
+      },
+      "dataFile": "flows/flow-000.json",
+      "assetsDir": "assets/flow-000",
+      "status": "passed",
+      "updateSeq": 18,
+      "endTime": "2026-03-12T23:15:09.891094+01:00",
+      "duration": 31773,
+      "lastUpdated": "2026-03-12T23:15:09.891401+01:00",
+      "commands": {
+        "total": 18,
+        "passed": 18,
+        "failed": 0,
+        "skipped": 0,
+        "running": 0,
+        "pending": 0
+      },
+      "attempts": 0
+    }
+  ]
+}
