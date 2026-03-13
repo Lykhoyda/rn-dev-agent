@@ -28,17 +28,19 @@ Integrate [agent-device](https://github.com/callstackincubator/agent-device) (v0
 - **CDP bridge** owns everything React knows internally (JS runtime)
 - **maestro-runner** owns persistent test artifacts (YAML flows)
 
-No overlap. `cdp_interact` is deprecated and replaced by agent-device commands.
+Preferred tool per task — not a hard isolation boundary. Some overlap exists (e.g., `cdp_component_tree` returns testIDs also visible in agent-device snapshots, `cdp_evaluate` can invoke native modules). The rule is: prefer agent-device for interaction, prefer CDP for React internals. `cdp_interact` is deprecated and replaced by agent-device commands.
 
 ## Auto-Install & Session Startup
 
 ### Installation
 
-In `hooks/detect-rn-project.sh`:
+Dedicated script: `scripts/ensure-agent-device.sh` (mirrors `scripts/ensure-maestro-runner.sh`). Called from `hooks/detect-rn-project.sh`.
+
+Steps:
 1. Check if `agent-device` CLI exists in PATH
-2. If missing, `npm install -g agent-device`
+2. If missing, install via npm: `npm install -g agent-device` (verify actual install method against agent-device README at implementation time — may be npx, brew, or curl-based)
 3. Verify with `agent-device --version`
-4. Same pattern as existing maestro-runner auto-install
+4. Log installed version
 
 ### Session Startup Flow
 
@@ -54,9 +56,29 @@ In `hooks/detect-rn-project.sh`:
 - User says "test on iOS" → pick booted iOS simulator
 - User says "test on Android" → pick running Android emulator
 - Ambiguous → ask user
-- Active session name stored in plugin state so all tools know which device to target
+- Active session name stored in MCP server memory (in-memory field on the server instance, like `CDPClient` today) + written to `/tmp/rn-dev-agent-session.json` for cross-process access by hooks/scripts
 
 ## MCP Tool Surface
+
+### Tool Hosting
+
+The 8 new `device_*` tools are added to the **existing `rn-dev-agent-cdp` MCP server** (`scripts/cdp-bridge/`). Rationale: one MCP server entry in `plugin.json`, shared session state in memory, simpler deployment. The server already mixes concerns (WebSocket CDP + HTTP status checks) — adding subprocess-based CLI calls is acceptable.
+
+New files:
+- `scripts/cdp-bridge/src/agent-device-wrapper.ts` — single module wrapping all agent-device CLI calls
+- `scripts/cdp-bridge/src/tools/device-*.ts` — one file per tool (8 files), same pattern as existing `tools/` directory
+
+### agent-device-wrapper.ts
+
+Centralizes all CLI interaction. Isolates agent-device API surface so version changes only affect this file.
+
+- **Subprocess**: uses `execFile` (not `exec`, to prevent shell injection) with 30s timeout
+- **Session injection**: automatically appends `--session <name>` from server's in-memory state
+- **JSON parsing**: all commands called with `--json`, output parsed and validated
+- **Error handling**: maps agent-device error codes to MCP `failResult`/`warnResult` helpers from `utils.ts`
+- **Exports**: `listDevices()`, `screenshot()`, `snapshot()`, `find()`, `press()`, `fill()`, `swipe()`, `back()`, `startSession()`, `stopSession()`
+
+**Open question (resolve at implementation time):** Verify exact CLI flags by running `agent-device --help` and `agent-device <command> --help` for each command. The flags listed in this spec are based on research of v0.7.x source but may differ in the installed version.
 
 ### New Tools (wrapping agent-device CLI)
 
@@ -65,7 +87,7 @@ In `hooks/detect-rn-project.sh`:
 | `device_list` | `agent-device list-devices --json` | List available simulators/emulators |
 | `device_screenshot` | `agent-device screenshot --session rn-dev` | Capture screen |
 | `device_snapshot` | `agent-device snapshot --session rn-dev --json` | Accessibility tree with @refs |
-| `device_find` | `agent-device find "text" click --session rn-dev` | Find element + optional action |
+| `device_find` | `agent-device find "text" [action] --session rn-dev` | Find element by text/label/id. Optional action param: `click`, `long-press`, or omit for search-only |
 | `device_press` | `agent-device press @e3 --session rn-dev` | Tap element by @ref |
 | `device_fill` | `agent-device fill @e5 "text" --session rn-dev` | Type text with verification |
 | `device_swipe` | `agent-device swipe up --session rn-dev` | Scroll/swipe |
@@ -109,13 +131,28 @@ In `hooks/detect-rn-project.sh`:
 
 - **`rn-tester.md`** — Phase 2 (interact) switches from Maestro to agent-device. Phase 3 (verify state) stays CDP. New pattern: `device_snapshot` diff before/after interaction.
 - **`rn-debugger.md`** — Add `device_snapshot` to evidence-gathering step.
-- **`rn-code-architect.md`** — No changes.
+- **`rn-code-architect.md`** — Update E2E proof flow templates to emit `device_press` / `device_find` / `device_fill` instead of `cdp_interact`.
+- **`rn-code-explorer.md`** — Update interaction references from Maestro to agent-device where applicable.
 
 ### Commands
 
-- **`rn-feature-dev.md`** — Phase 6 (live verification) uses agent-device for interaction, CDP for introspection. Phase 8 (E2E proof) still generates Maestro YAML via maestro-runner.
+- **`rn-feature-dev.md`** — Phase 5.5 Step 3.5: rewrite `cdp_interact(testID=..., action="press")` to `device_find`/`device_press`. Phase 6 (live verification) uses agent-device for interaction, CDP for introspection. Phase 8 (E2E proof) still generates Maestro YAML via maestro-runner.
 - **`test-feature.md`** — agent-device for interaction, maestro-runner for YAML generation.
-- **`check-env.md`** — Add agent-device daemon health check.
+- **`build-and-test.md`** — Delegates to rn-tester agent; no direct changes needed (inherits agent updates).
+- **`debug-screen.md`** — Delegates to rn-debugger agent; no direct changes needed (inherits agent updates).
+- **`check-env.md`** — Add agent-device health check: run `agent-device list-devices --json`, verify at least one device available. Show daemon status row in environment table. Fix suggestion: "Run `agent-device list-devices` to check connectivity."
+
+### CDP-Session Synchronization
+
+When an agent-device session is started targeting a specific platform, the CDP bridge must also target the correct Metro/Hermes instance:
+- `device_list` output includes platform info per device
+- When session starts, infer platform from the selected device
+- Pass platform hint to `CDPClient.connect()` so it filters Hermes targets accordingly
+- If agent-device targets Android but Metro only has iOS targets (or vice versa), `cdp_status` warns: "CDP connected to [platform] but agent-device session targets [other platform]"
+
+### CLAUDE.md Update
+
+After implementation, update CLAUDE.md architecture table to reflect the new three-layer model with agent-device.
 
 ## Implementation Phases
 
@@ -146,4 +183,6 @@ In `hooks/detect-rn-project.sh`:
 
 ## Risk
 
-agent-device is at v0.7.x — API may change. Mitigation: wrap all CLI calls through a single helper module (`agent-device-wrapper.ts`) so interface changes are isolated to one file.
+**API instability:** agent-device is at v0.7.x — API may change. Mitigation: `agent-device-wrapper.ts` isolates all CLI calls so interface changes affect one file.
+
+**Fallback if agent-device unavailable:** If agent-device fails to install or daemon crashes, the plugin falls back to existing behavior: Maestro/maestro-runner for interaction, direct `xcrun simctl`/`adb` for screenshots. Skills and agents should check `device_list` availability and gracefully degrade. This matches the existing maestro-runner → Maestro fallback pattern.
