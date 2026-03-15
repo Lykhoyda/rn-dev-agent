@@ -1,5 +1,6 @@
 import type { CDPClient } from './cdp-client.js';
 import type { ResultEnvelope, EvaluateResult } from './types.js';
+import { hasActiveSession } from './agent-device-wrapper.js';
 
 export type ToolResult = {
   content: Array<{ type: 'text'; text: string }>;
@@ -133,5 +134,21 @@ export function withConnection<T>(
 
       return failResult(message);
     }
+  };
+}
+
+export type DeviceToolHandler<T> = (args: T) => Promise<ToolResult>;
+
+export function withSession<T>(
+  handler: DeviceToolHandler<T>,
+): (args: T) => Promise<ToolResult> {
+  return async (args: T): Promise<ToolResult> => {
+    if (!hasActiveSession()) {
+      return failResult(
+        'No device session open. Call device_snapshot with action="open" and provide appId and platform first.',
+        { hint: 'device_snapshot action=open starts a session. All device_press/device_fill/device_find/device_swipe/device_back tools require an open session.' },
+      );
+    }
+    return handler(args);
   };
 }

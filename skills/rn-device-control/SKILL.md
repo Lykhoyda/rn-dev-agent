@@ -285,6 +285,48 @@ Quick decision table:
 
 ---
 
+## agent-device CLI (Cross-Platform Native Control)
+
+agent-device provides unified device interaction across iOS and Android without
+platform-specific branching. Prefer it over raw simctl/adb for interactive testing.
+
+### When to Use
+
+| Task | Preferred Tool | Why |
+|------|---------------|-----|
+| List available devices | `device_list` | Cross-platform, structured JSON |
+| Take a screenshot | `device_screenshot` | Works on both platforms identically |
+| Read UI element tree | `device_snapshot` | Returns @refs for subsequent interaction |
+| Tap an element by text | `device_find text="Sign In" action=click` | No testID needed |
+| Tap by element ref | `device_press ref=@e3` | After getting refs from snapshot |
+| Fill a text input | `device_fill ref=@e5 text="hello"` | Clears and types with verification |
+| Scroll/swipe | `device_swipe direction=up` | Native gesture |
+| Navigate back | `device_back` | System back (Android) or gesture (iOS) |
+| Persistent E2E test file | maestro-runner (YAML) | CI-ready test artifacts |
+| Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
+
+### Session Lifecycle
+
+```
+1. device_snapshot action=open appId="com.example.app" platform="ios"
+   → Boots device, installs app, creates session
+
+2. device_snapshot  → Returns accessibility tree with @refs
+3. device_find text="Login" action=click  → Tap by text
+4. device_press ref=@e5  → Tap by ref from snapshot
+5. device_fill ref=@e7 text="user@example.com"  → Fill input
+
+6. device_snapshot action=close  → End session
+```
+
+### Fallback
+
+If agent-device is unavailable, fall back to:
+- iOS: `xcrun simctl` for device lifecycle, Maestro for interaction
+- Android: `adb` for device lifecycle, Maestro for interaction
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

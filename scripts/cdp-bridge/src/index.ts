@@ -13,6 +13,9 @@ import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
 import { createInteractHandler } from './tools/interact.js';
+import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
+import { createDeviceSnapshotHandler } from './tools/device-session.js';
+import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceBackHandler } from './tools/device-interact.js';
 
 let client = new CDPClient();
 
@@ -28,7 +31,10 @@ const server = new McpServer({
 server.tool(
   'cdp_status',
   'Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.',
-  { metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)') },
+  {
+    metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
+    platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
+  },
   createStatusHandler(getClient, setClient, createClient),
 );
 
@@ -120,7 +126,7 @@ server.tool(
 
 server.tool(
   'cdp_interact',
-  'Interact with a React Native UI component via the fiber tree. Finds the component by testID or accessibilityLabel and dispatches the action. Use cdp_component_tree first to confirm the component is mounted. Does not simulate native touch — calls the JS event handler directly.',
+  'DEPRECATED: Prefer device_press, device_find, or device_fill for native touch simulation via agent-device. cdp_interact calls the JS handler directly (not a real touch event) and will be removed in a future version. Use only when you specifically need to invoke a JS event handler without native touch.',
   {
     action: z.enum(['press', 'typeText', 'scroll']).describe('press: calls onPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll.'),
     testID: z.string().optional().describe('testID prop of the target component'),
@@ -131,6 +137,81 @@ server.tool(
     animated: z.boolean().default(true).describe('For scroll: whether to animate'),
   },
   createInteractHandler(getClient),
+);
+
+// --- agent-device tools (native device interaction) ---
+
+server.tool(
+  'device_list',
+  'List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.',
+  {},
+  createDeviceListHandler(),
+);
+
+server.tool(
+  'device_screenshot',
+  'Capture a screenshot of the active device screen. Returns image data or file path.',
+  {
+    path: z.string().optional().describe('Output file path (default: auto-generated in /tmp)'),
+  },
+  createDeviceScreenshotHandler(),
+);
+
+server.tool(
+  'device_snapshot',
+  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session.',
+  {
+    action: z.enum(['open', 'close', 'snapshot']).default('snapshot').describe('open: start session for an app. snapshot: capture UI tree with element refs. close: end session.'),
+    appId: z.string().optional().describe('App bundle ID — required for action=open (e.g. "com.example.app")'),
+    platform: z.enum(['ios', 'android']).optional().describe('Target platform — used with action=open to select device'),
+    sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
+  },
+  createDeviceSnapshotHandler(),
+);
+
+server.tool(
+  'device_find',
+  'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session (call device_snapshot action=open first).',
+  {
+    text: z.string().describe('Visible text, accessibility label, or identifier to find'),
+    action: z.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),
+  },
+  createDeviceFindHandler(),
+);
+
+server.tool(
+  'device_press',
+  'Tap a UI element by its @ref from device_snapshot. Simulates a native touch event. Requires an open session.',
+  {
+    ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
+  },
+  createDevicePressHandler(),
+);
+
+server.tool(
+  'device_fill',
+  'Type text into an input field by its @ref from device_snapshot. Clears existing text first. Requires an open session.',
+  {
+    ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
+    text: z.string().describe('Text to type into the field'),
+  },
+  createDeviceFillHandler(),
+);
+
+server.tool(
+  'device_swipe',
+  'Swipe on the device screen. Use for scrolling, pull-to-refresh, or dismissing modals. Requires an open session.',
+  {
+    direction: z.enum(['up', 'down', 'left', 'right']).describe('Swipe direction'),
+  },
+  createDeviceSwipeHandler(),
+);
+
+server.tool(
+  'device_back',
+  'Press the system back button (Android) or perform back navigation gesture (iOS). Requires an open session.',
+  {},
+  createDeviceBackHandler(),
 );
 
 process.on('uncaughtException', (err: Error) => {

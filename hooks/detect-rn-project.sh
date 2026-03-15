@@ -26,6 +26,9 @@ if [ "$has_rn_config" = true ]; then
   # Ensure maestro-runner is installed (silent if already present)
   bash "$PLUGIN_ROOT/scripts/ensure-maestro-runner.sh" 2>/dev/null || true
 
+  # Ensure agent-device is installed (silent if already present)
+  bash "$PLUGIN_ROOT/scripts/ensure-agent-device.sh" 2>/dev/null || true
+
   cat <<'EOF'
 React Native project detected. The rn-dev-agent plugin is active.
 

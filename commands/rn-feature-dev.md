@@ -244,9 +244,10 @@ If the blueprint specifies interactive elements (buttons, pressables, inputs),
 exercise at least ONE primary interaction to verify the feature works
 end-to-end, not just renders:
 
-1. Use `cdp_interact(testID="<primary interactive testID>", action="press")`
-   to trigger the main user action
-2. Wait 1-2 seconds for state to settle
+1. Use `device_find(text="<button text>", action="click")` or
+   `device_press(ref="@<ref>")` to trigger the main user action.
+   Fallback: `cdp_interact(testID="<testID>", action="press")` if agent-device unavailable
+2. Wait 1-2 seconds for state to settle (or use `device_snapshot` to verify UI changed)
 3. Verify the expected side effect:
    - State change: call `cdp_store_state` to confirm
    - Navigation: call `cdp_navigation_state` to confirm
@@ -289,7 +290,7 @@ Present results as a table (use the actual screenshot path for the platform):
 | Screenshot | PASS/FAIL | actual file path |
 | Health (cdp_status) | PASS/FAIL | errorCount, hasRedBox, isPaused |
 | Component (cdp_component_tree) | PASS/FAIL | component found, props summary |
-| Interaction (cdp_interact) | PASS/FAIL/SKIP | action + side effect verified |
+| Interaction (device_find/device_press) | PASS/FAIL/SKIP | action + side effect verified |
 | State (cdp_store_state) | PASS/FAIL/SKIP | state shape summary |
 | Errors (cdp_error_log) | PASS/FAIL | error count since baseline |
 
@@ -371,9 +372,9 @@ in the table, execute in order:
 
 1. **Perform the action** exactly as specified:
    - Navigation: use `cdp_evaluate` with the expression from the table
-   - Interaction: use `cdp_interact(testID="<testID>", action="<action>")`
-     or `cdp_interact(testID="<testID>", action="typeText", text="<input>")`
-   - Wait 1-2 seconds for state to settle
+   - Interaction: use `device_find(text="<text>", action="click")`,
+     `device_press(ref="@<ref>")`, or `device_fill(ref="@<ref>", text="<input>")`
+   - Wait 1-2 seconds for state to settle (or use `device_snapshot` to confirm)
 
 2. **Capture the screenshot** using the exact filename from the table:
    ```bash

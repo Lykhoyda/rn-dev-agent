@@ -26,8 +26,11 @@ native device logs, and bash tools.
 | Is there a RedBox overlay? | MCP | `cdp_component_tree` (auto-detects and warns) |
 | Dismiss RedBox / toggle inspector | MCP | `cdp_dev_settings(action="dismissRedBox")` |
 | Is Metro bundler alive? | bash | `curl localhost:8081/status` |
-| Is a specific element on screen? | Maestro | `assertVisible: "element"` |
-| What are all UI elements' positions? | bash | `adb shell uiautomator dump` (Android only) |
+| Is a specific element on screen? | MCP | `device_find(text="element")` or Maestro `assertVisible` |
+| Tap an element by text or ref | MCP | `device_find(text="Login", action="click")` or `device_press(ref="@e3")` |
+| Fill a text input | MCP | `device_fill(ref="@e5", text="hello")` |
+| What are all UI elements? | MCP | `device_snapshot` (cross-platform accessibility tree with @refs) |
+| What are all UI elements' positions? | bash | `adb shell uiautomator dump` (Android only, raw XML) |
 | Arbitrary runtime value | MCP | `cdp_evaluate(expression="...")` |
 
 **Key rule:** If `cdp_error_log` is empty but the app is visibly broken, the

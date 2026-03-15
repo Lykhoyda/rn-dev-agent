@@ -85,3 +85,9 @@ export interface ResultEnvelope<T = unknown> {
   truncated?: boolean;
   meta?: Record<string, unknown>;
 }
+
+export interface SessionState {
+  name: string;
+  platform?: string;
+  openedAt: string;
+}

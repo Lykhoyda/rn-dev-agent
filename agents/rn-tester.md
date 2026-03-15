@@ -110,8 +110,16 @@ Then verify: `cdp_navigation_state` confirms you're on the right screen.
 
 For EACH step in the flow:
 
-1. **Act**: Write a minimal Maestro flow and run it.
-   Substitute `<app-bundle-id>` with the actual bundle ID from Step 1:
+1. **Act**: Use agent-device for native interaction (preferred), or Maestro for
+   complex multi-step flows:
+
+   **agent-device (preferred — no YAML, native touch):**
+   ```
+   device_find(text="Add to Cart", action="click")
+   device_snapshot  → verify UI changed, get @refs
+   ```
+
+   **Maestro (for persistent test file generation):**
    ```bash
    cat > /tmp/step.yaml << EOF
    appId: <app-bundle-id>
@@ -124,7 +132,7 @@ For EACH step in the flow:
    maestro-runner test /tmp/step.yaml  # or: maestro test /tmp/step.yaml
    ```
 
-2. **Wait for settle**: Maestro's assertVisible handles this.
+2. **Wait for settle**: `device_snapshot` or Maestro `assertVisible` handles this.
    If no assertion target, add `sleep 0.5` before CDP queries.
 
 3. **Verify UI**: Take screenshot, then query the specific component:

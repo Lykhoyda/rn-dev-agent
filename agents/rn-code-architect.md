@@ -125,12 +125,12 @@ Design the flow to cover:
 
 Format as a numbered table:
 ```
-| Step | Action | testID / CDP | Screenshot | Expected State |
-|------|--------|-------------|------------|----------------|
-| 1 | Navigate to feature screen | __NAV_REF__.navigate('...') | 01-initial.jpg | Route confirmed, components rendered |
-| 2 | <primary interaction> | <testID> press | 02-<desc>.jpg | store.path = <value> |
-| 3 | <secondary interaction> | <testID> press/typeText | 03-<desc>.jpg | <visual or state change> |
-| 4 | <edge case or toggle back> | <testID> press | 04-<desc>.jpg | <expected result> |
+| Step | Action | Tool + Target | Screenshot | Expected State |
+|------|--------|--------------|------------|----------------|
+| 1 | Navigate to feature screen | `cdp_evaluate` __NAV_REF__.navigate('...') | 01-initial.jpg | Route confirmed, components rendered |
+| 2 | <primary interaction> | `device_find` text="<text>" action=click OR `device_press` ref=@<ref> | 02-<desc>.jpg | store.path = <value> |
+| 3 | <secondary interaction> | `device_find`/`device_fill` ref=@<ref> text="<input>" | 03-<desc>.jpg | <visual or state change> |
+| 4 | <edge case or toggle back> | `device_find` text="<text>" action=click | 04-<desc>.jpg | <expected result> |
 ```
 
 Rules:

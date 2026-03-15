@@ -1,3 +1,4 @@
+import { hasActiveSession } from './agent-device-wrapper.js';
 export function okResult(data, opts) {
     const envelope = { ok: true, data };
     if (opts?.truncated)
@@ -122,5 +123,13 @@ export function withConnection(getClient, handler, options = {}) {
             }
             return failResult(message);
         }
+    };
+}
+export function withSession(handler) {
+    return async (args) => {
+        if (!hasActiveSession()) {
+            return failResult('No device session open. Call device_snapshot with action="open" and provide appId and platform first.', { hint: 'device_snapshot action=open starts a session. All device_press/device_fill/device_find/device_swipe/device_back tools require an open session.' });
+        }
+        return handler(args);
     };
 }

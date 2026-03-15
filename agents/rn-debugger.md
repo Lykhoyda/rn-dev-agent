@@ -90,6 +90,7 @@ Then, once connected, gather evidence in parallel:
 - `cdp_network_log` -- recent requests and their status codes
 - `cdp_navigation_state` -- current screen/route (use this to determine filter for tree)
 - `cdp_component_tree(filter="<current-route-name>", depth=3)` -- current UI tree
+- `device_snapshot` -- native accessibility tree (reveals issues invisible to CDP: native overlays, system dialogs, frozen UI elements)
 
 ### Step 3: Identify Error Type
 

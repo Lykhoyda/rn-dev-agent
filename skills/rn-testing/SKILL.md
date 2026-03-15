@@ -60,11 +60,18 @@ Improvement: 2.2x faster per step. Over a 10-step test: saves ~17 seconds.
 
 ---
 
-## Critical Timing Rule: Maestro Before CDP
+## Critical Timing Rule: Wait Before CDP
 
 After any UI interaction, React needs time to commit updates to the Fiber tree.
 
-RIGHT:
+### With agent-device (preferred for live verification)
+```
+1. device_find text="Submit" action=click  → native tap
+2. device_snapshot  → verify UI changed (new elements, @refs)
+3. cdp_store_state  → now safe to read React state
+```
+
+### With Maestro (for persistent YAML E2E tests)
 ```
 1. Maestro tap/input
 2. Maestro assertVisible (wait for UI to settle)
@@ -73,13 +80,13 @@ RIGHT:
 
 WRONG (race condition — gets stale state):
 ```
-1. Maestro tap
+1. device_find "Submit" action=click  OR  Maestro tap
 2. Immediately: cdp_store_state → returns OLD state
 ```
 
 If no visual indicator exists after an action, add an explicit delay:
 ```bash
-# maestro tapOn "Submit"
+# After interaction, wait for React to settle
 # bash: sleep 0.7
 # cdp_store_state
 ```
@@ -283,8 +290,9 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
-| maestro-runner | Recommended | UI test execution | Single binary download |
-| Maestro | Fallback | UI test execution | `brew install maestro` |
+| agent-device | Recommended | Live device interaction | `npm install -g agent-device` |
+| maestro-runner | Recommended | YAML E2E test execution | Single binary download |
+| Maestro | Fallback | YAML E2E test execution | `brew install maestro` |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |
 | Android SDK + adb | Android | Android testing | developer.android.com |
 | Node.js >= 18 | Required | CDP MCP server | nodejs.org |
