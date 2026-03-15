@@ -1,8 +1,19 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 5;
+  var __HELPERS_VERSION__ = 6;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
+
+  function findActiveRenderer() {
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (!hook || !hook.renderers || hook.renderers.size === 0) return null;
+    for (var entry of hook.renderers) {
+      var id = entry[0];
+      var roots = hook.getFiberRoots(id);
+      if (roots && roots.size > 0) return { rendererId: id, roots: roots };
+    }
+    return null;
+  }
 
   function safeStringify(obj, maxLen) {
     try {
@@ -39,18 +50,12 @@ export const INJECTED_HELPERS = `
     var maxDepth = opts.maxDepth || 4;
     var filter = opts.filter || opts.testID || opts.type || null;
 
-    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || !hook.renderers || hook.renderers.size === 0) {
-      return JSON.stringify({ error: 'React DevTools hook not available' });
+    var renderer = findActiveRenderer();
+    if (!renderer) {
+      return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots — app may still be loading' });
     }
 
-    var rendererId = hook.renderers.keys().next().value;
-    var roots = hook.getFiberRoots(rendererId);
-    if (!roots || roots.size === 0) {
-      return JSON.stringify({ error: 'No fiber roots — app may still be loading' });
-    }
-
-    var root = roots.values().next().value;
+    var root = renderer.roots.values().next().value;
     var visited = new WeakSet();
     var totalNodes = 0;
 
@@ -223,12 +228,10 @@ export const INJECTED_HELPERS = `
       if (devtools && devtools.getNavState) return safeStringify(devtools.getNavState(), 50000);
     } catch(e) {}
 
-    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook) return JSON.stringify({ error: 'No navigation state found' });
+    var renderer = findActiveRenderer();
+    if (!renderer) return JSON.stringify({ error: 'No navigation state found' });
 
-    var rendererId = hook.renderers.keys().next().value;
-    var roots = hook.getFiberRoots(rendererId);
-    var root = roots && roots.values().next().value;
+    var root = renderer.roots.values().next().value;
 
     function findNav(fiber, depth) {
       var current = fiber;
@@ -293,11 +296,9 @@ export const INJECTED_HELPERS = `
     }
 
     if (!state) {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (hook) {
-        var rendererId = hook.renderers.keys().next().value;
-        var roots = hook.getFiberRoots(rendererId);
-        var root = roots && roots.values().next().value;
+      var storeRenderer = findActiveRenderer();
+      if (storeRenderer) {
+        var root = storeRenderer.roots.values().next().value;
 
         function findStore(fiber, depth) {
           var current = fiber;
@@ -451,18 +452,12 @@ export const INJECTED_HELPERS = `
     if (!action) return JSON.stringify({ error: 'action is required' });
     if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
 
-    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || !hook.renderers || hook.renderers.size === 0) {
-      return JSON.stringify({ error: 'React DevTools hook not available' });
+    var renderer = findActiveRenderer();
+    if (!renderer) {
+      return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots — app may still be loading' });
     }
 
-    var rendererId = hook.renderers.keys().next().value;
-    var roots = hook.getFiberRoots(rendererId);
-    if (!roots || roots.size === 0) {
-      return JSON.stringify({ error: 'No fiber roots — app may still be loading' });
-    }
-
-    var root = roots.values().next().value;
+    var root = renderer.roots.values().next().value;
     var found = null;
     var findCount = 0;
 
@@ -566,8 +561,7 @@ export const INJECTED_HELPERS = `
     clearConsole: clearConsole,
     interact: interact,
     isReady: function() {
-      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      return !!(hook && hook.renderers && hook.renderers.size > 0 && hook.getFiberRoots);
+      return !!findActiveRenderer();
     },
     getAppInfo: function() {
       try {

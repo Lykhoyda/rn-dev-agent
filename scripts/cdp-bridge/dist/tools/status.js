@@ -21,7 +21,18 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 setClient(client);
             }
             if (!client.isConnected) {
-                await client.autoConnect(args.metroPort);
+                await client.autoConnect(args.metroPort, args.platform);
+            }
+            else if (args.platform) {
+                // Already connected — check if the current target matches the requested platform
+                const currentTarget = client.connectedTarget;
+                const haystack = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`.toLowerCase();
+                if (!haystack.includes(args.platform.toLowerCase())) {
+                    await client.disconnect();
+                    client = createClient(client.metroPort);
+                    setClient(client);
+                    await client.autoConnect(args.metroPort, args.platform);
+                }
             }
             let appInfo = null;
             let errorCount = 0;

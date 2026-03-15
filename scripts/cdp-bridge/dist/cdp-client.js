@@ -59,21 +59,24 @@ export class CDPClient {
         this._helpersInjected = true;
         return true;
     }
-    async autoConnect(portHint) {
+    async autoConnect(portHint, platformFilter) {
         if (this._state === 'connecting' || this.reconnecting) {
             throw new Error('Already connecting to Metro...');
         }
         if (this.disposed) {
             throw new Error('Client is disposed. Create a new CDPClient instance.');
         }
-        return this.discoverAndConnect(portHint);
+        return this.discoverAndConnect(portHint, platformFilter);
     }
-    async discoverAndConnect(portHint) {
+    _platformFilter;
+    async discoverAndConnect(portHint, platformFilter) {
         if (this.disposed) {
             throw new Error('Client is disposed. Create a new CDPClient instance.');
         }
         if (portHint)
             this._port = portHint;
+        if (platformFilter !== undefined)
+            this._platformFilter = platformFilter || undefined;
         this._state = 'connecting';
         const ports = [...new Set([this._port, ...DEFAULT_PORTS])];
         let metroPort = null;
@@ -117,7 +120,7 @@ export class CDPClient {
         }
         const validTargets = targets
             .filter(t => !!t.webSocketDebuggerUrl && !t.title?.includes('Experimental') &&
-            (t.vm === 'Hermes' || t.title?.includes('React Native')))
+            (t.vm === 'Hermes' || t.title?.includes('React Native') || t.description?.includes('React Native')))
             .map(t => ({
             ...t,
             webSocketDebuggerUrl: t.webSocketDebuggerUrl
@@ -137,8 +140,25 @@ export class CDPClient {
             this._state = 'disconnected';
             throw new Error('No Hermes debug target found. Is the app running? Is Hermes enabled?');
         }
+        // Filter by platform if specified (matches against title and description)
+        let filteredTargets = validTargets;
+        let platformFilterWarning;
+        if (this._platformFilter) {
+            const pf = this._platformFilter.toLowerCase();
+            const platformMatched = validTargets.filter(t => {
+                const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
+                return haystack.includes(pf);
+            });
+            if (platformMatched.length > 0) {
+                filteredTargets = platformMatched;
+            }
+            else {
+                platformFilterWarning = `Platform filter "${this._platformFilter}" matched no targets (available: ${validTargets.map(t => t.title || t.id).join(', ')}). Connecting to best available target.`;
+                console.error('CDP: ' + platformFilterWarning);
+            }
+        }
         // Sort by descending page ID (highest = most recent session)
-        const sorted = [...validTargets].sort((a, b) => {
+        const sorted = [...filteredTargets].sort((a, b) => {
             const aPage = parseInt(a.id?.split('-')[1] ?? '0', 10);
             const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
             return bPage - aPage;
@@ -180,7 +200,8 @@ export class CDPClient {
             }
         }
         this._connectionGeneration++;
-        return `Connected to ${connectedTarget.title} on port ${metroPort}`;
+        const msg = `Connected to ${connectedTarget.title} on port ${metroPort}`;
+        return platformFilterWarning ? `${msg}. WARNING: ${platformFilterWarning}` : msg;
     }
     async softReconnect() {
         if (this.disposed)

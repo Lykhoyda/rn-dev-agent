@@ -3,7 +3,15 @@ export function createReloadHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         // Step 1: Trigger reload — expected to disconnect the WS
         try {
-            const result = await client.evaluate('(function() { var ds = typeof __turboModuleProxy === "function" ? __turboModuleProxy("DevSettings") : null; if (!ds) try { ds = require("react-native").DevSettings; } catch(e) {} if (ds && ds.reload) ds.reload(); else throw new Error("DevSettings not available"); })()');
+            const result = await client.evaluate('(function() {' +
+                '  var ds = null;' +
+                '  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}' +
+                '  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}' +
+                '  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}' +
+                '  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }' +
+                '  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }' +
+                '  throw new Error("DevSettings not available — use Maestro or simctl to restart the app");' +
+                '})()');
             if (result.error) {
                 return failResult(`Reload failed: ${result.error}`);
             }

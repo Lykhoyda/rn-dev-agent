@@ -4,10 +4,9 @@ import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 type DevAction = 'reload' | 'toggleInspector' | 'togglePerfMonitor' | 'dismissRedBox';
 
 const RESOLVE_DEV_SETTINGS = `(function() {
-  if (typeof __turboModuleProxy === 'function') {
-    var ds = __turboModuleProxy("DevSettings");
-    if (ds) return ds;
-  }
+  if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
+  if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
+  if (typeof globalThis.__fbBatchedBridge !== 'undefined') try { var ds3 = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); if (ds3) return ds3; } catch(e) {}
   try { return require("react-native").DevSettings; } catch(e) {}
   return null;
 })()`;
