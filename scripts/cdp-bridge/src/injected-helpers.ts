@@ -685,6 +685,25 @@ export const INJECTED_HELPERS = `
         return JSON.stringify({ navigated: true, screen: screen, method: 'nested-dispatch', path: path });
       }
 
+      var tabsRoute = state.routes && state.routes.find(function(r) { return r.name === 'Tabs'; });
+      var tabState = tabsRoute && tabsRoute.state;
+      var tabNames = tabState && tabState.routeNames ? tabState.routeNames : [];
+      for (var t = 0; t < tabNames.length; t++) {
+        try {
+          var beforeState = JSON.stringify(ref.getRootState());
+          ref.navigate(tabNames[t], { screen: screen, params: params });
+          var afterState = ref.getRootState();
+          var activeRoute = afterState;
+          while (activeRoute.routes && activeRoute.index !== undefined) {
+            activeRoute = activeRoute.routes[activeRoute.index].state || activeRoute.routes[activeRoute.index];
+          }
+          var activeName = activeRoute.name || (activeRoute.routes && activeRoute.routes[activeRoute.index] && activeRoute.routes[activeRoute.index].name);
+          if (activeName === screen) {
+            return JSON.stringify({ navigated: true, screen: screen, method: 'tab-scan', tab: tabNames[t] });
+          }
+        } catch(e2) { /* try next tab */ }
+      }
+
       ref.navigate(screen, params || undefined);
       return JSON.stringify({ navigated: true, screen: screen, method: 'fallback-navigate' });
 
