@@ -505,7 +505,7 @@ so important tasks are always visible first.
 
 ---
 
-## S18: Gesture Handler Drag-to-Reorder `[ ]`
+## S18: Gesture Handler Drag-to-Reorder `[DONE]`
 
 **As a user**, I want to long-press a task and drag it to reorder the list, with haptic feedback on grab and drop.
 

@@ -116,6 +116,12 @@ const tasksSlice = createSlice({
     commitDelete: (state) => {
       state.pendingDelete = null;
     },
+    reorderTasks: (state, action: PayloadAction<{ fromIndex: number; toIndex: number }>) => {
+      const { fromIndex, toIndex } = action.payload;
+      if (fromIndex < 0 || fromIndex >= state.items.length || toIndex < 0 || toIndex >= state.items.length) return;
+      const [moved] = state.items.splice(fromIndex, 1);
+      state.items.splice(toIndex, 0, moved);
+    },
     shuffleTasks: (state) => {
       for (let i = state.items.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -125,7 +131,7 @@ const tasksSlice = createSlice({
   },
 });
 
-export const { addTask, addTaskFull, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort, softDelete, restoreTask, commitDelete, shuffleTasks } = tasksSlice.actions;
+export const { addTask, addTaskFull, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort, softDelete, restoreTask, commitDelete, reorderTasks, shuffleTasks } = tasksSlice.actions;
 
 export const selectActiveTaskCount = createSelector(
   (state: { tasks: TasksState }) => state.tasks.items,
