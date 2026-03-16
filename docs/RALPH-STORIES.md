@@ -452,7 +452,7 @@ so important tasks are always visible first.
 
 ---
 
-## S15: Reanimated Layout Animations `[ ]`
+## S15: Reanimated Layout Animations `[DONE]`
 
 **As a user**, I want the task list to use Reanimated layout animations — entering items slide in from right, exiting items fade out + shrink, and reordering items animate smoothly.
 

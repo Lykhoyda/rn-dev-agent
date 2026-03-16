@@ -1055,5 +1055,8 @@ Replaced manual fetch/dispatch pattern with `@tanstack/react-query` `useInfinite
 
 ## 2026-03-16: S14 Bottom Sheet (Partial)
 
+### D322: Reanimated layout animations on task rows — animation state invisible to CDP
+Wrapped `SwipeableTaskRow` in `Reanimated.View` with `entering={SlideInRight}`, `exiting={FadeOut}`, `layout={Layout.springify()}`. Added `shuffleTasks` reducer for testing layout reorder animations. Plugin finding: Reanimated animations execute on UI thread worklets — completely invisible to JS/CDP. Only screenshot timing can verify. The entering/exiting props work but `cdp_component_tree` shows no animation-related state.
+
 ### D321: @gorhom/bottom-sheet renders but snapToIndex fails silently in Expo Go
 Installed `@gorhom/bottom-sheet` + `react-native-gesture-handler`. Created `TaskBottomSheet` component with 3 snap points (25%/50%/90%), backdrop, and task editing. The BottomSheet renders (no JS errors) but `snapToIndex(1)` from a ref called in `handleNavigate` doesn't open the sheet. Root cause: likely Reanimated worklet initialization timing in Expo Go — the sheet needs to be fully mounted before snap calls work. The component is created but the sheet's internal layout pass hasn't completed. This is a known Expo Go limitation with Gorhom bottom-sheet v4. Plugin finding: `cdp_interact` cannot trigger native gestures (swipe-up), and `snapToIndex` via ref requires precise timing that CDP can't guarantee.

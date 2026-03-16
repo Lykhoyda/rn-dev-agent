@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, Animated } from 'react-native';
+import Reanimated, { SlideInRight, FadeOut, Layout } from 'react-native-reanimated';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps, NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -10,6 +11,7 @@ import {
   markAllSynced,
   toggleSort,
   softDelete,
+  shuffleTasks,
   selectSortedFilteredTasks,
   selectUnsyncedCount,
   selectActiveTaskCount,
@@ -89,12 +91,19 @@ export default function TasksScreen({ navigation }: Props) {
   }, [filteredTasks]);
 
   const renderItem = useCallback(({ item }: { item: TaskItem }) => (
-    <SwipeableTaskRow
-      item={item}
-      colors={colors}
-      onDelete={handleSwipeDelete}
-      onNavigate={handleNavigate}
-    />
+    <Reanimated.View
+      testID={`task-row-animated-${item.id}`}
+      entering={SlideInRight.duration(300)}
+      exiting={FadeOut.duration(200)}
+      layout={Layout.springify()}
+    >
+      <SwipeableTaskRow
+        item={item}
+        colors={colors}
+        onDelete={handleSwipeDelete}
+        onNavigate={handleNavigate}
+      />
+    </Reanimated.View>
   ), [colors, handleSwipeDelete, handleNavigate]);
 
   return (
@@ -147,6 +156,13 @@ export default function TasksScreen({ navigation }: Props) {
           >
             {currentSort === 'priority' ? 'Sort: Priority' : 'Sort: Default'}
           </Text>
+        </Pressable>
+        <Pressable
+          testID="shuffle-btn"
+          className={`rounded-full px-4 py-1.5 bg-orange-500`}
+          onPress={() => dispatch(shuffleTasks())}
+        >
+          <Text className="font-semibold text-white">Shuffle</Text>
         </Pressable>
       </View>
 
