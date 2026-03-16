@@ -118,6 +118,28 @@ server.tool(
 );
 
 server.tool(
+  'cdp_navigate',
+  'Navigate to any screen by name, including nested stack screens that __NAV_REF__.navigate() cannot reach. Builds a nested dispatch action by walking the navigation state tree. Works across tabs, stacks, and modals.',
+  {
+    screen: z.string().describe('Screen name to navigate to (e.g. "AllTasks", "Dashboard", "ProfileEditModal")'),
+    params: z.record(z.unknown()).optional().describe('Screen params (e.g. { id: "1" })'),
+  },
+  withConnection(getClient, async (args: { screen: string; params?: Record<string, unknown> }, client) => {
+    const paramsArg = args.params ? JSON.stringify(args.params) : 'undefined';
+    const expression = `__RN_AGENT.navigateTo(${JSON.stringify(args.screen)}, ${paramsArg})`;
+    const result = await client.evaluate(expression);
+    if (result.error) return failResult(`Navigate error: ${result.error}`);
+    if (typeof result.value !== 'string') return failResult('Unexpected response');
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.value); } catch { return okResult({ raw: result.value }); }
+    if (parsed !== null && typeof parsed === 'object' && '__agent_error' in (parsed as Record<string, unknown>)) {
+      return failResult(String((parsed as Record<string, unknown>).__agent_error));
+    }
+    return okResult(parsed);
+  }),
+);
+
+server.tool(
   'cdp_component_state',
   'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).',
   {
@@ -159,7 +181,7 @@ server.tool(
 
 server.tool(
   'cdp_interact',
-  'DEPRECATED: Prefer device_press, device_find, or device_fill for native touch simulation via agent-device. cdp_interact calls the JS handler directly (not a real touch event) and will be removed in a future version. Use only when you specifically need to invoke a JS event handler without native touch.',
+  'Interact with React components by testID — press buttons, type text, scroll. Calls JS handlers directly (not native touch). Reliable for all React-level interactions. For native gestures (swipe, drag), use device_swipe/device_press instead.',
   {
     action: z.enum(['press', 'typeText', 'scroll']).describe('press: calls onPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll.'),
     testID: z.string().optional().describe('testID prop of the target component'),

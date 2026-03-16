@@ -1413,3 +1413,33 @@ Split MCP server into a stable supervisor process + restartable CDP worker. When
 
 **Status:** Planned — fixes B73 (MCP death on Metro restart)
 **Impact:** Production reliability for real-world development loops
+
+---
+
+## Phase 44: Experience Engine (Planned)
+
+**Status:** Designed — spec at `docs/superpowers/specs/2026-03-16-experience-engine-design.md`
+**Impact:** Self-improving plugin that learns from failures — the tool gets better with every use
+**Decisions:** D325-D332
+
+A local-only self-improvement system that captures failure patterns, classifies them, distills heuristics, and promotes validated learnings into the agent's active context. Inspired by Voyager (skill library), Reflexion (episodic memory), and DSPy (metric-driven optimization).
+
+### Key Concepts
+- **Three-layer cascade**: Seed (ships with plugin) → User-Global (~/.claude/rn-agent/) → Project-Local (.rn-agent-experience.md, committable)
+- **"Ghost in the Machine"**: Try known recovery before code rewrite (saves ~3 fix-retry loops)
+- **Multi-plane disagreement detection**: Cross-reference screenshot/store/tree/nav to auto-classify failures
+- **LLM-driven compaction**: Consolidate telemetry into <2000 token active experience
+- **Human-gated promotion**: Auto-promote only machine-verifiable recoveries; everything else needs human review
+
+### Sub-Phases
+- **Phase A**: Foundation — seed YAML files, telemetry writer, redaction middleware, consent flow
+- **Phase B**: Classification + Retrieval — failure family matching, experience loading at run start, Ghost pattern
+- **Phase C**: Compaction + Promotion — `rn-agent-compact` command, stale decay, confidence tracking
+- **Phase D**: Sharing + Polish — export/import, team workflow, trend analysis dashboard
+
+### Privacy Guarantees
+- All data local-only — no telemetry, no cloud sync
+- Auto-redaction of secrets, tokens, PII, absolute paths
+- Opt-out via config.json flag
+- Delete ~/.claude/rn-agent/ to fully reset
+- SECURITY.md published in repo for audit

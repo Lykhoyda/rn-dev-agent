@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 8;
+  var __HELPERS_VERSION__ = 9;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -635,6 +635,64 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ dispatched: true });
   }
 
+  function navigateTo(screen, params) {
+    var ref = globalThis.__NAV_REF__;
+    if (!ref) return JSON.stringify({ __agent_error: '__NAV_REF__ not available' });
+
+    try {
+      var state = ref.getRootState();
+      if (!state) return JSON.stringify({ __agent_error: 'No navigation state' });
+
+      if (state.routeNames && state.routeNames.indexOf(screen) !== -1) {
+        ref.navigate(screen, params || undefined);
+        return JSON.stringify({ navigated: true, screen: screen, method: 'direct' });
+      }
+
+      function findPath(navState, target, path) {
+        if (!navState) return null;
+        var names = navState.routeNames || [];
+        if (names.indexOf(target) !== -1) {
+          path.push(target);
+          return path;
+        }
+        var routes = navState.routes || [];
+        for (var i = 0; i < routes.length; i++) {
+          var route = routes[i];
+          var childState = route.state;
+          if (!childState && navState.routeNames) {
+            for (var j = 0; j < navState.routeNames.length; j++) {
+              if (navState.routeNames[j] === route.name && route.state) {
+                childState = route.state;
+                break;
+              }
+            }
+          }
+          if (childState) {
+            var result = findPath(childState, target, path.concat([route.name]));
+            if (result) return result;
+          }
+        }
+        return null;
+      }
+
+      var path = findPath(state, screen, []);
+      if (path && path.length > 0) {
+        var action = { screen: path[path.length - 1], params: params };
+        for (var i = path.length - 2; i >= 0; i--) {
+          action = { screen: path[i], params: action };
+        }
+        ref.dispatch({ type: 'NAVIGATE', payload: { name: action.screen, params: action.params } });
+        return JSON.stringify({ navigated: true, screen: screen, method: 'nested-dispatch', path: path });
+      }
+
+      ref.navigate(screen, params || undefined);
+      return JSON.stringify({ navigated: true, screen: screen, method: 'fallback-navigate' });
+
+    } catch(e) {
+      return JSON.stringify({ __agent_error: 'Navigation failed: ' + (e && e.message || String(e)) });
+    }
+  }
+
   function getComponentState(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
     var renderer = findActiveRenderer();
@@ -715,6 +773,7 @@ export const INJECTED_HELPERS = `
     __v: __HELPERS_VERSION__,
     getTree: getTree,
     getNavState: getNavState,
+    navigateTo: navigateTo,
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     dispatchAction: dispatchAction,

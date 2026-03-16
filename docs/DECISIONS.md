@@ -1068,3 +1068,40 @@ Created `AllTasksScreen` with `@shopify/flash-list` rendering 500 generated task
 
 ### D324: MCP server process dies when Metro is restarted — CDP tools unavailable mid-session
 Killing the Metro process (to clear cache) also killed the MCP server child process. All `cdp_*` tools became unavailable for the rest of the session. This is a critical operational finding — the MCP server runs as a Claude Code child process and cannot be restarted without a new Claude Code session. Workaround: avoid killing Metro mid-session; use `cdp_reload(full=true)` instead. If Metro must restart, the entire Claude Code session must restart too.
+
+## 2026-03-16: Experience Engine Design
+
+### D325: Local-only experience storage — no cloud, no telemetry
+All experience data (failure patterns, recovery heuristics, raw telemetry) is stored exclusively on the user's machine under `~/.claude/rn-agent/` and `<project>/.rn-agent-experience.md`. The plugin team has zero access to or responsibility for this data. This is both a privacy feature and a precision feature — local experience "overfits" to the user's specific project (RN version, Expo SDK, architecture, dependencies), producing higher-precision heuristics than a pooled global model ever could. Reviewed with Codex and Gemini — unanimous agreement that local-only is the correct architecture.
+
+### D326: Three-layer experience cascade (Seed → User-Global → Project-Local)
+Experience resolves in priority order: project-local overrides user-global overrides seed knowledge (analogous to CSS specificity). Seed knowledge ships read-only with the plugin (universal RN truths). User-global lives at `~/.claude/rn-agent/experience.md` (machine-specific quirks, gitignored). Project-local lives at `<project>/.rn-agent-experience.md` (committable to git, shared across the team). This enables cold-start via seeds, personal learning via user-global, and team knowledge sharing via project-local.
+
+### D327: Markdown + JSONL hybrid over SQLite for experience storage
+Active experience uses Markdown (LLM-readable natively, user-inspectable, git-committable). Raw telemetry uses append-only JSONL.gz (fast writes, easy pruning, trivially importable into SQLite later if needed). Rejected SQLite because: (1) LLMs cannot query SQLite directly, (2) binary files are opaque to users, (3) Claude Code's memory system is already Markdown-based. Codex recommended SQLite; Gemini and Claude recommended Markdown+JSONL. Chose Markdown+JSONL for v1 with SQLite as a v2 migration path if structured queries are needed.
+
+### D328: Auto-redaction middleware on all experience write paths
+A mandatory `redact()` function scrubs secrets, tokens, PII, absolute paths, and network response bodies before any data is written to telemetry or experience files. Even though storage is local-only, this protects users who share experience files, export anonymized bundles, or whose machines are accessed by others. Patterns include high-entropy regex (trufflehog-style), auth store slice detection, and absolute path normalization.
+
+### D329: Multi-plane disagreement detection for automatic failure classification
+React Native's unique multi-observability (screenshot + store state + component tree + navigation state) enables automatic failure classification. When observation planes disagree (e.g., store changed but screenshot didn't), the system automatically categorizes the failure type (selector/binding bug, render-only update, native-only change, etc.). This classification feeds the failure family ontology and improves recovery recommendations.
+
+### D330: LLM-driven compaction cycle for experience management
+Instead of programmatic pruning, the experience store uses an LLM-driven compaction command (`rn-agent-compact`) that consolidates raw telemetry into high-level rules, removes stale heuristics, and keeps the active experience under 2000 tokens. This is inspired by Gemini's suggestion — the LLM is better at semantic consolidation than rule-based pruning. Raw JSONL serves as backup for re-derivation.
+
+### D331: Human-gated promotion for non-trivial heuristics
+Fully automated promotion is restricted to machine-verifiable recoveries (retry policies, reload sequences, timeout adjustments). All heuristics that would affect code generation, architectural decisions, or tool behavior require human review before promotion. This prevents the system from learning incorrect lessons from misclassified failures (the credit assignment problem identified by Codex).
+
+### D332: "Ghost in the Machine" pattern — try recovery before code rewrite
+When a failure matches a known "no-code-fix" pattern (Metro cache, fast-refresh stale, CDP target stale), the system tries the recovery action (reload, cache clear, reconnect) BEFORE entering a fix-retry loop. Based on evaluator data, this saves ~3 fix-retry loops per occurrence. Named pattern suggested by Gemini.
+
+## 2026-03-16: Post-Ralph-Loop Tool Fixes
+
+### D333: New cdp_navigate tool with recursive nested path builder (fixes B74)
+`__NAV_REF__.navigate('ScreenName')` only works for root-level screens. For nested stacks (Dashboard inside HomeStack, AllTasks inside TasksStack), `navigate()` silently fails. New `navigateTo(screen, params)` helper walks `getRootState()` recursively to find the target screen in any navigator, builds a fully nested dispatch action (`Tabs → HomeTab → Dashboard`), and dispatches it. Registered as 22nd MCP tool `cdp_navigate`. Verified: Dashboard navigation works that previously failed.
+
+### D334: cdp_interact un-deprecated — most reliable interaction method for Expo Go
+Ralph Loop S12-S21 proved that `cdp_interact` (calls JS handlers directly via testID) works 100% of the time for buttons and text inputs in Expo Go. `device_press/device_find` require an agent-device session which steals focus from Expo Go (B71). Re-described `cdp_interact` as the primary interaction tool for React-level interactions, with `device_*` tools for native gestures only.
+
+### D335: Helpers version 9 — navigateTo + updated interact description
+Bumped to v9 for `navigateTo` function and public API addition.
