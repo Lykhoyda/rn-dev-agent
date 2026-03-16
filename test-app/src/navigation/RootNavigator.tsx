@@ -23,6 +23,7 @@ import TasksScreen from '../screens/TasksScreen';
 import TaskDetailScreen from '../screens/TaskDetailScreen';
 import AllTasksScreen from '../screens/AllTasksScreen';
 import DashboardScreen from '../screens/DashboardScreen';
+import OnboardingScreen from '../screens/OnboardingScreen';
 import ErrorLabModal from '../screens/ErrorLabModal';
 import ProfileEditModal from '../screens/ProfileEditModal';
 import TaskWizardModal from '../screens/TaskWizardModal';
@@ -154,8 +155,11 @@ const linking = {
 };
 
 export default function RootNavigator() {
+  const onboardingComplete = useSelector((state: { settings: { onboardingComplete: boolean } }) => state.settings.onboardingComplete);
+
   return (
-    <RootStack.Navigator>
+    <RootStack.Navigator initialRouteName={onboardingComplete ? 'Tabs' : 'Onboarding'}>
+      <RootStack.Screen name="Onboarding" component={OnboardingScreen} options={{ headerShown: false }} />
       <RootStack.Screen name="Tabs" component={TabNavigator} options={{ headerShown: false }} />
       <RootStack.Screen name="ProfileEditModal" component={ProfileEditModal} options={{ presentation: 'modal', headerShown: false }} />
       <RootStack.Screen name="TaskWizard" component={TaskWizardModal} options={{ presentation: 'modal', headerShown: false }} />

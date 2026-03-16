@@ -5,6 +5,11 @@ export type TaskFilter = 'all' | 'active' | 'done';
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type TaskSort = 'default' | 'priority';
 
+export interface TaskReminder {
+  scheduledFor: number;
+  notifId: string;
+}
+
 export interface TaskItem {
   id: string;
   title: string;
@@ -13,6 +18,7 @@ export interface TaskItem {
   synced: boolean;
   priority: TaskPriority;
   tags: string[];
+  reminder: TaskReminder | null;
 }
 
 export interface PendingDelete {
@@ -30,9 +36,9 @@ interface TasksState {
 
 const initialState: TasksState = {
   items: [
-    { id: '1', title: 'Review pull request', description: '', done: false, synced: true, priority: 'high', tags: [] },
-    { id: '2', title: 'Update documentation', description: '', done: false, synced: true, priority: 'low', tags: [] },
-    { id: '3', title: 'Fix navigation bug', description: '', done: true, synced: true, priority: 'medium', tags: [] },
+    { id: '1', title: 'Review pull request', description: '', done: false, synced: true, priority: 'high', tags: [], reminder: null },
+    { id: '2', title: 'Update documentation', description: '', done: false, synced: true, priority: 'low', tags: [], reminder: null },
+    { id: '3', title: 'Fix navigation bug', description: '', done: true, synced: true, priority: 'medium', tags: [], reminder: null },
   ],
   filter: 'all',
   sort: 'default',
@@ -56,6 +62,7 @@ const tasksSlice = createSlice({
         synced: false,
         priority: 'medium',
         tags: [],
+        reminder: null,
       });
     },
     addTaskFull: (state, action: PayloadAction<{ title: string; description: string; priority: TaskPriority; tags: string[] }>) => {
@@ -71,7 +78,12 @@ const tasksSlice = createSlice({
         synced: false,
         priority: action.payload.priority,
         tags: action.payload.tags,
+        reminder: null,
       });
+    },
+    setReminder: (state, action: PayloadAction<{ id: string; reminder: TaskReminder | null }>) => {
+      const task = state.items.find((t) => t.id === action.payload.id);
+      if (task) task.reminder = action.payload.reminder;
     },
     toggleTask: (state, action: PayloadAction<string>) => {
       const task = state.items.find((t) => t.id === action.payload);
@@ -131,7 +143,7 @@ const tasksSlice = createSlice({
   },
 });
 
-export const { addTask, addTaskFull, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort, softDelete, restoreTask, commitDelete, reorderTasks, shuffleTasks } = tasksSlice.actions;
+export const { addTask, addTaskFull, setReminder, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort, softDelete, restoreTask, commitDelete, reorderTasks, shuffleTasks } = tasksSlice.actions;
 
 export const selectActiveTaskCount = createSelector(
   (state: { tasks: TasksState }) => state.tasks.items,

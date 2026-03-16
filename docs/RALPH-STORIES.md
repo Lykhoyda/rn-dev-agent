@@ -541,7 +541,7 @@ so important tasks are always visible first.
 
 ---
 
-## S20: Expo Notifications — Local Reminders `[ ]`
+## S20: Expo Notifications — Local Reminders `[DONE]`
 
 **As a user**, I want to schedule local notifications as task reminders — pick a time, notification fires with task title, tapping it opens the task detail.
 
@@ -559,7 +559,7 @@ so important tasks are always visible first.
 
 ---
 
-## S21: Animated Onboarding Flow with Moti `[ ]`
+## S21: Animated Onboarding Flow with Moti `[DONE]`
 
 **As a user**, I want a first-launch onboarding flow with 4 animated screens (staggered fade-ins, slide transitions, Lottie-style illustrations via Moti), skip button, and "Get Started" that marks onboarding complete.
 

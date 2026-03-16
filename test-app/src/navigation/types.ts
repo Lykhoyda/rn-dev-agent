@@ -31,6 +31,7 @@ export type TabParams = {
 };
 
 export type RootStackParams = {
+  Onboarding: undefined;
   Tabs: NavigatorScreenParams<TabParams>;
   ProfileEditModal: undefined;
   TaskWizard: undefined;

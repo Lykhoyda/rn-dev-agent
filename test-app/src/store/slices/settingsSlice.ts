@@ -5,12 +5,14 @@ interface SettingsState {
   theme: 'light' | 'dark';
   language: 'en' | 'de';
   lastSynced: number | null;
+  onboardingComplete: boolean;
 }
 
 const initialState: SettingsState = {
   theme: 'light',
   language: 'en',
   lastSynced: null,
+  onboardingComplete: false,
 };
 
 const settingsSlice = createSlice({
@@ -26,10 +28,13 @@ const settingsSlice = createSlice({
     setLastSynced: (state, action: PayloadAction<number>) => {
       state.lastSynced = action.payload;
     },
+    completeOnboarding: (state) => {
+      state.onboardingComplete = true;
+    },
   },
 });
 
-export const { toggleTheme, setLanguage, setLastSynced } = settingsSlice.actions;
+export const { toggleTheme, setLanguage, setLastSynced, completeOnboarding } = settingsSlice.actions;
 
 export const selectLastSynced = (state: { settings: SettingsState }) =>
   state.settings.lastSynced;
