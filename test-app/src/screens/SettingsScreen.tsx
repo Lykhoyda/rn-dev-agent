@@ -5,6 +5,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootState } from '../store';
 import type { ProfileStackParams } from '../navigation/types';
 import { toggleTheme, setLanguage } from '../store/slices/settingsSlice';
+import { selectLastSynced } from '../store/slices/settingsSlice';
+import { formatRelativeTime } from '../store/slices/feedSlice';
+import { useSyncContext } from '../context/SyncContext';
 import { useThemeColors } from '../hooks/useThemeColors';
 
 type Props = NativeStackScreenProps<ProfileStackParams, 'Settings'>;
@@ -12,10 +15,12 @@ type Props = NativeStackScreenProps<ProfileStackParams, 'Settings'>;
 export default function SettingsScreen({ navigation }: Props) {
   const dispatch = useDispatch();
   const settings = useSelector((state: RootState) => state.settings);
+  const lastSynced = useSelector(selectLastSynced);
+  const { syncNow, isSyncing } = useSyncContext();
   const colors = useThemeColors();
 
   return (
-    <View className={`flex-1 ${colors.bg} px-4 pt-4`}>
+    <View testID="settings-screen" className={`flex-1 ${colors.bg} px-4 pt-4`}>
       <Text className={`text-xl font-bold ${colors.text}`}>Settings</Text>
 
       <View className="mt-6 flex-row items-center justify-between">
@@ -41,6 +46,24 @@ export default function SettingsScreen({ navigation }: Props) {
           onValueChange={(value) => { dispatch(setLanguage(value ? 'de' : 'en')); }}
         />
       </View>
+
+      <View className="mt-6 flex-row items-center justify-between">
+        <Text className={`text-base ${colors.text}`}>Last synced</Text>
+        <Text testID="sync-status-label" className={`text-sm ${colors.muted}`}>
+          {lastSynced ? formatRelativeTime(lastSynced) : 'Never'}
+        </Text>
+      </View>
+
+      <Pressable
+        testID="sync-now-btn"
+        className={`mt-3 rounded-lg px-4 py-3 ${isSyncing ? 'bg-gray-400' : 'bg-indigo-500'}`}
+        onPress={syncNow}
+        disabled={isSyncing}
+      >
+        <Text className="text-center font-semibold text-white">
+          {isSyncing ? 'Syncing...' : 'Sync Now'}
+        </Text>
+      </Pressable>
 
       <Pressable
         testID="settings-reload-btn"

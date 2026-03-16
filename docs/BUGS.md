@@ -238,3 +238,41 @@
 **Workaround:** Added 5s AbortController timeout to FeedScreen fetch. Other screens may still hang. Long-term fix: either polyfill TransformStream for Hermes, downgrade to MSW v1, or replace MSW with a simple fetch interceptor.
 **Found by:** Debugging infinite loading on Feed screen during S6.
 **Status:** Open — MSW mocks are non-functional in the test app
+
+### B67: PanResponder stale closure captures initial props in SwipeableTaskRow (LOW)
+**Context:** `PanResponder.create()` is called once in `useRef`, so `onPanResponderRelease` captures the initial `onDelete` and `item` props. If parent passes new refs (e.g. after sort change while mid-swipe), the callback uses stale values.
+**Workaround:** Mitigated by `keyExtractor` returning `item.id` — React unmounts/remounts when ID changes. For non-ID prop changes during an active swipe, risk is minimal. A `useRef` wrapper for callbacks would fully fix this.
+**Found by:** Gemini and internal code review during S7-S10.
+**Status:** Open — low priority, mitigated by key-based reconciliation
+
+### B68: formatRelativeTime display goes stale without re-render trigger (LOW)
+**Context:** `formatRelativeTime(lastFetched)` and `formatRelativeTime(lastSynced)` are called during render. If the user stays on FeedScreen or SettingsScreen for minutes, the "just now" label won't update to "2m ago" until some other state change triggers a re-render.
+**Workaround:** Acceptable for test app. A `setInterval` tick updating local state every 30-60s would fix this.
+**Found by:** Codex and Gemini review during S7-S10.
+**Status:** Open — cosmetic issue in test app
+
+### B69: PanResponder Animated.ValueXY causes cyclical structure in cdp_component_tree (MEDIUM)
+**Context:** SwipeableTaskRow uses `PanResponder` with `Animated.ValueXY` refs. When `cdp_component_tree` tries to serialize the fiber tree containing these components, it hits a `TypeError: cyclical structure in JSON object` because Animated values contain circular references.
+**Workaround:** Use `cdp_store_state` and `cdp_interact` instead of `cdp_component_tree` for Tasks screen verification. The component tree tool cannot be used on screens with PanResponder.
+**Found by:** Live verification during S7-S10.
+**Fixed by:** D303 — WeakSet-based `safeStringify()` replaces `JSON.stringify` in `getTree()`. Cycles become `'[Circular]'` markers. Helpers version bumped to v7.
+**Status:** FIXED
+
+### B70: AbortController.abort() throws unhandled DOMException in Hermes (LOW)
+**Context:** `useBackgroundSync` uses `AbortController` with a 5s timeout. When the controller aborts, it throws a `DOMException` which doesn't exist in the Hermes runtime. The error is caught by the try/catch but still registers as an unhandled promise rejection.
+**Workaround:** The sync still completes correctly. Could wrap in an additional try/catch or use a polyfill for `DOMException`.
+**Found by:** Live verification during S7-S10 — `cdp_error_log` showed 1 error.
+**Status:** Open — non-blocking, cosmetic error in logs
+
+### B71: agent-device device_find/device_snapshot brings Agent Device Runner to foreground (HIGH)
+**Context:** Using `device_find`, `device_snapshot(action=open)`, or `device_screenshot` via the agent-device CLI causes the Agent Device Runner app to come to the foreground on iOS Simulator, stealing focus from Expo Go. After this, Expo Go shows a blank white screen and requires `xcrun simctl terminate` + `xcrun simctl openurl` to recover.
+**Workaround:** Use `cdp_interact` for button presses and `xcrun simctl io booted screenshot` for screenshots. Avoid all `device_*` tools when testing Expo Go apps on iOS Simulator.
+**Mitigated by:** D304 — `device_snapshot(action=open)` now rejects Expo Go bundle IDs before spawning CLI.
+**Found by:** Live verification during S7-S10.
+**Status:** Mitigated — Expo Go blocked at tool level; other `device_*` tools still risk focus stealing
+
+### B72: safeStringify WeakSet marks shared (non-circular) object references as [Circular] (LOW)
+**Context:** `safeStringify` uses a `WeakSet` to track visited objects but never removes them when moving up the tree (JSON.stringify replacer has no "exit" hook). If the same object is referenced from multiple locations without being circular (e.g., shared empty arrays, reused style objects in Redux state), the second occurrence is labeled `[Circular]`.
+**Workaround:** Acceptable for dev tools — prevents crashes at the cost of occasionally missing data on shared refs. Use `cdp_store_state` with a narrow `path` to inspect specific shared objects directly.
+**Found by:** Gemini review of Phase 37 changes.
+**Status:** Open — acceptable tradeoff for crash prevention

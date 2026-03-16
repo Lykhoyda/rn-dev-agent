@@ -224,7 +224,7 @@ so important tasks are always visible first.
 
 ---
 
-## S7: Swipe-to-Delete with Undo `[ ]`
+## S7: Swipe-to-Delete with Undo `[DONE]`
 
 **As a user**, I want to swipe a task left to delete it, with a brief undo window before permanent removal.
 
@@ -249,9 +249,14 @@ so important tasks are always visible first.
 
 **Plugin tools focus:** First test of `device_swipe` for gesture-based interactions, timer manipulation for undo window, and verifying transient UI state (toast).
 
+**Plugin learnings (S7):**
+- PanResponder creates stale closures when used in `useRef` — `keyExtractor` mitigates but a ref wrapper for callbacks is more robust (B67)
+- `removeTask` button inside SwipeableTaskRow initially bypassed `softDelete` — code review caught this critical bug
+- Duplicate task IDs possible when soft-delete + add + restore — Codex identified edge case, fixed by including pendingDelete in maxId
+
 ---
 
-## S8: Pull-to-Refresh with Loading States `[ ]`
+## S8: Pull-to-Refresh with Loading States `[DONE]`
 
 **As a user**, I want to pull down on the feed to refresh content, with clear loading indicators and error handling.
 
@@ -276,9 +281,14 @@ so important tasks are always visible first.
 
 **Plugin tools focus:** Test `cdp_network_log` for request/response correlation, `cdp_dev_settings` reload for state reset, and error recovery UI patterns.
 
+**Plugin learnings (S8):**
+- FlatList is hidden when `error` is truthy — pull-to-refresh cannot work if list isn't mounted. Fixed with `(!error || refreshing)` guard
+- `isRefresh` parameter needed to prevent full-screen loading overlay during pull-to-refresh
+- `formatRelativeTime` display goes stale without a re-render trigger (B68)
+
 ---
 
-## S9: Nested Navigation with Deep Links `[ ]`
+## S9: Nested Navigation with Deep Links `[DONE]`
 
 **As a user**, I want to navigate to a task detail screen from the tasks list, with deep link support so I can share task URLs.
 
@@ -303,9 +313,14 @@ so important tasks are always visible first.
 
 **Plugin tools focus:** First deep test of `cdp_navigation_state` with nested stacks and route params, deep link triggering via `cdp_evaluate`, and cross-screen state consistency.
 
+**Plugin learnings (S9):**
+- `PRIORITY_STYLES` needed extraction to shared `constants/taskStyles.ts` — 3 consumers justified the abstraction
+- TaskDetail follows identical pattern to NotificationDetail — no new patterns needed
+- Deep link `tasks/:id` registered in nested linking config, same structure as `notification/:id`
+
 ---
 
-## S10: Real-time Badge Counts with Background Sync `[ ]`
+## S10: Real-time Badge Counts with Background Sync `[DONE]`
 
 **As a user**, I want to see badge counts on tabs that update based on unread/pending items, with periodic background sync.
 
@@ -329,3 +344,8 @@ so important tasks are always visible first.
 - Evaluate to trigger sync → new items appear, badge increments
 
 **Plugin tools focus:** Comprehensive multi-tool verification — all CDP tools used in a single story. Tests periodic behavior, cross-tab state, and real-time UI updates.
+
+**Plugin learnings (S10):**
+- `tabBarBadge` only accepts `number | string` — `Animated.Value` scale animations cannot be attached to it. Removed dead code after Codex+Gemini caught it
+- `SyncContext` needed to share `syncNow()` from global hook to SettingsScreen — React Context is the right-sized abstraction
+- `useBackgroundSync` must guard `setIsSyncing` with a `mountedRef` to prevent updates after unmount

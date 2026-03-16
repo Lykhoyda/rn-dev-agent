@@ -1145,7 +1145,145 @@ Added a PostToolUse hook that automatically checks the simulator for crashes aft
 - D289: HTTP-only health check (no WebSocket from hook)
 - D290: AbortController timeout on fetch calls
 
-## Phase 35: Node.js LTS-Only Support (Planned)
+## Phase 35: Ralph Loop S7-S10 Implementation (Complete)
+
+**Status:** Complete
+**Date:** 2026-03-16
+
+### What Was Built
+
+Four Ralph Loop stories implemented in a single batch using the `feature-dev:feature-dev` skill workflow:
+
+**S7: Swipe-to-Delete with Undo**
+- `SwipeableTaskRow` component with `PanResponder` + `Animated` swipe gesture
+- Red delete zone revealed on left swipe past -80px threshold
+- `UndoSnackbar` with 5-second countdown timer
+- `softDelete`/`restoreTask`/`commitDelete` reducers in `tasksSlice`
+- `pendingDelete` with `insertIndex` for accurate restore position
+
+**S8: Pull-to-Refresh with Loading States**
+- `RefreshControl` on FeedScreen's FlatList
+- `isRefresh` parameter prevents full-screen loading overlay during pull
+- `lastFetched` field in `feedSlice` with `formatRelativeTime` utility
+- "Last updated" label below search bar
+
+**S9: Nested Navigation with Deep Links**
+- `TaskDetailScreen` with toggle done / cycle priority actions
+- `TaskDetail: { id: string }` in `TasksStackParams`
+- Deep link `rndatest://tasks/:id` registered in linking config
+- `task-row-pressable-{id}` on title area for navigation trigger
+
+**S10: Badge Counts with Background Sync**
+- `useBackgroundSync` hook with 30s `setInterval` + 5s AbortController timeout
+- `SyncContext` + `SyncBridge` for global state sharing
+- `lastSynced` in `settingsSlice` (auto-persisted via redux-persist whitelist)
+- "Last synced" display + "Sync Now" button in SettingsScreen
+- Removed dead badge Animated.Values after Codex/Gemini review
+
+### Files Created (6)
+- `src/constants/taskStyles.ts` — shared PRIORITY_STYLES
+- `src/components/SwipeableTaskRow.tsx` — swipe gesture row
+- `src/components/UndoSnackbar.tsx` — timer-based undo
+- `src/screens/TaskDetailScreen.tsx` — task detail screen
+- `src/hooks/useBackgroundSync.ts` — background sync hook
+- `src/context/SyncContext.ts` — sync state context
+
+### Files Modified (9)
+- `src/store/slices/tasksSlice.ts` — pendingDelete, softDelete/restoreTask/commitDelete
+- `src/store/slices/feedSlice.ts` — lastFetched, formatRelativeTime
+- `src/store/slices/settingsSlice.ts` — lastSynced, setLastSynced
+- `src/navigation/types.ts` — TaskDetail params
+- `src/screens/TasksScreen.tsx` — SwipeableTaskRow + UndoSnackbar
+- `src/screens/FeedScreen.tsx` — RefreshControl, lastFetched label
+- `src/screens/SettingsScreen.tsx` — sync status + sync-now-btn
+- `src/navigation/RootNavigator.tsx` — TaskDetail screen + deep link
+- `src/App.tsx` — SyncBridge wrapper
+
+### Review Results
+- Internal code review: 7 findings, all critical fixed
+- Codex review: 5 findings — duplicate ID bug fixed, dead animations removed
+- Gemini review: 8 findings — stale closure acknowledged (mitigated by keyExtractor), dead animations confirmed
+
+### Decisions (D291-D300)
+- D291: PanResponder + Animated (no gesture handler, avoid rebuild)
+- D292: pendingDelete with insertIndex for restore position
+- D293: Timer in UndoSnackbar component, not Redux
+- D294: isRefresh parameter skips loading overlay
+- D295: formatRelativeTime as pure function in feedSlice
+- D296: SyncContext + SyncBridge for state sharing
+- D297: lastSynced auto-persisted via settingsSlice
+- D298: Removed dead badge Animated.Values
+- D299: Include pendingDelete in addTask maxId computation
+- D300: TaskDetail deep link reuses existing linking pattern
+- D301: CDP-only verification strategy for Expo Go apps
+- D302: Synchronous cdp_evaluate for time-sensitive store verification
+
+### Live Verification Results (Phase 5.5)
+
+All 4 stories verified on iPhone 17 Pro Simulator via CDP tools:
+
+| Check | Story | Result |
+|-------|-------|--------|
+| Tasks screen renders (3 tasks, priorities, filters) | S7 | PASS |
+| softDelete sets pendingDelete synchronously | S7 | PASS |
+| restoreTask restores item at correct index | S7 | PASS |
+| commitDelete auto-fires after 5s | S7 | PASS |
+| Feed renders with "Last updated: just now" | S8 | PASS |
+| RefreshControl wired to FlatList | S8 | PASS |
+| TaskDetail navigation with params | S9 | PASS |
+| cyclePriority via TaskDetail button | S9 | PASS |
+| Settings shows "Last synced: just now" | S10 | PASS |
+| Sync Now button renders | S10 | PASS |
+| Error regression (cdp_error_log) | All | WARN (1 non-critical) |
+
+**Bugs found:** B69 (PanResponder cyclical structure in component tree), B70 (DOMException missing in Hermes), B71 (agent-device steals focus from Expo Go)
+
+**Tool performance notes:** CDP tools (cdp_status, cdp_store_state, cdp_interact, cdp_evaluate) all responded within 1-2 seconds. The 5s undo timer required synchronous cdp_evaluate dispatch+read pattern since MCP round-trips exceed 5s. agent-device tools incompatible with Expo Go due to focus-stealing (B71).
+
+---
+
+## Phase 37: Critical Plugin Tool Fixes (Complete)
+
+**Status:** Complete
+**Date:** 2026-03-16
+
+Four targeted fixes to the CDP bridge MCP server that reduced live verification time from ~30 minutes (with multiple crashes and manual interventions) to ~5 minutes 40 seconds (zero crashes, zero manual interventions).
+
+### What Changed
+
+**Fix 1: Cycle detection in getTree() serializer (D303, fixes B69)**
+- `scripts/cdp-bridge/src/injected-helpers.ts` — Added `safeStringify()` with WeakSet cycle tracking, replaced `JSON.stringify` at 3 call sites. Sanitized `hookStates` (functions → `'[Function]'`, circular → `'[Circular]'`). Removed unparseable `preview` field from truncation output, replaced with `hint`. Bumped helpers version to 7.
+
+**Fix 2: Expo Go detection in device_snapshot (D304, mitigates B71)**
+- `scripts/cdp-bridge/src/tools/device-session.ts` — Early rejection of Expo Go bundle IDs before spawning agent-device CLI. Returns guidance to use CDP tools instead.
+
+**Fix 3: Atomic cdp_dispatch tool (D305)**
+- `scripts/cdp-bridge/src/tools/dispatch.ts` — New file. Tool handler using `withConnection` pattern.
+- `scripts/cdp-bridge/src/injected-helpers.ts` — Added `dispatchAction()` helper (~60 lines) with 3-tier Redux store finder + dispatch + optional state read.
+- `scripts/cdp-bridge/src/index.ts` — Registered `cdp_dispatch` tool (20th tool).
+
+**Fix 4: Auto-recovery in cdp_status (D306)**
+- `scripts/cdp-bridge/src/tools/status.ts` — Auto-recovery for `dev:false` (softReconnect + re-probe) and `isPaused:true` (softReconnect + resume check). Warning fallbacks if recovery fails.
+
+### Verification Results
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Total verification time | ~30 min | 5 min 40 sec |
+| Crashes during verification | 2-3 (cycle errors) | 0 |
+| Manual interventions needed | 5+ (reconnect, retry) | 0 |
+| Features verified (S7-S10) | Partial, with workarounds | All complete |
+
+### Code Review
+
+Reviewed by code-reviewer agents (3 parallel reviews):
+- 4 issues found (all Important severity)
+- 3 fixed: unparseable `preview` field, missing isPaused warning after recovery, deprecated `cdp_interact` reference in hint
+- 1 deferred: `dispatchAction` duplicates store-finding fiber walk from `getStoreState` (maintenance concern, not a bug)
+
+---
+
+## Phase 38: Node.js LTS-Only Support (Planned)
 
 **Status:** Planned
 **Date:** 2026-03-13

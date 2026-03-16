@@ -948,3 +948,63 @@ The PostToolUse hook cannot open a WebSocket to Hermes because cdp-bridge alread
 
 ### D290: AbortController timeout on fetch calls
 FeedScreen's fetch to `api.testapp.local` (mock domain) hung indefinitely when MSW wasn't running. Added 5s AbortController timeout so the fetch aborts and shows an error state instead of loading forever. Applied to FeedScreen; other screens with similar patterns should follow.
+
+## 2026-03-16: S7-S10 Implementation
+
+### D291: PanResponder + Animated for swipe-to-delete (no gesture handler)
+Used `PanResponder` + `Animated` API from react-native core instead of `react-native-gesture-handler` because RNGH is not installed and adding it requires an Expo Go rebuild. Trade-off: gesture runs on JS thread (not native), so swipe may stutter under heavy JS load.
+
+### D292: pendingDelete in Redux with insertIndex for restore position
+Stores the soft-deleted task, its original array index, and its ID in `tasksSlice.pendingDelete`. On restore, task is spliced back at the original position (clamped to array bounds). Only one pending delete at a time — second delete permanently commits the first.
+
+### D293: UndoSnackbar timer in component, not Redux
+The 5-second undo countdown lives as a `setTimeout` in `UndoSnackbar`'s `useEffect`, not in the store. Keeps the store serializable while the component manages the ephemeral timer lifecycle.
+
+### D294: isRefresh parameter to skip loading overlay during pull-to-refresh
+`fetchFeed(triggerError, isRefresh)` skips `dispatch(setLoading(true))` when `isRefresh=true`, preventing the full-screen loading spinner from replacing the FlatList during pull-to-refresh. The native `RefreshControl` spinner handles the visual feedback instead.
+
+### D295: formatRelativeTime as pure function in feedSlice
+Shared `formatRelativeTime(ts)` utility exported from `feedSlice.ts` for both FeedScreen and SettingsScreen. Returns "just now" / "Xm ago" / "Xh ago". Note: does not auto-refresh — requires a re-render from state change to update the display.
+
+### D296: SyncContext + SyncBridge for background sync state sharing
+`useBackgroundSync` hook must mount globally in App.tsx for the 30s interval to persist across tab switches. `SyncContext` provides `syncNow` and `isSyncing` to SettingsScreen without prop drilling through the navigation tree.
+
+### D297: lastSynced in settingsSlice auto-persisted
+Added `lastSynced: number | null` to `settingsSlice` which is already in redux-persist's whitelist. Sync timestamp persists across app restarts automatically — no migration needed.
+
+### D298: Removed dead badge Animated.Values after Codex/Gemini review
+Initially added `Animated.spring` scale animations for tab badge counts, but `tabBarBadge` only accepts `number | string` — the Animated.Values were never attached to any rendered element. Removed dead code. Badge animation would require a fully custom `tabBarIcon` which is over-engineering for the test app.
+
+### D299: Include pendingDelete in addTask maxId computation
+`addTask` computes `maxId` from `state.items` to generate unique IDs. If the highest-ID task is soft-deleted and a new task is added, it would get the same ID as the pending task. Fixed by including `pendingDelete.task.id` in the maxId calculation.
+
+### D300: TaskDetail deep link reuses existing linking pattern
+`TaskDetail: 'tasks/:id'` follows the identical nesting pattern as `NotificationDetail: 'notification/:id'`. No `initialRouteName` needed — matches existing convention.
+
+### D301: CDP-only verification strategy for Expo Go apps
+During S7-S10 live verification, `device_*` tools (agent-device CLI) brought the Agent Device Runner app to the foreground, stealing focus from Expo Go. Adopted a CDP-only verification strategy: `cdp_interact` for button presses, `cdp_evaluate` for synchronous store dispatch + read, `cdp_store_state` for state verification, and `xcrun simctl io booted screenshot` for screenshots. This avoids the agent-device focus-stealing issue (B71).
+
+### D302: Synchronous cdp_evaluate for time-sensitive store verification
+The 5s undo timer in UndoSnackbar fires before MCP tool round-trips can complete. Used single `cdp_evaluate` calls that find the Redux store via the fiber tree, dispatch actions, and read state synchronously — proving softDelete/restoreTask work correctly without race conditions.
+
+## 2026-03-16: Critical Plugin Tool Fixes (Phase 37)
+
+### D303: WeakSet-based cycle detection in getTree() serializer
+`JSON.stringify` on React fiber trees throws `TypeError: cyclical structure in JSON object` when components use `PanResponder` or `Animated.ValueXY` (B69). Replaced all three `JSON.stringify` call sites in the injected helpers `getTree()` with a `safeStringify()` function that uses a `WeakSet` to track visited objects and replaces cycles with `'[Circular]'`. Also sanitizes `hookStates` — functions become `'[Function]'`, circular objects become `'[Circular]'` via pre-serialization try/catch. Bumped `__HELPERS_VERSION__` from 6 to 7.
+
+### D304: Expo Go detection in device_snapshot to prevent focus stealing
+`agent-device` CLI's `device_snapshot(action=open)` brings its own Runner app to the foreground on iOS Simulator, stealing focus from Expo Go (B71). Added early detection of Expo Go bundle IDs (`host.exp.Exponent`, `host.exp.exponent`) in `device-session.ts` — returns `failResult` with guidance to use CDP tools and `xcrun simctl` instead. This is a routing-level fix: the tool rejects the call before spawning the CLI process.
+
+### D305: Atomic dispatch+read via cdp_dispatch tool
+Added `cdp_dispatch` as a new MCP tool (20th tool) that calls `__RN_AGENT.dispatchAction()` — a single synchronous JS execution that finds the Redux store (3-tier: global → Zustand → Provider fiber walk), dispatches an action, and optionally reads state at a given path. This eliminates the race condition where separate dispatch and read MCP calls are separated by 1-2s round-trip time, which caused the 5s undo timer to fire between operations. The `dispatchAction` helper reuses the same store-finding fiber walk pattern as `getStoreState` but with `dispatch()` instead of `getState()`.
+
+### D306: Auto-recovery in cdp_status for dev:false and isPaused states
+`cdp_status` now auto-recovers from two common failure states without user intervention: (1) When `__DEV__` is false — indicates CDP connected to wrong Hermes JS context (common in RN 0.76+ Bridgeless mode). Calls `client.softReconnect()` to re-probe targets, retries the status probe, and returns recovered status with `autoRecovered` metadata if successful. (2) When `isPaused` is true — calls `softReconnect()` which resumes the debugger, then checks if still paused. Both paths fall through to warning messages if recovery fails, guiding the user to `cdp_reload(full=true)`.
+
+## 2026-03-16: Post-Review Fixes (Codex + Gemini)
+
+### D307: Pass large maxLen to safeStringify in getTree() to preserve fallback logic
+Codex and Gemini both identified that `safeStringify`'s internal 50KB truncation made `getTree()`'s fallback logic unreachable — the function returned a short truncation sentinel before `getTree()` could measure the real length and apply its graceful degradation (single-match fallback or "Tree too large" error). Fixed by passing `maxLen=999999` on the initial `safeStringify` calls in `getTree()`, letting the function measure real output size, then using standard `safeStringify` (with default 50KB limit) for the fallback payloads.
+
+### D308: dev:false recovery falls through to isPaused check instead of returning early
+Gemini identified that the `dev === false` auto-recovery path returned `okResult` immediately on success, skipping the subsequent `isPaused` check. If the recovered JS context was also paused, the caller would get `isPaused: true` inside a success response without guidance. Refactored to set `devRecovered` flag and `autoRecoveredMessage`, fall through to the `isPaused` check, then attach the recovery metadata to the final `okResult`.

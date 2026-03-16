@@ -11,6 +11,7 @@ import { createErrorLogHandler } from './tools/error-log.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
+import { createDispatchHandler } from './tools/dispatch.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
@@ -112,6 +113,17 @@ server.tool(
     path: z.string().optional().describe('Dot-path into store state (e.g. "cart.items")'),
   },
   createStoreStateHandler(getClient),
+);
+
+server.tool(
+  'cdp_dispatch',
+  'Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). Avoids MCP round-trip timing issues.',
+  {
+    action: z.string().describe('Redux action type (e.g. "tasks/softDelete", "cart/addItem")'),
+    payload: z.any().optional().describe('Action payload'),
+    readPath: z.string().optional().describe('Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete")'),
+  },
+  createDispatchHandler(getClient),
 );
 
 server.tool(

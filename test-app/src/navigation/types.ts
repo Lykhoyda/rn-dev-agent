@@ -18,6 +18,7 @@ export type NotificationsStackParams = {
 
 export type TasksStackParams = {
   TasksMain: undefined;
+  TaskDetail: { id: string };
 };
 
 export type TabParams = {

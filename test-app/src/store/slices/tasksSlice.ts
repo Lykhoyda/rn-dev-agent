@@ -13,10 +13,17 @@ export interface TaskItem {
   priority: TaskPriority;
 }
 
+export interface PendingDelete {
+  id: string;
+  task: TaskItem;
+  insertIndex: number;
+}
+
 interface TasksState {
   items: TaskItem[];
   filter: TaskFilter;
   sort: TaskSort;
+  pendingDelete: PendingDelete | null;
 }
 
 const initialState: TasksState = {
@@ -27,6 +34,7 @@ const initialState: TasksState = {
   ],
   filter: 'all',
   sort: 'default',
+  pendingDelete: null,
 };
 
 const tasksSlice = createSlice({
@@ -34,7 +42,10 @@ const tasksSlice = createSlice({
   initialState,
   reducers: {
     addTask: (state, action: PayloadAction<string>) => {
-      const maxId = state.items.reduce((m, t) => Math.max(m, Number(t.id)), 0);
+      let maxId = state.items.reduce((m, t) => Math.max(m, Number(t.id)), 0);
+      if (state.pendingDelete) {
+        maxId = Math.max(maxId, Number(state.pendingDelete.task.id));
+      }
       state.items.unshift({
         id: String(maxId + 1),
         title: action.payload,
@@ -70,10 +81,26 @@ const tasksSlice = createSlice({
     toggleSort: (state) => {
       state.sort = state.sort === 'default' ? 'priority' : 'default';
     },
+    softDelete: (state, action: PayloadAction<string>) => {
+      const idx = state.items.findIndex((t) => t.id === action.payload);
+      if (idx === -1) return;
+      state.pendingDelete = { id: action.payload, task: state.items[idx], insertIndex: idx };
+      state.items.splice(idx, 1);
+    },
+    restoreTask: (state) => {
+      if (!state.pendingDelete) return;
+      const { task, insertIndex } = state.pendingDelete;
+      const idx = Math.min(insertIndex, state.items.length);
+      state.items.splice(idx, 0, task);
+      state.pendingDelete = null;
+    },
+    commitDelete: (state) => {
+      state.pendingDelete = null;
+    },
   },
 });
 
-export const { addTask, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort } = tasksSlice.actions;
+export const { addTask, toggleTask, removeTask, setFilter, markAllSynced, cyclePriority, toggleSort, softDelete, restoreTask, commitDelete } = tasksSlice.actions;
 
 export const selectActiveTaskCount = createSelector(
   (state: { tasks: TasksState }) => state.tasks.items,
@@ -113,5 +140,8 @@ export const selectCurrentFilter = (state: { tasks: TasksState }) =>
 
 export const selectCurrentSort = (state: { tasks: TasksState }) =>
   state.tasks.sort;
+
+export const selectPendingDelete = (state: { tasks: TasksState }) =>
+  state.tasks.pendingDelete;
 
 export default tasksSlice;

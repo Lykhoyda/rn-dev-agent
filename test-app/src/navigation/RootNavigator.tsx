@@ -20,6 +20,7 @@ import ReloadTestScreen from '../screens/ReloadTestScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 import NotificationDetailScreen from '../screens/NotificationDetailScreen';
 import TasksScreen from '../screens/TasksScreen';
+import TaskDetailScreen from '../screens/TaskDetailScreen';
 import ErrorLabModal from '../screens/ErrorLabModal';
 import ProfileEditModal from '../screens/ProfileEditModal';
 import DeepLinkScreen from '../screens/DeepLinkScreen';
@@ -71,6 +72,7 @@ function TasksStackNavigator() {
   return (
     <TasksStack.Navigator>
       <TasksStack.Screen name="TasksMain" component={TasksScreen} options={{ title: 'Tasks' }} />
+      <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: 'Task Detail' }} />
     </TasksStack.Navigator>
   );
 }
@@ -128,6 +130,7 @@ const linking = {
           TasksTab: {
             screens: {
               TasksMain: 'tasks',
+              TaskDetail: 'tasks/:id',
             },
           },
           ProfileTab: {

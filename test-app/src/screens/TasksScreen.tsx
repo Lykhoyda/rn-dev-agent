@@ -5,20 +5,20 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TasksStackParams } from '../navigation/types';
 import {
   addTask,
-  toggleTask,
-  removeTask,
   setFilter,
   markAllSynced,
-  cyclePriority,
   toggleSort,
+  softDelete,
   selectSortedFilteredTasks,
   selectUnsyncedCount,
   selectActiveTaskCount,
   selectCurrentFilter,
   selectCurrentSort,
 } from '../store/slices/tasksSlice';
-import type { TaskFilter, TaskItem, TaskPriority } from '../store/slices/tasksSlice';
+import type { TaskFilter, TaskItem } from '../store/slices/tasksSlice';
 import { useThemeColors } from '../hooks/useThemeColors';
+import SwipeableTaskRow from '../components/SwipeableTaskRow';
+import UndoSnackbar from '../components/UndoSnackbar';
 
 const API_BASE = 'https://api.testapp.local';
 
@@ -28,15 +28,9 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: 'done', label: 'Done' },
 ];
 
-const PRIORITY_STYLES: Record<TaskPriority, { bg: string; text: string; label: string }> = {
-  high: { bg: 'bg-red-100', text: 'text-red-700', label: 'High' },
-  medium: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Med' },
-  low: { bg: 'bg-green-100', text: 'text-green-700', label: 'Low' },
-};
-
 type Props = NativeStackScreenProps<TasksStackParams, 'TasksMain'>;
 
-export default function TasksScreen(_props: Props) {
+export default function TasksScreen({ navigation }: Props) {
   const dispatch = useDispatch();
   const [text, setText] = useState('');
   const filteredTasks = useSelector(selectSortedFilteredTasks);
@@ -67,53 +61,25 @@ export default function TasksScreen(_props: Props) {
     }
   };
 
-  const renderItem = useCallback(({ item }: { item: TaskItem }) => {
-    const ps = PRIORITY_STYLES[item.priority];
-    return (
-      <View
-        testID={`task-item-${item.id}`}
-        className={`mb-2 flex-row items-center rounded-lg p-4 ${item.done ? colors.card : `${colors.bg} border ${colors.border}`}`}
-      >
-        <Pressable
-          testID={`task-toggle-${item.id}`}
-          className={`h-6 w-6 rounded-full border-2 items-center justify-center ${item.done ? 'border-green-500 bg-green-500' : colors.border}`}
-          onPress={() => dispatch(toggleTask(item.id))}
-        >
-          {item.done && <Text className="text-xs text-white">✓</Text>}
-        </Pressable>
+  const handleSwipeDelete = useCallback((id: string) => {
+    dispatch(softDelete(id));
+  }, [dispatch]);
 
-        <Pressable
-          testID={`task-priority-${item.id}`}
-          className={`ml-2 rounded-full px-2 py-0.5 ${ps.bg}`}
-          onPress={() => dispatch(cyclePriority(item.id))}
-        >
-          <Text className={`text-xs font-semibold ${ps.text}`}>{ps.label}</Text>
-        </Pressable>
+  const handleNavigate = useCallback((id: string) => {
+    navigation.navigate('TaskDetail', { id });
+  }, [navigation]);
 
-        <Text
-          testID={`task-title-${item.id}`}
-          className={`ml-2 flex-1 ${item.done ? colors.muted : colors.text} ${item.done ? 'line-through' : ''}`}
-        >
-          {item.title}
-        </Text>
-
-        {!item.synced && (
-          <View testID={`task-unsynced-${item.id}`} className="mr-2 h-2 w-2 rounded-full bg-orange-400" />
-        )}
-
-        <Pressable
-          testID={`task-remove-${item.id}`}
-          className="ml-2 h-6 w-6 items-center justify-center rounded-full bg-red-100"
-          onPress={() => dispatch(removeTask(item.id))}
-        >
-          <Text className="text-xs text-red-500">✕</Text>
-        </Pressable>
-      </View>
-    );
-  }, [dispatch, colors]);
+  const renderItem = useCallback(({ item }: { item: TaskItem }) => (
+    <SwipeableTaskRow
+      item={item}
+      colors={colors}
+      onDelete={handleSwipeDelete}
+      onNavigate={handleNavigate}
+    />
+  ), [colors, handleSwipeDelete, handleNavigate]);
 
   return (
-    <View testID="task-screen" className={`flex-1 ${colors.bg} px-4 pt-4`}>
+    <View testID="task-screen" className={`relative flex-1 ${colors.bg} px-4 pt-4`}>
       <Text testID="task-header" className={`text-xl font-bold ${colors.text}`}>
         Tasks ({activeCount} active)
       </Text>
@@ -194,6 +160,8 @@ export default function TasksScreen(_props: Props) {
           </Text>
         </Pressable>
       </View>
+
+      <UndoSnackbar />
     </View>
   );
 }

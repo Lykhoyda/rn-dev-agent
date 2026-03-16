@@ -25,6 +25,16 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         return failResult('appId is required for action=open (e.g. "com.example.app")');
       }
 
+      // Warn when targeting Expo Go — agent-device steals focus from Expo Go (B71)
+      const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];
+      if (EXPO_GO_BUNDLES.includes(args.appId)) {
+        return failResult(
+          'agent-device is incompatible with Expo Go — it steals foreground focus (B71). ' +
+          'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) and xcrun simctl for screenshots instead.',
+          { hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.' },
+        );
+      }
+
       const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
       const cliArgs = ['open', args.appId, '--session', sessionName];
       if (args.platform) cliArgs.push('--platform', args.platform);

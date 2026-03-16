@@ -6,6 +6,8 @@ import { NavigationContainer, createNavigationContainerRef } from '@react-naviga
 import { store, persistor } from './store';
 import RootNavigator, { linking } from './navigation/RootNavigator';
 import OfflineBanner from './components/OfflineBanner';
+import SyncContext from './context/SyncContext';
+import { useBackgroundSync } from './hooks/useBackgroundSync';
 import type { RootStackParams } from './navigation/types';
 
 const navigationRef = createNavigationContainerRef<RootStackParams>();
@@ -14,16 +16,23 @@ if (__DEV__) {
   (globalThis as Record<string, unknown>).__NAV_REF__ = navigationRef;
 }
 
+function SyncBridge({ children }: { children: React.ReactNode }) {
+  const sync = useBackgroundSync();
+  return <SyncContext.Provider value={sync}>{children}</SyncContext.Provider>;
+}
+
 export default function App() {
   return (
     <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
-        <NavigationContainer ref={navigationRef} linking={linking}>
-          <View style={{ flex: 1 }}>
-            <OfflineBanner />
-            <RootNavigator />
-          </View>
-        </NavigationContainer>
+        <SyncBridge>
+          <NavigationContainer ref={navigationRef} linking={linking}>
+            <View style={{ flex: 1 }}>
+              <OfflineBanner />
+              <RootNavigator />
+            </View>
+          </NavigationContainer>
+        </SyncBridge>
       </PersistGate>
     </Provider>
   );

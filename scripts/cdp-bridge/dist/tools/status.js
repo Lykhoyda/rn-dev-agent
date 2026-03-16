@@ -79,10 +79,62 @@ export function createStatusHandler(getClient, setClient, createClient) {
                     networkFallback: client.networkMode === 'hook',
                 },
             };
+            let autoRecoveredMessage;
             if (status.app.dev === false) {
-                return warnResult(status, 'Connected to a JS context where __DEV__ is false. This may not be the app\'s main context. Try cdp_reload(full=true) or restart Metro.');
+                // Auto-recovery: softReconnect to find the correct JS context (D306)
+                let devRecovered = false;
+                try {
+                    await client.softReconnect();
+                    if (client.helpersInjected) {
+                        const retryResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
+                        if (retryResult.value && typeof retryResult.value === 'string') {
+                            try {
+                                const retryProbe = JSON.parse(retryResult.value);
+                                if (retryProbe.appInfo?.__DEV__ === true) {
+                                    status.app.dev = true;
+                                    status.app.platform = retryProbe.appInfo?.platform ?? null;
+                                    status.app.hermes = retryProbe.appInfo?.hermes ?? null;
+                                    status.app.rnVersion = retryProbe.appInfo?.rnVersion ? JSON.stringify(retryProbe.appInfo.rnVersion) : null;
+                                    status.app.dimensions = retryProbe.appInfo?.dimensions ?? null;
+                                    status.app.hasRedBox = retryProbe.hasRedBox;
+                                    status.app.errorCount = retryProbe.errorCount;
+                                    status.app.isPaused = client.isPaused;
+                                    status.cdp.device = client.connectedTarget?.title ?? null;
+                                    status.cdp.pageId = client.connectedTarget?.id ?? null;
+                                    status.capabilities.fiberTree = retryProbe.fiberTree;
+                                    devRecovered = true;
+                                    autoRecoveredMessage = 'Reconnected to correct JS context';
+                                }
+                            }
+                            catch {
+                                // Probe parse failed, fall through to warning
+                            }
+                        }
+                    }
+                }
+                catch {
+                    // Recovery failed, fall through to warning
+                }
+                if (!devRecovered) {
+                    return warnResult(status, 'Connected to a JS context where __DEV__ is false. This may not be the app\'s main context. Try cdp_reload(full=true) or restart Metro.');
+                }
             }
-            return okResult(status);
+            if (status.app.isPaused) {
+                // Auto-recovery: resume paused debugger (D306)
+                try {
+                    await client.softReconnect();
+                    status.app.isPaused = client.isPaused;
+                    status.cdp.device = client.connectedTarget?.title ?? null;
+                    status.cdp.pageId = client.connectedTarget?.id ?? null;
+                    if (status.app.isPaused) {
+                        return warnResult(status, 'Debugger is still paused after auto-recovery. Try cdp_reload(full=true).');
+                    }
+                }
+                catch {
+                    return warnResult(status, 'Debugger is paused. Auto-recovery failed. Try cdp_reload(full=true).');
+                }
+            }
+            return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);

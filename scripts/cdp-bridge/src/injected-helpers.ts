@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 6;
+  var __HELPERS_VERSION__ = 7;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -34,8 +34,8 @@ export const INJECTED_HELPERS = `
       if (str && str.length > limit) {
         return JSON.stringify({
           __agent_truncated: true,
-          preview: str.substring(0, limit),
-          originalLength: str.length
+          originalLength: str.length,
+          hint: 'Use a filter or narrower path to reduce output size.'
         });
       }
       return str;
@@ -147,7 +147,15 @@ export const INJECTED_HELPERS = `
           var states = [];
           while (hookState) {
             if (hookState.queue && hookState.memoizedState !== undefined) {
-              states.push(hookState.memoizedState);
+              var hs = hookState.memoizedState;
+              if (typeof hs === 'function') {
+                states.push('[Function]');
+              } else if (typeof hs === 'object' && hs !== null) {
+                try { JSON.stringify(hs); states.push(hs); }
+                catch(e) { states.push('[Circular]'); }
+              } else {
+                states.push(hs);
+              }
             }
             hookState = hookState.next;
           }
@@ -200,18 +208,18 @@ export const INJECTED_HELPERS = `
       }
       totalNodes = scanned;
       var tree = matches.length === 1 ? matches[0] : { matches: matches };
-      var output = JSON.stringify({ tree: tree, totalNodes: totalNodes });
+      var output = safeStringify({ tree: tree, totalNodes: totalNodes }, 999999);
       if (output.length > 50000) {
-        return JSON.stringify({ tree: matches[0] || null, totalNodes: totalNodes, truncated: true });
+        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, truncated: true });
       }
       return output;
     }
 
     // Unfiltered: standard walk with depth limit
     var tree = walkSubtree(root.current, 0, maxDepth, visited);
-    var output = JSON.stringify({ tree: tree, totalNodes: totalNodes }, null, 2);
+    var output = safeStringify({ tree: tree, totalNodes: totalNodes }, 999999);
     if (output.length > 50000) {
-      return JSON.stringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
+      return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
     }
     return output;
   }
@@ -549,12 +557,73 @@ export const INJECTED_HELPERS = `
     }
   }
 
+  function dispatchAction(opts) {
+    opts = opts || {};
+    var actionType = opts.action;
+    var payload = opts.payload;
+    var readPath = opts.readPath;
+
+    if (!actionType) return JSON.stringify({ __agent_error: 'action is required (e.g. "tasks/softDelete")' });
+
+    var store = null;
+    if (globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.dispatch) {
+      store = globalThis.__REDUX_STORE__;
+    }
+
+    if (!store) {
+      var storeRenderer = findActiveRenderer();
+      if (storeRenderer) {
+        var storeRoot = storeRenderer.roots.values().next().value;
+        function findDispatchStore(fiber, depth) {
+          var current = fiber;
+          while (current) {
+            if ((depth || 0) > 30) return null;
+            if (current.type && current.type.displayName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
+              return current.memoizedProps.store;
+            }
+            var found = findDispatchStore(current.child, (depth || 0) + 1);
+            if (found) return found;
+            current = current.sibling;
+          }
+          return null;
+        }
+        store = findDispatchStore(storeRoot && storeRoot.current);
+      }
+    }
+
+    if (!store) {
+      return JSON.stringify({ __agent_error: 'No Redux store with dispatch found. Zustand stores do not support dispatch.' });
+    }
+
+    try {
+      store.dispatch({ type: actionType, payload: payload });
+    } catch(e) {
+      return JSON.stringify({ __agent_error: 'Dispatch failed: ' + (e && e.message || String(e)) });
+    }
+
+    if (readPath) {
+      var state = store.getState();
+      var parts = readPath.split('.');
+      var cur = state;
+      for (var i = 0; i < parts.length; i++) {
+        cur = cur && cur[parts[i]];
+        if (cur === undefined) {
+          return safeStringify({ dispatched: true, readError: 'Path not found: ' + readPath });
+        }
+      }
+      return safeStringify({ dispatched: true, state: cur });
+    }
+
+    return JSON.stringify({ dispatched: true });
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
     getTree: getTree,
     getNavState: getNavState,
     getStoreState: getStoreState,
+    dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,
     getConsole: getConsole,

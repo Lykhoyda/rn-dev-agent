@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TextInput, Pressable, ActivityIndicator, FlatList } from 'react-native';
+import { View, Text, TextInput, Pressable, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState, AppDispatch } from '../store';
-import { setLoading, setItems, setError } from '../store/slices/feedSlice';
+import { setLoading, setItems, setError, selectLastFetched, formatRelativeTime } from '../store/slices/feedSlice';
 import type { FeedItem } from '../store/slices/feedSlice';
 import { useThemeColors } from '../hooks/useThemeColors';
 import { selectIsOffline } from '../store/slices/networkSlice';
@@ -15,9 +15,11 @@ export default function FeedScreen() {
   const loading = useSelector((state: RootState) => state.feed.loading);
   const error = useSelector((state: RootState) => state.feed.error);
   const isOffline = useSelector(selectIsOffline);
+  const lastFetched = useSelector(selectLastFetched);
   const isOfflineRef = useRef(isOffline);
   const [searchText, setSearchText] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const colors = useThemeColors();
 
   useEffect(() => { isOfflineRef.current = isOffline; }, [isOffline]);
@@ -29,12 +31,12 @@ export default function FeedScreen() {
     return () => clearTimeout(timer);
   }, [searchText]);
 
-  const fetchFeed = useCallback(async (triggerError = false) => {
+  const fetchFeed = useCallback(async (triggerError = false, isRefresh = false) => {
     if (isOfflineRef.current) {
       dispatch(setError('You are offline'));
       return;
     }
-    dispatch(setLoading(true));
+    if (!isRefresh) dispatch(setLoading(true));
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
@@ -63,6 +65,12 @@ export default function FeedScreen() {
       void fetchFeed();
     }
   }, [fetchFeed, isOffline]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchFeed(false, true);
+    setRefreshing(false);
+  }, [fetchFeed]);
 
   const filteredItems = useMemo(() => {
     if (!debouncedQuery) return items;
@@ -109,13 +117,19 @@ export default function FeedScreen() {
         )}
       </View>
 
-      {loading && (
+      {lastFetched !== null && (
+        <Text testID="feed-last-updated" className={`mb-2 text-xs ${colors.muted}`}>
+          Last updated: {formatRelativeTime(lastFetched)}
+        </Text>
+      )}
+
+      {loading && !refreshing && (
         <View testID="feed-loading" className="items-center py-8">
           <ActivityIndicator size="large" />
         </View>
       )}
 
-      {error && (
+      {error && !refreshing && (
         <View testID="feed-error" className="rounded-lg bg-red-100 p-4">
           <Text className="text-red-700">{error}</Text>
           <Pressable
@@ -134,7 +148,7 @@ export default function FeedScreen() {
         </View>
       )}
 
-      {!loading && !error && (
+      {!loading && (!error || refreshing) && (
         <FlatList
           testID="feed-list"
           className="flex-1"
@@ -142,6 +156,13 @@ export default function FeedScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              testID="feed-refresh-indicator"
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+            />
+          }
           ListEmptyComponent={
             <View testID="feed-no-results" className="flex-1 items-center justify-center pt-16">
               <Text className={`text-lg ${colors.muted}`}>
