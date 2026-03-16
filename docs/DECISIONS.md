@@ -916,3 +916,35 @@ Production builds shouldn't log error details including stack traces. Wrapped `c
 
 ### D280: E2E Proof Flow designed by architect (Opus), executed mechanically by Phase 8
 Phase 8 was improvising the proof flow at execution time, risking skipped steps and shallow coverage. Now the architect agent (running on Opus with full feature context) defines the exact E2E Proof Flow table during Phase 4 — including testIDs, CDP expressions, expected state assertions, and numbered screenshot filenames. Phase 8 executes this plan mechanically with no improvisation. Added mandatory section 9 to rn-code-architect output format, verification in Phase 4, clarifying question in Phase 3, and "Deviations from Plan" section in PROOF.md.
+
+## 2026-03-16: S6 — Offline Banner with Network Detection
+
+### D281: New networkSlice instead of extending settingsSlice
+Network state (`isOffline`) is transient and should not be persisted. Keeping it in a separate `networkSlice` avoids accidentally adding it to the redux-persist whitelist (which only includes `settings` and `user`).
+
+### D282: Poll globalThis.__OFFLINE__ instead of @react-native-community/netinfo
+NetInfo requires native module installation which complicates Expo Go testing. Polling a global flag via `setInterval` is simpler, fully mockable via `cdp_evaluate`, and aligns with the test app's purpose of exercising plugin tools.
+
+### D283: Hardcoded STATUS_BAR_HEIGHT fallback over useSafeAreaInsets
+`useSafeAreaInsets` from react-native-safe-area-context crashes in Expo Go when `<SafeAreaProvider>` isn't initialized early enough. Hardcoded `Platform.OS === 'ios' ? 59 : StatusBar.currentHeight` is reliable across all Expo Go scenarios. Trade-off: won't adapt to future iOS devices with different notch heights.
+
+### D284: useRef pattern for stale closure prevention in useCallback
+`fetchFeed` uses `useCallback([dispatch])` but reads `isOffline`. Closing over the Redux selector value creates stale reads. Solution: `isOfflineRef` synced via a separate `useEffect`, read inside the callback. Avoids adding `isOffline` to deps (which would recreate the callback on every toggle).
+
+### D285: Immediate network check on mount before interval starts
+Gemini review found that `setInterval` doesn't fire immediately — first check waits 2s. Extracted the check into a named function, called it synchronously before starting the interval. Ensures banner appears on mount if already offline.
+
+### D286: UIManager.setLayoutAnimationEnabledExperimental for Android
+LayoutAnimation is experimental on Android and silently no-ops without explicit enablement. Added platform-guarded call at module scope in OfflineBanner.
+
+### D287: Stable item.id-based testIDs over index-based
+Codex review flagged `feed-item-${index}` — indices shift when items are filtered or reordered, making E2E assertions unreliable. Changed to `feed-item-${item.id}` for stability.
+
+### D288: PostToolUse hook for automatic post-edit health checks
+During S6, the agent introduced a broken MSW import that caused a syntax error on the simulator. The agent continued working without noticing. Added a PostToolUse hook on Edit/Write that fires after `.ts/.tsx/.js/.jsx` edits: waits 2s for Fast Refresh, checks Metro status and Hermes debug targets via HTTP (no WebSocket to avoid conflicting with cdp-bridge). Debounced to 5s to avoid latency on rapid edits. Exit 2 with stderr surfaces the error to Claude's context.
+
+### D289: HTTP-only health check (no WebSocket from hook)
+The PostToolUse hook cannot open a WebSocket to Hermes because cdp-bridge already holds the persistent connection — a second connection causes "another debugger connected" errors. Instead, the hook uses HTTP only: `GET /status` (Metro alive) and `GET /json` (debug targets exist). This catches app crashes and Metro failures but not RedBox errors. RedBox detection remains in Phase 5.5 verification via cdp_status.
+
+### D290: AbortController timeout on fetch calls
+FeedScreen's fetch to `api.testapp.local` (mock domain) hung indefinitely when MSW wasn't running. Added 5s AbortController timeout so the fetch aborts and shows an error state instead of loading forever. Applied to FeedScreen; other screens with similar patterns should follow.

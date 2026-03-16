@@ -1,9 +1,11 @@
 import React from 'react';
+import { View } from 'react-native';
 import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { store, persistor } from './store';
 import RootNavigator, { linking } from './navigation/RootNavigator';
+import OfflineBanner from './components/OfflineBanner';
 import type { RootStackParams } from './navigation/types';
 
 const navigationRef = createNavigationContainerRef<RootStackParams>();
@@ -17,7 +19,10 @@ export default function App() {
     <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
         <NavigationContainer ref={navigationRef} linking={linking}>
-          <RootNavigator />
+          <View style={{ flex: 1 }}>
+            <OfflineBanner />
+            <RootNavigator />
+          </View>
         </NavigationContainer>
       </PersistGate>
     </Provider>

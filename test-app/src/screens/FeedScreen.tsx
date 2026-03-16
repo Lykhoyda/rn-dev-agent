@@ -1,10 +1,11 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TextInput, Pressable, ActivityIndicator, FlatList } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState, AppDispatch } from '../store';
 import { setLoading, setItems, setError } from '../store/slices/feedSlice';
 import type { FeedItem } from '../store/slices/feedSlice';
 import { useThemeColors } from '../hooks/useThemeColors';
+import { selectIsOffline } from '../store/slices/networkSlice';
 
 const API_BASE = 'https://api.testapp.local';
 
@@ -13,9 +14,13 @@ export default function FeedScreen() {
   const items = useSelector((state: RootState) => state.feed.items);
   const loading = useSelector((state: RootState) => state.feed.loading);
   const error = useSelector((state: RootState) => state.feed.error);
+  const isOffline = useSelector(selectIsOffline);
+  const isOfflineRef = useRef(isOffline);
   const [searchText, setSearchText] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const colors = useThemeColors();
+
+  useEffect(() => { isOfflineRef.current = isOffline; }, [isOffline]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -25,10 +30,16 @@ export default function FeedScreen() {
   }, [searchText]);
 
   const fetchFeed = useCallback(async (triggerError = false) => {
+    if (isOfflineRef.current) {
+      dispatch(setError('You are offline'));
+      return;
+    }
     dispatch(setLoading(true));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const url = triggerError ? `${API_BASE}/api/feed?error=true` : `${API_BASE}/api/feed`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) {
         const body = await res.json();
         dispatch(setError(body.message ?? 'Request failed'));
@@ -37,13 +48,21 @@ export default function FeedScreen() {
       const data: FeedItem[] = await res.json();
       dispatch(setItems(data));
     } catch (err) {
-      dispatch(setError(err instanceof Error ? err.message : 'Unknown error'));
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        dispatch(setError('Request timed out'));
+      } else {
+        dispatch(setError(err instanceof Error ? err.message : 'Unknown error'));
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   }, [dispatch]);
 
   useEffect(() => {
-    void fetchFeed();
-  }, [fetchFeed]);
+    if (!isOffline) {
+      void fetchFeed();
+    }
+  }, [fetchFeed, isOffline]);
 
   const filteredItems = useMemo(() => {
     if (!debouncedQuery) return items;
@@ -55,8 +74,8 @@ export default function FeedScreen() {
     );
   }, [items, debouncedQuery]);
 
-  const renderItem = useCallback(({ item, index }: { item: FeedItem; index: number }) => (
-    <View testID={`feed-item-${index}`} className={`mb-3 rounded-lg p-4 ${colors.card}`}>
+  const renderItem = useCallback(({ item }: { item: FeedItem }) => (
+    <View testID={`feed-item-${item.id}`} className={`mb-3 rounded-lg p-4 ${colors.card}`}>
       <Text className={`font-semibold ${colors.text}`}>{item.title}</Text>
       <Text className={`mt-1 text-sm ${colors.muted}`}>{item.body}</Text>
     </View>
@@ -106,6 +125,12 @@ export default function FeedScreen() {
           >
             <Text className="text-center text-white">Retry</Text>
           </Pressable>
+        </View>
+      )}
+
+      {isOffline && !loading && !error && (
+        <View testID="feed-offline-msg" className="mb-3 rounded-lg bg-yellow-100 p-4">
+          <Text className="text-yellow-800">You are offline. Data may be stale.</Text>
         </View>
       )}
 

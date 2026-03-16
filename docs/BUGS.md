@@ -226,3 +226,15 @@
 **Fix:** Capture unsynced task IDs before the fetch and pass them to a `markSynced(ids: string[])` reducer, or use optimistic updates.
 **Found by:** Gemini + Codex review of S5 implementation.
 **Status:** Open — pre-existing behavior, not introduced by S5
+
+### B65: Transient UI elements (toasts) cannot be captured via simctl screenshot (LOW)
+**Context:** The "Back Online" green toast in S6 renders for 2s with LayoutAnimation. `xcrun simctl io booted screenshot` has ~200ms latency, and the 2s poll interval means the toast appears and auto-dismisses before an external screenshot can capture it. This affects E2E proof for any transient UI element under ~3s.
+**Workaround:** Verify transient elements via store state transitions and code review rather than screenshots. Could increase toast duration to 3-4s, or use continuous screen recording (`xcrun simctl io booted recordVideo`) and extract frames.
+**Found by:** S6 E2E Proof (Phase 8) — 3 attempts to capture the toast all missed it.
+**Status:** Open — limitation of screenshot-based proof methodology
+
+### B66: MSW v2 msw/native incompatible with Hermes (HIGH)
+**Context:** Test app has MSW v2 set up with `setupServer` from `msw/native` and mock handlers for all API endpoints. However, `server.listen()` was never called because MSW v2's native module requires `TransformStream` (Web Streams API) which Hermes doesn't provide. Attempting to import `msw/native` at runtime throws "Property 'TransformStream' doesn't exist". This means all `fetch()` calls to `api.testapp.local` go to the real (non-existent) domain and hang until timeout.
+**Workaround:** Added 5s AbortController timeout to FeedScreen fetch. Other screens may still hang. Long-term fix: either polyfill TransformStream for Hermes, downgrade to MSW v1, or replace MSW with a simple fetch interceptor.
+**Found by:** Debugging infinite loading on Feed screen during S6.
+**Status:** Open — MSW mocks are non-functional in the test app

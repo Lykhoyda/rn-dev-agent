@@ -1,5 +1,5 @@
 {
-  "description": "Detect React Native projects on session start and hint available commands",
+  "description": "RN project detection on session start + post-edit health check on simulator",
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +8,18 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/detect-rn-project.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-edit-health-check.sh",
+            "timeout": 10
           }
         ]
       }

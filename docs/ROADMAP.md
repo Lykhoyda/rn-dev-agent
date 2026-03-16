@@ -1082,7 +1082,70 @@ Phase 8 was improvising proof flows at execution time — risking skipped steps 
 ### Decisions
 - D280: E2E Proof Flow designed by architect (Opus), executed mechanically by Phase 8
 
-## Phase 33: Node.js LTS-Only Support (Planned)
+## Phase 33: Ralph Loop S6 — Offline Banner with Network Detection (Complete)
+
+**Status:** Complete
+**Date:** 2026-03-16
+
+Implemented persistent offline banner as the sixth Ralph Loop story (S6). The feature adds a red "No Connection" banner at the top of all screens when offline, with a green "Back Online" toast for 2s on reconnection. Network status is mocked via `globalThis.__OFFLINE__` polling (2s interval with immediate check on mount). API calls are blocked while offline with inline messaging.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `test-app/src/store/slices/networkSlice.ts` | Created — Redux slice with `isOffline` state, `setOffline`/`setOnline` reducers |
+| `test-app/src/hooks/useNetworkStatus.ts` | Created — Polls `globalThis.__OFFLINE__` every 2s, dispatches to Redux |
+| `test-app/src/components/OfflineBanner.tsx` | Created — Global banner with LayoutAnimation, retry button, online toast |
+| `test-app/src/store/index.ts` | Modified — Added `network` reducer (not persisted) |
+| `test-app/src/App.tsx` | Modified — Wrapped navigator with OfflineBanner |
+| `test-app/src/screens/FeedScreen.tsx` | Modified — Added offline guard, inline offline message, stable testIDs |
+
+### Decisions
+- D281: New networkSlice instead of extending settingsSlice
+- D282: Poll globalThis.__OFFLINE__ instead of NetInfo
+- D283: Hardcoded STATUS_BAR_HEIGHT fallback over useSafeAreaInsets
+- D284: useRef pattern for stale closure prevention in useCallback
+- D285: Immediate network check on mount before interval starts
+- D286: UIManager.setLayoutAnimationEnabledExperimental for Android
+- D287: Stable item.id-based testIDs over index-based
+
+### Review Findings
+Internal review: 6 issues found, 3 critical fixed (timer leak, circular import, stale closure)
+Gemini review: 4 findings — 2 fixed (immediate poll, Android LayoutAnimation)
+Codex review: 3 findings — 1 fixed (stable testIDs), 1 deferred (hardcoded height)
+
+## Phase 34: Post-Edit Health Check Hook (Complete)
+
+**Status:** Complete
+**Date:** 2026-03-16
+
+Added a PostToolUse hook that automatically checks the simulator for crashes after source file edits. This catches the most critical failure mode: an edit that crashes the app or kills Metro, which previously went unnoticed until the user reported it.
+
+### What Changed
+- `hooks/post-edit-health-check.sh` — New PostToolUse hook script
+- `hooks/hooks.json` — Added PostToolUse event for Edit/Write tools
+- `CLAUDE.md` — Updated plugin structure tree
+
+### How It Works
+1. Fires after any Edit/Write on `.ts/.tsx/.js/.jsx` files
+2. Debounced to 5s (rapid edits don't stack up)
+3. Waits 2s for Fast Refresh / Metro rebundle
+4. HTTP-only checks (no WebSocket to avoid conflicting with cdp-bridge):
+   - `GET /status` — Metro still running?
+   - `GET /json` — Hermes debug targets still alive?
+5. Exit 2 with stderr message → Claude sees the error and investigates
+
+### Limitations
+- Cannot detect RedBox errors (app running but showing error) — requires WebSocket which conflicts with cdp-bridge
+- 2s sleep adds latency to Edit/Write calls (mitigated by debounce)
+- Future: cdp-bridge could write health status to a temp file for richer hook checks
+
+### Decisions
+- D288: PostToolUse hook for automatic post-edit health checks
+- D289: HTTP-only health check (no WebSocket from hook)
+- D290: AbortController timeout on fetch calls
+
+## Phase 35: Node.js LTS-Only Support (Planned)
 
 **Status:** Planned
 **Date:** 2026-03-13

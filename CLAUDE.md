@@ -59,8 +59,9 @@ rn-dev-agent/
 │   ├── debug-screen.md               # Diagnose and fix current screen
 │   └── check-env.md                  # Verify environment readiness
 ├── hooks/
-│   ├── hooks.json                    # SessionStart hook config
-│   └── detect-rn-project.sh          # Auto-detect RN projects + install maestro-runner + agent-device
+│   ├── hooks.json                    # SessionStart + PostToolUse hook config
+│   ├── detect-rn-project.sh          # Auto-detect RN projects + install maestro-runner + agent-device
+│   └── post-edit-health-check.sh     # PostToolUse: checks simulator for crashes after source file edits
 └── scripts/
     ├── cdp-bridge/                   # MCP server (TypeScript)
     │   ├── src/

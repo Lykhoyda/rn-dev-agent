@@ -1,6 +1,6 @@
 # Ralph Loop — Test App User Stories
 
-This file tracks 5 user stories for the test app. Each story exercises different CDP tools
+This file tracks 10 user stories for the test app. Each story exercises different CDP tools
 and is implemented using the full `/rn-dev-agent:rn-feature-dev` workflow.
 
 **Purpose:** The stories are vehicles for exercising plugin tools (CDP, agents, skills,
@@ -186,3 +186,146 @@ so important tasks are always visible first.
 - Selector composition avoids filter logic duplication and improves memoization (D276)
 - First story to use Phase 8 E2E Proof — 5 screenshots captured via CDP + simctl
 - Review found 5 issues (all fixed): NativeWind static literal, selector composition, memoization, __DEV__ guard
+
+---
+
+## S6: Offline Banner with Network Detection `[DONE]`
+
+**As a user**, I want to see a persistent banner when I lose network connectivity, and have it dismiss automatically when the connection is restored.
+
+**Requirements:**
+- Add a `useNetworkStatus()` hook using `@react-native-community/netinfo` (or mock via `cdp_evaluate`)
+- Show a red "No Connection" banner at the top of all screens when offline
+- Banner slides in/out with `LayoutAnimation` or `Animated`
+- Tapping the banner triggers a manual retry (re-fetch current screen's data)
+- When connection restores, banner slides out and a green "Back Online" toast shows for 2s
+- Add `isOffline: boolean` to settingsSlice (or a new networkSlice)
+- Prevent API calls while offline — show inline "Offline" message instead of spinner
+- testIDs: `offline-banner`, `offline-retry-btn`, `online-toast`
+
+**CDP tools exercised:** `cdp_evaluate` (simulate offline by toggling global flag), `cdp_error_log` (failed fetch errors), `cdp_console_log` (network state changes), `cdp_component_tree` (banner visibility)
+
+**Acceptance criteria for verification:**
+- Simulate offline via `cdp_evaluate` → banner appears on current screen
+- Tap retry → console shows retry attempt
+- Simulate online → banner dismisses, green toast appears
+- Error log captures failed fetch attempts during offline
+- Component tree confirms banner testID present/absent
+
+**Plugin tools focus:** First real test of `cdp_error_log` for app errors, `cdp_evaluate` for environment manipulation (not just state reads), and animation/layout verification.
+
+**Plugin learnings:**
+- SafeAreaProvider crashes in Expo Go — must use hardcoded status bar height fallback (D283)
+- `cdp_component_tree` returns cyclic structure errors for some components — screenshot-based verification is reliable fallback
+- `useRef` pattern essential for avoiding stale closures in `useCallback` with Redux selectors (D284)
+- Android LayoutAnimation requires explicit `UIManager.setLayoutAnimationEnabledExperimental(true)` (D286)
+- Immediate check on mount prevents 2s blind spot in polling hooks (D285)
+- Gemini+Codex review caught 4 actionable issues; 3 fixed (immediate poll, stable testIDs, Android LayoutAnimation), 1 deferred (hardcoded height — known Expo Go limitation)
+
+---
+
+## S7: Swipe-to-Delete with Undo `[ ]`
+
+**As a user**, I want to swipe a task left to delete it, with a brief undo window before permanent removal.
+
+**Requirements:**
+- Add swipe-to-delete gesture on task items (react-native-gesture-handler `Swipeable` or manual `PanResponder`)
+- Swipe reveals red "Delete" background
+- On full swipe: task removed from list, undo toast appears for 3s at bottom
+- "Undo" button in toast restores the task to its original position
+- After 3s with no undo: dispatch `deleteTask(id)` permanently
+- Add `deleteTask` and `restoreTask` reducers to tasksSlice
+- Deleted task held in `pendingDelete: TaskItem | null` state during undo window
+- testIDs: `task-swipe-${id}`, `delete-undo-toast`, `delete-undo-btn`
+
+**CDP tools exercised:** `cdp_store_state` (pendingDelete field, items count), `cdp_evaluate` (fast-forward undo timer), `device_swipe` (gesture interaction), `cdp_component_tree` (toast visibility)
+
+**Acceptance criteria for verification:**
+- Swipe task left → task disappears, undo toast visible
+- Store shows `pendingDelete` populated with removed task
+- Tap undo → task restored to list, pendingDelete null
+- Wait 3s (or fast-forward) → pendingDelete cleared, task permanently gone
+- Items count decremented by 1 after permanent delete
+
+**Plugin tools focus:** First test of `device_swipe` for gesture-based interactions, timer manipulation for undo window, and verifying transient UI state (toast).
+
+---
+
+## S8: Pull-to-Refresh with Loading States `[ ]`
+
+**As a user**, I want to pull down on the feed to refresh content, with clear loading indicators and error handling.
+
+**Requirements:**
+- Add `RefreshControl` to FeedScreen's FlatList
+- On pull: dispatch async thunk to re-fetch feed from `/api/feed`
+- Show spinner during fetch, "Updated just now" timestamp after success
+- If fetch fails: show inline error banner with "Retry" button (not an alert)
+- Add `lastFetched: number | null` and `refreshError: string | null` to feedSlice
+- Stale data indicator: if `lastFetched` > 5 min ago, show subtle "Stale data" label
+- MSW handler: add `?fail=true` query param to simulate errors
+- testIDs: `feed-refresh-indicator`, `feed-last-fetched`, `feed-refresh-error`, `feed-retry-btn`
+
+**CDP tools exercised:** `cdp_network_log` (refresh requests, error responses), `cdp_store_state` (lastFetched, refreshError), `cdp_evaluate` (trigger refresh programmatically, simulate stale), `cdp_dev_settings` (reload to test initial state)
+
+**Acceptance criteria for verification:**
+- Pull to refresh → network log shows GET /api/feed
+- Store shows updated `lastFetched` timestamp
+- Simulate error → error banner with retry button visible
+- Tap retry → new network request fired
+- Manipulate lastFetched via evaluate → stale indicator appears
+
+**Plugin tools focus:** Test `cdp_network_log` for request/response correlation, `cdp_dev_settings` reload for state reset, and error recovery UI patterns.
+
+---
+
+## S9: Nested Navigation with Deep Links `[ ]`
+
+**As a user**, I want to navigate to a task detail screen from the tasks list, with deep link support so I can share task URLs.
+
+**Requirements:**
+- Create `TaskDetailScreen` showing full task info (title, priority, done status, created date)
+- Add to tasks stack: `TasksList → TaskDetail`
+- Deep link config: `myapp://tasks/:id` opens task detail directly
+- Edit priority and done status from detail screen (dispatches to store, reflects on list)
+- Back navigation returns to list with updated state
+- Handle invalid task ID gracefully (show "Task not found" screen)
+- Expo Router linking config or React Navigation deep link setup
+- testIDs: `task-detail-title`, `task-detail-priority`, `task-detail-done-toggle`, `task-not-found`
+
+**CDP tools exercised:** `cdp_navigation_state` (nested stack depth, params), `cdp_evaluate` (trigger deep link navigation), `cdp_store_state` (verify edits reflect), `cdp_component_tree` (detail screen content)
+
+**Acceptance criteria for verification:**
+- Tap task → navigates to detail, navigation state shows nested route with params
+- Edit priority on detail → back → list shows updated priority
+- Deep link to valid task → detail screen opens directly
+- Deep link to invalid ID → "Task not found" shown
+- Navigation stack depth correct at each step
+
+**Plugin tools focus:** First deep test of `cdp_navigation_state` with nested stacks and route params, deep link triggering via `cdp_evaluate`, and cross-screen state consistency.
+
+---
+
+## S10: Real-time Badge Counts with Background Sync `[ ]`
+
+**As a user**, I want to see badge counts on tabs that update based on unread/pending items, with periodic background sync.
+
+**Requirements:**
+- Add badge count to Notifications tab (unread count)
+- Add badge count to Tasks tab (high-priority undone count)
+- Badges update in real-time as user interacts (mark read, complete task, change priority)
+- Background sync: poll `/api/notifications` every 30s (configurable) for new items
+- New items from sync increment badge with brief bounce animation
+- Add `lastSyncedAt` to notificationsSlice, `syncInterval` to settingsSlice
+- Ability to pause sync from Settings (toggle)
+- testIDs: `tab-badge-notifications`, `tab-badge-tasks`, `settings-sync-toggle`, `settings-sync-interval`
+
+**CDP tools exercised:** `cdp_store_state` (badge counts, sync state), `cdp_evaluate` (trigger sync, manipulate interval), `cdp_network_log` (periodic sync requests), `cdp_console_log` (sync lifecycle logs), `cdp_component_tree` (badge elements)
+
+**Acceptance criteria for verification:**
+- Mark notification read → badge count decrements
+- Complete high-priority task → tasks badge decrements
+- Wait for sync interval → network log shows periodic GET
+- Toggle sync off → no more periodic requests
+- Evaluate to trigger sync → new items appear, badge increments
+
+**Plugin tools focus:** Comprehensive multi-tool verification — all CDP tools used in a single story. Tests periodic behavior, cross-tab state, and real-time UI updates.
