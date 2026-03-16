@@ -284,23 +284,28 @@ export const INJECTED_HELPERS = `
   }
 
   // Store State
-  function getStoreState(path) {
+  function getStoreState(path, requestedType) {
     var state = null;
     var storeType = null;
 
-    if (globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.getState) {
-      state = globalThis.__REDUX_STORE__.getState();
-      storeType = 'redux';
-    } else if (globalThis.__ZUSTAND_STORES__) {
-      var result = {};
-      var keys = Object.keys(globalThis.__ZUSTAND_STORES__);
-      for (var i = 0; i < keys.length; i++) {
-        var name = keys[i];
-        var store = globalThis.__ZUSTAND_STORES__[name];
-        result[name] = typeof store.getState === 'function' ? store.getState() : store;
+    if (!requestedType || requestedType === 'redux') {
+      if (globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.getState) {
+        state = globalThis.__REDUX_STORE__.getState();
+        storeType = 'redux';
       }
-      state = result;
-      storeType = 'zustand';
+    }
+    if (!state && (!requestedType || requestedType === 'zustand')) {
+      if (globalThis.__ZUSTAND_STORES__) {
+        var result = {};
+        var keys = Object.keys(globalThis.__ZUSTAND_STORES__);
+        for (var i = 0; i < keys.length; i++) {
+          var name = keys[i];
+          var store = globalThis.__ZUSTAND_STORES__[name];
+          result[name] = typeof store.getState === 'function' ? store.getState() : store;
+        }
+        state = result;
+        storeType = 'zustand';
+      }
     }
 
     if (!state) {

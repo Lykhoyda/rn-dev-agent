@@ -414,7 +414,7 @@ so important tasks are always visible first.
 
 ---
 
-## S13: TanStack React Query — Feed with Cache + Pagination `[ ]`
+## S13: TanStack React Query — Feed with Cache + Pagination `[DONE]`
 
 **As a user**, I want the Feed screen rebuilt with @tanstack/react-query for data fetching, with infinite scroll pagination, pull-to-refresh, and a visible cache indicator.
 

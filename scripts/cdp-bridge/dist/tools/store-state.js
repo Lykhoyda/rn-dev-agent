@@ -1,9 +1,9 @@
 import { okResult, failResult, withConnection } from '../utils.js';
 export function createStoreStateHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
-        const expression = args.path !== undefined
-            ? `__RN_AGENT.getStoreState(${JSON.stringify(args.path)})`
-            : '__RN_AGENT.getStoreState()';
+        const pathArg = args.path !== undefined ? JSON.stringify(args.path) : 'undefined';
+        const typeArg = args.storeType ? JSON.stringify(args.storeType) : 'undefined';
+        const expression = `__RN_AGENT.getStoreState(${pathArg}, ${typeArg})`;
         const result = await client.evaluate(expression);
         if (result.error) {
             return failResult(`Store state error: ${result.error}`);

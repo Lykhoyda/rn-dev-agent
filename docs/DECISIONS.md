@@ -1044,3 +1044,11 @@ Enhanced the `findStore` fiber walk to detect `QueryClientProvider` and extract 
 
 ### D318: Helpers version bumped to 8
 New `getComponentState` function + React Query detection required version bump to trigger re-injection on reload.
+
+## 2026-03-16: S13 TanStack React Query + Plugin Improvements
+
+### D319: storeType parameter for cdp_store_state to target specific stores
+S13 revealed that `cdp_store_state` always returns Redux first when `__REDUX_STORE__` exists, skipping the fiber walk for React Query. Added `storeType` parameter ('redux' | 'zustand' | 'react-query') to `getStoreState()` and the MCP tool schema. When specified, skips non-matching store types. Enables querying React Query cache even in apps that also use Redux.
+
+### D320: FeedScreen rebuilt with useInfiniteQuery + paginated mock API
+Replaced manual fetch/dispatch pattern with `@tanstack/react-query` `useInfiniteQuery`. Mock interceptor updated to support `?page=N&limit=N` pagination with 20 total items. Cache status badge (Fresh/Stale/Fetching) driven by `dataUpdatedAt` + `staleTime: 30000`.

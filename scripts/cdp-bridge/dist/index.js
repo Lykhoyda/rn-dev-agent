@@ -55,8 +55,9 @@ server.tool('cdp_console_log', 'Get recent console output. Buffered in ring buff
     limit: z.number().int().min(1).max(200).default(50).describe('Max entries to return (default 50, max 200)'),
     clear: z.boolean().default(false).describe('Clear console buffer instead of reading'),
 }, createConsoleLogHandler(getClient));
-server.tool('cdp_store_state', 'Read app store state (Redux, Zustand). Use path to query specific slice (e.g. "cart.items", "auth.user.name"). Redux auto-detected via fiber Provider. Zustand requires: if (__DEV__) global.__ZUSTAND_STORES__ = { store }', {
+server.tool('cdp_store_state', 'Read app store state (Redux, Zustand, React Query). Use path to query specific slice (e.g. "cart.items", "auth.user.name"). Use storeType to target a specific store when multiple exist. Redux auto-detected via fiber Provider. Zustand requires: if (__DEV__) global.__ZUSTAND_STORES__ = { store }', {
     path: z.string().optional().describe('Dot-path into store state (e.g. "cart.items")'),
+    storeType: z.enum(['redux', 'zustand', 'react-query']).optional().describe('Target a specific store type. Useful when app has both Redux and React Query.'),
 }, createStoreStateHandler(getClient));
 server.tool('cdp_component_state', 'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).', {
     testID: z.string().describe('testID of the target component'),

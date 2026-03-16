@@ -2,10 +2,10 @@ import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection } from '../utils.js';
 
 export function createStoreStateHandler(getClient: () => CDPClient) {
-  return withConnection(getClient, async (args: { path?: string }, client) => {
-    const expression = args.path !== undefined
-      ? `__RN_AGENT.getStoreState(${JSON.stringify(args.path)})`
-      : '__RN_AGENT.getStoreState()';
+  return withConnection(getClient, async (args: { path?: string; storeType?: string }, client) => {
+    const pathArg = args.path !== undefined ? JSON.stringify(args.path) : 'undefined';
+    const typeArg = args.storeType ? JSON.stringify(args.storeType) : 'undefined';
+    const expression = `__RN_AGENT.getStoreState(${pathArg}, ${typeArg})`;
 
     const result = await client.evaluate(expression);
 
