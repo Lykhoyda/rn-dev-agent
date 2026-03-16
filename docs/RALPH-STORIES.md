@@ -487,7 +487,7 @@ so important tasks are always visible first.
 
 ---
 
-## S17: Zustand Store for Theme Preferences `[ ]`
+## S17: Zustand Store for Theme Preferences `[DONE]`
 
 **As a user**, I want a second state management layer using Zustand for UI preferences (font size, compact mode, accent color) alongside the existing Redux store.
 
