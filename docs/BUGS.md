@@ -275,3 +275,9 @@
 **Workaround:** Acceptable for dev tools — prevents crashes at the cost of occasionally missing data on shared refs. Use `cdp_store_state` with a narrow `path` to inspect specific shared objects directly.
 **Found by:** Gemini review of Phase 37 changes.
 **Status:** Open — acceptable tradeoff for crash prevention
+
+### B73: MCP server process dies when Metro dev server is killed/restarted (HIGH)
+**Context:** The CDP bridge MCP server runs as a child process of Claude Code. When Metro is killed (e.g., to clear cache or fix module resolution), the MCP server process also terminates. All `cdp_*` and `device_*` tools become permanently unavailable for the rest of the session. The tool references disappear from the available tools list.
+**Workaround:** Avoid killing Metro mid-session. Use `cdp_reload(full=true)` for app reloads. If Metro must restart (e.g., new native module installation), restart the entire Claude Code session afterward.
+**Found by:** S16 FlashList integration — `@shopify/flash-list` required Metro cache clear to resolve.
+**Status:** Open — critical operational limitation

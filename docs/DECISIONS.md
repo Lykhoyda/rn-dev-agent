@@ -1060,3 +1060,11 @@ Wrapped `SwipeableTaskRow` in `Reanimated.View` with `entering={SlideInRight}`, 
 
 ### D321: @gorhom/bottom-sheet renders but snapToIndex fails silently in Expo Go
 Installed `@gorhom/bottom-sheet` + `react-native-gesture-handler`. Created `TaskBottomSheet` component with 3 snap points (25%/50%/90%), backdrop, and task editing. The BottomSheet renders (no JS errors) but `snapToIndex(1)` from a ref called in `handleNavigate` doesn't open the sheet. Root cause: likely Reanimated worklet initialization timing in Expo Go — the sheet needs to be fully mounted before snap calls work. The component is created but the sheet's internal layout pass hasn't completed. This is a known Expo Go limitation with Gorhom bottom-sheet v4. Plugin finding: `cdp_interact` cannot trigger native gestures (swipe-up), and `snapToIndex` via ref requires precise timing that CDP can't guarantee.
+
+## 2026-03-16: S16 FlashList + MCP Server Finding
+
+### D323: FlashList AllTasksScreen with 500 generated items
+Created `AllTasksScreen` with `@shopify/flash-list` rendering 500 generated tasks with `estimatedItemSize={52}`, debounced search, priority badges, and count indicator. Initial Metro module resolution error required cache clear — FlashList needs a clean Metro start to resolve its native modules. Registered as stack screen in TasksStackNavigator with deep link `tasks/all`.
+
+### D324: MCP server process dies when Metro is restarted — CDP tools unavailable mid-session
+Killing the Metro process (to clear cache) also killed the MCP server child process. All `cdp_*` tools became unavailable for the rest of the session. This is a critical operational finding — the MCP server runs as a Claude Code child process and cannot be restarted without a new Claude Code session. Workaround: avoid killing Metro mid-session; use `cdp_reload(full=true)` instead. If Metro must restart, the entire Claude Code session must restart too.

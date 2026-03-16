@@ -469,7 +469,7 @@ so important tasks are always visible first.
 
 ---
 
-## S16: FlashList with 500+ Items `[ ]`
+## S16: FlashList with 500+ Items `[DONE]`
 
 **As a user**, I want a "All Tasks" screen that renders 500 generated tasks using @shopify/flash-list for virtualized performance.
 

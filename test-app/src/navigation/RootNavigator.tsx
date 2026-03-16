@@ -21,6 +21,7 @@ import NotificationsScreen from '../screens/NotificationsScreen';
 import NotificationDetailScreen from '../screens/NotificationDetailScreen';
 import TasksScreen from '../screens/TasksScreen';
 import TaskDetailScreen from '../screens/TaskDetailScreen';
+import AllTasksScreen from '../screens/AllTasksScreen';
 import ErrorLabModal from '../screens/ErrorLabModal';
 import ProfileEditModal from '../screens/ProfileEditModal';
 import TaskWizardModal from '../screens/TaskWizardModal';
@@ -74,6 +75,7 @@ function TasksStackNavigator() {
     <TasksStack.Navigator>
       <TasksStack.Screen name="TasksMain" component={TasksScreen} options={{ title: 'Tasks' }} />
       <TasksStack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: 'Task Detail' }} />
+      <TasksStack.Screen name="AllTasks" component={AllTasksScreen} options={{ title: 'All Tasks (500)' }} />
     </TasksStack.Navigator>
   );
 }
@@ -132,6 +134,7 @@ const linking = {
             screens: {
               TasksMain: 'tasks',
               TaskDetail: 'tasks/:id',
+              AllTasks: 'tasks/all',
             },
           },
           ProfileTab: {

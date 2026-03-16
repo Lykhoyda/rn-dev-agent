@@ -1342,3 +1342,36 @@ Reviewed by code-reviewer agents (3 parallel reviews):
 ### Review Findings
 - 2 critical fixed (setTimeout memory leak D315, stale SCREEN_WIDTH D314)
 - 2 important deferred (StepIndicator totalSteps stability — dormant, ID generation NaN risk — pre-existing)
+
+---
+
+## Phase 40: Ralph Loop Phase 2 — Library Integration Stories S12-S16 (Complete)
+
+**Status:** Complete (5 of 10 stories, S17-S21 continue next session)
+**Date:** 2026-03-16
+
+### Stories Completed
+
+| Story | Library | Time | Plugin Improvement |
+|-------|---------|------|--------------------|
+| S12 | react-hook-form + zod | 5m | New `cdp_component_state` tool (21st), RHF auto-detection |
+| S13 | @tanstack/react-query | 14m | `storeType` param for `cdp_store_state`, React Query cache detection |
+| S14 | @gorhom/bottom-sheet | 10m | Finding: CDP can't control gesture-driven sheets (D321) |
+| S15 | react-native-reanimated | 6m | Finding: UI thread animations invisible to CDP (D322) |
+| S16 | @shopify/flash-list | 8m | AllTasksScreen 500 items, MCP server death finding (D324) |
+
+### Plugin Tool Changes
+- **New tool:** `cdp_component_state` — targeted hook dump by testID, auto-detects RHF control objects
+- **Enhanced:** `cdp_store_state` — `storeType` parameter to target Redux/Zustand/React Query specifically
+- **Enhanced:** `getStoreState` fiber walk — detects `QueryClientProvider` and extracts query cache
+- **Helpers:** v7 → v8
+
+### Architectural Findings
+- D316: Non-Redux state (react-hook-form) accessible via `cdp_component_state` hook inspection
+- D319: Apps using both Redux and React Query need `storeType` to disambiguate
+- D321: Bottom sheets with Reanimated worklets can't be controlled via CDP
+- D322: Reanimated UI thread animations are completely invisible to JS/CDP
+- D324: MCP server dies when Metro is restarted — requires Claude Code session restart
+
+### Remaining Stories (S17-S21)
+S17 (Zustand), S18 (gesture reorder), S19 (SVG charts), S20 (expo-notifications), S21 (Moti onboarding) — continue in next session with fresh MCP server.
