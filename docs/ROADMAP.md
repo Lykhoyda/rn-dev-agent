@@ -1373,5 +1373,43 @@ Reviewed by code-reviewer agents (3 parallel reviews):
 - D322: Reanimated UI thread animations are completely invisible to JS/CDP
 - D324: MCP server dies when Metro is restarted — requires Claude Code session restart
 
-### Remaining Stories (S17-S21)
-S17 (Zustand), S18 (gesture reorder), S19 (SVG charts), S20 (expo-notifications), S21 (Moti onboarding) — continue in next session with fresh MCP server.
+### S17-S21 Results (completed in next session)
+- S17 (Zustand): 3m28s — dual Redux+Zustand verified
+- S18 (gesture reorder): 2m36s — cdp_dispatch reorder works, no drag gesture tool
+- S19 (SVG charts): 6m21s — cdp_component_tree fully traverses SVG elements
+- S20 (expo-notifications): 3m — OS APIs unreachable from cdp_evaluate
+- S21 (onboarding): 11m — Moti incompatible with Expo Go, Reanimated direct works
+
+### Gemini + Codex Final Tool Recommendations (converged)
+
+Both reviewers independently identified the same 3 priorities:
+
+**Priority 1: App-Side Dev Bridge (`@rn-dev-agent/runtime`)**
+Ship a tiny npm package that apps install in `__DEV__`. Exposes `globalThis.__RN_AGENT_BRIDGE__` with three registries: `snapshots` (Redux/Zustand/RQ/RHF), `commands` (expo-notifications, permissions), `navigators` (CommonActions.navigate + StackActions.push). Replaces fragile fiber heuristics with stable public APIs. Collapses RHF fragility, RQ ambiguity, OS API access, and nested navigation into one mechanism.
+
+**Priority 2: Native Gesture Tool (`cdp_gesture` / enhanced `device_drag`)**
+Add `device_drag(fromRef, toRef, durationMs)` and `device_swipe_on(ref, direction)` to simulate touch sequences over time. Bottom sheets, drag-to-reorder, and swipe gestures can't be triggered by CDP synthetic events — need native touch simulation. Extend `device_snapshot` to return element bounds for coordinate-based gestures.
+
+**Priority 3: Decouple MCP from Metro Lifetime (B73 fix)**
+Split MCP server into a stable supervisor process + restartable CDP worker. When Metro dies, return `status: metro_down` instead of losing the tool surface. Auto-reconnect when Metro returns, re-inject helpers, restore device session. Currently operationally fatal for real apps where Metro restarts are normal.
+
+---
+
+## Phase 41: App-Side Dev Bridge (Planned)
+
+**Status:** Planned — highest priority from Gemini+Codex review
+**Impact:** Eliminates fiber walk fragility, enables OS API access, fixes nested navigation
+
+---
+
+## Phase 42: Native Gesture Tool (Planned)
+
+**Status:** Planned — enables bottom sheet, drag-to-reorder, swipe verification
+**Impact:** Unblocks all gesture-driven UI verification
+
+---
+
+## Phase 43: MCP Server Supervisor (Planned)
+
+**Status:** Planned — fixes B73 (MCP death on Metro restart)
+**Impact:** Production reliability for real-world development loops

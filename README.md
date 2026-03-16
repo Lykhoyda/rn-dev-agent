@@ -95,14 +95,16 @@ Phase 7: Done. 4 files modified, 3 decisions logged.
 
 ### Benchmarks
 
-Real measurements from the test app (11 stories completed):
+Real measurements from the test app (21 stories completed):
 
 | Feature complexity | Time | Crashes | Manual interventions |
 |-------------------|------|---------|---------------------|
-| Simple (search, toggle) | ~10 min | 0 | 0 |
-| Medium (swipe-to-delete, sync) | ~15 min | 0 | 0 |
-| Complex (3-step wizard with animations) | ~25 min | 0 | 0 |
+| Simple (search, toggle, store) | 3-5 min | 0 | 0 |
+| Medium (forms, charts, lists) | 5-10 min | 0 | 0 |
+| Complex (3-step wizard, onboarding) | 11-25 min | 0 | 0 |
 | 4-feature batch verification | ~2 min | 0 | 0 |
+
+**Libraries tested:** react-hook-form, zod, @tanstack/react-query, @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications, react-native-reanimated, react-native-gesture-handler, expo-haptics
 
 ## Other Commands
 
@@ -173,7 +175,7 @@ Add `testID` to interactive elements for reliable component queries:
 │  ┌──────▼───▼────────────▼─────────────────▼──────┐ │
 │  │              MCP Server (CDP Bridge)            │ │
 │  │  WebSocket → Metro → Hermes CDP                 │ │
-│  │  20 tools: 11 CDP + 8 device + 1 dispatch       │ │
+│  │  21 tools: 12 CDP + 8 device + 1 dispatch       │ │
 │  └─────────────────────┬───────────────────────────┘ │
 │                        │                             │
 │  ┌─────────────────────▼───────────────────────────┐ │
@@ -188,7 +190,7 @@ Add `testID` to interactive elements for reliable component queries:
     └─────────┘                   └───────────┘
 ```
 
-### MCP Tools (20 total)
+### MCP Tools (21 total)
 
 **CDP tools** (React internals via Chrome DevTools Protocol):
 
@@ -197,7 +199,8 @@ Add `testID` to interactive elements for reliable component queries:
 | `cdp_status` | Health check + auto-connect + auto-recovery |
 | `cdp_component_tree` | React fiber tree (filtered, cycle-safe) |
 | `cdp_navigation_state` | Current route, stack, tabs |
-| `cdp_store_state` | Redux/Zustand state at a dot-path |
+| `cdp_store_state` | Redux/Zustand/React Query state at a dot-path |
+| `cdp_component_state` | Targeted hook inspection by testID (forms, refs, atoms) |
 | `cdp_dispatch` | Atomic Redux dispatch + state read in single execution |
 | `cdp_network_log` | Recent HTTP requests |
 | `cdp_console_log` | Console output buffer |
