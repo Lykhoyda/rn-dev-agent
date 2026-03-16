@@ -1033,3 +1033,14 @@ Code review caught that a module-level `Dimensions.get('window').width` would go
 
 ### D315: Mounted ref + timer cleanup for wizard create flow
 Code review caught that nested `setTimeout` calls in `handleCreate` could fire after unmount. Added `mountedRef` + `timerRefs` with `useEffect` cleanup to prevent state-after-unmount warnings and stale navigation calls.
+
+## 2026-03-16: S12 React Hook Form + Plugin Improvements
+
+### D316: New cdp_component_state tool for non-Redux state inspection
+S12 revealed that `cdp_store_state` is useless for react-hook-form (state in refs, not Redux). Added `getComponentState(testID)` to injected helpers — walks the fiber tree to find a component by testID, dumps all hook cells (useState, useRef, useForm control), and auto-detects RHF `_formValues`/`_formState` objects. Registered as 21st MCP tool. Gemini+Codex both recommended this approach.
+
+### D317: React Query detection in cdp_store_state fiber walk
+Enhanced the `findStore` fiber walk to detect `QueryClientProvider` and extract its query cache via the public `getQueryCache().getAll()` API. Returns query keys, data, status, and dataUpdatedAt. Safer than RHF internals — QueryClient has a stable public API.
+
+### D318: Helpers version bumped to 8
+New `getComponentState` function + React Query detection required version bump to trigger re-injection on reload.

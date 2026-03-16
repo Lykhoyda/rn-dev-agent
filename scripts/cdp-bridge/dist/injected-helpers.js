@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 7;
+  var __HELPERS_VERSION__ = 8;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -312,8 +312,21 @@ export const INJECTED_HELPERS = `
           var current = fiber;
           while (current) {
             if ((depth || 0) > 30) return null;
-            if (current.type && current.type.displayName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.getState) {
-              return { store: current.memoizedProps.store.getState(), type: 'redux' };
+            var name = current.type && (current.type.displayName || current.type.name);
+            var props = current.memoizedProps;
+            if (name === 'Provider' && props && props.store && props.store.getState) {
+              return { store: props.store.getState(), type: 'redux' };
+            }
+            if (name === 'QueryClientProvider' && props && props.client && typeof props.client.getQueryCache === 'function') {
+              try {
+                var queries = props.client.getQueryCache().getAll();
+                var mapped = {};
+                for (var q = 0; q < queries.length; q++) {
+                  var key = JSON.stringify(queries[q].queryKey);
+                  mapped[key] = { data: queries[q].state.data, status: queries[q].state.status, dataUpdatedAt: queries[q].state.dataUpdatedAt };
+                }
+                return { store: mapped, type: 'react-query' };
+              } catch(e) { /* fall through */ }
             }
             var found = findStore(current.child, (depth || 0) + 1);
             if (found) return found;
@@ -617,12 +630,88 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ dispatched: true });
   }
 
+  function getComponentState(testID) {
+    if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
+    var renderer = findActiveRenderer();
+    if (!renderer) return JSON.stringify({ __agent_error: 'No active renderer' });
+    var root = renderer.roots.values().next().value;
+    if (!root || !root.current) return JSON.stringify({ __agent_error: 'No fiber root' });
+    var targetFiber = null;
+
+    function findByTestID(fiber) {
+      if (!fiber || targetFiber) return;
+      var props = fiber.memoizedProps;
+      if (props && (props.testID === testID || props.nativeID === testID)) {
+        targetFiber = fiber;
+        return;
+      }
+      var child = fiber.child;
+      while (child) {
+        findByTestID(child);
+        child = child.sibling;
+      }
+    }
+
+    findByTestID(root.current);
+    if (!targetFiber) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
+
+    var compName = targetFiber.type && (targetFiber.type.displayName || targetFiber.type.name) || null;
+
+    var hooks = [];
+    var hookState = targetFiber.memoizedState;
+    var limit = 20;
+    while (hookState && limit-- > 0) {
+      var hs = hookState.memoizedState;
+      if (typeof hs === 'function') {
+        hooks.push('[Function]');
+      } else if (typeof hs === 'object' && hs !== null) {
+        if (hs.current !== undefined) {
+          hooks.push({ ref: hs.current !== null ? typeof hs.current : null });
+        } else if (hs._formValues && hs._formState) {
+          try {
+            hooks.push({
+              __type: 'react-hook-form',
+              values: hs._formValues,
+              errors: hs._formState.errors,
+              isDirty: hs._formState.isDirty,
+              isValid: hs._formState.isValid,
+              isSubmitting: hs._formState.isSubmitting
+            });
+          } catch(e) { hooks.push('[RHF:unreadable]'); }
+        } else {
+          try { JSON.stringify(hs); hooks.push(hs); }
+          catch(e) { hooks.push('[Circular]'); }
+        }
+      } else {
+        hooks.push(hs);
+      }
+      hookState = hookState.next;
+    }
+
+    var propsObj = {};
+    if (targetFiber.memoizedProps) {
+      var pkeys = Object.keys(targetFiber.memoizedProps);
+      for (var i = 0; i < pkeys.length; i++) {
+        var v = targetFiber.memoizedProps[pkeys[i]];
+        propsObj[pkeys[i]] = typeof v === 'function' ? '[Function]' : v;
+      }
+    }
+
+    return safeStringify({
+      component: compName,
+      testID: testID,
+      props: propsObj,
+      hooks: hooks
+    }, 100000);
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
     getTree: getTree,
     getNavState: getNavState,
     getStoreState: getStoreState,
+    getComponentState: getComponentState,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

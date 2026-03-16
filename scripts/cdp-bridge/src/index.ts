@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { CDPClient } from './cdp-client.js';
+import { okResult, failResult, withConnection } from './utils.js';
 import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
@@ -113,6 +114,25 @@ server.tool(
     path: z.string().optional().describe('Dot-path into store state (e.g. "cart.items")'),
   },
   createStoreStateHandler(getClient),
+);
+
+server.tool(
+  'cdp_component_state',
+  'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).',
+  {
+    testID: z.string().describe('testID of the target component'),
+  },
+  withConnection(getClient, async (args: { testID: string }, client) => {
+    const result = await client.evaluate(`__RN_AGENT.getComponentState(${JSON.stringify(args.testID)})`);
+    if (result.error) return failResult(`Component state error: ${result.error}`);
+    if (typeof result.value !== 'string') return failResult('Unexpected response');
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.value); } catch { return okResult({ raw: result.value }); }
+    if (parsed !== null && typeof parsed === 'object' && '__agent_error' in (parsed as Record<string, unknown>)) {
+      return failResult(String((parsed as Record<string, unknown>).__agent_error));
+    }
+    return okResult(parsed);
+  }),
 );
 
 server.tool(

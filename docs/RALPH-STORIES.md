@@ -387,3 +387,191 @@ so important tasks are always visible first.
 - Navigate back → FAB still visible
 
 **Plugin tools focus:** Most complex single-screen UI story. Tests modal navigation, multi-step form state, animation verification, keyboard handling, and combined store dispatch with rich payload. First story to verify animated transitions via CDP.
+
+---
+
+# Ralph Loop Phase 2: Library Integration Stories (S12-S21)
+
+**Goal:** Integrate popular React Native libraries and use them to stress-test plugin tools against real-world complexity. Each cycle: implement → benchmark → get Gemini+Codex tool feedback → apply improvements.
+
+---
+
+## S12: React Hook Form + Zod Validation `[DONE]`
+
+**As a user**, I want a Settings "Edit Profile" screen rebuilt with react-hook-form and zod schema validation, with real-time field errors, conditional fields, and form state that exists outside Redux.
+
+**Requirements:**
+- Install `react-hook-form` and `zod` + `@hookform/resolvers`
+- Replace ProfileEditModal with react-hook-form `useForm` + `Controller`
+- Zod schema: name (min 2, max 50), email (valid email), bio (optional, max 200), website (optional, valid URL)
+- Show real-time errors as user types (mode: 'onChange')
+- Conditional field: show "Company" field only when bio contains "work" or "job"
+- Form dirty/valid state shown in header ("Save" button disabled when invalid)
+- `useWatch` to show live character counts
+- testIDs: `rhf-name`, `rhf-email`, `rhf-bio`, `rhf-website`, `rhf-company`, `rhf-error-{field}`, `rhf-save-btn`, `rhf-char-count-{field}`
+
+**Plugin stress test:** react-hook-form stores state in refs, NOT React state. `cdp_component_tree` hookStates won't show form values. Tests whether `cdp_evaluate` can reach into `useForm` internals. First story where Redux is irrelevant to the feature.
+
+---
+
+## S13: TanStack React Query — Feed with Cache + Pagination `[ ]`
+
+**As a user**, I want the Feed screen rebuilt with @tanstack/react-query for data fetching, with infinite scroll pagination, pull-to-refresh, and a visible cache indicator.
+
+**Requirements:**
+- Install `@tanstack/react-query`
+- Wrap app in `QueryClientProvider`
+- Replace manual fetch/dispatch in FeedScreen with `useInfiniteQuery`
+- Paginated API: `/api/feed?page=1&limit=5` returns `{ items, nextPage, hasMore }`
+- Update mock interceptor with pagination support
+- Infinite scroll via `onEndReached` + `fetchNextPage`
+- Pull-to-refresh via `refetch`
+- Show cache status badge: "Fresh" (< 30s), "Stale" (> 30s), "Fetching..."
+- `staleTime: 30000`, `gcTime: 300000`
+- testIDs: `feed-cache-badge`, `feed-page-indicator`, `feed-loading-more`
+
+**Plugin stress test:** React Query state lives in its own cache, not Redux. `cdp_store_state` won't find it. Tests whether the plugin can inspect non-Redux state via `cdp_evaluate` against the QueryClient. First story with infinite scroll verification.
+
+---
+
+## S14: Bottom Sheet with Snap Points `[ ]`
+
+**As a user**, I want a task detail bottom sheet (Gorhom) that slides up from the task list with snap points, backdrop, and gesture dismiss.
+
+**Requirements:**
+- Install `@gorhom/bottom-sheet`
+- Tapping a task row opens a bottom sheet (not navigating to TaskDetail)
+- 3 snap points: 25% (peek), 50% (half), 90% (full)
+- Sheet content: task title, description, priority editor, done toggle, delete button
+- Backdrop with opacity animation (0 at closed, 0.5 at full)
+- Swipe down to dismiss
+- Edit priority/done directly in sheet (dispatches to Redux immediately)
+- testIDs: `task-sheet`, `task-sheet-backdrop`, `task-sheet-handle`, `task-sheet-title`, `task-sheet-priority`, `task-sheet-done`, `task-sheet-delete`
+
+**Plugin stress test:** Bottom sheets use Reanimated shared values for position. Tests `device_swipe` for gesture-based sheet manipulation and whether `cdp_component_tree` can see content inside the sheet portal. First story with gesture-driven UI verification.
+
+---
+
+## S15: Reanimated Layout Animations `[ ]`
+
+**As a user**, I want the task list to use Reanimated layout animations — entering items slide in from right, exiting items fade out + shrink, and reordering items animate smoothly.
+
+**Requirements:**
+- Use `Animated.FlatList` from `react-native-reanimated`
+- `entering={SlideInRight}` on task rows
+- `exiting={FadeOut.duration(300)}` on deleted rows
+- `layout={Layout.springify()}` for reorder animations
+- Add a "Shuffle" button that randomizes task order (to demo layout animation)
+- Keep existing swipe-to-delete but use Reanimated exiting instead of LayoutAnimation
+- testIDs: `task-row-animated-{id}`, `shuffle-btn`
+
+**Plugin stress test:** Reanimated animations run on the UI thread, invisible to JS. Tests whether `cdp_evaluate` can detect animation completion or if screenshot timing is the only proof. First story to verify animation-driven UX.
+
+---
+
+## S16: FlashList with 500+ Items `[ ]`
+
+**As a user**, I want a "All Tasks" screen that renders 500 generated tasks using @shopify/flash-list for virtualized performance.
+
+**Requirements:**
+- Install `@shopify/flash-list`
+- New screen: AllTasksScreen with `FlashList` instead of `FlatList`
+- Generate 500 seed tasks with varied priorities, done states, tags
+- `estimatedItemSize={60}`, sticky section headers by priority group
+- Search bar that filters the 500 items (client-side, debounced 200ms)
+- Show render count and blank area metrics (FlashList performance hooks)
+- Navigation: accessible from TasksScreen "View All" button
+- testIDs: `all-tasks-screen`, `all-tasks-search`, `all-tasks-list`, `all-tasks-count`, `all-tasks-metrics`
+
+**Plugin stress test:** `cdp_component_tree` with 500+ items could hit truncation limits or safeStringify's 50KB cap. Tests whether filtered queries (`filter="FlashList"`) keep token count manageable. First large-dataset verification.
+
+---
+
+## S17: Zustand Store for Theme Preferences `[ ]`
+
+**As a user**, I want a second state management layer using Zustand for UI preferences (font size, compact mode, accent color) alongside the existing Redux store.
+
+**Requirements:**
+- Install `zustand`
+- Create `usePreferencesStore` with: `fontSize: 'small' | 'medium' | 'large'`, `compactMode: boolean`, `accentColor: string`
+- Expose via `__ZUSTAND_STORES__` in `__DEV__`
+- New "Appearance" section in SettingsScreen with controls for each preference
+- Font size affects all text globally (via a context or style utility)
+- Compact mode reduces padding/margins by 30%
+- Accent color changes primary button/FAB color
+- testIDs: `pref-font-size`, `pref-compact-toggle`, `pref-accent-{color}`
+
+**Plugin stress test:** First story using Zustand. Tests the `__ZUSTAND_STORES__` detection path in `cdp_store_state`. Verifies that both Redux and Zustand stores are accessible simultaneously.
+
+---
+
+## S18: Gesture Handler Drag-to-Reorder `[ ]`
+
+**As a user**, I want to long-press a task and drag it to reorder the list, with haptic feedback on grab and drop.
+
+**Requirements:**
+- Install `react-native-gesture-handler` (if not present) + `expo-haptics`
+- Replace PanResponder swipe with gesture-handler based implementation
+- Long press (500ms) activates drag mode — item scales up 1.05x, shadow appears
+- Drag reorders in real-time (items shift with animation)
+- Drop snaps item into new position, triggers light haptic
+- Save new order to Redux (`reorderTasks` reducer)
+- Maintain swipe-to-delete alongside drag-to-reorder
+- testIDs: `task-draggable-{id}`, `task-drag-handle-{id}`
+
+**Plugin stress test:** Complex gesture state machine (long-press → drag → drop) that can't be triggered by `cdp_interact`. Tests `device_press` + `device_swipe` for multi-step gesture sequences. First story requiring gesture choreography.
+
+---
+
+## S19: SVG Charts Dashboard `[ ]`
+
+**As a user**, I want a dashboard tab showing task statistics as interactive SVG charts — pie chart for priority distribution, bar chart for completion by day.
+
+**Requirements:**
+- Install `react-native-svg` + `victory-native`
+- New DashboardScreen (replace HomeScreen or add as tab)
+- Pie chart: task count by priority (high=red, medium=amber, low=green)
+- Bar chart: tasks completed per day (last 7 days, mock data)
+- Tap pie slice → filter tasks to that priority (navigate to Tasks tab with filter)
+- Charts animate on mount (VictoryAnimation)
+- Add `completedAt: number | null` field to TaskItem for chart data
+- testIDs: `chart-pie`, `chart-bar`, `chart-pie-slice-{priority}`, `dashboard-screen`
+
+**Plugin stress test:** SVG elements render as native views, not React components. Tests whether `cdp_component_tree` can traverse SVG children. Victory-native uses complex nested component structures. First story with data visualization verification.
+
+---
+
+## S20: Expo Notifications — Local Reminders `[ ]`
+
+**As a user**, I want to schedule local notifications as task reminders — pick a time, notification fires with task title, tapping it opens the task detail.
+
+**Requirements:**
+- Install `expo-notifications`
+- Add "Remind me" button on TaskDetailScreen
+- Time picker: "In 1 min", "In 5 min", "In 1 hour", custom time
+- Schedule local notification with task title + id in data payload
+- Handle notification tap → navigate to TaskDetail with correct id
+- Show scheduled reminders list in Settings (with cancel option)
+- Add `reminder: { scheduledFor: number; notifId: string } | null` to TaskItem
+- testIDs: `task-remind-btn`, `remind-1m`, `remind-5m`, `remind-1h`, `remind-custom`, `remind-list`, `remind-cancel-{id}`
+
+**Plugin stress test:** Notifications are OS-level — invisible to CDP. Tests whether `cdp_evaluate` can check `Notifications.getAllScheduledNotificationsAsync()`. First story requiring OS-level feature verification beyond the JS runtime.
+
+---
+
+## S21: Animated Onboarding Flow with Moti `[ ]`
+
+**As a user**, I want a first-launch onboarding flow with 4 animated screens (staggered fade-ins, slide transitions, Lottie-style illustrations via Moti), skip button, and "Get Started" that marks onboarding complete.
+
+**Requirements:**
+- Install `moti` (uses Reanimated under the hood)
+- 4 onboarding screens with `MotiView` staggered entrance animations
+- Horizontal swipe between screens (like a pager)
+- Animated progress dots (scale + color transition)
+- "Skip" button skips to last screen
+- "Get Started" on last screen dispatches `completeOnboarding` to settingsSlice
+- Only shows once — `settings.onboardingComplete` persisted via redux-persist
+- Illustrations: use colored placeholder shapes animated with Moti sequences
+- testIDs: `onboarding-screen`, `onboarding-page-{n}`, `onboarding-skip`, `onboarding-next`, `onboarding-done`, `onboarding-dots`
+
+**Plugin stress test:** Moti wraps Reanimated with declarative animations. Tests whether the plugin can detect animation completion states. 4-page pager tests navigation state within a single screen (no React Navigation). First story with onboarding/first-launch verification.
