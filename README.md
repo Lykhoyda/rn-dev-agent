@@ -4,19 +4,31 @@ A Claude Code plugin that turns Claude into a React Native development partner. 
 
 ## Quick Start
 
+From inside Claude Code, run these commands:
+
 ```bash
-# Add the marketplace and install the plugin
-claude mcp add-marketplace Lykhoyda/react-native-dev-claude-plugin
-claude plugin install rn-dev-agent
+# 1. Add the marketplace
+/plugin marketplace add Lykhoyda/react-native-dev-claude-plugin
 
-# Navigate to your React Native project
+# 2. Install the plugin
+/plugin install rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin
+```
+
+Or use the interactive UI:
+
+```bash
+# Open the plugin manager, go to Discover tab
+/plugin
+```
+
+Then navigate to your React Native project and start building:
+
+```bash
 cd /path/to/your-rn-app
-
-# Start Claude Code
 claude
 ```
 
-On startup the plugin auto-detects your React Native project and installs [maestro-runner](https://github.com/devicelab-dev/maestro-runner) for UI interactions.
+On startup the plugin auto-detects your React Native project and installs [maestro-runner](https://github.com/devicelab-dev/maestro-runner) and [agent-device](https://github.com/nicklama/agent-device) for device interactions.
 
 Then tell Claude what to build:
 
@@ -231,10 +243,12 @@ Add `testID` to interactive elements for reliable component queries:
 | CDP connection rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | `cdp_store_state` error for Zustand | Add `global.__ZUSTAND_STORES__` to your app entry |
 | Empty error log but app crashed | Native crash — use `adb logcat -b crash` or Xcode console |
-| Plugin not detected | Pass `--plugin-dir` pointing to this repo, or install via marketplace |
+| Plugin not detected | Run `/plugin install rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin`, or use `--plugin-dir` for local dev |
+| `/plugin` command not found | Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code` |
+| Plugin skills not appearing | Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache` |
 | maestro-runner not in PATH | `export PATH="$HOME/.maestro-runner/bin:$PATH"` |
 
-## Install from Source
+## Install from Source (development)
 
 ```bash
 git clone https://github.com/Lykhoyda/react-native-dev-claude-plugin.git
@@ -245,3 +259,5 @@ cd scripts/cdp-bridge && npm install && npm run build && cd ../..
 cd /path/to/your-rn-app
 claude --plugin-dir /path/to/react-native-dev-claude-plugin
 ```
+
+For development only. For normal use, install via the marketplace (see Quick Start above).
