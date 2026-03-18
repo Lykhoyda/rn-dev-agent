@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Pressable } from 'react-native';
+import { View, Text, Pressable, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackScreenProps, NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompositeScreenProps } from '@react-navigation/native';
@@ -7,6 +7,7 @@ import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { HomeStackParams, TabParams, RootStackParams } from '../navigation/types';
 import { useThemeColors } from '../hooks/useThemeColors';
 import type { ThemeColors } from '../hooks/useThemeColors';
+import TaskStatsCard from '../components/TaskStatsCard';
 
 type Props = CompositeScreenProps<
   NativeStackScreenProps<HomeStackParams, 'HomeMain'>,
@@ -26,17 +27,17 @@ function FeatureCard({ index, title, description, colors }: { index: number; tit
   );
 }
 
-function FeatureList({ colors }: { colors: ThemeColors }) {
-  const features = [
-    { title: 'Component Tree', description: 'Tests cdp_component_tree with nested testIDs' },
-    { title: 'Navigation State', description: 'Tests cdp_navigation_state across tabs and stacks' },
-    { title: 'Store State', description: 'Tests cdp_store_state with Redux Toolkit slices' },
-  ];
+const FEATURES = [
+  { id: 'component-tree', title: 'Component Tree', description: 'Tests cdp_component_tree with nested testIDs' },
+  { id: 'navigation-state', title: 'Navigation State', description: 'Tests cdp_navigation_state across tabs and stacks' },
+  { id: 'store-state', title: 'Store State', description: 'Tests cdp_store_state with Redux Toolkit slices' },
+];
 
+function FeatureList({ colors }: { colors: ThemeColors }) {
   return (
     <View testID="home-feature-list" className="mt-4">
-      {features.map((f, i) => (
-        <FeatureCard key={i} index={i} title={f.title} description={f.description} colors={colors} />
+      {FEATURES.map((f, i) => (
+        <FeatureCard key={f.id} index={i} title={f.title} description={f.description} colors={colors} />
       ))}
     </View>
   );
@@ -47,7 +48,7 @@ export default function HomeScreen({ navigation }: Props) {
   const rootNav = useNavigation<NativeStackNavigationProp<RootStackParams>>();
 
   return (
-    <View testID="home-welcome" className={`flex-1 ${colors.bg} px-4 pt-4`}>
+    <ScrollView testID="home-welcome" className={`flex-1 ${colors.bg} px-4 pt-4`} contentContainerStyle={{ paddingBottom: 20 }}>
       <Text className={`text-2xl font-bold ${colors.text}`}>Welcome</Text>
       <Text className={`mt-1 ${colors.muted}`}>rn-dev-agent test fixture</Text>
       <Pressable
@@ -58,6 +59,7 @@ export default function HomeScreen({ navigation }: Props) {
       >
         <Text className={`flex-1 ${colors.muted}`}>Search tasks, notifications, feed...</Text>
       </Pressable>
+      <TaskStatsCard />
       <FeatureList colors={colors} />
       <Pressable
         testID="home-feed-btn"
@@ -73,6 +75,6 @@ export default function HomeScreen({ navigation }: Props) {
       >
         <Text className="text-center font-semibold text-white">Go to Dashboard</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }

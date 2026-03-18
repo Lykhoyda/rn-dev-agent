@@ -187,4 +187,22 @@ export const selectCurrentSort = (state: { tasks: TasksState }) =>
 export const selectPendingDelete = (state: { tasks: TasksState }) =>
   state.tasks.pendingDelete;
 
+export const selectTaskStats = createSelector(
+  (state: { tasks: TasksState }) => state.tasks.items,
+  (items) => ({
+    total: items.length,
+    active: items.filter((t) => !t.done).length,
+    done: items.filter((t) => t.done).length,
+  }),
+);
+
+export const selectPriorityDistribution = createSelector(
+  (state: { tasks: TasksState }) => state.tasks.items,
+  (items) => ({
+    high: items.filter((t) => t.priority === 'high').length,
+    medium: items.filter((t) => t.priority === 'medium').length,
+    low: items.filter((t) => t.priority === 'low').length,
+  }),
+);
+
 export default tasksSlice;
