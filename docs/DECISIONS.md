@@ -1164,3 +1164,9 @@ The bridge's store.ts auto-detects `globalThis.__REDUX_STORE__` and `globalThis.
 
 ### D353: Document auto-update workflow in README
 Third-party Claude Code marketplace plugins don't auto-update by default. Since rn-dev-agent ships frequent updates, added a "Keeping Up to Date" section guiding users to enable auto-update via the plugin manager UI, with fallback manual commands.
+
+### D354: Guard health check against uninstalled app
+The post-edit health check fires false positives when Metro is running and simulator is booted but the app isn't installed (e.g., after `xcrun simctl uninstall`). Added `xcrun simctl listapps booted` guard that reads the bundle ID from `app.json` and skips if not installed.
+
+### D355: Bridgeless mode target detection in health check
+RN 0.81.5+ Bridgeless targets put "React Native" in the CDP target's `description` field, not `title`. Extended the jq filter to check both `(.title | test(...)) or (.description | test(...))` — matching the same logic already in `cdp-client.ts`.

@@ -74,6 +74,20 @@ if [[ "$metro_status" != "packager-status:running" ]]; then
   exit 0  # Metro not running — not in a dev session, skip
 fi
 
+# --- Guard: check if the app is actually installed on the simulator ---
+if [[ "$ios_booted" == "true" ]]; then
+  app_json="$check_dir/app.json"
+  if [[ -f "$app_json" ]]; then
+    bundle_id=$(jq -r '.expo.ios.bundleIdentifier // empty' "$app_json" 2>/dev/null)
+    if [[ -n "$bundle_id" ]]; then
+      installed=$(xcrun simctl listapps booted 2>/dev/null | grep -c "$bundle_id" || echo "0")
+      if [[ "$installed" == "0" ]]; then
+        exit 0  # App not installed on simulator — skip
+      fi
+    fi
+  fi
+fi
+
 # Last-write-wins debounce:
 # Write a unique token, sleep, then only proceed if our token is still current.
 LOCKFILE="${TMPDIR:-/tmp}/rn-dev-agent-health-check.token"
@@ -106,7 +120,7 @@ while [ "$waited" -lt "$max_wait" ]; do
 
   if [[ "$target_count" != "0" ]]; then
     # Targets exist — verify at least one is Hermes/RN
-    has_hermes=$(echo "$targets" | jq '[.[] | select(.title | test("Hermes|React Native"; "i"))] | length' 2>/dev/null || echo "0")
+    has_hermes=$(echo "$targets" | jq '[.[] | select((.title // "" | test("Hermes|React Native"; "i")) or (.description // "" | test("React Native"; "i")))] | length' 2>/dev/null || echo "0")
     if [[ "$has_hermes" != "0" ]]; then
       exit 0  # All healthy
     fi
