@@ -1,8 +1,13 @@
-import { safeStringify } from './utils';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.installConsolePatch = installConsolePatch;
+exports.getConsole = getConsole;
+exports.clearConsole = clearConsole;
+const utils_1 = require("./utils");
 const MAX_ENTRIES = 200;
 let buffer = [];
 const SENTINEL_KEY = '__RN_DEV_BRIDGE_CONSOLE_PATCHED__';
-export function installConsolePatch() {
+function installConsolePatch() {
     const g = globalThis;
     if (g[SENTINEL_KEY])
         return;
@@ -17,7 +22,7 @@ export function installConsolePatch() {
         globalThis.console[level] = (...args) => {
             buffer.push({
                 level,
-                message: args.map((a) => (typeof a === 'string' ? a : safeStringify(a, 2000))).join(' '),
+                message: args.map((a) => (typeof a === 'string' ? a : (0, utils_1.safeStringify)(a, 2000))).join(' '),
                 timestamp: Date.now(),
             });
             if (buffer.length > MAX_ENTRIES) {
@@ -27,7 +32,7 @@ export function installConsolePatch() {
         };
     }
 }
-export function getConsole(opts) {
+function getConsole(opts) {
     var _a, _b;
     const level = (_a = opts === null || opts === void 0 ? void 0 : opts.level) !== null && _a !== void 0 ? _a : 'all';
     const limit = (_b = opts === null || opts === void 0 ? void 0 : opts.limit) !== null && _b !== void 0 ? _b : 50;
@@ -38,7 +43,7 @@ export function getConsole(opts) {
     const entries = filtered.slice(-limit);
     return JSON.stringify({ entries, total: filtered.length, shown: entries.length });
 }
-export function clearConsole() {
+function clearConsole() {
     buffer = [];
     return JSON.stringify({ cleared: true });
 }

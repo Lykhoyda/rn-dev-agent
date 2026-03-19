@@ -1,6 +1,11 @@
-import { safeStringify, resolvePath } from './utils';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.registerStore = registerStore;
+exports.getStoreState = getStoreState;
+exports.dispatchAction = dispatchAction;
+const utils_1 = require("./utils");
 const stores = new Map();
-export function registerStore(reg) {
+function registerStore(reg) {
     stores.set(reg.name, reg);
 }
 function autoDetectStores() {
@@ -21,7 +26,7 @@ function autoDetectStores() {
         }
     }
 }
-export function getStoreState(path, type) {
+function getStoreState(path, type) {
     autoDetectStores();
     if (stores.size === 0) {
         return JSON.stringify({ error: 'No stores registered. Call registerStore() or expose __REDUX_STORE__/__ZUSTAND_STORES__' });
@@ -33,7 +38,7 @@ export function getStoreState(path, type) {
         try {
             let state = reg.getState();
             if (path) {
-                state = resolvePath(state, path);
+                state = (0, utils_1.resolvePath)(state, path);
             }
             results[key] = state;
         }
@@ -47,11 +52,11 @@ export function getStoreState(path, type) {
         return JSON.stringify({ error: `No stores of type '${type}' found` });
     }
     if (keys.length === 1) {
-        return safeStringify({ type: stores.get(keys[0]).type, state: results[keys[0]] });
+        return (0, utils_1.safeStringify)({ type: stores.get(keys[0]).type, state: results[keys[0]] });
     }
-    return safeStringify({ stores: results });
+    return (0, utils_1.safeStringify)({ stores: results });
 }
-export function dispatchAction(opts) {
+function dispatchAction(opts) {
     autoDetectStores();
     let reduxStore;
     for (const reg of stores.values()) {
@@ -66,8 +71,8 @@ export function dispatchAction(opts) {
     try {
         reduxStore.dispatch({ type: opts.action, payload: opts.payload });
         if (opts.readPath) {
-            const state = resolvePath(reduxStore.getState(), opts.readPath);
-            return safeStringify({ dispatched: true, action: opts.action, state });
+            const state = (0, utils_1.resolvePath)(reduxStore.getState(), opts.readPath);
+            return (0, utils_1.safeStringify)({ dispatched: true, action: opts.action, state });
         }
         return JSON.stringify({ dispatched: true, action: opts.action });
     }

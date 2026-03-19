@@ -1,6 +1,11 @@
-import { safeStringify } from './utils';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.registerNavRef = registerNavRef;
+exports.getNavState = getNavState;
+exports.navigateTo = navigateTo;
+const utils_1 = require("./utils");
 let _navRef = null;
-export function registerNavRef(ref) {
+function registerNavRef(ref) {
     _navRef = ref;
 }
 function getRef() {
@@ -33,7 +38,7 @@ function simplifyState(state) {
     }
     return result;
 }
-export function getNavState() {
+function getNavState() {
     const ref = getRef();
     if (!ref) {
         return JSON.stringify({ error: 'No navigation ref registered. Call registerNavRef() or set globalThis.__NAV_REF__' });
@@ -44,14 +49,14 @@ export function getNavState() {
             return JSON.stringify({ error: 'Navigation state not ready' });
         }
         const simplified = simplifyState(rootState);
-        return safeStringify(simplified);
+        return (0, utils_1.safeStringify)(simplified);
     }
     catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return JSON.stringify({ error: `Navigation state error: ${msg}` });
     }
 }
-export function navigateTo(screen, params) {
+function navigateTo(screen, params) {
     const ref = getRef();
     if (!ref) {
         return JSON.stringify({ error: 'No navigation ref registered' });

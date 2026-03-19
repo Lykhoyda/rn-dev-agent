@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2019",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "CommonJS",
+    "moduleResolution": "node",
     "jsx": "react-native",
     "declaration": true,
     "outDir": "dist",

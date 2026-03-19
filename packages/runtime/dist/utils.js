@@ -1,4 +1,8 @@
-export function safeStringify(obj, maxLen = 50000) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.safeStringify = safeStringify;
+exports.resolvePath = resolvePath;
+function safeStringify(obj, maxLen = 50000) {
     try {
         const seen = new WeakSet();
         const str = JSON.stringify(obj, function (_key, val) {
@@ -34,7 +38,7 @@ export function safeStringify(obj, maxLen = 50000) {
         return JSON.stringify({ __agent_error: `Serialization failed: ${msg}` });
     }
 }
-export function resolvePath(obj, path) {
+function resolvePath(obj, path) {
     const parts = path.split('.');
     let current = obj;
     for (const part of parts) {
