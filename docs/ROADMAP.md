@@ -1548,7 +1548,7 @@ New `rn-best-practices` skill containing all 36 Vercel React Native rules (MIT l
 
 ---
 
-*Last updated: 2026-03-19 — 46 phases (41,43,45 done), 22 tools, 24 stories, 11 libraries, 4 skills, 39 best-practice rules, 1 runtime package*
+*Last updated: 2026-03-19 — 46 phases (41,43,45 done), 22 tools, 24 stories, 11 libraries, 4 skills, 39 best-practice rules, 1 runtime package, auto-update guide*
 
 A local-only self-improvement system that captures failure patterns, classifies them, distills heuristics, and promotes validated learnings into the agent's active context. Inspired by Voyager (skill library), Reflexion (episodic memory), and DSPy (metric-driven optimization).
 

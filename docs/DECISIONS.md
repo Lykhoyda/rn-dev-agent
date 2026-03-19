@@ -1161,3 +1161,6 @@ The fiber tree walker and testID interaction are the most complex helpers and pr
 
 ### D352: Auto-detect legacy globals for backward compatibility
 The bridge's store.ts auto-detects `globalThis.__REDUX_STORE__` and `globalThis.__ZUSTAND_STORES__` on first call. Apps that already expose stores via these globals don't need to change anything — the bridge picks them up automatically.
+
+### D353: Document auto-update workflow in README
+Third-party Claude Code marketplace plugins don't auto-update by default. Since rn-dev-agent ships frequent updates, added a "Keeping Up to Date" section guiding users to enable auto-update via the plugin manager UI, with fallback manual commands.

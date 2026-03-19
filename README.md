@@ -24,6 +24,35 @@ Or use the interactive UI:
 /plugin
 ```
 
+### Keeping Up to Date
+
+This plugin ships frequent updates. Enable auto-update so you always get the latest tools:
+
+```bash
+# Open plugin manager → Marketplaces tab → select the marketplace → Enable auto-update
+/plugin
+```
+
+With auto-update enabled, Claude Code checks for new versions at startup and updates automatically. You'll see a notification to run `/reload-plugins` when an update lands.
+
+**Manual update** (if you prefer to control when updates happen):
+
+```bash
+# Pull the latest version
+/plugin update rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin
+
+# Activate changes
+/reload-plugins
+```
+
+**Refresh marketplace listings** (force-check for new versions mid-session):
+
+```bash
+/plugin marketplace update Lykhoyda-react-native-dev-claude-plugin
+```
+
+> **Note:** Third-party marketplaces have auto-update disabled by default. You must enable it explicitly via the plugin manager UI.
+
 Then navigate to your React Native project and start building:
 
 ```bash
