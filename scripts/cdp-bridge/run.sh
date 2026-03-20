@@ -6,6 +6,10 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_SCRIPT="$SCRIPT_DIR/dist/index.js"
 
+if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+  cd "$SCRIPT_DIR" && npm install --production --silent 2>/dev/null
+fi
+
 trap 'exit 0' SIGINT
 
 MAX_RESTARTS=5
