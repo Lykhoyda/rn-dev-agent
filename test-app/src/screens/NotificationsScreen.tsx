@@ -33,7 +33,7 @@ export default function NotificationsScreen({ navigation }: Props) {
     if (__DEV__) {
       console.log('notifications loaded');
       console.warn('stale cache');
-      console.error('notification parse failed');
+      console.warn('notification parse failed');
     }
   }, []);
 
