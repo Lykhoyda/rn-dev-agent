@@ -4,6 +4,7 @@ export type HomeStackParams = {
   HomeMain: undefined;
   Feed: undefined;
   Dashboard: undefined;
+  Diagnostics: undefined;
 };
 
 export type ProfileStackParams = {

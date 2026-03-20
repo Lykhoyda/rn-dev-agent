@@ -67,8 +67,9 @@ async function collectJsConsole(
 }
 
 function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
-  return new Promise<LogEntry[]>((resolve) => {
+  return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
+    let killedByUs = false;
 
     let proc: ReturnType<typeof spawn>;
     try {
@@ -76,17 +77,21 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
         'simctl', 'spawn', 'booted', 'log', 'stream',
         '--style', 'ndjson',
         '--level', 'debug',
-      ], { stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      resolve([]);
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error('Failed to spawn xcrun'));
       return;
     }
 
     const killMs = durationMs > 0 ? durationMs : 100;
-    const timeout = setTimeout(() => proc.kill('SIGTERM'), killMs);
+    const kill = () => { killedByUs = true; proc.kill('SIGTERM'); };
+    const timeout = setTimeout(kill, killMs);
 
-    const onAbort = () => { clearTimeout(timeout); proc.kill('SIGTERM'); };
+    const onAbort = () => { clearTimeout(timeout); kill(); };
     signal.addEventListener('abort', onAbort, { once: true });
+
+    let stderrBuf = '';
+    proc.stderr!.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString('utf8'); });
 
     let buf = '';
     proc.stdout!.on('data', (chunk: Buffer) => {
@@ -99,20 +104,24 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
       }
     });
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       if (buf.trim()) {
         const entry = parseIosNdjson(buf);
         if (entry) entries.push(entry);
       }
-      resolve(entries);
+      if (!killedByUs && code !== 0 && entries.length === 0) {
+        reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
+      } else {
+        resolve(entries);
+      }
     });
 
-    proc.on('error', () => {
+    proc.on('error', (err) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
-      resolve(entries);
+      reject(err);
     });
   });
 }
@@ -138,26 +147,32 @@ function parseIosNdjson(line: string): LogEntry | null {
 }
 
 function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
-  return new Promise<LogEntry[]>((resolve) => {
+  return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
     const year = new Date().getFullYear();
+    const tzOffsetMs = new Date().getTimezoneOffset() * 60_000;
     const killMs = durationMs > 0 ? durationMs : 100;
+    let killedByUs = false;
 
     let proc: ReturnType<typeof spawn>;
     try {
       proc = spawn('adb', [
         'logcat', '-v', 'threadtime', '-T', '1',
-        '-s', 'ReactNative:V', 'ReactNativeJS:V',
-      ], { stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      resolve([]);
+        '-s', 'ReactNative:V', 'ReactNativeJS:V', 'AndroidRuntime:E', 'DEBUG:V',
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error('Failed to spawn adb'));
       return;
     }
 
-    const timeout = setTimeout(() => proc.kill('SIGTERM'), killMs);
+    const kill = () => { killedByUs = true; proc.kill('SIGTERM'); };
+    const timeout = setTimeout(kill, killMs);
 
-    const onAbort = () => { clearTimeout(timeout); proc.kill('SIGTERM'); };
+    const onAbort = () => { clearTimeout(timeout); kill(); };
     signal.addEventListener('abort', onAbort, { once: true });
+
+    let stderrBuf = '';
+    proc.stderr!.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString('utf8'); });
 
     let buf = '';
     proc.stdout!.on('data', (chunk: Buffer) => {
@@ -165,25 +180,29 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
       for (const line of lines) {
-        const entry = parseLogcatLine(line, year);
+        const entry = parseLogcatLine(line, year, tzOffsetMs);
         if (entry) entries.push(entry);
       }
     });
 
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       if (buf.trim()) {
-        const entry = parseLogcatLine(buf, year);
+        const entry = parseLogcatLine(buf, year, tzOffsetMs);
         if (entry) entries.push(entry);
       }
-      resolve(entries);
+      if (!killedByUs && code !== 0 && entries.length === 0) {
+        reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
+      } else {
+        resolve(entries);
+      }
     });
 
-    proc.on('error', () => {
+    proc.on('error', (err) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
-      resolve(entries);
+      reject(err);
     });
   });
 }
@@ -194,17 +213,19 @@ const ANDROID_LEVEL_MAP: Record<string, string> = {
   V: 'debug', D: 'debug', I: 'info', W: 'warn', E: 'error', F: 'error', S: 'log',
 };
 
-function parseLogcatLine(line: string, year: number): LogEntry | null {
+function parseLogcatLine(line: string, year: number, tzOffsetMs: number): LogEntry | null {
   const m = LOGCAT_RE.exec(line);
   if (!m) return null;
 
   const [, date, time, pidStr, priority, tag, message] = m;
+  const localDate = new Date(`${year}-${date}T${time}`);
+  const utcDate = new Date(localDate.getTime() + tzOffsetMs);
 
   return {
     source: 'native_android',
     level: ANDROID_LEVEL_MAP[priority] ?? 'log',
     text: message,
-    timestamp: normalizeTimestamp(`${year}-${date}T${time}Z`),
+    timestamp: utcDate.toISOString(),
     pid: parseInt(pidStr, 10),
     tag,
   };
@@ -232,11 +253,13 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
         switch (source) {
           case 'js_console': {
             const client = getClient();
-            if (client.isConnected) {
+            if (client.isConnected && client.helpersInjected) {
               promises.push({
                 source,
                 promise: collectJsConsole(client, args.logLevel ?? 'all', 200),
               });
+            } else if (client.isConnected) {
+              errors.js_console = 'CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.';
             } else {
               errors.js_console = 'CDP not connected — skipped. Call cdp_status first to connect.';
             }

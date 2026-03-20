@@ -47,24 +47,28 @@ async function collectJsConsole(client, level, limit) {
     }
 }
 function collectNativeIos(durationMs, signal) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const entries = [];
+        let killedByUs = false;
         let proc;
         try {
             proc = spawn('xcrun', [
                 'simctl', 'spawn', 'booted', 'log', 'stream',
                 '--style', 'ndjson',
                 '--level', 'debug',
-            ], { stdio: ['ignore', 'pipe', 'ignore'] });
+            ], { stdio: ['ignore', 'pipe', 'pipe'] });
         }
-        catch {
-            resolve([]);
+        catch (err) {
+            reject(err instanceof Error ? err : new Error('Failed to spawn xcrun'));
             return;
         }
         const killMs = durationMs > 0 ? durationMs : 100;
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), killMs);
-        const onAbort = () => { clearTimeout(timeout); proc.kill('SIGTERM'); };
+        const kill = () => { killedByUs = true; proc.kill('SIGTERM'); };
+        const timeout = setTimeout(kill, killMs);
+        const onAbort = () => { clearTimeout(timeout); kill(); };
         signal.addEventListener('abort', onAbort, { once: true });
+        let stderrBuf = '';
+        proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf8'); });
         let buf = '';
         proc.stdout.on('data', (chunk) => {
             buf += chunk.toString('utf8');
@@ -76,7 +80,7 @@ function collectNativeIos(durationMs, signal) {
                     entries.push(entry);
             }
         });
-        proc.on('close', () => {
+        proc.on('close', (code) => {
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             if (buf.trim()) {
@@ -84,12 +88,17 @@ function collectNativeIos(durationMs, signal) {
                 if (entry)
                     entries.push(entry);
             }
-            resolve(entries);
+            if (!killedByUs && code !== 0 && entries.length === 0) {
+                reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
+            }
+            else {
+                resolve(entries);
+            }
         });
-        proc.on('error', () => {
+        proc.on('error', (err) => {
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
-            resolve(entries);
+            reject(err);
         });
     });
 }
@@ -115,49 +124,59 @@ function parseIosNdjson(line) {
     }
 }
 function collectNativeAndroid(durationMs, signal) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const entries = [];
         const year = new Date().getFullYear();
+        const tzOffsetMs = new Date().getTimezoneOffset() * 60_000;
         const killMs = durationMs > 0 ? durationMs : 100;
+        let killedByUs = false;
         let proc;
         try {
             proc = spawn('adb', [
                 'logcat', '-v', 'threadtime', '-T', '1',
-                '-s', 'ReactNative:V', 'ReactNativeJS:V',
-            ], { stdio: ['ignore', 'pipe', 'ignore'] });
+                '-s', 'ReactNative:V', 'ReactNativeJS:V', 'AndroidRuntime:E', 'DEBUG:V',
+            ], { stdio: ['ignore', 'pipe', 'pipe'] });
         }
-        catch {
-            resolve([]);
+        catch (err) {
+            reject(err instanceof Error ? err : new Error('Failed to spawn adb'));
             return;
         }
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), killMs);
-        const onAbort = () => { clearTimeout(timeout); proc.kill('SIGTERM'); };
+        const kill = () => { killedByUs = true; proc.kill('SIGTERM'); };
+        const timeout = setTimeout(kill, killMs);
+        const onAbort = () => { clearTimeout(timeout); kill(); };
         signal.addEventListener('abort', onAbort, { once: true });
+        let stderrBuf = '';
+        proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf8'); });
         let buf = '';
         proc.stdout.on('data', (chunk) => {
             buf += chunk.toString('utf8');
             const lines = buf.split('\n');
             buf = lines.pop() ?? '';
             for (const line of lines) {
-                const entry = parseLogcatLine(line, year);
+                const entry = parseLogcatLine(line, year, tzOffsetMs);
                 if (entry)
                     entries.push(entry);
             }
         });
-        proc.on('close', () => {
+        proc.on('close', (code) => {
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             if (buf.trim()) {
-                const entry = parseLogcatLine(buf, year);
+                const entry = parseLogcatLine(buf, year, tzOffsetMs);
                 if (entry)
                     entries.push(entry);
             }
-            resolve(entries);
+            if (!killedByUs && code !== 0 && entries.length === 0) {
+                reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
+            }
+            else {
+                resolve(entries);
+            }
         });
-        proc.on('error', () => {
+        proc.on('error', (err) => {
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
-            resolve(entries);
+            reject(err);
         });
     });
 }
@@ -165,16 +184,18 @@ const LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+(
 const ANDROID_LEVEL_MAP = {
     V: 'debug', D: 'debug', I: 'info', W: 'warn', E: 'error', F: 'error', S: 'log',
 };
-function parseLogcatLine(line, year) {
+function parseLogcatLine(line, year, tzOffsetMs) {
     const m = LOGCAT_RE.exec(line);
     if (!m)
         return null;
     const [, date, time, pidStr, priority, tag, message] = m;
+    const localDate = new Date(`${year}-${date}T${time}`);
+    const utcDate = new Date(localDate.getTime() + tzOffsetMs);
     return {
         source: 'native_android',
         level: ANDROID_LEVEL_MAP[priority] ?? 'log',
         text: message,
-        timestamp: normalizeTimestamp(`${year}-${date}T${time}Z`),
+        timestamp: utcDate.toISOString(),
         pid: parseInt(pidStr, 10),
         tag,
     };
@@ -197,11 +218,14 @@ export function createCollectLogsHandler(getClient) {
                 switch (source) {
                     case 'js_console': {
                         const client = getClient();
-                        if (client.isConnected) {
+                        if (client.isConnected && client.helpersInjected) {
                             promises.push({
                                 source,
                                 promise: collectJsConsole(client, args.logLevel ?? 'all', 200),
                             });
+                        }
+                        else if (client.isConnected) {
+                            errors.js_console = 'CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.';
                         }
                         else {
                             errors.js_console = 'CDP not connected — skipped. Call cdp_status first to connect.';

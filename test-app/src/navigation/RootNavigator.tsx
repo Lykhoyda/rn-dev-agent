@@ -31,6 +31,7 @@ import ProfileEditModal from '../screens/ProfileEditModal';
 import TaskWizardModal from '../screens/TaskWizardModal';
 import DeepLinkScreen from '../screens/DeepLinkScreen';
 import GlobalSearchModal from '../screens/GlobalSearchModal';
+import DiagnosticsScreen from '../screens/DiagnosticsScreen';
 
 const RootStack = createNativeStackNavigator<RootStackParams>();
 const Tab = createBottomTabNavigator<TabParams>();
@@ -45,6 +46,7 @@ function HomeStackNavigator() {
       <HomeStack.Screen name="HomeMain" component={HomeScreen} options={{ title: 'Home' }} />
       <HomeStack.Screen name="Feed" component={FeedScreen} options={{ title: 'Feed' }} />
       <HomeStack.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'Dashboard' }} />
+      <HomeStack.Screen name="Diagnostics" component={DiagnosticsScreen} options={{ title: 'Diagnostics' }} />
     </HomeStack.Navigator>
   );
 }

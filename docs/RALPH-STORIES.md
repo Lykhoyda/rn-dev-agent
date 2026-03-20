@@ -605,3 +605,27 @@ so important tasks are always visible first.
 **Implemented:** TaskStatsCard with Reanimated shared values, staggered FadeInDown entries, GPU-accelerated progress bar via `transform: [{ scaleX }]`, priority distribution dots. Memoized selectors `selectTaskStats` + `selectPriorityDistribution`.
 
 **Rules exercised:** [RN-3.1] GPU properties, [RN-7.1] state as ground truth, [RN-6.1] minimize state. **Benchmark:** 15 min. **Pass 4:** 3 issues caught and fixed (withTiming in worklet, stable ref in deps, hoisted FEATURES array).
+
+## S25: Crash Reporter with Native Log Viewer `[DONE]`
+
+**As a user**, I want a developer diagnostics screen that shows recent JS errors and native crash logs, so I can diagnose issues without leaving the app.
+
+**Requirements:**
+- New "Diagnostics" screen accessible from HomeScreen (dev-only, gated on `__DEV__`)
+- Section 1: Recent JS errors from `cdp_error_log` displayed in a list with stack traces
+- Section 2: "Collect Logs" button that triggers a mock crash scenario (throw + catch), then shows collected entries
+- Console logging at various levels (log, warn, error) during app lifecycle for `collect_logs` to capture
+- FlatList/FlashList rendering of log entries with level-based color coding (error=red, warn=amber, info=blue, debug=gray)
+- Pull-to-refresh to re-collect logs
+- Filter by log level (segmented control)
+
+**Tools to exercise:**
+- `collect_logs(sources=["js_console"])` — primary validation of the new tool
+- `collect_logs(sources=["native_ios"], durationMs=3000, logLevel="error")` — native log capture
+- `cdp_error_log` — verify JS error capture
+- `cdp_console_log` — cross-validate with collect_logs results
+- `cdp_component_tree(filter="DiagnosticsScreen")` — verify render
+- `cdp_store_state` — if any diagnostics state is stored
+
+**Why this story:**
+Exercises the new `collect_logs` tool end-to-end. The screen itself generates console output and errors that the tool must capture. Cross-validates `collect_logs(sources=["js_console"])` against `cdp_console_log` to prove data consistency.

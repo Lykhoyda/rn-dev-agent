@@ -75,6 +75,15 @@ export default function HomeScreen({ navigation }: Props) {
       >
         <Text className="text-center font-semibold text-white">Go to Dashboard</Text>
       </Pressable>
+      {__DEV__ && (
+        <Pressable
+          testID="home-diagnostics-btn"
+          className={`mt-3 rounded-lg border ${colors.border} px-4 py-3`}
+          onPress={() => navigation.navigate('Diagnostics')}
+        >
+          <Text className={`text-center font-semibold ${colors.muted}`}>Diagnostics (Dev)</Text>
+        </Pressable>
+      )}
     </ScrollView>
   );
 }
