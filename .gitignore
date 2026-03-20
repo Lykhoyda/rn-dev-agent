@@ -6,3 +6,8 @@ node_modules/
 skills-lock.json
 reports
 .DS_Store
+
+# Workspace symlinks (local dev only)
+test-app
+docs
+packages
