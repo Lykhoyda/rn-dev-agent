@@ -20,7 +20,11 @@ if (typeof __DEV__ !== 'undefined' && __DEV__ && !g.__RN_DEV_BRIDGE__) {
           timestamp: Date.now(),
         });
         if (consoleBuffer.length > MAX_CONSOLE) consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE);
-        orig.apply(console, args);
+        try {
+          orig.apply(console, args);
+        } catch {
+          // LogBox internals may throw — swallow to prevent RedBox cascade
+        }
       };
     }
   }
