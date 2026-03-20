@@ -204,6 +204,8 @@ server.tool(
       .describe('Log sources to collect from (default: js_console only)'),
     durationMs: z.number().int().min(0).max(10000).default(2000)
       .describe('How long to stream native logs in ms (default 2000). JS console is a snapshot — durationMs only applies to native sources.'),
+    limit: z.number().int().min(1).max(500).default(100)
+      .describe('Max entries to return (default 100, max 500). Returns most recent entries when truncated.'),
     filter: z.string().optional()
       .describe('Substring filter applied to log text after collection'),
     logLevel: z.enum(['all', 'log', 'warn', 'error', 'info', 'debug']).default('all')

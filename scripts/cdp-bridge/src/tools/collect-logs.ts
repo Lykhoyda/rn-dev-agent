@@ -26,6 +26,7 @@ interface LogEntry {
 interface CollectLogsArgs {
   sources: LogSource[];
   durationMs: number;
+  limit: number;
   filter?: string;
   logLevel?: string;
 }
@@ -299,8 +300,15 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
         .filter(e => matchesFilters(e, args.filter, args.logLevel))
         .sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
 
+      const totalBeforeLimit = allEntries.length;
+      if (allEntries.length > args.limit) {
+        allEntries = allEntries.slice(-args.limit);
+      }
+
       const data = {
         count: allEntries.length,
+        total: totalBeforeLimit,
+        truncated: totalBeforeLimit > args.limit,
         entries: allEntries,
         durationMs: args.durationMs,
         sources: args.sources,
