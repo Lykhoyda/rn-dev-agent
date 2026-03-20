@@ -279,6 +279,7 @@ Add `testID` to interactive elements for reliable component queries:
 | Plugin not detected | Run `/plugin install rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin`, or use `--plugin-dir` for local dev |
 | `/plugin` command not found | Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code` |
 | Plugin skills not appearing | Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache` |
+| Plugin update fails with `ENOTEMPTY` | Clear the stale cache: `rm -rf ~/.claude/plugins/cache/rn-dev-agent`, then retry update |
 | maestro-runner not in PATH | `export PATH="$HOME/.maestro-runner/bin:$PATH"` |
 
 ## Install from Source (development)
