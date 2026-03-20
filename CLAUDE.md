@@ -12,11 +12,11 @@ The primary workflow is `/rn-dev-agent:rn-feature-dev <description>` — an 8-ph
 
 ```bash
 # Build the CDP bridge MCP server (after modifying source)
-cd scripts/cdp-bridge && npm install && npm run build
+cd plugin/scripts/cdp-bridge && npm install && npm run build
 
 # Run with a React Native project
 cd /path/to/your-rn-app
-claude --plugin-dir /path/to/rn-dev-agent
+claude --plugin-dir /path/to/rn-dev-agent/plugin
 ```
 
 ## Architecture
@@ -35,7 +35,8 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 
 ```
 rn-dev-agent/
-├── .claude-plugin/plugin.json        # Plugin manifest
+├── plugin/                           # Plugin root (marketplace installs only this)
+│   ├── .claude-plugin/plugin.json    # Plugin manifest
 ├── skills/
 │   ├── rn-device-control/            # simctl, adb, screenshots, UI hierarchy
 │   │   ├── SKILL.md

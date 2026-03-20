@@ -287,11 +287,11 @@ Add `testID` to interactive elements for reliable component queries:
 ```bash
 git clone https://github.com/Lykhoyda/react-native-dev-claude-plugin.git
 cd react-native-dev-claude-plugin
-cd scripts/cdp-bridge && npm install && npm run build && cd ../..
+cd plugin/scripts/cdp-bridge && npm install && npm run build && cd ../../..
 
 # Then use with any RN project
 cd /path/to/your-rn-app
-claude --plugin-dir /path/to/react-native-dev-claude-plugin
+claude --plugin-dir /path/to/react-native-dev-claude-plugin/plugin
 ```
 
 For development only. For normal use, install via the marketplace (see Quick Start above).
