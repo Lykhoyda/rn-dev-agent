@@ -40,6 +40,9 @@ if [ "$has_rn_config" = true ]; then
   # Ensure ffmpeg for video-to-GIF conversion (silent if already present)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
 
+  # Initialize Experience Engine directory structure (silent if already present)
+  bash "$PLUGIN_ROOT/scripts/ensure-experience-engine.sh" 2>/dev/null || true
+
   cat <<'EOF'
 React Native project detected. The rn-dev-agent plugin is active.
 

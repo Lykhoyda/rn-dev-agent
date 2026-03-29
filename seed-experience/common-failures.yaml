@@ -1,0 +1,83 @@
+failure_families:
+  - id: FF_STALE_CDP
+    name: Stale CDP target
+    symptoms:
+      - cdp_status timeout
+      - WebSocket close 1006
+      - target not found after reload
+    recovery:
+      - call cdp_status (auto-reconnects via withConnection)
+      - if still disconnected, check Metro is running
+      - last resort: cdp_reload(full=true)
+    notes: cdp_status already handles reconnection — try it before reload
+
+  - id: FF_REDBOX
+    name: RedBox/LogBox error overlay
+    symptoms:
+      - hasRedBox=true in cdp_status
+      - error overlay in component tree
+    recovery:
+      - read cdp_error_log for stack trace
+      - fix the source code error
+      - cdp_reload if fast-refresh stale
+    notes: Check if error is from the current edit or pre-existing
+
+  - id: FF_FAST_REFRESH_STALE
+    name: Fast refresh did not pick up changes
+    symptoms:
+      - code changed but UI unchanged
+      - old exports still used after save
+      - RedBox referencing old module paths
+    recovery:
+      - cdp_reload(full=true) BEFORE rewriting code
+    notes: Saves ~3 fix-retry loops. Try reload first, edit second.
+
+  - id: FF_METRO_CACHE
+    name: Metro serving stale bundle
+    symptoms:
+      - config change not reflected (babel, metro, tailwind)
+      - old code running after editing config files
+    recovery:
+      - restart Metro with --reset-cache
+      - cdp_reload(full=true)
+    notes: Metro does not invalidate cache on config changes
+
+  - id: FF_BINARY_MISMATCH
+    name: Native binary / JS bundle version mismatch
+    symptoms:
+      - TurboModuleRegistry.getEnforcing module not found
+      - Invariant native module cannot be null
+      - native module mismatch errors
+    recovery:
+      - rebuild with npx expo run:ios or npx expo run:android
+    notes: Do NOT retry or clear app data — only a rebuild fixes this
+
+  - id: FF_EXPO_DIALOG
+    name: Expo Go / Dev Client system dialog blocking
+    symptoms:
+      - device_find cannot find expected element
+      - screenshot shows system confirmation dialog
+      - "Open in app?" alert visible
+    recovery:
+      - use cdp_evaluate with __NAV_REF__ instead of deep links
+      - for Dev Client, use agent-device tools (not blocked like Expo Go)
+    notes: Deep links trigger native dialogs in Expo Go (B56). Expo Go bundle IDs are blocked by agent-device.
+
+  - id: FF_KEYBOARD_OVERLAY
+    name: Keyboard obscuring target element
+    symptoms:
+      - device_press fails on element behind keyboard
+      - element exists in tree but tap has no effect
+    recovery:
+      - device_back to dismiss keyboard first
+      - scroll to element before tapping
+    notes: Always dismiss keyboard before interacting with elements below it
+
+  - id: FF_DEBUGGER_PAUSED
+    name: Debugger paused — JS execution halted
+    symptoms:
+      - isPaused=true in cdp_status
+      - all CDP evaluate calls timeout
+    recovery:
+      - cdp_reload(full=true) to resume
+    notes: Caused by breakpoints or Chrome DevTools connection

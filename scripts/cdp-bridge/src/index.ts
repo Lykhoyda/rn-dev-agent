@@ -20,6 +20,9 @@ import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceBackHandler } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
+import { instrumentTool, pruneOldTelemetry } from './experience/index.js';
+
+pruneOldTelemetry();
 
 let client = new CDPClient();
 
@@ -29,10 +32,16 @@ const createClient = (port: number): CDPClient => new CDPClient(port);
 
 const server = new McpServer({
   name: 'rn-dev-agent-cdp',
-  version: '0.1.0',
+  version: '0.6.0',
 });
 
-server.tool(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function trackedTool(name: string, desc: string, schema: any, handler: any): void {
+  const wrapped = instrumentTool(name, handler as (...args: unknown[]) => Promise<unknown>);
+  server.tool(name, desc, schema, wrapped as typeof handler);
+}
+
+trackedTool(
   'cdp_status',
   'Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.',
   {
@@ -42,7 +51,7 @@ server.tool(
   createStatusHandler(getClient, setClient, createClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_evaluate',
   'CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. Prefer cdp_component_tree, cdp_store_state, and other targeted tools over raw evaluate.',
   {
@@ -52,7 +61,7 @@ server.tool(
   createEvaluateHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_reload',
   'Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 15s). Returns when app is ready for queries again.',
   {
@@ -61,7 +70,7 @@ server.tool(
   createReloadHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_component_tree',
   'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns.',
   {
@@ -71,14 +80,14 @@ server.tool(
   createComponentTreeHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_navigation_state',
   'Get current navigation state: active route, params, stack history, nested navigators, active tab. Works with React Navigation and Expo Router.',
   {},
   createNavigationStateHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_error_log',
   'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — use bash logcat/simctl log instead.',
   {
@@ -87,7 +96,7 @@ server.tool(
   createErrorLogHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_network_log',
   'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected).',
   {
@@ -98,7 +107,7 @@ server.tool(
   createNetworkLogHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_console_log',
   'Get recent console output. Buffered in ring buffer so logs from between agent calls are preserved.',
   {
@@ -109,7 +118,7 @@ server.tool(
   createConsoleLogHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_store_state',
   'Read app store state (Redux, Zustand, React Query). Use path to query specific slice (e.g. "cart.items", "auth.user.name"). Use storeType to target a specific store when multiple exist. Redux auto-detected via fiber Provider. Zustand requires: if (__DEV__) global.__ZUSTAND_STORES__ = { store }',
   {
@@ -119,7 +128,7 @@ server.tool(
   createStoreStateHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_navigate',
   'Navigate to any screen by name, including nested stack screens that __NAV_REF__.navigate() cannot reach. Builds a nested dispatch action by walking the navigation state tree. Works across tabs, stacks, and modals.',
   {
@@ -141,7 +150,7 @@ server.tool(
   }),
 );
 
-server.tool(
+trackedTool(
   'cdp_component_state',
   'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).',
   {
@@ -160,7 +169,7 @@ server.tool(
   }),
 );
 
-server.tool(
+trackedTool(
   'cdp_dispatch',
   'Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). Avoids MCP round-trip timing issues.',
   {
@@ -171,7 +180,7 @@ server.tool(
   createDispatchHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_dev_settings',
   'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. For reload with auto-reconnect, use cdp_reload instead.',
   {
@@ -181,7 +190,7 @@ server.tool(
   createDevSettingsHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'cdp_interact',
   'Interact with React components by testID — press buttons, type text, scroll. Calls JS handlers directly (not native touch). Reliable for all React-level interactions. For native gestures (swipe, drag), use device_swipe/device_press instead.',
   {
@@ -196,7 +205,7 @@ server.tool(
   createInteractHandler(getClient),
 );
 
-server.tool(
+trackedTool(
   'collect_logs',
   'Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.',
   {
@@ -217,14 +226,14 @@ server.tool(
 
 // --- agent-device tools (native device interaction) ---
 
-server.tool(
+trackedTool(
   'device_list',
   'List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.',
   {},
   createDeviceListHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_screenshot',
   'Capture a screenshot of the active device screen. Returns image data or file path.',
   {
@@ -233,7 +242,7 @@ server.tool(
   createDeviceScreenshotHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_snapshot',
   'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session.',
   {
@@ -245,7 +254,7 @@ server.tool(
   createDeviceSnapshotHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_find',
   'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session (call device_snapshot action=open first).',
   {
@@ -255,7 +264,7 @@ server.tool(
   createDeviceFindHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_press',
   'Tap a UI element by its @ref from device_snapshot. Simulates a native touch event. Requires an open session.',
   {
@@ -264,7 +273,7 @@ server.tool(
   createDevicePressHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_fill',
   'Type text into an input field by its @ref from device_snapshot. Clears existing text first. Requires an open session.',
   {
@@ -274,7 +283,7 @@ server.tool(
   createDeviceFillHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_swipe',
   'Swipe on the device screen. Use for scrolling, pull-to-refresh, or dismissing modals. Requires an open session.',
   {
@@ -283,14 +292,14 @@ server.tool(
   createDeviceSwipeHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_back',
   'Press the system back button (Android) or perform back navigation gesture (iOS). Requires an open session.',
   {},
   createDeviceBackHandler(),
 );
 
-server.tool(
+trackedTool(
   'device_permission',
   'Grant, revoke, or reset app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm (Android). Useful for testing permission-gated flows like notifications, camera, location.',
   {
