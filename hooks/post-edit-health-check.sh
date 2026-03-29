@@ -5,19 +5,18 @@
 #
 # Skips when: no active CDP session (rn-dev-agent not in use), file is outside
 # an RN project, no simulator/emulator running, Metro not running.
-# Non-blocking warning for "no Hermes target" (GH #1, #2).
+# Silent exit on all skip paths — never outputs messages that could trigger
+# the LLM to take action (GH #4).
 
 set -uo pipefail
 
 input=$(cat)
 file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
-# Bail if we couldn't parse the file path
 if [[ -z "$file_path" ]]; then
   exit 0
 fi
 
-# Only check React Native source files (not .d.ts, test files, or config)
 if [[ ! "$file_path" =~ \.(tsx?|jsx?)$ ]]; then
   exit 0
 fi
@@ -28,11 +27,27 @@ if [[ "$file_path" =~ (__tests__|\.test\.|\.spec\.|\.config\.) ]]; then
   exit 0
 fi
 
-# --- Guard: only run if the CDP bridge has an active session ---
+# --- Guard: only run if the CDP bridge has a RECENT active session ---
 # The MCP server writes this flag when connected to a Hermes target.
 # Without it, there's no active rn-dev-agent workflow — skip.
+# Staleness check: if the flag is older than 30 minutes, the session is
+# likely dead (simulator closed, Metro stopped) — skip to avoid noise (GH #4).
 CDP_ACTIVE_FLAG="${TMPDIR:-/tmp}/rn-dev-agent-cdp-active"
 if [[ ! -f "$CDP_ACTIVE_FLAG" ]]; then
+  exit 0
+fi
+
+flag_age=0
+if [[ "$(uname)" == "Darwin" ]]; then
+  flag_mtime=$(stat -f '%m' "$CDP_ACTIVE_FLAG" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  flag_age=$(( now - flag_mtime ))
+else
+  flag_age=$(( $(date +%s) - $(stat -c '%Y' "$CDP_ACTIVE_FLAG" 2>/dev/null || echo 0) ))
+fi
+
+if [[ "$flag_age" -gt 1800 ]]; then
+  rm -f "$CDP_ACTIVE_FLAG"
   exit 0
 fi
 
@@ -142,6 +157,9 @@ if [[ "$current_token" != "$token" ]]; then
   exit 0
 fi
 
-# Metro is running but no Hermes targets found. Non-blocking warning. (GH #1)
-echo "Post-edit health check: No Hermes debug targets found after editing $(basename "$file_path"). The app may have crashed or is not running. Run cdp_status to check." >&2
+# Metro is running but no Hermes targets found after polling.
+# Silent exit — do NOT output warnings that the LLM might interpret as
+# instructions to create tests or take other action (GH #4).
+# The cdp_status tool already handles target discovery and reconnection
+# when the agent explicitly calls it.
 exit 0
