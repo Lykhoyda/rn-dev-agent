@@ -8,10 +8,10 @@ From inside Claude Code, run these commands:
 
 ```bash
 # 1. Add the marketplace
-/plugin marketplace add Lykhoyda/react-native-dev-claude-plugin
+/plugin marketplace add Lykhoyda/rn-dev-agent
 
 # 2. Install the plugin
-/plugin install rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin
+/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
 
 # 3. Reload plugins to activate
 /reload-plugins
@@ -39,7 +39,7 @@ With auto-update enabled, Claude Code checks for new versions at startup and upd
 
 ```bash
 # Pull the latest version
-/plugin update rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin
+/plugin update rn-dev-agent@Lykhoyda-rn-dev-agent
 
 # Activate changes
 /reload-plugins
@@ -48,7 +48,7 @@ With auto-update enabled, Claude Code checks for new versions at startup and upd
 **Refresh marketplace listings** (force-check for new versions mid-session):
 
 ```bash
-/plugin marketplace update Lykhoyda-react-native-dev-claude-plugin
+/plugin marketplace update Lykhoyda-rn-dev-agent
 ```
 
 > **Note:** Third-party marketplaces have auto-update disabled by default. You must enable it explicitly via the plugin manager UI.
@@ -276,22 +276,22 @@ Add `testID` to interactive elements for reliable component queries:
 | CDP connection rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | `cdp_store_state` error for Zustand | Add `global.__ZUSTAND_STORES__` to your app entry |
 | Empty error log but app crashed | Native crash — use `adb logcat -b crash` or Xcode console |
-| Plugin not detected | Run `/plugin install rn-dev-agent@Lykhoyda-react-native-dev-claude-plugin`, or use `--plugin-dir` for local dev |
+| Plugin not detected | Run `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`, or use `--plugin-dir` for local dev |
 | `/plugin` command not found | Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code` |
 | Plugin skills not appearing | Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache` |
-| Plugin update fails with `ENOTEMPTY` | Clear the stale cache: `rm -rf ~/.claude/plugins/cache/rn-dev-agent`, then retry update |
+| Plugin update fails with `ENOTEMPTY` | Clear the stale cache: `rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent`, then retry update |
 | maestro-runner not in PATH | `export PATH="$HOME/.maestro-runner/bin:$PATH"` |
 
 ## Install from Source (development)
 
 ```bash
-git clone https://github.com/Lykhoyda/react-native-dev-claude-plugin.git
-cd react-native-dev-claude-plugin
+git clone https://github.com/Lykhoyda/rn-dev-agent.git
+cd rn-dev-agent
 cd scripts/cdp-bridge && npm install && npm run build && cd ../..
 
 # Then use with any RN project
 cd /path/to/your-rn-app
-claude --plugin-dir /path/to/react-native-dev-claude-plugin
+claude --plugin-dir /path/to/rn-dev-agent
 ```
 
 For development only. For normal use, install via the marketplace (see Quick Start above).

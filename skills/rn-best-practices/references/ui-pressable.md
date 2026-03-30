@@ -58,4 +58,4 @@ gesture coordination, as long as you are using the ScrollView from
 
 **For animated press states (scale, opacity changes):** Use `GestureDetector`
 with Reanimated shared values instead of Pressable's style callback. See the
-`animation-gesture-detector-press` rule.
+`anim-gesture-press` rule.

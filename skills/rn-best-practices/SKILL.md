@@ -28,26 +28,26 @@ category present in the code under review.
 | ID | Rule | Impact | Reference File |
 |----|------|--------|----------------|
 | 1.1 | Never use `&&` with potentially falsy values | CRITICAL | `references/rendering-no-falsy-and.md` |
-| 1.2 | Wrap strings in `<Text>` components | CRITICAL | `references/rendering-text-in-text-component.md` |
-| 2.1 | Avoid inline objects in renderItem | HIGH | `references/list-performance-inline-objects.md` |
+| 1.2 | Wrap strings in `<Text>` components | CRITICAL | `references/rendering-text-in-text.md` |
+| 2.1 | Avoid inline objects in renderItem | HIGH | `references/list-perf-inline-objects.md` |
 | 2.2 | Hoist callbacks to the root of lists | HIGH | `references/list-performance-callbacks.md` |
-| 2.3 | Keep list items lightweight | HIGH | `references/list-performance-item-expensive.md` |
-| 2.4 | Stable object references before lists | CRITICAL | `references/list-performance-function-references.md` |
+| 2.3 | Keep list items lightweight | HIGH | `references/list-perf-expensive-item.md` |
+| 2.4 | Stable object references before lists | CRITICAL | `references/list-perf-fn-refs.md` |
 | 2.5 | Pass primitives to list items for memoization | HIGH | `references/list-performance-item-memo.md` |
 | 2.6 | Use a list virtualizer for any list | HIGH | `references/list-performance-virtualize.md` |
 | 2.7 | Use compressed images in lists | HIGH | `references/list-performance-images.md` |
 | 2.8 | Use item types for heterogeneous lists | HIGH | `references/list-performance-item-types.md` |
 | 3.1 | Animate transform and opacity only | HIGH | `references/animation-gpu-properties.md` |
 | 3.2 | Prefer useDerivedValue over useAnimatedReaction | MEDIUM | `references/animation-derived-value.md` |
-| 3.3 | Use GestureDetector for animated press states | MEDIUM | `references/animation-gesture-detector-press.md` |
+| 3.3 | Use GestureDetector for animated press states | MEDIUM | `references/anim-gesture-press.md` |
 | 4.1 | Never track scroll position in useState | HIGH | `references/scroll-position-no-state.md` |
 | 5.1 | Use native navigators (native-stack, native tabs) | HIGH | `references/navigation-native-navigators.md` |
 | 6.1 | Minimize state variables; derive values | MEDIUM | `references/react-state-minimize.md` |
 | 6.2 | Use fallback state instead of initialState | MEDIUM | `references/react-state-fallback.md` |
 | 6.3 | Use dispatch updaters for state depending on current value | MEDIUM | `references/react-state-dispatcher.md` |
 | 7.1 | State must represent ground truth | HIGH | `references/state-ground-truth.md` |
-| 8.1 | Destructure functions early in render (React Compiler) | HIGH | `references/react-compiler-destructure-functions.md` |
-| 8.2 | Use .get()/.set() for Reanimated shared values | LOW | `references/react-compiler-reanimated-shared-values.md` |
+| 8.1 | Destructure functions early in render (React Compiler) | HIGH | `references/compiler-destructure-fns.md` |
+| 8.2 | Use .get()/.set() for Reanimated shared values | LOW | `references/compiler-reanimated-shared.md` |
 | 9.1 | Measure views with onLayout, not measure() | MEDIUM | `references/ui-measure-views.md` |
 | 9.2 | Modern styling: borderCurve, gap, boxShadow | MEDIUM | `references/ui-styling.md` |
 | 9.3 | Use contentInset for dynamic ScrollView spacing | LOW | `references/ui-scrollview-content-inset.md` |
@@ -57,9 +57,9 @@ category present in the code under review.
 | 9.7 | Use native menus (zeego) for dropdowns | HIGH | `references/ui-menus.md` |
 | 9.8 | Use native modals over JS bottom sheets | HIGH | `references/ui-native-modals.md` |
 | 9.9 | Use Pressable instead of TouchableOpacity | LOW | `references/ui-pressable.md` |
-| 10.1 | Use compound components over polymorphic children | MEDIUM | `references/design-system-compound-components.md` |
+| 10.1 | Use compound components over polymorphic children | MEDIUM | `references/design-compound-components.md` |
 | 11.1 | Install native dependencies in app directory | CRITICAL | `references/monorepo-native-deps-in-app.md` |
-| 11.2 | Use single dependency versions across monorepo | MEDIUM | `references/monorepo-single-dependency-versions.md` |
+| 11.2 | Use single dependency versions across monorepo | MEDIUM | `references/monorepo-single-deps.md` |
 | 12.1 | Import from design system folder | LOW | `references/imports-design-system-folder.md` |
 | 13.1 | Hoist Intl formatter creation | LOW | `references/js-hoist-intl.md` |
 | 14.1 | Load fonts natively at build time | LOW | `references/fonts-config-plugin.md` |
@@ -91,7 +91,7 @@ A string as a direct child of `<View>` causes a runtime crash.
 **Bad:** `<View>Hello, {name}!</View>`
 **Good:** `<View><Text>Hello, {name}!</Text></View>`
 
-Full examples: `references/rendering-text-in-text-component.md`
+Full examples: `references/rendering-text-in-text.md`
 
 ---
 

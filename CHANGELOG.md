@@ -4,6 +4,13 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] — 2026-03-30
+
+### Fixed
+- **ENAMETOOLONG on marketplace install** (#6) — repo renamed from `react-native-dev-claude-plugin` to `rn-dev-agent`, shortening marketplace qualifier from 39 to 21 chars on every cached path.
+- Shortened 9 long reference filenames in `skills/rn-best-practices/references/` (max 42 → 31 chars).
+- Updated all internal references: plugin.json, marketplace.json, README install commands, troubleshooting, and source clone instructions.
+
 ## [0.5.0] — 2026-03-20
 
 ### Added

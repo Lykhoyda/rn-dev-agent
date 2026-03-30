@@ -5,17 +5,17 @@
   },
   "metadata": {
     "description": "Claude Code plugin marketplace for React Native development and testing",
-    "version": "0.5.0"
+    "version": "0.6.1"
   },
   "plugins": [
     {
       "name": "rn-dev-agent",
       "source": {
         "source": "github",
-        "repo": "Lykhoyda/react-native-dev-claude-plugin"
+        "repo": "Lykhoyda/rn-dev-agent"
       },
       "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
-      "version": "0.5.0",
+      "version": "0.6.1",
       "author": {
         "name": "Anton Lykhoyda"
       },
