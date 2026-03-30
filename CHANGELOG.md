@@ -4,6 +4,11 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] — 2026-03-30
+
+### Added
+- **Video label subcommand** (`record_proof.sh label`) — adds timed text labels to proof videos in a dedicated dark bar below the video content. Cross-platform (works on any .mp4). Uses Pillow for rendering, auto-installs in venv if missing.
+
 ## [0.7.0] — 2026-03-30
 
 ### Added
