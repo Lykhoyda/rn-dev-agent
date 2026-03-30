@@ -18,7 +18,17 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
-import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceBackHandler } from './tools/device-interact.js';
+import {
+  createDeviceFindHandler,
+  createDevicePressHandler,
+  createDeviceFillHandler,
+  createDeviceSwipeHandler,
+  createDeviceScrollHandler,
+  createDeviceScrollIntoViewHandler,
+  createDeviceLongPressHandler,
+  createDevicePinchHandler,
+  createDeviceBackHandler,
+} from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { instrumentTool, pruneOldTelemetry } from './experience/index.js';
 
@@ -266,9 +276,12 @@ trackedTool(
 
 trackedTool(
   'device_press',
-  'Tap a UI element by its @ref from device_snapshot. Simulates a native touch event. Requires an open session.',
+  'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, and long hold. Requires an open session.',
   {
     ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
+    doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
+    count: z.number().optional().describe('Repeat tap N times (for rapid-fire interactions)'),
+    holdMs: z.number().optional().describe('Hold duration in ms (for long-press via ref)'),
   },
   createDevicePressHandler(),
 );
@@ -285,9 +298,16 @@ trackedTool(
 
 trackedTool(
   'device_swipe',
-  'Swipe on the device screen. Use for scrolling, pull-to-refresh, or dismissing modals. Requires an open session.',
+  'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Requires an open session.',
   {
-    direction: z.enum(['up', 'down', 'left', 'right']).describe('Swipe direction'),
+    direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('Simple directional swipe (delegates to scroll)'),
+    x1: z.number().optional().describe('Start X coordinate (use with y1, x2, y2 for precise swipes)'),
+    y1: z.number().optional().describe('Start Y coordinate'),
+    x2: z.number().optional().describe('End X coordinate'),
+    y2: z.number().optional().describe('End Y coordinate'),
+    durationMs: z.number().optional().describe('Swipe duration in ms (slower = more precise, default ~300)'),
+    count: z.number().optional().describe('Repeat swipe N times'),
+    pattern: z.enum(['one-way', 'ping-pong']).optional().describe('Repeat pattern: one-way (reset to start) or ping-pong (reverse direction)'),
   },
   createDeviceSwipeHandler(),
 );
@@ -297,6 +317,49 @@ trackedTool(
   'Press the system back button (Android) or perform back navigation gesture (iOS). Requires an open session.',
   {},
   createDeviceBackHandler(),
+);
+
+trackedTool(
+  'device_longpress',
+  'Long press on an element or coordinates. Use for context menus, drag initiation, or hold-to-delete. Requires an open session.',
+  {
+    ref: z.string().optional().describe('Element ref from device_snapshot (uses press --hold-ms)'),
+    x: z.number().optional().describe('X coordinate (use with y for coordinate-based long press)'),
+    y: z.number().optional().describe('Y coordinate'),
+    durationMs: z.number().optional().describe('Hold duration in ms (default 1000)'),
+  },
+  createDeviceLongPressHandler(),
+);
+
+trackedTool(
+  'device_scroll',
+  'Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.',
+  {
+    direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
+    amount: z.number().optional().describe('Scroll amount 0-1 (default ~0.5). 1 = full screen height/width.'),
+  },
+  createDeviceScrollHandler(),
+);
+
+trackedTool(
+  'device_scrollintoview',
+  'Scroll until a specific element becomes visible. Use for finding elements in long lists without knowing their position. Requires an open session.',
+  {
+    text: z.string().optional().describe('Visible text to scroll to'),
+    ref: z.string().optional().describe('Element ref from device_snapshot to scroll to'),
+  },
+  createDeviceScrollIntoViewHandler(),
+);
+
+trackedTool(
+  'device_pinch',
+  'Pinch/zoom gesture on the screen. scale < 1 zooms out, scale > 1 zooms in. iOS simulator only. Requires an open session.',
+  {
+    scale: z.number().describe('Pinch scale factor (0.5 = zoom out 50%, 2.0 = zoom in 2x)'),
+    x: z.number().optional().describe('Center X coordinate (default: screen center)'),
+    y: z.number().optional().describe('Center Y coordinate (default: screen center)'),
+  },
+  createDevicePinchHandler(),
 );
 
 trackedTool(

@@ -4,6 +4,19 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] — 2026-03-30
+
+### Added
+- **`device_longpress`** — long press by @ref or coordinates with configurable duration. Enables context menus, drag initiation, hold-to-delete.
+- **`device_scroll`** — native directional scroll with configurable amount (0-1). Smoother than swipe for list scrolling.
+- **`device_scrollintoview`** — scroll until element visible by text or @ref. Works with ScrollView content (FlatList virtualizes, so elements must be rendered).
+- **`device_pinch`** — pinch/zoom gesture with scale factor and optional center point. iOS simulator only.
+- **`device_press` enhanced** — added `doubleTap`, `count` (repeated taps), and `holdMs` (long press via ref) options.
+- **`device_swipe` enhanced** — now supports coordinate-based swipes (`x1,y1,x2,y2,durationMs`) for precise gestures (drag-to-reorder, bottom sheets, pull-to-refresh). Direction shortcut still works, now delegates to native scroll.
+
+### Changed
+- MCP tool count: 21 → 25 (4 new device gesture tools).
+
 ## [0.7.2] — 2026-03-30
 
 ### Added
