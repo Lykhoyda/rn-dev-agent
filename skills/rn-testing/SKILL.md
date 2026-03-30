@@ -185,7 +185,7 @@ appId: com.example.app
 - assertVisible:
     id: "cart-badge"
 EOF
-maestro-runner test /tmp/step.yaml
+maestro-runner --platform <ios|android> test /tmp/step.yaml
 ```
 
 ---
@@ -226,14 +226,39 @@ grep -r 'testID=' src/ --include="*.tsx" --include="*.ts"
 ## Multi-Device Testing
 
 ```bash
-# Run Maestro on specific device
-maestro-runner --device booted test flow.yaml        # iOS
-maestro-runner --device emulator-5554 test flow.yaml  # Android
+# ALWAYS pass --platform explicitly (global flag, before the test subcommand)
+maestro-runner --platform ios test flow.yaml              # iOS
+maestro-runner --platform android test flow.yaml          # Android
+
+# With explicit device ID
+maestro-runner --platform ios --device booted test flow.yaml
+maestro-runner --platform android --device emulator-5554 test flow.yaml
 
 # Sequential cross-platform
-maestro-runner test --device booted flows/feature.yaml && \
-maestro-runner test --device emulator-5554 flows/feature.yaml
+maestro-runner --platform ios test flows/feature.yaml && \
+maestro-runner --platform android test flows/feature.yaml
 ```
+
+## Android-Specific Testing Rules (GH #7)
+
+1. **ALWAYS use maestro-runner on Android** — classic Maestro's gRPC driver
+   is unreliable (UNAVAILABLE: io exception). maestro-runner talks directly
+   to UIAutomator2 over HTTP, bypassing the fragile gRPC stack entirely.
+
+2. **Text input**: Use `device_fill` for text input on Android. It auto-detects
+   long strings (>30 chars) or special characters (`+`, `@`, `#`) and chunks
+   the input to prevent ANR crashes. Never use raw `adb shell input text` for
+   complex strings.
+
+3. **Emulator boot timing**: Android emulators report "device" to ADB before
+   the system is fully booted. Always verify `sys.boot_completed == 1` before
+   running tests. The `ensure-android-ready.sh` hook checks this automatically.
+
+4. **Play Protect**: Google Play Protect on emulators can silently block test
+   APK installations. Disable it: Settings > Security > Play Protect.
+
+5. **Port 7001 conflicts**: If you must use classic Maestro, clean stale
+   forwarding rules first: `adb forward --remove-all`
 
 ---
 

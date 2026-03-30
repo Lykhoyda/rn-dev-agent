@@ -6,6 +6,31 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_SCRIPT="$SCRIPT_DIR/dist/index.js"
 
+# Ensure Android SDK tools are in PATH (agent-device needs adb)
+if [ -z "${ANDROID_HOME:-}" ]; then
+  for candidate in "$HOME/Library/Android/sdk" "$HOME/Android/Sdk" "/opt/android-sdk"; do
+    if [ -d "$candidate" ]; then
+      export ANDROID_HOME="$candidate"
+      break
+    fi
+  done
+fi
+if [ -n "${ANDROID_HOME:-}" ]; then
+  [[ ":$PATH:" != *":$ANDROID_HOME/platform-tools:"* ]] && export PATH="$ANDROID_HOME/platform-tools:$PATH"
+  [[ ":$PATH:" != *":$ANDROID_HOME/emulator:"* ]] && export PATH="$ANDROID_HOME/emulator:$PATH"
+fi
+
+# Ensure JDK is in PATH (needed for Gradle/Android builds)
+if ! command -v java &>/dev/null; then
+  for jdk in "/opt/homebrew/opt/openjdk@17" "/opt/homebrew/opt/openjdk"; do
+    if [ -x "$jdk/bin/java" ]; then
+      export JAVA_HOME="$jdk"
+      export PATH="$jdk/bin:$PATH"
+      break
+    fi
+  done
+fi
+
 if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   cd "$SCRIPT_DIR" && npm install --production --silent 2>/dev/null
 fi

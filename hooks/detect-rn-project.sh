@@ -43,6 +43,9 @@ if [ "$has_rn_config" = true ]; then
   # Initialize Experience Engine directory structure (silent if already present)
   bash "$PLUGIN_ROOT/scripts/ensure-experience-engine.sh" 2>/dev/null || true
 
+  # Check Android emulator readiness (if Android device detected)
+  bash "$PLUGIN_ROOT/scripts/ensure-android-ready.sh" 2>/dev/null || true
+
   cat <<'EOF'
 React Native project detected. The rn-dev-agent plugin is active.
 

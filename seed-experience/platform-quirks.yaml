@@ -41,3 +41,16 @@ platform_quirks:
     - id: PQ_ANDROID_PERMISSION
       quirk: Permission manipulation via adb shell pm
       command: adb shell pm <grant|revoke> <package> <android.permission.NAME>
+
+    - id: PQ_ANDROID_MAESTRO_GRPC
+      quirk: Classic Maestro gRPC driver is unreliable on Android (UNAVAILABLE io exception)
+      workaround: Always use maestro-runner which uses HTTP to UIAutomator2 instead of gRPC
+      notes: Upstream Maestro issue #998, open since April 2023. maestro-runner eliminates this class of errors entirely.
+
+    - id: PQ_ANDROID_TEXT_INPUT_CRASH
+      quirk: adb shell input text crashes app with special chars (+, @, #) or long strings
+      workaround: device_fill auto-chunks input on Android. For manual adb, split into <30 char chunks and escape special chars.
+
+    - id: PQ_ANDROID_PLAY_PROTECT
+      quirk: Google Play Protect on emulators can silently block test APK installations
+      workaround: Disable in Settings > Security > Play Protect before running Maestro

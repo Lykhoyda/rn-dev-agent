@@ -129,8 +129,15 @@ For EACH step in the flow:
    - assertVisible:
        id: "cart-badge"
    EOF
-   maestro-runner test /tmp/step.yaml  # or: maestro test /tmp/step.yaml
+   # ALWAYS use maestro-runner (not classic maestro) — especially on Android
+   # where classic Maestro's gRPC driver is unreliable (GH #7)
+   # --platform is a GLOBAL flag (before the test subcommand)
+   maestro-runner --platform <ios|android> test /tmp/step.yaml
    ```
+
+   **Android text input**: For long strings or strings with special characters
+   (`+`, `@`, `#`), use `device_fill` which auto-chunks input on Android to
+   prevent ANR crashes (GH #7).
 
 2. **Wait for settle**: `device_snapshot` or Maestro `assertVisible` handles this.
    If no assertion target, add `sleep 0.5` before CDP queries.

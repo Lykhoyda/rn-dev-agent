@@ -73,6 +73,36 @@ failure_families:
       - scroll to element before tapping
     notes: Always dismiss keyboard before interacting with elements below it
 
+  - id: FF_MAESTRO_GRPC_ANDROID
+    name: Maestro gRPC UNAVAILABLE on Android
+    symptoms:
+      - "UNAVAILABLE: io exception"
+      - maestro.drivers.AndroidDriver gRPC error
+      - run_flow fails on Android but iOS works
+    recovery:
+      - switch to maestro-runner (does not use gRPC)
+      - always pass --platform android to maestro-runner
+      - if classic Maestro required, uninstall dev.mobile.maestro APKs and cold-boot emulator
+    notes: >
+      Classic Maestro Android driver uses gRPC over port 7001 to an Instrumentation
+      APK on the device. This is fragile and fails frequently (GH #7, upstream #998).
+      maestro-runner uses direct HTTP to UIAutomator2 — no gRPC, no driver APK needed.
+
+  - id: FF_ANDROID_TEXT_INPUT_CRASH
+    name: Android text input crashes or backgrounds app
+    symptoms:
+      - app disappears after mobile_type_keys
+      - home screen shown after text input
+      - ANR during long text input on Android
+    recovery:
+      - use device_fill (auto-chunks long input on Android)
+      - avoid special characters in direct adb input
+      - split input into shorter chunks (< 30 chars)
+    notes: >
+      Android dispatches text as individual key events. Special characters (+, @, #)
+      and long strings (> 30 chars) can overwhelm the input method causing ANR or
+      crash. The device_fill tool auto-detects Android and chunks input (GH #7).
+
   - id: FF_DEBUGGER_PAUSED
     name: Debugger paused — JS execution halted
     symptoms:

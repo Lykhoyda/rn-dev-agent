@@ -178,7 +178,9 @@ After the fix:
        id: "<element-id>"
    - assertVisible: "<expected-text>"
    EOF
-   maestro-runner test /tmp/verify.yaml  # or: maestro test /tmp/verify.yaml
+   # ALWAYS use maestro-runner (not classic maestro) — required on Android (GH #7)
+   # --platform is a GLOBAL flag (before the test subcommand)
+   maestro-runner --platform <ios|android> test /tmp/verify.yaml
    ```
 
 ## Critical Rules

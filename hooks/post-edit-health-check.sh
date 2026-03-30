@@ -98,7 +98,7 @@ if [[ "$metro_status" != "packager-status:running" ]]; then
   exit 0  # Metro not running — not in a dev session, skip
 fi
 
-# --- Guard: check if the app is actually installed on the simulator ---
+# --- Guard: check if the app is actually installed on the simulator/emulator ---
 if [[ "$ios_booted" == "true" ]]; then
   app_json="$check_dir/app.json"
   if [[ -f "$app_json" ]]; then
@@ -107,6 +107,20 @@ if [[ "$ios_booted" == "true" ]]; then
       installed=$(xcrun simctl listapps booted 2>/dev/null | grep -c "$bundle_id" || echo "0")
       if [[ "$installed" == "0" ]]; then
         exit 0  # App not installed on simulator — skip
+      fi
+    fi
+  fi
+elif [[ "$android_booted" == "true" ]]; then
+  app_json="$check_dir/app.json"
+  if [[ -f "$app_json" ]]; then
+    android_pkg=$(jq -r '.expo.android.package // empty' "$app_json" 2>/dev/null)
+    if [[ -z "$android_pkg" ]]; then
+      android_pkg=$(jq -r '.android.package // empty' "$app_json" 2>/dev/null)
+    fi
+    if [[ -n "$android_pkg" ]]; then
+      installed=$(adb shell pm list packages 2>/dev/null | grep -c "$android_pkg" || echo "0")
+      if [[ "$installed" == "0" ]]; then
+        exit 0  # App not installed on emulator — skip
       fi
     fi
   fi

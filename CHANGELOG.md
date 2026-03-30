@@ -4,6 +4,24 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] — 2026-03-30
+
+### Added
+- **Android emulator readiness script** (`scripts/ensure-android-ready.sh`) — checks boot completion, cleans stale port forwarding, auto-selects `ANDROID_SERIAL`, warns about Play Protect. Runs on SessionStart.
+- **Android text input workaround** — `device_fill` auto-detects Android sessions and chunks long/special-char strings into safe 10-char segments via `adb shell input text`.
+- **Android app installation check** in post-edit health check — verifies `expo.android.package` via `adb shell pm list packages`.
+- **Android-Specific Testing Rules** section in rn-testing skill — maestro-runner enforcement, text input best practices, boot timing, Play Protect.
+- **2 new failure families** — `FF_MAESTRO_GRPC_ANDROID` and `FF_ANDROID_TEXT_INPUT_CRASH` in seed experience.
+- **3 new platform quirks** — `PQ_ANDROID_MAESTRO_GRPC`, `PQ_ANDROID_TEXT_INPUT_CRASH`, `PQ_ANDROID_PLAY_PROTECT`.
+
+### Changed
+- **maestro-runner enforced on Android** — all agents (rn-tester, rn-debugger) and skills now require maestro-runner over classic Maestro for Android flows. Classic Maestro's gRPC driver is unreliable (upstream #998).
+- All Maestro commands now include `--platform` flag explicitly.
+
+### Fixed
+- **Maestro gRPC UNAVAILABLE on Android** (#7) — bypassed by enforcing maestro-runner which uses HTTP to UIAutomator2 instead of gRPC.
+- **`mobile_type_keys` crashes app on Android** (#7) — special characters and long strings now auto-chunked.
+
 ## [0.6.1] — 2026-03-30
 
 ### Fixed
