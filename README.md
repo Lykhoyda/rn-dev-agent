@@ -280,6 +280,7 @@ Add `testID` to interactive elements for reliable component queries:
 | `/plugin` command not found | Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code` |
 | Plugin skills not appearing | Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache` |
 | Plugin update fails with `ENOTEMPTY` | Clear the stale cache: `rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent`, then retry update |
+| `ENAMETOOLONG` on install/update | Clear stale cache: `rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent ~/.claude/plugins/data/rn-dev-agent-*`, then re-add marketplace and install |
 | maestro-runner not in PATH | `export PATH="$HOME/.maestro-runner/bin:$PATH"` |
 
 ## Install from Source (development)
