@@ -7,6 +7,8 @@ export { loadExperience, getFailureFamilies, getRecoverySequence, clearExperienc
 export { attemptGhostRecovery, appendGhostNote } from './ghost.js';
 export { scanTelemetry, groupFailures, generateCandidates, computeDecay } from './compact.js';
 export { runCompactionCycle } from './promote.js';
+export { exportExperience, importExperience, getExperienceHealth } from './sharing.js';
+export type { ExperienceHealth } from './sharing.js';
 export type {
   TelemetryEvent,
   EnvironmentFingerprint,
