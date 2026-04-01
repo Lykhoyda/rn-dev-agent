@@ -80,13 +80,13 @@ export async function attemptGhostRecovery(ghost) {
                 : `Ghost recovery failed for ${classification.family_id}. Original error preserved.`,
             recovered_result: didRecover && typeof recovered === 'object' ? recovered.result : undefined,
         };
-        logGhostAttempt(ghost.toolName, classification.family_id, classification.confidence, result.recovered ? 'recovered' : 'failed', latency, eventId);
+        logGhostAttempt(ghost.toolName, classification.family_id, classification.confidence, result.recovered ? 'recovered' : 'failed', latency, eventId, ghost.error);
         return result;
     }
     catch (err) {
         const latency = Date.now() - start;
         const msg = err instanceof Error ? err.message : String(err);
-        logGhostAttempt(ghost.toolName, classification.family_id, classification.confidence, 'failed', latency, eventId);
+        logGhostAttempt(ghost.toolName, classification.family_id, classification.confidence, 'failed', latency, eventId, ghost.error);
         return {
             recovered: false,
             family_id: classification.family_id,

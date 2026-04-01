@@ -110,6 +110,7 @@ export async function attemptGhostRecovery(
       result.recovered ? 'recovered' : 'failed',
       latency,
       eventId,
+      ghost.error,
     );
 
     return result;
@@ -124,6 +125,7 @@ export async function attemptGhostRecovery(
       'failed',
       latency,
       eventId,
+      ghost.error,
     );
 
     return {

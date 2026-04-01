@@ -112,6 +112,7 @@ export function logGhostAttempt(
   outcome: 'recovered' | 'failed',
   latencyMs: number,
   eventId: string,
+  error?: string,
 ): void {
   writeEvent({
     ts: new Date().toISOString(),
@@ -120,6 +121,8 @@ export function logGhostAttempt(
     phase: 'tool',
     event: 'ghost_attempt',
     tool,
+    error,
+    normalized_error: error ? normalizeError(error) : undefined,
     family_id: familyId,
     family_confidence: confidence,
     ghost_attempted: true,

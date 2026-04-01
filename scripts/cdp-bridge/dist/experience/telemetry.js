@@ -96,7 +96,7 @@ export function logToolCall(tool, params, result, latencyMs, error, extra) {
         Object.assign(event, extra);
     writeEvent(event);
 }
-export function logGhostAttempt(tool, familyId, confidence, outcome, latencyMs, eventId) {
+export function logGhostAttempt(tool, familyId, confidence, outcome, latencyMs, eventId, error) {
     writeEvent({
         ts: new Date().toISOString(),
         event_id: eventId,
@@ -104,6 +104,8 @@ export function logGhostAttempt(tool, familyId, confidence, outcome, latencyMs, 
         phase: 'tool',
         event: 'ghost_attempt',
         tool,
+        error,
+        normalized_error: error ? normalizeError(error) : undefined,
         family_id: familyId,
         family_confidence: confidence,
         ghost_attempted: true,

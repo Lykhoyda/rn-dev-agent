@@ -116,6 +116,56 @@ export interface GhostRecoveryResult {
   recovered_result?: unknown;
 }
 
+// --- Phase C: Compaction + Promotion ---
+
+export interface FailureStats {
+  tool: string;
+  normalized_error: string;
+  family_id?: string;
+  total: number;
+  passed: number;
+  failed: number;
+  ghost_recovered: number;
+  first_seen: string;
+  last_seen: string;
+  runs: Set<string>;
+}
+
+export interface CandidateHeuristic {
+  id: string;
+  type: 'failure_pattern' | 'recovery_shortcut';
+  tool: string;
+  symptom: string;
+  normalized_error: string;
+  family_id?: string;
+  recovery?: string;
+  confidence: number;
+  seen_count: number;
+  success_count: number;
+  first_seen: string;
+  last_seen: string;
+  env?: Partial<EnvironmentFingerprint>;
+  auto_promotable: boolean;
+}
+
+export interface CompactionResult {
+  telemetry_files_scanned: number;
+  events_processed: number;
+  failure_groups: number;
+  candidates_generated: number;
+  candidates_auto_promoted: number;
+  heuristics_decayed: number;
+  heuristics_removed: number;
+  experience_tokens: number;
+}
+
+export interface PromotionResult {
+  promoted_to: 'user' | 'project';
+  heuristic_id: string;
+  auto: boolean;
+  reason: string;
+}
+
 export interface ExperienceConfig {
   experience_engine: boolean;
   retention_days: number;

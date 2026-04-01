@@ -181,7 +181,7 @@ function parseExperienceMd(path: string, source: HeuristicSource): ExperienceHeu
     const content = readFileSync(path, 'utf-8');
     const heuristics: ExperienceHeuristic[] = [];
 
-    const sectionRe = /^###\s+(FP|RS|PC)-(\d+):\s*(.+)$/gm;
+    const sectionRe = /^###\s+(FP|RS|PC)-([\w]+):\s*(.+)$/gm;
     let match;
     while ((match = sectionRe.exec(content)) !== null) {
       const prefix = match[1];
