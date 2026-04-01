@@ -1,6 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { StatusResult } from '../types.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { handleDevClientPicker } from './dev-client-picker.js';
 
 const STATUS_PROBE_EXPRESSION = `
 (function() {
@@ -14,6 +15,53 @@ const STATUS_PROBE_EXPRESSION = `
   return JSON.stringify(result);
 })()
 `;
+
+async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
+  let appInfo: Record<string, unknown> | null = null;
+  let errorCount = 0;
+  let fiberTree = false;
+  let hasRedBox = false;
+
+  if (client.helpersInjected) {
+    const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
+    if (probeResult.value && typeof probeResult.value === 'string') {
+      try {
+        const probe = JSON.parse(probeResult.value) as {
+          appInfo: Record<string, unknown> | null;
+          errorCount: number;
+          fiberTree: boolean;
+          hasRedBox: boolean;
+        };
+        appInfo = probe.appInfo;
+        errorCount = probe.errorCount;
+        fiberTree = probe.fiberTree;
+        hasRedBox = probe.hasRedBox;
+      } catch { /* probe failed */ }
+    }
+  }
+
+  return {
+    metro: { running: true, port: client.metroPort },
+    cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null },
+    app: {
+      platform: (appInfo?.platform as string) ?? null,
+      dev: (appInfo?.__DEV__ as boolean) ?? null,
+      hermes: (appInfo?.hermes as boolean) ?? null,
+      rnVersion: appInfo?.rnVersion ? JSON.stringify(appInfo.rnVersion) : null,
+      dimensions: (appInfo?.dimensions as { width: number; height: number }) ?? null,
+      hasRedBox,
+      isPaused: client.isPaused,
+      errorCount,
+    },
+    capabilities: {
+      networkDomain: client.networkMode === 'cdp',
+      fiberTree,
+      networkFallback: client.networkMode === 'hook',
+      bridgeDetected: client.bridgeDetected,
+      bridgeVersion: client.bridgeVersion,
+    },
+  };
+}
 
 export function createStatusHandler(
   getClient: () => CDPClient,
@@ -44,59 +92,7 @@ export function createStatusHandler(
         }
       }
 
-      let appInfo: Record<string, unknown> | null = null;
-      let errorCount = 0;
-      let fiberTree = false;
-      let hasRedBox = false;
-
-      if (client.helpersInjected) {
-        const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
-        if (probeResult.value && typeof probeResult.value === 'string') {
-          try {
-            const probe = JSON.parse(probeResult.value) as {
-              appInfo: Record<string, unknown> | null;
-              errorCount: number;
-              fiberTree: boolean;
-              hasRedBox: boolean;
-            };
-            appInfo = probe.appInfo;
-            errorCount = probe.errorCount;
-            fiberTree = probe.fiberTree;
-            hasRedBox = probe.hasRedBox;
-          } catch {
-            // Probe failed, use defaults
-          }
-        }
-      }
-
-      const status: StatusResult = {
-        metro: {
-          running: true,
-          port: client.metroPort,
-        },
-        cdp: {
-          connected: client.isConnected,
-          device: client.connectedTarget?.title ?? null,
-          pageId: client.connectedTarget?.id ?? null,
-        },
-        app: {
-          platform: (appInfo?.platform as string) ?? null,
-          dev: (appInfo?.__DEV__ as boolean) ?? null,
-          hermes: (appInfo?.hermes as boolean) ?? null,
-          rnVersion: appInfo?.rnVersion ? JSON.stringify(appInfo.rnVersion) : null,
-          dimensions: (appInfo?.dimensions as { width: number; height: number }) ?? null,
-          hasRedBox,
-          isPaused: client.isPaused,
-          errorCount,
-        },
-        capabilities: {
-          networkDomain: client.networkMode === 'cdp',
-          fiberTree,
-          networkFallback: client.networkMode === 'hook',
-          bridgeDetected: client.bridgeDetected,
-          bridgeVersion: client.bridgeVersion,
-        },
-      };
+      const status = await buildStatusResult(client);
 
       let autoRecoveredMessage: string | undefined;
 
@@ -161,6 +157,33 @@ export function createStatusHandler(
       return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+
+      // If connection failed, check if the Dev Client picker is blocking
+      try {
+        const pickerResult = await handleDevClientPicker();
+        if (pickerResult?.dismissed) {
+          // Picker was dismissed — retry connection automatically
+          try {
+            let retryClient = getClient();
+            if (!retryClient.isConnected) {
+              await retryClient.autoConnect(args.metroPort, args.platform);
+            }
+            // If retry succeeds, run the full status handler again
+            if (retryClient.isConnected) {
+              // Re-invoke ourselves (the outer function) for a clean status
+              return warnResult(
+                await buildStatusResult(retryClient),
+                `Dev Client picker was blocking — auto-dismissed (${pickerResult.reason}). Connection recovered.`,
+              );
+            }
+          } catch { /* retry failed — fall through */ }
+          return failResult(`${message}. Dev Client picker was dismissed but reconnection failed. Try cdp_status again.`);
+        }
+        if (pickerResult && !pickerResult.dismissed && pickerResult.reason.includes('could not find')) {
+          return failResult(`${message}. ${pickerResult.reason}`);
+        }
+      } catch { /* picker check failed, return original error */ }
+
       return failResult(message);
     }
   };

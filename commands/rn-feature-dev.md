@@ -367,12 +367,14 @@ Use the feature slug from Phase 1 (e.g., `s4-notification-snooze`, `profile-edit
 
 ### Step 1.5: Pre-recording setup and start video
 
-**Pre-recording readiness (GH #8):**
-1. Call `cdp_navigation_state` — verify a valid route (not Dev Client picker).
-   If stuck on picker, ask the user to select the Metro server.
-2. Call `cdp_dev_settings(action="disableDevMenu")` — suppress dev menu popups
+**Pre-recording readiness (GH #8, #9):**
+1. Call `cdp_status` — auto-detects and dismisses the Dev Client picker if
+   an agent-device session is open (GH #9). If warning returned, retry.
+2. Call `cdp_navigation_state` — verify a valid route (not Dev Client picker).
+   If still stuck, ask the user to select the Metro server.
+3. Call `cdp_dev_settings(action="disableDevMenu")` — suppress dev menu popups
    during recording.
-3. Take a baseline screenshot to confirm app is on an actual screen.
+4. Take a baseline screenshot to confirm app is on an actual screen.
 
 Then start recording:
 

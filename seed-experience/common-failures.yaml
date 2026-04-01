@@ -63,6 +63,23 @@ failure_families:
       - for Dev Client, use agent-device tools (not blocked like Expo Go)
     notes: Deep links trigger native dialogs in Expo Go (B56). Expo Go bundle IDs are blocked by agent-device.
 
+  - id: FF_DEV_CLIENT_PICKER
+    name: Expo Dev Client server picker blocking
+    symptoms:
+      - cdp_status fails to connect
+      - no Hermes target found
+      - screenshot shows "DEVELOPMENT SERVERS"
+      - cdp_navigation_state returns empty or DevClientLauncher
+    recovery:
+      - cdp_status auto-detects and dismisses picker if device session is open
+      - if auto-dismiss fails, manually tap the Metro server entry
+      - wait 15-25s for rebundle after dismissal
+    notes: >
+      The Dev Client picker appears after deep links, app restarts, permission
+      changes, or clearState. It is a native screen (not React) so CDP tools
+      cannot detect it. Auto-handling via device_find requires an active
+      agent-device session. cdp_status now checks for this automatically (GH #9).
+
   - id: FF_KEYBOARD_OVERLAY
     name: Keyboard obscuring target element
     symptoms:
