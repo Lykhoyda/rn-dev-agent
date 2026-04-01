@@ -128,21 +128,23 @@ cmd_stop() {
 
     # --- Pull Android recording from device ---
     if [[ "$platform" == "android" ]]; then
+      # Ensure remote screenrecord is stopped (local SIGINT may not propagate)
+      adb shell pkill -2 screenrecord 2>/dev/null || true
       local device_pathf="${PID_PREFIX}-${platform}.device-path"
       if [[ -f "$device_pathf" ]]; then
         local device_path
         device_path="$(cat "$device_pathf")"
         sleep 2
-        adb pull "$device_path" "$raw_file" 2>/dev/null || echo "Warning: Failed to pull recording from device" >&2
+        adb pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
         adb shell rm -f "$device_path" 2>/dev/null || true
         rm -f "$device_pathf"
       fi
     fi
 
     # --- Convert to MP4 with faststart + validate ---
-    # Ensure output path ends in .mp4
-    output_path="${output_path%.mov}.mp4"
-    mkdir -p "$(dirname "$output_path")"
+    # Normalize output path to .mp4 (strip any video extension first)
+    output_path="${output_path%.*}.mp4"
+    mkdir -p "$(dirname "$output_path")" || true
 
     if [[ -n "$raw_file" && -f "$raw_file" ]]; then
       if command -v ffmpeg >/dev/null 2>&1; then
@@ -153,24 +155,29 @@ cmd_stop() {
             if ffprobe -v error -show_entries format=duration "$tmp_mp4" 2>/dev/null | grep -q "duration="; then
               mv "$tmp_mp4" "$output_path"
             else
-              echo "Warning: Converted file failed validation. Keeping raw file." >&2
-              mv "$raw_file" "$output_path"
+              echo "Warning: Converted file failed validation. Keeping raw file as .mov" >&2
+              mv "$raw_file" "${output_path%.mp4}.mov"
+              output_path="${output_path%.mp4}.mov"
               rm -f "$tmp_mp4"
             fi
           else
-            # No ffprobe — trust the conversion
             mv "$tmp_mp4" "$output_path"
           fi
         else
-          echo "Warning: ffmpeg conversion failed. Keeping raw file." >&2
-          mv "$raw_file" "$output_path"
+          echo "Warning: ffmpeg conversion failed. Keeping raw file as .mov" >&2
+          mv "$raw_file" "${output_path%.mp4}.mov"
+          output_path="${output_path%.mp4}.mov"
+          rm -f "$tmp_mp4"
         fi
       else
-        # No ffmpeg — copy raw file directly
         echo "Warning: ffmpeg not available. Output is raw ${platform} format (install: brew install ffmpeg)" >&2
-        mv "$raw_file" "$output_path"
+        if [[ "$platform" == "ios" ]]; then
+          mv "$raw_file" "${output_path%.mp4}.mov"
+          output_path="${output_path%.mp4}.mov"
+        else
+          mv "$raw_file" "$output_path"
+        fi
       fi
-      # Clean up raw file if it still exists
       rm -f "$raw_file"
     fi
 
