@@ -47,6 +47,7 @@ export function readGraph(projectRoot: string): NavGraph | null {
     if (!existsSync(filePath)) return null;
     const raw = yamlParse(readFileSync(filePath, 'utf-8')) as { nav_graph?: NavGraph } | null;
     if (!raw || !raw.nav_graph) return null;
+    hydrateStrikesFromGraph(raw.nav_graph);
     return raw.nav_graph;
   } catch {
     return null;
@@ -198,9 +199,50 @@ const RELIABILITY_SUCCESS_DELTA = 5;
 const RELIABILITY_FAILURE_DELTA = -15;
 
 const strikeMap = new Map<string, StrikeEntry>();
+let strikesHydrated = false;
 
 function strikeKey(screen: string, method: NavMethod): string {
   return `${screen}::${method}`;
+}
+
+export function hydrateStrikesFromGraph(graph: NavGraph): void {
+  if (strikesHydrated) return;
+  strikesHydrated = true;
+
+  for (const nav of graph.navigators) {
+    for (const screen of nav.screens) {
+      if (!screen.action_records || screen.action_records.length === 0) continue;
+
+      const byMethod = new Map<NavMethod, typeof screen.action_records>();
+      for (const rec of screen.action_records) {
+        const arr = byMethod.get(rec.method) ?? [];
+        arr.push(rec);
+        byMethod.set(rec.method, arr);
+      }
+
+      for (const [method, records] of byMethod) {
+        const sorted = records.sort((a, b) =>
+          new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime(),
+        );
+        let consecutive = 0;
+        for (const rec of sorted) {
+          if (!rec.success) consecutive++;
+          else break;
+        }
+        if (consecutive >= STRIKE_THRESHOLD) {
+          const lastFailure = sorted[0].recorded_at;
+          const coolUntil = new Date(new Date(lastFailure).getTime() + STRIKE_COOLDOWN_MS).toISOString();
+          strikeMap.set(strikeKey(screen.name, method), {
+            screen: screen.name,
+            method,
+            consecutive_failures: consecutive,
+            last_failure_at: lastFailure,
+            cooled_until: coolUntil,
+          });
+        }
+      }
+    }
+  }
 }
 
 export function isMethodCooledDown(screen: string, method: NavMethod): boolean {

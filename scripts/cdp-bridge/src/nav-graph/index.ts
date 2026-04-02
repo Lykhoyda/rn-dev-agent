@@ -34,6 +34,7 @@ export {
   recordNavigation,
   isMethodCooledDown,
   getStrikeStatus,
+  hydrateStrikesFromGraph,
 } from './storage.js';
 
 export {

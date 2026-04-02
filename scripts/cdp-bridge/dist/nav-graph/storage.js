@@ -34,6 +34,7 @@ export function readGraph(projectRoot) {
         const raw = yamlParse(readFileSync(filePath, 'utf-8'));
         if (!raw || !raw.nav_graph)
             return null;
+        hydrateStrikesFromGraph(raw.nav_graph);
         return raw.nav_graph;
     }
     catch {
@@ -166,8 +167,47 @@ const STRIKE_THRESHOLD = 2;
 const RELIABILITY_SUCCESS_DELTA = 5;
 const RELIABILITY_FAILURE_DELTA = -15;
 const strikeMap = new Map();
+let strikesHydrated = false;
 function strikeKey(screen, method) {
     return `${screen}::${method}`;
+}
+export function hydrateStrikesFromGraph(graph) {
+    if (strikesHydrated)
+        return;
+    strikesHydrated = true;
+    for (const nav of graph.navigators) {
+        for (const screen of nav.screens) {
+            if (!screen.action_records || screen.action_records.length === 0)
+                continue;
+            const byMethod = new Map();
+            for (const rec of screen.action_records) {
+                const arr = byMethod.get(rec.method) ?? [];
+                arr.push(rec);
+                byMethod.set(rec.method, arr);
+            }
+            for (const [method, records] of byMethod) {
+                const sorted = records.sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+                let consecutive = 0;
+                for (const rec of sorted) {
+                    if (!rec.success)
+                        consecutive++;
+                    else
+                        break;
+                }
+                if (consecutive >= STRIKE_THRESHOLD) {
+                    const lastFailure = sorted[0].recorded_at;
+                    const coolUntil = new Date(new Date(lastFailure).getTime() + STRIKE_COOLDOWN_MS).toISOString();
+                    strikeMap.set(strikeKey(screen.name, method), {
+                        screen: screen.name,
+                        method,
+                        consecutive_failures: consecutive,
+                        last_failure_at: lastFailure,
+                        cooled_until: coolUntil,
+                    });
+                }
+            }
+        }
+    }
 }
 export function isMethodCooledDown(screen, method) {
     const entry = strikeMap.get(strikeKey(screen, method));

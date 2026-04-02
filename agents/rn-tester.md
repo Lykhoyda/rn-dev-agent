@@ -206,21 +206,26 @@ navigating to the screen.
 
 Before navigating, build a navigation plan using the graph:
 
-1. **Check for cached graph**: Call `cdp_nav_graph action="read"`.
-   - If no graph exists, call `cdp_nav_graph action="scan"` to build one.
-   - If graph is stale (>24h), re-scan.
+1. **Check staleness**: Call `cdp_nav_graph action="staleness"`.
+   - If `recommendation` is `rescan_required` or `rescan_recommended`,
+     call `cdp_nav_graph action="scan"`.
+   - If no graph exists, call `cdp_nav_graph action="scan"`.
 
-2. **Plan the path**: Call `cdp_nav_graph action="navigate" screen="<target>"`.
+2. **Get platform tips**: Call `cdp_nav_graph action="playbook"
+   platform="<ios|android>"` to get known quirks for this platform.
+
+3. **Plan the path**: Call `cdp_nav_graph action="navigate" screen="<target>"`.
    This returns a multi-step plan with:
    - **Steps**: tab switches, stack navigations, drawer opens — in order
    - **Reliability score**: based on historical success
    - **Prerequisites**: auth gates, permissions detected in the path
    - **Deep link alternative**: if a URL path exists for the target
+   - **[COOLED DOWN]** annotations on methods that failed recently
 
-3. **Review prerequisites**: If the plan reports auth or permission
+4. **Review prerequisites**: If the plan reports auth or permission
    prerequisites, handle them in Steps 2.5/2.6 before proceeding.
 
-4. **Skip** this step if navigating to the current screen or if the
+5. **Skip** this step if navigating to the current screen or if the
    app has only one screen.
 
 ### Step 3: Navigate to Start
@@ -238,6 +243,18 @@ Execute the navigation plan from Step 2.7:
    ```bash
    xcrun simctl openurl booted "myapp://home"
    ```
+
+5. **Record outcome for EACH step** (critical for learning):
+   ```
+   cdp_nav_graph action="record" screen="<target>"
+     method="programmatic" success=true latency_ms=<ms>
+   ```
+   On failure, also get recovery advice:
+   ```
+   cdp_nav_graph action="heal" screen="<target>"
+     method="<failed_method>" platform="<ios|android>"
+   ```
+   Then try the suggested recovery method.
 
 Verify: `cdp_navigation_state` confirms you're on the right screen.
 

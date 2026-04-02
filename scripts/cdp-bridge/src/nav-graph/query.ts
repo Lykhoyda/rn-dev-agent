@@ -25,10 +25,7 @@ export function findRouteInGraph(graph: NavGraph, routeName: string): RouteLocat
   }
   if (candidates.length === 0) return null;
 
-  candidates.sort((a, b) =>
-    (b.screen.is_active ? 1 : 0) - (a.screen.is_active ? 1 : 0)
-    || b.screen.reliability_score - a.screen.reliability_score,
-  );
+  candidates.sort((a, b) => b.screen.reliability_score - a.screen.reliability_score);
 
   const best = candidates[0];
   const path = buildNavigatorPath(graph, best.nav.id);
