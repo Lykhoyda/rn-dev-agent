@@ -36,7 +36,7 @@ expo_gotchas:
 
   - id: EG_EXPO_ROUTER_DEEP_LINK
     name: Expo Router deep links trigger native confirmation dialog
-    symptom: "Open in app?" dialog blocks automation
+    symptom: Open-in-app system dialog blocks automation
     cause: iOS shows a native confirmation when opening custom URI schemes
     fix: Use cdp_evaluate with __NAV_REF__ or globalThis.__EXPO_ROUTER__ instead
     severity: medium

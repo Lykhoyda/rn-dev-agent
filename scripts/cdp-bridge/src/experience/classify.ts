@@ -78,6 +78,7 @@ export function classifyError(
 
     // Strategy 2: Symptom substring matching (lower confidence)
     for (const symptom of family.symptoms) {
+      if (typeof symptom !== 'string') continue;
       const symptomLower = symptom.toLowerCase();
       const errorLower = error.toLowerCase();
       const normalizedLower = normalizedError.toLowerCase();

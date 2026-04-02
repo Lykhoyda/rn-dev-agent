@@ -57,7 +57,7 @@ failure_families:
     symptoms:
       - device_find cannot find expected element
       - screenshot shows system confirmation dialog
-      - "Open in app?" alert visible
+      - open-in-app system alert visible
     recovery:
       - use cdp_evaluate with __NAV_REF__ instead of deep links
       - for Dev Client, use agent-device tools (not blocked like Expo Go)
@@ -125,7 +125,7 @@ failure_families:
     symptoms:
       - navigation state shows Login or Welcome or Register or Auth route
       - feature screen not reachable — app stuck on auth
-      - note: empty nav state is NOT auth — check FF_DEV_CLIENT_PICKER first
+      - "empty nav state is NOT auth — check FF_DEV_CLIENT_PICKER first"
     recovery:
       - scan .maestro/subflows/ for login flows (prefer login.yaml over register_user.yaml)
       - check subflow for clearState:true — strip it on Dev Client builds
