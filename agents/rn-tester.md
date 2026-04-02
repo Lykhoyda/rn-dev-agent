@@ -202,12 +202,44 @@ navigating to the screen.
 
 5. **Skip** this step if the feature does not involve permissions.
 
+### Step 2.7: Navigation Graph Planning (GH #12)
+
+Before navigating, build a navigation plan using the graph:
+
+1. **Check for cached graph**: Call `cdp_nav_graph action="read"`.
+   - If no graph exists, call `cdp_nav_graph action="scan"` to build one.
+   - If graph is stale (>24h), re-scan.
+
+2. **Plan the path**: Call `cdp_nav_graph action="navigate" screen="<target>"`.
+   This returns a multi-step plan with:
+   - **Steps**: tab switches, stack navigations, drawer opens — in order
+   - **Reliability score**: based on historical success
+   - **Prerequisites**: auth gates, permissions detected in the path
+   - **Deep link alternative**: if a URL path exists for the target
+
+3. **Review prerequisites**: If the plan reports auth or permission
+   prerequisites, handle them in Steps 2.5/2.6 before proceeding.
+
+4. **Skip** this step if navigating to the current screen or if the
+   app has only one screen.
+
 ### Step 3: Navigate to Start
-Use deep links when possible (fastest, most deterministic):
-```bash
-xcrun simctl openurl booted "myapp://home"
-```
-Then verify: `cdp_navigation_state` confirms you're on the right screen.
+Execute the navigation plan from Step 2.7:
+
+1. **Programmatic** (preferred): For each step in the plan, call
+   `cdp_navigate(screen="<step.target_screen>")`. Verify after each
+   step with `cdp_navigation_state`.
+2. **Deep link** (if `preferred_method` is `deep_link`): Use
+   `cdp_evaluate` with `__NAV_REF__` and the deep link path. Beware
+   Dev Client picker (GH #9) — prefer programmatic on Dev Client.
+3. **UI fallback** (if a step fails): Use `device_find` + `device_press`
+   to tap the navigation element directly.
+4. **Legacy fallback** (no graph): Use deep links:
+   ```bash
+   xcrun simctl openurl booted "myapp://home"
+   ```
+
+Verify: `cdp_navigation_state` confirms you're on the right screen.
 
 ### Step 4: Execute and Verify (The Core Loop)
 

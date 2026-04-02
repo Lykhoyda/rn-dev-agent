@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 9;
+  var __HELPERS_VERSION__ = 10;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -281,6 +281,256 @@ export const INJECTED_HELPERS = `
     }
 
     return JSON.stringify(simplify(navState));
+  }
+
+  // Navigation Graph — full topology extraction
+  function getNavGraph() {
+    try {
+      var navigators = [];
+      var navIdCounter = 0;
+      var containersFound = 0;
+      var library = 'unknown';
+      var rnVersion = null;
+      var expoSdk = null;
+
+      try {
+        var RN = require('react-native');
+        try { var rnV = require('react-native/Libraries/Core/ReactNativeVersion').version; rnVersion = rnV.major + '.' + rnV.minor + '.' + rnV.patch; } catch(e) {}
+      } catch(e) {}
+      try { var expoC = require('expo-constants'); if (expoC && expoC.default && expoC.default.expoConfig) expoSdk = expoC.default.expoConfig.sdkVersion || null; } catch(e) {}
+
+      // Detect navigator kind from state.type + fiber heuristic
+      function detectKind(stateType, fiberHint) {
+        if (stateType === 'tab') return 'tab';
+        if (stateType === 'drawer') return 'drawer';
+        if (stateType === 'stack') {
+          if (fiberHint && (fiberHint.indexOf('NativeStack') !== -1 || fiberHint.indexOf('native-stack') !== -1)) return 'native-stack';
+          return 'stack';
+        }
+        return 'unknown';
+      }
+
+      // Build navigator ID
+      function makeNavId(parentScreen, kind) {
+        if (!parentScreen) return 'root' + (navIdCounter > 0 ? '-' + navIdCounter : '');
+        return parentScreen + '/' + kind;
+      }
+
+      // Duck-type navigation state: must have routes array + routeNames array
+      function isNavState(obj) {
+        return obj && Array.isArray(obj.routes) && Array.isArray(obj.routeNames);
+      }
+
+      // Walk memoizedState linked list to find navigation state
+      function findNavStateInHooks(memoizedState) {
+        var current = memoizedState;
+        var depth = 0;
+        while (current && depth < 30) {
+          if (current.memoizedState && isNavState(current.memoizedState)) return current.memoizedState;
+          if (isNavState(current)) return current;
+          // Check queue (useReducer stores state in .queue.lastRenderedState or .memoizedState)
+          if (current.queue && current.queue.lastRenderedState && isNavState(current.queue.lastRenderedState)) return current.queue.lastRenderedState;
+          current = current.next;
+          depth++;
+        }
+        return null;
+      }
+
+      // Flatten linking config: { screens: { Name: 'path' | { path, screens } } }
+      function flattenLinking(config, prefix) {
+        var map = {};
+        if (!config || !config.screens) return map;
+        var screens = config.screens;
+        var keys = Object.keys(screens);
+        for (var i = 0; i < keys.length; i++) {
+          var name = keys[i];
+          var val = screens[name];
+          if (typeof val === 'string') {
+            map[name] = (prefix ? prefix + '/' : '') + val;
+          } else if (val && typeof val === 'object') {
+            var path = val.path !== undefined ? val.path : name;
+            var fullPath = (prefix ? prefix + '/' : '') + path;
+            map[name] = fullPath;
+            if (val.screens) {
+              var nested = flattenLinking({ screens: val.screens }, fullPath);
+              var nk = Object.keys(nested);
+              for (var j = 0; j < nk.length; j++) map[nk[j]] = nested[nk[j]];
+            }
+          }
+        }
+        return map;
+      }
+
+      // Extract params from path pattern like "/cart/:id/review/:reviewId"
+      function extractParams(path) {
+        if (!path) return null;
+        var matches = path.match(/:([a-zA-Z_][a-zA-Z0-9_]*)/g);
+        if (!matches || matches.length === 0) return null;
+        return matches.map(function(m) { return m.slice(1); });
+      }
+
+      // Recursively walk navigation state, collecting navigators (read-only — no mutation)
+      function walkState(state, parentScreen, linkingMap, fiberHint, depth) {
+        if (!state || depth > 20) return;
+
+        var kind = detectKind(state.type, fiberHint);
+        var navId = makeNavId(parentScreen, kind);
+        var seenIds = {};
+        for (var si = 0; si < navigators.length; si++) {
+          seenIds[navigators[si].id] = true;
+        }
+        if (seenIds[navId]) navId = navId + '-' + (++navIdCounter);
+
+        var screenNames = state.routeNames || [];
+        var routes = [];
+        var activeIndex = typeof state.index === 'number' ? state.index : 0;
+        var activeRouteName = state.routes && state.routes[activeIndex] ? state.routes[activeIndex].name : null;
+
+        for (var i = 0; i < screenNames.length; i++) {
+          var name = screenNames[i];
+          var matchedRoute = null;
+          if (state.routes) {
+            for (var j = 0; j < state.routes.length; j++) {
+              if (state.routes[j].name === name) { matchedRoute = state.routes[j]; break; }
+            }
+          }
+          var isVisited = !!matchedRoute;
+          var linkPath = linkingMap ? (linkingMap[name] !== undefined ? linkingMap[name] : null) : null;
+          var params = extractParams(linkPath);
+
+          routes.push({
+            name: name,
+            path: linkPath !== null ? linkPath : undefined,
+            params_schema: params || undefined,
+            is_initial: name === activeRouteName && activeIndex === 0,
+            is_active: name === activeRouteName,
+            is_visited: isVisited
+          });
+        }
+
+        navigators.push({
+          id: navId,
+          kind: kind,
+          parent_screen: parentScreen || null,
+          routes: routes,
+          active_route_name: activeRouteName,
+          initial_route_name: screenNames[0] || undefined,
+          is_visited: true,
+          source: linkingMap && Object.keys(linkingMap).length > 0 ? 'both' : 'runtime'
+        });
+
+        // Recurse into all routes that have nested state
+        if (state.routes) {
+          for (var ri = 0; ri < state.routes.length; ri++) {
+            var route = state.routes[ri];
+            if (route.state && isNavState(route.state)) {
+              walkState(route.state, route.name, linkingMap, null, depth + 1);
+            }
+          }
+        }
+      }
+
+      // -- Primary path: __NAV_REF__.getRootState() --
+      var rootState = null;
+      var linkingMap = {};
+
+      if (globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getRootState) {
+        var refState = globalThis.__NAV_REF__.getRootState();
+        if (isNavState(refState)) {
+          rootState = refState;
+          containersFound = 1;
+          library = 'react-navigation';
+        }
+      }
+
+      // -- Expo Router fast path --
+      if (!rootState && globalThis.__expo_router_state__) {
+        try {
+          var expoState = globalThis.__expo_router_state__;
+          if (isNavState(expoState)) {
+            rootState = expoState;
+            containersFound = 1;
+            library = 'expo-router';
+          }
+        } catch(e) {}
+      }
+
+      // -- Fallback: fiber walk --
+      if (!rootState) {
+        var renderer = findActiveRenderer();
+        if (renderer) {
+          var fiberRoot = renderer.roots.values().next().value;
+          if (fiberRoot && fiberRoot.current) {
+            var containerFibers = [];
+            (function findContainers(fiber, d) {
+              if (!fiber || d > 30) return;
+              var fname = fiber.type && (fiber.type.displayName || fiber.type.name);
+              if (fname === 'NavigationContainer' || fname === 'ExpoRoot') {
+                containerFibers.push(fiber);
+              }
+              findContainers(fiber.child, d + 1);
+              if (fiber.sibling) findContainers(fiber.sibling, d);
+            })(fiberRoot.current, 0);
+
+            containersFound = containerFibers.length;
+            for (var ci = 0; ci < containerFibers.length; ci++) {
+              var cf = containerFibers[ci];
+              var fiberState = findNavStateInHooks(cf.memoizedState);
+              if (!fiberState && globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getRootState) {
+                fiberState = globalThis.__NAV_REF__.getRootState();
+              }
+              if (fiberState && isNavState(fiberState)) {
+                if (!rootState) rootState = fiberState;
+                // Harvest linking config from fiber props
+                try {
+                  var linking = cf.memoizedProps && cf.memoizedProps.linking;
+                  if (!linking && cf.return) linking = cf.return.memoizedProps && cf.return.memoizedProps.linking;
+                  if (linking && linking.config) {
+                    linkingMap = flattenLinking(linking.config, '');
+                  }
+                } catch(e) {}
+                var fName = cf.type && (cf.type.displayName || cf.type.name);
+                if (fName === 'ExpoRoot') library = 'expo-router';
+                else library = 'react-navigation';
+              }
+            }
+          }
+        }
+      }
+
+      // Also try to harvest linking config from __NAV_REF__ if fiber didn't get it
+      if (Object.keys(linkingMap).length === 0) {
+        try {
+          if (globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getLinkingOptions) {
+            var lo = globalThis.__NAV_REF__.getLinkingOptions();
+            if (lo && lo.config) linkingMap = flattenLinking(lo.config, '');
+          }
+        } catch(e) {}
+        // Expo Router auto-linking
+        try {
+          if (Object.keys(linkingMap).length === 0 && globalThis.__expo_router_linking__) {
+            var erl = globalThis.__expo_router_linking__;
+            if (erl.config) linkingMap = flattenLinking(erl.config, '');
+          }
+        } catch(e) {}
+      }
+
+      if (!rootState) return JSON.stringify({ error: 'No navigation state found. Is React Navigation or Expo Router installed?' });
+
+      // Walk the state tree
+      walkState(rootState, null, linkingMap, null, 0);
+
+      return safeStringify({
+        library: library,
+        rn_version: rnVersion,
+        expo_sdk: expoSdk,
+        navigators: navigators,
+        containers_found: containersFound
+      }, 200000);
+
+    } catch(e) {
+      return JSON.stringify({ error: 'Nav graph extraction failed: ' + (e && e.message || String(e)) });
+    }
   }
 
   // Store State
@@ -792,6 +1042,7 @@ export const INJECTED_HELPERS = `
     __v: __HELPERS_VERSION__,
     getTree: getTree,
     getNavState: getNavState,
+    getNavGraph: getNavGraph,
     navigateTo: navigateTo,
     getStoreState: getStoreState,
     getComponentState: getComponentState,
