@@ -116,7 +116,7 @@ function computeCoverage(navigators: NavNavigator[]): number {
   return total === 0 ? 0 : Math.round((visited / total) * 100);
 }
 
-export function buildGraph(raw: RawNavTopology, projectRoot: string): NavGraph {
+export function buildGraph(raw: RawNavTopology, projectRoot: string, commitHash?: string): NavGraph {
   const navigators: NavNavigator[] = [];
 
   for (const rawNav of raw.navigators) {
@@ -134,6 +134,7 @@ export function buildGraph(raw: RawNavTopology, projectRoot: string): NavGraph {
     expo_sdk: raw.expo_sdk,
     created_at: now,
     last_scanned_at: now,
+    scanned_at_commit: commitHash,
     scan_count: 1,
     containers_found: raw.containers_found,
     coverage: computeCoverage(navigators),
@@ -181,6 +182,9 @@ export function mergeGraph(existing: NavGraph, raw: RawNavTopology, projectRoot:
 
   fresh.meta.created_at = existing.meta.created_at;
   fresh.meta.scan_count = existing.meta.scan_count + 1;
+  if (!fresh.meta.scanned_at_commit && existing.meta.scanned_at_commit) {
+    fresh.meta.scanned_at_commit = existing.meta.scanned_at_commit;
+  }
 
   return { graph: fresh, new_routes: newRoutes, removed_routes: removedRoutes };
 }

@@ -101,7 +101,7 @@ function computeCoverage(navigators) {
     }
     return total === 0 ? 0 : Math.round((visited / total) * 100);
 }
-export function buildGraph(raw, projectRoot) {
+export function buildGraph(raw, projectRoot, commitHash) {
     const navigators = [];
     for (const rawNav of raw.navigators) {
         navigators.push(buildNavigator(rawNav, rawNav.active_route_name ?? null));
@@ -116,6 +116,7 @@ export function buildGraph(raw, projectRoot) {
         expo_sdk: raw.expo_sdk,
         created_at: now,
         last_scanned_at: now,
+        scanned_at_commit: commitHash,
         scan_count: 1,
         containers_found: raw.containers_found,
         coverage: computeCoverage(navigators),
@@ -153,6 +154,9 @@ export function mergeGraph(existing, raw, projectRoot) {
     const removedRoutes = existing.all_screens.filter(s => !freshScreenNames.has(s));
     fresh.meta.created_at = existing.meta.created_at;
     fresh.meta.scan_count = existing.meta.scan_count + 1;
+    if (!fresh.meta.scanned_at_commit && existing.meta.scanned_at_commit) {
+        fresh.meta.scanned_at_commit = existing.meta.scanned_at_commit;
+    }
     return { graph: fresh, new_routes: newRoutes, removed_routes: removedRoutes };
 }
 // --- Phase C: Runtime Learning ---

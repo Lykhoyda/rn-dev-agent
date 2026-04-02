@@ -17,6 +17,9 @@ export type {
   StrikeEntry,
   NavRecordInput,
   NavRecordResult,
+  StalenessCheck,
+  PlaybookEntry,
+  SelfHealResult,
 } from './types.js';
 
 export type { MergeResult } from './storage.js';
@@ -39,3 +42,12 @@ export {
   getNavigatorSubtree,
   buildNavigationPlan,
 } from './query.js';
+
+export {
+  checkStaleness,
+  getHeadCommit,
+  getPlaybook,
+  getPlaybookForContext,
+  buildSelfHealAdvice,
+  stampGraphWithCommit,
+} from './self-heal.js';

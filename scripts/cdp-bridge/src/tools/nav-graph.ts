@@ -17,9 +17,15 @@ import {
   getNavigatorSubtree,
   buildNavigationPlan,
 } from '../nav-graph/query.js';
+import {
+  checkStaleness,
+  getHeadCommit,
+  getPlaybook,
+  buildSelfHealAdvice,
+} from '../nav-graph/self-heal.js';
 
 interface NavGraphArgs {
-  action: 'scan' | 'read' | 'navigate' | 'record';
+  action: 'scan' | 'read' | 'navigate' | 'record' | 'staleness' | 'playbook' | 'heal';
   navigator_id?: string;
   screen?: string;
   force?: boolean;
@@ -27,6 +33,7 @@ interface NavGraphArgs {
   method?: NavMethod;
   success?: boolean;
   latency_ms?: number;
+  platform?: 'ios' | 'android';
 }
 
 export function createNavGraphHandler(getClient: () => CDPClient) {
@@ -95,13 +102,16 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
     let removedRoutes: string[] = [];
     const isFirstScan = !existing;
 
+    const commitHash = getHeadCommit(projectRoot) ?? undefined;
+
     if (existing) {
       const merged: MergeResult = mergeGraph(existing, raw, projectRoot);
       graph = merged.graph;
       newRoutes = merged.new_routes;
       removedRoutes = merged.removed_routes;
+      if (commitHash) graph.meta.scanned_at_commit = commitHash;
     } else {
-      graph = buildGraph(raw, projectRoot);
+      graph = buildGraph(raw, projectRoot, commitHash);
     }
 
     let filePath: string | null = null;
@@ -246,10 +256,35 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
     return okResult(result);
   };
 
+  const stalenessHandler = async () => {
+    const projectRoot = findProjectRoot();
+    if (!projectRoot) return failResult('Cannot find project root.');
+    const result = checkStaleness(projectRoot);
+    return result.stale
+      ? warnResult(result, result.reason ?? 'Graph may be stale')
+      : okResult(result);
+  };
+
+  const playbookHandler = async (args: NavGraphArgs) => {
+    const entries = getPlaybook(args.platform ?? undefined);
+    return okResult({ entries, platform: args.platform ?? 'all', count: entries.length });
+  };
+
+  const healHandler = async (args: NavGraphArgs) => {
+    if (!args.screen) return failResult('screen is required for action="heal".');
+    if (!args.method) return failResult('method is required for action="heal".');
+    const platform = args.platform ?? null;
+    const advice = buildSelfHealAdvice(args.screen, args.method, platform);
+    return okResult(advice);
+  };
+
   return async (args: NavGraphArgs) => {
     if (args.action === 'scan') return scanHandler(args);
     if (args.action === 'navigate') return navigateHandler(args);
     if (args.action === 'record') return recordHandler(args);
+    if (args.action === 'staleness') return stalenessHandler();
+    if (args.action === 'playbook') return playbookHandler(args);
+    if (args.action === 'heal') return healHandler(args);
     return readHandler(args);
   };
 }

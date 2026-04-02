@@ -34,6 +34,7 @@ export interface NavGraphMeta {
   expo_sdk: string | null;
   created_at: string;
   last_scanned_at: string;
+  scanned_at_commit?: string;
   scan_count: number;
   containers_found: number;
   coverage: number;
@@ -144,6 +145,33 @@ export interface NavRecordResult {
     cooled_down: boolean;
     cooled_until?: string;
   };
+}
+
+// --- Phase D: Self-Healing + Polish ---
+
+export interface StalenessCheck {
+  stale: boolean;
+  reason?: string;
+  scanned_at_commit?: string;
+  current_commit?: string;
+  nav_files_changed: string[];
+  recommendation: 'ok' | 'rescan_recommended' | 'rescan_required';
+}
+
+export interface PlaybookEntry {
+  context: string;
+  platform: 'ios' | 'android' | 'both';
+  use: string;
+  avoid?: string;
+  reason: string;
+}
+
+export interface SelfHealResult {
+  original_failure: string;
+  recovery_attempted: boolean;
+  recovery_method?: string;
+  recovered: boolean;
+  note: string;
 }
 
 export interface NavGraphScanResult {

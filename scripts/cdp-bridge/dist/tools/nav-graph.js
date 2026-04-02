@@ -1,6 +1,7 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { findProjectRoot, readGraph, writeGraph, buildGraph, mergeGraph, getGraphPath, recordNavigation, } from '../nav-graph/storage.js';
 import { findRouteInGraph, listAllRoutes, getNavigatorSubtree, buildNavigationPlan, } from '../nav-graph/query.js';
+import { checkStaleness, getHeadCommit, getPlaybook, buildSelfHealAdvice, } from '../nav-graph/self-heal.js';
 export function createNavGraphHandler(getClient) {
     const scanHandler = withConnection(getClient, async (args, client) => {
         const projectRoot = findProjectRoot();
@@ -58,14 +59,17 @@ export function createNavGraphHandler(getClient) {
         let newRoutes = [];
         let removedRoutes = [];
         const isFirstScan = !existing;
+        const commitHash = getHeadCommit(projectRoot) ?? undefined;
         if (existing) {
             const merged = mergeGraph(existing, raw, projectRoot);
             graph = merged.graph;
             newRoutes = merged.new_routes;
             removedRoutes = merged.removed_routes;
+            if (commitHash)
+                graph.meta.scanned_at_commit = commitHash;
         }
         else {
-            graph = buildGraph(raw, projectRoot);
+            graph = buildGraph(raw, projectRoot, commitHash);
         }
         let filePath = null;
         try {
@@ -189,6 +193,28 @@ export function createNavGraphHandler(getClient) {
         }
         return okResult(result);
     };
+    const stalenessHandler = async () => {
+        const projectRoot = findProjectRoot();
+        if (!projectRoot)
+            return failResult('Cannot find project root.');
+        const result = checkStaleness(projectRoot);
+        return result.stale
+            ? warnResult(result, result.reason ?? 'Graph may be stale')
+            : okResult(result);
+    };
+    const playbookHandler = async (args) => {
+        const entries = getPlaybook(args.platform ?? undefined);
+        return okResult({ entries, platform: args.platform ?? 'all', count: entries.length });
+    };
+    const healHandler = async (args) => {
+        if (!args.screen)
+            return failResult('screen is required for action="heal".');
+        if (!args.method)
+            return failResult('method is required for action="heal".');
+        const platform = args.platform ?? null;
+        const advice = buildSelfHealAdvice(args.screen, args.method, platform);
+        return okResult(advice);
+    };
     return async (args) => {
         if (args.action === 'scan')
             return scanHandler(args);
@@ -196,6 +222,12 @@ export function createNavGraphHandler(getClient) {
             return navigateHandler(args);
         if (args.action === 'record')
             return recordHandler(args);
+        if (args.action === 'staleness')
+            return stalenessHandler();
+        if (args.action === 'playbook')
+            return playbookHandler(args);
+        if (args.action === 'heal')
+            return healHandler(args);
         return readHandler(args);
     };
 }

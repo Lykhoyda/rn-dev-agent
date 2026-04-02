@@ -100,16 +100,17 @@ trackedTool(
 
 trackedTool(
   'cdp_nav_graph',
-  'Navigation graph tool with 4 actions. scan: extract full topology from running app, persist to .rn-nav-graph.yaml. read: load cached graph (no CDP). navigate: plan multi-step path to target screen with method ranking. record: log navigation outcome to update reliability scores and trigger two-strike cooldown. Use cdp_navigation_state for current route only.',
+  'Navigation graph tool with 7 actions. scan: extract topology from running app. read: load cached graph. navigate: plan path to screen. record: log outcome. staleness: check if graph needs re-scan (git-aware). playbook: get per-platform action recommendations. heal: get self-healing advice after navigation failure.',
   {
-    action: z.enum(['scan', 'read', 'navigate', 'record']).describe('scan = extract topology, read = load cached, navigate = plan path, record = log outcome'),
+    action: z.enum(['scan', 'read', 'navigate', 'record', 'staleness', 'playbook', 'heal']).describe('scan/read/navigate/record/staleness/playbook/heal'),
     navigator_id: z.string().optional().describe('(read) Filter to navigator subtree by id'),
-    screen: z.string().optional().describe('(read/navigate/record) Target screen name'),
-    from: z.string().optional().describe('(navigate) Current screen name. Omit to use active screen from graph'),
-    force: z.boolean().default(false).describe('(scan) Force re-scan even if scanned within 5 minutes'),
-    method: z.enum(['programmatic', 'deep_link', 'ui_interaction']).optional().describe('(record) Navigation method used'),
+    screen: z.string().optional().describe('(read/navigate/record/heal) Target screen name'),
+    from: z.string().optional().describe('(navigate) Current screen. Omit to use active screen'),
+    force: z.boolean().default(false).describe('(scan) Force re-scan'),
+    method: z.enum(['programmatic', 'deep_link', 'ui_interaction']).optional().describe('(record/heal) Navigation method'),
     success: z.boolean().optional().describe('(record) Whether navigation succeeded'),
-    latency_ms: z.number().optional().describe('(record) Time taken for navigation in milliseconds'),
+    latency_ms: z.number().optional().describe('(record) Navigation time in ms'),
+    platform: z.enum(['ios', 'android']).optional().describe('(playbook/heal) Filter by platform'),
   },
   createNavGraphHandler(getClient),
 );
