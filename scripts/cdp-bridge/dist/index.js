@@ -197,8 +197,8 @@ trackedTool('device_pinch', 'Pinch/zoom gesture on the screen. scale < 1 zooms o
     x: z.number().optional().describe('Center X coordinate (default: screen center)'),
     y: z.number().optional().describe('Center Y coordinate (default: screen center)'),
 }, createDevicePinchHandler());
-trackedTool('device_permission', 'Grant, revoke, or reset app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm (Android). Useful for testing permission-gated flows like notifications, camera, location.', {
-    action: z.enum(['grant', 'revoke', 'reset']).describe('grant: allow permission. revoke: deny permission. reset: restore to default (ask-again state).'),
+trackedTool('device_permission', 'Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm/dumpsys (Android). query returns current permission state (Android only — iOS returns "unknown"). Use before testing permission-gated flows to ensure correct starting state.', {
+    action: z.enum(['grant', 'revoke', 'reset', 'query']).describe('grant: allow. revoke: deny. reset: restore default. query: check current state (Android: granted/denied/not_declared, iOS: unknown).'),
     permission: z.string().describe('Permission key: notifications, camera, microphone, location, location-always, photos, contacts, calendar, reminders, storage, all'),
     appId: z.string().describe('App bundle ID (e.g. "com.example.app")'),
     platform: z.string().optional().describe('Force platform: "ios" or "android". Auto-detected if omitted.'),

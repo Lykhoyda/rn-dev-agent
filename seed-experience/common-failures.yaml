@@ -138,6 +138,22 @@ failure_families:
       Manual coordinate-based login is unreliable (keyboard covers buttons).
       Maestro subflows handle this in seconds. See GH #10.
 
+  - id: FF_PERMISSION_ALREADY_GRANTED
+    name: Permission already granted — flow skips prompt
+    symptoms:
+      - permission-gated flow completes instantly
+      - prompt screen not shown — app navigates past it
+      - recording captures no useful content
+    recovery:
+      - query permission state with device_permission(action=query)
+      - revoke the permission before starting the flow
+      - restart the app if needed after revoke
+      - on iOS, use device_permission(action=reset) since query is not supported
+    notes: >
+      On non-fresh devices, permissions from previous sessions persist.
+      Always query (Android) or reset (iOS) before testing opt-in flows.
+      See GH #11.
+
   - id: FF_DEBUGGER_PAUSED
     name: Debugger paused — JS execution halted
     symptoms:

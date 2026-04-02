@@ -341,6 +341,49 @@ cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 
 ---
 
+## Permission Pre-flight for Permission-Gated Flows (GH #11)
+
+Before testing flows that depend on specific permission states (notification
+opt-in, camera access, location prompts), verify and set the correct state.
+
+### Query (Android only)
+
+```
+device_permission(action="query", permission="notifications", appId="com.example.app")
+→ { state: "granted" | "denied" | "not_declared" }
+```
+
+Query all permissions at once:
+```
+device_permission(action="query", permission="all", appId="com.example.app")
+→ { granted: ["notifications", "camera"], denied: ["location"] }
+```
+
+### Set Required State
+
+| Need | Currently | Action |
+|------|-----------|--------|
+| Undetermined (fresh prompt) | granted | `action="revoke"` + app restart |
+| Undetermined (fresh prompt) | denied | `action="reset"` |
+| Granted | denied | `action="grant"` |
+| Denied | granted | `action="revoke"` |
+
+### Platform Differences
+
+| Platform | Query | Grant | Revoke | Reset |
+|----------|-------|-------|--------|-------|
+| Android | `dumpsys` — returns granted/denied | `pm grant` | `pm revoke` | `pm reset-permissions` |
+| iOS Sim | **Not supported** (returns "unknown") | `simctl privacy grant` | `simctl privacy revoke` | `simctl privacy reset` |
+
+### iOS Workaround
+
+iOS Simulator cannot query permission state. Options:
+1. Use `action="reset"` before testing to ensure ask-again state
+2. Erase simulator for fully clean state (nuclear option)
+3. Accept the limitation and retry if the flow skips
+
+---
+
 ## Dev Menu: Use CDP, Not the Visual Menu
 
 NEVER open the visual dev menu during automated testing — it overlays the

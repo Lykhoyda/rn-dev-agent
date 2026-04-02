@@ -95,11 +95,87 @@ async function androidPermission(action, permission, appId) {
         return failResult(`adb pm ${adbAction} failed: ${msg}`);
     }
 }
+async function androidQueryPermission(permission, appId) {
+    if (permission === 'all') {
+        try {
+            const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+            if (stdout.includes('Unable to find package')) {
+                return failResult(`Package "${appId}" not installed on device`);
+            }
+            const grantedPerms = [];
+            const deniedPerms = [];
+            for (const [key, androidKey] of Object.entries(ANDROID_PERMISSIONS)) {
+                const re = new RegExp(`${androidKey.replace(/\./g, '\\.')}:.*granted=(true|false)`, 'i');
+                const match = stdout.match(re);
+                if (match) {
+                    (match[1] === 'true' ? grantedPerms : deniedPerms).push(key);
+                }
+            }
+            return okResult({ platform: 'android', appId, granted: grantedPerms, denied: deniedPerms });
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            return failResult(`adb dumpsys failed: ${msg}`);
+        }
+    }
+    const androidKey = ANDROID_PERMISSIONS[permission];
+    if (!androidKey) {
+        const valid = Object.keys(ANDROID_PERMISSIONS).join(', ');
+        return failResult(`Unknown Android permission: "${permission}". Valid: ${valid}`);
+    }
+    try {
+        const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+        if (stdout.includes('Unable to find package')) {
+            return failResult(`Package "${appId}" not installed on device`);
+        }
+        const re = new RegExp(`${androidKey.replace(/\./g, '\\.')}:.*granted=(true|false)`, 'i');
+        const match = stdout.match(re);
+        if (match) {
+            return okResult({
+                platform: 'android',
+                permission,
+                android_permission: androidKey,
+                appId,
+                state: match[1] === 'true' ? 'granted' : 'denied',
+            });
+        }
+        return okResult({
+            platform: 'android',
+            permission,
+            android_permission: androidKey,
+            appId,
+            state: 'not_declared',
+            note: 'Permission not found in app manifest. The app may not declare this permission.',
+        });
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return failResult(`adb dumpsys failed: ${msg}`);
+    }
+}
+async function iosQueryPermission(permission, appId) {
+    if (permission !== 'all' && !IOS_PERMISSIONS[permission]) {
+        const valid = Object.keys(IOS_PERMISSIONS).join(', ');
+        return failResult(`Unknown iOS permission: "${permission}". Valid: ${valid}`);
+    }
+    return okResult({
+        platform: 'ios',
+        permission,
+        appId,
+        state: 'unknown',
+        note: 'iOS Simulator does not support permission state queries via CLI. Use device_permission action=reset to restore ask-again state.',
+    });
+}
 export function createDevicePermissionHandler() {
     return async (args) => {
         const platform = args.platform || await detectPlatform();
         if (!platform)
             return failResult('No iOS simulator or Android device detected');
+        if (args.action === 'query') {
+            return platform === 'ios'
+                ? iosQueryPermission(args.permission, args.appId)
+                : androidQueryPermission(args.permission, args.appId);
+        }
         if (platform === 'ios')
             return iosPermission(args.action, args.permission, args.appId);
         return androidPermission(args.action, args.permission, args.appId);

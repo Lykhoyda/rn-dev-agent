@@ -162,6 +162,46 @@ project's own Maestro subflows instead of unreliable manual taps.
 4. If the route is a main app screen (home, dashboard, tabs, etc.),
    skip this step — the user is already authenticated.
 
+### Step 2.6: Permission Pre-flight Check (GH #11)
+
+If the feature under test involves **permission-gated flows** (notifications,
+camera, location, etc.), check and set the required permission state BEFORE
+navigating to the screen.
+
+1. **Identify required permission state** from the test plan:
+   - Testing opt-in flow → permission must be `denied` or `not_declared`
+   - Testing granted behavior → permission must be `granted`
+
+2. **Query current state** (Android — iOS returns "unknown"):
+   ```
+   device_permission(action="query", permission="notifications", appId="<bundle-id>")
+   ```
+
+3. **Fix state if wrong**:
+   - Need undetermined/denied but currently granted:
+     ```
+     device_permission(action="revoke", permission="notifications", appId="<bundle-id>")
+     ```
+   - Need granted but currently denied:
+     ```
+     device_permission(action="grant", permission="notifications", appId="<bundle-id>")
+     ```
+   - **IMPORTANT**: Revoking a granted permission **kills the app process**
+     on both iOS and Android. After revoke, you MUST relaunch the app
+     (e.g., deep link or `device_find` to re-open). Then call `cdp_status`
+     to reconnect CDP before proceeding.
+
+4. **iOS limitation**: `device_permission query` returns `"unknown"` on iOS.
+   Use `device_permission action=reset` to restore ask-again state.
+   Do NOT erase the simulator — it wipes Dev Client, auth state, and
+   Maestro setup.
+
+5. **Android `reset` warning**: `action=reset` on Android resets ALL
+   runtime permissions for the app, not just the one specified. Use
+   `action=revoke` for a single permission instead.
+
+5. **Skip** this step if the feature does not involve permissions.
+
 ### Step 3: Navigate to Start
 Use deep links when possible (fastest, most deterministic):
 ```bash
