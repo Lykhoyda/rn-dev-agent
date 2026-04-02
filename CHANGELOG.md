@@ -4,6 +4,36 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] — 2026-04-02
+
+### Added
+- **Experience Engine (Phases A-D)** — self-improving failure pattern learning system:
+  - **Phase B: Classification + Retrieval** — normalized error signatures, failure family matching, three-layer experience cascade (seed → project → user), environment fingerprint filtering
+  - **Phase B: Ghost Recovery** — auto-recovers FF_STALE_CDP transparently (depth-1 circuit breaker, 30s cooldown, 15s timeout)
+  - **Phase C: Compaction + Promotion** — telemetry scanner, candidate generator, auto-promotes ghost recoveries, stale heuristic decay, `rn-agent-compact` command
+  - **Phase D: Sharing + Polish** — anonymized export/import, experience health dashboard, `rn-agent-export`, `rn-agent-import`, `rn-agent-health` commands
+- **Auto-handle Dev Client picker** (#9) — `cdp_status` detects and dismisses the Expo Dev Client server picker via `device_find`, auto-retries CDP connection after dismissal
+- **`FF_DEV_CLIENT_PICKER`** failure family in seed experience
+
+### Changed
+- MCP tool count: 25 (unchanged). Command count: 6 → 10 (4 new experience engine commands).
+- `cdp_status` refactored: extracted `buildStatusResult()` helper, picker detection in catch block
+- `record_proof.sh` standardized video output (#14): always MP4 with `-movflags +faststart`, `ffprobe` validation before copy, graceful fallback preserving correct extension
+- All command/skill `.mov` references updated to `.mp4`
+- Zod schemas tightened: `count`, `holdMs`, `durationMs`, `amount`, `scale` now have min/max bounds
+
+### Fixed
+- **ENAMETOOLONG on marketplace install** (#6) — changed to local source `"./"` in marketplace.json
+- **Shell globbing vulnerability** in `androidClipboardFill` — escape `*?[]{}` chars
+- **Missing `-s` device serial** in adb calls — added `getAdbSerial()` helper
+- **Platform detection gap** — `isAndroidSession()` falls back to `ANDROID_SERIAL` env
+- **Misleading `disableDevMenu` fallback** — removed unrelated `setIsDebuggingRemotely` call
+- **`ANDROID_SDK_ROOT` not honored** in run.sh — maps to `ANDROID_HOME`
+- **Ineffective `ANDROID_SERIAL` export** — persisted to file for cross-process access
+- **Inexact package matching** in post-edit health check — exact match with `grep -cxF`
+- **Video corruption** (#14) — record to temp, convert on stop, validate with ffprobe
+- **Double `.mp4.mp4` extension** — strip any extension before appending .mp4
+
 ## [0.8.0] — 2026-03-30
 
 ### Added
