@@ -20,6 +20,7 @@ export type {
   StalenessCheck,
   PlaybookEntry,
   SelfHealResult,
+  GoResult,
 } from './types.js';
 
 export type { MergeResult } from './storage.js';

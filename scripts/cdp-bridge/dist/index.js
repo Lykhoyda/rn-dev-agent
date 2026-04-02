@@ -52,8 +52,8 @@ trackedTool('cdp_component_tree', 'Get React component tree. Returns components 
     depth: z.number().int().min(1).max(12).default(4).describe('Max depth (default 4, max 12)'),
 }, createComponentTreeHandler(getClient));
 trackedTool('cdp_navigation_state', 'Get current navigation state: active route, params, stack history, nested navigators, active tab. Works with React Navigation and Expo Router.', {}, createNavigationStateHandler(getClient));
-trackedTool('cdp_nav_graph', 'Navigation graph tool with 7 actions. scan: extract topology from running app. read: load cached graph. navigate: plan path to screen. record: log outcome. staleness: check if graph needs re-scan (git-aware). playbook: get per-platform action recommendations. heal: get self-healing advice after navigation failure.', {
-    action: z.enum(['scan', 'read', 'navigate', 'record', 'staleness', 'playbook', 'heal']).describe('scan/read/navigate/record/staleness/playbook/heal'),
+trackedTool('cdp_nav_graph', 'Navigation graph tool. PRIMARY: action="go" — navigates to any screen in ONE call (auto-scans if stale, plans path, executes via __NAV_REF__, verifies arrival, records outcome, returns heal advice on failure). Other actions for manual control: scan, read, navigate (plan only), record, staleness, playbook, heal.', {
+    action: z.enum(['go', 'scan', 'read', 'navigate', 'record', 'staleness', 'playbook', 'heal']).describe('go = navigate in one call (recommended). scan/read/navigate/record/staleness/playbook/heal for manual control'),
     navigator_id: z.string().optional().describe('(read) Filter to navigator subtree by id'),
     screen: z.string().optional().describe('(read/navigate/record/heal) Target screen name'),
     from: z.string().optional().describe('(navigate) Current screen. Omit to use active screen'),
@@ -61,7 +61,8 @@ trackedTool('cdp_nav_graph', 'Navigation graph tool with 7 actions. scan: extrac
     method: z.enum(['programmatic', 'deep_link', 'ui_interaction']).optional().describe('(record/heal) Navigation method'),
     success: z.boolean().optional().describe('(record) Whether navigation succeeded'),
     latency_ms: z.number().optional().describe('(record) Navigation time in ms'),
-    platform: z.enum(['ios', 'android']).optional().describe('(playbook/heal) Filter by platform'),
+    platform: z.enum(['ios', 'android']).optional().describe('(go/playbook/heal) Platform for playbook tips and heal advice'),
+    params: z.record(z.unknown()).optional().describe('(go) Screen params to pass (e.g. { id: "1" })'),
 }, createNavGraphHandler(getClient));
 trackedTool('cdp_error_log', 'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — use bash logcat/simctl log instead.', {
     clear: z.boolean().default(false).describe('Clear all captured errors instead of reading them'),

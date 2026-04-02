@@ -1,6 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
-import type { RawNavTopology, NavGraphScanResult, NavGraph, NavMethod } from '../nav-graph/types.js';
+import type { RawNavTopology, NavGraphScanResult, NavGraph, NavMethod, GoResult } from '../nav-graph/types.js';
 import {
   findProjectRoot,
   readGraph,
@@ -25,7 +25,7 @@ import {
 } from '../nav-graph/self-heal.js';
 
 interface NavGraphArgs {
-  action: 'scan' | 'read' | 'navigate' | 'record' | 'staleness' | 'playbook' | 'heal';
+  action: 'scan' | 'read' | 'navigate' | 'record' | 'staleness' | 'playbook' | 'heal' | 'go';
   navigator_id?: string;
   screen?: string;
   force?: boolean;
@@ -34,6 +34,7 @@ interface NavGraphArgs {
   success?: boolean;
   latency_ms?: number;
   platform?: 'ios' | 'android';
+  params?: Record<string, unknown>;
 }
 
 export function createNavGraphHandler(getClient: () => CDPClient) {
@@ -278,7 +279,170 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
     return okResult(advice);
   };
 
+  const goHandler = withConnection(getClient, async (args: NavGraphArgs, client) => {
+    if (!args.screen) return failResult('screen is required for action="go".');
+
+    const startTime = Date.now();
+    const result: GoResult = {
+      arrived: false,
+      screen: args.screen,
+      from: null,
+      method_used: 'none',
+      steps_executed: 0,
+      latency_ms: 0,
+      nav_state_after: null,
+      graph_scanned: false,
+    };
+
+    const projectRoot = findProjectRoot();
+
+    // 1. Staleness check + auto-rescan
+    if (projectRoot) {
+      const staleness = checkStaleness(projectRoot);
+      result.staleness = staleness;
+      if (staleness.recommendation === 'rescan_required' || staleness.recommendation === 'rescan_recommended' || !readGraph(projectRoot)) {
+        try {
+          const expr = client.bridgeDetected
+            ? '__RN_DEV_BRIDGE__.getNavGraph ? __RN_DEV_BRIDGE__.getNavGraph() : __RN_AGENT.getNavGraph()'
+            : '__RN_AGENT.getNavGraph()';
+          const scanResult = await client.evaluate(expr);
+          if (scanResult.value && typeof scanResult.value === 'string') {
+            const raw = JSON.parse(scanResult.value) as RawNavTopology & { error?: string };
+            if (!raw.error && raw.navigators?.length > 0) {
+              const existing = readGraph(projectRoot);
+              const commitHash = getHeadCommit(projectRoot) ?? undefined;
+              if (existing) {
+                const merged = mergeGraph(existing, raw, projectRoot);
+                if (commitHash) merged.graph.meta.scanned_at_commit = commitHash;
+                writeGraph(projectRoot, merged.graph);
+              } else {
+                writeGraph(projectRoot, buildGraph(raw, projectRoot, commitHash));
+              }
+              result.graph_scanned = true;
+            }
+          }
+        } catch { /* scan failed, continue with cached graph */ }
+      }
+    }
+
+    // 2. Playbook tips
+    if (args.platform) {
+      result.playbook_tips = getPlaybook(args.platform);
+    }
+
+    // 3. Build plan
+    if (projectRoot) {
+      const graph = readGraph(projectRoot);
+      if (graph) {
+        result.plan = buildNavigationPlan(graph, args.screen, args.from ?? undefined) ?? undefined;
+        result.from = result.plan?.from ?? null;
+      }
+    }
+
+    // 4. Execute navigation — single CDP evaluate call
+    const paramsArg = args.params ? JSON.stringify(args.params) : 'undefined';
+    const navExpr = `
+      (function() {
+        var start = Date.now();
+        var navResult = __RN_AGENT.navigateTo(${JSON.stringify(args.screen)}, ${paramsArg});
+        var parsed = JSON.parse(navResult);
+        if (parsed.__agent_error) return JSON.stringify({ error: parsed.__agent_error, latency_ms: Date.now() - start });
+
+        var stateResult = __RN_AGENT.getNavState();
+        var state = JSON.parse(stateResult);
+
+        function getDeepestRoute(s) {
+          if (!s) return null;
+          if (s.nested) return getDeepestRoute(s.nested);
+          return s.routeName || null;
+        }
+        var currentScreen = getDeepestRoute(state);
+        var arrived = currentScreen === ${JSON.stringify(args.screen)};
+
+        return JSON.stringify({
+          arrived: arrived,
+          current_screen: currentScreen,
+          method: parsed.method,
+          path: parsed.path,
+          latency_ms: Date.now() - start,
+          nav_state: state
+        });
+      })()
+    `;
+
+    const navResult = await client.evaluate(navExpr);
+
+    if (navResult.error) {
+      result.error = navResult.error;
+      result.method_used = 'programmatic_failed';
+      // 5. Auto-heal on failure
+      result.heal_advice = buildSelfHealAdvice(args.screen, 'programmatic', args.platform ?? null);
+      if (projectRoot) {
+        recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: false });
+      }
+      result.latency_ms = Date.now() - startTime;
+      return warnResult(result, `Navigation failed: ${navResult.error}. See heal_advice for recovery steps.`);
+    }
+
+    if (typeof navResult.value === 'string') {
+      try {
+        const parsed = JSON.parse(navResult.value) as {
+          arrived?: boolean;
+          current_screen?: string;
+          method?: string;
+          path?: string[];
+          latency_ms?: number;
+          nav_state?: unknown;
+          error?: string;
+        };
+
+        if (parsed.error) {
+          result.error = parsed.error;
+          result.method_used = 'programmatic_failed';
+          result.heal_advice = buildSelfHealAdvice(args.screen, 'programmatic', args.platform ?? null);
+          if (projectRoot) {
+            recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: false });
+          }
+          result.latency_ms = Date.now() - startTime;
+          return warnResult(result, `Navigation failed: ${parsed.error}. See heal_advice.`);
+        }
+
+        result.arrived = parsed.arrived ?? false;
+        result.method_used = parsed.method ?? 'unknown';
+        result.steps_executed = parsed.path?.length ?? 1;
+        result.nav_state_after = parsed.nav_state;
+        result.latency_ms = Date.now() - startTime;
+
+        // 6. Record outcome
+        if (projectRoot) {
+          recordNavigation(projectRoot, {
+            screen: args.screen,
+            method: 'programmatic',
+            success: result.arrived,
+            latency_ms: parsed.latency_ms,
+          });
+        }
+
+        if (!result.arrived) {
+          result.heal_advice = buildSelfHealAdvice(args.screen, 'programmatic', args.platform ?? null);
+          return warnResult(result, `Navigated but landed on "${parsed.current_screen}" instead of "${args.screen}". See heal_advice.`);
+        }
+
+        return okResult(result);
+      } catch {
+        result.error = 'Failed to parse navigation result';
+        result.latency_ms = Date.now() - startTime;
+        return failResult(result.error);
+      }
+    }
+
+    result.error = 'Unexpected response from navigateTo';
+    result.latency_ms = Date.now() - startTime;
+    return failResult(result.error);
+  });
+
   return async (args: NavGraphArgs) => {
+    if (args.action === 'go') return goHandler(args);
     if (args.action === 'scan') return scanHandler(args);
     if (args.action === 'navigate') return navigateHandler(args);
     if (args.action === 'record') return recordHandler(args);

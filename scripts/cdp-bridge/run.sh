@@ -54,14 +54,6 @@ fi
 
 trap 'exit 0' SIGINT
 
-# SIGUSR1 = hot-reload: kill node child → restart loop picks it up
-# Usage: kill -USR1 $(cat /tmp/rn-dev-agent-cdp-bridge.pid)
-NODE_PID=0
-trap 'if [ "$NODE_PID" -ne 0 ]; then echo "CDP bridge: SIGUSR1 received, restarting..." >&2; kill "$NODE_PID" 2>/dev/null; fi' USR1
-
-# Write wrapper PID so other tools can send SIGUSR1
-echo $$ > "${TMPDIR:-/tmp}/rn-dev-agent-cdp-bridge.pid"
-
 MAX_RESTARTS=5
 CRASH_WINDOW_SECS=60
 STABLE_RUN_SECS=30
@@ -72,24 +64,14 @@ window_start=$(date +%s)
 while true; do
   run_start=$(date +%s)
 
-  node "$NODE_SCRIPT" &
-  NODE_PID=$!
-  wait "$NODE_PID"
-  exit_code=$?
-  NODE_PID=0
+  exit_code=0
+  node "$NODE_SCRIPT" || exit_code=$?
 
   if [ "$exit_code" -eq 0 ]; then
     exit 0
   fi
 
   run_duration=$(( $(date +%s) - run_start ))
-
-  # SIGUSR1 restarts don't count toward crash budget
-  if [ "$exit_code" -eq 143 ] || [ "$exit_code" -eq 130 ]; then
-    echo "CDP bridge: signal restart (exit $exit_code), reloading in 1s..." >&2
-    sleep 1
-    continue
-  fi
 
   if [ "$run_duration" -ge "$STABLE_RUN_SECS" ]; then
     crash_count=0
@@ -106,7 +88,6 @@ while true; do
 
   if [ "$crash_count" -gt "$MAX_RESTARTS" ]; then
     echo "CDP bridge: exceeded $MAX_RESTARTS restarts within ${CRASH_WINDOW_SECS}s — giving up" >&2
-    rm -f "${TMPDIR:-/tmp}/rn-dev-agent-cdp-bridge.pid"
     exit 1
   fi
 

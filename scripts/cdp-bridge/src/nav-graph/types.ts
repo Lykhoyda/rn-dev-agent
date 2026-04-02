@@ -174,6 +174,24 @@ export interface SelfHealResult {
   note: string;
 }
 
+// --- Phase E: Atomic Go ---
+
+export interface GoResult {
+  arrived: boolean;
+  screen: string;
+  from: string | null;
+  method_used: string;
+  steps_executed: number;
+  latency_ms: number;
+  nav_state_after: unknown;
+  graph_scanned: boolean;
+  staleness?: StalenessCheck;
+  playbook_tips?: PlaybookEntry[];
+  plan?: NavigationPlan;
+  heal_advice?: SelfHealResult;
+  error?: string;
+}
+
 export interface NavGraphScanResult {
   graph: NavGraph;
   file_path: string | null;
