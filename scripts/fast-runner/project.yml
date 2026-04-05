@@ -1,0 +1,40 @@
+name: FastRunner
+options:
+  bundleIdPrefix: dev.rndevagent
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    SDKROOT: iphoneos
+    SUPPORTED_PLATFORMS: "iphonesimulator iphoneos"
+    SUPPORTS_MACCATALYST: NO
+
+packages:
+  FlyingFox:
+    url: https://github.com/swhitty/FlyingFox
+    from: "0.22.0"
+
+targets:
+  FastRunnerApp:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/FastRunnerApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rndevagent.fastrunner
+        INFOPLIST_FILE: ""
+        GENERATE_INFOPLIST_FILE: YES
+
+  FastRunnerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Sources/FastRunnerUITests
+    dependencies:
+      - target: FastRunnerApp
+      - package: FlyingFox
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rndevagent.fastrunner.uitests

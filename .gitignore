@@ -14,3 +14,4 @@ drivers/
 test-app
 docs
 packages
+scripts/fast-runner/build/
