@@ -3,7 +3,10 @@ import Foundation
 struct PointerEventPath {
 
     static func pathForTouch(at point: CGPoint, offset: TimeInterval = 0) -> Self {
-        let alloced = objc_lookUpClass("XCPointerEventPath")!.alloc() as! NSObject
+        guard let clazz = objc_lookUpClass("XCPointerEventPath") else {
+            fatalError("XCPointerEventPath not found — Xcode version may be incompatible")
+        }
+        let alloced = clazz.alloc() as! NSObject
         let selector = NSSelectorFromString("initForTouchAtPoint:offset:")
         let imp = alloced.method(for: selector)
         typealias Method = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> NSObject
@@ -13,7 +16,10 @@ struct PointerEventPath {
     }
 
     static func pathForTextInput(offset: TimeInterval = 0) -> Self {
-        let alloced = objc_lookUpClass("XCPointerEventPath")!.alloc() as! NSObject
+        guard let clazz = objc_lookUpClass("XCPointerEventPath") else {
+            fatalError("XCPointerEventPath not found — Xcode version may be incompatible")
+        }
+        let alloced = clazz.alloc() as! NSObject
         let selector = NSSelectorFromString("initForTextInput")
         let imp = alloced.method(for: selector)
         typealias Method = @convention(c) (NSObject, Selector) -> NSObject

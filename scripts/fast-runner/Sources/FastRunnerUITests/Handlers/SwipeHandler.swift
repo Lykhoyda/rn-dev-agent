@@ -22,7 +22,7 @@ struct SwipeHandler: HTTPHandler {
             end: CGPoint(x: body.x2, y: body.y2),
             duration: duration
         )
-        try await RunnerDaemonProxy().synthesize(eventRecord: eventRecord)
+        try await try RunnerDaemonProxy().synthesize(eventRecord: eventRecord)
 
         let response = """
         {"ok":true}

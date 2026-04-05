@@ -18,7 +18,7 @@ struct TapHandler: HTTPHandler {
             at: CGPoint(x: body.x, y: body.y),
             touchUpAfter: body.duration
         )
-        try await RunnerDaemonProxy().synthesize(eventRecord: eventRecord)
+        try await try RunnerDaemonProxy().synthesize(eventRecord: eventRecord)
 
         let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
         let response = """

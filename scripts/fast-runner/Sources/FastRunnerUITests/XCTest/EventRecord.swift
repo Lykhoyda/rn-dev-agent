@@ -7,13 +7,15 @@ final class EventRecord: NSObject {
     static let defaultTapDuration = 0.1
 
     init(orientation: UIInterfaceOrientation = .portrait) {
-        eventRecord = objc_lookUpClass("XCSynthesizedEventRecord")?.alloc()
-            .perform(
-                NSSelectorFromString("initWithName:interfaceOrientation:"),
-                with: "Single-Finger Touch Action",
-                with: orientation
-            )
-            .takeUnretainedValue() as! NSObject
+        guard let clazz = objc_lookUpClass("XCSynthesizedEventRecord") else {
+            fatalError("XCSynthesizedEventRecord not found — Xcode version may be incompatible")
+        }
+        let alloced = clazz.alloc() as! NSObject
+        let selector = NSSelectorFromString("initWithName:interfaceOrientation:")
+        let imp = alloced.method(for: selector)
+        typealias Method = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
+        let method = unsafeBitCast(imp, to: Method.self)
+        eventRecord = method(alloced, selector, "Single-Finger Touch Action" as NSString, orientation.rawValue)
     }
 
     @discardableResult
@@ -27,9 +29,8 @@ final class EventRecord: NSObject {
     @discardableResult
     func addSwipeEvent(start: CGPoint, end: CGPoint, duration: TimeInterval) -> Self {
         var path = PointerEventPath.pathForTouch(at: start)
-        path.offset += Self.defaultTapDuration
-        path.moveTo(point: end)
         path.offset += duration
+        path.moveTo(point: end)
         path.liftUp()
         return add(path)
     }

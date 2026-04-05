@@ -21,8 +21,7 @@ final class FastRunnerTests: XCTestCase {
         await server.appendRoute("POST /screenshot", to: ScreenshotHandler())
         await server.appendRoute("POST /dismissKeyboard", to: DismissKeyboardHandler())
 
-        // Signal ready with port
-        let actualPort = port == 0 ? port : port
+        // Signal ready (port 0 not supported — use fixed port)
         print("FASTXCT_READY {\"port\":\(port)}")
         fflush(stdout)
 

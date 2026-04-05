@@ -3,16 +3,16 @@ import FlyingFox
 import XCTest
 
 struct DismissKeyboardHandler: HTTPHandler {
-    
     @MainActor
     func handleRequest(_ request: HTTPRequest) async throws -> HTTPResponse {
-        // Maestro's micro-swipe trick: 3% vertical swipe, 50ms duration
-        // Triggers iOS keyboard interactive dismissal
-        let app = XCUIApplication()
-        let frame = app.frame
-        let centerX = frame.midX
-        let centerY = frame.midY
-        let swipeEndY = centerY - (frame.height * 0.03)
+        // Use screen size — works regardless of which app is foreground
+        let screenSize = XCUIScreen.main.screenshot().image.size
+
+        // Maestro's micro-swipe trick: swipe DOWN ~3% from center
+        // iOS dismisses keyboard on downward scroll gesture
+        let centerX = screenSize.width / 2
+        let centerY = screenSize.height / 2
+        let swipeEndY = centerY + (screenSize.height * 0.03)
 
         let eventRecord = EventRecord()
         eventRecord.addSwipeEvent(
@@ -22,9 +22,6 @@ struct DismissKeyboardHandler: HTTPHandler {
         )
         try await RunnerDaemonProxy().synthesize(eventRecord: eventRecord)
 
-        let response = """
-        {"ok":true}
-        """
-        return HTTPResponse(statusCode: .ok, body: Data(response.utf8))
+        return HTTPResponse(statusCode: .ok, body: Data("{\"ok\":true}".utf8))
     }
 }

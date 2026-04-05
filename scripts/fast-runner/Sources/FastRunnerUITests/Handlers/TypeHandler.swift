@@ -15,7 +15,7 @@ struct TypeHandler: HTTPHandler {
             return HTTPResponse(statusCode: .badRequest, body: Data("{\"ok\":false,\"error\":\"empty text\"}".utf8))
         }
 
-        let proxy = RunnerDaemonProxy()
+        let proxy = try RunnerDaemonProxy()
 
         // First character slow (autocorrect safety) — Maestro's proven pattern
         let firstChar = String(text.prefix(1))
