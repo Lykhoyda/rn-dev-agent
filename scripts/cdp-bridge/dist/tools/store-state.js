@@ -5,7 +5,7 @@ export function createStoreStateHandler(getClient) {
         const typeArg = args.storeType ? JSON.stringify(args.storeType) : 'undefined';
         const agentExpr = `__RN_AGENT.getStoreState(${pathArg}, ${typeArg})`;
         const expression = client.bridgeDetected
-            ? `(function() { try { var r = __RN_DEV_BRIDGE__.getStoreState(${pathArg}, ${typeArg}); var p = JSON.parse(r); if (p && p.__agent_error) return ${agentExpr}; return r; } catch(e) { return ${agentExpr}; } })()`
+            ? `(function() { try { var r = __RN_DEV_BRIDGE__.getStoreState(${pathArg}, ${typeArg}); var p = JSON.parse(r); if (p && (p.__agent_error || p.error)) return ${agentExpr}; return r; } catch(e) { return ${agentExpr}; } })()`
             : agentExpr;
         const result = await client.evaluate(expression);
         if (result.error) {

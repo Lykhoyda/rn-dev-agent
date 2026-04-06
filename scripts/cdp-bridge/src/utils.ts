@@ -1,6 +1,7 @@
 import type { CDPClient } from './cdp-client.js';
 import type { ResultEnvelope, EvaluateResult } from './types.js';
 import { hasActiveSession } from './agent-device-wrapper.js';
+import { handleDevClientPicker } from './tools/dev-client-picker.js';
 
 export type ToolResult = {
   content: Array<{ type: 'text'; text: string }>;
@@ -61,8 +62,38 @@ export function withConnection<T>(
         while (!client.helpersInjected && Date.now() < helperDeadline) {
           await new Promise(r => setTimeout(r, 300));
         }
+        // D503: If helpers still not ready, Dev Client picker may be blocking React
         if (!client.helpersInjected) {
-          return failResult('Connected but helpers not injected. App may still be loading — retry in a few seconds.');
+          const pickerResult = await handleDevClientPicker();
+          if (pickerResult?.dismissed) {
+            console.error('CDP: Dev Client picker dismissed, waiting for helpers...');
+            const extDeadline = Date.now() + 15_000;
+            while (!client.helpersInjected && Date.now() < extDeadline) {
+              await new Promise(r => setTimeout(r, 500));
+            }
+          }
+          if (!client.helpersInjected) {
+            return failResult('Connected but helpers not injected. App may still be loading — retry in a few seconds.');
+          }
+        }
+      }
+      // D502: Proactive freshness check — helpers flag may be true but globals gone
+      // after bridgeless navigation. Cheaper than failing + softReconnect (D490).
+      if (requireHelpers && client.helpersInjected) {
+        try {
+          const vCheck = await Promise.race([
+            client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v'),
+            new Promise<EvaluateResult>((res) => setTimeout(() => res({ error: 'timeout' }), 2000)),
+          ]);
+          if (vCheck.error || typeof vCheck.value !== 'number') {
+            console.error('CDP: helpers stale (globals missing), re-injecting...');
+            const reinjected = await client.reinjectHelpers();
+            if (!reinjected) {
+              return failResult('Helpers became stale and re-injection failed. Try cdp_reload.');
+            }
+          }
+        } catch {
+          // Probe failed — let handler attempt proceed and use existing error paths
         }
       }
       return await handler(args, client);

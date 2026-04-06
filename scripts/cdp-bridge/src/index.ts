@@ -33,6 +33,10 @@ import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
 import { createDeviceBatchHandler } from './tools/device-batch.js';
 import { handleAutoLogin } from './tools/auto-login.js';
+import { createProofStepHandler } from './tools/proof-step.js';
+import { createMaestroRunHandler } from './tools/maestro-run.js';
+import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
+import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
 import { stopFastRunner } from './fast-runner-session.js';
 import { instrumentTool, pruneOldTelemetry } from './experience/index.js';
 
@@ -429,6 +433,67 @@ trackedTool(
     if (result.reason.includes('not on an auth screen')) return okResult(result);
     return warnResult(result, result.reason);
   }),
+);
+
+trackedTool(
+  'proof_step',
+  'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in Phase 8 proof flows to reduce tool-call overhead.',
+  {
+    screen: z.string().optional().describe('Screen to navigate to (omit to stay on current screen)'),
+    params: z.record(z.unknown()).optional().describe('Navigation params (e.g. { id: "1" })'),
+    waitMs: z.number().int().min(0).max(10000).default(1500).describe('Settlement wait in ms (default 1500)'),
+    verifyText: z.string().optional().describe('Visible text to verify on screen (uses device_find)'),
+    verifyTestID: z.string().optional().describe('testID to verify in component tree (uses cdp_component_tree)'),
+    screenshotPath: z.string().optional().describe('Output path for screenshot (default: auto-generated)'),
+    label: z.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")'),
+  },
+  createProofStepHandler(getClient),
+);
+
+trackedTool(
+  'maestro_run',
+  'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP — works even when app is crashed or on native screens.',
+  {
+    flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
+    inlineYaml: z.string().optional().describe('Inline YAML flow content (written to /tmp and executed)'),
+    platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
+    appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
+    timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
+  },
+  createMaestroRunHandler(),
+);
+
+trackedTool(
+  'maestro_generate',
+  'Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/<name>.yaml in the project root. Use after Phase 5.5 verification to create regression tests.',
+  {
+    name: z.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
+    steps: z.array(z.object({
+      action: z.enum(['tap', 'fill', 'assert', 'scroll', 'navigate', 'back', 'wait', 'swipe', 'launch']).describe('Step action'),
+      testID: z.string().optional().describe('Target element testID'),
+      text: z.string().optional().describe('Visible text to find/assert'),
+      input: z.string().optional().describe('Text to input (for fill action)'),
+      direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('Swipe direction'),
+      url: z.string().optional().describe('Deep link URL (for navigate action)'),
+      waitMs: z.number().optional().describe('Wait duration in ms (for wait action)'),
+    })).describe('Ordered list of Maestro steps'),
+    appId: z.string().optional().describe('App bundle ID to include in YAML header'),
+    outputDir: z.string().optional().describe('Output directory (default: <project>/.maestro/flows/)'),
+  },
+  createMaestroGenerateHandler(),
+);
+
+trackedTool(
+  'maestro_test_all',
+  'Discover and run all Maestro flows in .maestro/flows/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions.',
+  {
+    platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
+    flowDir: z.string().optional().describe('Directory to scan for .yaml flows (default: <project>/.maestro/flows/)'),
+    pattern: z.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
+    timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
+    stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
+  },
+  createMaestroTestAllHandler(),
 );
 
 process.on('uncaughtException', (err: Error) => {

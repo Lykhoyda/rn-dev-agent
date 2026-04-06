@@ -8,6 +8,8 @@ description: This skill should be used when the user asks to "control the simula
 Commands for controlling iOS Simulator and Android Emulator, taking screenshots,
 reading UI state, and managing device settings. All commands run via bash.
 
+**See also:** [3-Tier Interaction Model](references/interaction-model.md) — when to use cdp_interact vs device_press vs Maestro.
+
 ---
 
 ## iOS Simulator (simctl)

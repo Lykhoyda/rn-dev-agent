@@ -607,7 +607,16 @@ export const INJECTED_HELPERS = `
       var parts = path.split('.');
       var current = state;
       for (var i = 0; i < parts.length; i++) {
-        current = current && current[parts[i]];
+        var next = current && current[parts[i]];
+        if (next === undefined && i === 0 && storeType === 'zustand') {
+          var storeKeys = Object.keys(current);
+          var lower = parts[0].toLowerCase().replace(/^use|store$/gi, '');
+          for (var k = 0; k < storeKeys.length; k++) {
+            var sk = storeKeys[k].toLowerCase().replace(/^use|store$/gi, '');
+            if (sk === lower) { next = current[storeKeys[k]]; parts[0] = storeKeys[k]; break; }
+          }
+        }
+        current = next;
         if (current === undefined) {
           return JSON.stringify({ __agent_error: 'Path not found: ' + path, availableKeys: Object.keys(state) });
         }
