@@ -13,6 +13,10 @@ the simulator, review quality, and produce E2E proof with screenshots.
 
 ## Core Principles
 
+- **NEVER skip phases**: Every phase (1-8) must be executed. Do NOT bypass
+  explorer agents (Phase 2), architect agents (Phase 4), reviewer agents
+  (Phase 6), or proof capture (Phase 8) even when the codebase is familiar.
+  Speed comes from parallel agent launches, not phase elimination.
 - **Ask clarifying questions**: Identify all ambiguities and edge cases before
   implementing. Wait for user answers before proceeding.
 - **Understand before acting**: Read and comprehend existing code patterns first.
@@ -22,6 +26,9 @@ the simulator, review quality, and produce E2E proof with screenshots.
 - **Use TodoWrite**: Track all progress through the phases.
 - **Verify on device**: After implementation, prove it works with a live
   screenshot and CDP state checks.
+- **Cross-platform visual verification**: When both iOS and Android are
+  available, compare screenshots element-by-element. A screen that renders
+  without crashing but has missing icons/images is a FAIL, not a PASS.
 
 ---
 
@@ -296,6 +303,35 @@ Present results as a table (use the actual screenshot path for the platform):
 
 **Gate**: All checks must be PASS (or SKIP where not applicable)
 before proceeding to Phase 6.
+
+### Step 6: Cross-Platform Element Verification (CRITICAL)
+
+**If both iOS and Android are available**, run this check BEFORE marking
+verification as complete. This catches platform-specific rendering failures
+(e.g., missing icon fonts, layout differences, invisible elements).
+
+1. **Build an element checklist** from the architect's blueprint — list every
+   new UI element (icons, buttons, text, images) with its testID.
+2. **Take screenshots on BOTH platforms** and compare element-by-element.
+3. **Present a cross-platform comparison table:**
+
+| Element | testID | iOS | Android |
+|---------|--------|-----|---------|
+| Like icon | feed-like-1 | visible | visible/MISSING |
+| Like count | feed-like-count-1 | "1" | "1" |
+| Avatar image | profile-avatar-image | visible | visible/MISSING |
+
+4. **Any "MISSING" = FAIL** — do not proceed. Diagnose the cause (missing
+   font assets, native rebuild needed, platform-specific API differences).
+5. If the issue requires a native rebuild (e.g., font assets not linked),
+   log it in `docs/BUGS.md` and note it in the verification report.
+   Verification can proceed with the working platform, but the MISSING
+   elements must be documented and the Android column in the results log
+   must show the actual status, not a false "PASS".
+
+**Never mark a platform as "PASS" if UI elements are invisible or missing.**
+A screen that loads without crashing but has missing icons is a FAIL, not
+a PASS.
 
 **Evaluator**: If `dev/evaluator.md` exists in the plugin root, log every CDP tool call, recovery action, and fix-retry loop per `dev/evaluator.md` Phase 5.5.
 
