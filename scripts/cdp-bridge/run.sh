@@ -52,7 +52,15 @@ if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   cd "$SCRIPT_DIR" && npm install --production --silent 2>/dev/null
 fi
 
-trap 'exit 0' SIGINT
+NODE_PID=""
+cleanup() {
+  if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
+    kill "$NODE_PID" 2>/dev/null
+    wait "$NODE_PID" 2>/dev/null
+  fi
+  exit 0
+}
+trap cleanup SIGINT SIGTERM
 
 MAX_RESTARTS=5
 CRASH_WINDOW_SECS=60
@@ -65,7 +73,10 @@ while true; do
   run_start=$(date +%s)
 
   exit_code=0
-  node "$NODE_SCRIPT" || exit_code=$?
+  node "$NODE_SCRIPT" &
+  NODE_PID=$!
+  wait "$NODE_PID" || exit_code=$?
+  NODE_PID=""
 
   if [ "$exit_code" -eq 0 ]; then
     exit 0

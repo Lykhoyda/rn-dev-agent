@@ -259,8 +259,9 @@ export const INJECTED_HELPERS = `
 
     var navState = findNav(root && root.current);
 
-    if (!navState && globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getRootState) {
-      navState = globalThis.__NAV_REF__.getRootState();
+    if (!navState) {
+      var fallbackRef = findNavRef();
+      if (fallbackRef && fallbackRef.getRootState) navState = fallbackRef.getRootState();
     }
 
     if (!navState) return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
@@ -903,9 +904,42 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ dispatched: true });
   }
 
+  function findNavRef() {
+    if (globalThis.__NAV_REF__ && globalThis.__NAV_REF__.navigate) return globalThis.__NAV_REF__;
+    if (globalThis.__NAVIGATION_REF__ && globalThis.__NAVIGATION_REF__.navigate) return globalThis.__NAVIGATION_REF__;
+    if (globalThis.navigationRef && globalThis.navigationRef.navigate) return globalThis.navigationRef;
+    var renderer = findActiveRenderer();
+    if (!renderer) return null;
+    var found = null;
+    renderer.roots.forEach(function(root) {
+      if (found || !root || !root.current) return;
+      var count = 0;
+      function search(fiber) {
+        if (!fiber || found || count > 5000) return;
+        count++;
+        var name = fiber.type && (fiber.type.displayName || fiber.type.name);
+        if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
+          var r = fiber.ref;
+          if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {
+            found = r.current;
+            return;
+          }
+          if (fiber.stateNode && typeof fiber.stateNode.navigate === 'function') {
+            found = fiber.stateNode;
+            return;
+          }
+        }
+        search(fiber.child);
+        if (!found) search(fiber.sibling);
+      }
+      search(root.current);
+    });
+    return found;
+  }
+
   function navigateTo(screen, params) {
-    var ref = globalThis.__NAV_REF__;
-    if (!ref) return JSON.stringify({ __agent_error: '__NAV_REF__ not available' });
+    var ref = findNavRef();
+    if (!ref) return JSON.stringify({ __agent_error: 'Navigation ref not found. Add globalThis.__NAV_REF__ = navigationRef in your app, or ensure NavigationContainer has a ref prop.' });
 
     try {
       var state = ref.getRootState();

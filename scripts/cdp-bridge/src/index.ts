@@ -271,9 +271,10 @@ trackedTool(
 
 trackedTool(
   'device_screenshot',
-  'Capture a screenshot of the active device screen. Returns image data or file path.',
+  'Capture a screenshot of the active device screen. Returns image data or file path. Prefer JPEG for faster capture.',
   {
-    path: z.string().optional().describe('Output file path (default: auto-generated in /tmp)'),
+    path: z.string().optional().describe('Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG.'),
+    format: z.enum(['jpeg', 'png']).optional().describe('Image format (default: auto-detect from path extension, or jpeg)'),
   },
   createDeviceScreenshotHandler(),
 );
