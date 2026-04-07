@@ -14,7 +14,7 @@ description: >
 
 # React Native Best Practice Rules
 
-36 rules from [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)
+43 rules from [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)
 plus 3 rn-dev-agent rules discovered through story testing.
 Each rule has full incorrect/correct code examples in `references/<rule-name>.md`.
 
@@ -66,6 +66,13 @@ category present in the code under review.
 | 15.1 | Use reactive query hooks, not imperative cache reads | HIGH | `references/query-cache-reactive.md` |
 | 15.2 | Avoid Reanimated layout animations in virtualized lists | HIGH | `references/reanimated-in-lists.md` |
 | 15.3 | Consume theme hooks inside list items, not in renderItem | HIGH | `references/theme-memoization-lists.md` |
+| 16.1 | Don't define components inside components | CRITICAL | `references/rerender-no-inline-components.md` |
+| 16.2 | Use lazy state initialization for expensive values | HIGH | `references/rerender-lazy-state-init.md` |
+| 16.3 | Use Promise.all() for independent async operations | CRITICAL | `references/async-parallel.md` |
+| 16.4 | Check cheap conditions before async work | HIGH | `references/async-cheap-condition-first.md` |
+| 16.5 | Initialize app once at module level, not per mount | HIGH | `references/init-once-module-level.md` |
+| 16.6 | Use Set/Map for O(1) lookups | MEDIUM | `references/js-set-map-lookups.md` |
+| 16.7 | Build index Maps for repeated .find() lookups | MEDIUM | `references/js-index-maps.md` |
 
 ---
 
@@ -92,6 +99,26 @@ A string as a direct child of `<View>` causes a runtime crash.
 **Good:** `<View><Text>Hello, {name}!</Text></View>`
 
 Full examples: `references/rendering-text-in-text.md`
+
+### 16.1 Don't Define Components Inside Components
+
+Defining a component inside another creates a new type every render — React remounts it,
+destroying state, native views, and animations.
+
+**Bad:** `function Parent() { const Child = () => <Text>hi</Text>; return <Child /> }`
+**Good:** Define `Child` outside `Parent` and pass data via props.
+
+Symptoms: TextInput loses focus, animations restart, scroll resets.
+Full examples: `references/rerender-no-inline-components.md`
+
+### 16.3 Use Promise.all() for Independent Async Operations
+
+Sequential `await` on independent calls wastes 2-10x time.
+
+**Bad:** `const a = await fetchA(); const b = await fetchB();`
+**Good:** `const [a, b] = await Promise.all([fetchA(), fetchB()])`
+
+Full examples: `references/async-parallel.md`
 
 ---
 

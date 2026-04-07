@@ -1,0 +1,56 @@
+# Use Lazy State Initialization
+
+**Impact: HIGH (wasted computation on every render)**
+
+Pass a function to `useState` for expensive initial values. Without the function form, the initializer runs on every render even though the value is only used once.
+
+**Incorrect (runs on every render):**
+
+```tsx
+function FilteredList({ items }: { items: Item[] }) {
+  // buildSearchIndex() runs on EVERY render
+  const [searchIndex, setSearchIndex] = useState(buildSearchIndex(items))
+  const [query, setQuery] = useState('')
+
+  return <SearchResults index={searchIndex} query={query} />
+}
+
+function UserSettings() {
+  // MMKV read runs on every render
+  const [settings, setSettings] = useState(
+    JSON.parse(storage.getString('settings') || '{}')
+  )
+
+  return <SettingsForm settings={settings} onChange={setSettings} />
+}
+```
+
+**Correct (runs only on first render):**
+
+```tsx
+function FilteredList({ items }: { items: Item[] }) {
+  const [searchIndex, setSearchIndex] = useState(() => buildSearchIndex(items))
+  const [query, setQuery] = useState('')
+
+  return <SearchResults index={searchIndex} query={query} />
+}
+
+function UserSettings() {
+  const [settings, setSettings] = useState(() => {
+    const stored = storage.getString('settings')
+    return stored ? JSON.parse(stored) : {}
+  })
+
+  return <SettingsForm settings={settings} onChange={setSettings} />
+}
+```
+
+Use lazy initialization when:
+- Reading from MMKV, AsyncStorage, or SecureStore
+- Building data structures (indexes, maps, sets)
+- Performing heavy transformations on initial data
+- Parsing JSON or deserializing complex objects
+
+Skip for: simple primitives (`useState(0)`), direct prop refs (`useState(props.value)`), cheap literals (`useState({})`).
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)

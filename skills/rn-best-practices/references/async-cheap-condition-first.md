@@ -1,0 +1,33 @@
+# Check Cheap Conditions Before Async Work
+
+**Impact: HIGH (avoids unnecessary network/async calls)**
+
+When a branch requires both an async flag and a cheap synchronous condition, evaluate the cheap condition first. Otherwise you pay for the async call even when the result won't be used.
+
+**Incorrect (always awaits):**
+
+```typescript
+const hasPermission = await checkPermission('camera')
+if (hasPermission && Platform.OS === 'ios') {
+  openIOSCamera()
+}
+```
+
+**Correct (cheap check first):**
+
+```typescript
+if (Platform.OS === 'ios') {
+  const hasPermission = await checkPermission('camera')
+  if (hasPermission) {
+    openIOSCamera()
+  }
+}
+```
+
+Common React Native cases:
+- `Platform.OS` check before platform-specific async work
+- Feature flag check: skip network call if local condition is false
+- Auth state check before fetching protected resources
+- Empty input validation before API submission
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)

@@ -1,0 +1,68 @@
+# Don't Define Components Inside Components
+
+**Impact: CRITICAL (prevents remount on every render)**
+
+Defining a component inside another component creates a new component type on every render. React sees a different component each time and fully remounts it, destroying all state and native views.
+
+A common reason developers do this is to access parent variables without passing props. Always pass props instead.
+
+**Incorrect (remounts on every render):**
+
+```tsx
+function UserProfile({ user, theme }) {
+  const Avatar = () => (
+    <Image source={{ uri: user.avatarUrl }} style={theme === 'dark' ? styles.avatarDark : styles.avatarLight} />
+  )
+
+  const Stats = () => (
+    <View>
+      <Text>{user.followers} followers</Text>
+      <Text>{user.posts} posts</Text>
+    </View>
+  )
+
+  return (
+    <View>
+      <Avatar />
+      <Stats />
+    </View>
+  )
+}
+```
+
+Every time `UserProfile` renders, `Avatar` and `Stats` are new component types. React unmounts the old instances and mounts new ones — destroying native views, losing internal state, and re-running all effects.
+
+**Correct (define outside, pass props):**
+
+```tsx
+function Avatar({ src, theme }: { src: string; theme: string }) {
+  return <Image source={{ uri: src }} style={theme === 'dark' ? styles.avatarDark : styles.avatarLight} />
+}
+
+function Stats({ followers, posts }: { followers: number; posts: number }) {
+  return (
+    <View>
+      <Text>{followers} followers</Text>
+      <Text>{posts} posts</Text>
+    </View>
+  )
+}
+
+function UserProfile({ user, theme }) {
+  return (
+    <View>
+      <Avatar src={user.avatarUrl} theme={theme} />
+      <Stats followers={user.followers} posts={user.posts} />
+    </View>
+  )
+}
+```
+
+**Symptoms of this bug in React Native:**
+- TextInput loses focus on every keystroke
+- Reanimated animations restart unexpectedly
+- FlatList scroll position resets
+- `useEffect` cleanup/setup runs on every parent render
+- Native view flicker during re-renders
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)

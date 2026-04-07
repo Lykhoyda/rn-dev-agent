@@ -1,0 +1,39 @@
+# Build Index Maps for Repeated Lookups
+
+**Impact: MEDIUM (1M ops to 2K ops for joined data)**
+
+Multiple `.find()` calls by the same key should use a Map.
+
+**Incorrect (O(n) per lookup):**
+
+```typescript
+function renderFeed(posts: Post[], users: User[]) {
+  return posts.map(post => ({
+    ...post,
+    author: users.find(u => u.id === post.authorId)
+  }))
+}
+```
+
+**Correct (O(1) per lookup):**
+
+```typescript
+function renderFeed(posts: Post[], users: User[]) {
+  const userById = new Map(users.map(u => [u.id, u]))
+
+  return posts.map(post => ({
+    ...post,
+    author: userById.get(post.authorId)
+  }))
+}
+```
+
+Build map once (O(n)), then all lookups are O(1).
+For 1000 posts x 1000 users: 1M ops -> 2K ops.
+
+Common React Native cases:
+- Joining feed posts with user data for FlatList rendering
+- Resolving category names for task items
+- Mapping notification IDs to read/unread status
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)

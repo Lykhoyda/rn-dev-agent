@@ -1,0 +1,31 @@
+# Promise.all() for Independent Operations
+
+**Impact: CRITICAL (2-10x improvement on data loading)**
+
+When async operations have no interdependencies, execute them concurrently.
+
+**Incorrect (sequential, 3 round trips):**
+
+```typescript
+const user = await fetchUser()
+const feed = await fetchFeed()
+const notifications = await fetchNotifications()
+```
+
+**Correct (parallel, 1 round trip):**
+
+```typescript
+const [user, feed, notifications] = await Promise.all([
+  fetchUser(),
+  fetchFeed(),
+  fetchNotifications()
+])
+```
+
+Common React Native cases:
+- App startup: auth token + user profile + feature flags
+- Screen mount: multiple API endpoints for a single screen
+- Parallel AsyncStorage/MMKV reads
+- Image prefetching alongside data fetching
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)
