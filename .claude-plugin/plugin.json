@@ -43,7 +43,8 @@
     "./commands/rn-agent-export.md",
     "./commands/rn-agent-import.md",
     "./commands/rn-agent-health.md",
-    "./commands/nav-graph.md"
+    "./commands/nav-graph.md",
+    "./commands/send-feedback.md"
   ],
   "mcpServers": {
     "rn-dev-agent-cdp": {
