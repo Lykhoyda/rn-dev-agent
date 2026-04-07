@@ -47,16 +47,34 @@ if [ "$has_rn_config" = true ]; then
   bash "$PLUGIN_ROOT/scripts/ensure-android-ready.sh" 2>/dev/null || true
 
   cat <<'EOF'
-React Native project detected. The rn-dev-agent plugin is active.
+React Native project detected. The rn-dev-agent plugin is active with 23 MCP tools.
 
-Available commands:
-  /rn-dev-agent:test-feature <description>  - Test a feature end-to-end
+## How to interact with the running app
+
+ALWAYS use the CDP MCP tools instead of raw bash commands:
+- `cdp_status` — check Metro, CDP connection, app health (call this FIRST)
+- `cdp_component_tree` — read React component tree by testID
+- `cdp_store_state` — read Redux/Zustand/React Query state
+- `cdp_evaluate` — run JS in the Hermes runtime
+- `cdp_navigate` — navigate to any screen by name
+- `cdp_interact` — press buttons, long-press, type text, scroll by testID
+- `cdp_error_log` — check for JS errors and unhandled rejections
+- `device_screenshot` — capture screen image
+- `device_find` / `device_press` / `device_fill` — native UI interaction
+- `proof_step` — navigate + wait + verify + screenshot in one call
+
+Do NOT use `xcrun simctl` for app interaction or `curl localhost:8081` for Metro queries.
+The CDP tools handle connection, reconnection, and error recovery automatically.
+
+## Commands
+
+  /rn-dev-agent:rn-feature-dev <description> - Full 8-phase feature development pipeline
+  /rn-dev-agent:test-feature <description>   - Test a feature end-to-end on device
+  /rn-dev-agent:debug-screen                 - Diagnose and fix the current screen
+  /rn-dev-agent:check-env                    - Verify environment readiness
+  /rn-dev-agent:send-feedback                - Report a bug or request a feature
   /rn-dev-agent:build-and-test <description> - Build app, then test feature
-  /rn-dev-agent:debug-screen                - Diagnose and fix the current screen
-  /rn-dev-agent:check-env                   - Verify environment is ready
-  /rn-dev-agent:rn-feature-dev <description> - Guided feature development (explore, design, implement, verify)
-  /rn-dev-agent:proof-capture <slug>        - Capture PR proof (video + screenshots + PR body)
 
-Use build-and-test if the app isn't installed yet. Metro starts automatically.
+Start with `cdp_status` to connect, then use the tools above.
 EOF
 fi

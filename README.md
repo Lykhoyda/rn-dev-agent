@@ -202,10 +202,14 @@ Auto-detected. No setup needed.
 Add `testID` to interactive elements for reliable component queries:
 
 ```tsx
-<TouchableOpacity testID="checkout-button" onPress={handleCheckout}>
+<Pressable testID="checkout-button" onPress={handleCheckout}>
   <Text testID="cart-badge">{itemCount}</Text>
-</TouchableOpacity>
+</Pressable>
 ```
+
+### Recommended: Add instructions to your CLAUDE.md
+
+Copy the template from [`CLAUDE-MD-TEMPLATE.md`](CLAUDE-MD-TEMPLATE.md) into your project's `CLAUDE.md` to ensure Claude always uses the CDP tools instead of raw bash commands for app interaction.
 
 ## Architecture
 
@@ -220,7 +224,7 @@ Add `testID` to interactive elements for reliable component queries:
 │  ┌──────▼───▼────────────▼─────────────────▼──────┐ │
 │  │              MCP Server (CDP Bridge)            │ │
 │  │  WebSocket → Metro → Hermes CDP                 │ │
-│  │  21 tools: 12 CDP + 8 device + 1 dispatch       │ │
+│  │  23 tools: CDP + device + maestro + proof         │ │
 │  └─────────────────────┬───────────────────────────┘ │
 │                        │                             │
 │  ┌─────────────────────▼───────────────────────────┐ │
