@@ -52,56 +52,10 @@ if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   cd "$SCRIPT_DIR" && npm install --production --silent 2>/dev/null
 fi
 
-NODE_PID=""
-cleanup() {
-  if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
-    kill "$NODE_PID" 2>/dev/null
-    wait "$NODE_PID" 2>/dev/null
-  fi
-  exit 0
-}
-trap cleanup SIGINT SIGTERM
-
-MAX_RESTARTS=5
-CRASH_WINDOW_SECS=60
-STABLE_RUN_SECS=30
-
-crash_count=0
-window_start=$(date +%s)
-
-while true; do
-  run_start=$(date +%s)
-
-  exit_code=0
-  node "$NODE_SCRIPT" &
-  NODE_PID=$!
-  wait "$NODE_PID" || exit_code=$?
-  NODE_PID=""
-
-  if [ "$exit_code" -eq 0 ]; then
-    exit 0
-  fi
-
-  run_duration=$(( $(date +%s) - run_start ))
-
-  if [ "$run_duration" -ge "$STABLE_RUN_SECS" ]; then
-    crash_count=0
-    window_start=$(date +%s)
-  fi
-
-  elapsed=$(( $(date +%s) - window_start ))
-  if [ "$elapsed" -gt "$CRASH_WINDOW_SECS" ]; then
-    crash_count=0
-    window_start=$(date +%s)
-  fi
-
-  crash_count=$((crash_count + 1))
-
-  if [ "$crash_count" -gt "$MAX_RESTARTS" ]; then
-    echo "CDP bridge: exceeded $MAX_RESTARTS restarts within ${CRASH_WINDOW_SECS}s — giving up" >&2
-    exit 1
-  fi
-
-  echo "CDP bridge: exited with code $exit_code, restart $crash_count/$MAX_RESTARTS in 2s..." >&2
-  sleep 2
-done
+# exec replaces the bash process with node — stdin/stdout pass through
+# directly to the MCP JSON-RPC transport. The previous background-job
+# pattern (`node ... &; wait`) broke non-interactive bash because
+# background processes get stdin redirected from /dev/null.
+# Claude Code manages MCP server lifecycle (restart on crash), so
+# a wrapper restart loop is unnecessary.
+exec node "$NODE_SCRIPT"
