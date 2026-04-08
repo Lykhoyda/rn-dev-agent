@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-commit: ensure marketplace.json version matches plugin.json
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+if git diff --cached --name-only | grep -qE '(plugin\.json|marketplace\.json)'; then
+  "$REPO_ROOT/scripts/sync-versions.sh"
+fi
