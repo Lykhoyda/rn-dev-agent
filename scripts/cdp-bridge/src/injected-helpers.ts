@@ -915,25 +915,26 @@ export const INJECTED_HELPERS = `
     renderer.roots.forEach(function(root) {
       if (found || !root || !root.current) return;
       var count = 0;
-      function search(fiber) {
-        if (!fiber || found || count > 5000) return;
+      var stack = [root.current];
+      while (stack.length > 0 && !found && count < 5000) {
+        var fiber = stack.pop();
+        if (!fiber) continue;
         count++;
         var name = fiber.type && (fiber.type.displayName || fiber.type.name);
         if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
           var r = fiber.ref;
           if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {
             found = r.current;
-            return;
+            break;
           }
           if (fiber.stateNode && typeof fiber.stateNode.navigate === 'function') {
             found = fiber.stateNode;
-            return;
+            break;
           }
         }
-        search(fiber.child);
-        if (!found) search(fiber.sibling);
+        if (fiber.sibling) stack.push(fiber.sibling);
+        if (fiber.child) stack.push(fiber.child);
       }
-      search(root.current);
     });
     return found;
   }

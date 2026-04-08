@@ -33,9 +33,10 @@ redact() {
   # Strip bundle IDs (com.company.app, org.company.app) — contain company names
   input=$(echo "$input" | sed -E 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g' 2>/dev/null || echo "$input")
   # Strip app display names and project names from app.json if present
-  if [ -f "app.json" ]; then
-    local app_name=$(python3 -c "import json,sys; d=json.load(open('app.json')); print(d.get('expo',d).get('name',''))" 2>/dev/null)
-    local app_slug=$(python3 -c "import json,sys; d=json.load(open('app.json')); print(d.get('expo',d).get('slug',''))" 2>/dev/null)
+  local project_root="${RN_PROJECT_ROOT:-${CLAUDE_USER_CWD:-$PWD}}"
+  if [ -f "$project_root/app.json" ]; then
+    local app_name=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('expo',d).get('name',''))" "$project_root/app.json" 2>/dev/null)
+    local app_slug=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('expo',d).get('slug',''))" "$project_root/app.json" 2>/dev/null)
     if [ -n "$app_name" ] && [ ${#app_name} -gt 2 ]; then
       input="${input//$app_name/[APP_NAME_REDACTED]}"
     fi

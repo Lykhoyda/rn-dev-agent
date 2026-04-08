@@ -47,12 +47,14 @@ export function createReloadHandler(getClient: () => CDPClient) {
         break;
       }
       try {
+        let reconnTimer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
           client.softReconnect(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('softReconnect timeout')), Math.max(reconnectDeadline - Date.now(), 1000)),
-          ),
+          new Promise<never>((_, reject) => {
+            reconnTimer = setTimeout(() => reject(new Error('softReconnect timeout')), Math.max(reconnectDeadline - Date.now(), 1000));
+          }),
         ]);
+        if (reconnTimer) clearTimeout(reconnTimer);
         reconnected = true;
         break;
       } catch (reconnErr) {

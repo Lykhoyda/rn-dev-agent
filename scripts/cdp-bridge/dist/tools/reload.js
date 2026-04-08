@@ -41,10 +41,15 @@ export function createReloadHandler(getClient) {
                 break;
             }
             try {
+                let reconnTimer;
                 await Promise.race([
                     client.softReconnect(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('softReconnect timeout')), Math.max(reconnectDeadline - Date.now(), 1000))),
+                    new Promise((_, reject) => {
+                        reconnTimer = setTimeout(() => reject(new Error('softReconnect timeout')), Math.max(reconnectDeadline - Date.now(), 1000));
+                    }),
                 ]);
+                if (reconnTimer)
+                    clearTimeout(reconnTimer);
                 reconnected = true;
                 break;
             }
