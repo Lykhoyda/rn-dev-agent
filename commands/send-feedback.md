@@ -134,11 +134,14 @@ The following data is NEVER included:
 - API keys, tokens, secrets (pattern-matched and redacted)
 - Email addresses, phone numbers, SSNs (PII patterns redacted)
 - IP addresses (except localhost)
+- Company names and bundle IDs (com.company.app → [BUNDLE_REDACTED])
+- App name and slug from app.json ([APP_NAME_REDACTED])
 - Tool call parameters (only tool name + result + latency)
 - Store state values
 - Component tree contents
 - Network request/response bodies
 - Console log contents
+- Error stack traces (error field excluded from telemetry)
 
 The following IS included (safe):
 - Plugin and tool versions

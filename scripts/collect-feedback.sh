@@ -30,6 +30,19 @@ redact() {
   input=$(echo "$input" | sed -E 's/(^|[^0-9])(192|10|172|169)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9]|$)/\1[IP_REDACTED]\3/g' 2>/dev/null || echo "$input")
   # Strip absolute paths that aren't home (already handled) — catches stack traces
   input=$(echo "$input" | sed -E 's#/(Users|home|opt|var|tmp)/[A-Za-z0-9_./-]{10,}#[PATH_REDACTED]#g' 2>/dev/null || echo "$input")
+  # Strip bundle IDs (com.company.app, org.company.app) — contain company names
+  input=$(echo "$input" | sed -E 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g' 2>/dev/null || echo "$input")
+  # Strip app display names and project names from app.json if present
+  if [ -f "app.json" ]; then
+    local app_name=$(python3 -c "import json,sys; d=json.load(open('app.json')); print(d.get('expo',d).get('name',''))" 2>/dev/null)
+    local app_slug=$(python3 -c "import json,sys; d=json.load(open('app.json')); print(d.get('expo',d).get('slug',''))" 2>/dev/null)
+    if [ -n "$app_name" ] && [ ${#app_name} -gt 2 ]; then
+      input="${input//$app_name/[APP_NAME_REDACTED]}"
+    fi
+    if [ -n "$app_slug" ] && [ ${#app_slug} -gt 2 ]; then
+      input="${input//$app_slug/[APP_SLUG_REDACTED]}"
+    fi
+  fi
   echo "$input"
 }
 
