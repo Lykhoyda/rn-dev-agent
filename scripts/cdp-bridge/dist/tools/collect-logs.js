@@ -47,9 +47,12 @@ async function collectJsConsole(client, level, limit) {
     }
 }
 function collectNativeIos(durationMs, signal) {
+    if (signal.aborted)
+        return Promise.resolve([]);
     return new Promise((resolve, reject) => {
         const entries = [];
         let killedByUs = false;
+        let settled = false;
         let proc;
         try {
             proc = spawn('xcrun', [
@@ -67,10 +70,16 @@ function collectNativeIos(durationMs, signal) {
         const timeout = setTimeout(kill, killMs);
         const onAbort = () => { clearTimeout(timeout); kill(); };
         signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) {
+            clearTimeout(timeout);
+            kill();
+        }
         let stderrBuf = '';
         proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf8'); });
         let buf = '';
         proc.stdout.on('data', (chunk) => {
+            if (settled)
+                return;
             buf += chunk.toString('utf8');
             const lines = buf.split('\n');
             buf = lines.pop() ?? '';
@@ -81,6 +90,7 @@ function collectNativeIos(durationMs, signal) {
             }
         });
         proc.on('close', (code) => {
+            settled = true;
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             if (buf.trim()) {
@@ -96,6 +106,7 @@ function collectNativeIos(durationMs, signal) {
             }
         });
         proc.on('error', (err) => {
+            settled = true;
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             reject(err);
@@ -124,12 +135,15 @@ function parseIosNdjson(line) {
     }
 }
 function collectNativeAndroid(durationMs, signal) {
+    if (signal.aborted)
+        return Promise.resolve([]);
     return new Promise((resolve, reject) => {
         const entries = [];
         const year = new Date().getFullYear();
         const tzOffsetMs = new Date().getTimezoneOffset() * 60_000;
         const killMs = durationMs > 0 ? durationMs : 100;
         let killedByUs = false;
+        let settled = false;
         let proc;
         try {
             proc = spawn('adb', [
@@ -145,10 +159,16 @@ function collectNativeAndroid(durationMs, signal) {
         const timeout = setTimeout(kill, killMs);
         const onAbort = () => { clearTimeout(timeout); kill(); };
         signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) {
+            clearTimeout(timeout);
+            kill();
+        }
         let stderrBuf = '';
         proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf8'); });
         let buf = '';
         proc.stdout.on('data', (chunk) => {
+            if (settled)
+                return;
             buf += chunk.toString('utf8');
             const lines = buf.split('\n');
             buf = lines.pop() ?? '';
@@ -159,6 +179,7 @@ function collectNativeAndroid(durationMs, signal) {
             }
         });
         proc.on('close', (code) => {
+            settled = true;
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             if (buf.trim()) {
@@ -174,6 +195,7 @@ function collectNativeAndroid(durationMs, signal) {
             }
         });
         proc.on('error', (err) => {
+            settled = true;
             clearTimeout(timeout);
             signal.removeEventListener('abort', onAbort);
             reject(err);

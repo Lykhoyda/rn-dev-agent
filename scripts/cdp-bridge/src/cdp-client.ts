@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,6 +115,83 @@ export class CDPClient {
     return this.discoverAndConnect(portHint, platformFilter);
   }
 
+  private inferPlatforms(targets: HermesTarget[]): void {
+    let androidPackages: Set<string> | null = null;
+    try {
+      const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
+        timeout: 3000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      androidPackages = new Set(
+        out.split('\n')
+          .map(line => line.replace('package:', '').trim())
+          .filter(Boolean),
+      );
+    } catch {
+      // adb not available or no device — all targets treated as iOS
+    }
+
+    for (const t of targets) {
+      if (androidPackages?.has(t.description ?? '')) {
+        t.platform = 'android';
+      } else {
+        t.platform = 'ios';
+      }
+    }
+  }
+
+  async listTargets(portHint?: number): Promise<{ port: number; targets: HermesTarget[] }> {
+    const ports = [...new Set([portHint ?? this._port, ...DEFAULT_PORTS])];
+    let metroPort: number | null = null;
+
+    for (const p of ports) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), DISCOVERY_TIMEOUT_MS);
+      try {
+        const resp = await fetch(`http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
+        const text = await resp.text();
+        if (text.includes('packager-status:running')) {
+          metroPort = p;
+          break;
+        }
+      } catch {
+        // Port not available
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (!metroPort) {
+      throw new Error('Metro not found on ports ' + ports.join(', '));
+    }
+
+    const listCtrl = new AbortController();
+    const listTimer = setTimeout(() => listCtrl.abort(), DISCOVERY_TIMEOUT_MS * 2);
+    let raw: HermesTarget[];
+    try {
+      const resp = await fetch(`http://127.0.0.1:${metroPort}/json/list`, { signal: listCtrl.signal });
+      raw = (await resp.json()) as HermesTarget[];
+    } catch (err) {
+      throw new Error(`Failed to list CDP targets on port ${metroPort}: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      clearTimeout(listTimer);
+    }
+
+    const targets = raw
+      .filter(t => !!t.webSocketDebuggerUrl && !t.title?.includes('Experimental') &&
+        (t.vm === 'Hermes' || t.title?.includes('React Native') || t.description?.includes('React Native')))
+      .map(t => ({
+        ...t,
+        webSocketDebuggerUrl: t.webSocketDebuggerUrl
+          ?.replace(/\[::1\]/g, '127.0.0.1')
+          ?.replace(/\[::\]/g, '127.0.0.1'),
+      }));
+
+    this.inferPlatforms(targets);
+    return { port: metroPort, targets };
+  }
+
   private _platformFilter?: string;
 
   private async discoverAndConnect(portHint?: number, platformFilter?: string): Promise<string> {
@@ -192,19 +270,27 @@ export class CDPClient {
       );
     }
 
-    // Filter by platform if specified (matches against title and description)
+    // Infer platform per target via adb package list
+    this.inferPlatforms(validTargets);
+
+    // Filter by platform if specified
     let filteredTargets = validTargets;
     let platformFilterWarning: string | undefined;
     if (this._platformFilter) {
       const pf = this._platformFilter.toLowerCase();
-      const platformMatched = validTargets.filter(t => {
-        const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
-        return haystack.includes(pf);
-      });
+      // Primary: match on inferred platform field
+      let platformMatched = validTargets.filter(t => t.platform === pf);
+      // Fallback: text search on title + description + vm
+      if (platformMatched.length === 0) {
+        platformMatched = validTargets.filter(t => {
+          const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
+          return haystack.includes(pf);
+        });
+      }
       if (platformMatched.length > 0) {
         filteredTargets = platformMatched;
       } else {
-        platformFilterWarning = `Platform filter "${this._platformFilter}" matched no targets (available: ${validTargets.map(t => t.title || t.id).join(', ')}). Connecting to best available target.`;
+        platformFilterWarning = `Platform filter "${this._platformFilter}" matched no targets (available: ${validTargets.map(t => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`;
         console.error('CDP: ' + platformFilterWarning);
       }
     }

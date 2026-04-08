@@ -19,6 +19,7 @@ export interface HermesTarget {
   webSocketDebuggerUrl: string;
   description?: string;
   type?: string;
+  platform?: 'ios' | 'android';
 }
 
 export interface ConsoleEntry {

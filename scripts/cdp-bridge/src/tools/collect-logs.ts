@@ -68,9 +68,12 @@ async function collectJsConsole(
 }
 
 function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
+  if (signal.aborted) return Promise.resolve([]);
+
   return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
     let killedByUs = false;
+    let settled = false;
 
     let proc: ReturnType<typeof spawn>;
     try {
@@ -91,11 +94,14 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
     const onAbort = () => { clearTimeout(timeout); kill(); };
     signal.addEventListener('abort', onAbort, { once: true });
 
+    if (signal.aborted) { clearTimeout(timeout); kill(); }
+
     let stderrBuf = '';
     proc.stderr!.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString('utf8'); });
 
     let buf = '';
     proc.stdout!.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buf += chunk.toString('utf8');
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
@@ -106,6 +112,7 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
     });
 
     proc.on('close', (code) => {
+      settled = true;
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       if (buf.trim()) {
@@ -120,6 +127,7 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
     });
 
     proc.on('error', (err) => {
+      settled = true;
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       reject(err);
@@ -148,12 +156,15 @@ function parseIosNdjson(line: string): LogEntry | null {
 }
 
 function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
+  if (signal.aborted) return Promise.resolve([]);
+
   return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
     const year = new Date().getFullYear();
     const tzOffsetMs = new Date().getTimezoneOffset() * 60_000;
     const killMs = durationMs > 0 ? durationMs : 100;
     let killedByUs = false;
+    let settled = false;
 
     let proc: ReturnType<typeof spawn>;
     try {
@@ -172,11 +183,14 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
     const onAbort = () => { clearTimeout(timeout); kill(); };
     signal.addEventListener('abort', onAbort, { once: true });
 
+    if (signal.aborted) { clearTimeout(timeout); kill(); }
+
     let stderrBuf = '';
     proc.stderr!.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString('utf8'); });
 
     let buf = '';
     proc.stdout!.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buf += chunk.toString('utf8');
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
@@ -187,6 +201,7 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
     });
 
     proc.on('close', (code) => {
+      settled = true;
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       if (buf.trim()) {
@@ -201,6 +216,7 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
     });
 
     proc.on('error', (err) => {
+      settled = true;
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
       reject(err);

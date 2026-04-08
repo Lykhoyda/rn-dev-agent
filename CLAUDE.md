@@ -68,7 +68,7 @@ rn-dev-agent/
 └── scripts/
     ├── cdp-bridge/                   # MCP server (TypeScript)
     │   ├── src/
-    │   │   ├── index.ts              # Entry + 19 tool registrations (11 CDP + 8 device)
+    │   │   ├── index.ts              # Entry + 38 tool registrations (19 CDP + 14 device + 5 testing/composite)
     │   │   ├── cdp-client.ts         # WebSocket lifecycle, auto-discovery, reconnect
     │   │   ├── injected-helpers.ts   # globalThis.__RN_AGENT (fiber walker, nav, store, errors)
     │   │   ├── ring-buffer.ts        # Event buffering (console/network/error)
@@ -89,20 +89,28 @@ rn-dev-agent/
 
 ### MCP Server (cdp-bridge)
 
-19 tools exposed via MCP in two categories:
+38 tools exposed via MCP in three categories:
 
-**CDP tools** (React internals via Chrome DevTools Protocol over WebSocket):
+**CDP tools** (19 — React internals via Chrome DevTools Protocol over WebSocket):
 - `cdp_status` — health check (Metro, CDP, app info, errors, RedBox)
-- `cdp_component_tree` — React fiber tree (filtered, depth-limited, RedBox-aware)
-- `cdp_navigation_state` — current route/stack (Expo Router + React Navigation)
-- `cdp_store_state` — Redux (auto-detect) / Zustand (via global) state
-- `cdp_interact` — DEPRECATED: tap/press UI elements by testID (use device_press/device_find instead)
-- `cdp_network_log`, `cdp_console_log`, `cdp_error_log` — buffered events via ring buffers
+- `cdp_connect` — explicit connect with port/platform targeting
+- `cdp_disconnect` — clean teardown, stops auto-reconnect
+- `cdp_targets` — list available Hermes debug targets without connecting
 - `cdp_evaluate` — arbitrary JS execution in Hermes (5s timeout)
 - `cdp_reload` — full reload with auto-reconnect and target re-validation
 - `cdp_dev_settings` — programmatic dev menu actions
+- `cdp_component_tree` — React fiber tree (filtered, depth-limited, RedBox-aware)
+- `cdp_component_state` — full hook state (useState, useForm, etc.) by testID
+- `cdp_navigation_state` — current route/stack (Expo Router + React Navigation)
+- `cdp_nav_graph` — navigation graph: scan, plan, go-to-screen in one call
+- `cdp_navigate` — navigate to any screen by name (nested dispatch)
+- `cdp_store_state` — Redux (auto-detect) / Zustand (via global) / React Query state
+- `cdp_dispatch` — dispatch Redux action + optional read-back in one call
+- `cdp_network_log`, `cdp_console_log`, `cdp_error_log` — buffered events via ring buffers
+- `cdp_interact` — DEPRECATED: tap/press UI elements by testID (use device_press/device_find instead)
+- `collect_logs` — parallel multi-source log collection (JS console + native iOS/Android)
 
-**Device tools** (native interaction via agent-device CLI):
+**Device tools** (14 — native interaction via agent-device CLI):
 - `device_list` — list available simulators/emulators
 - `device_screenshot` — capture screen image
 - `device_snapshot` — session management + accessibility tree with @refs
@@ -110,7 +118,20 @@ rn-dev-agent/
 - `device_press` — tap element by @ref from snapshot
 - `device_fill` — type text into input by @ref
 - `device_swipe` — directional swipe gesture
+- `device_scroll` — smooth directional scroll
+- `device_scrollintoview` — scroll until element becomes visible
 - `device_back` — system back navigation
+- `device_longpress` — long press on element or coordinates
+- `device_pinch` — pinch/zoom gesture (iOS simulator)
+- `device_permission` — grant/revoke/query app permissions
+- `device_batch` — execute multiple UI interactions in one call
+
+**Testing & composite tools** (5):
+- `cdp_auto_login` — detect auth screen + auto-login via Maestro subflows
+- `proof_step` — atomic proof capture: navigate + verify + screenshot in one call
+- `maestro_run` — execute a Maestro flow via maestro-runner
+- `maestro_generate` — generate persistent Maestro YAML from structured steps
+- `maestro_test_all` — run all Maestro flows as a regression suite
 
 ### Key Technical Decisions
 

@@ -24,6 +24,7 @@ import { createNavGraphHandler } from './tools/nav-graph.js';
 import { createDeviceBatchHandler } from './tools/device-batch.js';
 import { handleAutoLogin } from './tools/auto-login.js';
 import { createProofStepHandler } from './tools/proof-step.js';
+import { createConnectHandler, createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -47,6 +48,14 @@ trackedTool('cdp_status', 'Get full environment status. Auto-connects if not con
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
 }, createStatusHandler(getClient, setClient, createClient));
+trackedTool('cdp_connect', 'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform or port, or reconnect after a manual disconnect. If already connected, returns current connection info without reconnecting.', {
+    metroPort: z.number().optional().describe('Metro port to connect to (default: auto-detect 8081/8082/19000/19006)'),
+    platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android")'),
+}, createConnectHandler(getClient, setClient, createClient));
+trackedTool('cdp_disconnect', 'Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.', {}, createDisconnectHandler(getClient, setClient, createClient));
+trackedTool('cdp_targets', 'List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.', {
+    metroPort: z.number().optional().describe('Metro port to scan (default: auto-detect)'),
+}, createTargetsHandler(getClient));
 trackedTool('cdp_evaluate', 'CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. Prefer cdp_component_tree, cdp_store_state, and other targeted tools over raw evaluate.', {
     expression: z.string().describe('JavaScript expression to evaluate'),
     awaitPromise: z.boolean().default(false).describe('Wait for promise resolution'),
