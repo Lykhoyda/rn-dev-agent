@@ -36,6 +36,10 @@ let cachedDaemonInfo: DaemonInfo | null = null;
 
 function loadDaemonInfo(): DaemonInfo | null {
   if (cachedDaemonInfo) return cachedDaemonInfo;
+  return refreshDaemonInfo();
+}
+
+function refreshDaemonInfo(): DaemonInfo | null {
   const daemonPath = join(homedir(), '.agent-device', 'daemon.json');
   try {
     if (!existsSync(daemonPath)) return null;
@@ -46,6 +50,10 @@ function loadDaemonInfo(): DaemonInfo | null {
   } catch {
     return null;
   }
+}
+
+function invalidateDaemonCache(): void {
+  cachedDaemonInfo = null;
 }
 
 function extractFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
@@ -118,7 +126,24 @@ async function runViaDaemon(command: string, positionals: string[], session: str
     const e = resp.error!;
     return failResult(e.message, { code: e.code, ...(e.hint ? { hint: e.hint } : {}) });
   } catch (err) {
-    return failResult(`Daemon error: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    // B95 fix: If daemon connection refused, the daemon may have restarted
+    // with a new port. Invalidate cache and retry once with fresh daemon info.
+    if (msg.includes('ECONNREFUSED')) {
+      invalidateDaemonCache();
+      const freshInfo = refreshDaemonInfo();
+      if (freshInfo) {
+        try {
+          const retryResp = await sendToDaemon(command, positionals, session);
+          if (retryResp.ok) return okResult(retryResp.data ?? {});
+          const e = retryResp.error!;
+          return failResult(e.message, { code: e.code, ...(e.hint ? { hint: e.hint } : {}) });
+        } catch (retryErr) {
+          return failResult(`Daemon error (after refresh): ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+        }
+      }
+    }
+    return failResult(`Daemon error: ${msg}`);
   }
 }
 
