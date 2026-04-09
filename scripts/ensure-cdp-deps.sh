@@ -50,11 +50,17 @@ install_persistent() {
   return 1
 }
 
-# Prefer persistent storage when CLAUDE_PLUGIN_DATA is available
-if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+# Prefer persistent storage when CLAUDE_PLUGIN_DATA is available and version is known
+# Skip persistent path if version is "unknown" (node unavailable) to avoid stamp flip-flop
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ] && [ "$CURRENT_VERSION" != "unknown" ]; then
   if install_persistent; then
     exit 0
   fi
+fi
+
+# Clean up dangling symlink from a previous persistent install
+if [ -L "$CDP_DIR/node_modules" ] && [ ! -d "$CDP_DIR/node_modules" ]; then
+  rm -f "$CDP_DIR/node_modules"
 fi
 
 # Fallback: install locally (no CLAUDE_PLUGIN_DATA or persistent install failed)

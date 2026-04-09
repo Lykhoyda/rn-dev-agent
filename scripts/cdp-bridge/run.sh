@@ -48,8 +48,12 @@ if [ -z "${CLAUDE_USER_CWD:-}" ] && [ -n "${PWD:-}" ]; then
   export CLAUDE_USER_CWD="$PWD"
 fi
 
-# node_modules may be a symlink to ${CLAUDE_PLUGIN_DATA}/cdp-node_modules/ (D552)
-if [ ! -d "$SCRIPT_DIR/node_modules" ] && [ ! -L "$SCRIPT_DIR/node_modules" ]; then
+# Clean up dangling symlink from a previous persistent-storage session (D552)
+if [ -L "$SCRIPT_DIR/node_modules" ] && [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+  rm -f "$SCRIPT_DIR/node_modules"
+fi
+
+if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   cd "$SCRIPT_DIR" && npm install --production --ignore-scripts --silent 2>/dev/null
 fi
 
