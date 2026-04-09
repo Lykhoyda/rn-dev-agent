@@ -119,6 +119,22 @@ if [ -f "$HOME/.maestro-runner/bin/maestro-runner" ]; then
   maestro_runner_version=$("$HOME/.maestro-runner/bin/maestro-runner" --version 2>/dev/null | head -1 || echo "installed, version unknown")
 fi
 
+# --- Collect CDP bridge log tail (last 30 lines, redacted) ---
+
+cdp_log_tail=""
+cdp_log_path=""
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ] && [ -f "$CLAUDE_PLUGIN_DATA/cdp-bridge.log" ]; then
+  cdp_log_path="$CLAUDE_PLUGIN_DATA/cdp-bridge.log"
+elif [ -f "$HOME/.claude/logs/rn-dev-agent-cdp-bridge.log" ]; then
+  cdp_log_path="$HOME/.claude/logs/rn-dev-agent-cdp-bridge.log"
+fi
+if [ -n "$cdp_log_path" ]; then
+  raw_log=$(tail -30 "$cdp_log_path" 2>/dev/null || echo "")
+  if [ -n "$raw_log" ]; then
+    cdp_log_tail=$(redact "$raw_log")
+  fi
+fi
+
 # --- Output sanitized JSON via python3 (safe escaping) ---
 
 telemetry_json=$(echo "$recent_telemetry" | python3 -c "
@@ -155,6 +171,9 @@ data = {
     },
     'recent_telemetry_lines': json.loads(sys.argv[12]),
 }
+log_tail = sys.argv[13].strip()
+if log_tail:
+    data['cdp_bridge_log_tail'] = log_tail.split('\n')
 print(json.dumps(data, indent=2))
 " \
   "$plugin_version" \
@@ -168,4 +187,5 @@ print(json.dumps(data, indent=2))
   "$metro_status" \
   "$agent_device_version" \
   "$maestro_runner_version" \
-  "$telemetry_json"
+  "$telemetry_json" \
+  "$cdp_log_tail"

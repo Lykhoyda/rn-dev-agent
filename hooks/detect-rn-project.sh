@@ -31,6 +31,9 @@ if [ "$has_rn_config" = true ]; then
     echo "Warning: Node.js v${NODE_MAJOR} is below the minimum (22 LTS). Some CDP bridge features may not work."
   fi
 
+  # Ensure CDP bridge dependencies are installed (silent if already present)
+  bash "$PLUGIN_ROOT/scripts/ensure-cdp-deps.sh" 2>/dev/null || true
+
   # Ensure maestro-runner is installed (silent if already present)
   bash "$PLUGIN_ROOT/scripts/ensure-maestro-runner.sh" 2>/dev/null || true
 

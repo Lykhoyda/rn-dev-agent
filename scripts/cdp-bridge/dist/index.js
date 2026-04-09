@@ -1,8 +1,10 @@
+import './env-setup.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { CDPClient } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { logger } from './logger.js';
 import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
@@ -37,7 +39,7 @@ const setClient = (c) => { client = c; };
 const createClient = (port) => new CDPClient(port);
 const server = new McpServer({
     name: 'rn-dev-agent-cdp',
-    version: '0.8.0',
+    version: '0.9.0',
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
@@ -297,24 +299,36 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .maestro/
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
 }, createMaestroTestAllHandler());
 process.on('uncaughtException', (err) => {
-    console.error('MCP server uncaught exception:', err.message);
+    logger.error('MCP', `Uncaught exception: ${err.message}`);
     stopFastRunner();
     process.exit(1);
 });
 process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    console.error('MCP server unhandled rejection (non-fatal):', msg);
+    logger.warn('MCP', `Unhandled rejection (non-fatal): ${msg}`);
 });
 process.on('SIGTERM', () => {
+    logger.info('MCP', 'SIGTERM received, shutting down');
     stopFastRunner();
     process.exit(0);
 });
 async function main() {
+    logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.0 (log level: ${logger.level})`);
+    if (logger.logFilePath) {
+        logger.info('MCP', `Log file: ${logger.logFilePath}`);
+    }
+    logger.debug('MCP', `CWD: ${process.cwd()}, CLAUDE_USER_CWD: ${process.env.CLAUDE_USER_CWD ?? 'not set'}`);
+    logger.debug('MCP', `Node: ${process.version}, ANDROID_HOME: ${process.env.ANDROID_HOME ?? 'not set'}`);
     const transport = new StdioServerTransport();
+    logger.info('MCP', 'StdioServerTransport created, connecting...');
     await server.connect(transport);
+    logger.info('MCP', 'MCP server connected and ready');
 }
 main().catch((err) => {
-    console.error('MCP server fatal error:', err);
+    logger.error('MCP', `Fatal error: ${err instanceof Error ? err.message : err}`);
+    if (logger.logFilePath) {
+        console.error(`CDP bridge log: ${logger.logFilePath}`);
+    }
     stopFastRunner();
     process.exit(1);
 });

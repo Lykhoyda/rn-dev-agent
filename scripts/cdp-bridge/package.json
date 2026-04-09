@@ -1,11 +1,10 @@
 {
   "name": "rn-dev-agent-cdp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
     "dev": "tsc --watch"
   },
   "dependencies": {

@@ -83,7 +83,8 @@ export function createReloadHandler(getClient: () => CDPClient) {
     }
 
     if (!client.helpersInjected) {
-      const injected = await client.reinjectHelpers();
+      // B43 fix: pass tighter timeout (10s) to avoid exceeding reload's overall budget
+      const injected = await client.reinjectHelpers(10_000);
       if (!injected) {
         return warnResult(
           { reloaded: true, type: 'full', reconnected: true },

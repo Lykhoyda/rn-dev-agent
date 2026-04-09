@@ -49,7 +49,7 @@ if [ -z "${CLAUDE_USER_CWD:-}" ] && [ -n "${PWD:-}" ]; then
 fi
 
 if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
-  cd "$SCRIPT_DIR" && npm install --production --silent 2>/dev/null
+  cd "$SCRIPT_DIR" && npm install --production --ignore-scripts --silent 2>/dev/null
 fi
 
 # exec replaces the bash process with node — stdin/stdout pass through

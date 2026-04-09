@@ -71,7 +71,8 @@ export function createReloadHandler(getClient) {
             return okResult({ reloaded: true, type: 'full', reconnected: false }, { meta: { warning: 'Reload triggered but connection dropped after re-discovery.' } });
         }
         if (!client.helpersInjected) {
-            const injected = await client.reinjectHelpers();
+            // B43 fix: pass tighter timeout (10s) to avoid exceeding reload's overall budget
+            const injected = await client.reinjectHelpers(10_000);
             if (!injected) {
                 return warnResult({ reloaded: true, type: 'full', reconnected: true }, 'Reload succeeded but helper injection failed. App may still be loading — retry cdp_status.');
             }

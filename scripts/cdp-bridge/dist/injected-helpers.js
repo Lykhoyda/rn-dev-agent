@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 10;
+  var __HELPERS_VERSION__ = 11;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -1119,15 +1119,40 @@ export const INJECTED_HELPERS = `
           rnVersion: null,
           dimensions: null
         };
+        // B44 fix: try TurboModule first (works in Bridgeless), then require() fallback
         try {
-          var RN = require('react-native');
-          info.platform = RN.Platform.OS;
-          info.version = RN.Platform.Version;
-          info.dimensions = RN.Dimensions.get('window');
+          if (typeof __turboModuleProxy === 'function') {
+            var pc = __turboModuleProxy('PlatformConstants');
+            if (pc) {
+              info.platform = pc.OS || pc.interfaceIdiom || null;
+              info.version = pc.osVersion || pc.Version || null;
+              info.rnVersion = pc.reactNativeVersion || null;
+            }
+          }
         } catch(e) {}
-        try {
-          info.rnVersion = require('react-native/Libraries/Core/ReactNativeVersion').version;
-        } catch(e) {}
+        // Fallback: require() works in Classic bridge mode
+        if (!info.platform) {
+          try {
+            var RN = require('react-native');
+            info.platform = RN.Platform.OS;
+            info.version = RN.Platform.Version;
+            info.dimensions = RN.Dimensions.get('window');
+          } catch(e) {}
+        }
+        if (!info.rnVersion) {
+          try {
+            info.rnVersion = require('react-native/Libraries/Core/ReactNativeVersion').version;
+          } catch(e) {}
+        }
+        // Dimensions fallback via Dimensions module (may be available even when require fails)
+        if (!info.dimensions) {
+          try {
+            if (typeof globalThis.nativeModuleProxy !== 'undefined') {
+              var dims = globalThis.nativeModuleProxy.DeviceInfo && globalThis.nativeModuleProxy.DeviceInfo.Dimensions;
+              if (dims && dims.window) info.dimensions = dims.window;
+            }
+          } catch(e) {}
+        }
         return JSON.stringify(info);
       } catch(e) {
         return JSON.stringify({ error: e.message });

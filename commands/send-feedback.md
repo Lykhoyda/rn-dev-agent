@@ -1,6 +1,7 @@
 ---
 command: send-feedback
 description: Send feedback or report a bug for the rn-dev-agent plugin. Collects sanitized environment context and creates a GitHub issue. No sensitive data (paths, secrets, PII) is transmitted.
+argument-hint: [description or context from conversation]
 allowed-tools: Bash, Read, Grep, mcp__rn-dev-agent-cdp__cdp_status, mcp__rn-dev-agent-cdp__cdp_error_log, AskUserQuestion
 ---
 
@@ -10,14 +11,27 @@ Guide the user through submitting feedback for the rn-dev-agent plugin.
 All data is sanitized before submission — no home paths, secrets, PII, or
 IP addresses leave the local machine.
 
-## Step 1: Ask the user what type of feedback
+## Step 0: Check for pre-written context
+
+If `$ARGUMENTS` is provided, use it as the starting description. Scan the
+argument text for clues about type (bug/feature/question), steps to reproduce,
+workarounds, related issues, and suggested fixes. Pre-fill as much as
+possible so the user only confirms rather than re-typing.
+
+## Step 1: Gather feedback details
 
 Ask: "What would you like to report?"
 - **Bug report** — something broken or unexpected
 - **Feature request** — something missing or could be improved
 - **Question** — need help understanding something
 
-Then ask for a **description** of the issue (1-3 sentences).
+Then collect the following (skip what was already provided via $ARGUMENTS):
+
+1. **Description** (1-3 sentences) — what happened or what's needed
+2. **Steps to reproduce** (for bugs) — numbered list of steps. Ask: "How can I reproduce this?"
+3. **Known workaround** (optional) — "Did you find a workaround or fix?"
+4. **Related issues** (optional) — "Any related GitHub issues? (e.g., #22, #23)"
+5. **Suggested fix** (optional, for bugs) — "Do you know what should change?"
 
 ## Step 2: Collect environment context (automated)
 
@@ -108,9 +122,25 @@ gh issue create \
 
 <status summary or "not connected">
 
+## CDP Bridge Log (last 30 lines)
+
+<if cdp_bridge_log_tail present in collected data, format as code block. Omit section if no log file exists.>
+
 ## Steps to Reproduce
 
-<if bug: ask user or note "not provided">
+<numbered steps from user, or "Not provided">
+
+## Workaround
+
+<workaround from user, or omit section if not provided>
+
+## Suggested Fix
+
+<user's suggested fix, or omit section if not provided>
+
+## Related Issues
+
+<#N, #M links, or omit section if not provided>
 
 ---
 *Submitted via `/rn-dev-agent:send-feedback` — data sanitized automatically*

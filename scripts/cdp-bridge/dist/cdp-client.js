@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { RingBuffer } from './ring-buffer.js';
 import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from './injected-helpers.js';
 import { detectBridge } from './bridge-detector.js';
+import { logger } from './logger.js';
 const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
 const CDP_TIMEOUT_MS = 5000;
 const REACT_READY_TIMEOUT_MS = 30000;
@@ -73,10 +74,10 @@ export class CDPClient {
         }
         catch { /* may not exist */ }
     }
-    async reinjectHelpers() {
+    async reinjectHelpers(waitTimeout) {
         if (!this.isConnected)
             return false;
-        await this.waitForReact(REACT_READY_TIMEOUT_MS);
+        await this.waitForReact(waitTimeout ?? REACT_READY_TIMEOUT_MS);
         const helperResult = await this.evaluate(INJECTED_HELPERS);
         if (helperResult.error) {
             console.error('CDP: failed to re-inject helpers:', helperResult.error);
@@ -186,6 +187,7 @@ export class CDPClient {
             this._platformFilter = platformFilter || undefined;
         this._state = 'connecting';
         const ports = [...new Set([this._port, ...DEFAULT_PORTS])];
+        logger.debug('CDP', `Discovering Metro on ports: ${ports.join(', ')}${this._platformFilter ? ` (platform: ${this._platformFilter})` : ''}`);
         let metroPort = null;
         for (const p of ports) {
             const ctrl = new AbortController();
@@ -211,6 +213,7 @@ export class CDPClient {
                 '. Is the dev server running? Try: npx expo start or npx react-native start');
         }
         this._port = metroPort;
+        logger.info('CDP', `Metro found on port ${metroPort}`);
         const listCtrl = new AbortController();
         const listTimer = setTimeout(() => listCtrl.abort(), DISCOVERY_TIMEOUT_MS * 2);
         let targets;
@@ -271,6 +274,7 @@ export class CDPClient {
                 console.error('CDP: ' + platformFilterWarning);
             }
         }
+        logger.debug('CDP', `Found ${filteredTargets.length} valid target(s): ${filteredTargets.map(t => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
         // Sort by descending page ID (highest = most recent session)
         const sorted = [...filteredTargets].sort((a, b) => {
             const aPage = parseInt(a.id?.split('-')[1] ?? '0', 10);
@@ -314,12 +318,14 @@ export class CDPClient {
             }
         }
         this._connectionGeneration++;
+        logger.info('CDP', `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${this._connectionGeneration}`);
         const msg = `Connected to ${connectedTarget.title} on port ${metroPort}`;
         return platformFilterWarning ? `${msg}. WARNING: ${platformFilterWarning}` : msg;
     }
     async softReconnect() {
         if (this.disposed)
             throw new Error('Client is disposed');
+        logger.info('CDP', 'softReconnect initiated');
         // Preempt any background reconnect loop — signal it to bail out
         if (this.reconnecting) {
             this._softReconnectRequested = true;
@@ -418,16 +424,20 @@ export class CDPClient {
                     'Unknown evaluation error',
             };
         }
-        // Poll for result (up to 5s)
-        const start = Date.now();
-        while (Date.now() - start < CDP_TIMEOUT_MS) {
+        // B45 fix: Use absolute deadline to guarantee total wall-clock stays within CDP_TIMEOUT_MS.
+        // Each poll gets only the remaining time (min 500ms) to avoid overshooting.
+        const deadline = Date.now() + CDP_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+            const remaining = deadline - Date.now();
+            if (remaining < 500)
+                break;
+            const pollTimeout = Math.min(remaining - 100, 1500);
             const check = await this.sendWithTimeout('Runtime.evaluate', {
                 expression: `globalThis['${slot}']`,
                 returnByValue: true,
-            }, 2000);
+            }, pollTimeout);
             const val = check?.result?.value;
             if (val && typeof val === 'object') {
-                // Cleanup immediately (deferred timer is backup)
                 void this.sendWithTimeout('Runtime.evaluate', {
                     expression: `delete globalThis['${slot}']`,
                     returnByValue: true,
@@ -443,7 +453,6 @@ export class CDPClient {
             }
             await this.sleep(100);
         }
-        // Proactive cleanup — don't rely solely on the Hermes deferred timer
         void this.sendWithTimeout('Runtime.evaluate', {
             expression: `delete globalThis['${slot}']`,
             returnByValue: true,
@@ -591,6 +600,7 @@ export class CDPClient {
         }
     }
     async setup() {
+        logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
         await this.sendWithTimeout('Runtime.enable', undefined, CDP_TIMEOUT_MS);
         await this.sendWithTimeout('Debugger.enable', undefined, CDP_TIMEOUT_MS);
         try {
@@ -616,8 +626,9 @@ export class CDPClient {
             return;
         }
         this._helpersInjected = true;
+        logger.info('CDP', `Helpers injected (v11), network mode: ${this._networkMode}`);
         this.setActiveFlag();
-        detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; }).catch(() => { });
+        detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`); }).catch(() => { });
         if (this._networkMode === 'none') {
             const hookResult = await this.evaluate(NETWORK_HOOK_SCRIPT);
             if (hookResult.error) {
@@ -706,6 +717,7 @@ export class CDPClient {
         this._connectedTarget = null;
         if (this.disposed || this.reconnecting)
             return;
+        logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
         if (code === 1006) {
             console.error('CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...');
         }

@@ -98,7 +98,42 @@ export function withConnection<T>(
           // Probe failed — let handler attempt proceed and use existing error paths
         }
       }
-      return await handler(args, client);
+      const result = await handler(args, client);
+
+      // B63 fix: detect stale-target indicators in failResult responses.
+      // Most handlers return failResult instead of throwing on evaluate errors,
+      // so the stale-target probe (Path B below) never fires. Check the result
+      // for known stale indicators and retry with softReconnect if detected.
+      if (requireHelpers && result.isError && client.isConnected) {
+        const text = result.content?.[0]?.text ?? '';
+        const staleIndicators = ['__RN_AGENT', 'not defined', 'not found', 'not available', 'is not a function', 'Cannot read prop'];
+        const looksStale = staleIndicators.some(s => text.includes(s));
+        if (looksStale) {
+          try {
+            let staleProbeTimer: ReturnType<typeof setTimeout> | undefined;
+            const probe = await Promise.race([
+              client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v'),
+              new Promise<EvaluateResult>((res) => { staleProbeTimer = setTimeout(() => res({ error: 'timeout' }), 2000); }),
+            ]);
+            if (staleProbeTimer) clearTimeout(staleProbeTimer);
+            if (probe.error || typeof probe.value !== 'number') {
+              console.error('CDP: B63 stale handler result detected, re-injecting helpers...');
+              const reinjected = await client.reinjectHelpers();
+              if (reinjected) {
+                try {
+                  return await handler(args, client);
+                } catch {
+                  // Retry failed — return original result
+                }
+              }
+            }
+          } catch {
+            // Probe failed — return original result
+          }
+        }
+      }
+
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const isDisconnect = message.includes('WebSocket closed') || message.includes('WebSocket not connected');
