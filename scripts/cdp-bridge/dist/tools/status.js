@@ -35,7 +35,7 @@ async function buildStatusResult(client) {
     }
     return {
         metro: { running: true, port: client.metroPort },
-        cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null },
+        cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null },
         app: {
             platform: appInfo?.platform ?? null,
             dev: appInfo?.__DEV__ ?? null,
@@ -68,10 +68,12 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 await client.autoConnect(args.metroPort, args.platform);
             }
             else if (args.platform) {
-                // Already connected — check if the current target matches the requested platform
+                // GH #21: Already connected — check if the current target matches the requested platform
                 const currentTarget = client.connectedTarget;
-                const haystack = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`.toLowerCase();
-                if (!haystack.includes(args.platform.toLowerCase())) {
+                const requestedPlatform = args.platform.toLowerCase();
+                const currentPlatform = currentTarget?.platform?.toLowerCase();
+                const titleMatch = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`.toLowerCase().includes(requestedPlatform);
+                if (currentPlatform !== requestedPlatform && !titleMatch) {
                     await client.disconnect();
                     client = createClient(client.metroPort);
                     setClient(client);

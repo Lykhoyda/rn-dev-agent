@@ -56,6 +56,7 @@ export interface StatusResult {
     connected: boolean;
     device: string | null;
     pageId: string | null;
+    platform: string | null;
   };
   app: {
     platform: string | null;

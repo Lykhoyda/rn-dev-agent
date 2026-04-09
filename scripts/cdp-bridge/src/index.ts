@@ -74,10 +74,11 @@ trackedTool(
 
 trackedTool(
   'cdp_connect',
-  'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform or port, or reconnect after a manual disconnect. If already connected, returns current connection info without reconnecting.',
+  'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform or port, or reconnect after a manual disconnect. If already connected to a different platform than requested, automatically reconnects to the correct target. Use force=true to always reconnect regardless of current state.',
   {
     metroPort: z.number().optional().describe('Metro port to connect to (default: auto-detect 8081/8082/19000/19006)'),
-    platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android")'),
+    platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android"). If already connected to a different platform, forces reconnection to the correct target.'),
+    force: z.boolean().optional().default(false).describe('Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.'),
   },
   createConnectHandler(getClient, setClient, createClient),
 );

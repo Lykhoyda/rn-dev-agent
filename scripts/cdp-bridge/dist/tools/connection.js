@@ -2,13 +2,41 @@ import { okResult, failResult } from '../utils.js';
 export function createConnectHandler(getClient, setClient, createClient) {
     return async (args) => {
         let client = getClient();
-        if (client.isConnected) {
+        // GH #21: Check if already connected to the correct platform
+        if (client.isConnected && !args.force) {
             const target = client.connectedTarget;
-            return okResult({
-                alreadyConnected: true,
-                port: client.metroPort,
-                target: target ? { id: target.id, title: target.title, vm: target.vm } : null,
-            });
+            if (args.platform) {
+                const requestedPlatform = args.platform.toLowerCase();
+                const currentPlatform = target?.platform?.toLowerCase();
+                const titleMatch = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase().includes(requestedPlatform);
+                if (currentPlatform !== requestedPlatform && !titleMatch) {
+                    // Platform mismatch — force reconnection to correct target
+                    await client.disconnect();
+                    client = createClient(client.metroPort);
+                    setClient(client);
+                }
+                else {
+                    return okResult({
+                        alreadyConnected: true,
+                        port: client.metroPort,
+                        target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
+                    });
+                }
+            }
+            else {
+                return okResult({
+                    alreadyConnected: true,
+                    port: client.metroPort,
+                    target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
+                });
+            }
+        }
+        else if (client.isConnected && args.force) {
+            // Force reconnection regardless of current state
+            const port = args.metroPort ?? client.metroPort;
+            await client.disconnect();
+            client = createClient(port);
+            setClient(client);
         }
         if (args.metroPort && args.metroPort !== client.metroPort) {
             await client.disconnect();
@@ -22,7 +50,7 @@ export function createConnectHandler(getClient, setClient, createClient) {
                 connected: true,
                 message: msg,
                 port: client.metroPort,
-                target: target ? { id: target.id, title: target.title, vm: target.vm } : null,
+                target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
             });
         }
         catch (err) {
