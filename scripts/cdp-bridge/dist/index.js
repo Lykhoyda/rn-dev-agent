@@ -39,7 +39,7 @@ const setClient = (c) => { client = c; };
 const createClient = (port) => new CDPClient(port);
 const server = new McpServer({
     name: 'rn-dev-agent-cdp',
-    version: '0.9.0',
+    version: '0.9.1',
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
@@ -314,7 +314,7 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 async function main() {
-    logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.0 (log level: ${logger.level})`);
+    logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
     if (logger.logFilePath) {
         logger.info('MCP', `Log file: ${logger.logFilePath}`);
     }
