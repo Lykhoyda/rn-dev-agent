@@ -1,40 +1,9 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
-import { findProjectRoot } from '../nav-graph/storage.js';
+import { resolveBundleId } from '../project-config.js';
 const execFile = promisify(execFileCb);
-function readAppId(projectRoot, platform) {
-    for (const filename of ['app.json', 'app.config.json']) {
-        const p = join(projectRoot, filename);
-        if (!existsSync(p))
-            continue;
-        try {
-            const raw = JSON.parse(readFileSync(p, 'utf-8'));
-            const expo = raw.expo ?? raw;
-            const iosBundleId = expo.ios?.bundleIdentifier;
-            const androidPkg = expo.android?.package;
-            if (platform === 'android')
-                return androidPkg ?? iosBundleId ?? null;
-            return iosBundleId ?? androidPkg ?? null;
-        }
-        catch {
-            continue;
-        }
-    }
-    return null;
-}
-function resolveBundleId(platform) {
-    const projectRoot = findProjectRoot();
-    if (projectRoot) {
-        const appId = readAppId(projectRoot, platform);
-        if (appId)
-            return appId;
-    }
-    return null;
-}
 async function launchApp(bundleId, platform) {
     if (platform === 'ios') {
         await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {

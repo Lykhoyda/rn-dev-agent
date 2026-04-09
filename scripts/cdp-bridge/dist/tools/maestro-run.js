@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { findProjectRoot } from '../nav-graph/storage.js';
+import { resolveBundleId, readExpoSlug } from '../project-config.js';
 const execFile = promisify(execFileCb);
 function getRunnerPath() {
     const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
@@ -20,20 +20,9 @@ function resolvePlatform(override) {
 function resolveAppId(override, platform) {
     if (override)
         return override;
-    const root = findProjectRoot();
-    if (!root)
-        return '';
-    try {
-        const appJson = JSON.parse(require('node:fs').readFileSync(join(root, 'app.json'), 'utf-8'));
-        if (platform === 'ios')
-            return appJson?.expo?.ios?.bundleIdentifier ?? appJson?.expo?.slug ?? '';
-        if (platform === 'android')
-            return appJson?.expo?.android?.package ?? appJson?.expo?.slug ?? '';
-        return appJson?.expo?.slug ?? '';
-    }
-    catch {
-        return '';
-    }
+    if (platform)
+        return resolveBundleId(platform) ?? readExpoSlug() ?? '';
+    return readExpoSlug() ?? '';
 }
 export function createMaestroRunHandler() {
     return async (args) => {

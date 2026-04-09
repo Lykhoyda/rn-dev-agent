@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
+import { readAppId } from '../project-config.js';
 
 const execFile = promisify(execFileCb);
 
@@ -98,30 +99,6 @@ function findLoginFlow(projectRoot: string): string | null {
     if (authFile) return join(dir, authFile);
   }
 
-  return null;
-}
-
-function readAppId(projectRoot: string, platform: string): string | null {
-  for (const filename of ['app.json', 'app.config.json']) {
-    const p = join(projectRoot, filename);
-    if (!existsSync(p)) continue;
-    try {
-      const raw = JSON.parse(readFileSync(p, 'utf-8')) as {
-        expo?: { ios?: { bundleIdentifier?: string }; android?: { package?: string } };
-        ios?: { bundleIdentifier?: string };
-        android?: { package?: string };
-      };
-      const expo = raw.expo ?? raw;
-      const iosBundleId = (expo as { ios?: { bundleIdentifier?: string } }).ios?.bundleIdentifier;
-      const androidPkg = (expo as { android?: { package?: string } }).android?.package;
-      if (platform === 'android') {
-        return androidPkg ?? iosBundleId ?? null;
-      }
-      return iosBundleId ?? androidPkg ?? null;
-    } catch {
-      continue;
-    }
-  }
   return null;
 }
 

@@ -1,21 +1,30 @@
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../fast-runner-session.js';
-import { okResult, failResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { resolveBundleId } from '../project-config.js';
 export function createDeviceSnapshotHandler() {
     return async (args) => {
         const action = args.action ?? 'snapshot';
         if (action === 'open') {
-            if (!args.appId) {
-                return failResult('appId is required for action=open (e.g. "com.example.app")');
+            let appId = args.appId;
+            let autoDetected = false;
+            if (!appId) {
+                const platform = args.platform ?? 'ios';
+                appId = resolveBundleId(platform) ?? undefined;
+                if (!appId) {
+                    return failResult('appId is required for action=open (e.g. "com.example.app"). ' +
+                        'Could not auto-detect from app.json — provide appId explicitly.');
+                }
+                autoDetected = true;
             }
             // Warn when targeting Expo Go — agent-device steals focus from Expo Go (B71)
             const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];
-            if (EXPO_GO_BUNDLES.includes(args.appId)) {
+            if (EXPO_GO_BUNDLES.includes(appId)) {
                 return failResult('agent-device is incompatible with Expo Go — it steals foreground focus (B71). ' +
                     'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) and xcrun simctl for screenshots instead.', { hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.' });
             }
             const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
-            const cliArgs = ['open', args.appId, '--session', sessionName];
+            const cliArgs = ['open', appId, '--session', sessionName];
             if (args.platform)
                 cliArgs.push('--platform', args.platform);
             const result = await runAgentDevice(cliArgs, { skipSession: true });
@@ -33,7 +42,10 @@ export function createDeviceSnapshotHandler() {
                     openedAt: new Date().toISOString(),
                 });
                 if (args.platform === 'ios' && deviceId) {
-                    ensureFastRunner(deviceId, args.appId).catch(() => { });
+                    ensureFastRunner(deviceId, appId).catch(() => { });
+                }
+                if (autoDetected) {
+                    return warnResult(JSON.parse(result.content[0].text).data, `appId auto-detected from app.json: ${appId}`);
                 }
             }
             return result;

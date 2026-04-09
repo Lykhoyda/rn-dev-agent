@@ -5,16 +5,23 @@ export function createDeviceListHandler() {
 export function createDeviceScreenshotHandler() {
     return async (args) => {
         const cliArgs = ['screenshot'];
-        if (args.path)
-            cliArgs.push(args.path);
-        if (args.format) {
-            cliArgs.push('--format', args.format);
+        // Resolve output path first — ensures all dispatch tiers (fast-runner,
+        // daemon, CLI) receive a concrete path instead of --format flags that
+        // the daemon would misinterpret as a positional file path (GH #26).
+        let outputPath = args.path;
+        if (!outputPath && args.format) {
+            const ext = args.format === 'jpeg' ? 'jpg' : args.format;
+            outputPath = `/tmp/rn-screenshot-${Date.now()}.${ext}`;
         }
-        else if (args.path) {
-            if (args.path.endsWith('.jpg') || args.path.endsWith('.jpeg')) {
+        if (outputPath) {
+            cliArgs.push(outputPath);
+            if (args.format) {
+                cliArgs.push('--format', args.format);
+            }
+            else if (outputPath.endsWith('.jpg') || outputPath.endsWith('.jpeg')) {
                 cliArgs.push('--format', 'jpeg');
             }
-            else if (args.path.endsWith('.png')) {
+            else if (outputPath.endsWith('.png')) {
                 cliArgs.push('--format', 'png');
             }
         }

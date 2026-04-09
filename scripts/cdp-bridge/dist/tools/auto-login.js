@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
+import { readAppId } from '../project-config.js';
 const execFile = promisify(execFileCb);
 const AUTH_ROUTE_PATTERNS = [
     'login', 'signin', 'sign_in', 'sign-in',
@@ -74,27 +75,6 @@ function findLoginFlow(projectRoot) {
         const authFile = files.find(f => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some(p => f.toLowerCase().includes(p)));
         if (authFile)
             return join(dir, authFile);
-    }
-    return null;
-}
-function readAppId(projectRoot, platform) {
-    for (const filename of ['app.json', 'app.config.json']) {
-        const p = join(projectRoot, filename);
-        if (!existsSync(p))
-            continue;
-        try {
-            const raw = JSON.parse(readFileSync(p, 'utf-8'));
-            const expo = raw.expo ?? raw;
-            const iosBundleId = expo.ios?.bundleIdentifier;
-            const androidPkg = expo.android?.package;
-            if (platform === 'android') {
-                return androidPkg ?? iosBundleId ?? null;
-            }
-            return iosBundleId ?? androidPkg ?? null;
-        }
-        catch {
-            continue;
-        }
     }
     return null;
 }

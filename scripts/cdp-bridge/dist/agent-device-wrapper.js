@@ -29,16 +29,39 @@ function loadDaemonInfo() {
         return null;
     }
 }
-function sendToDaemon(command, positionals, session, timeoutMs = DAEMON_TIMEOUT) {
+function extractFlags(args) {
+    const positionals = [];
+    const flags = {};
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith('--') && arg.length > 2) {
+            const key = arg.slice(2);
+            const next = args[i + 1];
+            if (next !== undefined && !next.startsWith('--')) {
+                flags[key] = next;
+                i++;
+            }
+            else {
+                flags[key] = true;
+            }
+        }
+        else {
+            positionals.push(arg);
+        }
+    }
+    return { positionals, flags };
+}
+function sendToDaemon(command, rawArgs, session, timeoutMs = DAEMON_TIMEOUT) {
     const info = loadDaemonInfo();
     if (!info)
         return Promise.reject(new Error('daemon not available'));
+    const { positionals, flags } = extractFlags(rawArgs);
     const req = {
         token: info.token,
         session,
         command,
         positionals,
-        flags: {},
+        flags,
     };
     return new Promise((resolve, reject) => {
         const sock = createConnection({ host: '127.0.0.1', port: info.port }, () => {

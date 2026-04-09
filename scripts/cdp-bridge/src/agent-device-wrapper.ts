@@ -48,16 +48,39 @@ function loadDaemonInfo(): DaemonInfo | null {
   }
 }
 
-function sendToDaemon(command: string, positionals: string[], session: string, timeoutMs = DAEMON_TIMEOUT): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string; hint?: string } }> {
+function extractFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
+  const positionals: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--') && arg.length > 2) {
+      const key = arg.slice(2);
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positionals.push(arg);
+    }
+  }
+  return { positionals, flags };
+}
+
+function sendToDaemon(command: string, rawArgs: string[], session: string, timeoutMs = DAEMON_TIMEOUT): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string; hint?: string } }> {
   const info = loadDaemonInfo();
   if (!info) return Promise.reject(new Error('daemon not available'));
+
+  const { positionals, flags } = extractFlags(rawArgs);
 
   const req = {
     token: info.token,
     session,
     command,
     positionals,
-    flags: {},
+    flags,
   };
 
   return new Promise((resolve, reject) => {

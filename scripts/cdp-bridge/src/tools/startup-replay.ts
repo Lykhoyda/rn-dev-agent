@@ -1,11 +1,9 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { CDPClient } from '../cdp-client.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
-import { findProjectRoot } from '../nav-graph/storage.js';
+import { resolveBundleId } from '../project-config.js';
 
 const execFile = promisify(execFileCb);
 
@@ -18,37 +16,6 @@ export interface StartupReplayResult {
   picker_dismissed?: boolean;
   reconnect_attempts?: number;
   error?: string;
-}
-
-function readAppId(projectRoot: string, platform: string): string | null {
-  for (const filename of ['app.json', 'app.config.json']) {
-    const p = join(projectRoot, filename);
-    if (!existsSync(p)) continue;
-    try {
-      const raw = JSON.parse(readFileSync(p, 'utf-8')) as {
-        expo?: { ios?: { bundleIdentifier?: string }; android?: { package?: string } };
-        ios?: { bundleIdentifier?: string };
-        android?: { package?: string };
-      };
-      const expo = raw.expo ?? raw;
-      const iosBundleId = (expo as { ios?: { bundleIdentifier?: string } }).ios?.bundleIdentifier;
-      const androidPkg = (expo as { android?: { package?: string } }).android?.package;
-      if (platform === 'android') return androidPkg ?? iosBundleId ?? null;
-      return iosBundleId ?? androidPkg ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function resolveBundleId(platform: string): string | null {
-  const projectRoot = findProjectRoot();
-  if (projectRoot) {
-    const appId = readAppId(projectRoot, platform);
-    if (appId) return appId;
-  }
-  return null;
 }
 
 async function launchApp(bundleId: string, platform: string): Promise<void> {
