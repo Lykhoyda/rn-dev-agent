@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { logger } from '../logger.js';
 import { scanTelemetry, groupFailures, generateCandidates, computeDecay } from './compact.js';
 const AGENT_DIR = join(homedir(), '.claude', 'rn-agent');
 const EXPERIENCE_PATH = join(AGENT_DIR, 'experience.md');
@@ -184,4 +185,74 @@ export function runCompactionCycle() {
         },
         promotions,
     };
+}
+const LAST_COMPACT_PATH = join(AGENT_DIR, 'last-compact.json');
+const AUTO_COMPACT_MIN_EVENTS = 200;
+const AUTO_COMPACT_MIN_DAYS = 3;
+function readLastCompactTime() {
+    try {
+        if (!existsSync(LAST_COMPACT_PATH))
+            return 0;
+        const data = JSON.parse(readFileSync(LAST_COMPACT_PATH, 'utf-8'));
+        return data.ts ?? 0;
+    }
+    catch {
+        return 0;
+    }
+}
+function writeLastCompactTime() {
+    try {
+        if (!existsSync(AGENT_DIR))
+            mkdirSync(AGENT_DIR, { recursive: true });
+        writeFileSync(LAST_COMPACT_PATH, JSON.stringify({ ts: Date.now() }), 'utf-8');
+    }
+    catch { /* best-effort */ }
+}
+function countTelemetryEvents() {
+    if (!existsSync(TELEMETRY_DIR))
+        return 0;
+    try {
+        let total = 0;
+        for (const file of readdirSync(TELEMETRY_DIR)) {
+            if (!file.endsWith('.jsonl'))
+                continue;
+            const stat = statSync(join(TELEMETRY_DIR, file));
+            // Rough estimate: ~200 bytes per JSONL line
+            total += Math.ceil(stat.size / 200);
+        }
+        return total;
+    }
+    catch {
+        return 0;
+    }
+}
+function shouldAutoCompact() {
+    const lastCompact = readLastCompactTime();
+    const daysSince = (Date.now() - lastCompact) / (1000 * 60 * 60 * 24);
+    const eventEstimate = countTelemetryEvents();
+    if (eventEstimate < 10)
+        return false;
+    if (daysSince >= AUTO_COMPACT_MIN_DAYS && eventEstimate >= AUTO_COMPACT_MIN_EVENTS)
+        return true;
+    if (daysSince >= 7)
+        return true;
+    return false;
+}
+export function autoCompactIfNeeded() {
+    try {
+        if (!shouldAutoCompact())
+            return;
+        logger.info('EXP', 'Auto-compaction triggered');
+        const { result, promotions } = runCompactionCycle();
+        writeLastCompactTime();
+        logger.info('EXP', `Compacted: ${result.events_processed} events, ${result.candidates_generated} candidates, ${result.candidates_auto_promoted} auto-promoted, ${result.heuristics_decayed} decayed, ${result.heuristics_removed} removed`);
+        if (promotions.length > 0) {
+            for (const p of promotions) {
+                logger.info('EXP', `Promoted ${p.heuristic_id}: ${p.reason}`);
+            }
+        }
+    }
+    catch (err) {
+        logger.warn('EXP', `Auto-compaction failed: ${err instanceof Error ? err.message : err}`);
+    }
 }

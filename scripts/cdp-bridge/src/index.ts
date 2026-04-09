@@ -41,9 +41,10 @@ import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
 import { stopFastRunner } from './fast-runner-session.js';
-import { instrumentTool, pruneOldTelemetry } from './experience/index.js';
+import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 
 pruneOldTelemetry();
+autoCompactIfNeeded();
 
 let client = new CDPClient();
 
@@ -53,7 +54,7 @@ const createClient = (port: number): CDPClient => new CDPClient(port);
 
 const server = new McpServer({
   name: 'rn-dev-agent-cdp',
-  version: '0.9.1',
+  version: '0.9.2',
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
