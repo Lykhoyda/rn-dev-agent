@@ -1,0 +1,74 @@
+---
+title: "Device Control"
+description: "iOS Simulator and Android Emulator lifecycle, screenshots, UI hierarchy, and native log commands."
+---
+
+The device control skill provides comprehensive reference for controlling simulators and emulators, capturing screenshots, reading UI state, managing permissions, and handling Expo/EAS builds.
+
+## When loaded
+
+Activates when Claude encounters tasks involving simulator/emulator interaction: taking screenshots, booting devices, installing apps, reading UI hierarchy, opening deep links, granting permissions, streaming native logs, or managing device settings.
+
+## Key Knowledge Areas
+
+### iOS Simulator (simctl)
+
+Commands for boot/shutdown, app install/launch/terminate, deep links, screenshots, native log streaming, and permissions. Key recommendations:
+- Prefer JPEG screenshots (80ms, 200KB) over PNG (150ms, 800KB)
+- Use `processImagePath ENDSWITH "/BinaryName"` for precise native log filtering
+- Use `xcrun simctl privacy` for permission grants/revokes
+
+### Android Emulator (adb)
+
+Commands for device management, deep links, screenshots, UI hierarchy extraction, animation control, native logs, permissions, and locale. Key recommendations:
+- Use `adb exec-out screencap -p` for direct-pipe screenshots (skips device storage round-trip)
+- `uiautomator dump --compressed` provides full structured accessibility tree
+- Disable animations before test runs (window, transition, animator scales to 0)
+
+### agent-device CLI
+
+Cross-platform unified device interaction that eliminates platform-specific branching:
+
+| Task | Tool |
+|------|------|
+| List devices | `device_list` |
+| Screenshot | `device_screenshot` |
+| UI element tree | `device_snapshot` (returns @refs) |
+| Tap by text | `device_find text="Sign In" action=click` |
+| Tap by ref | `device_press ref=@e3` |
+| Fill input | `device_fill ref=@e5 text="hello"` |
+| Scroll/swipe | `device_swipe direction=up` |
+| System back | `device_back` |
+
+### Concurrent State Snapshot
+
+`scripts/snapshot_state.sh` captures screenshot + UI hierarchy simultaneously, cutting state-check time by ~40%.
+
+### Benchmark Reference
+
+| Operation | Time | Size |
+|-----------|------|------|
+| iOS screenshot (JPEG) | 80ms | 200KB |
+| iOS screenshot (PNG) | 150ms | 800KB |
+| Android screenshot (exec-out) | 300ms | 800KB |
+| Android UI hierarchy (raw) | 300-500ms | 15-30KB XML |
+| Android UI hierarchy (parsed) | 350-550ms | 2-3KB JSON |
+
+### Expo/EAS Build Integration
+
+Decision table for build workflows:
+
+| Situation | Action |
+|-----------|--------|
+| App running + Metro connected | Skip, proceed to testing |
+| Metro not running, app missing | `expo_ensure_running.sh ios` or `android` |
+| Test a specific EAS build | `eas_resolve_artifact.sh` then `expo_ensure_running.sh --artifact` |
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Simulator not booting | `xcrun simctl shutdown all && xcrun simctl erase all` |
+| adb shows "unauthorized" | Revoke USB debugging, reconnect, tap Allow |
+| Screenshot hangs | Wait for home screen, verify boot completed |
+| uiautomator dump fails | Wake screen with keyevent WAKEUP |

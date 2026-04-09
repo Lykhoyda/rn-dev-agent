@@ -1,0 +1,20 @@
+---
+title: "cdp_reload"
+description: "Trigger a full reload of the app"
+sidebar:
+  order: 5
+---
+
+Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 15s). Returns when app is ready for queries again.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `full` | `boolean` | No | `true` |  | Always performs a full reload via DevSettings.reload() |
+
+## Usage
+
+```
+cdp_reload()
+```

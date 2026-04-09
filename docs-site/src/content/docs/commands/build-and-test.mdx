@@ -1,0 +1,52 @@
+---
+title: "build-and-test"
+description: "Build the Expo/React Native app, install on simulator, then test a feature end-to-end."
+sidebar:
+  order: 4
+---
+
+Build the app (local or EAS), install on the simulator or emulator, start Metro, then run the full 7-step test protocol on the specified feature.
+
+## Usage
+
+```
+/rn-dev-agent:build-and-test <description>
+/rn-dev-agent:build-and-test --eas [profile] <description>
+```
+
+## Examples
+
+```
+/rn-dev-agent:build-and-test shopping cart -- local build, then test add-to-cart flow
+/rn-dev-agent:build-and-test --eas development login screen -- install EAS build, test auth
+/rn-dev-agent:build-and-test --eas preview payment flow -- test a specific EAS profile
+```
+
+## Build Modes
+
+| Mode | When | What happens |
+|------|------|-------------|
+| Local dev build | Default (no `--eas` flag) | Runs `npx expo run:ios` or `npx expo run:android` |
+| EAS artifact | `--eas` flag provided | Downloads from EAS, installs on simulator |
+| Skip build | App already running | Proceeds directly to testing |
+
+## What Happens
+
+1. **Detect platform** — check for booted iOS simulator or Android emulator
+2. **Check if app is running** — call `cdp_status` to see if Metro + Hermes are connected
+3. **Build/install if needed** — local build or EAS artifact download
+4. **Start Metro** if not already running
+5. **Run the 7-step test protocol** — environment check, understand feature, plan test, navigate, execute + verify, edge cases, generate test file
+
+## When to Use
+
+- Testing a feature on a fresh build
+- After native dependency changes that require a rebuild
+- When installing an EAS build artifact for the first time
+
+## Prerequisites
+
+- iOS Simulator or Android Emulator booted
+- Expo project with `app.json` or `app.config.js/ts`
+- For EAS builds: `eas-cli` installed and logged in
+- For local builds: Xcode (iOS) or Android SDK (Android)

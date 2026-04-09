@@ -1,0 +1,52 @@
+---
+title: "test-feature"
+description: "Test a React Native feature on the running simulator — verify UI, user flows, and state."
+sidebar:
+  order: 1
+---
+
+Test an already-implemented feature on the running simulator or emulator. Verifies UI rendering, user flows, and internal state, then generates a persistent Maestro test file for CI.
+
+## Usage
+
+```
+/rn-dev-agent:test-feature <feature-description>
+```
+
+## Examples
+
+```
+/rn-dev-agent:test-feature shopping cart -- add items, see badge, checkout
+/rn-dev-agent:test-feature user authentication -- login, persist session, logout
+/rn-dev-agent:test-feature profile screen -- edit name, upload photo, save
+```
+
+## 7-Step Verification Protocol
+
+| Step | What happens |
+|------|-------------|
+| 1 | **Environment check** — confirm Metro running, CDP connected, no RedBox |
+| 2 | **Understand the feature** — read implementation files, find testIDs, routes, store slices |
+| 3 | **Plan the test** — write test steps and expected outcomes before executing |
+| 4 | **Navigate to start** — use deep links or navigation to reach the starting screen |
+| 5 | **Execute and verify** — for each step: act, wait, verify UI via `cdp_component_tree`, verify data via `cdp_store_state` |
+| 6 | **Edge cases** — test empty state, error state, back navigation, rapid interactions |
+| 7 | **Generate persistent test** — write `flows/<feature-name>.yaml` Maestro flow for CI |
+
+## Output
+
+- Pass/fail summary with evidence (screenshots, component tree snapshots, store state)
+- A `flows/<feature-name>.yaml` Maestro flow file written to the repo
+
+## When to Use
+
+- After implementing a feature manually and wanting to verify it works
+- To generate Maestro test files for CI without running the full 8-phase pipeline
+- To test edge cases on an existing feature
+
+## Prerequisites
+
+- iOS Simulator or Android Emulator running with the app loaded
+- Metro dev server running
+- Maestro or maestro-runner installed
+- For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry

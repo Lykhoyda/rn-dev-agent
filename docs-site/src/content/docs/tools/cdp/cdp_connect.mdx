@@ -1,0 +1,21 @@
+---
+title: "cdp_connect"
+description: "Explicitly connect to a Hermes debug target"
+sidebar:
+  order: 1
+---
+
+Explicitly connect to a Hermes debug target. Use when you need to target a specific platform or port, or reconnect after a manual disconnect. If already connected, returns current connection info without reconnecting.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `metroPort` | `number` | No |  |  | Metro port to connect to (default: auto-detect 8081/8082/19000/19006) |
+| `platform` | `string` | No |  |  | Filter target by platform (e.g. "ios", "android") |
+
+## Usage
+
+```
+cdp_connect()
+```

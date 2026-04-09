@@ -1,0 +1,102 @@
+---
+title: Architecture
+description: Three-layer architecture — device interaction, app introspection, and E2E testing.
+---
+
+## Three-layer model
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Claude Code                                         │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐ │
+│  │ Skills       │  │ Agents       │  │ Commands   │ │
+│  │ (knowledge)  │  │ (protocols)  │  │ (entry pts)│ │
+│  └──────┬───┬──┘  └──────┬───────┘  └─────┬──────┘ │
+│         │   │            │                 │        │
+│  ┌──────▼───▼────────────▼─────────────────▼──────┐ │
+│  │              MCP Server (CDP Bridge)            │ │
+│  │  WebSocket → Metro → Hermes CDP                 │ │
+│  │  38 tools: CDP + device + testing               │ │
+│  └─────────────────────┬───────────────────────────┘ │
+│                        │                             │
+│  ┌─────────────────────▼───────────────────────────┐ │
+│  │           agent-device CLI                      │ │
+│  │  Native device interaction + fast-runner        │ │
+│  └──────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+         │                              │
+    ┌────▼────┐                   ┌─────▼─────┐
+    │ iOS Sim │                   │ Android   │
+    │         │                   │ Emulator  │
+    └─────────┘                   └───────────┘
+```
+
+| Layer | Tool | Role |
+|-------|------|------|
+| **Device interaction** | agent-device CLI (auto-installed) | Cross-platform native device control: tap, swipe, fill, find, snapshot, screenshot |
+| **App introspection** | Custom MCP server → Hermes CDP via WebSocket | Persistent WebSocket — reads React fiber tree, store state, network, console, errors |
+| **E2E testing** | maestro-runner (preferred) / Maestro (fallback) | YAML-based persistent test files for CI |
+
+Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent-device is unavailable.
+
+## MCP server (CDP bridge)
+
+The MCP server is a Node.js process that maintains a persistent WebSocket connection to the React Native app's Hermes engine through Metro's CDP endpoint.
+
+**38 tools** in three categories:
+- **19 CDP tools** — React internals via Chrome DevTools Protocol
+- **14 device tools** — Native interaction via agent-device CLI
+- **5 testing/composite tools** — Maestro flows, proof capture, auto-login
+
+All tools are registered through a single `trackedTool()` wrapper that adds telemetry via the Experience Engine.
+
+### Helper injection
+
+On first CDP connect, ~2KB of JavaScript is injected into the Hermes runtime via `Runtime.evaluate`. This creates `globalThis.__RN_AGENT` with methods:
+
+- `getTree(filter, depth)` — Walk the React fiber tree
+- `getNavState()` — Read React Navigation / Expo Router state
+- `getStoreState(path, type)` — Read Redux / Zustand / React Query
+- `getComponentState(testID)` — Inspect hooks by testID
+- `navigateTo(screen, params)` — Navigate via fiber tree traversal
+- `getErrors()` / `clearErrors()` — Error tracking
+
+### Ring buffers
+
+Since MCP is pull-based (tools are called on demand), events that fire between calls are buffered:
+
+| Buffer | Size | Content |
+|--------|------|---------|
+| Console | 200 entries | `console.log/warn/error` output |
+| Network | 100 entries | HTTP request/response metadata |
+| Errors | 50 entries | Unhandled exceptions and promise rejections |
+
+### Key technical decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Inject helpers ONCE on connect | ~2KB JS, then call `__RN_AGENT.*` — small payloads per call |
+| 5-second timeout on ALL CDP calls | Prevents hanging promises |
+| RedBox detection before tree return | Check fiber root for LogBox/ErrorWindow, warn instead of returning error overlay |
+| `Debugger.paused` auto-resume | Prevents silent JS thread freeze from `debugger;` statements |
+| Network fallback for RN < 0.83 | Try `Network.enable`, if fails → inject fetch/XHR monkey-patches |
+| Filter mandatory on component tree | Full dumps waste 10K+ tokens — always scope to testID or component |
+
+## 3-tier device dispatch
+
+For iOS, device interactions use a three-tier fallback:
+
+1. **fast-runner** (XCTest HTTP server) — ~216ms tap, ~5ms snapshot, ~74ms screenshot
+2. **agent-device daemon** — persistent process, medium latency
+3. **agent-device CLI** — direct invocation, highest latency
+
+The fast-runner is the default path when available, providing 13x faster tap interactions than the CLI fallback.
+
+## What we're NOT using (and why)
+
+| Tool | Why not |
+|------|---------|
+| **Appium** | Too heavy, latency overhead, black-box (no RN sync) |
+| **Flipper** | Deprecated for debugging in RN 0.76+ |
+| **Detox** | Great for JS tests but not AI-agent-friendly (JS files, not YAML) |
+| **Facebook idb** | Python + pip + companion daemon = too much setup friction |

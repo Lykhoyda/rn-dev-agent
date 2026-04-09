@@ -1,0 +1,127 @@
+---
+title: Getting Started
+description: Install and configure rn-dev-agent for your React Native project.
+---
+
+## Requirements
+
+| Requirement | Notes |
+|-------------|-------|
+| Node.js >= 22 (LTS) | For the CDP bridge MCP server |
+| Claude Code CLI | `npm install -g @anthropic-ai/claude-code` |
+| iOS Simulator or Android Emulator | At least one platform |
+| Metro dev server running | `npx expo start` or `npx react-native start` |
+
+**maestro-runner** and **agent-device** are auto-installed on first plugin load.
+
+## Installation
+
+From inside Claude Code:
+
+```bash
+# 1. Add the marketplace
+/plugin marketplace add Lykhoyda/rn-dev-agent
+
+# 2. Install the plugin
+/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
+
+# 3. Reload plugins to activate
+/reload-plugins
+```
+
+Or use the interactive UI:
+
+```bash
+/plugin
+```
+
+### Keeping up to date
+
+Enable auto-update in the plugin manager (Marketplaces tab). With auto-update enabled, Claude Code checks for new versions at startup.
+
+Manual update:
+
+```bash
+/plugin update rn-dev-agent@Lykhoyda-rn-dev-agent
+/reload-plugins
+```
+
+## Setup for your app
+
+### No setup needed for most apps
+
+The plugin connects to your running app via Metro's CDP endpoint and reads the React fiber tree directly.
+
+### Zustand stores (one line)
+
+```typescript
+// App.tsx or app/_layout.tsx
+if (__DEV__) {
+  global.__ZUSTAND_STORES__ = {
+    auth: useAuthStore,
+    cart: useCartStore,
+  };
+}
+```
+
+Zero production cost — stripped in release builds.
+
+### Redux
+
+Auto-detected. No setup needed.
+
+### testIDs
+
+Add `testID` to interactive elements for reliable component queries:
+
+```tsx
+<Pressable testID="checkout-button" onPress={handleCheckout}>
+  <Text testID="cart-badge">{itemCount}</Text>
+</Pressable>
+```
+
+## Recommended: Add to your CLAUDE.md
+
+Copy this into your project's `CLAUDE.md` to ensure Claude uses CDP tools:
+
+```markdown
+## React Native Development (rn-dev-agent)
+
+### Tool Usage Rules
+- ALWAYS use CDP MCP tools instead of raw bash commands
+- ALWAYS call cdp_status first before any app interaction
+- NEVER use xcrun simctl openurl for navigation
+- For UI interaction, use device_find/device_press — not simctl or adb input
+
+### Key Commands
+- /rn-dev-agent:rn-feature-dev <description> — Full 8-phase pipeline
+- /rn-dev-agent:check-env — Verify environment
+- /rn-dev-agent:debug-screen — Diagnose current screen
+```
+
+## First run
+
+Navigate to your React Native project and start building:
+
+```bash
+cd /path/to/your-rn-app
+claude
+```
+
+On startup the plugin auto-detects your project and installs dependencies. Then:
+
+```
+/rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
+```
+
+Claude handles the rest — 8 phases from understanding to verified code with proof screenshots.
+
+## Install from source (development)
+
+```bash
+git clone https://github.com/Lykhoyda/rn-dev-agent.git
+cd rn-dev-agent/scripts/cdp-bridge && npm install && npm run build && cd ../..
+
+cd /path/to/your-rn-app
+claude --plugin-dir /path/to/rn-dev-agent
+```

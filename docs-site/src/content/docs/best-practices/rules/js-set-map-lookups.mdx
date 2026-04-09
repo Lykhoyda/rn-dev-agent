@@ -1,0 +1,31 @@
+---
+title: "Use Set/Map for O(1) Lookups"
+description: "MEDIUM impact — "
+---
+# Use Set/Map for O(1) Lookups
+
+**Impact: MEDIUM (O(n) to O(1) per check)**
+
+Convert arrays to Set/Map for repeated membership checks.
+
+**Incorrect (O(n) per check):**
+
+```typescript
+const bookmarkedIds = ['a', 'b', 'c', ...]
+items.filter(item => bookmarkedIds.includes(item.id))
+```
+
+**Correct (O(1) per check):**
+
+```typescript
+const bookmarkedIds = new Set(['a', 'b', 'c', ...])
+items.filter(item => bookmarkedIds.has(item.id))
+```
+
+Common React Native cases:
+- Filtering FlatList data by bookmarked/selected IDs
+- Checking if a notification has been read
+- Permission sets (`allowedRoles.has(user.role)`)
+- Selection mode: `selectedIds.has(item.id)` (already used in S12/S28 patterns)
+
+Source: [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)

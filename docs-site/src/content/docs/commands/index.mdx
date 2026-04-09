@@ -1,0 +1,40 @@
+---
+title: Commands
+description: 12 slash commands for React Native development, testing, and maintenance.
+---
+
+## Core commands
+
+The primary workflow starts with `/rn-feature-dev`. Other commands are useful on their own or alongside it.
+
+| Command | When to use |
+|---------|-------------|
+| [`rn-feature-dev`](/rn-dev-agent/commands/rn-feature-dev/) | Build a complete feature with the 8-phase pipeline |
+| [`test-feature`](/rn-dev-agent/commands/test-feature/) | Test an already-implemented feature end-to-end |
+| [`build-and-test`](/rn-dev-agent/commands/build-and-test/) | Build the app first, then test |
+| [`debug-screen`](/rn-dev-agent/commands/debug-screen/) | Diagnose a broken screen — gather evidence, apply fix |
+| [`check-env`](/rn-dev-agent/commands/check-env/) | Verify Metro, CDP, and simulator are ready |
+
+## Proof & testing
+
+| Command | When to use |
+|---------|-------------|
+| [`proof-capture`](/rn-dev-agent/commands/proof-capture/) | Record video + screenshots for PR proof |
+| [`nav-graph`](/rn-dev-agent/commands/nav-graph/) | Map and navigate the app's screen graph |
+
+## Experience Engine
+
+Self-improvement tools that learn from failure patterns across sessions.
+
+| Command | When to use |
+|---------|-------------|
+| [`rn-agent-health`](/rn-dev-agent/commands/rn-agent-health/) | View engine health — telemetry, heuristics, confidence |
+| [`rn-agent-compact`](/rn-dev-agent/commands/rn-agent-compact/) | Compact telemetry, promote learnings, decay stale data |
+| [`rn-agent-export`](/rn-dev-agent/commands/rn-agent-export/) | Export anonymized experience bundle for sharing |
+| [`rn-agent-import`](/rn-dev-agent/commands/rn-agent-import/) | Import experience from teammates or other projects |
+
+## Utility
+
+| Command | When to use |
+|---------|-------------|
+| [`send-feedback`](/rn-dev-agent/commands/send-feedback/) | Report a bug or send feedback via GitHub issue |

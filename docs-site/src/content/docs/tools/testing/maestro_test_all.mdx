@@ -1,0 +1,24 @@
+---
+title: "maestro_test_all"
+description: "Discover and run all Maestro flows in "
+sidebar:
+  order: 37
+---
+
+Discover and run all Maestro flows in .maestro/flows/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `platform` | `enum: ios | android` | No |  |  | Target platform (auto-detected from session) |
+| `flowDir` | `string` | No |  |  | Directory to scan for .yaml flows (default: &lt;project>/.maestro/flows/) |
+| `pattern` | `string` | No |  |  | Regex pattern to filter flow files (e.g. "cart|checkout") |
+| `timeoutPerFlow` | `number` | No | `120000` | min: 5000, max: 300000, integer | Timeout per flow in ms |
+| `stopOnFailure` | `boolean` | No | `false` |  | Stop after first failure |
+
+## Usage
+
+```
+maestro_test_all()
+```

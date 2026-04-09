@@ -1,0 +1,22 @@
+---
+title: "device_batch"
+description: "Execute a sequence of UI interactions in ONE tool call"
+sidebar:
+  order: 32
+---
+
+Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find (text + optional tap), fill (ref + text), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Fails fast on error unless step has optional=true.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `steps` | `object[]` | No |  |  | Ordered list of UI interaction steps |
+| `delayMs` | `number` | No | `300` |  | Delay between steps in ms (default 300) |
+| `screenshotOn` | `enum: none | failure | end | each` | No | `'failure'` |  | When to capture screenshots |
+
+## Usage
+
+```
+device_batch()
+```

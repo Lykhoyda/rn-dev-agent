@@ -1,0 +1,23 @@
+---
+title: "device_press"
+description: "Tap a UI element by its @ref from device_snapshot"
+sidebar:
+  order: 23
+---
+
+Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, and long hold. Requires an open session.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `ref` | `string` | Yes |  |  | Element ref from device_snapshot (e.g. "e3" or "@e3") |
+| `doubleTap` | `boolean` | No |  |  | Use double-tap gesture |
+| `count` | `number` | No |  | min: 1, max: 50, integer | Repeat tap N times (for rapid-fire interactions) |
+| `holdMs` | `number` | No |  | min: 0, max: 10000, integer | Hold duration in ms (for long-press via ref) |
+
+## Usage
+
+```
+device_press(ref: <string>)
+```

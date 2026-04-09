@@ -1,0 +1,21 @@
+---
+title: Skills
+description: 4 knowledge skills that give Claude domain expertise for React Native development.
+---
+
+Skills are knowledge bundles that Claude loads on demand. They provide context about tools, patterns, and best practices without requiring tool calls.
+
+| Skill | Content |
+|-------|---------|
+| [Device Control](/rn-dev-agent/skills/rn-device-control/) | simctl/adb commands, deep links, Expo EAS builds, 3-tier interaction model |
+| [Testing](/rn-dev-agent/skills/rn-testing/) | Maestro patterns, timing rules, testID conventions, network mocking |
+| [Debugging](/rn-dev-agent/skills/rn-debugging/) | CDP vs bash decision table, error types, connection troubleshooting |
+| [Best Practices](/rn-dev-agent/skills/rn-best-practices/) | 46 rules for performance, rendering, animation, state management |
+
+## How skills are used
+
+Skills are loaded automatically when Claude encounters relevant work:
+- **Device Control** activates when interacting with simulators/emulators
+- **Testing** activates when writing Maestro flows or adding testIDs
+- **Debugging** activates when diagnosing crashes or connection issues
+- **Best Practices** is loaded during Phase 4 (Architecture) and Phase 6 (Review)

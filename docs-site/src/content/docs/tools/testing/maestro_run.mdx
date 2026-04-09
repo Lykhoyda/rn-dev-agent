@@ -1,0 +1,24 @@
+---
+title: "maestro_run"
+description: "Execute a Maestro flow via maestro-runner"
+sidebar:
+  order: 35
+---
+
+Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP — works even when app is crashed or on native screens.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `flowPath` | `string` | No |  |  | Path to a .yaml flow file to execute |
+| `inlineYaml` | `string` | No |  |  | Inline YAML flow content (written to /tmp and executed) |
+| `platform` | `enum: ios | android` | No |  |  | Target platform (auto-detected from session) |
+| `appId` | `string` | No |  |  | App bundle ID (auto-detected from app.json) |
+| `timeoutMs` | `number` | No | `120000` | min: 5000, max: 300000, integer | Execution timeout in ms |
+
+## Usage
+
+```
+maestro_run()
+```

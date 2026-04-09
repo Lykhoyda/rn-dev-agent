@@ -1,0 +1,21 @@
+---
+title: "device_fill"
+description: "Type text into an input field by its @ref from device_snapshot"
+sidebar:
+  order: 24
+---
+
+Type text into an input field by its @ref from device_snapshot. Clears existing text first. Requires an open session.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `ref` | `string` | Yes |  |  | Input field ref from device_snapshot (e.g. "e5" or "@e5") |
+| `text` | `string` | Yes |  |  | Text to type into the field |
+
+## Usage
+
+```
+device_fill(ref: <string>, text: <string>)
+```

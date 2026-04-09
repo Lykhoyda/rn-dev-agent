@@ -1,0 +1,44 @@
+---
+title: "check-env"
+description: "Verify that Metro, CDP, simulator, and agent-device are ready for testing."
+sidebar:
+  order: 3
+---
+
+Check that the React Native development environment is ready for testing. Reports status for each subsystem and suggests fixes for any issues found.
+
+## Usage
+
+```
+/rn-dev-agent:check-env
+```
+
+## What Gets Checked
+
+| Subsystem | What it checks | Source |
+|-----------|---------------|--------|
+| Metro | Running? Which port? | `cdp_status` |
+| CDP | Connected to Hermes? Which device/page? | `cdp_status` |
+| App | Platform, RN version, Hermes enabled, screen dimensions | `cdp_status` |
+| Capabilities | Network domain available? Fiber tree accessible? | `cdp_status` |
+| Errors | Active error count, RedBox showing, debugger paused? | `cdp_status` |
+| agent-device | CLI installed? Devices available? | `device_list` |
+
+## Common Fixes
+
+| Status | Suggested fix |
+|--------|--------------|
+| Metro not found | `npx expo start` or `npx react-native start` |
+| No Hermes target | Open the app on the simulator |
+| CDP code 1006 | Close React Native DevTools, Flipper, or Chrome DevTools |
+| hasRedBox: true | Run `/rn-dev-agent:debug-screen` |
+| isPaused: true | Remove `debugger;` statements or use `cdp_reload` |
+| fiberTree: false | Only works in `__DEV__` builds with Hermes |
+| agent-device not found | `npm install -g agent-device` |
+| No devices | Boot a simulator: `xcrun simctl boot "iPhone 16"` |
+
+## When to Use
+
+- Before starting a feature development session
+- When other commands report connection issues
+- After restarting Metro or the simulator

@@ -1,0 +1,43 @@
+---
+title: Best Practices
+description: 46 rules for building performant React Native apps — crash prevention, lists, animation, state.
+---
+
+The plugin includes 46 best-practice rules integrated from [Vercel's React Native skills](https://github.com/vercel-labs/agent-skills) plus custom additions. Rules are checked during Phase 4 (Architecture) and Phase 6 (Code Review).
+
+## Impact levels
+
+| Level | Meaning | When checked |
+|-------|---------|-------------|
+| **CRITICAL** | Can cause crashes or data loss | Always checked |
+| **HIGH** | Significant performance or UX impact | Always checked |
+| **MEDIUM** | Noticeable improvement | Checked when relevant patterns present |
+| **LOW** | Minor optimization | Checked on 3+ occurrences |
+
+## Rule categories
+
+### Rendering & Crash Prevention
+Rules that prevent crashes, infinite loops, and rendering bugs. These are CRITICAL priority.
+
+### List Performance
+Rules for optimizing FlatList, FlashList, and SectionList. Covers item memoization, callback refs, image handling, and expensive item extraction.
+
+### Animation
+Rules for keeping animations on the UI thread using Reanimated shared values, derived values, and GPU-friendly properties.
+
+### State Management
+Rules for efficient state updates, lazy initialization, and avoiding inline component definitions.
+
+### Code Quality
+Rules for imports, module-level initialization, compound component patterns, and design system organization.
+
+### Async Patterns
+Rules for parallel execution, cheap-condition-first checks, and avoiding unnecessary async work.
+
+## Browse all rules
+
+All 46 rules are available in the sidebar under **Rules**. Each rule page includes:
+- Impact level and description
+- Incorrect code example (what to avoid)
+- Correct code example (what to do instead)
+- Explanation of why it matters

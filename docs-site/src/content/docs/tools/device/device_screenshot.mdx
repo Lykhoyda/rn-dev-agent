@@ -1,0 +1,21 @@
+---
+title: "device_screenshot"
+description: "Capture a screenshot of the active device screen"
+sidebar:
+  order: 20
+---
+
+Capture a screenshot of the active device screen. Returns image data or file path. Prefer JPEG for faster capture.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `path` | `string` | No |  |  | Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG. |
+| `format` | `enum: jpeg | png` | No |  |  | Image format (default: auto-detect from path extension, or jpeg) |
+
+## Usage
+
+```
+device_screenshot()
+```

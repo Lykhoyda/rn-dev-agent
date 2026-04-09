@@ -1,0 +1,32 @@
+---
+title: "rn-agent-health"
+description: "View Experience Engine health — telemetry size, heuristic stats, confidence distribution."
+sidebar:
+  order: 10
+---
+
+Display the current state of the Experience Engine as a health dashboard.
+
+## Usage
+
+```
+/rn-dev-agent:rn-agent-health
+```
+
+## Dashboard Metrics
+
+| Category | Metrics |
+|----------|---------|
+| **Telemetry** | File count, total disk size, event count, date range |
+| **Heuristics** | Total active, breakdown by source (seed/project/user/imported), breakdown by type (failure_pattern/recovery_shortcut/platform_quirk/expo_gotcha) |
+| **Confidence** | Distribution: high (80+), medium (50-79), low (20-49) |
+| **Candidates** | Pending count, oldest waiting candidate |
+| **Budget** | Current token usage vs 2000 max |
+| **Knowledge** | Loaded failure families, loaded recovery sequences |
+
+## When to Use
+
+- After running `/rn-dev-agent:rn-agent-compact` to verify results
+- To check if telemetry is growing too large
+- To see how many candidates are waiting for review
+- To monitor confidence distribution (too many "low" means stale experience)

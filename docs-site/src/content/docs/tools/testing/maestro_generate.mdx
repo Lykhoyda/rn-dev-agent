@@ -1,0 +1,23 @@
+---
+title: "maestro_generate"
+description: "Generate a persistent Maestro YAML flow file from structured steps"
+sidebar:
+  order: 36
+---
+
+Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/&lt;name>.yaml in the project root. Use after Phase 5.5 verification to create regression tests.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `name` | `string` | Yes |  |  | Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename. |
+| `steps` | `object[]` | No |  |  | Ordered list of Maestro steps |
+| `appId` | `string` | No |  |  | App bundle ID to include in YAML header |
+| `outputDir` | `string` | No |  |  | Output directory (default: &lt;project>/.maestro/flows/) |
+
+## Usage
+
+```
+maestro_generate(name: <string>)
+```

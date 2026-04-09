@@ -1,0 +1,21 @@
+---
+title: "cdp_auto_login"
+description: "Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project"
+sidebar:
+  order: 33
+---
+
+Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns \{ loggedIn: true/false, reason, flow \}. Call before proof capture or feature testing when app may be logged out.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `appId` | `string` | No |  |  | App bundle ID override (auto-detected from app.json if omitted) |
+| `platform` | `enum: ios | android` | No |  |  | Platform override (auto-detected from session if omitted) |
+
+## Usage
+
+```
+cdp_auto_login()
+```

@@ -1,0 +1,21 @@
+---
+title: "cdp_evaluate"
+description: "CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing"
+sidebar:
+  order: 4
+---
+
+CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. Prefer cdp_component_tree, cdp_store_state, and other targeted tools over raw evaluate.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `expression` | `string` | Yes |  |  | JavaScript expression to evaluate |
+| `awaitPromise` | `boolean` | No | `false` |  | Wait for promise resolution |
+
+## Usage
+
+```
+cdp_evaluate(expression: <string>)
+```

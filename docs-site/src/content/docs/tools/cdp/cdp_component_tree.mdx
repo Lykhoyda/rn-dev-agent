@@ -1,0 +1,21 @@
+---
+title: "cdp_component_tree"
+description: "Get React component tree"
+sidebar:
+  order: 6
+---
+
+Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `filter` | `string` | No |  |  | Component name or testID to scope query (e.g. "CartBadge", "product-list") |
+| `depth` | `number` | No | `4` | min: 1, max: 12, integer | Max depth (default 4, max 12) |
+
+## Usage
+
+```
+cdp_component_tree()
+```

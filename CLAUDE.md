@@ -46,9 +46,9 @@ rn-dev-agent/
 │   ├── rn-debugging/                 # CDP vs bash decision table, error types
 │   │   ├── SKILL.md
 │   │   └── references/
-│   └── rn-best-practices/            # 36 Vercel RN best-practice rules (perf, rendering, animation, state)
+│   └── rn-best-practices/            # 46 best-practice rules (perf, rendering, animation, state)
 │       ├── SKILL.md                  # Compact index + CRITICAL rules inline
-│       └── references/               # 36 individual rule files with full code examples
+│       └── references/               # 46 individual rule files with full code examples
 ├── agents/
 │   ├── rn-tester.md                  # 7-step test verification protocol
 │   ├── rn-debugger.md                # Diagnostic evidence-gathering flow

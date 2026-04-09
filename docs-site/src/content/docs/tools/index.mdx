@@ -1,0 +1,48 @@
+---
+title: MCP Tools
+description: 38 tools for React Native development — CDP introspection, device interaction, and testing.
+---
+
+The MCP server exposes **38 tools** organized in three categories. All tools are available through Claude Code's tool-calling interface.
+
+## When to use which category
+
+| Need | Use | Example |
+|------|-----|---------|
+| Read React component tree, store state, navigation | **CDP tools** | `cdp_component_tree`, `cdp_store_state` |
+| Tap, swipe, type, scroll on the device | **Device tools** | `device_press`, `device_fill`, `device_swipe` |
+| Run E2E test flows, capture proof | **Testing tools** | `maestro_run`, `proof_step` |
+| Check environment health | **CDP tools** | `cdp_status` (always call first) |
+| Debug crashes spanning JS + native | **CDP tools** | `collect_logs` with multiple sources |
+
+## CDP Tools (19)
+
+Read React internals via Chrome DevTools Protocol over a WebSocket connection to Hermes.
+
+**Connection lifecycle:** `cdp_status` (auto-connect) → `cdp_connect` (explicit) → `cdp_disconnect` (teardown) → `cdp_targets` (list without connecting)
+
+**Component inspection:** `cdp_component_tree` (filtered fiber tree) → `cdp_component_state` (hook state by testID)
+
+**Navigation:** `cdp_navigation_state` (current route) → `cdp_nav_graph` (full graph with go-to-screen) → `cdp_navigate` (by screen name)
+
+**State management:** `cdp_store_state` (Redux/Zustand/React Query) → `cdp_dispatch` (Redux action + read-back)
+
+**Logs:** `cdp_console_log`, `cdp_network_log`, `cdp_error_log`, `collect_logs` (multi-source)
+
+**Utilities:** `cdp_evaluate` (raw JS), `cdp_reload` (full reload), `cdp_dev_settings` (dev menu), `cdp_interact` (deprecated)
+
+## Device Tools (14)
+
+Native interaction via the agent-device CLI. Requires an open session (`device_snapshot action=open`).
+
+**Session:** `device_list` → `device_snapshot` (open/snapshot/close) → `device_screenshot`
+
+**Interaction:** `device_find` (by text) → `device_press` (by @ref) → `device_fill` (type text) → `device_swipe` / `device_scroll` / `device_scrollintoview` → `device_back` → `device_longpress` → `device_pinch`
+
+**Utilities:** `device_permission` (grant/revoke) → `device_batch` (multi-step sequence)
+
+## Testing Tools (5)
+
+E2E testing and proof capture — work even when the app is crashed or on native screens.
+
+`cdp_auto_login` → `maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step`

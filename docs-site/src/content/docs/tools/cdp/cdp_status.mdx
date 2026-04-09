@@ -1,0 +1,21 @@
+---
+title: "cdp_status"
+description: "Get full environment status"
+sidebar:
+  order: 0
+---
+
+Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `metroPort` | `number` | No |  |  | Override Metro port (default: auto-detect 8081/8082/19000/19006) |
+| `platform` | `string` | No |  |  | Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups |
+
+## Usage
+
+```
+cdp_status()
+```

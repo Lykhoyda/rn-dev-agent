@@ -1,0 +1,26 @@
+---
+title: Agents
+description: 5 specialized agents for testing, debugging, architecture, exploration, and code review.
+---
+
+Agents are autonomous sub-agents that Claude Code spawns to handle specific tasks. Each agent has its own model, tools, and protocol.
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| [`rn-tester`](/rn-dev-agent/agents/rn-tester/) | Sonnet | 7-step test verification protocol |
+| [`rn-debugger`](/rn-dev-agent/agents/rn-debugger/) | — | Parallel evidence gathering + targeted fix |
+| [`rn-code-explorer`](/rn-dev-agent/agents/rn-code-explorer/) | Sonnet | Codebase mapping: screens, store, navigation, testIDs |
+| [`rn-code-architect`](/rn-dev-agent/agents/rn-code-architect/) | Opus | Architecture design with E2E proof flow |
+| [`rn-code-reviewer`](/rn-dev-agent/agents/rn-code-reviewer/) | — | Correctness, RN conventions, project patterns |
+
+## When agents are used
+
+In the `rn-feature-dev` pipeline:
+- **Phase 2 (Exploration):** 2-3 `rn-code-explorer` agents run in parallel
+- **Phase 4 (Architecture):** `rn-code-architect` designs the blueprint
+- **Phase 5.5 (Verification):** `rn-tester` verifies live on simulator
+- **Phase 6 (Review):** 3 `rn-code-reviewer` agents check different aspects
+
+Standalone:
+- `/debug-screen` spawns `rn-debugger`
+- `/test-feature` spawns `rn-tester`

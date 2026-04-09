@@ -1,0 +1,44 @@
+---
+title: "rn-agent-import"
+description: "Import an experience bundle from a teammate or another project."
+sidebar:
+  order: 9
+---
+
+Import an exported experience bundle into the local experience store. Validates format, checks for duplicates, and adds heuristics at reduced confidence.
+
+## Usage
+
+```
+/rn-dev-agent:rn-agent-import <path-to-export.yaml>
+```
+
+## Example
+
+```
+/rn-dev-agent:rn-agent-import ~/.claude/rn-agent/exports/export-2026-03-31.yaml
+```
+
+## Import Rules
+
+| Rule | Detail |
+|------|--------|
+| Confidence | Reduced to 70% of the exported value |
+| Duplicates | Silently skipped (matched by summary text) |
+| Minimum threshold | Heuristics below 20% effective confidence are skipped |
+| Prefix | Imported entries marked with `RS-I*` or `FP-I*` prefix |
+| Destination | All stay in `experience.md` for review (no auto-promotion) |
+
+## What Happens
+
+1. **Validate** the bundle format (version, heuristics array)
+2. **Check** for duplicates against existing experience
+3. **Add** new heuristics with 70% of original confidence
+4. **Mark** imported entries with source attribution and original date
+5. **Skip** heuristics below 20% effective confidence
+
+## When to Use
+
+- Onboarding a new team member with shared experience
+- Bootstrapping a new project with patterns from a similar project
+- Syncing learnings across machines

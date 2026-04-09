@@ -1,0 +1,26 @@
+---
+title: "cdp_interact"
+description: "Interact with React components by testID — press buttons, long-press, type text, scroll"
+sidebar:
+  order: 14
+---
+
+Interact with React components by testID — press buttons, long-press, type text, scroll. Calls JS handlers directly (not native touch). Reliable for all React-level interactions including elements inside gesture handlers. For native gestures (swipe, drag), use device_swipe/device_press instead.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `enum: press | longPress | typeText | scroll` | Yes |  |  | press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. |
+| `testID` | `string` | No |  |  | testID prop of the target component |
+| `accessibilityLabel` | `string` | No |  |  | accessibilityLabel prop (used if testID not provided) |
+| `text` | `string` | No |  |  | Required for typeText: the text to enter |
+| `scrollX` | `number` | No |  |  | For scroll: horizontal offset in pixels (default 0) |
+| `scrollY` | `number` | No |  |  | For scroll: vertical offset in pixels (default 300) |
+| `animated` | `boolean` | No | `true` |  | For scroll: whether to animate |
+
+## Usage
+
+```
+cdp_interact(action: <enum: press | longPress | typeText | scroll>)
+```

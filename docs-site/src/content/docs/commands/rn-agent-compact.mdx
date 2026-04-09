@@ -1,0 +1,43 @@
+---
+title: "rn-agent-compact"
+description: "Compact the Experience Engine — promote learnings, decay stale heuristics."
+sidebar:
+  order: 7
+---
+
+Run the compaction cycle for the Experience Engine. Scans telemetry, generates candidates from failure patterns, auto-promotes verified recoveries, and decays stale heuristics.
+
+## Usage
+
+```
+/rn-dev-agent:rn-agent-compact
+```
+
+## What Happens
+
+1. **Scan** all telemetry JSONL files in `~/.claude/rn-agent/telemetry/`
+2. **Group** failures by tool + normalized error signature
+3. **Generate candidates** for patterns seen 3+ times with 67%+ recovery success
+4. **Auto-promote** ghost recovery shortcuts to `~/.claude/rn-agent/experience.md`
+5. **Write candidates** for human review to `~/.claude/rn-agent/candidates/`
+6. **Decay** stale heuristics not triggered in 20+ runs (-20% confidence)
+7. **Remove** dead heuristics below 30% confidence
+
+## Promotion Rules
+
+| Destination | Gate | Criteria |
+|-------------|------|----------|
+| `experience.md` | Auto | Ghost recovery with 67%+ success rate over 3+ occurrences |
+| `candidates/*.md` | Human review | All other patterns |
+| Project `.rn-agent-experience.md` | Manual | User copies from candidates after review |
+
+## Output
+
+Reports a summary table with telemetry files scanned, events processed, failure groups found, candidates generated, auto-promoted count, heuristics decayed/removed, and token usage.
+
+## When to Run
+
+- After completing 5-10 `rn-feature-dev` sessions
+- When `~/.claude/rn-agent/telemetry/` grows large
+- Before sharing project experience
+- Weekly or biweekly maintenance

@@ -1,0 +1,20 @@
+---
+title: "cdp_error_log"
+description: "Get unhandled JS errors and promise rejections"
+sidebar:
+  order: 17
+---
+
+Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — use bash logcat/simctl log instead.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `clear` | `boolean` | No | `false` |  | Clear all captured errors instead of reading them |
+
+## Usage
+
+```
+cdp_error_log()
+```

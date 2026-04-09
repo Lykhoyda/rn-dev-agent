@@ -1,0 +1,22 @@
+---
+title: "cdp_network_log"
+description: "Get recent network requests"
+sidebar:
+  order: 15
+---
+
+Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected).
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `limit` | `number` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
+| `filter` | `string` | No |  |  | Filter by URL substring (e.g. "/api/cart") |
+| `clear` | `boolean` | No | `false` |  | Clear network buffer instead of reading |
+
+## Usage
+
+```
+cdp_network_log()
+```

@@ -1,0 +1,83 @@
+---
+title: "Debugging"
+description: "CDP vs bash decision table, error types matrix, connection troubleshooting, and diagnostic recipes."
+---
+
+The debugging skill provides knowledge for diagnosing problems in React Native apps using the CDP MCP server, native device logs, and bash tools.
+
+## When loaded
+
+Activates when Claude encounters crashes, blank screens, connection issues, error logs, Metro problems, network failures, or any diagnostic task.
+
+## Key Knowledge Areas
+
+### CDP vs Bash Decision Table
+
+| What you need | Tool | Command |
+|--------------|------|---------|
+| Metro status | MCP | `cdp_status` |
+| JS crash | MCP | `cdp_error_log` |
+| Native crash (iOS) | MCP | `collect_logs(sources=["native_ios"])` |
+| Native crash (Android) | MCP | `collect_logs(sources=["native_android"])` |
+| Current screen | MCP | `cdp_navigation_state` |
+| Component tree | MCP | `cdp_component_tree(filter="...")` |
+| Store state | MCP | `cdp_store_state(path="...")` |
+| API calls | MCP | `cdp_network_log` |
+| Console output | MCP | `cdp_console_log(level="all")` |
+| Debugger paused? | MCP | `cdp_status` (reports isPaused) |
+| RedBox overlay? | MCP | `cdp_component_tree` (auto-detects) |
+| Metro alive? | bash | `curl localhost:8081/status` |
+| UI element tree | MCP | `device_snapshot` |
+| Runtime value | MCP | `cdp_evaluate(expression="...")` |
+
+If `cdp_error_log` is empty but the app is broken, the problem is native.
+
+### Error Types Matrix
+
+| Error Type | Where to Find |
+|-----------|--------------|
+| JS runtime error | `cdp_error_log` |
+| Unhandled promise rejection | `cdp_error_log` |
+| RedBox overlay | `cdp_component_tree` (APP_HAS_REDBOX) |
+| console.error() | `cdp_console_log(level="error")` |
+| Metro bundle syntax error | `curl localhost:8081/status` |
+| Native crash (iOS) | `collect_logs(sources=["native_ios"])` |
+| Native crash (Android) | `collect_logs(sources=["native_android"])` |
+| Network failure | `cdp_network_log` (status=0) |
+
+### Environment Status (`cdp_status`)
+
+Always called first. Decision tree:
+- `metro.running = false` means start Metro
+- `app.hasRedBox = true` means read `cdp_error_log`, fix, reload
+- `app.isPaused = true` means `cdp_reload`
+- `app.errorCount > 0` means check `cdp_error_log`
+- `capabilities.networkDomain = false` means network logging uses injected hooks (RN < 0.83)
+- `capabilities.fiberTree = false` means release build or non-Hermes engine
+
+### Connection Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Metro not found | Start dev server: `npx expo start` |
+| No Hermes target | Wait for app to load, retry |
+| Error code 1006 | Close other debugger UIs (DevTools, Flipper, Chrome) |
+| Evaluate timeout (5s) | Search for `debugger;` statements, check for long sync ops |
+| "hook not available" | Only works in `__DEV__` mode with Hermes |
+| APP_HAS_REDBOX | Read error log, fix code, reload |
+| "No store found" | Add `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` |
+| All CDP calls fail | Reload app and reconnect with `cdp_status` |
+
+### CDP Technical Constraints
+
+- **5-second timeout** on all CDP calls (caused by `debugger;` statements, long sync ops, unresolved promises)
+- **Single CDP session** (Hermes allows exactly one client; close DevTools/Flipper first)
+- **Fiber tree limitations**: only works in `__DEV__` + Hermes; component in tree does not mean visible on screen
+
+### Post-Reload Readiness
+
+After `cdp_reload`, auto-reconnect waits up to 30 seconds. If `cdp_component_tree` returns "No fiber roots", wait 2 seconds and retry.
+
+### Metro Health Check
+
+The MCP server auto-discovers Metro on ports 8081, 8082, 19000, 19006. Pass `metroPort` to `cdp_status` for non-standard ports.

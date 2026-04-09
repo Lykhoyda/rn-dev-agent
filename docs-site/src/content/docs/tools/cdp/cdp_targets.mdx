@@ -1,0 +1,20 @@
+---
+title: "cdp_targets"
+description: "List available Hermes debug targets without connecting"
+sidebar:
+  order: 3
+---
+
+List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `metroPort` | `number` | No |  |  | Metro port to scan (default: auto-detect) |
+
+## Usage
+
+```
+cdp_targets()
+```

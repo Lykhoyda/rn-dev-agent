@@ -1,0 +1,61 @@
+---
+title: rn-dev-agent
+description: Claude Code plugin for React Native — explore, build, verify, and test features live on simulator.
+template: splash
+hero:
+  tagline: A Claude Code plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then verifies everything live on the simulator.
+  actions:
+    - text: Get Started
+      link: /rn-dev-agent/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Browse 38 Tools
+      link: /rn-dev-agent/tools/
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What it does
+
+<CardGrid stagger>
+  <Card title="Live Verification" icon="approve-check">
+    After implementing a feature, Claude connects to your running app via CDP, navigates to the screen, checks the component tree, exercises interactions, and confirms store state — no "trust me it works."
+  </Card>
+  <Card title="38 MCP Tools" icon="setting">
+    19 CDP tools for React internals (component tree, store state, navigation), 14 device tools for native interaction (tap, swipe, type), and 5 testing/composite tools (Maestro, proof capture).
+  </Card>
+  <Card title="8-Phase Pipeline" icon="list-format">
+    `/rn-feature-dev` runs discovery, exploration, questions, architecture, implementation, live verification, code review, and E2E proof — from description to verified code.
+  </Card>
+  <Card title="46 Best Practices" icon="open-book">
+    Built-in rules for crash prevention, list performance, animations, state management, and UI patterns. Checked during architecture design and code review.
+  </Card>
+</CardGrid>
+
+## Quick install
+
+```bash
+# Inside Claude Code
+/plugin marketplace add Lykhoyda/rn-dev-agent
+/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
+/reload-plugins
+```
+
+Then navigate to your React Native project and start building:
+
+```
+/rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
+```
+
+## Benchmarks
+
+Real measurements from the test app (30 stories completed):
+
+| Feature complexity | Time | Crashes | Manual interventions |
+|-------------------|------|---------|---------------------|
+| Simple (search, toggle, store) | 3-5 min | 0 | 0 |
+| Medium (forms, charts, lists) | 5-10 min | 0 | 0 |
+| Complex (3-step wizard, onboarding) | 11-25 min | 0 | 0 |
+
+**Libraries tested:** react-hook-form, zod, @tanstack/react-query, @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications, react-native-reanimated, react-native-gesture-handler, expo-haptics

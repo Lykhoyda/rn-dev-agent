@@ -1,0 +1,22 @@
+---
+title: "cdp_dispatch"
+description: "Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution"
+sidebar:
+  order: 12
+---
+
+Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). Avoids MCP round-trip timing issues.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `string` | Yes |  |  | Redux action type (e.g. "tasks/softDelete", "cart/addItem") |
+| `payload` | `any` | No |  |  | Action payload |
+| `readPath` | `string` | No |  |  | Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete") |
+
+## Usage
+
+```
+cdp_dispatch(action: <string>)
+```

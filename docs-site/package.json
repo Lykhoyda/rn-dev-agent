@@ -1,0 +1,19 @@
+{
+  "name": "rn-dev-agent-docs",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "generate": "node scripts/generate-tool-docs.mjs && node scripts/generate-bp-docs.mjs",
+    "dev": "npm run generate && astro dev",
+    "build": "npm run generate && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.38.3",
+    "astro": "^6.0.1",
+    "sharp": "^0.34.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

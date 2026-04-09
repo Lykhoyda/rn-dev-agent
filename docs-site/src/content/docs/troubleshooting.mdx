@@ -1,0 +1,94 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for rn-dev-agent.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Connection issues
+
+<Aside type="tip" title="Metro not found">
+Start Metro first: `npx expo start` or `npx react-native start`. The plugin auto-detects ports 8081, 8082, 19000, and 19006.
+</Aside>
+
+<Aside type="tip" title="No Hermes target">
+Open the app on the simulator and ensure Hermes is enabled. Check your `app.json` or `metro.config.js` for Hermes configuration.
+</Aside>
+
+<Aside type="tip" title="CDP connection rejected (1006)">
+Close React Native DevTools, Flipper, or Chrome DevTools — only one debugger can connect at a time. The 1006 close code means session conflict.
+</Aside>
+
+<Aside type="tip" title="CDP connection lost after reload">
+This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it fails, call `cdp_status` to re-establish the connection.
+</Aside>
+
+## Store state issues
+
+<Aside type="tip" title="cdp_store_state error for Zustand">
+Add a one-line setup to your app entry:
+
+```typescript
+if (__DEV__) {
+  global.__ZUSTAND_STORES__ = { auth: useAuthStore, cart: useCartStore };
+}
+```
+
+Redux is auto-detected — no setup needed.
+</Aside>
+
+<Aside type="tip" title="cdp_store_state returns empty for React Query">
+Use `storeType: 'react-query'` explicitly. React Query state is read from the QueryClient, which requires the provider to be mounted.
+</Aside>
+
+## Plugin issues
+
+<Aside type="tip" title="Plugin not detected">
+Run `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent` then `/reload-plugins`. For local development, use `claude --plugin-dir /path/to/rn-dev-agent`.
+</Aside>
+
+<Aside type="tip" title="/plugin command not found">
+Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code`
+</Aside>
+
+<Aside type="tip" title="Plugin skills not appearing">
+Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache`
+</Aside>
+
+<Aside type="tip" title="Plugin update fails with ENOTEMPTY">
+Clear the stale cache first:
+
+```bash
+rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent
+```
+
+Then retry the update.
+</Aside>
+
+<Aside type="tip" title="ENAMETOOLONG on install/update">
+Clear stale cache:
+
+```bash
+rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent ~/.claude/plugins/data/rn-dev-agent-*
+```
+
+Then re-add marketplace and install.
+</Aside>
+
+## Device issues
+
+<Aside type="tip" title="maestro-runner not in PATH">
+Add to your shell profile: `export PATH="$HOME/.maestro-runner/bin:$PATH"`
+</Aside>
+
+<Aside type="tip" title="Empty error log but app crashed">
+The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or check Xcode console (iOS) for native crash logs.
+</Aside>
+
+<Aside type="tip" title="Android emulator not detected">
+Ensure the emulator is booted and `adb devices` shows it. The plugin auto-selects the first available device. Set `ANDROID_SERIAL` to target a specific emulator.
+</Aside>
+
+<Aside type="tip" title="Maestro gRPC error on Android">
+Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
+</Aside>

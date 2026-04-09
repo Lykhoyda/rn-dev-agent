@@ -1,0 +1,41 @@
+---
+title: "rn-agent-export"
+description: "Export anonymized experience bundle for sharing across projects or teams."
+sidebar:
+  order: 8
+---
+
+Export accumulated experience as an anonymized YAML bundle. Strips paths, secrets, and PII before writing the file.
+
+## Usage
+
+```
+/rn-dev-agent:rn-agent-export
+```
+
+## What Gets Exported
+
+| Data | Included | Anonymized |
+|------|----------|------------|
+| Heuristic summaries | Yes | Paths/secrets redacted |
+| Confidence scores | Yes | As-is |
+| Environment fingerprint | Yes | Coarsened to major.minor |
+| Failure statistics | Yes | Normalized errors only |
+| Raw telemetry | No | Never exported |
+| Candidate files | No | Not included |
+
+## Output
+
+Written to `~/.claude/rn-agent/exports/export-<timestamp>.yaml`.
+
+Import on another machine or project with:
+
+```
+/rn-dev-agent:rn-agent-import ~/.claude/rn-agent/exports/export-<timestamp>.yaml
+```
+
+## Privacy
+
+- All summaries pass through redaction (secrets, PII, paths stripped)
+- Environment versions coarsened to major.minor
+- No raw telemetry, project names, or file paths included

@@ -1,0 +1,20 @@
+---
+title: "cdp_dev_settings"
+description: "Control React Native dev settings programmatically (no visual dev menu needed)"
+sidebar:
+  order: 13
+---
+
+Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). For reload with auto-reconnect, use cdp_reload instead.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `enum: reload | toggleInspector | togglePerfMonitor | dismissRedBox | disableDevMenu` | Yes |  |  | Dev menu action to execute |
+
+## Usage
+
+```
+cdp_dev_settings(action: <enum: reload | toggleInspector | togglePerfMonitor | dismissRedBox | disableDevMenu>)
+```

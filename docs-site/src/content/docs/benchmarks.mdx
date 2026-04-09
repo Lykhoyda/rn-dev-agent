@@ -1,0 +1,65 @@
+---
+title: Benchmarks
+description: Real performance measurements from 30 completed stories and Polar Star optimization.
+---
+
+## Feature development timing
+
+Real measurements from the test app (30 stories completed across the Ralph Loop):
+
+| Feature complexity | Time | Crashes | Manual interventions |
+|-------------------|------|---------|---------------------|
+| Simple (search, toggle, store) | 3-5 min | 0 | 0 |
+| Medium (forms, charts, lists) | 5-10 min | 0 | 0 |
+| Complex (3-step wizard, onboarding) | 11-25 min | 0 | 0 |
+| 4-feature batch verification | ~2 min | 0 | 0 |
+
+### Phase timing breakdown
+
+| Phase | Typical time |
+|-------|-------------|
+| 1-3 (Discovery, Exploration, Questions) | ~3 min |
+| 4 (Architecture) | ~1 min |
+| 5 (Implementation) | ~5 min |
+| 5.5 (Live verification) | ~5 min |
+| 6 (Code review + fixes) | ~4 min |
+| 7-8 (Summary + E2E proof) | ~2 min |
+
+## Libraries tested
+
+All libraries below were successfully integrated and verified through the pipeline:
+
+| Library | Story type |
+|---------|-----------|
+| react-hook-form | Form wizard |
+| zod | Validation |
+| @tanstack/react-query | Data fetching |
+| @gorhom/bottom-sheet | Bottom sheet |
+| @shopify/flash-list | High-performance list |
+| zustand | State management |
+| react-native-svg | Charts |
+| expo-notifications | Push notifications |
+| react-native-reanimated | Animations |
+| react-native-gesture-handler | Gestures |
+| expo-haptics | Haptic feedback |
+
+## Device interaction speed (Polar Star)
+
+Optimized device interaction latency via the fast-runner (XCTest HTTP server):
+
+| Operation | Latency | Improvement |
+|-----------|---------|-------------|
+| Tap | ~216ms | 13x faster than CLI |
+| Snapshot (accessibility tree) | ~5ms | 100x faster |
+| Screenshot | ~74ms | 4x faster |
+| Per-step overhead | ~1.4s | vs ~3.1s baseline |
+
+The XPC floor (~210ms) is the hard limit for `_XCT_synthesizeEvent` — further tap optimization requires Apple framework changes.
+
+### 3-tier dispatch
+
+| Tier | Path | When used |
+|------|------|-----------|
+| 1 | fast-runner (XCTest HTTP) | Default iOS path |
+| 2 | agent-device daemon | fast-runner unavailable |
+| 3 | agent-device CLI | Daemon unavailable |

@@ -1,0 +1,21 @@
+---
+title: "device_find"
+description: "Find a UI element by visible text and optionally interact with it"
+sidebar:
+  order: 22
+---
+
+Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session (call device_snapshot action=open first).
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `text` | `string` | Yes |  |  | Visible text, accessibility label, or identifier to find |
+| `action` | `string` | No |  |  | Action to perform: "click" to tap, omit for search-only |
+
+## Usage
+
+```
+device_find(text: <string>)
+```

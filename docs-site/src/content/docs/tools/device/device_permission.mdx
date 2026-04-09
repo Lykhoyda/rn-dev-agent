@@ -1,0 +1,23 @@
+---
+title: "device_permission"
+description: "Grant, revoke, reset, or query app permissions on simulator/emulator"
+sidebar:
+  order: 31
+---
+
+Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm/dumpsys (Android). query returns current permission state (Android only — iOS returns "unknown"). Use before testing permission-gated flows to ensure correct starting state.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `enum: grant | revoke | reset | query` | Yes |  |  | grant: allow. revoke: deny. reset: restore default. query: check current state (Android: granted/denied/not_declared, iOS: unknown). |
+| `permission` | `string` | Yes |  |  | Permission key: notifications, camera, microphone, location, location-always, photos, contacts, calendar, reminders, storage, all |
+| `appId` | `string` | Yes |  |  | App bundle ID (e.g. "com.example.app") |
+| `platform` | `string` | No |  |  | Force platform: "ios" or "android". Auto-detected if omitted. |
+
+## Usage
+
+```
+device_permission(action: <enum: grant | revoke | reset | query>, permission: <string>, appId: <string>)
+```

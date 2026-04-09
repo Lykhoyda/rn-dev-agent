@@ -1,0 +1,16 @@
+---
+title: "cdp_disconnect"
+description: "Cleanly disconnect from the current Hermes target"
+sidebar:
+  order: 2
+---
+
+Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.
+
+This tool takes no parameters.
+
+## Usage
+
+```
+cdp_disconnect()
+```
