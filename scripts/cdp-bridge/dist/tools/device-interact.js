@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial } from '../agent-device-wrapper.js';
+import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
@@ -25,7 +25,11 @@ async function fetchSnapshotNodes() {
         const envelope = JSON.parse(snapshotResult.content[0].text);
         if (!envelope.ok || !envelope.data?.nodes)
             return null;
-        return envelope.data.nodes;
+        const nodes = envelope.data.nodes;
+        const platform = getActiveSession()?.platform;
+        if (platform)
+            cacheSnapshot(platform, nodes);
+        return nodes;
     }
     catch {
         return null;

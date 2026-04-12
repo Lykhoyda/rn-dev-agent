@@ -154,6 +154,16 @@ export function clearActiveSession() {
 export function hasActiveSession() {
     return activeSession !== null;
 }
+const snapshotCache = new Map();
+export function cacheSnapshot(platform, nodes) {
+    snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString() });
+}
+export function getCachedSnapshot(platform) {
+    return snapshotCache.get(platform);
+}
+export function listCachedSnapshots() {
+    return [...snapshotCache.keys()];
+}
 // Returns the `-s <serial>` args for adb when a specific device/emulator is
 // targeted. Prefers the active session's deviceId, then ANDROID_SERIAL env.
 // Returns an empty array when no target is set (adb will pick the only

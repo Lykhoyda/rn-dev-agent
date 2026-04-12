@@ -33,6 +33,7 @@ import { createConnectHandler, createDisconnectHandler, createTargetsHandler } f
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
+import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { stopFastRunner } from './fast-runner-session.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 pruneOldTelemetry();
@@ -334,6 +335,10 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .maestro/
     timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
 }, createMaestroTestAllHandler());
+trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Returns a per-element comparison table with PASS/FAIL verdict.', {
+    elements: z.array(z.string()).min(1).describe('List of testIDs or labels to check on both platforms'),
+    matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
+}, createCrossPlatformVerifyHandler());
 process.on('uncaughtException', (err) => {
     logger.error('MCP', `Uncaught exception: ${err.message}`);
     stopFastRunner();

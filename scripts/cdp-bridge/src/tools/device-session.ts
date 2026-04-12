@@ -4,6 +4,7 @@ import {
   clearActiveSession,
   getActiveSession,
   ensureFastRunner,
+  cacheSnapshot,
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../fast-runner-session.js';
 import type { ToolResult } from '../utils.js';
@@ -105,6 +106,19 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       );
     }
 
-    return runAgentDevice(['snapshot', '-i']);
+    const result = await runAgentDevice(['snapshot', '-i']);
+    if (!result.isError) {
+      try {
+        const envelope = JSON.parse(result.content[0].text) as {
+          ok?: boolean;
+          data?: { nodes?: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean }[] };
+        };
+        const platform = getActiveSession()?.platform;
+        if (platform && envelope.ok && envelope.data?.nodes) {
+          cacheSnapshot(platform, envelope.data.nodes);
+        }
+      } catch { /* best-effort cache */ }
+    }
+    return result;
   };
 }

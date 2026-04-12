@@ -175,6 +175,28 @@ export function hasActiveSession(): boolean {
   return activeSession !== null;
 }
 
+// Per-platform snapshot cache for cross-platform verification (P4-3).
+// Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
+interface CachedSnapshot {
+  platform: string;
+  nodes: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean }[];
+  capturedAt: string;
+}
+
+const snapshotCache = new Map<string, CachedSnapshot>();
+
+export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
+  snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString() });
+}
+
+export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
+  return snapshotCache.get(platform);
+}
+
+export function listCachedSnapshots(): string[] {
+  return [...snapshotCache.keys()];
+}
+
 // Returns the `-s <serial>` args for adb when a specific device/emulator is
 // targeted. Prefers the active session's deviceId, then ANDROID_SERIAL env.
 // Returns an empty array when no target is set (adb will pick the only

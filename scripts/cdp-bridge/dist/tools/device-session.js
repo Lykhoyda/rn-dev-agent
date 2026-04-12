@@ -1,4 +1,4 @@
-import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, } from '../agent-device-wrapper.js';
+import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../fast-runner-session.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
@@ -66,6 +66,17 @@ export function createDeviceSnapshotHandler() {
         if (!getActiveSession()) {
             return failResult('No device session open. Call device_snapshot with action="open" first.', { hint: 'Provide appId and platform to start a session.' });
         }
-        return runAgentDevice(['snapshot', '-i']);
+        const result = await runAgentDevice(['snapshot', '-i']);
+        if (!result.isError) {
+            try {
+                const envelope = JSON.parse(result.content[0].text);
+                const platform = getActiveSession()?.platform;
+                if (platform && envelope.ok && envelope.data?.nodes) {
+                    cacheSnapshot(platform, envelope.data.nodes);
+                }
+            }
+            catch { /* best-effort cache */ }
+        }
+        return result;
     };
 }
