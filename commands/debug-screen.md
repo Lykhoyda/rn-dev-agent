@@ -1,7 +1,7 @@
 ---
 command: debug-screen
 description: Diagnose why the current screen is broken, showing unexpected content, or crashing. Gathers parallel evidence from all layers and applies a targeted fix.
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__rn-dev-agent-cdp__*
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 agent: rn-debugger
 ---
 

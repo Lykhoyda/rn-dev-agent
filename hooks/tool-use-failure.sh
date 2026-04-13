@@ -9,7 +9,7 @@ tool_name=$(echo "$input" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 
 # Only diagnose rn-dev-agent MCP tool failures
 case "$tool_name" in
-  mcp__plugin_rn-dev-agent_rn-dev-agent-cdp__*|mcp__rn-dev-agent-cdp__*) ;;
+  mcp__*cdp__*) ;;
   *) exit 0 ;;
 esac
 

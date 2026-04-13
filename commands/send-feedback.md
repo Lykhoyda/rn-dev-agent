@@ -2,7 +2,7 @@
 command: send-feedback
 description: Send feedback or report a bug for the rn-dev-agent plugin. Collects sanitized environment context and creates a GitHub issue. No sensitive data (paths, secrets, PII) is transmitted.
 argument-hint: [description or context from conversation]
-allowed-tools: Bash, Read, Grep, mcp__rn-dev-agent-cdp__cdp_status, mcp__rn-dev-agent-cdp__cdp_error_log, AskUserQuestion
+allowed-tools: Bash, Read, Grep, mcp__*cdp__cdp_status, mcp__*cdp__cdp_error_log, AskUserQuestion
 ---
 
 # Send Feedback — Sanitized Bug Report / Feature Request

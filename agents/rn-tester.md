@@ -33,7 +33,7 @@ description: |
   User is asking whether a feature works correctly, which requires live device testing.
   </commentary>
   </example>
-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__rn-dev-agent-cdp__*
+tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 model: sonnet
 memory: true
 color: cyan

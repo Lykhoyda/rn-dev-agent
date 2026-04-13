@@ -47,7 +47,7 @@ const getClient = () => client;
 const setClient = (c) => { client = c; };
 const createClient = (port) => new CDPClient(port);
 const server = new McpServer({
-    name: 'rn-dev-agent-cdp',
+    name: 'rn-dev-agent-cdp-bridge',
     version: '0.10.1',
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

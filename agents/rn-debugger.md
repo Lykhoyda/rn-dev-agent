@@ -33,7 +33,7 @@ description: |
   Frozen app could be paused debugger, blocked JS thread, or native crash — needs structured diagnosis.
   </commentary>
   </example>
-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__rn-dev-agent-cdp__*
+tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 model: opus
 memory: true
 color: red

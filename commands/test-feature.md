@@ -2,7 +2,7 @@
 command: test-feature
 description: Test a React Native feature on the running simulator/emulator. Verifies UI, user flows, and internal state. Generates a persistent Maestro test file.
 argument-hint: [feature-description]
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__rn-dev-agent-cdp__*
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 agent: rn-tester
 ---
 

@@ -2,7 +2,7 @@
 command: proof-capture
 description: Capture PR-ready proof artifacts — video recording, screenshots, and generated PR body for a feature. Validates the recording shows the expected feature before presenting.
 argument-hint: <feature-slug> [description of flow to execute]
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__rn-dev-agent-cdp__*
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 ---
 
 Capture PR proof artifacts for: $ARGUMENTS

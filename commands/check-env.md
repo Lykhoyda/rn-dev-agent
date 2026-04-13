@@ -1,7 +1,7 @@
 ---
 command: check-env
 description: Check that the React Native development environment is ready for testing -- Metro running, app loaded, CDP connected, no active errors.
-allowed-tools: Bash, Read, Grep, mcp__rn-dev-agent-cdp__*
+allowed-tools: Bash, Read, Grep, mcp__*cdp__*
 ---
 
 Run `cdp_status` and report environment readiness.

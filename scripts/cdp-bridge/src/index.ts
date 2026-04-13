@@ -68,7 +68,7 @@ const setClient = (c: CDPClient): void => { client = c; };
 const createClient = (port: number): CDPClient => new CDPClient(port);
 
 const server = new McpServer({
-  name: 'rn-dev-agent-cdp',
+  name: 'rn-dev-agent-cdp-bridge',
   version: '0.10.1',
 });
 
