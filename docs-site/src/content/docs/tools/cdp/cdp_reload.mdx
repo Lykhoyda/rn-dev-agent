@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 15s). Returns when app is ready for queries again.
+Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 retries). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if reconnect fails.
 
 ## Parameters
 

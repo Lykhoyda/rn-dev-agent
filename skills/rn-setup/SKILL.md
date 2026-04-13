@@ -32,24 +32,52 @@ If odd-numbered (e.g., v25) or < 22: warn the user to install Node 22.
 ```bash
 cd ${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge && npm ls --depth=0 2>&1 | head -5
 ```
-If missing: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge && npm install`
+If missing or showing WARN/ERR, run the ensure script:
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-cdp-deps.sh
+```
+Then re-check: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge && npm ls --depth=0 2>&1 | head -5`
+
+If it still fails, give the user manual instructions:
+1. `cd ${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge && npm install`
+2. If ENOENT: the plugin directory may be corrupt — reinstall: `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`
 
 ### 3. agent-device CLI
 ```bash
 command -v agent-device && agent-device --version
 ```
-If missing: `npm install -g agent-device`
-If permission error: `sudo npm install -g agent-device` or use nvm (preferred)
+If missing, run the ensure script to attempt automatic installation:
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-agent-device.sh
+```
+Then re-check: `command -v agent-device && agent-device --version`
+
+If it still fails, give the user these manual instructions:
+1. `npm install -g agent-device` — most common install method
+2. If EACCES permission error: check if using nvm (`command -v nvm`). With nvm, global installs go to the user directory and don't need sudo. Without nvm: `sudo npm install -g agent-device`
+3. If npm registry error: check internet connection, then `npm cache clean --force && npm install -g agent-device`
+4. Verify: `agent-device --version` should print a version number
 
 ### 4. maestro-runner
 ```bash
 command -v maestro-runner && maestro-runner --version
 ```
-If missing: check `~/.maestro-runner/bin/maestro-runner`
-If not there: install via the ensure script:
+If missing, check the default install location first:
+```bash
+ls -la ~/.maestro-runner/bin/maestro-runner 2>/dev/null
+```
+If not there, run the ensure script to attempt automatic installation:
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
 ```
+Then re-check: `command -v maestro-runner || ~/.maestro-runner/bin/maestro-runner --version`
+
+If it still fails, give the user these manual instructions:
+1. `curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash` — downloads ~24MB binary
+2. If curl fails: check internet, proxy settings, or firewall
+3. After install, add to PATH: `export PATH="$HOME/.maestro-runner/bin:$PATH"` (add to `~/.zshrc` or `~/.bashrc`)
+4. Fallback: install Maestro CLI instead: `brew install maestro` (slower but compatible)
+5. Verify: `maestro-runner --version` should print a version number
 
 ### 5. iOS Simulator (if macOS)
 ```bash

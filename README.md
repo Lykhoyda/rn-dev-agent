@@ -92,7 +92,7 @@ Each phase gates on the previous one. Claude asks for your approval before imple
 
 - **Live verification** — After implementation, Claude connects to your running app via CDP, navigates to the feature screen, checks the component tree, exercises interactions, and confirms store state matches expectations. No "trust me it works."
 - **Architect-designed proof flows** — The architect agent (Opus) designs the exact E2E verification steps during Phase 4, including which testIDs to check, which CDP expressions to run, and which screenshots to take. Phase 5.5 executes this plan mechanically.
-- **36 best-practice rules** — Integrated from [Vercel's React Native skills](https://github.com/vercel-labs/agent-skills). Every code review (Phase 6) and architecture design (Phase 4) checks against rules covering crash prevention, list performance, animation, state management, and UI patterns.
+- **46 best-practice rules** — Integrated from [Vercel's React Native skills](https://github.com/vercel-labs/agent-skills). Every code review (Phase 6) and architecture design (Phase 4) checks against rules covering crash prevention, list performance, animation, state management, and UI patterns.
 - **Parallel exploration** — Phase 2 launches multiple explorer agents simultaneously to map different aspects of your codebase, so Claude understands your patterns before writing a single line.
 
 ### Example session
@@ -140,7 +140,7 @@ Phase 7: Done. 4 files modified, 3 decisions logged.
 
 ### Benchmarks
 
-Real measurements from the test app (21 stories completed):
+Real measurements from the test app (35 stories completed):
 
 | Feature complexity | Time | Crashes | Manual interventions |
 |-------------------|------|---------|---------------------|
@@ -224,7 +224,7 @@ Copy the template from [`CLAUDE-MD-TEMPLATE.md`](CLAUDE-MD-TEMPLATE.md) into you
 │  ┌──────▼───▼────────────▼─────────────────▼──────┐ │
 │  │              MCP Server (CDP Bridge)            │ │
 │  │  WebSocket → Metro → Hermes CDP                 │ │
-│  │  23 tools: CDP + device + maestro + proof         │ │
+│  │  51 tools: CDP + device + maestro + proof          │ │
 │  └─────────────────────┬───────────────────────────┘ │
 │                        │                             │
 │  ┌─────────────────────▼───────────────────────────┐ │
@@ -239,9 +239,9 @@ Copy the template from [`CLAUDE-MD-TEMPLATE.md`](CLAUDE-MD-TEMPLATE.md) into you
     └─────────┘                   └───────────┘
 ```
 
-### MCP Tools (21 total)
+### MCP Tools (51 total)
 
-**CDP tools** (React internals via Chrome DevTools Protocol):
+**CDP tools** (24 — React internals via Chrome DevTools Protocol):
 
 | Tool | Purpose |
 |------|---------|
@@ -252,24 +252,49 @@ Copy the template from [`CLAUDE-MD-TEMPLATE.md`](CLAUDE-MD-TEMPLATE.md) into you
 | `cdp_component_state` | Targeted hook inspection by testID (forms, refs, atoms) |
 | `cdp_dispatch` | Atomic Redux dispatch + state read in single execution |
 | `cdp_network_log` | Recent HTTP requests |
+| `cdp_network_body` | Response body by request ID |
 | `cdp_console_log` | Console output buffer |
 | `cdp_error_log` | JS errors + promise rejections |
 | `cdp_evaluate` | Execute JS in Hermes |
 | `cdp_reload` | Full reload with auto-reconnect |
 | `cdp_dev_settings` | Dev menu actions |
+| `cdp_interact` | Press/type/scroll by testID via fiber tree |
+| `cdp_heap_usage` | JS memory usage |
+| `cdp_cpu_profile` | CPU profiling with hot function ranking |
+| `cdp_object_inspect` | Handle-based lazy object inspection |
+| `cdp_exception_breakpoint` | Catch exceptions with timed capture |
+| `cdp_nav_graph` | Full navigation graph extraction |
+| `cdp_navigate` | Navigate to any screen by name |
+| `collect_logs` | Parallel multi-source log collection |
 
-**Device tools** (native interaction via agent-device CLI):
+**Device tools** (14 — native interaction via agent-device CLI):
 
 | Tool | Purpose |
 |------|---------|
 | `device_list` | List simulators/emulators |
 | `device_screenshot` | Capture screen image |
-| `device_snapshot` | Accessibility tree with @refs |
+| `device_snapshot` | Open/close session + accessibility tree with @refs |
 | `device_find` | Find element by text, optionally tap |
 | `device_press` | Tap element by @ref |
 | `device_fill` | Type text into input by @ref |
 | `device_swipe` | Directional swipe gesture |
+| `device_scroll` | Native directional scroll |
+| `device_scrollintoview` | Scroll until element visible |
 | `device_back` | System back navigation |
+| `device_longpress` | Long press by @ref or coordinates |
+| `device_pinch` | Pinch/zoom gesture |
+| `device_batch` | Multi-step action sequence |
+| `device_deeplink` | Open URL in app |
+
+**Testing & composite tools** (13):
+
+| Tool | Purpose |
+|------|---------|
+| `proof_step` | Navigate + wait + verify + screenshot in one call |
+| `cross_platform_verify` | Compare iOS vs Android element-by-element |
+| `maestro_run` / `maestro_generate` / `maestro_test_all` | E2E test management |
+| `cdp_auto_login` | Auto-login via Maestro subflows |
+| Device helpers | deeplink, accept/dismiss dialog, focus_next, pick_date, pick_value |
 
 ## Troubleshooting
 

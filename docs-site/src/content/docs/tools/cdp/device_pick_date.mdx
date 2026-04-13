@@ -1,0 +1,21 @@
+---
+title: "device_pick_date"
+description: "Select a date in a UIDatePicker (wheels mode) / Android DatePicker"
+---
+
+Select a date in a UIDatePicker (wheels mode) / Android DatePicker. Parses YYYY-MM-DD or ISO 8601 and taps month name, day, and year in sequence. Known limitation: only wheels mode is supported — iOS 14+ inline calendar mode requires tapping calendar cells via device_find.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `date` | `string` | Yes |  |  | Target date — YYYY-MM-DD or full ISO 8601. Time component is ignored. |
+| `pickerTestId` | `string` | No |  |  | Optional testID of the date picker — tapped first to ensure the picker is open. |
+| `platform` | `enum: ios | android` | No |  |  | Force platform. Auto-detected if omitted. |
+| `timeoutMs` | `number` | No |  | min: 1000, max: 120000, integer | Maestro timeout (default 20000ms). |
+
+## Usage
+
+```
+device_pick_date(date: <string>)
+```

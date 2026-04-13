@@ -1,0 +1,20 @@
+---
+title: "device_deeplink"
+description: "Open a deep link or universal URL on the booted simulator/emulator"
+---
+
+Open a deep link or universal URL on the booted simulator/emulator. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `url` | `string` | Yes |  |  | URL to open, e.g. "myapp://claims/new" or "https://example.com/page". |
+| `platform` | `enum: ios | android` | No |  |  | Force platform. Auto-detected from the active session or booted devices if omitted. |
+| `packageName` | `string` | No |  |  | (Android only) Explicit package/activity, e.g. "com.example/.MainActivity". Usually not needed — intent resolution picks the right app. |
+
+## Usage
+
+```
+device_deeplink(url: <string>)
+```

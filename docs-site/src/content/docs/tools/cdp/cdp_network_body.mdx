@@ -1,0 +1,19 @@
+---
+title: "cdp_network_body"
+description: "Get the actual response body for a network request by its requestId"
+---
+
+Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `requestId` | `string` | Yes |  |  | Request ID from cdp_network_log output |
+| `maxLength` | `number` | No | `10000` | min: 100, max: 100000, integer | Max body length to return (default 10000 chars). Truncated if longer. |
+
+## Usage
+
+```
+cdp_network_body(requestId: <string>)
+```

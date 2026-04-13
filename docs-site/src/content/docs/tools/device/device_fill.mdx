@@ -5,7 +5,7 @@ sidebar:
   order: 24
 ---
 
-Type text into an input field by its @ref from device_snapshot. Clears existing text first. Requires an open session.
+Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.
 
 ## Parameters
 

@@ -1,0 +1,51 @@
+---
+title: setup
+description: Check and install all rn-dev-agent prerequisites with automatic retry and manual fallback instructions.
+---
+
+## Usage
+
+```
+/rn-dev-agent:setup
+```
+
+## What it does
+
+Runs a 9-point environment checklist. For each missing dependency, it attempts automatic installation. If that fails, it provides manual instructions.
+
+## Checklist
+
+| # | Check | Required | Auto-install |
+|---|-------|----------|-------------|
+| 1 | Node.js >= 22 LTS | Yes | No (user must install) |
+| 2 | CDP bridge dependencies | Yes | Yes (`npm install`) |
+| 3 | agent-device CLI | Yes | Yes (`npm install -g agent-device`) |
+| 4 | maestro-runner | Yes | Yes (curl installer) |
+| 5 | iOS Simulator booted | One platform | No |
+| 6 | Android Emulator running | One platform | No |
+| 7 | Metro dev server | Yes | No (user starts) |
+| 8 | CDP connection | Yes | Auto via `cdp_status` |
+| 9 | ffmpeg | Optional | No |
+
+## When to run
+
+- First time using the plugin
+- After SessionStart shows WARNING messages
+- When `cdp_status` fails to connect
+- When `device_*` tools fail
+
+## Example output
+
+```
+| Check           | Status                | Action Needed                           |
+|-----------------|-----------------------|-----------------------------------------|
+| Node.js         | OK (v22.15.0)         | —                                       |
+| CDP bridge      | OK                    | —                                       |
+| agent-device    | MISSING               | Run: npm install -g agent-device        |
+| maestro-runner  | OK (v1.0.9)           | —                                       |
+| iOS Simulator   | BOOTED (iPhone 16)    | —                                       |
+| Android         | NOT RUNNING           | Boot an emulator                        |
+| Metro           | RUNNING (port 8081)   | —                                       |
+| CDP connection  | CONNECTED             | —                                       |
+| ffmpeg          | OK (v7.1)             | —                                       |
+```

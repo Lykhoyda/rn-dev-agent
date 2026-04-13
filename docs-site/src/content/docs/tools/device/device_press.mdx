@@ -5,7 +5,7 @@ sidebar:
   order: 23
 ---
 
-Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, and long hold. Requires an open session.
+Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session.
 
 ## Parameters
 
@@ -15,6 +15,7 @@ Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated
 | `doubleTap` | `boolean` | No |  |  | Use double-tap gesture |
 | `count` | `number` | No |  | min: 1, max: 50, integer | Repeat tap N times (for rapid-fire interactions) |
 | `holdMs` | `number` | No |  | min: 0, max: 10000, integer | Hold duration in ms (for long-press via ref) |
+| `waitForFocusMs` | `number` | No |  | min: 0, max: 5000, integer | Sleep this many ms after tap to let keyboard focus settle — useful in sequential press+fill flows where focus would otherwise not propagate. |
 
 ## Usage
 

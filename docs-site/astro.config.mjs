@@ -7,9 +7,31 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'rn-dev-agent',
-      description: 'Claude Code plugin for React Native — 38 MCP tools, 5 agents, 12 commands.',
+      description: 'Claude Code plugin for React Native development — 51 MCP tools, 5 agents, 13 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/Lykhoyda/rn-dev-agent' },
+      ],
+      head: [
+        { tag: 'meta', attrs: { name: 'keywords', content: 'react native, claude code, plugin, mcp, chrome devtools protocol, expo, ios simulator, android emulator, ai testing, mobile development' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://lykhoyda.github.io/rn-dev-agent/og-image.png' } },
+        { tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+        { tag: 'link', attrs: { rel: 'canonical', href: 'https://lykhoyda.github.io/rn-dev-agent/' } },
+        {
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'SoftwareApplication',
+            name: 'rn-dev-agent',
+            description: 'Claude Code plugin for React Native development with 51 MCP tools for live app verification via Chrome DevTools Protocol.',
+            applicationCategory: 'DeveloperApplication',
+            operatingSystem: 'macOS, Linux',
+            url: 'https://lykhoyda.github.io/rn-dev-agent/',
+            author: { '@type': 'Person', name: 'Anton Lykhoyda', url: 'https://github.com/Lykhoyda' },
+            offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+          }),
+        },
       ],
       editLink: {
         baseUrl: 'https://github.com/Lykhoyda/rn-dev-agent/edit/main/docs-site/',
@@ -30,6 +52,7 @@ export default defineConfig({
                 { label: 'build-and-test', slug: 'commands/build-and-test' },
                 { label: 'debug-screen', slug: 'commands/debug-screen' },
                 { label: 'check-env', slug: 'commands/check-env' },
+                { label: 'setup', slug: 'commands/setup' },
               ],
             },
             {
@@ -56,7 +79,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'tools' },
             {
-              label: 'CDP Tools (19)',
+              label: 'CDP Tools (24)',
               collapsed: false,
               autogenerate: { directory: 'tools/cdp' },
             },
@@ -66,7 +89,7 @@ export default defineConfig({
               autogenerate: { directory: 'tools/device' },
             },
             {
-              label: 'Testing Tools (5)',
+              label: 'Testing Tools (13)',
               collapsed: true,
               autogenerate: { directory: 'tools/testing' },
             },
