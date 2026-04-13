@@ -33,21 +33,21 @@ if [ "$has_rn_config" = true ]; then
   fi
 
   # Track tool installation status for the banner
-  INSTALL_WARNINGS=""
+  INSTALL_WARNINGS=()
 
-  # Ensure CDP bridge dependencies are installed
-  if ! bash "$PLUGIN_ROOT/scripts/ensure-cdp-deps.sh" 2>/dev/null; then
-    INSTALL_WARNINGS="${INSTALL_WARNINGS}\nWARNING: CDP bridge deps failed. Run: cd ${PLUGIN_ROOT}/scripts/cdp-bridge && npm install"
+  # Ensure CDP bridge dependencies are installed (stderr visible for diagnostics)
+  if ! bash "$PLUGIN_ROOT/scripts/ensure-cdp-deps.sh" 2>&1; then
+    INSTALL_WARNINGS+=("WARNING: CDP bridge deps failed. Run: cd ${PLUGIN_ROOT}/scripts/cdp-bridge && npm install")
   fi
 
-  # Ensure maestro-runner is installed
-  if ! bash "$PLUGIN_ROOT/scripts/ensure-maestro-runner.sh" 2>/dev/null; then
-    INSTALL_WARNINGS="${INSTALL_WARNINGS}\nWARNING: maestro-runner not installed. Run: npm install -g maestro-runner"
+  # Ensure maestro-runner is installed (stderr visible for diagnostics)
+  if ! bash "$PLUGIN_ROOT/scripts/ensure-maestro-runner.sh" 2>&1; then
+    INSTALL_WARNINGS+=("WARNING: maestro-runner not installed. Run: npm install -g maestro-runner")
   fi
 
-  # Ensure agent-device is installed
-  if ! bash "$PLUGIN_ROOT/scripts/ensure-agent-device.sh" 2>/dev/null; then
-    INSTALL_WARNINGS="${INSTALL_WARNINGS}\nWARNING: agent-device not installed. Run: npm install -g agent-device"
+  # Ensure agent-device is installed (stderr visible for diagnostics)
+  if ! bash "$PLUGIN_ROOT/scripts/ensure-agent-device.sh" 2>&1; then
+    INSTALL_WARNINGS+=("WARNING: agent-device not installed. Run: npm install -g agent-device")
   fi
 
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
@@ -60,8 +60,10 @@ if [ "$has_rn_config" = true ]; then
   bash "$PLUGIN_ROOT/scripts/ensure-android-ready.sh" 2>/dev/null || true
 
   # Show any installation warnings BEFORE the banner so they're visible
-  if [ -n "$INSTALL_WARNINGS" ]; then
-    echo -e "$INSTALL_WARNINGS"
+  if [ ${#INSTALL_WARNINGS[@]} -gt 0 ]; then
+    printf '%s\n' "${INSTALL_WARNINGS[@]}"
+    echo ""
+    echo "Run /rn-dev-agent:setup to install missing dependencies."
     echo ""
   fi
 

@@ -185,33 +185,28 @@ Call `cdp_status`. If it fails to connect:
 ### Step 0: Ensure Simulator & Navigate to Feature
 
 First, verify the simulator is running and CDP is connected:
-1. Detect platform: check `xcrun simctl list devices booted` (iOS) or
-   `adb devices` (Android)
+1. Call `device_list` to check for booted simulators/emulators
 2. If no device is booted, attempt auto-recovery:
    - Run `rn-ensure-running <platform>`
    - If exit 0: call `cdp_status` to confirm connection
-   - If the script fails: report the error and ask the user to boot the simulator.
+   - If the script fails: tell the user to boot a simulator and run
+     `/rn-dev-agent:setup` to verify all dependencies are installed.
      Do not skip verification without user consent.
 3. Call `cdp_status` to confirm CDP connection before proceeding.
 
 Then, if the blueprint's `entryRoute` is not "none", navigate to the feature
-screen before taking any measurements. After a full reload, the app starts on
-the initial route — features on sub-screens will not be visible without
-navigation.
-
-**Use `cdp_evaluate` with the app's navigation ref** — deep links trigger
-native confirmation dialogs in Expo Go that cannot be dismissed programmatically
-(see B56):
+screen using `cdp_navigate` or `cdp_evaluate`:
+```
+cdp_navigate(screen="<screen>", params={...})
+```
+Or if `cdp_navigate` is unavailable:
 ```
 cdp_evaluate(expression="globalThis.__NAV_REF__?.navigate('<screen>', <params>)")
 ```
 
-If `__NAV_REF__` is not available, fall back to deep links as a last resort:
-```bash
-# iOS
-xcrun simctl openurl booted "<entryRoute from blueprint>"
-# Android
-adb shell am start -a android.intent.action.VIEW -d "<entryRoute from blueprint>"
+If navigation ref is not available, use `device_deeplink` as a last resort:
+```
+device_deeplink(url="<entryRoute from blueprint>")
 ```
 
 After navigation, call `cdp_navigation_state` to confirm you are on the
