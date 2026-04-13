@@ -608,9 +608,10 @@ trackedTool(
 
 trackedTool(
   'cross_platform_verify',
-  'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Returns a per-element comparison table with PASS/FAIL verdict.',
+  'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.',
   {
-    elements: z.array(z.string()).min(1).describe('List of testIDs or labels to check on both platforms'),
+    elements: z.array(z.string()).optional().describe('List of testIDs or labels to check on both platforms. Optional if scanDir is provided.'),
+    scanDir: z.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),
     matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
   },
   createCrossPlatformVerifyHandler(),

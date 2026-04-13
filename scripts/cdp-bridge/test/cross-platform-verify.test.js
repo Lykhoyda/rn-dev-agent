@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findElement } from '../dist/tools/cross-platform-verify.js';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { findElement, discoverTestIDs } from '../dist/tools/cross-platform-verify.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── findElement ────────────────────────────────────────────────────────
 
 const NODES = [
   { ref: '@1', label: 'Submit Button', identifier: 'submit-btn', type: 'Button' },
@@ -39,4 +45,33 @@ test('findElement on empty nodes returns false', () => {
   assert.equal(findElement([], 'anything', 'any'), false);
   assert.equal(findElement([], 'anything', 'testID'), false);
   assert.equal(findElement([], 'anything', 'label'), false);
+});
+
+// ── discoverTestIDs ────────────────────────────────────────────────────
+
+test('discoverTestIDs extracts testIDs from .tsx fixture', () => {
+  const fixtureDir = join(__dirname, 'fixtures', 'scan-test');
+  const ids = discoverTestIDs(fixtureDir);
+  assert.ok(ids.includes('example-screen'), 'should find testID="example-screen"');
+  assert.ok(ids.includes('title-text'), 'should find testID="title-text"');
+  assert.ok(ids.includes('submit-btn'), "should find testID='submit-btn'");
+  assert.ok(ids.includes('dynamic-view'), 'should find testID={"dynamic-view"}');
+  assert.equal(ids.length, 4);
+});
+
+test('discoverTestIDs returns sorted results', () => {
+  const fixtureDir = join(__dirname, 'fixtures', 'scan-test');
+  const ids = discoverTestIDs(fixtureDir);
+  const sorted = [...ids].sort();
+  assert.deepEqual(ids, sorted);
+});
+
+test('discoverTestIDs returns empty array for nonexistent dir', () => {
+  const ids = discoverTestIDs('/nonexistent/path/that/does/not/exist');
+  assert.deepEqual(ids, []);
+});
+
+test('discoverTestIDs skips node_modules and dotfiles', () => {
+  const ids = discoverTestIDs(join(__dirname, '..'));
+  assert.ok(!ids.some(id => id.includes('node_modules')));
 });

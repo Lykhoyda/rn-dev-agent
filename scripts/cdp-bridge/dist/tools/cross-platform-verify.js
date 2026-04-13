@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import { getCachedSnapshot } from '../agent-device-wrapper.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 export function findElement(nodes, query, matchBy) {
@@ -10,8 +12,60 @@ export function findElement(nodes, query, matchBy) {
         return (n.identifier?.toLowerCase() === q) || (n.label?.toLowerCase().includes(q) ?? false);
     });
 }
+const TESTID_RE = /testID\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+const SCAN_EXTENSIONS = new Set(['.tsx', '.jsx', '.ts', '.js']);
+export function discoverTestIDs(dir) {
+    const ids = new Set();
+    function walk(d) {
+        let entries;
+        try {
+            entries = readdirSync(d);
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry === 'node_modules' || entry.startsWith('.'))
+                continue;
+            const full = join(d, entry);
+            try {
+                const st = lstatSync(full);
+                if (st.isSymbolicLink())
+                    continue;
+                if (st.isDirectory()) {
+                    walk(full);
+                    continue;
+                }
+                if (!SCAN_EXTENSIONS.has(extname(entry)))
+                    continue;
+                const src = readFileSync(full, 'utf8');
+                for (const m of src.matchAll(TESTID_RE)) {
+                    const id = m[1] ?? m[2] ?? m[3];
+                    if (id)
+                        ids.add(id);
+                }
+            }
+            catch { /* skip unreadable files */ }
+        }
+    }
+    walk(dir);
+    return [...ids].sort();
+}
 export function createCrossPlatformVerifyHandler() {
     return async (args) => {
+        let elements = args.elements;
+        let discoveredCount = 0;
+        if (args.scanDir) {
+            const discovered = discoverTestIDs(args.scanDir);
+            if (discovered.length === 0) {
+                return failResult(`No testIDs found in ${args.scanDir}. Ensure components use testID="..." props.`);
+            }
+            discoveredCount = discovered.length;
+            elements = elements ? [...new Set([...elements, ...discovered])] : discovered;
+        }
+        if (!elements || elements.length === 0) {
+            return failResult('Provide elements[] or scanDir to discover testIDs from source.');
+        }
         const matchBy = args.matchBy ?? 'any';
         const iosSnap = getCachedSnapshot('ios');
         const androidSnap = getCachedSnapshot('android');
@@ -22,7 +76,7 @@ export function createCrossPlatformVerifyHandler() {
         const results = [];
         let iosFound = 0;
         let androidFound = 0;
-        for (const el of args.elements) {
+        for (const el of elements) {
             const iosStatus = !iosSnap ? 'NO_SNAPSHOT' : findElement(iosSnap.nodes, el, matchBy) ? 'FOUND' : 'MISSING';
             const androidStatus = !androidSnap ? 'NO_SNAPSHOT' : findElement(androidSnap.nodes, el, matchBy) ? 'FOUND' : 'MISSING';
             if (iosStatus === 'FOUND')
@@ -37,7 +91,7 @@ export function createCrossPlatformVerifyHandler() {
             });
         }
         const missing = results.filter(r => !r.match || r.ios === 'MISSING' || r.android === 'MISSING');
-        const total = args.elements.length;
+        const total = elements.length;
         const allMatch = missing.length === 0 && iosSnap != null && androidSnap != null;
         const summary = {
             verdict: allMatch ? 'PASS' : 'FAIL',
@@ -48,6 +102,7 @@ export function createCrossPlatformVerifyHandler() {
             iosCapturedAt: iosSnap?.capturedAt ?? null,
             androidCapturedAt: androidSnap?.capturedAt ?? null,
             matchBy,
+            ...(args.scanDir ? { scannedDir: args.scanDir, discoveredTestIDs: discoveredCount } : {}),
             results,
         };
         if (!iosSnap || !androidSnap) {
