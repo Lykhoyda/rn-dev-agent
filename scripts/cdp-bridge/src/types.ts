@@ -35,6 +35,8 @@ export interface NetworkEntry {
   timestamp: string;
   status?: number;
   duration_ms?: number;
+  bodyAvailable?: boolean;
+  bodySize?: number;
 }
 
 export interface ErrorEntry {
@@ -43,6 +45,15 @@ export interface ErrorEntry {
   isFatal?: boolean;
   type?: string;
   timestamp: string;
+}
+
+export interface LogEntry {
+  source: string;
+  level: string;
+  text: string;
+  timestamp: string;
+  url?: string;
+  lineNumber?: number;
 }
 
 export type CDPClientState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -74,6 +85,14 @@ export interface StatusResult {
     networkFallback: boolean;
     bridgeDetected: boolean;
     bridgeVersion: number | null;
+  };
+  domains: {
+    runtime: boolean;
+    debugger: boolean;
+    network: boolean;
+    log: boolean;
+    profiler: boolean;
+    heapProfiler: boolean;
   };
 }
 

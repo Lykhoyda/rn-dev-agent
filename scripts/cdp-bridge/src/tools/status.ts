@@ -64,6 +64,14 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       bridgeDetected: client.bridgeDetected,
       bridgeVersion: client.bridgeVersion,
     },
+    domains: {
+      runtime: client.isConnected,
+      debugger: client.isConnected,
+      network: client.networkMode === 'cdp',
+      log: client.logDomainEnabled,
+      profiler: client.profilerAvailable,
+      heapProfiler: client.heapProfilerAvailable,
+    },
   };
 }
 

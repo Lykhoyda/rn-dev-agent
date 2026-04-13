@@ -13,13 +13,33 @@ import type {
   HermesTarget,
   ConsoleEntry,
   NetworkEntry,
+  LogEntry,
   CDPClientState,
   EvaluateResult,
 } from './types.js';
 
 const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
 const CDP_SESSION_FILE = join(tmpdir(), 'rn-dev-agent-cdp-session.json');
+const CDP_TIMEOUT_FAST = 1500;
 const CDP_TIMEOUT_MS = 5000;
+const CDP_TIMEOUT_SLOW = 30000;
+
+function timeoutForMethod(method: string): number {
+  switch (method) {
+    case 'Runtime.getHeapUsage':
+    case 'Log.enable':
+    case 'Log.disable':
+      return CDP_TIMEOUT_FAST;
+    case 'HeapProfiler.takeHeapSnapshot':
+    case 'HeapProfiler.startTrackingHeapObjects':
+    case 'Profiler.start':
+    case 'Profiler.stop':
+    case 'Network.getResponseBody':
+      return CDP_TIMEOUT_SLOW;
+    default:
+      return CDP_TIMEOUT_MS;
+  }
+}
 const REACT_READY_TIMEOUT_MS = 30000;
 const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
@@ -54,10 +74,16 @@ export class CDPClient {
   private _bridgeDetected = false;
   private _bridgeVersion: number | null = null;
 
+  private _logBuffer: RingBuffer<LogEntry>;
+  private _logDomainEnabled = false;
+  private _profilerAvailable = false;
+  private _heapProfilerAvailable = false;
+
   constructor(port?: number) {
     this._port = port ?? 8081;
     this._consoleBuffer = new RingBuffer<ConsoleEntry>(200);
     this._networkBuffer = new RingBuffer<NetworkEntry>(100);
+    this._logBuffer = new RingBuffer<LogEntry>(50);
   }
 
   get state(): CDPClientState { return this._state; }
@@ -72,6 +98,10 @@ export class CDPClient {
   get connectionGeneration(): number { return this._connectionGeneration; }
   get bridgeDetected(): boolean { return this._bridgeDetected; }
   get bridgeVersion(): number | null { return this._bridgeVersion; }
+  get logBuffer(): RingBuffer<LogEntry> { return this._logBuffer; }
+  get logDomainEnabled(): boolean { return this._logDomainEnabled; }
+  get profilerAvailable(): boolean { return this._profilerAvailable; }
+  get heapProfilerAvailable(): boolean { return this._heapProfilerAvailable; }
 
   helperExpr(call: string): string {
     return this._bridgeDetected ? `__RN_DEV_BRIDGE__.${call}` : `__RN_AGENT.${call}`;
@@ -387,6 +417,9 @@ export class CDPClient {
       this._bridgeDetected = false;
       this._bridgeVersion = null;
       this._connectedTarget = null;
+      this._logDomainEnabled = false;
+      this._profilerAvailable = false;
+      this._heapProfilerAvailable = false;
 
       if (this.ws) {
         this.ws.removeAllListeners();
@@ -413,6 +446,9 @@ export class CDPClient {
     this._bridgeDetected = false;
     this._bridgeVersion = null;
     this._connectedTarget = null;
+    this._logDomainEnabled = false;
+    this._profilerAvailable = false;
+    this._heapProfilerAvailable = false;
     this.clearActiveFlag();
     this.stopBackgroundPoll();
 
@@ -518,7 +554,7 @@ export class CDPClient {
   }
 
   async send(method: string, params?: unknown): Promise<unknown> {
-    return this.sendWithTimeout(method, params, CDP_TIMEOUT_MS);
+    return this.sendWithTimeout(method, params, timeoutForMethod(method));
   }
 
   private async connectToTarget(target: HermesTarget, retries = 5): Promise<void> {
@@ -661,15 +697,35 @@ export class CDPClient {
 
   private async setup(): Promise<void> {
     logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
-    await this.sendWithTimeout('Runtime.enable', undefined, CDP_TIMEOUT_MS);
-    await this.sendWithTimeout('Debugger.enable', undefined, CDP_TIMEOUT_MS);
+    await this.sendWithTimeout('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
+    await this.sendWithTimeout('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
 
     try {
-      await this.sendWithTimeout('Network.enable', undefined, CDP_TIMEOUT_MS);
+      await this.sendWithTimeout('Network.enable', undefined, timeoutForMethod('Network.enable'));
       this._networkMode = 'cdp';
     } catch {
       this._networkMode = 'none';
     }
+
+    // D588: Log.enable for pre-helper diagnostics
+    try {
+      await this.sendWithTimeout('Log.enable', undefined, timeoutForMethod('Log.enable'));
+      this._logDomainEnabled = true;
+    } catch {
+      this._logDomainEnabled = false;
+    }
+
+    // Probe optional profiling domains in parallel (don't leave enabled)
+    const [profilerProbe, heapProbe] = await Promise.allSettled([
+      this.sendWithTimeout('Profiler.enable', undefined, CDP_TIMEOUT_FAST)
+        .then(() => this.sendWithTimeout('Profiler.disable', undefined, CDP_TIMEOUT_FAST))
+        .then(() => true),
+      this.sendWithTimeout('HeapProfiler.enable', undefined, CDP_TIMEOUT_FAST)
+        .then(() => this.sendWithTimeout('HeapProfiler.disable', undefined, CDP_TIMEOUT_FAST))
+        .then(() => true),
+    ]);
+    this._profilerAvailable = profilerProbe.status === 'fulfilled' && profilerProbe.value === true;
+    this._heapProfilerAvailable = heapProbe.status === 'fulfilled' && heapProbe.value === true;
 
     this.eventHandlers.clear();
     this.setupEventHandlers();
@@ -751,10 +807,35 @@ export class CDPClient {
       }
     });
 
+    // D588: Buffer Log.entryAdded events for pre-helper diagnostics
+    this.eventHandlers.set('Log.entryAdded', (params: unknown) => {
+      const p = params as { entry?: { source?: string; level?: string; text?: string; timestamp?: number; url?: string; lineNumber?: number } };
+      const e = p.entry;
+      if (!e) return;
+      this._logBuffer.push({
+        source: e.source ?? 'other',
+        level: e.level ?? 'info',
+        text: e.text ?? '',
+        timestamp: e.timestamp ? new Date(e.timestamp).toISOString() : new Date().toISOString(),
+        url: e.url,
+        lineNumber: e.lineNumber,
+      });
+    });
+
+    // D588: Buffer Network.loadingFinished for response body availability
+    this.eventHandlers.set('Network.loadingFinished', (params: unknown) => {
+      const p = params as { requestId: string; encodedDataLength?: number };
+      const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
+      if (entry) {
+        entry.bodyAvailable = true;
+        entry.bodySize = p.encodedDataLength;
+      }
+    });
+
     this.eventHandlers.set('Debugger.paused', async () => {
       this._isPaused = true;
       try {
-        await this.sendWithTimeout('Debugger.resume', undefined, CDP_TIMEOUT_MS);
+        await this.sendWithTimeout('Debugger.resume', undefined, timeoutForMethod('Debugger.resume'));
       } catch {
         // Best effort auto-resume
       }
@@ -785,6 +866,9 @@ export class CDPClient {
     this._bridgeDetected = false;
     this._bridgeVersion = null;
     this._connectedTarget = null;
+    this._logDomainEnabled = false;
+    this._profilerAvailable = false;
+    this._heapProfilerAvailable = false;
 
     if (this.disposed || this.reconnecting) return;
 

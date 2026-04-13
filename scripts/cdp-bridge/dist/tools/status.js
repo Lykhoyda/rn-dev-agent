@@ -53,6 +53,14 @@ async function buildStatusResult(client) {
             bridgeDetected: client.bridgeDetected,
             bridgeVersion: client.bridgeVersion,
         },
+        domains: {
+            runtime: client.isConnected,
+            debugger: client.isConnected,
+            network: client.networkMode === 'cdp',
+            log: client.logDomainEnabled,
+            profiler: client.profilerAvailable,
+            heapProfiler: client.heapProfilerAvailable,
+        },
     };
 }
 export function createStatusHandler(getClient, setClient, createClient) {

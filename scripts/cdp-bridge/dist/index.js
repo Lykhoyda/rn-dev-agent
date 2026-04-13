@@ -12,6 +12,7 @@ import { createComponentTreeHandler } from './tools/component-tree.js';
 import { createNavigationStateHandler } from './tools/navigation-state.js';
 import { createErrorLogHandler } from './tools/error-log.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
+import { createNetworkBodyHandler } from './tools/network-body.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
 import { createDispatchHandler } from './tools/dispatch.js';
@@ -96,6 +97,11 @@ trackedTool('cdp_network_log', 'Get recent network requests. Shows method, URL, 
     filter: z.string().optional().describe('Filter by URL substring (e.g. "/api/cart")'),
     clear: z.boolean().default(false).describe('Clear network buffer instead of reading'),
 }, createNetworkLogHandler(getClient));
+trackedTool('cdp_network_body', 'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached.', {
+    requestId: z.string().describe('Request ID from cdp_network_log output'),
+    maxLength: z.number().int().min(100).max(100000).default(10000).optional()
+        .describe('Max body length to return (default 10000 chars). Truncated if longer.'),
+}, createNetworkBodyHandler(getClient));
 trackedTool('cdp_console_log', 'Get recent console output. Buffered in ring buffer so logs from between agent calls are preserved.', {
     level: z.enum(['all', 'log', 'warn', 'error', 'info', 'debug']).default('all').describe('Filter by log level'),
     limit: z.number().int().min(1).max(200).default(50).describe('Max entries to return (default 50, max 200)'),
