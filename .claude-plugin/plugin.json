@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
   "author": {
     "name": "Anton Lykhoyda",
@@ -21,6 +21,8 @@
     "maestro"
   ],
   "skills": [
+    "./skills/using-rn-dev-agent",
+    "./skills/rn-feature-development",
     "./skills/rn-device-control",
     "./skills/rn-testing",
     "./skills/rn-debugging",
