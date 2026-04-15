@@ -4,6 +4,8 @@ description: |
   Tests React Native features on simulator/emulator. Verifies UI renders
   correctly, user flows work, and internal state matches expectations.
   Use when a feature has been implemented and needs verification.
+  PARENT-SESSION-ONLY: requires MCP tools (cdp_*, device_*) — do NOT spawn
+  via Task tool, run protocol inline in parent session (GH #31).
   Triggers: "test this feature", "verify it works", "check the implementation",
   "test on simulator", "run on device", "does it work"
 
@@ -33,7 +35,7 @@ description: |
   User is asking whether a feature works correctly, which requires live device testing.
   </commentary>
   </example>
-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
+tools: Bash, Read, Write, Edit, Glob, Grep
 model: sonnet
 memory: true
 color: cyan
@@ -42,6 +44,21 @@ skills: rn-device-control, rn-testing, rn-debugging
 
 You are a React Native feature testing agent. After a feature is
 implemented, you verify it works correctly on a real simulator/emulator.
+
+> **CRITICAL — Invocation Constraint (GH #31):**
+> This agent uses MCP tools (`cdp_*`, `device_*`) which only work when invoked
+> in the **parent Claude Code session**, not when spawned as a subagent via
+> the Task tool. MCP stdio connections do not propagate across subprocess
+> boundaries.
+>
+> - **DO** invoke this agent's protocol inline from a slash command
+>   (`/rn-dev-agent:test-feature`) or from the parent session directly
+> - **DO NOT** spawn this agent via `Task(subagent_type='rn-dev-agent:rn-tester')`
+>   — the spawned subagent will not have access to `cdp_*` / `device_*` tools
+>
+> If you are reading this as a spawned subagent and notice you cannot call
+> CDP/device tools, **stop immediately**. Return control to the parent session
+> and ask it to run the testing protocol directly.
 
 ## Your Testing Protocol
 

@@ -3,16 +3,42 @@ command: test-feature
 description: Test a React Native feature on the running simulator/emulator. Verifies UI, user flows, and internal state. Generates a persistent Maestro test file.
 argument-hint: [feature-description]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
-agent: rn-tester
 ---
 
 Test this React Native feature: $ARGUMENTS
 
-## Usage
+## Run the rn-tester protocol INLINE (parent session)
 
-```
-/rn-dev-agent:test-feature <description>
-```
+> **Important (GH #31):** Do NOT spawn the `rn-tester` agent via the Task tool.
+> MCP tools (`cdp_*`, `device_*`) are not available in spawned subagents.
+> Execute the rn-tester protocol directly in this parent session using the
+> `rn-testing` and `rn-device-control` skills as your reference.
+
+Load the `rn-testing` skill and follow this 7-step protocol in this session:
+
+1. **Environment check** — call `cdp_status`. If it fails, stop and tell the
+   user to run `/rn-dev-agent:setup`.
+2. **Understand the feature** — read implementation files, find testIDs, routes,
+   store slices.
+3. **Plan the test** — write test steps and expected outcomes BEFORE executing.
+4. **Navigate to start** — use `cdp_navigate` or `device_deeplink` to reach the
+   starting screen.
+5. **Execute and verify** — for each step:
+   - Act (`device_press`, `device_fill`, `device_find`)
+   - Wait (`assertVisible` or 1-2s settle)
+   - Verify UI (`cdp_component_tree(filter=...)`)
+   - Verify data (`cdp_store_state(path=...)` + `cdp_network_log`)
+6. **Edge cases** — test empty state, error state, back navigation, rapid taps.
+7. **Generate persistent test** — write `flows/<feature-name>.yaml` for CI.
+
+## Verification (mandatory before declaring "tested")
+
+- [ ] `cdp_status` returned `ok:true` with `cdp.connected: true`
+- [ ] Every assertion has concrete Evidence (not "looks fine")
+- [ ] At least one `device_screenshot` saved
+- [ ] `flows/<feature-name>.yaml` written
+- [ ] `cdp_error_log` shows 0 new errors at end of flow
+- [ ] Cross-platform check via `cross_platform_verify` (or single-platform noted)
 
 ## Examples
 
@@ -22,23 +48,11 @@ Test this React Native feature: $ARGUMENTS
 /rn-dev-agent:test-feature profile screen -- edit name, upload photo, save
 ```
 
-## What This Does
-
-Invokes the `rn-tester` agent, which runs a 7-step verification protocol:
-
-1. **Environment check** -- confirms Metro running, CDP connected, no RedBox
-2. **Understand the feature** -- reads implementation files, finds testIDs, routes, store slices
-3. **Plan the test** -- writes test steps and expected outcomes before executing
-4. **Navigate to start** -- uses deep links or Maestro to reach the starting screen
-5. **Execute and verify** -- for each step: act (Maestro), wait (assertVisible), verify UI (cdp_component_tree), verify data (cdp_store_state + cdp_network_log)
-6. **Edge cases** -- tests empty state, error state, back navigation, rapid interactions
-7. **Generate persistent test** -- writes `flows/<feature-name>.yaml` for CI
-
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Metro dev server running (`npx expo start` or `npx react-native start`)
-- Maestro or maestro-runner installed (`brew install maestro`)
+- Maestro or maestro-runner installed
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 
 ## Output

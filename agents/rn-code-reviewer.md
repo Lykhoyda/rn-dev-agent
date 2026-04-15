@@ -64,7 +64,8 @@ Rate each potential issue 0–100:
 
 - **testID coverage** (Critical): Every `Pressable`, `TouchableOpacity`, `Button`,
   `TextInput`, and scrollable container must have a `testID`. Without testIDs,
-  the rn-tester agent cannot verify the feature via `cdp_component_tree` or Maestro.
+  the rn-tester protocol (run via `/rn-dev-agent:test-feature`) cannot verify
+  the feature via `cdp_component_tree` or Maestro.
 - **`__DEV__` guards** (Critical): All dev-only code must be wrapped in `if (__DEV__)`.
   This includes `global.__ZUSTAND_STORES__`, network mocks, debug logging, and
   dev menu setup. Shipping dev code to production is a security risk.

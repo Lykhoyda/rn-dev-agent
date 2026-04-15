@@ -27,15 +27,15 @@ What is the user asking for?
 │
 ├── TEST an existing feature
 │   └─► /rn-dev-agent:test-feature <description>
-│       (Launches rn-tester agent + rn-testing skill)
+│       (Runs rn-tester protocol INLINE in parent session — MCP tools required)
 │
 ├── BUILD + TEST (app not yet installed)
 │   └─► /rn-dev-agent:build-and-test <description>
-│       (Builds app via Expo/EAS, installs, starts Metro, then tests)
+│       (Builds app via Expo/EAS, installs, starts Metro, then runs tester protocol inline)
 │
 ├── Something is BROKEN on the current screen
 │   └─► /rn-dev-agent:debug-screen
-│       (Launches rn-debugger agent — gathers parallel evidence, applies fix)
+│       (Runs rn-debugger protocol INLINE in parent session — MCP tools required)
 │
 ├── Plugin tools not working / environment broken
 │   └─► /rn-dev-agent:setup
@@ -46,15 +46,15 @@ What is the user asking for?
 │       (Video + screenshots + generated PR body)
 │
 ├── Understand an existing feature (read, don't write)
-│   └─► Launch rn-code-explorer agent
+│   └─► Spawn rn-code-explorer via Task tool (read-only, safe to spawn)
 │       (Maps screens, state, navigation, testIDs, patterns)
 │
 ├── Design architecture before implementing
-│   └─► Launch rn-code-architect agent
+│   └─► Spawn rn-code-architect via Task tool (read-only, safe to spawn)
 │       (Opus-powered blueprint with testID placement + proof flow)
 │
 ├── Review code before merging
-│   └─► Launch rn-code-reviewer agent
+│   └─► Spawn rn-code-reviewer via Task tool (read-only, safe to spawn)
 │       (Confidence-filtered review, RN conventions + best practices)
 │
 ├── Just check if environment is ready
@@ -113,13 +113,29 @@ These apply to every RN task:
 
 ## Agent Map
 
-| Agent | Model | Purpose | Launch via |
+Two categories — invocation pattern matters:
+
+### Parent-session-only agents (MCP-bound — NEVER spawn via Task tool)
+
+These agents' protocols require `cdp_*` / `device_*` MCP tools, which don't
+propagate to spawned subagents (GH #31). They are **protocol playbooks** —
+read them as reference, execute the steps INLINE in the parent session.
+
+| Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|-----------|
-| `rn-tester` | sonnet | Verify feature works live on device | `/test-feature` or explicit launch |
-| `rn-debugger` | opus | Diagnose broken screen, apply fix | `/debug-screen` or explicit launch |
-| `rn-code-explorer` | sonnet | Map feature implementation across layers | Explicit launch |
-| `rn-code-architect` | opus | Design blueprint with proof flow | Explicit launch, usually from `/rn-feature-dev` Phase 4 |
-| `rn-code-reviewer` | sonnet | Review for bugs + RN convention violations | Explicit launch, usually from `/rn-feature-dev` Phase 6 |
+| `rn-tester` | sonnet | Verify feature works live on device | Run `/test-feature` — protocol executes inline in parent session |
+| `rn-debugger` | opus | Diagnose broken screen, apply fix | Run `/debug-screen` — protocol executes inline in parent session |
+
+### Spawnable agents (read-only — safe to use via Task tool)
+
+These use only `Glob, Grep, LS, Read` — no MCP tools. They can be spawned
+in parallel via the Task tool for concurrent codebase analysis.
+
+| Agent | Model | Purpose | How to invoke |
+|-------|-------|---------|-----------|
+| `rn-code-explorer` | sonnet | Map feature implementation across layers | `Task(subagent_type='rn-dev-agent:rn-code-explorer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 2 |
+| `rn-code-architect` | opus | Design blueprint with proof flow | `Task(subagent_type='rn-dev-agent:rn-code-architect', ...)` — typically × 1-2 during `/rn-feature-dev` Phase 4 |
+| `rn-code-reviewer` | sonnet | Review for bugs + RN convention violations | `Task(subagent_type='rn-dev-agent:rn-code-reviewer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 6 |
 
 ---
 
@@ -131,7 +147,8 @@ Agents skip this skill at the start of conversations. Don't.
 |--------|---------|
 | "The user asked a specific question — I'll answer directly without routing" | You lose the workflow gates. `/rn-feature-dev` wouldn't skip Phase 5.5; neither should an ad-hoc answer. |
 | "I know what `cdp_store_state` does — skip reading rn-debugging" | Skills are not API docs. They contain the process knowledge (when to combine tools, when to fallback). You need that context. |
-| "The user said 'fix the bug' — I'll just edit the file directly" | Route to `/rn-dev-agent:debug-screen` OR launch `rn-debugger` agent. The agent enforces reproduce → diagnose → fix → verify. |
+| "The user said 'fix the bug' — I'll just edit the file directly" | Route to `/rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
+| "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
 
 ---
@@ -145,7 +162,8 @@ If you notice yourself doing any of these at the start of an RN task, stop:
 - About to claim "feature works" without any `device_screenshot` or `cdp_*` output
 - Skipping `/rn-dev-agent:setup` because "tools probably work"
 - Starting feature development without `/rn-dev-agent:rn-feature-dev`
-- Launching an agent without the matching skill loaded in context
+- Spawning `rn-tester` or `rn-debugger` via Task tool — their protocols need MCP tools that don't propagate to subagents (GH #31). Run `/test-feature` or `/debug-screen` instead; the protocol executes inline in the parent session.
+- Spawning an agent without the matching skill loaded in context
 - Answering "is this broken?" without running `cdp_status` first
 
 ---

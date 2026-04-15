@@ -3,17 +3,46 @@ command: build-and-test
 description: Build the Expo/React Native app (local or EAS), install on simulator/emulator, start Metro, then test the specified feature end-to-end.
 argument-hint: [--eas profile] [feature-description]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
-agent: rn-tester
 ---
 
 Build the app and test this feature: $ARGUMENTS
 
-## Usage
+## Run the build + test protocol INLINE (parent session)
 
-```
-/rn-dev-agent:build-and-test <description>
-/rn-dev-agent:build-and-test --eas [profile] <description>
-```
+> **Important (GH #31):** Do NOT spawn the `rn-tester` agent via the Task tool.
+> MCP tools (`cdp_*`, `device_*`) are not available in spawned subagents.
+> Execute the build + test protocol directly in this parent session.
+
+Phase A — Build pre-flight (run in this session):
+
+1. **Detect platform** — check booted devices via `device_list` or `xcrun simctl
+   list devices booted` / `adb devices`. Record the result as `<platform>` =
+   `ios` or `android` — every script below needs it as argument 1.
+2. **Check if app is already running** — call `cdp_status`. If `cdp.connected
+   == true` AND `app.dev == true`, skip to Phase B.
+3. **Build / install** (substitute `<platform>` with `ios` or `android`):
+   - **No `--eas` flag:** run `bash $CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh <platform>`
+     which triggers `npx expo run:ios` or `npx expo run:android` (local build).
+   - **With `--eas` flag:** run `bash $CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh <platform> <profile>`
+     to find the artifact, then `bash $CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh <platform> --artifact <path>`
+     to install.
+4. **Start Metro** if not running (`npx expo start` in background, or instruct
+   user to start it).
+5. **Confirm CDP** — call `cdp_status` again, must return `ok:true`.
+
+Phase B — Run the rn-tester 7-step protocol (load `rn-testing` skill):
+
+Follow the same protocol as `/rn-dev-agent:test-feature` — environment check,
+understand the feature, plan, navigate, execute+verify, edge cases, generate
+persistent test.
+
+## Verification (mandatory before declaring complete)
+
+- [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` after Phase A
+- [ ] Every test assertion has concrete Evidence
+- [ ] At least one `device_screenshot` saved
+- [ ] `flows/<feature-name>.yaml` written
+- [ ] `cdp_error_log` shows 0 new errors at end
 
 ## Examples
 
@@ -22,18 +51,6 @@ Build the app and test this feature: $ARGUMENTS
 /rn-dev-agent:build-and-test --eas development login screen -- install EAS build, test auth
 /rn-dev-agent:build-and-test --eas preview payment flow -- test a specific EAS profile
 ```
-
-## What This Does
-
-Extends the standard `rn-tester` 7-step protocol with a build pre-flight:
-
-1. **Detect platform** — checks for booted iOS simulator or Android emulator
-2. **Check if app is running** — calls `cdp_status` to see if Metro + Hermes are connected
-3. **Build/install if needed**:
-   - **No `--eas` flag**: runs `expo_ensure_running.sh` which triggers `npx expo run:ios` or `npx expo run:android` (local build, blocks until done)
-   - **With `--eas` flag**: runs `eas_resolve_artifact.sh` to find the artifact (cache → EAS servers), then `expo_ensure_running.sh --artifact <path>` to install
-4. **Start Metro** if not already running
-5. **Run the standard 7-step test protocol** (environment check, understand feature, plan test, navigate, execute+verify, edge cases, generate test file)
 
 ## Build Modes
 

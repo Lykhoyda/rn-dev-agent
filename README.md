@@ -150,6 +150,7 @@ Claude Code
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
 | Plugin not detected | `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent` then `/reload-plugins` |
 | Tools fail after upgrade | Restart Claude Code ([why](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)) |
+| Spawned subagent says "MCP tools unavailable" | Never spawn `rn-tester` / `rn-debugger` via Task tool — MCP stdio doesn't propagate to subprocesses (GH #31). Use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead; protocols run inline in the parent session. |
 
 [Full troubleshooting guide](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
 
