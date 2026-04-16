@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
-**51 MCP tools** | **5 agents** | **13 commands** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**52 MCP tools** | **5 agents** | **13 commands** | **148 tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -103,11 +103,11 @@ if (__DEV__) {
 
 ## MCP Tools
 
-51 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
+52 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
 | Category | Count | Examples | Docs |
 |----------|-------|---------|------|
-| **CDP** (React internals) | 24 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_network_body` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
+| **CDP** (React internals) | 25 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
 | **Device** (native interaction) | 14 | `device_find`, `device_press`, `device_fill`, `device_screenshot` | [Device tools](https://lykhoyda.github.io/rn-dev-agent/tools/#device-tools) |
 | **Testing** (E2E + proof) | 13 | `proof_step`, `cross_platform_verify`, `maestro_run` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
 
@@ -118,7 +118,7 @@ Claude Code
   ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
-  │   51 tools: component tree, store state, profiling, network, interaction
+  │   52 tools: component tree, store state, profiling, network, interaction
   │
   └── Bash (device lifecycle)
       xcrun simctl / adb / maestro-runner / agent-device
@@ -130,15 +130,16 @@ Claude Code
 
 ## Benchmarks
 
-35 stories completed on the test app. [Full benchmarks](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
+38 stories completed on the test app (35 Ralph Loop + 3 Liquid Glass). [Full benchmarks](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
 
 | Complexity | Time | Crashes | Manual interventions |
 |-----------|------|---------|---------------------|
 | Simple (search, toggle, store) | 3-5 min | 0 | 0 |
 | Medium (forms, charts, lists) | 5-10 min | 0 | 0 |
 | Complex (3-step wizard, onboarding) | 11-25 min | 0 | 0 |
+| Glass UI (BlurView, Reanimated, haptics) | 27-90 min | 0 | 1 (Metro restart) |
 
-**Libraries tested:** react-hook-form, zod, @tanstack/react-query, @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications, react-native-reanimated, react-native-gesture-handler, expo-haptics
+**Libraries tested:** react-hook-form, zod, @tanstack/react-query, @gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg, expo-notifications, react-native-reanimated, react-native-gesture-handler, expo-haptics, expo-blur
 
 ## Troubleshooting
 
@@ -151,6 +152,8 @@ Claude Code
 | Plugin not detected | `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent` then `/reload-plugins` |
 | Tools fail after upgrade | Restart Claude Code ([why](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)) |
 | Spawned subagent says "MCP tools unavailable" | Never spawn `rn-tester` / `rn-debugger` via Task tool — MCP stdio doesn't propagate to subprocesses (GH #31). Use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead; protocols run inline in the parent session. |
+| Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles. Kill Metro, restart it, relaunch the app. `cdp_status` warns when reload count is high. |
+| `device_scroll` times out on Reanimated screens | agent-device daemon `waitForIdle` deadlocks with Reanimated worklets. Fixed in v0.22.0 — scroll routes through fast-runner HID synthesis. Ensure fast-runner is healthy via device session. |
 
 [Full troubleshooting guide](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
 
@@ -171,7 +174,7 @@ cd rn-dev-agent/scripts/cdp-bridge && npm install && npm run build && cd ../..
 cd /path/to/your-rn-app && claude --plugin-dir /path/to/rn-dev-agent
 ```
 
-Tests: `cd scripts/cdp-bridge && npm test` (144 tests, [CI](../../actions))
+Tests: `cd scripts/cdp-bridge && npm test` (148 tests, [CI](../../actions))
 
 ## License
 
