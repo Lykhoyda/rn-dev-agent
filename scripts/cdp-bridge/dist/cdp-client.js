@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeout-config.js';
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
+import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
 const REACT_READY_TIMEOUT_MS = 30000;
 const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
@@ -555,35 +556,7 @@ export class CDPClient {
         handleMsg(data, this.pending, this.eventHandlers, (params) => this.parseNetworkHookMessage(params));
     }
     parseNetworkHookMessage(params) {
-        if (this._networkMode !== 'hook')
-            return;
-        const p = params;
-        const firstArg = p.args?.[0]?.value;
-        if (typeof firstArg !== 'string' || !firstArg.startsWith('__RN_NET__:'))
-            return;
-        try {
-            const parts = firstArg.split(':');
-            const type = parts[1];
-            const data = JSON.parse(parts.slice(2).join(':'));
-            if (type === 'request') {
-                this._networkBuffer.push({
-                    id: data.id,
-                    method: data.method ?? 'GET',
-                    url: data.url ?? '',
-                    timestamp: new Date().toISOString(),
-                });
-            }
-            else if (type === 'response') {
-                const entry = this._networkBuffer.findLast(e => e.id === data.id);
-                if (entry) {
-                    entry.status = data.status;
-                    entry.duration_ms = data.duration_ms;
-                }
-            }
-        }
-        catch (err) {
-            console.error('CDP: malformed network hook message dropped:', typeof firstArg === 'string' ? firstArg.slice(0, 100) : typeof firstArg, err instanceof Error ? err.message : '');
-        }
+        parseNetHook(params, this._networkMode, this._networkBuffer);
     }
     async setup() {
         logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
@@ -664,89 +637,7 @@ export class CDPClient {
         }
     }
     setupEventHandlers() {
-        this.eventHandlers.set('Runtime.consoleAPICalled', (params) => {
-            const p = params;
-            const text = p.args?.map(a => a.value !== undefined ? String(a.value) : (a.description ?? '')).join(' ') ?? '';
-            // Skip internal network hook messages to avoid evicting real console logs
-            if (text.startsWith('__RN_NET__:'))
-                return;
-            this._consoleBuffer.push({
-                level: p.type,
-                text,
-                timestamp: new Date().toISOString(),
-            });
-        });
-        this.eventHandlers.set('Network.requestWillBeSent', (params) => {
-            const p = params;
-            this._networkBuffer.push({
-                id: p.requestId,
-                method: p.request?.method ?? 'GET',
-                url: p.request?.url ?? '',
-                timestamp: new Date().toISOString(),
-            });
-        });
-        this.eventHandlers.set('Network.responseReceived', (params) => {
-            const p = params;
-            const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
-            if (entry) {
-                entry.status = p.response?.status;
-                entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
-            }
-        });
-        this.eventHandlers.set('Network.loadingFailed', (params) => {
-            const p = params;
-            const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
-            if (entry) {
-                entry.status = 0;
-                entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
-            }
-        });
-        // D592: Cache Debugger.scriptParsed events for source lookup
-        this.eventHandlers.set('Debugger.scriptParsed', (params) => {
-            const p = params;
-            if (p.scriptId && p.url) {
-                this._scripts.set(p.scriptId, {
-                    scriptId: p.scriptId,
-                    url: p.url,
-                    startLine: p.startLine ?? 0,
-                    endLine: p.endLine ?? 0,
-                });
-            }
-        });
-        // D588: Buffer Log.entryAdded events for pre-helper diagnostics
-        this.eventHandlers.set('Log.entryAdded', (params) => {
-            const p = params;
-            const e = p.entry;
-            if (!e)
-                return;
-            this._logBuffer.push({
-                source: e.source ?? 'other',
-                level: e.level ?? 'info',
-                text: e.text ?? '',
-                timestamp: e.timestamp ? new Date(e.timestamp).toISOString() : new Date().toISOString(),
-                url: e.url,
-                lineNumber: e.lineNumber,
-            });
-        });
-        // D588: Buffer Network.loadingFinished for response body availability
-        this.eventHandlers.set('Network.loadingFinished', (params) => {
-            const p = params;
-            const entry = this._networkBuffer.findLast(e => e.id === p.requestId);
-            if (entry) {
-                entry.bodyAvailable = true;
-                entry.bodySize = p.encodedDataLength;
-            }
-        });
-        this.eventHandlers.set('Debugger.paused', async () => {
-            this._isPaused = true;
-            try {
-                await this.sendWithTimeout('Debugger.resume', undefined, timeoutForMethod('Debugger.resume'));
-            }
-            catch {
-                // Best effort auto-resume
-            }
-            this._isPaused = false;
-        });
+        wireEventHandlers(this.eventHandlers, { console: this._consoleBuffer, network: this._networkBuffer, log: this._logBuffer, scripts: this._scripts }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method)), () => this._isPaused, (v) => { this._isPaused = v; });
     }
     async waitForReact(timeout) {
         const start = Date.now();
