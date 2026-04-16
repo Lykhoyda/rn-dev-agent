@@ -3,7 +3,7 @@ import type { ConsoleEntry, NetworkEntry, LogEntry } from '../types.js';
 
 export interface EventBuffers {
   console: RingBuffer<ConsoleEntry>;
-  network: RingBuffer<NetworkEntry>;
+  network: RingBuffer<NetworkEntry, string>;
   log: RingBuffer<LogEntry>;
   scripts: Map<string, { scriptId: string; url: string; startLine: number; endLine: number }>;
 }
@@ -38,7 +38,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.responseReceived', (params: unknown) => {
     const p = params as { requestId: string; response?: { status: number } };
-    const entry = buffers.network.findLast(e => e.id === p.requestId);
+    const entry = buffers.network.getByKey(p.requestId);
     if (entry) {
       entry.status = p.response?.status;
       entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -47,7 +47,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.loadingFailed', (params: unknown) => {
     const p = params as { requestId: string };
-    const entry = buffers.network.findLast(e => e.id === p.requestId);
+    const entry = buffers.network.getByKey(p.requestId);
     if (entry) {
       entry.status = 0;
       entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -82,7 +82,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.loadingFinished', (params: unknown) => {
     const p = params as { requestId: string; encodedDataLength?: number };
-    const entry = buffers.network.findLast(e => e.id === p.requestId);
+    const entry = buffers.network.getByKey(p.requestId);
     if (entry) {
       entry.bodyAvailable = true;
       entry.bodySize = p.encodedDataLength;
@@ -103,7 +103,7 @@ export function wireEventHandlers(
 export function parseNetworkHookMessage(
   params: unknown,
   networkMode: 'cdp' | 'hook' | 'none',
-  networkBuffer: RingBuffer<NetworkEntry>,
+  networkBuffer: RingBuffer<NetworkEntry, string>,
 ): void {
   if (networkMode !== 'hook') return;
   const p = params as { args?: Array<{ value?: unknown }> };
@@ -123,7 +123,7 @@ export function parseNetworkHookMessage(
         timestamp: new Date().toISOString(),
       });
     } else if (type === 'response') {
-      const entry = networkBuffer.findLast(e => e.id === data.id);
+      const entry = networkBuffer.getByKey(data.id);
       if (entry) {
         entry.status = data.status;
         entry.duration_ms = data.duration_ms;

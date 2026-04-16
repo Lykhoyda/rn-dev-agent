@@ -75,14 +75,38 @@ export function inferPlatforms(targets) {
         }
     }
 }
-export function selectTarget(validTargets, platformFilter) {
+export function selectTarget(validTargets, filtersOrPlatform) {
+    // Legacy single-string signature kept for back-compat; new callers pass an object.
+    const filters = typeof filtersOrPlatform === 'string'
+        ? { platform: filtersOrPlatform }
+        : (filtersOrPlatform ?? {});
     let filteredTargets = validTargets;
-    let warning;
-    if (platformFilter) {
-        const pf = platformFilter.toLowerCase();
-        let platformMatched = validTargets.filter(t => t.platform === pf);
+    const warnings = [];
+    // B111 (D635): targetId is an exact-id filter — highest precedence.
+    if (filters.targetId) {
+        const idMatched = validTargets.filter(t => t.id === filters.targetId);
+        if (idMatched.length > 0) {
+            filteredTargets = idMatched;
+        }
+        else {
+            warnings.push(`targetId "${filters.targetId}" matched no targets; ignoring filter. Available ids: ${validTargets.map(t => t.id).join(', ')}`);
+        }
+    }
+    // B111 (D635): bundleId matches target.description exactly.
+    if (filters.bundleId && filteredTargets.length > 1) {
+        const bundleMatched = filteredTargets.filter(t => t.description === filters.bundleId);
+        if (bundleMatched.length > 0) {
+            filteredTargets = bundleMatched;
+        }
+        else {
+            warnings.push(`bundleId "${filters.bundleId}" matched no targets (available descriptions: ${filteredTargets.map(t => t.description ?? '?').join(', ')}); falling through.`);
+        }
+    }
+    if (filters.platform && filteredTargets.length > 1) {
+        const pf = filters.platform.toLowerCase();
+        let platformMatched = filteredTargets.filter(t => t.platform === pf);
         if (platformMatched.length === 0) {
-            platformMatched = validTargets.filter(t => {
+            platformMatched = filteredTargets.filter(t => {
                 const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
                 return haystack.includes(pf);
             });
@@ -91,7 +115,16 @@ export function selectTarget(validTargets, platformFilter) {
             filteredTargets = platformMatched;
         }
         else {
-            warning = `Platform filter "${platformFilter}" matched no targets (available: ${validTargets.map(t => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`;
+            warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map(t => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`);
+        }
+    }
+    // B111 (D635): smarter auto-selection — when a preferred bundleId exists (e.g. from
+    // project-config.ts), prefer targets whose description matches it. This is a soft
+    // filter: only applied when it narrows without eliminating all candidates.
+    if (filters.preferredBundleId && filteredTargets.length > 1) {
+        const preferred = filteredTargets.filter(t => t.description === filters.preferredBundleId);
+        if (preferred.length > 0 && preferred.length < filteredTargets.length) {
+            filteredTargets = preferred;
         }
     }
     const sorted = [...filteredTargets].sort((a, b) => {
@@ -99,11 +132,23 @@ export function selectTarget(validTargets, platformFilter) {
         const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
         return bPage - aPage;
     });
-    return { targets: sorted, warning };
+    return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
 }
-export async function discover(currentPort, platformFilter) {
+export async function discover(currentPort, platformFilterOrFilters) {
+    const filters = typeof platformFilterOrFilters === 'string'
+        ? { platform: platformFilterOrFilters }
+        : (platformFilterOrFilters ?? {});
     const ports = [...new Set([currentPort, ...DEFAULT_PORTS])];
-    logger.debug('CDP', `Discovering Metro on ports: ${ports.join(', ')}${platformFilter ? ` (platform: ${platformFilter})` : ''}`);
+    const hints = [];
+    if (filters.platform)
+        hints.push(`platform=${filters.platform}`);
+    if (filters.targetId)
+        hints.push(`targetId=${filters.targetId}`);
+    if (filters.bundleId)
+        hints.push(`bundleId=${filters.bundleId}`);
+    if (filters.preferredBundleId)
+        hints.push(`preferredBundleId=${filters.preferredBundleId}`);
+    logger.debug('CDP', `Discovering Metro on ports: ${ports.join(', ')}${hints.length ? ` (${hints.join(', ')})` : ''}`);
     const metroPort = await discoverMetroPort(ports, DISCOVERY_TIMEOUT_MS);
     if (!metroPort) {
         throw new Error('Metro not found on ports ' + ports.join(', ') +
@@ -124,7 +169,7 @@ export async function discover(currentPort, platformFilter) {
         throw new Error('No Hermes debug target found. Is the app running? Is Hermes enabled?');
     }
     inferPlatforms(validTargets);
-    const { targets: sorted, warning } = selectTarget(validTargets, platformFilter);
+    const { targets: sorted, warning } = selectTarget(validTargets, filters);
     logger.debug('CDP', `Found ${sorted.length} valid target(s): ${sorted.map(t => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
     return { port: metroPort, targets: sorted, warning };
 }

@@ -5,6 +5,8 @@ import { okResult, failResult } from '../utils.js';
 interface ConnectArgs {
   metroPort?: number;
   platform?: string;
+  targetId?: string;
+  bundleId?: string;
   force?: boolean;
 }
 
@@ -65,13 +67,17 @@ export function createConnectHandler(
     }
 
     try {
-      const msg = await client.autoConnect(args.metroPort, args.platform);
+      const msg = await client.autoConnect(args.metroPort, {
+        platform: args.platform,
+        targetId: args.targetId,
+        bundleId: args.bundleId,
+      });
       const target = client.connectedTarget;
       return okResult({
         connected: true,
         message: msg,
         port: client.metroPort,
-        target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
+        target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null, description: target.description ?? null } : null,
       });
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err));

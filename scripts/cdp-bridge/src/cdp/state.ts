@@ -6,32 +6,28 @@ import type { CDPClientState, HermesTarget } from '../types.js';
 const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
 const CDP_SESSION_FILE = join(tmpdir(), 'rn-dev-agent-cdp-session.json');
 
-export interface CDPResettableState {
-  _state: CDPClientState;
-  _helpersInjected: boolean;
-  _bridgeDetected: boolean;
-  _bridgeVersion: number | null;
-  _connectedTarget: HermesTarget | null;
-  _logDomainEnabled: boolean;
-  _profilerAvailable: boolean;
-  _heapProfilerAvailable: boolean;
-  _scripts: Map<string, { scriptId: string; url: string; startLine: number; endLine: number }>;
+export interface ResettableState {
+  setState(v: CDPClientState): void;
+  setHelpersInjected(v: boolean): void;
+  setBridgeDetected(v: boolean): void;
+  setBridgeVersion(v: number | null): void;
+  setConnectedTarget(v: HermesTarget | null): void;
+  setLogDomainEnabled(v: boolean): void;
+  setProfilerAvailable(v: boolean): void;
+  setHeapProfilerAvailable(v: boolean): void;
+  clearScripts(): void;
 }
 
-const RESET_DEFAULTS: Omit<CDPResettableState, '_scripts'> = {
-  _state: 'disconnected' as CDPClientState,
-  _helpersInjected: false,
-  _bridgeDetected: false,
-  _bridgeVersion: null,
-  _connectedTarget: null,
-  _logDomainEnabled: false,
-  _profilerAvailable: false,
-  _heapProfilerAvailable: false,
-};
-
-export function resetState(s: CDPResettableState): void {
-  Object.assign(s, RESET_DEFAULTS);
-  s._scripts.clear();
+export function resetState(s: ResettableState): void {
+  s.setState('disconnected');
+  s.setHelpersInjected(false);
+  s.setBridgeDetected(false);
+  s.setBridgeVersion(null);
+  s.setConnectedTarget(null);
+  s.setLogDomainEnabled(false);
+  s.setProfilerAvailable(false);
+  s.setHeapProfilerAvailable(false);
+  s.clearScripts();
 }
 
 export function setActiveFlag(port: number, target: HermesTarget | null): void {

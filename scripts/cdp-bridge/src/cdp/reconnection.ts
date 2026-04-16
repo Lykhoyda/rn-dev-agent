@@ -1,6 +1,6 @@
 import { logger } from '../logger.js';
 import { resetState, clearActiveFlag, sleep } from './state.js';
-import type { CDPResettableState } from './state.js';
+import type { ResettableState } from './state.js';
 
 const RECONNECT_DELAY_MS = 1500;
 const RECONNECT_ATTEMPTS = 30;
@@ -17,7 +17,7 @@ export interface ReconnectContext {
   closeWs: () => void;
   rejectAllPending: (reason: Error) => void;
   discoverAndConnect: () => Promise<string>;
-  getResettableState: () => CDPResettableState;
+  getResettableState: () => ResettableState;
   getPort: () => number;
   setBgPollTimer: (timer: ReturnType<typeof setInterval> | null) => void;
   getBgPollTimer: () => ReturnType<typeof setInterval> | null;

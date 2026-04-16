@@ -106,10 +106,18 @@ export interface EvaluateResult {
   error?: string;
 }
 
+export type ToolErrorCode =
+  | 'STALE_TARGET'
+  | 'HELPERS_STALE'
+  | 'RECONNECT_TIMEOUT'
+  | 'NOT_CONNECTED'
+  | 'HELPERS_NOT_INJECTED';
+
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
+  code?: ToolErrorCode;
   truncated?: boolean;
   meta?: Record<string, unknown>;
 }

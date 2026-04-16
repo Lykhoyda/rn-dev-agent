@@ -21,7 +21,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.responseReceived', (params) => {
         const p = params;
-        const entry = buffers.network.findLast(e => e.id === p.requestId);
+        const entry = buffers.network.getByKey(p.requestId);
         if (entry) {
             entry.status = p.response?.status;
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -29,7 +29,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.loadingFailed', (params) => {
         const p = params;
-        const entry = buffers.network.findLast(e => e.id === p.requestId);
+        const entry = buffers.network.getByKey(p.requestId);
         if (entry) {
             entry.status = 0;
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -62,7 +62,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.loadingFinished', (params) => {
         const p = params;
-        const entry = buffers.network.findLast(e => e.id === p.requestId);
+        const entry = buffers.network.getByKey(p.requestId);
         if (entry) {
             entry.bodyAvailable = true;
             entry.bodySize = p.encodedDataLength;
@@ -99,7 +99,7 @@ export function parseNetworkHookMessage(params, networkMode, networkBuffer) {
             });
         }
         else if (type === 'response') {
-            const entry = networkBuffer.findLast(e => e.id === data.id);
+            const entry = networkBuffer.getByKey(data.id);
             if (entry) {
                 entry.status = data.status;
                 entry.duration_ms = data.duration_ms;

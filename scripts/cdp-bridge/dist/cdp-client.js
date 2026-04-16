@@ -4,10 +4,12 @@ import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
-import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeout-config.js';
+import { CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeout-config.js';
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
-import { discover, discoverForList } from './cdp/discovery.js';
+import { discoverForList } from './cdp/discovery.js';
+import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn } from './cdp/helper-expr.js';
+import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
 import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
 export class CDPClient {
     ws = null;
@@ -42,7 +44,7 @@ export class CDPClient {
     constructor(port) {
         this._port = port ?? 8081;
         this._consoleBuffer = new RingBuffer(200);
-        this._networkBuffer = new RingBuffer(100);
+        this._networkBuffer = new RingBuffer(100, { indexKey: (e) => e.id });
         this._logBuffer = new RingBuffer(50);
     }
     get state() { return this._state; }
@@ -66,12 +68,10 @@ export class CDPClient {
         return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
     }
     helperExpr(call) {
-        return this._bridgeDetected ? `__RN_DEV_BRIDGE__.${call}` : `__RN_AGENT.${call}`;
+        return helperExprFn(call, this._bridgeDetected);
     }
     bridgeWithFallback(call) {
-        return this._bridgeDetected
-            ? `(function() { var fb = false; try { var r = __RN_DEV_BRIDGE__.${call}; var p = JSON.parse(r); if (p && (p.__agent_error || p.error)) fb = true; else return r; } catch(e) { fb = true; } if (fb) return __RN_AGENT.${call}; })()`
-            : `__RN_AGENT.${call}`;
+        return bridgeWithFallbackFn(call, this._bridgeDetected);
     }
     async reinjectHelpers(waitTimeout) {
         if (!this.isConnected)
@@ -84,84 +84,25 @@ export class CDPClient {
         }
         return ok;
     }
-    async autoConnect(portHint, platformFilter) {
-        if (this._state === 'connecting' || this.reconnecting) {
-            throw new Error('Already connecting to Metro...');
-        }
-        if (this.disposed) {
-            throw new Error('Client is disposed. Create a new CDPClient instance.');
-        }
-        const effectivePlatform = platformFilter
-            ?? (process.env.RN_PREFERRED_PLATFORM && process.env.RN_PREFERRED_PLATFORM !== 'auto'
-                ? process.env.RN_PREFERRED_PLATFORM
-                : undefined);
-        return this.discoverAndConnect(portHint, effectivePlatform);
+    async autoConnect(portHint, filtersOrPlatform) {
+        const filters = typeof filtersOrPlatform === 'string'
+            ? { platform: filtersOrPlatform }
+            : (filtersOrPlatform ?? {});
+        return autoConnectFn(this.buildConnectCtx(), portHint, filters);
     }
     async listTargets(portHint) {
         return discoverForList(this._port, portHint);
     }
-    _platformFilter;
-    async discoverAndConnect(portHint, platformFilter) {
-        if (this.disposed) {
-            throw new Error('Client is disposed. Create a new CDPClient instance.');
-        }
-        if (portHint)
-            this._port = portHint;
-        if (platformFilter !== undefined)
-            this._platformFilter = platformFilter || undefined;
-        this._state = 'connecting';
-        let result;
-        try {
-            result = await discover(this._port, this._platformFilter);
-        }
-        catch (err) {
-            this._state = 'disconnected';
-            throw err;
-        }
-        const { port: metroPort, targets: sorted, warning: platformFilterWarning } = result;
-        this._port = metroPort;
-        let connectedTarget = null;
-        for (const candidate of sorted) {
-            try {
-                await this.connectToTarget(candidate);
-                const devCheck = await this.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
-                if (devCheck.value === true) {
-                    connectedTarget = candidate;
-                    break;
-                }
-                console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
-                if (sorted.indexOf(candidate) < sorted.length - 1) {
-                    if (this.ws) {
-                        this.ws.removeAllListeners();
-                        if (this.ws.readyState === WebSocket.OPEN)
-                            this.ws.close();
-                        this.ws = null;
-                    }
-                    this._state = 'disconnected';
-                    this._helpersInjected = false;
-                    this._connectedTarget = null;
-                    continue;
-                }
-                console.error('CDP: no target with __DEV__=true found, using last available target');
-                connectedTarget = candidate;
-            }
-            catch (err) {
-                if (sorted.indexOf(candidate) < sorted.length - 1)
-                    continue;
-                throw err;
-            }
-        }
-        this._connectionGeneration++;
-        logger.info('CDP', `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${this._connectionGeneration}`);
-        const msg = `Connected to ${connectedTarget.title} on port ${metroPort}`;
-        return platformFilterWarning ? `${msg}. WARNING: ${platformFilterWarning}` : msg;
+    _connectFilters = {};
+    async discoverAndConnect(portHint, filters) {
+        return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters);
     }
     async softReconnect() {
         return softReconnectFn(this.buildReconnectCtx());
     }
     async disconnect() {
         this.disposed = true;
-        resetState(this);
+        resetState(this.buildResettableState());
         clearActiveFlag();
         this.stopBackgroundPoll();
         if (this.ws) {
@@ -258,91 +199,6 @@ export class CDPClient {
     async send(method, params) {
         return this.sendWithTimeout(method, params, timeoutForMethod(method));
     }
-    async connectToTarget(target, retries = 5) {
-        let lastError = null;
-        for (let i = 0; i < retries; i++) {
-            if (this.disposed || this._softReconnectRequested)
-                throw new Error('Client disposed or preempted during connection');
-            try {
-                await this.connectWs(target.webSocketDebuggerUrl);
-                // D594: Early stale-target detection — quick probe before full setup
-                try {
-                    await this.sendWithTimeout('Runtime.evaluate', {
-                        expression: '1+1',
-                        returnByValue: true,
-                    }, CDP_TIMEOUT_FAST);
-                }
-                catch {
-                    throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
-                }
-                this._connectedTarget = target;
-                await this.setup();
-                return;
-            }
-            catch (err) {
-                lastError = err instanceof Error ? err : new Error(String(err));
-                // Close stale socket if connectWs succeeded but setup failed
-                if (this.ws) {
-                    this.ws.removeAllListeners();
-                    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-                        this.ws.close();
-                    }
-                    this.ws = null;
-                }
-                // Connection refused — nothing listening, don't retry
-                if (lastError.message.includes('refused')) {
-                    this._state = 'disconnected';
-                    throw new Error('CDP connection refused. Is Metro running and the app loaded?');
-                }
-                // Code 1006 and all other errors — retry (1006 is the most common transient failure)
-                if (i < retries - 1)
-                    await sleep(2000);
-            }
-        }
-        this._state = 'disconnected';
-        const hint = lastError?.message.includes('1006')
-            ? ' Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools.'
-            : '';
-        throw new Error(`Failed to connect after ${retries} attempts.${hint}`);
-    }
-    connectWs(url) {
-        return new Promise((resolve, reject) => {
-            const ws = new WebSocket(url, {
-                handshakeTimeout: 5000,
-                maxPayload: 100 * 1024 * 1024,
-            });
-            let settled = false;
-            ws.on('open', () => {
-                settled = true;
-                this.ws = ws;
-                this._state = 'connected';
-                resolve();
-            });
-            ws.on('error', (err) => {
-                if (!settled) {
-                    settled = true;
-                    reject(err);
-                }
-                else {
-                    console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
-                }
-            });
-            ws.on('message', (data) => {
-                this.handleMessage(data);
-            });
-            ws.on('close', (code) => {
-                if (!settled) {
-                    settled = true;
-                    reject(new Error(`WebSocket closed before connecting: ${code}`));
-                    return;
-                }
-                if (this.ws === ws) {
-                    this.rejectAllPending(new Error(`WebSocket closed: ${code}`));
-                    this.handleClose(code);
-                }
-            });
-        });
-    }
     handleMessage(data) {
         handleMsg(data, this.pending, this.eventHandlers, (params) => this.parseNetworkHookMessage(params));
     }
@@ -408,10 +264,47 @@ export class CDPClient {
             },
             rejectAllPending: (reason) => this.rejectAllPending(reason),
             discoverAndConnect: () => this.discoverAndConnect(),
-            getResettableState: () => this,
+            getResettableState: () => this.buildResettableState(),
             getPort: () => this._port,
             setBgPollTimer: (timer) => { this._bgPollTimer = timer; },
             getBgPollTimer: () => this._bgPollTimer,
+        };
+    }
+    buildConnectCtx() {
+        return {
+            isDisposed: () => this.disposed,
+            isReconnecting: () => this.reconnecting,
+            isSoftReconnectRequested: () => this._softReconnectRequested,
+            getState: () => this._state,
+            setState: (s) => { this._state = s; },
+            getPort: () => this._port,
+            setPort: (v) => { this._port = v; },
+            getConnectFilters: () => this._connectFilters,
+            setConnectFilters: (v) => { this._connectFilters = v; },
+            getWs: () => this.ws,
+            setWs: (ws) => { this.ws = ws; },
+            setHelpersInjected: (v) => { this._helpersInjected = v; },
+            setConnectedTarget: (t) => { this._connectedTarget = t; },
+            incrementConnectionGeneration: () => ++this._connectionGeneration,
+            evaluate: (expr) => this.evaluate(expr),
+            sendWithTimeout: (method, params, ms) => this.sendWithTimeout(method, params, ms),
+            handleMessage: (data) => this.handleMessage(data),
+            handleClose: (code) => this.handleClose(code),
+            rejectAllPending: (reason) => this.rejectAllPending(reason),
+            setup: () => this.setup(),
+        };
+    }
+    buildResettableState() {
+        return {
+            setState: (v) => { this._state = v; },
+            setHelpersInjected: (v) => { this._helpersInjected = v; },
+            setBridgeDetected: (v) => { this._bridgeDetected = v; },
+            setBridgeVersion: (v) => { this._bridgeVersion = v; },
+            setConnectedTarget: (v) => { this._connectedTarget = v; },
+            setLogDomainEnabled: (v) => { this._logDomainEnabled = v; },
+            setProfilerAvailable: (v) => { this._profilerAvailable = v; },
+            setHeapProfilerAvailable: (v) => { this._heapProfilerAvailable = v; },
+            clearScripts: () => { this._scripts.clear(); },
         };
     }
     rejectAllPending(reason) {

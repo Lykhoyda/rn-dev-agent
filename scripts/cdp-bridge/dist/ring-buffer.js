@@ -3,15 +3,31 @@ export class RingBuffer {
     cursor = 0;
     count = 0;
     capacity;
-    constructor(capacity) {
+    indexKey;
+    index;
+    constructor(capacity, options) {
         this.capacity = capacity;
         this.buffer = new Array(capacity);
+        this.indexKey = options?.indexKey;
+        this.index = options?.indexKey ? new Map() : null;
     }
     push(item) {
+        if (this.index && this.buffer[this.cursor] !== undefined) {
+            const evicted = this.buffer[this.cursor];
+            const evictedKey = this.indexKey(evicted);
+            if (evictedKey !== undefined && this.index.get(evictedKey) === evicted) {
+                this.index.delete(evictedKey);
+            }
+        }
         this.buffer[this.cursor] = item;
         this.cursor = (this.cursor + 1) % this.capacity;
         if (this.count < this.capacity)
             this.count++;
+        if (this.index) {
+            const key = this.indexKey(item);
+            if (key !== undefined)
+                this.index.set(key, item);
+        }
     }
     getLast(n) {
         const result = [];
@@ -37,10 +53,14 @@ export class RingBuffer {
         }
         return undefined;
     }
+    getByKey(key) {
+        return this.index?.get(key);
+    }
     clear() {
         this.buffer = new Array(this.capacity);
         this.cursor = 0;
         this.count = 0;
+        this.index?.clear();
     }
     get size() {
         return this.count;

@@ -9,7 +9,7 @@ import { RingBuffer } from '../../dist/ring-buffer.js';
  */
 export function createMockClient(overrides = {}) {
   const consoleBuffer = new RingBuffer(200);
-  const networkBuffer = new RingBuffer(100);
+  const networkBuffer = new RingBuffer(100, { indexKey: (e) => e.id });
   const logBuffer = new RingBuffer(50);
 
   const client = {

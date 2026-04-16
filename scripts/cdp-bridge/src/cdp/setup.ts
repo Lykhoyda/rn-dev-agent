@@ -21,7 +21,7 @@ export async function performSetup(opts: {
   evaluate: (expr: string) => Promise<EvaluateResult>;
   port: number;
   connectedTarget: HermesTarget | null;
-  networkBuffer: RingBuffer<NetworkEntry>;
+  networkBuffer: RingBuffer<NetworkEntry, string>;
   setupEventHandlers: () => void;
   clearScripts: () => void;
   clearEventHandlers: () => void;

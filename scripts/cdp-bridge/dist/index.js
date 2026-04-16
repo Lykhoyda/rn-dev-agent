@@ -1,4 +1,7 @@
 import './env-setup.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -46,9 +49,11 @@ let client = new CDPClient();
 const getClient = () => client;
 const setClient = (c) => { client = c; };
 const createClient = (port) => new CDPClient(port);
+const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 const server = new McpServer({
     name: 'rn-dev-agent-cdp-bridge',
-    version: '0.10.1',
+    version: pkgVersion,
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
@@ -59,9 +64,11 @@ trackedTool('cdp_status', 'Get full environment status. Auto-connects if not con
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
 }, createStatusHandler(getClient, setClient, createClient));
-trackedTool('cdp_connect', 'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform or port, or reconnect after a manual disconnect. If already connected to a different platform than requested, automatically reconnects to the correct target. Use force=true to always reconnect regardless of current state.', {
+trackedTool('cdp_connect', 'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform, port, or bundle, or reconnect after a manual disconnect. When multiple Hermes targets exist (common after app restarts on Expo Dev Client — zombie `host.exp.Exponent` pages linger alongside fresh app pages), pass `targetId` (exact id from cdp_targets) or `bundleId` (e.g. "com.myapp") to disambiguate. Use force=true to always reconnect regardless of current state.', {
     metroPort: z.number().optional().describe('Metro port to connect to (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android"). If already connected to a different platform, forces reconnection to the correct target.'),
+    targetId: z.string().optional().describe('Exact Hermes target id (from cdp_targets). Highest-precedence filter — picks one target precisely. Use when multiple targets share a platform and bundleId is ambiguous.'),
+    bundleId: z.string().optional().describe('App bundle id to match against target.description (e.g. "com.myapp.dev"). Filters out zombie Expo Go host pages when the real app target is present. B111/D635.'),
     force: z.boolean().optional().default(false).describe('Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.'),
 }, createConnectHandler(getClient, setClient, createClient));
 trackedTool('cdp_disconnect', 'Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.', {}, createDisconnectHandler(getClient, setClient, createClient));

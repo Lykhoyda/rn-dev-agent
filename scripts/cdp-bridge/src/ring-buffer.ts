@@ -1,18 +1,37 @@
-export class RingBuffer<T> {
+export interface RingBufferOptions<T, K> {
+  indexKey?: (item: T) => K | undefined;
+}
+
+export class RingBuffer<T, K = unknown> {
   private buffer: (T | undefined)[];
   private cursor = 0;
   private count = 0;
   private readonly capacity: number;
+  private readonly indexKey?: (item: T) => K | undefined;
+  private readonly index: Map<K, T> | null;
 
-  constructor(capacity: number) {
+  constructor(capacity: number, options?: RingBufferOptions<T, K>) {
     this.capacity = capacity;
     this.buffer = new Array(capacity);
+    this.indexKey = options?.indexKey;
+    this.index = options?.indexKey ? new Map() : null;
   }
 
   push(item: T): void {
+    if (this.index && this.buffer[this.cursor] !== undefined) {
+      const evicted = this.buffer[this.cursor] as T;
+      const evictedKey = this.indexKey!(evicted);
+      if (evictedKey !== undefined && this.index.get(evictedKey) === evicted) {
+        this.index.delete(evictedKey);
+      }
+    }
     this.buffer[this.cursor] = item;
     this.cursor = (this.cursor + 1) % this.capacity;
     if (this.count < this.capacity) this.count++;
+    if (this.index) {
+      const key = this.indexKey!(item);
+      if (key !== undefined) this.index.set(key, item);
+    }
   }
 
   getLast(n: number): T[] {
@@ -40,10 +59,15 @@ export class RingBuffer<T> {
     return undefined;
   }
 
+  getByKey(key: K): T | undefined {
+    return this.index?.get(key);
+  }
+
   clear(): void {
     this.buffer = new Array(this.capacity);
     this.cursor = 0;
     this.count = 0;
+    this.index?.clear();
   }
 
   get size(): number {

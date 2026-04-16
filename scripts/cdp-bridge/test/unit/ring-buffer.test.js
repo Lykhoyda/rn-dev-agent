@@ -130,3 +130,59 @@ test('push after clear works correctly', () => {
   assert.equal(buf.size, 1);
   assert.deepEqual(buf.getLast(3), ['x']);
 });
+
+// ── indexKey (D632, S2) ──────────────────────────────────────────────
+
+test('getByKey returns undefined when no indexKey is configured', () => {
+  const buf = new RingBuffer(5);
+  buf.push({ id: 'a' });
+  assert.equal(buf.getByKey('a'), undefined);
+});
+
+test('getByKey returns the item when indexKey matches', () => {
+  const buf = new RingBuffer(5, { indexKey: (e) => e.id });
+  const item = { id: 'req1', url: '/a' };
+  buf.push(item);
+  assert.equal(buf.getByKey('req1'), item);
+});
+
+test('getByKey returns undefined for unknown key', () => {
+  const buf = new RingBuffer(5, { indexKey: (e) => e.id });
+  buf.push({ id: 'req1' });
+  assert.equal(buf.getByKey('missing'), undefined);
+});
+
+test('getByKey returns undefined for evicted entries after overwrite', () => {
+  const buf = new RingBuffer(3, { indexKey: (e) => e.id });
+  buf.push({ id: 'a' });
+  buf.push({ id: 'b' });
+  buf.push({ id: 'c' });
+  buf.push({ id: 'd' }); // evicts 'a'
+  assert.equal(buf.getByKey('a'), undefined);
+  assert.equal(buf.getByKey('b').id, 'b');
+  assert.equal(buf.getByKey('d').id, 'd');
+});
+
+test('getByKey returns latest entry when key is reused', () => {
+  const buf = new RingBuffer(5, { indexKey: (e) => e.id });
+  const first = { id: 'x', n: 1 };
+  const second = { id: 'x', n: 2 };
+  buf.push(first);
+  buf.push(second);
+  assert.equal(buf.getByKey('x'), second);
+});
+
+test('clear wipes the index', () => {
+  const buf = new RingBuffer(5, { indexKey: (e) => e.id });
+  buf.push({ id: 'a' });
+  buf.clear();
+  assert.equal(buf.getByKey('a'), undefined);
+});
+
+test('indexKey returning undefined is ignored', () => {
+  const buf = new RingBuffer(5, { indexKey: (e) => e.id });
+  buf.push({ url: '/no-id' });
+  buf.push({ id: 'has-id' });
+  assert.equal(buf.getByKey('has-id').id, 'has-id');
+  assert.equal(buf.size, 2);
+});

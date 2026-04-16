@@ -3,19 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
 const CDP_SESSION_FILE = join(tmpdir(), 'rn-dev-agent-cdp-session.json');
-const RESET_DEFAULTS = {
-    _state: 'disconnected',
-    _helpersInjected: false,
-    _bridgeDetected: false,
-    _bridgeVersion: null,
-    _connectedTarget: null,
-    _logDomainEnabled: false,
-    _profilerAvailable: false,
-    _heapProfilerAvailable: false,
-};
 export function resetState(s) {
-    Object.assign(s, RESET_DEFAULTS);
-    s._scripts.clear();
+    s.setState('disconnected');
+    s.setHelpersInjected(false);
+    s.setBridgeDetected(false);
+    s.setBridgeVersion(null);
+    s.setConnectedTarget(null);
+    s.setLogDomainEnabled(false);
+    s.setProfilerAvailable(false);
+    s.setHeapProfilerAvailable(false);
+    s.clearScripts();
 }
 export function setActiveFlag(port, target) {
     try {

@@ -2,29 +2,22 @@ import { runAgentDevice } from '../agent-device-wrapper.js';
 export function createDeviceListHandler() {
     return async () => runAgentDevice(['devices'], { skipSession: true });
 }
+/**
+ * B113 fix (D636): agent-device >= 0.8.0 exposes only `[path]` and `--out <path>`
+ * — no `--format`. Emitting --format caused 100% failure ("Unknown flag: --format").
+ * Use --out so no dispatch tier can misparse the path as a positional arg
+ * (GH #26 concern is solved by the explicit flag). Extension determines format implicitly.
+ *
+ * Exported for unit tests — pure function, no I/O.
+ */
+export function buildScreenshotArgs(args, now = Date.now) {
+    let outputPath = args.path;
+    if (!outputPath) {
+        const ext = args.format === 'jpeg' ? 'jpg' : args.format === 'png' ? 'png' : 'jpg';
+        outputPath = `/tmp/rn-screenshot-${now()}.${ext}`;
+    }
+    return ['screenshot', '--out', outputPath];
+}
 export function createDeviceScreenshotHandler() {
-    return async (args) => {
-        const cliArgs = ['screenshot'];
-        // Resolve output path first — ensures all dispatch tiers (fast-runner,
-        // daemon, CLI) receive a concrete path instead of --format flags that
-        // the daemon would misinterpret as a positional file path (GH #26).
-        let outputPath = args.path;
-        if (!outputPath && args.format) {
-            const ext = args.format === 'jpeg' ? 'jpg' : args.format;
-            outputPath = `/tmp/rn-screenshot-${Date.now()}.${ext}`;
-        }
-        if (outputPath) {
-            cliArgs.push(outputPath);
-            if (args.format) {
-                cliArgs.push('--format', args.format);
-            }
-            else if (outputPath.endsWith('.jpg') || outputPath.endsWith('.jpeg')) {
-                cliArgs.push('--format', 'jpeg');
-            }
-            else if (outputPath.endsWith('.png')) {
-                cliArgs.push('--format', 'png');
-            }
-        }
-        return runAgentDevice(cliArgs);
-    };
+    return async (args) => runAgentDevice(buildScreenshotArgs(args));
 }

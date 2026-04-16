@@ -44,13 +44,17 @@ export function createConnectHandler(getClient, setClient, createClient) {
             setClient(client);
         }
         try {
-            const msg = await client.autoConnect(args.metroPort, args.platform);
+            const msg = await client.autoConnect(args.metroPort, {
+                platform: args.platform,
+                targetId: args.targetId,
+                bundleId: args.bundleId,
+            });
             const target = client.connectedTarget;
             return okResult({
                 connected: true,
                 message: msg,
                 port: client.metroPort,
-                target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
+                target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null, description: target.description ?? null } : null,
             });
         }
         catch (err) {
