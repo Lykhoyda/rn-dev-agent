@@ -32,7 +32,19 @@ export function createDeviceSnapshotHandler() {
                 let deviceId;
                 try {
                     const envelope = JSON.parse(result.content[0].text);
-                    deviceId = envelope?.data?.deviceId ?? envelope?.data?.device?.id;
+                    const data = envelope?.data;
+                    // agent-device `open` response shape (v0.8.0):
+                    //   data.id = device UDID (top-level)
+                    //   data.device_udid = UDID (duplicate)
+                    //   data.device = device NAME (string, e.g. "iPhone 17 Pro") — NOT an object
+                    //   data.deviceId = legacy field (older agent-device)
+                    // B107 fix: also read data.id / data.device_udid / (data.device.id when object).
+                    const rawId = data?.deviceId
+                        ?? data?.device_udid
+                        ?? data?.id
+                        ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
+                    const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
+                    deviceId = typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
                 }
                 catch { /* best-effort */ }
                 setActiveSession({

@@ -185,7 +185,7 @@ Call `cdp_status`. If it fails to connect:
 
 **Only proceed to Step 0 after `cdp_status` returns `ok: true`.**
 
-### Step 0: Ensure Simulator & Navigate to Feature
+### Step 0: Ensure Simulator, Device Session & Navigate to Feature
 
 First, verify the simulator is running and CDP is connected:
 1. Call `device_list` to check for booted simulators/emulators
@@ -196,6 +196,19 @@ First, verify the simulator is running and CDP is connected:
      `/rn-dev-agent:setup` to verify all dependencies are installed.
      Do not skip verification without user consent.
 3. Call `cdp_status` to confirm CDP connection before proceeding.
+
+Then, ensure a device session is open for `device_*` tools:
+4. Check if `/tmp/rn-dev-agent-session.json` exists (via bash `cat`).
+   If absent or stale (older than 30 minutes), open a fresh session:
+   ```
+   device_snapshot(action="open", platform="<platform from cdp_status>")
+   ```
+   Auto-detect `appId` — the tool resolves it from `app.json` if omitted.
+   This enables `device_screenshot`, `device_find`, `device_press`, and
+   `device_scroll` for the rest of the verification and proof phases.
+   **NEVER skip this step** — without a session, all `device_*` calls fail
+   and verification falls back to bash commands, defeating the plugin's
+   purpose.
 
 Then, if the blueprint's `entryRoute` is not "none", navigate to the feature
 screen using `cdp_navigate` or `cdp_evaluate`:
@@ -642,6 +655,8 @@ Each phase has shortcuts agents reach for. Don't.
 ### Never
 - Claim "done" without a Phase 5.5 table with Evidence in every row
 - Use `xcrun simctl` or `adb` for app interaction (use MCP tools)
+- Use `xcrun simctl io screenshot` or bash for screenshots — use `device_screenshot(path=...)` exclusively
+- Use `sleep N` for settling — use `device_snapshot` to verify UI state change instead
 - Refactor adjacent components ("while I'm here")
 - Add `console.log` calls and leave them in committed code
 - Proceed past Phase 4 without user approval on architecture

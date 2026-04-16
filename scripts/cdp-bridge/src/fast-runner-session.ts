@@ -27,7 +27,11 @@ export function getFastRunnerState(): FastRunnerState | null {
 }
 
 export function isFastRunnerAvailable(): boolean {
-  return runnerState !== null;
+  if (!runnerState) return false;
+  try { process.kill(runnerState.pid, 0); return true; } catch { /* process dead */ }
+  runnerState = null;
+  try { unlinkSync(STATE_FILE); } catch { /* ignore */ }
+  return false;
 }
 
 // --- Lifecycle ---

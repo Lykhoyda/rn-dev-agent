@@ -1,4 +1,6 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+let sessionReloadCount = 0;
+export function getSessionReloadCount() { return sessionReloadCount; }
 export function createReloadHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         // Step 1: Trigger reload — expected to disconnect the WS
@@ -79,6 +81,7 @@ export function createReloadHandler(getClient) {
                 return warnResult({ reloaded: true, type: 'full', reconnected: true }, 'Reload succeeded but helper injection failed. App may still be loading — retry cdp_status.');
             }
         }
+        sessionReloadCount++;
         return okResult({ reloaded: true, type: 'full', reconnected: true });
     });
 }

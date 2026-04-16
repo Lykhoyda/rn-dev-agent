@@ -302,6 +302,70 @@ trackedTool(
 );
 
 trackedTool(
+  'cdp_set_shared_value',
+  'Set a Reanimated SharedValue on a component found by testID. Walks the React fiber tree to find the component, locates the named prop (a SharedValue object), and sets .value. Useful for driving Reanimated animations in proof captures when gesture/scroll synthesis is unavailable.',
+  {
+    testID: z.string().describe('testID of the component that receives the SharedValue as a prop'),
+    prop: z.string().describe('Prop name containing the SharedValue (e.g. "scrollY", "progress")'),
+    value: z.number().describe('Numeric value to set on the SharedValue'),
+  },
+  withConnection(getClient, async (args: { testID: string; prop: string; value: number }, client) => {
+    const expression = `(function() {
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (!hook) return JSON.stringify({ __agent_error: 'No React DevTools hook' });
+      var ids = Array.from(hook.renderers.keys());
+      var allRoots = [];
+      for (var i = 0; i < ids.length; i++) {
+        var r = hook.getFiberRoots(ids[i]);
+        if (r && r.size) { var it = r.values(); var v; while (!(v = it.next()).done) allRoots.push(v.value); }
+      }
+      if (!allRoots.length) return JSON.stringify({ __agent_error: 'No fiber roots' });
+      var found = null;
+      function walk(fiber, depth) {
+        if (!fiber || depth > 300 || found) return;
+        var props = fiber.memoizedProps;
+        if (props && props.testID === ${JSON.stringify(args.testID)}) {
+          var sv = props[${JSON.stringify(args.prop)}];
+          if (sv && typeof sv === 'object' && 'value' in sv) { found = fiber; return; }
+          var fc = fiber;
+          for (var up = 0; up < 5 && fc; up++) {
+            var p2 = fc.memoizedProps;
+            if (p2 && p2[${JSON.stringify(args.prop)}] && typeof p2[${JSON.stringify(args.prop)}] === 'object' && 'value' in p2[${JSON.stringify(args.prop)}]) {
+              found = fc; return;
+            }
+            fc = fc.return;
+          }
+        }
+        if (fiber.child) walk(fiber.child, depth + 1);
+        if (fiber.sibling) walk(fiber.sibling, depth);
+      }
+      for (var ri = 0; ri < allRoots.length; ri++) walk(allRoots[ri].current, 0);
+      if (!found) return JSON.stringify({ __agent_error: 'No component with testID=' + ${JSON.stringify(args.testID)} + ' has a SharedValue prop named ' + ${JSON.stringify(args.prop)} });
+      var sv = found.memoizedProps[${JSON.stringify(args.prop)}];
+      if (!sv) {
+        var fc2 = found;
+        for (var up2 = 0; up2 < 5 && fc2; up2++) {
+          if (fc2.memoizedProps && fc2.memoizedProps[${JSON.stringify(args.prop)}]) { sv = fc2.memoizedProps[${JSON.stringify(args.prop)}]; break; }
+          fc2 = fc2.return;
+        }
+      }
+      if (!sv || typeof sv !== 'object' || !('value' in sv)) return JSON.stringify({ __agent_error: 'SharedValue prop found but not accessible on the resolved fiber' });
+      sv.value = ${args.value};
+      return JSON.stringify({ ok: true, testID: ${JSON.stringify(args.testID)}, prop: ${JSON.stringify(args.prop)}, value: ${args.value} });
+    })()`;
+    const result = await client.evaluate(expression);
+    if (result.error) return failResult(`SharedValue error: ${result.error}`);
+    if (typeof result.value !== 'string') return failResult('Unexpected response');
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.value); } catch { return okResult({ raw: result.value }); }
+    if (parsed !== null && typeof parsed === 'object' && '__agent_error' in (parsed as Record<string, unknown>)) {
+      return failResult(String((parsed as Record<string, unknown>).__agent_error));
+    }
+    return okResult(parsed);
+  }),
+);
+
+trackedTool(
   'cdp_dispatch',
   'Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). NOTE: Best used for state verification, not UI interaction testing — React components may not re-render immediately after CDP-dispatched actions. For UI testing, use device_press/device_find to trigger the action through the UI instead.',
   {

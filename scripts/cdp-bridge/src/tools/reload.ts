@@ -1,6 +1,9 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 
+let sessionReloadCount = 0;
+export function getSessionReloadCount(): number { return sessionReloadCount; }
+
 export function createReloadHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (_args: { full: boolean }, client) => {
     // Step 1: Trigger reload — expected to disconnect the WS
@@ -95,6 +98,7 @@ export function createReloadHandler(getClient: () => CDPClient) {
       }
     }
 
+    sessionReloadCount++;
     return okResult({ reloaded: true, type: 'full', reconnected: true });
   });
 }

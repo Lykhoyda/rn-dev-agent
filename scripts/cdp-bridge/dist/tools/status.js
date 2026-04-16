@@ -1,5 +1,6 @@
 import { okResult, failResult, warnResult } from '../utils.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
+import { getSessionReloadCount } from './reload.js';
 const STATUS_PROBE_EXPRESSION = `
 (function() {
   var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
@@ -144,6 +145,10 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 catch {
                     return warnResult(status, 'Debugger is paused. Auto-recovery failed. Try cdp_reload(full=true).');
                 }
+            }
+            const reloadCount = getSessionReloadCount();
+            if (reloadCount >= 5) {
+                return warnResult(status, `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`);
             }
             return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
         }

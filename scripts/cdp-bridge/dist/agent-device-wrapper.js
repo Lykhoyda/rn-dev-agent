@@ -1,12 +1,13 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { okResult, failResult } from './utils.js';
 import { isFastRunnerAvailable, getFastRunnerState, fastTap, fastType, fastSwipe, fastSnapshot, fastScreenshot, fastDismissKeyboard, startFastRunner, } from './fast-runner-session.js';
 import { updateRefMap, refCenter, getScreenRect, hasRefMap, clearRefMap } from './fast-runner-ref-map.js';
+import { resolveBundleId } from './project-config.js';
 const execFile = promisify(execFileCb);
 const SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 const EXEC_TIMEOUT = 30_000;
@@ -197,8 +198,20 @@ function computeSwipeCoords(direction, screen) {
     }
 }
 async function tryFastRunner(command, positionals) {
-    if (!isFastRunnerAvailable())
-        return null;
+    if (!isFastRunnerAvailable()) {
+        const session = getActiveSession();
+        if (session?.platform === 'ios' && session.deviceId) {
+            try {
+                await startFastRunner(session.deviceId, resolveBundleId('ios') ?? 'unknown');
+            }
+            catch { /* auto-restart failed */ }
+            if (!isFastRunnerAvailable())
+                return null;
+        }
+        else {
+            return null;
+        }
+    }
     const state = getFastRunnerState();
     try {
         switch (command) {
@@ -206,6 +219,15 @@ async function tryFastRunner(command, positionals) {
                 const pngBuffer = await fastScreenshot();
                 const tmpPath = `/tmp/rn-fast-screenshot-${Date.now()}.png`;
                 writeFileSync(tmpPath, pngBuffer);
+                const requestedPath = positionals.find(p => !p.startsWith('-'));
+                if (requestedPath && requestedPath !== tmpPath) {
+                    try {
+                        mkdirSync(dirname(requestedPath), { recursive: true });
+                        copyFileSync(tmpPath, requestedPath);
+                        return okResult({ path: requestedPath, method: 'fast-runner' });
+                    }
+                    catch { /* fall through to tmpPath */ }
+                }
                 return okResult({ path: tmpPath, method: 'fast-runner' });
             }
             case 'snapshot': {

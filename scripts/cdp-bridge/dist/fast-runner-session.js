@@ -26,7 +26,19 @@ export function getFastRunnerState() {
     return runnerState;
 }
 export function isFastRunnerAvailable() {
-    return runnerState !== null;
+    if (!runnerState)
+        return false;
+    try {
+        process.kill(runnerState.pid, 0);
+        return true;
+    }
+    catch { /* process dead */ }
+    runnerState = null;
+    try {
+        unlinkSync(STATE_FILE);
+    }
+    catch { /* ignore */ }
+    return false;
 }
 // --- Lifecycle ---
 export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {

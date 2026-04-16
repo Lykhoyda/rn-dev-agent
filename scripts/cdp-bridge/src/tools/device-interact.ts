@@ -1,6 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
+import { isFastRunnerAvailable, fastSwipe } from '../fast-runner-session.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
@@ -417,8 +418,22 @@ function computeSwipeFromDirection(
 }
 
 export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolResult> {
-  return withSession((args) => {
+  return withSession(async (args) => {
+    // B106 fix: use fast-runner's HID-level synthesis to bypass XCTest
+    // `waitForIdle` hangs on Reanimated-driven screens. Only applies when
+    // fast-runner is available (iOS) and count/pattern are not used (those
+    // are daemon-specific features — fall back to agent-device for them).
+    const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
+
     if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
+      if (canUseFastRunner) {
+        try {
+          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs);
+          if (resp.ok) {
+            return okResult({ x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, durationMs: args.durationMs, method: 'fast-runner' });
+          }
+        } catch { /* fall through */ }
+      }
       const cliArgs = ['swipe', String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
       if (args.durationMs) cliArgs.push(String(args.durationMs));
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
@@ -427,17 +442,23 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
     }
     if (args.direction) {
       // B-Tier3 fix: Use real swipe gesture (not scroll) for direction-based swipes.
-      // The previous delegation to `scroll` produced smooth list scrolls that don't
-      // trigger gesture handlers (pull-to-refresh, swipe-to-delete).
       const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
       const coords = computeSwipeFromDirection(args.direction, screen);
       const duration = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+      if (canUseFastRunner) {
+        try {
+          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration);
+          if (resp.ok) {
+            return okResult({ direction: args.direction, durationMs: duration, method: 'fast-runner', ...coords });
+          }
+        } catch { /* fall through */ }
+      }
       const cliArgs = ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
       return runAgentDevice(cliArgs);
     }
-    return Promise.resolve(failResult('Provide either direction or x1,y1,x2,y2 coordinates'));
+    return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
   });
 }
 
@@ -449,7 +470,39 @@ interface ScrollArgs {
 }
 
 export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolResult> {
-  return withSession((args) => {
+  return withSession(async (args) => {
+    // B106 fix: Route iOS scroll through fast-runner's direct HID synthesis
+    // when available. The agent-device daemon path uses XCTest's high-level
+    // gesture API which calls `waitForIdle` after the drag — this hangs
+    // indefinitely on screens driven by Reanimated `useAnimatedScrollHandler`
+    // because the UI thread is never "idle" between scroll events. Fast-runner
+    // uses `RunnerDaemonProxy.synthesize(eventRecord)` which is raw HID event
+    // injection and returns as soon as events are delivered.
+    if (isFastRunnerAvailable()) {
+      const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+      const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
+      const cx = Math.round(screen.width / 2);
+      const cy = Math.round(screen.height / 2);
+      const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
+      const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
+      let x1 = cx, y1 = cy, x2 = cx, y2 = cy;
+      switch (args.direction) {
+        // "scroll down" = content moves up = finger moves up (swipe up)
+        case 'down': y1 = cy + Math.round(dy / 2); y2 = cy - Math.round(dy / 2); break;
+        case 'up': y1 = cy - Math.round(dy / 2); y2 = cy + Math.round(dy / 2); break;
+        case 'left': x1 = cx + Math.round(dx / 2); x2 = cx - Math.round(dx / 2); break;
+        case 'right': x1 = cx - Math.round(dx / 2); x2 = cx + Math.round(dx / 2); break;
+      }
+      try {
+        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);
+        if (resp.ok) {
+          return okResult({ direction: args.direction, amount: args.amount ?? 0.5, method: 'fast-runner', x1, y1, x2, y2 });
+        }
+        // Fall through to daemon on fast-runner failure
+      } catch {
+        // Fall through to daemon on fast-runner error
+      }
+    }
     const cliArgs = ['scroll', args.direction];
     if (args.amount != null) cliArgs.push(String(args.amount));
     return runAgentDevice(cliArgs);

@@ -1066,6 +1066,22 @@ export const INJECTED_HELPERS = `
       }
 
       ref.navigate(screen, params || undefined);
+      var afterFallback = ref.getRootState();
+      var found = false;
+      function checkRoute(rs) {
+        if (!rs) return;
+        if (rs.name === screen) { found = true; return; }
+        if (rs.routes) {
+          for (var ri = 0; ri < rs.routes.length; ri++) {
+            checkRoute(rs.routes[ri]);
+            if (rs.routes[ri].state) checkRoute(rs.routes[ri].state);
+          }
+        }
+      }
+      checkRoute(afterFallback);
+      if (!found) {
+        return JSON.stringify({ __agent_error: 'Navigate failed: screen "' + screen + '" not found in any navigator after dispatch. Check screen name spelling and that it is registered in a navigator.' });
+      }
       return JSON.stringify({ navigated: true, screen: screen, method: 'fallback-navigate' });
 
     } catch(e) {
