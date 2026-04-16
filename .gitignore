@@ -11,7 +11,4 @@ reports
 drivers/
 
 # Workspace symlinks (local dev only)
-/test-app
-/docs
-/packages
 scripts/fast-runner/build/

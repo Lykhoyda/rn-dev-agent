@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **rn-dev-agent** — A Claude Code plugin that turns Claude into a React Native development partner. It explores the codebase, designs architecture, implements features, then verifies everything live on the simulator — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
+## Project Structure — sibling repos
+
+This is the **pure plugin repo** — agents, commands, skills, hooks, MCP server (`scripts/cdp-bridge/`), marketplace manifest. It ships to users as-is, so it contains only what runs inside Claude Code.
+
+Development scaffolding lives in the **sibling workspace repo**:
+`../rn-dev-agent-workspace` (absolute on dev machine: `/Users/anton_personal/GitHub/rn-dev-agent-workspace`).
+
+| Artifact | Location |
+|---|---|
+| Test app (Expo Dev Client, exercises plugin tools) | `rn-dev-agent-workspace/test-app/` |
+| `ROADMAP.md`, `DECISIONS.md`, `BUGS.md` | `rn-dev-agent-workspace/docs/` |
+| Proof artifacts / benchmarks / session reports | `rn-dev-agent-workspace/docs/proof/` |
+| Shared packages (agent-device, maestro-runner) | `rn-dev-agent-workspace/packages/` |
+| Dev-only scripts (benchmark runners, harnesses) | `rn-dev-agent-workspace/dev/` |
+
+**Do not** recreate `test-app`, `docs`, or `packages` symlinks in this repo — they caused "two test-apps" confusion during benchmarking and were removed on 2026-04-16. Edit workspace files via their absolute/relative path directly (`../rn-dev-agent-workspace/docs/ROADMAP.md`).
+
+**Metro must be started from the workspace**: `cd ../rn-dev-agent-workspace/test-app && npx expo start`. Otherwise the `com.rndevagent.testapp` Dev Client bundle fails to register and you get "App entry not found" on the simulator.
+
 ## Quick Start (for users)
 
 ### First-time setup
