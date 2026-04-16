@@ -6,6 +6,7 @@ import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import type { CDPResettableState } from './cdp/state.js';
+import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, CDP_TIMEOUT_SLOW, timeoutForMethod } from './cdp/timeout-config.js';
 import type {
   CDPMessage,
   PendingCall,
@@ -16,26 +17,6 @@ import type {
   CDPClientState,
   EvaluateResult,
 } from './types.js';
-const CDP_TIMEOUT_FAST = 1500;
-const CDP_TIMEOUT_MS = 5000;
-const CDP_TIMEOUT_SLOW = 30000;
-
-function timeoutForMethod(method: string): number {
-  switch (method) {
-    case 'Runtime.getHeapUsage':
-    case 'Log.enable':
-    case 'Log.disable':
-      return CDP_TIMEOUT_FAST;
-    case 'HeapProfiler.takeHeapSnapshot':
-    case 'HeapProfiler.startTrackingHeapObjects':
-    case 'Profiler.start':
-    case 'Profiler.stop':
-    case 'Network.getResponseBody':
-      return CDP_TIMEOUT_SLOW;
-    default:
-      return CDP_TIMEOUT_MS;
-  }
-}
 const REACT_READY_TIMEOUT_MS = 30000;
 const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
