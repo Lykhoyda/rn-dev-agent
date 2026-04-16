@@ -1,7 +1,45 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../fast-runner-session.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
+const execFile = promisify(execFileCb);
+/**
+ * B112 (D641): check whether a given bundleId is currently running on the
+ * booted device. iOS uses `xcrun simctl spawn booted launchctl list`;
+ * Android uses `adb shell pidof <pkg>`. Exported for unit tests via the
+ * optional probe injection.
+ */
+export async function isAppRunning(platform, bundleId, probes) {
+    const p = (platform ?? 'ios').toLowerCase();
+    if (p === 'android') {
+        return (probes?.android ?? defaultAndroidProbe)(bundleId);
+    }
+    return (probes?.ios ?? defaultIOSProbe)(bundleId);
+}
+async function defaultIOSProbe(bundleId) {
+    try {
+        const { stdout } = await execFile('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], { timeout: 5000, encoding: 'utf8' });
+        // launchctl list outputs lines like "<pid>  <status>  UIKitApplication:<bundleId>[...]"
+        return stdout.includes(`UIKitApplication:${bundleId}`);
+    }
+    catch {
+        return false;
+    }
+}
+async function defaultAndroidProbe(bundleId) {
+    try {
+        const { stdout } = await execFile('adb', ['shell', 'pidof', bundleId], {
+            timeout: 3000,
+            encoding: 'utf8',
+        });
+        return stdout.trim().length > 0;
+    }
+    catch {
+        return false;
+    }
+}
 export function createDeviceSnapshotHandler() {
     return async (args) => {
         const action = args.action ?? 'snapshot';
@@ -24,7 +62,20 @@ export function createDeviceSnapshotHandler() {
                     'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) and xcrun simctl for screenshots instead.', { hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.' });
             }
             const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
-            const cliArgs = ['open', appId, '--session', sessionName];
+            // B112 (D641): attachOnly mode — skip the app launch when the user knows
+            // the app is already running. Avoids the unconditional relaunch that
+            // invalidates CDP sessions and can race Metro bundle loading.
+            let cliArgs;
+            if (args.attachOnly) {
+                const running = await isAppRunning(args.platform, appId);
+                if (!running) {
+                    return failResult(`attachOnly=true but ${appId} is not running on ${args.platform ?? 'ios'}. Launch it manually (e.g. xcrun simctl launch / adb monkey) or drop attachOnly to let the session opener launch it.`, 'NOT_CONNECTED');
+                }
+                cliArgs = ['open', '--session', sessionName];
+            }
+            else {
+                cliArgs = ['open', appId, '--session', sessionName];
+            }
             if (args.platform)
                 cliArgs.push('--platform', args.platform);
             const result = await runAgentDevice(cliArgs, { skipSession: true });

@@ -1,3 +1,5 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   runAgentDevice,
   setActiveSession,
@@ -11,6 +13,8 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 
+const execFile = promisify(execFileCb);
+
 type SnapshotAction = 'open' | 'close' | 'snapshot';
 
 interface SnapshotArgs {
@@ -18,6 +22,60 @@ interface SnapshotArgs {
   appId?: string;
   platform?: string;
   sessionName?: string;
+  /**
+   * B112 (D641): when true, skip launching the app — create a session that
+   * attaches to the already-running process. Requires the app to be running;
+   * returns an error if it isn't. Prevents the unwanted relaunch + bundle-race
+   * cascade observed during Phase 88 Round 1.
+   */
+  attachOnly?: boolean;
+}
+
+/**
+ * B112 (D641): check whether a given bundleId is currently running on the
+ * booted device. iOS uses `xcrun simctl spawn booted launchctl list`;
+ * Android uses `adb shell pidof <pkg>`. Exported for unit tests via the
+ * optional probe injection.
+ */
+export async function isAppRunning(
+  platform: string | undefined,
+  bundleId: string,
+  probes?: {
+    ios?: (bundleId: string) => Promise<boolean>;
+    android?: (bundleId: string) => Promise<boolean>;
+  },
+): Promise<boolean> {
+  const p = (platform ?? 'ios').toLowerCase();
+  if (p === 'android') {
+    return (probes?.android ?? defaultAndroidProbe)(bundleId);
+  }
+  return (probes?.ios ?? defaultIOSProbe)(bundleId);
+}
+
+async function defaultIOSProbe(bundleId: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFile(
+      'xcrun',
+      ['simctl', 'spawn', 'booted', 'launchctl', 'list'],
+      { timeout: 5000, encoding: 'utf8' },
+    );
+    // launchctl list outputs lines like "<pid>  <status>  UIKitApplication:<bundleId>[...]"
+    return stdout.includes(`UIKitApplication:${bundleId}`);
+  } catch {
+    return false;
+  }
+}
+
+async function defaultAndroidProbe(bundleId: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFile('adb', ['shell', 'pidof', bundleId], {
+      timeout: 3000,
+      encoding: 'utf8',
+    });
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<ToolResult> {
@@ -51,7 +109,23 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       }
 
       const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
-      const cliArgs = ['open', appId, '--session', sessionName];
+
+      // B112 (D641): attachOnly mode — skip the app launch when the user knows
+      // the app is already running. Avoids the unconditional relaunch that
+      // invalidates CDP sessions and can race Metro bundle loading.
+      let cliArgs: string[];
+      if (args.attachOnly) {
+        const running = await isAppRunning(args.platform, appId);
+        if (!running) {
+          return failResult(
+            `attachOnly=true but ${appId} is not running on ${args.platform ?? 'ios'}. Launch it manually (e.g. xcrun simctl launch / adb monkey) or drop attachOnly to let the session opener launch it.`,
+            'NOT_CONNECTED',
+          );
+        }
+        cliArgs = ['open', '--session', sessionName];
+      } else {
+        cliArgs = ['open', appId, '--session', sessionName];
+      }
       if (args.platform) cliArgs.push('--platform', args.platform);
 
       const result = await runAgentDevice(cliArgs, { skipSession: true });

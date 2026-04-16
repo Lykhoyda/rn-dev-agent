@@ -150,6 +150,16 @@ export function createStatusHandler(getClient, setClient, createClient) {
             if (reloadCount >= 5) {
                 return warnResult(status, `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`);
             }
+            // B114 (D642): suspicion hint. When we're CDP-connected but the app didn't
+            // inject helpers and has no JS errors to show, the visible app state
+            // (RedBox, blank screen, native-module-missing) is INVISIBLE to our tools
+            // because __RN_AGENT never loaded. Point the agent at cdp_native_errors.
+            if (status.cdp.connected
+                && !client.helpersInjected
+                && !status.app.hasRedBox
+                && status.app.errorCount === 0) {
+                return warnResult(status, 'CDP connected but app helpers not injected and no JS errors captured. The app may have crashed natively before __RN_AGENT loaded (e.g. missing native module, failed bundle fetch). Call cdp_native_errors to inspect the platform log.');
+            }
             return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
         }
         catch (err) {

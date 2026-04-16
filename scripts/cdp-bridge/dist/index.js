@@ -14,6 +14,7 @@ import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
 import { createNavigationStateHandler } from './tools/navigation-state.js';
 import { createErrorLogHandler } from './tools/error-log.js';
+import { createNativeErrorsHandler } from './tools/native-errors.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
 import { createNetworkBodyHandler } from './tools/network-body.js';
 import { createHeapUsageHandler, createCpuProfileHandler } from './tools/profiling.js';
@@ -99,9 +100,14 @@ trackedTool('cdp_nav_graph', 'Navigation graph tool. PRIMARY: action="go" — na
     platform: z.enum(['ios', 'android']).optional().describe('(go/playbook/heal) Platform for playbook tips and heal advice'),
     params: z.record(z.unknown()).optional().describe('(go) Screen params to pass (e.g. { id: "1" })'),
 }, createNavGraphHandler(getClient));
-trackedTool('cdp_error_log', 'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — use bash logcat/simctl log instead.', {
+trackedTool('cdp_error_log', 'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — call cdp_native_errors to check native logs (B114/D642).', {
     clear: z.boolean().default(false).describe('Clear all captured errors instead of reading them'),
 }, createErrorLogHandler(getClient));
+trackedTool('cdp_native_errors', 'Read native-level error logs for when JS-layer tools come up empty. iOS spawns `xcrun simctl log show`, Android uses `adb logcat -d`. Catches errors that fire BEFORE __RN_AGENT injects (missing native module, bundle load failure, native crash). Returns filtered + deduped error/fatal entries. Platform defaults to the CDP-connected target.', {
+    platform: z.enum(['ios', 'android']).optional().describe('Target platform. Defaults to the currently-connected CDP target platform.'),
+    sinceSeconds: z.number().int().min(5).max(3600).optional().describe('How far back to look (default 60s, max 3600)'),
+    limit: z.number().int().min(1).max(100).optional().describe('Max entries to return (default 10, max 100)'),
+}, createNativeErrorsHandler(getClient));
 trackedTool('cdp_network_log', 'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected).', {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     filter: z.string().optional().describe('Filter by URL substring (e.g. "/api/cart")'),
@@ -282,11 +288,12 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
     format: z.enum(['jpeg', 'png']).optional().describe('Image format (default: auto-detect from path extension, or jpeg)'),
     platform: z.enum(['ios', 'android']).optional().describe('Target device platform. Defaults to the currently-connected CDP target platform.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session.', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races — B112).', {
     action: z.enum(['open', 'close', 'snapshot']).default('snapshot').describe('open: start session for an app. snapshot: capture UI tree with element refs. close: end session.'),
     appId: z.string().optional().describe('App bundle ID — required for action=open (e.g. "com.example.app")'),
     platform: z.enum(['ios', 'android']).optional().describe('Target platform — used with action=open to select device'),
     sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
+    attachOnly: z.boolean().optional().describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races (B112/D641).'),
 }, createDeviceSnapshotHandler());
 trackedTool('device_find', 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
     text: z.string().describe('Visible text, accessibility label, or identifier to find'),

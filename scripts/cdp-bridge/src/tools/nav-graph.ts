@@ -25,6 +25,28 @@ import {
   buildSelfHealAdvice,
 } from '../nav-graph/self-heal.js';
 
+/**
+ * B115 (D640): build the JS arg string for __NAV_REF__.navigate() when the plan
+ * contains a switch_tab step.
+ *
+ * Case 1: user requested the tab itself (tab name === target screen name).
+ *   Emit `ref.navigate('TasksTab', params?)` — flat call, just focuses the tab.
+ *   The old shape `ref.navigate('TasksTab', { screen: 'TasksTab' })` was
+ *   self-referential and left React Navigation stuck (arrived=false).
+ *
+ * Case 2: user requested a screen INSIDE a tab (tab name !== target screen name).
+ *   Emit `ref.navigate('TasksTab', { screen: 'TaskDetail', params })` — nested
+ *   dispatch lands on the inner screen.
+ *
+ * Exported for unit testing — pure string-builder.
+ */
+export function buildTabNavigateArgs(tabName: string, targetScreen: string, paramsArgJs: string): string {
+  if (tabName === targetScreen) {
+    return `${JSON.stringify(tabName)}, ${paramsArgJs}`;
+  }
+  return `${JSON.stringify(tabName)}, { screen: ${JSON.stringify(targetScreen)}, params: ${paramsArgJs} }`;
+}
+
 interface NavGraphArgs {
   action: 'scan' | 'read' | 'navigate' | 'record' | 'staleness' | 'playbook' | 'heal' | 'go';
   navigator_id?: string;
@@ -362,9 +384,12 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
 
     // 4. Execute navigation — single CDP evaluate call
     // If the plan has a tab switch step, use direct tab+screen navigation (avoids the
-    // fallback-navigate bug where unvisited tabs haven't mounted their nested navigators)
+    // fallback-navigate bug where unvisited tabs haven't mounted their nested navigators).
     const planTabStep = result.plan?.steps?.find(s => s.action === 'switch_tab');
     const paramsArg = args.params ? JSON.stringify(args.params) : 'undefined';
+    const tabNavArgsJs = planTabStep
+      ? buildTabNavigateArgs(planTabStep.target_screen, args.screen, paramsArg)
+      : '';
     const navExpr = planTabStep
       ? `
       (function() {
@@ -372,7 +397,7 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
         var ref = globalThis.__NAV_REF__;
         if (!ref) return JSON.stringify({ error: '__NAV_REF__ not available', latency_ms: 0 });
         try {
-          ref.navigate(${JSON.stringify(planTabStep.target_screen)}, { screen: ${JSON.stringify(args.screen)}, params: ${paramsArg} });
+          ref.navigate(${tabNavArgsJs});
         } catch(e) {
           return JSON.stringify({ error: 'Tab navigate failed: ' + e.message, latency_ms: Date.now() - start });
         }
