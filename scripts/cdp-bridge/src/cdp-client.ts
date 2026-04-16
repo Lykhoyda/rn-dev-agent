@@ -1,11 +1,11 @@
 import WebSocket from 'ws';
 import { RingBuffer } from './ring-buffer.js';
-import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from './injected-helpers.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
+import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import type { CDPResettableState } from './cdp/state.js';
-import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, CDP_TIMEOUT_SLOW, timeoutForMethod } from './cdp/timeout-config.js';
+import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeout-config.js';
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
 import { discover, discoverForList } from './cdp/discovery.js';
@@ -18,8 +18,6 @@ import type {
   CDPClientState,
   EvaluateResult,
 } from './types.js';
-const REACT_READY_TIMEOUT_MS = 30000;
-const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
 const RECONNECT_ATTEMPTS = 30;
 const RECONNECT_RETRY_MS = 1500;
@@ -97,22 +95,16 @@ export class CDPClient {
 
   async reinjectHelpers(waitTimeout?: number): Promise<boolean> {
     if (!this.isConnected) return false;
-    await this.waitForReact(waitTimeout ?? REACT_READY_TIMEOUT_MS);
-    const helperResult = await this.evaluate(INJECTED_HELPERS);
-    if (helperResult.error) {
-      console.error('CDP: failed to re-inject helpers:', helperResult.error);
-      this._helpersInjected = false;
-      return false;
+    const ok = await reinjectHelpersFn(
+      (expr) => this.evaluate(expr),
+      waitTimeout,
+    );
+    this._helpersInjected = ok;
+    if (ok) {
+      setActiveFlag(this._port, this._connectedTarget);
+      detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; }).catch(() => {});
     }
-    const verify = await this.evaluate('typeof globalThis.__RN_AGENT === "object"');
-    if (verify.value !== true) {
-      this._helpersInjected = false;
-      return false;
-    }
-    this._helpersInjected = true;
-    setActiveFlag(this._port, this._connectedTarget);
-    detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; }).catch(() => {});
-    return true;
+    return ok;
   }
 
   async autoConnect(portHint?: number, platformFilter?: string): Promise<string> {
@@ -432,88 +424,23 @@ export class CDPClient {
   }
 
   private async setup(): Promise<void> {
-    logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
-    await this.sendWithTimeout('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
-    await this.sendWithTimeout('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
-
-    try {
-      await this.sendWithTimeout('Network.enable', undefined, timeoutForMethod('Network.enable'));
-      this._networkMode = 'cdp';
-    } catch {
-      this._networkMode = 'none';
-    }
-
-    // D588: Log.enable for pre-helper diagnostics
-    try {
-      await this.sendWithTimeout('Log.enable', undefined, timeoutForMethod('Log.enable'));
-      this._logDomainEnabled = true;
-    } catch {
-      this._logDomainEnabled = false;
-    }
-
-    // Probe optional profiling domains in parallel (don't leave enabled)
-    const [profilerProbe, heapProbe] = await Promise.allSettled([
-      this.sendWithTimeout('Profiler.enable', undefined, CDP_TIMEOUT_FAST)
-        .then(() => this.sendWithTimeout('Profiler.disable', undefined, CDP_TIMEOUT_FAST))
-        .then(() => true),
-      this.sendWithTimeout('HeapProfiler.enable', undefined, CDP_TIMEOUT_FAST)
-        .then(() => this.sendWithTimeout('HeapProfiler.disable', undefined, CDP_TIMEOUT_FAST))
-        .then(() => true),
-    ]);
-    this._profilerAvailable = profilerProbe.status === 'fulfilled' && profilerProbe.value === true;
-    this._heapProfilerAvailable = heapProbe.status === 'fulfilled' && heapProbe.value === true;
-
-    this.eventHandlers.clear();
-    this._scripts.clear();
-    this.setupEventHandlers();
-
-    await this.waitForReact(REACT_READY_TIMEOUT_MS);
-
-    const helperResult = await this.evaluate(INJECTED_HELPERS);
-    if (helperResult.error) {
-      console.error('CDP: failed to inject helpers:', helperResult.error);
-      this._helpersInjected = false;
-      return;
-    }
-
-    const verify = await this.evaluate('typeof globalThis.__RN_AGENT === "object"');
-    if (verify.value !== true) {
-      console.error('CDP: helper injection succeeded but __RN_AGENT not found');
-      this._helpersInjected = false;
-      return;
-    }
-
-    this._helpersInjected = true;
-    logger.info('CDP', `Helpers injected (v11), network mode: ${this._networkMode}`);
-    setActiveFlag(this._port, this._connectedTarget);
-    detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`); }).catch(() => {});
-
-    // D626 (B1 fix): Probe whether Network.enable actually delivers events.
-    // On RN < 0.83, Hermes accepts Network.enable without error but never
-    // fires requestWillBeSent/responseReceived. Probe with a small fetch
-    // and check if the buffer grows within 500ms.
-    if (this._networkMode === 'cdp') {
-      const bufSizeBefore = this._networkBuffer.size;
-      await this.evaluate(`void fetch('http://localhost:${this._port}/status').catch(function(){})`);
-      await new Promise(r => setTimeout(r, 500));
-      if (this._networkBuffer.size <= bufSizeBefore) {
-        logger.info('CDP', 'Network.enable accepted but no events fired (RN < 0.83) — falling back to hooks');
-        this._networkMode = 'none';
-      }
-    }
-
-    if (this._networkMode === 'none') {
-      const hookResult = await this.evaluate(NETWORK_HOOK_SCRIPT);
-      if (hookResult.error) {
-        console.error('CDP: failed to inject network hooks:', hookResult.error);
-      } else {
-        await this.evaluate(`
-          globalThis.__RN_AGENT_NETWORK_CB__ = function(type, data) {
-            console.log('__RN_NET__:' + type + ':' + JSON.stringify(data));
-          };
-        `);
-        this._networkMode = 'hook';
-      }
+    const result = await performSetup({
+      send: (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method)),
+      evaluate: (expr) => this.evaluate(expr),
+      port: this._port,
+      connectedTarget: this._connectedTarget,
+      networkBuffer: this._networkBuffer,
+      setupEventHandlers: () => this.setupEventHandlers(),
+      clearScripts: () => this._scripts.clear(),
+      clearEventHandlers: () => this.eventHandlers.clear(),
+    });
+    this._networkMode = result.networkMode;
+    this._helpersInjected = result.helpersInjected;
+    this._logDomainEnabled = result.logDomainEnabled;
+    this._profilerAvailable = result.profilerAvailable;
+    this._heapProfilerAvailable = result.heapProfilerAvailable;
+    if (result.helpersInjected) {
+      detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`); }).catch(() => {});
     }
   }
 
@@ -525,23 +452,6 @@ export class CDPClient {
       () => this._isPaused,
       (v) => { this._isPaused = v; },
     );
-  }
-
-  private async waitForReact(timeout: number): Promise<void> {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      try {
-        const result = await this.evaluate(
-          'typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ !== "undefined" && ' +
-          '__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers?.size > 0'
-        );
-        if (result.value === true) return;
-      } catch {
-        // Not ready yet
-      }
-      await sleep(REACT_READY_POLL_MS);
-    }
-    console.error(`CDP: React not ready after ${timeout}ms — helpers will be injected anyway`);
   }
 
   private handleClose(code: number): void {
