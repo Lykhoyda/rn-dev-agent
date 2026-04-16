@@ -8,9 +8,7 @@ import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeou
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
 import { discover, discoverForList } from './cdp/discovery.js';
-const RECONNECT_DELAY_MS = 1500;
-const RECONNECT_ATTEMPTS = 30;
-const RECONNECT_RETRY_MS = 1500;
+import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
 export class CDPClient {
     ws = null;
     msgId = 0;
@@ -159,37 +157,7 @@ export class CDPClient {
         return platformFilterWarning ? `${msg}. WARNING: ${platformFilterWarning}` : msg;
     }
     async softReconnect() {
-        if (this.disposed)
-            throw new Error('Client is disposed');
-        logger.info('CDP', 'softReconnect initiated');
-        // Preempt any background reconnect loop — signal it to bail out
-        if (this.reconnecting) {
-            this._softReconnectRequested = true;
-            const bailDeadline = Date.now() + 3_000;
-            while (this.reconnecting && Date.now() < bailDeadline) {
-                await sleep(200);
-            }
-            this._softReconnectRequested = false;
-        }
-        this.reconnecting = true;
-        try {
-            resetState(this);
-            if (this.ws) {
-                this.ws.removeAllListeners();
-                if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-                    this.ws.close();
-                }
-                this.ws = null;
-            }
-            this.rejectAllPending(new Error('Stale target — re-discovering'));
-            const result = await this.discoverAndConnect();
-            this.reconnecting = false;
-            return result;
-        }
-        catch (err) {
-            this.reconnecting = false;
-            throw err;
-        }
+        return softReconnectFn(this.buildReconnectCtx());
     }
     async disconnect() {
         this.disposed = true;
@@ -405,86 +373,46 @@ export class CDPClient {
         wireEventHandlers(this.eventHandlers, { console: this._consoleBuffer, network: this._networkBuffer, log: this._logBuffer, scripts: this._scripts }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method)), () => this._isPaused, (v) => { this._isPaused = v; });
     }
     handleClose(code) {
-        resetState(this);
-        if (this.disposed || this.reconnecting)
-            return;
-        logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
-        if (code === 1006) {
-            console.error('CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...');
-        }
-        else {
-            console.error('CDP: connection closed (code ' + code + '). Reconnecting...');
-        }
-        this.reconnecting = true;
-        this._state = 'reconnecting';
-        this.reconnect().catch((err) => {
-            console.error('CDP: reconnect failed:', err instanceof Error ? err.message : err);
-            this.reconnecting = false;
-        });
+        handleCloseFn(this.buildReconnectCtx(), code);
     }
     async reconnect() {
-        await sleep(RECONNECT_DELAY_MS);
-        for (let i = 0; i < RECONNECT_ATTEMPTS; i++) {
-            this._reconnectAttemptCount = i + 1;
-            this._lastReconnectAttempt = new Date().toISOString();
-            if (this.disposed || this._softReconnectRequested) {
-                this.reconnecting = false;
-                return;
-            }
-            try {
-                await this.discoverAndConnect();
-                // Clear flag immediately so close events on the new connection trigger a fresh reconnect
-                this.reconnecting = false;
-                console.error('CDP: reconnected successfully');
-                return;
-            }
-            catch {
-                if (i < RECONNECT_ATTEMPTS - 1) {
-                    if (this._softReconnectRequested) {
-                        this.reconnecting = false;
-                        return;
-                    }
-                    await sleep(RECONNECT_RETRY_MS);
-                }
-            }
-        }
-        this.reconnecting = false;
-        this._state = 'disconnected';
-        clearActiveFlag();
-        console.error('CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...');
-        this.startBackgroundPoll();
+        return reconnectFn(this.buildReconnectCtx());
     }
     startBackgroundPoll() {
-        if (this._bgPollTimer || this.disposed)
-            return;
-        this._bgPollTimer = setInterval(async () => {
-            if (this.disposed || this.isConnected || this.reconnecting) {
-                this.stopBackgroundPoll();
-                return;
-            }
-            try {
-                const res = await fetch(`http://127.0.0.1:${this._port}/status`, {
-                    signal: AbortSignal.timeout(2000),
-                });
-                const text = await res.text();
-                if (text === 'packager-status:running') {
-                    console.error('CDP: Metro detected via background poll. Reconnecting...');
-                    this.stopBackgroundPoll();
-                    this.reconnecting = true;
-                    this._state = 'reconnecting';
-                    this.reconnect().catch(() => { this.reconnecting = false; });
-                }
-            }
-            catch {
-                // Metro not available yet — keep polling
-            }
-        }, 5000);
+        startBgPoll(this.buildReconnectCtx());
     }
     stopBackgroundPoll() {
-        if (this._bgPollTimer) {
-            clearInterval(this._bgPollTimer);
-            this._bgPollTimer = null;
-        }
+        stopBgPoll(this.buildReconnectCtx());
+    }
+    buildReconnectCtx() {
+        return {
+            isDisposed: () => this.disposed,
+            isReconnecting: () => this.reconnecting,
+            isConnected: () => this.isConnected,
+            isSoftReconnectRequested: () => this._softReconnectRequested,
+            setReconnecting: (v) => { this.reconnecting = v; },
+            setSoftReconnectRequested: (v) => { this._softReconnectRequested = v; },
+            setState: (s) => { this._state = s; },
+            setReconnectAttempt: (count, timestamp) => {
+                this._reconnectAttemptCount = count;
+                this._lastReconnectAttempt = timestamp;
+            },
+            closeWs: () => {
+                if (this.ws) {
+                    this.ws.removeAllListeners();
+                    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+                        this.ws.close();
+                    }
+                    this.ws = null;
+                }
+            },
+            rejectAllPending: (reason) => this.rejectAllPending(reason),
+            discoverAndConnect: () => this.discoverAndConnect(),
+            getResettableState: () => this,
+            getPort: () => this._port,
+            setBgPollTimer: (timer) => { this._bgPollTimer = timer; },
+            getBgPollTimer: () => this._bgPollTimer,
+        };
     }
     rejectAllPending(reason) {
         rejectPending(this.pending, reason);
