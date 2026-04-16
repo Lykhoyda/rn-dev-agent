@@ -7,8 +7,8 @@ import { logger } from './logger.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import type { CDPResettableState } from './cdp/state.js';
 import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, CDP_TIMEOUT_SLOW, timeoutForMethod } from './cdp/timeout-config.js';
+import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 import type {
-  CDPMessage,
   PendingCall,
   HermesTarget,
   ConsoleEntry,
@@ -599,34 +599,7 @@ export class CDPClient {
   }
 
   private handleMessage(data: WebSocket.RawData): void {
-    try {
-      const msg = JSON.parse(data.toString()) as CDPMessage;
-
-      if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) {
-        console.error('CDP: unexpected message shape, ignoring');
-        return;
-      }
-
-      if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const pending = this.pending.get(msg.id)!;
-        clearTimeout(pending.timer);
-        this.pending.delete(msg.id);
-        if (msg.error) {
-          pending.reject(new Error(msg.error.message));
-        } else {
-          pending.resolve(msg.result);
-        }
-      } else if (msg.method) {
-        const handler = this.eventHandlers.get(msg.method);
-        if (handler) handler(msg.params);
-
-        if (msg.method === 'Runtime.consoleAPICalled') {
-          this.parseNetworkHookMessage(msg.params);
-        }
-      }
-    } catch (err) {
-      console.error('CDP: malformed message:', err instanceof Error ? err.message : err);
-    }
+    handleMsg(data, this.pending, this.eventHandlers, (params) => this.parseNetworkHookMessage(params));
   }
 
   private parseNetworkHookMessage(params: unknown): void {
@@ -939,40 +912,11 @@ export class CDPClient {
   }
 
   private rejectAllPending(reason: Error): void {
-    for (const { reject, timer } of this.pending.values()) {
-      clearTimeout(timer);
-      reject(reason);
-    }
-    this.pending.clear();
+    rejectPending(this.pending, reason);
   }
 
   private sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('WebSocket not connected'));
-    }
-
-    return new Promise((resolve, reject) => {
-      const id = ++this.msgId;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(
-          `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`
-        ));
-      }, ms);
-
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-      try {
-        const ws = this.ws;
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          throw new Error('WebSocket closed between check and send');
-        }
-        ws.send(JSON.stringify({ id, method, params }));
-      } catch (err) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(err instanceof Error ? err : new Error(`ws.send failed: ${err}`));
-      }
-    });
+    return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);
   }
 
 }

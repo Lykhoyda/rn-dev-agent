@@ -5,25 +5,8 @@ import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from './injected-helpers.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
-const CDP_TIMEOUT_FAST = 1500;
-const CDP_TIMEOUT_MS = 5000;
-const CDP_TIMEOUT_SLOW = 30000;
-function timeoutForMethod(method) {
-    switch (method) {
-        case 'Runtime.getHeapUsage':
-        case 'Log.enable':
-        case 'Log.disable':
-            return CDP_TIMEOUT_FAST;
-        case 'HeapProfiler.takeHeapSnapshot':
-        case 'HeapProfiler.startTrackingHeapObjects':
-        case 'Profiler.start':
-        case 'Profiler.stop':
-        case 'Network.getResponseBody':
-            return CDP_TIMEOUT_SLOW;
-        default:
-            return CDP_TIMEOUT_MS;
-    }
-}
+import { CDP_TIMEOUT_FAST, CDP_TIMEOUT_MS, timeoutForMethod } from './cdp/timeout-config.js';
+import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 const REACT_READY_TIMEOUT_MS = 30000;
 const REACT_READY_POLL_MS = 500;
 const RECONNECT_DELAY_MS = 1500;
@@ -569,35 +552,7 @@ export class CDPClient {
         });
     }
     handleMessage(data) {
-        try {
-            const msg = JSON.parse(data.toString());
-            if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) {
-                console.error('CDP: unexpected message shape, ignoring');
-                return;
-            }
-            if (msg.id !== undefined && this.pending.has(msg.id)) {
-                const pending = this.pending.get(msg.id);
-                clearTimeout(pending.timer);
-                this.pending.delete(msg.id);
-                if (msg.error) {
-                    pending.reject(new Error(msg.error.message));
-                }
-                else {
-                    pending.resolve(msg.result);
-                }
-            }
-            else if (msg.method) {
-                const handler = this.eventHandlers.get(msg.method);
-                if (handler)
-                    handler(msg.params);
-                if (msg.method === 'Runtime.consoleAPICalled') {
-                    this.parseNetworkHookMessage(msg.params);
-                }
-            }
-        }
-        catch (err) {
-            console.error('CDP: malformed message:', err instanceof Error ? err.message : err);
-        }
+        handleMsg(data, this.pending, this.eventHandlers, (params) => this.parseNetworkHookMessage(params));
     }
     parseNetworkHookMessage(params) {
         if (this._networkMode !== 'hook')
@@ -892,35 +847,9 @@ export class CDPClient {
         }
     }
     rejectAllPending(reason) {
-        for (const { reject, timer } of this.pending.values()) {
-            clearTimeout(timer);
-            reject(reason);
-        }
-        this.pending.clear();
+        rejectPending(this.pending, reason);
     }
     sendWithTimeout(method, params, ms) {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            return Promise.reject(new Error('WebSocket not connected'));
-        }
-        return new Promise((resolve, reject) => {
-            const id = ++this.msgId;
-            const timer = setTimeout(() => {
-                this.pending.delete(id);
-                reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
-            }, ms);
-            this.pending.set(id, { resolve: resolve, reject, timer });
-            try {
-                const ws = this.ws;
-                if (!ws || ws.readyState !== WebSocket.OPEN) {
-                    throw new Error('WebSocket closed between check and send');
-                }
-                ws.send(JSON.stringify({ id, method, params }));
-            }
-            catch (err) {
-                clearTimeout(timer);
-                this.pending.delete(id);
-                reject(err instanceof Error ? err : new Error(`ws.send failed: ${err}`));
-            }
-        });
+        return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);
     }
 }
