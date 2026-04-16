@@ -79,6 +79,21 @@ describe('CDPClient lifecycle', () => {
     }
   });
 
+  test('falls back to hook mode when Network.enable fires no events (B1)', async () => {
+    const client = new CDPClient(server.port);
+    try {
+      await client.autoConnect(server.port);
+      // The probe fires a fetch via evaluate, but fake server doesn't emit
+      // Network.requestWillBeSent, so the probe times out and falls back to hooks
+      const ok = await poll(() => client.helpersInjected, 15000, 300);
+      assert.ok(ok, 'Helpers should be injected');
+      assert.equal(client.networkMode, 'hook',
+        'Network mode should be "hook" — probe got no CDP events from fake server');
+    } finally {
+      await client.disconnect();
+    }
+  });
+
   test('autoConnect fails when no Hermes targets are available', async () => {
     const { createServer } = await import('node:http');
     const srv = createServer((req, res) => {
