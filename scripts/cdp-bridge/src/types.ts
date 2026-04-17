@@ -74,6 +74,8 @@ export interface StatusResult {
     device: string | null;
     pageId: string | null;
     platform: string | null;
+    /** B111 (D643): target.description (bundleId from Metro) — surfaces which app the MCP attached to. */
+    bundleId: string | null;
   };
   app: {
     platform: string | null;

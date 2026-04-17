@@ -108,15 +108,17 @@ test('selectTarget with targetId returns only the exact-id match', () => {
   assert.equal(warning, undefined);
 });
 
-test('selectTarget with unknown targetId falls through with warning', () => {
+test('selectTarget with unknown targetId hard-fails (B111/D643: was silent fallthrough)', () => {
   const targets = [
     { id: '008aba-1', platform: 'ios', description: 'host.exp.Exponent' },
     { id: '6f8d21-2', platform: 'ios', description: 'com.rndevagent.testapp' },
   ];
   const { targets: sorted, warning } = selectTarget(targets, { targetId: 'does-not-exist' });
-  assert.equal(sorted.length, 2); // fell back to all
+  assert.equal(sorted.length, 0);
   assert.ok(warning);
-  assert.match(warning, /targetId "does-not-exist" matched no targets/);
+  assert.match(warning, /targetId "does-not-exist" not found/);
+  assert.match(warning, /008aba-1/);
+  assert.match(warning, /6f8d21-2/);
 });
 
 test('selectTarget with bundleId filters zombie targets out', () => {
@@ -133,15 +135,16 @@ test('selectTarget with bundleId filters zombie targets out', () => {
   assert.equal(sorted[0].id, '6f8d21-2');
 });
 
-test('selectTarget with unknown bundleId falls through with warning', () => {
+test('selectTarget with unknown bundleId hard-fails (B111/D643: was silent fallthrough)', () => {
   const targets = [
     { id: '6f8d21-1', platform: 'ios', description: 'com.rndevagent.testapp' },
     { id: '6f8d21-2', platform: 'ios', description: 'com.rndevagent.testapp' },
   ];
   const { targets: sorted, warning } = selectTarget(targets, { bundleId: 'com.different.app' });
-  assert.equal(sorted.length, 2);
+  assert.equal(sorted.length, 0);
   assert.ok(warning);
-  assert.match(warning, /bundleId "com.different.app" matched no targets/);
+  assert.match(warning, /bundleId "com.different.app" not found/);
+  assert.match(warning, /com.rndevagent.testapp/);
 });
 
 test('selectTarget preferredBundleId is soft filter — only applies when it narrows', () => {
@@ -180,6 +183,81 @@ test('selectTarget: legacy string signature still works', () => {
   const { targets: sorted } = selectTarget(targets, 'ios');
   assert.equal(sorted.length, 1);
   assert.equal(sorted[0].id, '1');
+});
+
+// ── B111 / D643: zombie target hardening (Phase 91) ───────────────────
+
+test('selectTarget: bundleId hard-fails on single-target mismatch (B111/D643)', () => {
+  // Pre-D643, the bundleId check was guarded by `length > 1` and silently
+  // skipped this case — connecting to the wrong app. Now hard-fails.
+  const targets = [
+    { id: 'aaa-1', platform: 'ios', description: 'com.zombie.app' },
+  ];
+  const { targets: sorted, warning } = selectTarget(targets, { bundleId: 'com.realapp' });
+  assert.equal(sorted.length, 0);
+  assert.match(warning, /bundleId "com.realapp" not found/);
+  assert.match(warning, /com.zombie.app/);
+});
+
+test('selectTarget: bundleId match is case-insensitive (B111/D643/G4)', () => {
+  const targets = [
+    { id: 'aaa-1', platform: 'ios', description: 'host.exp.Exponent' },
+    { id: 'bbb-1', platform: 'ios', description: 'host.exp.exponent' },
+  ];
+  const { targets: sorted } = selectTarget(targets, { bundleId: 'HOST.EXP.EXPONENT' });
+  assert.equal(sorted.length, 2);
+  assert.ok(sorted.every(t => t.description?.toLowerCase() === 'host.exp.exponent'));
+});
+
+test('selectTarget: preferredBundleId match is case-insensitive (B111/D643/G4)', () => {
+  const targets = [
+    { id: 'aaa-1', platform: 'ios', description: 'HOST.EXP.EXPONENT' },
+    { id: 'bbb-1', platform: 'ios', description: 'com.myapp' },
+  ];
+  const { targets: sorted } = selectTarget(targets, { preferredBundleId: 'host.exp.exponent' });
+  assert.equal(sorted.length, 1);
+  assert.equal(sorted[0].id, 'aaa-1');
+});
+
+test('selectTarget: zombie tie-break — preferredBundleId picks fresh over zombie at equal page (B111/D643/G3)', () => {
+  // Core B111 regression. Both targets have page-id `1` so the numeric sort
+  // is a tie. Without preferredBundleId, JS sort stability dictates which wins —
+  // a flake. With preferredBundleId pointing at the real app, fresh always wins.
+  const targets = [
+    { id: 'aaaaaaa-1', platform: 'ios', description: 'host.exp.Exponent', title: 'Hermes' },
+    { id: 'bbbbbbb-1', platform: 'ios', description: 'com.myapp', title: 'Hermes' },
+  ];
+  const { targets: sorted } = selectTarget(targets, { preferredBundleId: 'com.myapp' });
+  assert.equal(sorted[0].description, 'com.myapp');
+  // narrowed via soft filter — only matching target survives
+  assert.equal(sorted.length, 1);
+});
+
+test('selectTarget: lexicographic id tie-break is deterministic when no preferredBundleId (B111/D643/G5)', () => {
+  // Same page-id, no preferredBundleId — fall back to ascending lex by full id
+  // for a stable, repeatable result. This is determinism, not zombie-avoidance
+  // (zombie-avoidance is preferredBundleId's job — see G3 above).
+  const targets = [
+    { id: 'zzz-5', platform: 'ios', description: 'com.appA' },
+    { id: 'aaa-5', platform: 'ios', description: 'com.appB' },
+  ];
+  const { targets: sorted } = selectTarget(targets);
+  assert.equal(sorted.length, 2);
+  // ascending lex by id: 'aaa-5' before 'zzz-5'
+  assert.equal(sorted[0].id, 'aaa-5');
+  assert.equal(sorted[1].id, 'zzz-5');
+});
+
+test('selectTarget: warning includes available ids when targetId not found (B111/D643/G9)', () => {
+  const targets = [
+    { id: 'real-1', platform: 'ios', description: 'com.app' },
+    { id: 'real-2', platform: 'ios', description: 'com.app' },
+  ];
+  const { targets: sorted, warning } = selectTarget(targets, { targetId: 'phantom-99' });
+  assert.equal(sorted.length, 0);
+  assert.ok(warning);
+  // Caller-actionable: tells them what's actually available
+  assert.match(warning, /Available ids: real-1, real-2/);
 });
 
 // ── B116 / D639: platform inference via simctl listapps + adb pm list ──
