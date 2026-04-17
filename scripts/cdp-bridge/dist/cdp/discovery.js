@@ -139,25 +139,30 @@ export function selectTarget(validTargets, filtersOrPlatform) {
         : (filtersOrPlatform ?? {});
     let filteredTargets = validTargets;
     const warnings = [];
-    // B111 (D635): targetId is an exact-id filter — highest precedence.
+    // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
+    // would silently connect the caller to a different target than requested.
     if (filters.targetId) {
         const idMatched = validTargets.filter(t => t.id === filters.targetId);
-        if (idMatched.length > 0) {
-            filteredTargets = idMatched;
+        if (idMatched.length === 0) {
+            return {
+                targets: [],
+                warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map(t => t.id).join(', ')}`,
+            };
         }
-        else {
-            warnings.push(`targetId "${filters.targetId}" matched no targets; ignoring filter. Available ids: ${validTargets.map(t => t.id).join(', ')}`);
-        }
+        filteredTargets = idMatched;
     }
-    // B111 (D635): bundleId matches target.description exactly.
-    if (filters.bundleId && filteredTargets.length > 1) {
-        const bundleMatched = filteredTargets.filter(t => t.description === filters.bundleId);
-        if (bundleMatched.length > 0) {
-            filteredTargets = bundleMatched;
+    // B111 (D643): explicit bundleId hard-fails on no match (case-insensitive).
+    // Runs even with 1 target — single non-matching target is still wrong.
+    if (filters.bundleId) {
+        const bundleLower = filters.bundleId.toLowerCase();
+        const bundleMatched = filteredTargets.filter(t => (t.description ?? '').toLowerCase() === bundleLower);
+        if (bundleMatched.length === 0) {
+            return {
+                targets: [],
+                warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map(t => t.description ?? '?').join(', ')}`,
+            };
         }
-        else {
-            warnings.push(`bundleId "${filters.bundleId}" matched no targets (available descriptions: ${filteredTargets.map(t => t.description ?? '?').join(', ')}); falling through.`);
-        }
+        filteredTargets = bundleMatched;
     }
     if (filters.platform && filteredTargets.length > 1) {
         const pf = filters.platform.toLowerCase();
@@ -175,19 +180,32 @@ export function selectTarget(validTargets, filtersOrPlatform) {
             warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map(t => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`);
         }
     }
-    // B111 (D635): smarter auto-selection — when a preferred bundleId exists (e.g. from
-    // project-config.ts), prefer targets whose description matches it. This is a soft
-    // filter: only applied when it narrows without eliminating all candidates.
-    if (filters.preferredBundleId && filteredTargets.length > 1) {
-        const preferred = filteredTargets.filter(t => t.description === filters.preferredBundleId);
+    // B111 (D643): preferredBundleId is a SOFT filter — auto-selection hint
+    // (case-insensitive). Only applied when it narrows without eliminating
+    // all candidates. Auto-populated from project-config.ts in connect.ts.
+    const prefLower = filters.preferredBundleId?.toLowerCase();
+    if (prefLower && filteredTargets.length > 1) {
+        const preferred = filteredTargets.filter(t => (t.description ?? '').toLowerCase() === prefLower);
         if (preferred.length > 0 && preferred.length < filteredTargets.length) {
+            logger.info('CDP', `Auto-selected target by preferredBundleId "${filters.preferredBundleId}" (${preferred.length} of ${filteredTargets.length})`);
             filteredTargets = preferred;
         }
     }
+    // B111 (D643): deterministic sort. Primary: page-id desc (newer first).
+    // Tie-break 1: preferredBundleId-matched targets win.
+    // Tie-break 2: lexicographic by full id (eliminates JS sort stability dependency).
     const sorted = [...filteredTargets].sort((a, b) => {
         const aPage = parseInt(a.id?.split('-')[1] ?? '0', 10);
         const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
-        return bPage - aPage;
+        if (aPage !== bPage)
+            return bPage - aPage;
+        if (prefLower) {
+            const aPref = (a.description ?? '').toLowerCase() === prefLower ? 1 : 0;
+            const bPref = (b.description ?? '').toLowerCase() === prefLower ? 1 : 0;
+            if (aPref !== bPref)
+                return bPref - aPref;
+        }
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
     return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
 }

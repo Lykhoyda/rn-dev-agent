@@ -47,7 +47,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
 
   return {
     metro: { running: true, port: client.metroPort },
-    cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null },
+    cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null, bundleId: client.connectedTarget?.description ?? null },
     app: {
       platform: (appInfo?.platform as string) ?? null,
       dev: (appInfo?.__DEV__ as boolean) ?? null,
@@ -138,6 +138,7 @@ export function createStatusHandler(
                   status.app.isPaused = client.isPaused;
                   status.cdp.device = client.connectedTarget?.title ?? null;
                   status.cdp.pageId = client.connectedTarget?.id ?? null;
+                  status.cdp.bundleId = client.connectedTarget?.description ?? null;
                   status.capabilities.fiberTree = retryProbe.fiberTree;
                   devRecovered = true;
                   autoRecoveredMessage = 'Reconnected to correct JS context';
@@ -162,6 +163,7 @@ export function createStatusHandler(
           status.app.isPaused = client.isPaused;
           status.cdp.device = client.connectedTarget?.title ?? null;
           status.cdp.pageId = client.connectedTarget?.id ?? null;
+          status.cdp.bundleId = client.connectedTarget?.description ?? null;
           if (status.app.isPaused) {
             return warnResult(status, 'Debugger is still paused after auto-recovery. Try cdp_reload(full=true).');
           }

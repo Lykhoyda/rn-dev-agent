@@ -12,3 +12,6 @@ drivers/
 
 # Workspace symlinks (local dev only)
 scripts/fast-runner/build/
+
+# Local worktrees for isolated feature work
+.worktrees/

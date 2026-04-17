@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { logger } from '../logger.js';
+import { resolveBundleId } from '../project-config.js';
 import { discover } from './discovery.js';
 import type { SelectTargetFilters } from './discovery.js';
 import { sleep } from './state.js';
@@ -52,6 +53,13 @@ export async function autoConnect(
     const envPlatform = process.env.RN_PREFERRED_PLATFORM;
     if (envPlatform && envPlatform !== 'auto') effective.platform = envPlatform;
   }
+  // B111 (D643): auto-populate preferredBundleId from project-config so the
+  // smart auto-selection in selectTarget fires for callers that didn't pass
+  // explicit filters. resolveBundleId returns null when no app.json — graceful no-op.
+  if (!effective.preferredBundleId) {
+    const resolved = resolveBundleId(effective.platform ?? 'ios');
+    if (resolved) effective.preferredBundleId = resolved;
+  }
   return discoverAndConnect(ctx, portHint, effective);
 }
 
@@ -59,12 +67,18 @@ export async function discoverAndConnect(
   ctx: ConnectContext,
   portHint?: number,
   filters?: ConnectFilters,
+  // B111 (D643): injectable for unit tests — defaults to real discover. Production
+  // call sites pass nothing, so behavior is unchanged. Tests pass a stub.
+  discoverFn: typeof discover = discover,
 ): Promise<string> {
   if (ctx.isDisposed()) {
     throw new Error('Client is disposed. Create a new CDPClient instance.');
   }
 
   if (portHint) ctx.setPort(portHint);
+  // B111 (D643/G7): preserve _connectFilters across softReconnect — only overwrite
+  // when caller explicitly passes filters. softReconnect calls with filters=undefined
+  // so the previously-set targetId/bundleId/preferredBundleId survive the reload.
   if (filters !== undefined) ctx.setConnectFilters(filters);
   ctx.setState('connecting');
 
@@ -78,14 +92,22 @@ export async function discoverAndConnect(
 
   let result;
   try {
-    result = await discover(ctx.getPort(), filtersForDiscover);
+    result = await discoverFn(ctx.getPort(), filtersForDiscover);
   } catch (err) {
     ctx.setState('disconnected');
     throw err;
   }
 
-  const { port: metroPort, targets: sorted, warning: platformFilterWarning } = result;
+  const { port: metroPort, targets: sorted, warning: selectionWarning } = result;
   ctx.setPort(metroPort);
+
+  // B111 (D643/G9): selectTarget hard-fails (returns []) on explicit filter
+  // mismatch — surface that as a connect error rather than crashing on the
+  // candidate loop's connectedTarget! non-null assertion below.
+  if (sorted.length === 0) {
+    ctx.setState('disconnected');
+    throw new Error(selectionWarning ?? 'No matching CDP targets found.');
+  }
 
   let connectedTarget: HermesTarget | null = null;
   for (const candidate of sorted) {
@@ -115,7 +137,7 @@ export async function discoverAndConnect(
   const generation = ctx.incrementConnectionGeneration();
   logger.info('CDP', `Connected to target ${connectedTarget!.id} (${connectedTarget!.title}) on port ${metroPort}, generation=${generation}`);
   const msg = `Connected to ${connectedTarget!.title} on port ${metroPort}`;
-  return platformFilterWarning ? `${msg}. WARNING: ${platformFilterWarning}` : msg;
+  return selectionWarning ? `${msg}. WARNING: ${selectionWarning}` : msg;
 }
 
 async function connectToTarget(
