@@ -101,6 +101,11 @@ export class CDPClient {
         return softReconnectFn(this.buildReconnectCtx());
     }
     async disconnect() {
+        // B76/D644: idempotent guard — graceful-shutdown may race with a tool-triggered
+        // disconnect (e.g. cdp_restart calling disconnect() while SIGTERM fires). Second
+        // caller sees already-disposed and returns cleanly.
+        if (this.disposed)
+            return;
         this.disposed = true;
         resetState(this.buildResettableState());
         clearActiveFlag();

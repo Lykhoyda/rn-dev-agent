@@ -38,6 +38,8 @@ import { createDeviceBatchHandler } from './tools/device-batch.js';
 import { handleAutoLogin } from './tools/auto-login.js';
 import { createProofStepHandler } from './tools/proof-step.js';
 import { createConnectHandler, createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
+import { createRestartHandler } from './tools/restart.js';
+import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -439,25 +441,43 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .maestro/
     timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
 }, createMaestroTestAllHandler());
+trackedTool('cdp_restart', 'In-process soft state reset (B76/D644). Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.', {
+    metroPort: z.number().optional().describe('Override Metro port for reconnection (default: keep current)'),
+    platform: z.string().optional().describe('Platform filter for reconnection (e.g. "ios", "android")'),
+}, createRestartHandler(getClient, setClient, createClient));
 trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.', {
     elements: z.array(z.string()).optional().describe('List of testIDs or labels to check on both platforms. Optional if scanDir is provided.'),
     scanDir: z.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),
     matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
 }, createCrossPlatformVerifyHandler());
+// B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
+// funnel into this graceful path so the 5s background-poll setInterval in
+// reconnection.ts (the zombie cause) is cleared on every exit.
+const shutdown = buildGracefulShutdown({ getClient, stopFastRunnerFn: stopFastRunner });
 process.on('uncaughtException', (err) => {
     logger.error('MCP', `Uncaught exception: ${err.message}`);
-    stopFastRunner();
-    process.exit(1);
+    void shutdown(1);
 });
 process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     logger.warn('MCP', `Unhandled rejection (non-fatal): ${msg}`);
 });
-process.on('SIGTERM', () => {
-    logger.info('MCP', 'SIGTERM received, shutting down');
-    stopFastRunner();
-    process.exit(0);
-});
+process.on('SIGTERM', () => { logger.info('MCP', 'SIGTERM'); void shutdown(0); });
+process.on('SIGINT', () => { logger.info('MCP', 'SIGINT'); void shutdown(0); });
+process.on('SIGHUP', () => { logger.info('MCP', 'SIGHUP'); void shutdown(0); });
+// SIGUSR2: hot-reload intent — exit 1 signals a supervisor to respawn. Today CC
+// doesn't auto-respawn MCP subprocesses (B76 notes) so this is the clean-exit path
+// for future supervisor wiring. Developers should use cdp_restart for in-session reset.
+// NOTE: we deliberately avoid SIGUSR1 here because Node reserves it for the built-in
+// inspector — running the MCP under `node --inspect` would both start the debugger
+// AND trigger our shutdown. SIGUSR2 is collision-free.
+process.on('SIGUSR2', () => { logger.info('MCP', 'SIGUSR2 — hot-reload intent'); void shutdown(1); });
+// stdin.end is the primary zombie-prevention path: CC closes the stdio pipe on quit
+// without sending SIGTERM, and the 5s bgPoll interval would keep the event loop alive
+// forever. Explicitly shut down on stdin EOF. The listener itself is registered early
+// (passive — doesn't flip stdin into flowing mode); StdioServerTransport flips the
+// stream inside transport.start() when server.connect() runs, so 'end' fires reliably.
+process.stdin.on('end', () => { logger.info('MCP', 'stdin closed — host disconnected'); void shutdown(0); });
 async function main() {
     logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
     if (logger.logFilePath) {
