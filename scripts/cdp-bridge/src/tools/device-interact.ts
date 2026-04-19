@@ -6,6 +6,8 @@ import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
+import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
+import { reopenSessionForRecovery } from './device-session.js';
 
 const execFile = promisify(execFileCb);
 
@@ -41,29 +43,71 @@ function candidateFromNode(n: SnapshotNode): FindCandidate {
   };
 }
 
-async function fetchSnapshotNodes(): Promise<SnapshotNode[] | null> {
+function parseSnapshotEnvelope(result: ToolResult): SnapshotNode[] | null {
+  if (result.isError) return null;
   try {
-    const snapshotResult = await runAgentDevice(['snapshot', '-i']);
-    if (snapshotResult.isError) return null;
-    const envelope = JSON.parse(snapshotResult.content[0].text) as {
+    const envelope = JSON.parse(result.content[0].text) as {
       ok?: boolean;
       data?: { nodes?: SnapshotNode[] };
     };
     if (!envelope.ok || !envelope.data?.nodes) return null;
-    const nodes = envelope.data.nodes;
-    const platform = getActiveSession()?.platform;
-    if (platform) cacheSnapshot(platform, nodes);
-    return nodes;
+    return envelope.data.nodes;
   } catch {
     return null;
   }
 }
 
-async function fetchFindCandidates(query: string, exact: boolean): Promise<FindCandidate[] | null> {
-  const nodes = await fetchSnapshotNodes();
-  if (!nodes) return null;
+export type SnapshotFetchResult =
+  | { ok: true; nodes: SnapshotNode[]; recoveredTier?: 'attach-only' | 'full-relaunch' }
+  | { ok: false; reason: 'fetch-failed' }
+  | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
+
+async function fetchSnapshotNodes(): Promise<SnapshotFetchResult> {
+  const first = await runAgentDevice(['snapshot', '-i']);
+  const initialNodes = parseSnapshotEnvelope(first);
+  if (initialNodes === null) return { ok: false, reason: 'fetch-failed' };
+
+  if (!isAgentDeviceRunnerSentinel(initialNodes)) {
+    const platform = getActiveSession()?.platform;
+    if (platform) cacheSnapshot(platform, initialNodes);
+    return { ok: true, nodes: initialNodes };
+  }
+
+  const session = getActiveSession();
+  const recovery = await recoverFromRunnerLeak(
+    { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
+    {
+      closeSession: () => runAgentDevice(['close']),
+      openSession: ({ appId, platform, attachOnly }) =>
+        reopenSessionForRecovery(appId, platform, attachOnly),
+      resnapshot: () => runAgentDevice(['snapshot', '-i']),
+      parseNodes: parseSnapshotEnvelope,
+    },
+  );
+
+  if (!recovery.recovered) {
+    return { ok: false, reason: 'runner-leak-unrecovered', recoveryReason: recovery.reason };
+  }
+
+  const recoveredNodes = parseSnapshotEnvelope(recovery.result);
+  if (recoveredNodes === null) return { ok: false, reason: 'fetch-failed' };
+
+  const platform = getActiveSession()?.platform;
+  if (platform) cacheSnapshot(platform, recoveredNodes);
+  return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+}
+
+export type FindCandidatesResult =
+  | { ok: true; candidates: FindCandidate[]; recoveredTier?: 'attach-only' | 'full-relaunch' }
+  | { ok: false; reason: 'fetch-failed' }
+  | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
+
+async function fetchFindCandidates(query: string, exact: boolean): Promise<FindCandidatesResult> {
+  const snap = await fetchSnapshotNodes();
+  if (!snap.ok) return snap;
+
   const needle = query.toLowerCase();
-  return nodes
+  const candidates = snap.nodes
     .filter((n) => {
       const label = n.label ?? '';
       const id = n.identifier ?? '';
@@ -72,6 +116,19 @@ async function fetchFindCandidates(query: string, exact: boolean): Promise<FindC
     })
     .slice(0, 10)
     .map(candidateFromNode);
+  return { ok: true, candidates, recoveredTier: snap.recoveredTier };
+}
+
+function runnerLeakFailResult(query: string | undefined, recoveryReason?: string): ToolResult {
+  const queryHint = query ? ` (while resolving "${query}")` : '';
+  return failResult(
+    `device_find/snapshot returned AgentDeviceRunner's own UI tree instead of the target app${queryHint} (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.`,
+    {
+      code: 'RUNNER_LEAK',
+      recoveryReason,
+      hint: 'Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context — re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35.',
+    },
+  );
 }
 
 async function pressCandidate(candidate: FindCandidate, action?: string): Promise<ToolResult> {
@@ -80,6 +137,20 @@ async function pressCandidate(candidate: FindCandidate, action?: string): Promis
     return runAgentDevice(['press', ref]);
   }
   return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
+}
+
+// B119: when an underlying snapshot triggered runner-leak recovery, surface
+// that side-effect on the wrapping result so callers (LLM agents) know the
+// app may have been relaunched and CDP/state may have been invalidated.
+function tagPressIfRecovered(result: ToolResult, tier?: 'attach-only' | 'full-relaunch'): ToolResult {
+  if (!tier || result.isError) return result;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: unknown; meta?: Record<string, unknown> };
+    envelope.meta = { ...envelope.meta, recovered: 'agent-device-runner-leak', recoveryTier: tier };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+  } catch {
+    return result;
+  }
 }
 
 // --- Find ---
@@ -97,8 +168,11 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
     // go straight to a snapshot-based client-side match so we never roll the dice
     // on agent-device's fuzzy matcher returning AMBIGUOUS_MATCH.
     if (args.exact === true || args.index !== undefined) {
-      const candidates = await fetchFindCandidates(args.text, args.exact === true);
-      if (candidates === null) {
+      const find = await fetchFindCandidates(args.text, args.exact === true);
+      if (!find.ok) {
+        if (find.reason === 'runner-leak-unrecovered') {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
         // Snapshot failed and caller has strict requirements — do NOT fall through
         // to the fuzzy agent-device path because it cannot honor exact/index. Fail
         // cleanly so the caller knows exact/index semantics aren't reachable.
@@ -107,6 +181,7 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
           { code: 'SNAPSHOT_UNAVAILABLE', query: args.text },
         );
       }
+      const { candidates, recoveredTier } = find;
       if (candidates.length === 0) {
         return failResult(
           `No element matches "${args.text}" (exact=${args.exact === true})`,
@@ -120,11 +195,11 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
             { code: 'INDEX_OUT_OF_RANGE', count: candidates.length, candidates },
           );
         }
-        return pressCandidate(candidates[args.index], args.action);
+        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action), recoveredTier);
       }
       // exact=true, no index: require single match
       if (candidates.length === 1) {
-        return pressCandidate(candidates[0], args.action);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
       }
       return failResult(
         `AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`,
@@ -140,8 +215,12 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
     if (result.isError) {
       const text = result.content?.[0]?.text ?? '';
       if (text.includes('AMBIGUOUS_MATCH') || (text.includes('matched') && text.includes('elements'))) {
-        const candidates = await fetchFindCandidates(args.text, false);
-        if (candidates) {
+        const find = await fetchFindCandidates(args.text, false);
+        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        if (find.ok) {
+          const candidates = find.candidates;
           return failResult(
             `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`,
             {
@@ -567,14 +646,18 @@ export function createDeviceFocusNextHandler(): (args: Record<string, never>) =>
     // Benchmark data: 4 serial finds = 10-22s on no-keyboard case; single
     // snapshot = 3-5s on the same case. Also more reliable — one accessibility
     // query races keyboard animations less than four sequential queries.
-    const nodes = await fetchSnapshotNodes();
-    if (!nodes) {
+    const snap = await fetchSnapshotNodes();
+    if (!snap.ok) {
+      if (snap.reason === 'runner-leak-unrecovered') {
+        return runnerLeakFailResult(undefined, snap.recoveryReason);
+      }
       return failResult(
         'Snapshot unavailable — cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.',
         { code: 'SNAPSHOT_UNAVAILABLE' },
       );
     }
 
+    const { nodes, recoveredTier } = snap;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match) continue;
@@ -582,7 +665,12 @@ export function createDeviceFocusNextHandler(): (args: Record<string, never>) =>
       if (pressResult.isError) continue; // Match found but tap failed — try next label
       try {
         const envelope = JSON.parse(pressResult.content[0].text) as { ok: true; data: unknown };
-        return okResult(envelope.data, { meta: { keyUsed: label, ref: match.ref } });
+        const meta: Record<string, unknown> = { keyUsed: label, ref: match.ref };
+        if (recoveredTier) {
+          meta.recovered = 'agent-device-runner-leak';
+          meta.recoveryTier = recoveredTier;
+        }
+        return okResult(envelope.data, { meta });
       } catch {
         return pressResult;
       }
