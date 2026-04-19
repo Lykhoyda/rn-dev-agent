@@ -34,31 +34,37 @@ test('parseSipsDimensions returns null when fields missing', () => {
 
 // ── buildSipsResizeArgs ───────────────────────────────────────────────
 
-test('buildSipsResizeArgs adds quality flag for .jpg paths', () => {
+test('buildSipsResizeArgs forces JPEG format + quality for .jpg paths', () => {
+  // B121 follow-up: must emit `-s format jpeg` for .jpg/.jpeg outputs so that
+  // PNG bytes from the fast-runner path get re-encoded as JPEG instead of
+  // staying as PNG-in-.jpg-extension. Without the format flag, savings drop
+  // from ~46% (full re-encode) to ~12% (resize-only) under fast-runner.
   assert.deepEqual(
     buildSipsResizeArgs('/tmp/x.jpg', 800, 85),
-    ['--resampleWidth', '800', '-s', 'formatOptions', '85', '/tmp/x.jpg'],
+    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '/tmp/x.jpg'],
   );
 });
 
-test('buildSipsResizeArgs adds quality flag for .jpeg paths', () => {
+test('buildSipsResizeArgs forces JPEG format + quality for .jpeg paths', () => {
   assert.deepEqual(
     buildSipsResizeArgs('/tmp/x.jpeg', 800, 85),
-    ['--resampleWidth', '800', '-s', 'formatOptions', '85', '/tmp/x.jpeg'],
+    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '/tmp/x.jpeg'],
   );
 });
 
-test('buildSipsResizeArgs omits quality flag for .png paths', () => {
+test('buildSipsResizeArgs omits format/quality flags for .png paths', () => {
   assert.deepEqual(
     buildSipsResizeArgs('/tmp/x.png', 800, 85),
     ['--resampleWidth', '800', '/tmp/x.png'],
   );
 });
 
-test('buildSipsResizeArgs omits quality flag when quality is undefined', () => {
+test('buildSipsResizeArgs forces JPEG format even when quality is undefined for .jpg paths', () => {
+  // The format conversion is unconditional for .jpg/.jpeg outputs (PNG-in-jpg
+  // would otherwise leak through). Quality is the only conditional flag.
   assert.deepEqual(
     buildSipsResizeArgs('/tmp/x.jpg', 800, undefined),
-    ['--resampleWidth', '800', '/tmp/x.jpg'],
+    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '/tmp/x.jpg'],
   );
 });
 
