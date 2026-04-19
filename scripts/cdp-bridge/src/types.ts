@@ -135,6 +135,12 @@ export interface SessionState {
   platform?: string;
   deviceId?: string;
   openedAt: string;
+  /**
+   * B35: bundleId saved at session-open time. Used by runner-leak-recovery to
+   * close+reopen the session when the agent-device daemon misroutes commands
+   * to AgentDeviceRunner instead of the target app on iOS.
+   */
+  appId?: string;
 }
 
 export interface FastRunnerState {
