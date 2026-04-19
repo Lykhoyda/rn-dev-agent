@@ -206,8 +206,10 @@ test('resizeWithSips returns sips-failed when resample throws', async () => {
 });
 
 test('resizeWithSips uses defaults when opts not provided', () => {
-  // Verify the exported defaults are the documented values.
-  assert.equal(DEFAULT_MAX_WIDTH, 1200);
+  // Verify the exported defaults are the documented values. 800 was picked
+  // empirically — see DECISIONS.md D647 / device-screenshot-resize.ts header
+  // for the iPhone 17 Pro measurement table.
+  assert.equal(DEFAULT_MAX_WIDTH, 800);
   assert.equal(DEFAULT_QUALITY, 85);
 });
 

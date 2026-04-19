@@ -3,12 +3,19 @@ import { promisify } from 'node:util';
 import { statSync } from 'node:fs';
 const execFile = promisify(execFileCb);
 /**
- * B120 / GH #36: defaults chosen so a stock device_screenshot call drops from
- * ~1MB native (1179×2556 @ 3x on iPhone 15 Pro) to ~150-300KB without losing
- * label readability. Set maxWidth=0 to disable when full-resolution capture
- * is required (visual diffing, pixel comparisons).
+ * B120 / GH #36: defaults validated against a live iPhone 17 Pro screenshot
+ * (native 1206×2622, ~193 KB JPEG). Empirical measurements:
+ *   maxWidth=1200 → 181 KB (−7%, near no-op on modern iPhones)
+ *   maxWidth=1000 → 144 KB (−25%)
+ *   maxWidth=800  → 105 KB (−46%)  ← matches the issue's suggested default
+ *   maxWidth=600  →  68 KB (−65%)
+ * Picked 800 to match the issue's suggestion and produce meaningful savings
+ * even on devices whose native width is already close to 1200. Still leaves
+ * text labels at ~35-40 px tall — comfortably readable for any agent task.
+ * Set maxWidth=0 to disable when full-resolution capture is required (visual
+ * diffing, pixel comparisons).
  */
-export const DEFAULT_MAX_WIDTH = 1200;
+export const DEFAULT_MAX_WIDTH = 800;
 export const DEFAULT_QUALITY = 85;
 let sipsAvailable = null;
 const defaultFileSize = (path) => {
