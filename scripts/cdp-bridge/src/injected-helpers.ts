@@ -945,6 +945,11 @@ export const INJECTED_HELPERS = `
     // B90 fix: Prefer fiber-walked store over __REDUX_STORE__ global.
     // After Dev Client rebuilds, the global may reference the OLD store instance
     // while the fiber tree always reflects the CURRENT React context.
+    //
+    // B125 fix: also check current.type.name as a fallback when displayName
+    // is missing — common for minified/bundled Providers. Mirrors what
+    // findFiberReduxStore already does for getStoreState. Without this,
+    // cdp_store_state succeeds but cdp_dispatch fails on the same app.
     var store = null;
     var storeRenderer = findActiveRenderer();
     if (storeRenderer) {
@@ -953,7 +958,8 @@ export const INJECTED_HELPERS = `
         var current = fiber;
         while (current) {
           if ((depth || 0) > 30) return null;
-          if (current.type && current.type.displayName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
+          var typeName = current.type && (current.type.displayName || current.type.name);
+          if (typeName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
             return current.memoizedProps.store;
           }
           var found = findDispatchStore(current.child, (depth || 0) + 1);

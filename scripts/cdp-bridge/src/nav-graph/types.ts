@@ -207,4 +207,11 @@ export interface NavGraphScanResult {
   removed_routes: string[];
   is_first_scan: boolean;
   coverage: number;
+  /**
+   * B126: maps UPPER_SNAKE_CASE route names → PascalCase aliases. Useful for
+   * cross-referencing the runtime route name (what RN navigation accepts) with
+   * the app's TypeScript ScreenName enum keys (which are typically PascalCase).
+   * Empty when no snake-case routes are present.
+   */
+  pascal_case_aliases?: Record<string, string>;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAdbInputTextArgv, splitChunkAroundPercentS } from '../../dist/tools/device-interact.js';
+import { buildAdbInputTextArgv, splitChunkAroundPercentS, findInputForPressable } from '../../dist/tools/device-interact.js';
 
 // ── buildAdbInputTextArgv ──────────────────────────────────────────────
 
@@ -105,4 +105,88 @@ test('splitChunkAroundPercentS + buildAdbInputTextArgv produce correct argv sequ
     ['shell', 'input', 'text', "'%'"],
     ['shell', 'input', 'text', "'s%sworld'"],
   ]);
+});
+
+// ── B122: findInputForPressable (Pressable→TextInput resolution) ──────
+
+const PRESSABLE_NODES = [
+  { ref: 'e10', identifier: 'email-pressable', type: 'Other' },
+  { ref: 'e11', identifier: 'email', type: 'TextField' },
+  { ref: 'e12', identifier: 'email-label', type: 'StaticText' },
+  { ref: 'e20', identifier: 'password-pressable', type: 'Other' },
+  { ref: 'e21', identifier: 'password', type: 'SecureTextField' },
+  { ref: 'e30', identifier: 'plain-input', type: 'TextField' },
+];
+
+test('findInputForPressable resolves -pressable ref to inner TextField', () => {
+  assert.equal(findInputForPressable(PRESSABLE_NODES, '@e10'), '@e11');
+  assert.equal(findInputForPressable(PRESSABLE_NODES, 'e10'), '@e11');
+});
+
+test('findInputForPressable resolves -pressable ref to inner SecureTextField', () => {
+  assert.equal(findInputForPressable(PRESSABLE_NODES, '@e20'), '@e21');
+});
+
+test('findInputForPressable supports Android EditText', () => {
+  const nodes = [
+    { ref: 'a1', identifier: 'username-pressable', type: 'View' },
+    { ref: 'a2', identifier: 'username', type: 'EditText' },
+  ];
+  assert.equal(findInputForPressable(nodes, '@a1'), '@a2');
+});
+
+test('findInputForPressable supports TextView', () => {
+  const nodes = [
+    { ref: 'b1', identifier: 'notes-pressable', type: 'Other' },
+    { ref: 'b2', identifier: 'notes', type: 'TextView' },
+  ];
+  assert.equal(findInputForPressable(nodes, '@b1'), '@b2');
+});
+
+test('findInputForPressable returns null when ref does not end in -pressable', () => {
+  // Plain input — no wrapping Pressable to resolve.
+  assert.equal(findInputForPressable(PRESSABLE_NODES, '@e30'), null);
+});
+
+test('findInputForPressable returns null when no inner TextInput sibling exists', () => {
+  const nodes = [
+    { ref: 'c1', identifier: 'orphan-pressable', type: 'Other' },
+    // No matching identifier='orphan' anywhere
+  ];
+  assert.equal(findInputForPressable(nodes, '@c1'), null);
+});
+
+test('findInputForPressable returns null when sibling has matching id but wrong type', () => {
+  // Label, not a TextField — should not resolve to it.
+  const nodes = [
+    { ref: 'd1', identifier: 'addr-pressable', type: 'Other' },
+    { ref: 'd2', identifier: 'addr', type: 'StaticText' },
+  ];
+  assert.equal(findInputForPressable(nodes, '@d1'), null);
+});
+
+test('findInputForPressable returns null for null/empty input', () => {
+  assert.equal(findInputForPressable(null, '@e10'), null);
+  assert.equal(findInputForPressable([], '@e10'), null);
+});
+
+test('findInputForPressable returns null when ref does not exist in nodes', () => {
+  assert.equal(findInputForPressable(PRESSABLE_NODES, '@nonexistent'), null);
+});
+
+test('findInputForPressable handles -pressable suffix on identifier with hyphens in base', () => {
+  const nodes = [
+    { ref: 'e1', identifier: 'shipping-address-pressable', type: 'Other' },
+    { ref: 'e2', identifier: 'shipping-address', type: 'TextField' },
+  ];
+  assert.equal(findInputForPressable(nodes, '@e1'), '@e2');
+});
+
+test('findInputForPressable rejects bare -pressable identifier (no base)', () => {
+  // Edge case: identifier === '-pressable' would have empty baseId.
+  const nodes = [
+    { ref: 'e1', identifier: '-pressable', type: 'Other' },
+    { ref: 'e2', identifier: '', type: 'TextField' },
+  ];
+  assert.equal(findInputForPressable(nodes, '@e1'), null);
 });
