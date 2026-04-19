@@ -165,6 +165,17 @@ Claude Code
 
 [Full troubleshooting guide](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
 
+## Security
+
+The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime with full access to component tree, store state, AsyncStorage, and any in-memory secrets. This is **intentional** — runtime introspection is what makes the plugin useful for debugging — but it means **only run this plugin against apps where you trust the agent's prompts**.
+
+Recommended usage:
+- **Local dev environments only.** Do not point the plugin at production builds, store-signed apps, or any app holding real user data.
+- **Treat the agent like a developer with shell access to your laptop.** Any prompt that reaches `cdp_evaluate` (directly or through another tool that calls it) can read or mutate your app's runtime state.
+- **Don't connect to CDP targets you didn't intentionally launch.** The plugin filters Metro endpoints to `127.0.0.1` / `localhost`, but if you're running multiple Hermes targets on your machine, double-check `cdp_targets` before relying on tool output.
+
+The plugin makes no attempt to sandbox `cdp_evaluate` calls. If you need that, gate the agent's tool access through Claude Code's permission prompts rather than trusting the tool layer to enforce safety.
+
 ## Keeping up to date
 
 Enable auto-update in the plugin manager (Marketplaces tab), or update manually:
