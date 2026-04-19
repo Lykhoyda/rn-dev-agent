@@ -237,6 +237,39 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
   });
 }
 
+// B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
+// Common RN design-system pattern: outer Pressable with testID `${name}-pressable`
+// imperatively focuses an inner TextInput whose testID is `${name}`. When
+// device_fill targets the Pressable directly, the focus hasn't propagated to
+// the TextInput by the time we probe — primary fill fails with "no focused
+// text input to clear". Re-resolving to the inner TextInput's ref and re-tapping
+// directly forces native focus into the right element.
+//
+// Heuristic — both must hold:
+//   1. The ref's node has identifier ending in `-pressable`.
+//   2. There is a sibling/descendant node whose identifier === stripped(identifier)
+//      AND whose type is one of TextField, SecureTextField, or TextView.
+//
+// Returns the resolved ref (with leading `@`) or null if no match.
+const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
+const PRESSABLE_SUFFIX = '-pressable';
+
+export function findInputForPressable(
+  nodes: SnapshotNode[] | null,
+  pressableRef: string,
+): string | null {
+  if (!nodes) return null;
+  const cleanRef = pressableRef.replace(/^@/, '');
+  const pressableNode = nodes.find((n) => n.ref === cleanRef);
+  if (!pressableNode?.identifier?.endsWith(PRESSABLE_SUFFIX)) return null;
+  const baseId = pressableNode.identifier.slice(0, -PRESSABLE_SUFFIX.length);
+  if (!baseId) return null;
+  const inputNode = nodes.find(
+    (n) => n.identifier === baseId && n.type !== undefined && TEXT_INPUT_TYPES.has(n.type),
+  );
+  return inputNode ? `@${inputNode.ref}` : null;
+}
+
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
 
 interface PressArgs {
@@ -292,6 +325,13 @@ export function createDeviceLongPressHandler(): (args: LongPressArgs) => Promise
 interface FillArgs {
   ref: string;
   text: string;
+  /**
+   * B122: how long to wait between the pre-tap and the fill probe. Defaults to
+   * 150ms (FOCUS_DELAY_MS). Bump to 500-1000ms when filling a Pressable-wrapped
+   * TextInput on slow keyboard animations — gives RN's native focus dispatch
+   * time to land before the probe.
+   */
+  waitForKeyboardMs?: number;
 }
 
 // Splits a chunk into segments where no segment, after space→%s encoding,
@@ -403,6 +443,8 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
       return androidClipboardFill(args.text);
     }
 
+    const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
+
     // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
     // press+fill+press+fill flows where the previous call left focus on a different field.
     const preTap = await runAgentDevice(['press', ref]);
@@ -410,7 +452,7 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
       // If we can't even tap the element, fall straight through to fill — it may still
       // work via the fast-runner coordinate path, and we want its error message, not ours.
     } else {
-      await sleep(FOCUS_DELAY_MS);
+      await sleep(focusWaitMs);
     }
 
     const primary = await runAgentDevice(['fill', ref, args.text]);
@@ -421,6 +463,32 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
     // G4: Fallback chain for "no focused text input to clear" and similar focus errors.
     if (!isNoFocusedInputError(primary)) {
       return primary;
+    }
+
+    // B122: Pressable→TextInput resolution. Common RN design-system pattern is
+    // an outer Pressable (testID `${name}-pressable`) that imperatively focuses
+    // an inner TextInput (testID `${name}`). The Pressable absorbs the tap and
+    // the focus dispatches asynchronously, so by the time we probe, focus
+    // hasn't propagated. Resolve to the inner ref and tap THAT directly — much
+    // more reliable than waiting + retapping the wrapper.
+    const snap = await fetchSnapshotNodes();
+    if (snap.ok) {
+      const resolvedRef = findInputForPressable(snap.nodes, ref);
+      if (resolvedRef && resolvedRef !== ref) {
+        const innerTap = await runAgentDevice(['press', resolvedRef]);
+        if (!innerTap.isError) {
+          await sleep(focusWaitMs);
+          const resolved = await runAgentDevice(['fill', resolvedRef, args.text]);
+          if (!resolved.isError) {
+            try {
+              const envelope = JSON.parse(resolved.content[0].text) as { ok: true; data: unknown };
+              return okResult(envelope.data, { meta: { fallbackUsed: 'pressable-resolution', resolvedRef } });
+            } catch {
+              return resolved;
+            }
+          }
+        }
+      }
     }
 
     // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
@@ -470,6 +538,15 @@ interface SwipeArgs {
   durationMs?: number;
   count?: number;
   pattern?: 'one-way' | 'ping-pong';
+  /**
+   * B123: when true, REQUIRE fast-runner. The agent-device daemon caps swipe
+   * duration at ~60ms via `safe-normalized` mode, which causes momentum
+   * overshoot on UIDatePicker wheels and similar momentum-sensitive UIs.
+   * Fast-runner uses the raw user-supplied duration with no clamp.
+   * Fails with EXACT_REQUIRES_FAST_RUNNER when fast-runner unavailable
+   * instead of silently degrading to a 60ms-capped daemon swipe.
+   */
+  exact?: boolean;
 }
 
 // Default screen dimensions for common devices — used when screen rect cache is empty.
@@ -496,6 +573,13 @@ function computeSwipeFromDirection(
   }
 }
 
+export function exactModeRejectionMessage(reason: 'fast-runner-unavailable' | 'count-pattern-incompatible'): string {
+  if (reason === 'count-pattern-incompatible') {
+    return 'exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.';
+  }
+  return 'exact: true requires fast-runner (iOS only, session must be open). Fast-runner unavailable — open a device session via device_snapshot action=open, then retry.';
+}
+
 export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     // B106 fix: use fast-runner's HID-level synthesis to bypass XCTest
@@ -504,6 +588,23 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
     // are daemon-specific features — fall back to agent-device for them).
     const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
 
+    // B123: exact: true requires fast-runner. Fail loud if unavailable instead
+    // of silently degrading to a 60ms-capped daemon swipe.
+    if (args.exact === true) {
+      if (args.count || args.pattern) {
+        return failResult(
+          exactModeRejectionMessage('count-pattern-incompatible'),
+          { code: 'EXACT_INCOMPATIBLE', hint: 'count and pattern only work via agent-device daemon, which enforces safe-normalized timing. Drop one to proceed.' },
+        );
+      }
+      if (!isFastRunnerAvailable()) {
+        return failResult(
+          exactModeRejectionMessage('fast-runner-unavailable'),
+          { code: 'EXACT_REQUIRES_FAST_RUNNER', hint: 'fast-runner is the only path that respects user-supplied durationMs verbatim. Open a device session first.' },
+        );
+      }
+    }
+
     if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
       if (canUseFastRunner) {
         try {
@@ -511,7 +612,15 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
           if (resp.ok) {
             return okResult({ x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, durationMs: args.durationMs, method: 'fast-runner' });
           }
-        } catch { /* fall through */ }
+          if (args.exact === true) {
+            return failResult('fast-runner swipe call failed and exact: true forbids daemon fallback', { code: 'EXACT_FAST_RUNNER_FAILED' });
+          }
+        } catch (err) {
+          if (args.exact === true) {
+            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: 'EXACT_FAST_RUNNER_FAILED' });
+          }
+          /* fall through */
+        }
       }
       const cliArgs = ['swipe', String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
       if (args.durationMs) cliArgs.push(String(args.durationMs));
@@ -530,7 +639,15 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
           if (resp.ok) {
             return okResult({ direction: args.direction, durationMs: duration, method: 'fast-runner', ...coords });
           }
-        } catch { /* fall through */ }
+          if (args.exact === true) {
+            return failResult('fast-runner swipe call failed and exact: true forbids daemon fallback', { code: 'EXACT_FAST_RUNNER_FAILED' });
+          }
+        } catch (err) {
+          if (args.exact === true) {
+            return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: 'EXACT_FAST_RUNNER_FAILED' });
+          }
+          /* fall through */
+        }
       }
       const cliArgs = ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));

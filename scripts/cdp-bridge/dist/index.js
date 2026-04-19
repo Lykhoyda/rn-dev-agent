@@ -312,19 +312,21 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. 
     holdMs: z.number().int().min(0).max(10000).optional().describe('Hold duration in ms (for long-press via ref)'),
     waitForFocusMs: z.number().int().min(0).max(5000).optional().describe('Sleep this many ms after tap to let keyboard focus settle — useful in sequential press+fill flows where focus would otherwise not propagate.'),
 }, createDevicePressHandler());
-trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
+trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (B122 — common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
+    waitForKeyboardMs: z.number().int().min(0).max(5000).optional().describe('Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land.'),
 }, createDeviceFillHandler());
-trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Requires an open session.', {
+trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true to require fast-runner (precise unclamped duration) — needed for momentum-sensitive UIs like UIDatePicker wheels where the agent-device daemon\'s safe-normalized 60ms cap causes overshoot. Requires an open session.', {
     direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('Simple directional swipe (delegates to scroll)'),
     x1: z.number().optional().describe('Start X coordinate (use with y1, x2, y2 for precise swipes)'),
     y1: z.number().optional().describe('Start Y coordinate'),
     x2: z.number().optional().describe('End X coordinate'),
     y2: z.number().optional().describe('End Y coordinate'),
-    durationMs: z.number().int().min(50).max(10000).optional().describe('Swipe duration in ms (slower = more precise, default ~300)'),
-    count: z.number().int().min(1).max(50).optional().describe('Repeat swipe N times'),
-    pattern: z.enum(['one-way', 'ping-pong']).optional().describe('Repeat pattern: one-way (reset to start) or ping-pong (reverse direction)'),
+    durationMs: z.number().int().min(50).max(10000).optional().describe('Swipe duration in ms (slower = more precise, default ~300). Note: agent-device daemon caps at ~60ms via safe-normalized timing — use exact: true to bypass.'),
+    count: z.number().int().min(1).max(50).optional().describe('Repeat swipe N times (incompatible with exact: true)'),
+    pattern: z.enum(['one-way', 'ping-pong']).optional().describe('Repeat pattern: one-way (reset to start) or ping-pong (reverse direction). Incompatible with exact: true.'),
+    exact: z.boolean().optional().describe('B123: REQUIRE fast-runner (no daemon fallback). Preserves user-supplied durationMs verbatim — needed for slow precise swipes on UIDatePicker wheels and similar momentum-sensitive UIs. Fails with EXACT_REQUIRES_FAST_RUNNER if fast-runner unavailable instead of silently degrading.'),
 }, createDeviceSwipeHandler());
 trackedTool('device_back', 'Press the system back button (Android) or perform back navigation gesture (iOS). Requires an open session.', {}, createDeviceBackHandler());
 trackedTool('device_longpress', 'Long press on an element or coordinates. Use for context menus, drag initiation, or hold-to-delete. Requires an open session.', {

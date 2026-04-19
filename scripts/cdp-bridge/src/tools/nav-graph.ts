@@ -26,6 +26,32 @@ import {
 } from '../nav-graph/self-heal.js';
 
 /**
+ * B126: derive PascalCase aliases for any UPPER_SNAKE_CASE route names. Lets
+ * agents cross-reference the runtime route name (what RN navigation accepts)
+ * with the app's TypeScript ScreenName enum keys (typically PascalCase).
+ *
+ * Heuristic: only convert names that look like all-caps snake_case (`/^[A-Z][A-Z0-9_]*$/`)
+ * AND have at least one underscore (single-word UPPER_CASE has no PascalCase
+ * benefit). Returns an empty object when no conversions apply.
+ *
+ * Pure helper — exported for unit testing.
+ */
+export function buildScreenNameAliases(screens: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of screens) {
+    if (typeof name !== 'string') continue;
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) continue;
+    if (!name.includes('_')) continue;
+    const pascal = name.split('_')
+      .filter((part) => part.length > 0)
+      .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+      .join('');
+    if (pascal && pascal !== name) out[name] = pascal;
+  }
+  return out;
+}
+
+/**
  * B115 (D640): build the JS arg string for __NAV_REF__.navigate() when the plan
  * contains a switch_tab step.
  *
@@ -83,6 +109,7 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
               removed_routes: [],
               is_first_scan: false,
               coverage: existing.meta.coverage,
+              pascal_case_aliases: buildScreenNameAliases(existing.all_screens),
               cached: true,
             } satisfies NavGraphScanResult & { cached: boolean },
             'Graph was scanned less than 5 minutes ago. Use force=true to re-scan.',
@@ -152,6 +179,7 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
           removed_routes: removedRoutes,
           is_first_scan: isFirstScan,
           coverage: graph.meta.coverage,
+          pascal_case_aliases: buildScreenNameAliases(graph.all_screens),
         } satisfies NavGraphScanResult,
         `Graph extracted but save failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
       );
@@ -166,6 +194,7 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
       removed_routes: removedRoutes,
       is_first_scan: isFirstScan,
       coverage: graph.meta.coverage,
+      pascal_case_aliases: buildScreenNameAliases(graph.all_screens),
     };
 
     return okResult(scanResult);
@@ -408,11 +437,23 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
           if (s.nested) return getDeepestRoute(s.nested);
           return s.routeName || null;
         }
+        function collectAllRoutes(s, acc) {
+          if (!s) return acc;
+          if (s.routeName) acc.push(s.routeName);
+          if (s.nested) collectAllRoutes(s.nested, acc);
+          return acc;
+        }
         var currentScreen = getDeepestRoute(state);
-        var arrived = currentScreen === ${JSON.stringify(args.screen)};
+        var allRoutes = collectAllRoutes(state, []);
+        var target = ${JSON.stringify(args.screen)};
+        var deepestMatches = currentScreen === target;
+        var anywhereMatches = allRoutes.indexOf(target) >= 0;
+        var arrived = deepestMatches || anywhereMatches;
         return JSON.stringify({
           arrived: arrived,
           current_screen: currentScreen,
+          arrived_via: deepestMatches ? 'deepest-route' : (anywhereMatches ? 'parent-of-current' : null),
+          all_routes: allRoutes,
           method: 'plan-tab-navigate',
           path: [${JSON.stringify(planTabStep.target_screen)}, ${JSON.stringify(args.screen)}],
           latency_ms: Date.now() - start,
@@ -435,12 +476,29 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
           if (s.nested) return getDeepestRoute(s.nested);
           return s.routeName || null;
         }
+        // B124: collect ALL route names down the nested chain. This lets us
+        // detect "navigation succeeded but landed under a modal pushed on top
+        // of the target" — the target is in the route tree, just not the leaf.
+        // Without this, reliability_score drops 50→35 on successful navigations
+        // whenever a stacked modal happens to be open.
+        function collectAllRoutes(s, acc) {
+          if (!s) return acc;
+          if (s.routeName) acc.push(s.routeName);
+          if (s.nested) collectAllRoutes(s.nested, acc);
+          return acc;
+        }
         var currentScreen = getDeepestRoute(state);
-        var arrived = currentScreen === ${JSON.stringify(args.screen)};
+        var allRoutes = collectAllRoutes(state, []);
+        var target = ${JSON.stringify(args.screen)};
+        var deepestMatches = currentScreen === target;
+        var anywhereMatches = allRoutes.indexOf(target) >= 0;
+        var arrived = deepestMatches || anywhereMatches;
 
         return JSON.stringify({
           arrived: arrived,
           current_screen: currentScreen,
+          arrived_via: deepestMatches ? 'deepest-route' : (anywhereMatches ? 'parent-of-current' : null),
+          all_routes: allRoutes,
           method: parsed.method,
           path: parsed.path,
           latency_ms: Date.now() - start,
@@ -468,6 +526,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
         const parsed = JSON.parse(navResult.value) as {
           arrived?: boolean;
           current_screen?: string;
+          arrived_via?: 'deepest-route' | 'parent-of-current' | null;
+          all_routes?: string[];
           method?: string;
           path?: string[];
           latency_ms?: number;
@@ -491,6 +551,16 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
         result.steps_executed = parsed.path?.length ?? 1;
         result.nav_state_after = parsed.nav_state;
         result.latency_ms = Date.now() - startTime;
+        // B124: surface arrived_via so callers and the experience engine can
+        // distinguish a strict deepest-route match from a "navigated but
+        // covered by a stacked modal" success. Only the latter needs the
+        // explicit hint that the visible UI may not yet reflect the target.
+        if (parsed.arrived_via) {
+          (result as unknown as Record<string, unknown>).arrived_via = parsed.arrived_via;
+        }
+        if (parsed.all_routes) {
+          (result as unknown as Record<string, unknown>).all_routes = parsed.all_routes;
+        }
 
         // 6. Record outcome
         if (projectRoot) {
