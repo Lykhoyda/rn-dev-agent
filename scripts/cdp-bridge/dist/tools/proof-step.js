@@ -1,5 +1,6 @@
 import { okResult, warnResult, withConnection } from '../utils.js';
 import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
+import { captureAndResizeScreenshot } from './device-list.js';
 export function createProofStepHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const result = {
@@ -70,12 +71,11 @@ export function createProofStepHandler(getClient) {
                 }
             }
         }
-        // Step 4: Screenshot
+        // Step 4: Screenshot — B121: route through resize wrapper so per-phase
+        // proof captures pay the B120 budget (default maxWidth=800) instead of
+        // emitting native-resolution images that bloat proof bundles.
         if (hasActiveSession()) {
-            const ssArgs = ['screenshot'];
-            if (args.screenshotPath)
-                ssArgs.push(args.screenshotPath);
-            const ssResult = await runAgentDevice(ssArgs);
+            const ssResult = await captureAndResizeScreenshot({ path: args.screenshotPath });
             if (ssResult.isError) {
                 errors.push('Screenshot failed');
             }

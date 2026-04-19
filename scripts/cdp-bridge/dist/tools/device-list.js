@@ -76,12 +76,38 @@ export function wrapResultWithResize(result, resize) {
     }
 }
 /**
+ * B121: shared capture + resize helper. Extracted from
+ * `createDeviceScreenshotHandler` so internal callers like `device_batch`
+ * (action=screenshot, on-failure / on-each / on-end auto-captures) and
+ * `proof_step` (per-phase screenshots) can opt into the same resize pipeline
+ * as the public tool — without needing a CDP client context. B120's savings
+ * previously applied only to direct `device_screenshot` calls; batch and
+ * proof flows produced raw native-resolution images.
+ */
+export async function captureAndResizeScreenshot(args) {
+    const requestedPath = deriveScreenshotPath(args);
+    // Pin the path explicitly so the post-resize step targets the same file
+    // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
+    const argsWithPath = { ...args, path: requestedPath };
+    const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+    if (result.isError)
+        return result;
+    const actualPath = resolveScreenshotPath(result, requestedPath);
+    const resizeOpts = {};
+    if (args.maxWidth !== undefined)
+        resizeOpts.maxWidth = args.maxWidth;
+    if (args.quality !== undefined)
+        resizeOpts.quality = args.quality;
+    const resize = await resizeWithSips(actualPath, resizeOpts);
+    return wrapResultWithResize(result, resize);
+}
+/**
  * B117/D638: device_screenshot accepts an optional `platform` and, when not
  * provided, falls back to the current CDP target's platform. Prevents
  * wrong-device screenshots when both iOS sim and Android emulator are booted.
  *
  * B120 / GH #36: post-process via macOS `sips` to downscale native-resolution
- * images that otherwise blow LLM context budgets. Defaults to maxWidth=1200,
+ * images that otherwise blow LLM context budgets. Defaults to maxWidth=800,
  * quality=85 (JPEG only). Set maxWidth=0 to disable. Gracefully degrades on
  * non-macOS / missing sips — original screenshot is still returned with a
  * `meta.resize.reason` explaining why.
@@ -91,20 +117,6 @@ export function wrapResultWithResize(result, resize) {
 export function createDeviceScreenshotHandler(getClient) {
     return async (args) => {
         const platform = args.platform ?? getClient?.()?.connectedTarget?.platform ?? null;
-        const requestedPath = deriveScreenshotPath(args);
-        // Pin the path explicitly so the post-resize step targets the same file
-        // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
-        const argsWithPath = { ...args, path: requestedPath };
-        const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform });
-        if (result.isError)
-            return result;
-        const actualPath = resolveScreenshotPath(result, requestedPath);
-        const resizeOpts = {};
-        if (args.maxWidth !== undefined)
-            resizeOpts.maxWidth = args.maxWidth;
-        if (args.quality !== undefined)
-            resizeOpts.quality = args.quality;
-        const resize = await resizeWithSips(actualPath, resizeOpts);
-        return wrapResultWithResize(result, resize);
+        return captureAndResizeScreenshot({ ...args, platform });
     };
 }

@@ -1,5 +1,6 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { withSession, okResult, failResult } from '../utils.js';
+import { captureAndResizeScreenshot } from './device-list.js';
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
@@ -47,7 +48,9 @@ async function executeStep(step) {
             return runAgentDevice(['snapshot', '-i']);
         }
         case 'screenshot': {
-            return runAgentDevice(['screenshot']);
+            // B121: route through the resize wrapper (B120 default maxWidth=800)
+            // so batch-step screenshots don't pay native-resolution context cost.
+            return captureAndResizeScreenshot({});
         }
         case 'wait': {
             await sleep(step.ms ?? 500);
@@ -124,7 +127,8 @@ export function createDeviceBatchHandler() {
                 failedStep = stepResult;
                 if (screenshotOn === 'failure' || screenshotOn === 'each') {
                     try {
-                        const ssResult = await runAgentDevice(['screenshot']);
+                        // B121: route through resize wrapper.
+                        const ssResult = await captureAndResizeScreenshot({});
                         if (isOk(ssResult)) {
                             stepResult.data = extractData(ssResult);
                         }
@@ -134,8 +138,9 @@ export function createDeviceBatchHandler() {
                 break;
             }
             if (screenshotOn === 'each' && step.action !== 'screenshot') {
+                // B121: route through resize wrapper so per-step captures pay budget.
                 try {
-                    await runAgentDevice(['screenshot']);
+                    await captureAndResizeScreenshot({});
                 }
                 catch { /* ignore */ }
             }
@@ -145,7 +150,8 @@ export function createDeviceBatchHandler() {
         }
         if (!failedStep && screenshotOn === 'end') {
             try {
-                const ssResult = await runAgentDevice(['screenshot']);
+                // B121: route through resize wrapper.
+                const ssResult = await captureAndResizeScreenshot({});
                 if (isOk(ssResult)) {
                     finalSnapshot = extractData(ssResult);
                 }
