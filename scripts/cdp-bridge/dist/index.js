@@ -285,10 +285,12 @@ trackedTool('collect_logs', 'Collect logs from multiple sources in parallel: JS 
 }, createCollectLogsHandler(getClient));
 // --- agent-device tools (native device interaction) ---
 trackedTool('device_list', 'List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.', {}, createDeviceListHandler());
-trackedTool('device_screenshot', 'Capture a screenshot of the active device screen. Returns image data or file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target; override with `platform` if needed.', {
+trackedTool('device_screenshot', 'Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 1200px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened.', {
     path: z.string().optional().describe('Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG.'),
     format: z.enum(['jpeg', 'png']).optional().describe('Image format (default: auto-detect from path extension, or jpeg)'),
     platform: z.enum(['ios', 'android']).optional().describe('Target device platform. Defaults to the currently-connected CDP target platform.'),
+    maxWidth: z.number().int().min(0).optional().describe('Downscale image so width does not exceed this many pixels. 0 disables resize. Default 1200.'),
+    quality: z.number().int().min(1).max(100).optional().describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
 trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races — B112).', {
     action: z.enum(['open', 'close', 'snapshot']).default('snapshot').describe('open: start session for an app. snapshot: capture UI tree with element refs. close: end session.'),

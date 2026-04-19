@@ -1,0 +1,112 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { statSync } from 'node:fs';
+const execFile = promisify(execFileCb);
+/**
+ * B120 / GH #36: defaults chosen so a stock device_screenshot call drops from
+ * ~1MB native (1179×2556 @ 3x on iPhone 15 Pro) to ~150-300KB without losing
+ * label readability. Set maxWidth=0 to disable when full-resolution capture
+ * is required (visual diffing, pixel comparisons).
+ */
+export const DEFAULT_MAX_WIDTH = 1200;
+export const DEFAULT_QUALITY = 85;
+let sipsAvailable = null;
+const defaultFileSize = (path) => {
+    try {
+        return statSync(path).size;
+    }
+    catch {
+        return undefined;
+    }
+};
+async function checkSipsAvailable(deps) {
+    if (sipsAvailable !== null)
+        return sipsAvailable;
+    const runner = deps.exec ?? execFile;
+    try {
+        await runner('sips', ['--version'], { timeout: 1500 });
+        sipsAvailable = true;
+    }
+    catch {
+        sipsAvailable = false;
+    }
+    return sipsAvailable;
+}
+/** Test-only: reset the cached `sips --version` probe. */
+export function resetSipsProbeForTesting() {
+    sipsAvailable = null;
+}
+export function parseSipsDimensions(stdout) {
+    // sips -g pixelWidth -g pixelHeight <path> output:
+    //   /path/to/file.jpg
+    //     pixelWidth: 1179
+    //     pixelHeight: 2556
+    const wMatch = stdout.match(/pixelWidth:\s*(\d+)/);
+    const hMatch = stdout.match(/pixelHeight:\s*(\d+)/);
+    if (!wMatch || !hMatch)
+        return null;
+    return { width: parseInt(wMatch[1], 10), height: parseInt(hMatch[1], 10) };
+}
+async function getDimensions(path, deps) {
+    const runner = deps.exec ?? execFile;
+    try {
+        const { stdout } = await runner('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', path], { timeout: 5000, encoding: 'utf8' });
+        return parseSipsDimensions(stdout);
+    }
+    catch {
+        return null;
+    }
+}
+export function buildSipsResizeArgs(path, maxWidth, quality) {
+    const args = ['--resampleWidth', String(maxWidth)];
+    // JPEG quality only applies to .jpg/.jpeg files. sips accepts the flag for
+    // PNG paths but it's a no-op there — still safe, just noise — so we gate it
+    // on extension to keep the args minimal.
+    if (quality !== undefined && /\.jpe?g$/i.test(path)) {
+        args.push('-s', 'formatOptions', String(quality));
+    }
+    args.push(path);
+    return args;
+}
+/**
+ * Downscale an image at `path` in place via macOS `sips`. Returns details about
+ * what happened (or why no resize was performed). Never throws — degraded
+ * environments (Linux, missing sips, unreadable file) return `resized: false`
+ * with a reason, so the screenshot is still usable.
+ */
+export async function resizeWithSips(path, opts = {}, deps = {}) {
+    const maxWidth = opts.maxWidth ?? DEFAULT_MAX_WIDTH;
+    if (maxWidth <= 0) {
+        return { resized: false, path, reason: 'maxWidth-zero' };
+    }
+    if (!(await checkSipsAvailable(deps))) {
+        return { resized: false, path, reason: 'sips-unavailable' };
+    }
+    const originalDims = await getDimensions(path, deps);
+    if (!originalDims) {
+        return { resized: false, path, reason: 'no-dimensions' };
+    }
+    if (originalDims.width <= maxWidth) {
+        return { resized: false, path, reason: 'already-smaller', originalDims };
+    }
+    const fileSize = deps.fileSize ?? defaultFileSize;
+    const originalBytes = fileSize(path);
+    const runner = deps.exec ?? execFile;
+    const quality = opts.quality ?? DEFAULT_QUALITY;
+    try {
+        await runner('sips', buildSipsResizeArgs(path, maxWidth, quality), { timeout: 10_000 });
+    }
+    catch {
+        return { resized: false, path, reason: 'sips-failed', originalDims, originalBytes };
+    }
+    const newDims = await getDimensions(path, deps);
+    const newBytes = fileSize(path);
+    return {
+        resized: true,
+        path,
+        originalDims,
+        newDims: newDims ?? undefined,
+        originalBytes,
+        newBytes,
+    };
+}
