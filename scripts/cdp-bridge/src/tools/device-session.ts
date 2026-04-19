@@ -12,6 +12,11 @@ import { stopFastRunner } from '../fast-runner-session.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
+import {
+  isAgentDeviceRunnerSentinel,
+  recoverFromRunnerLeak,
+  type RunnerLeakNode,
+} from './runner-leak-recovery.js';
 
 const execFile = promisify(execFileCb);
 
@@ -153,6 +158,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           platform: args.platform,
           deviceId,
           openedAt: new Date().toISOString(),
+          appId,
         });
 
         if (args.platform === 'ios' && deviceId) {
@@ -192,19 +198,153 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       );
     }
 
-    const result = await runAgentDevice(['snapshot', '-i']);
-    if (!result.isError) {
-      try {
-        const envelope = JSON.parse(result.content[0].text) as {
-          ok?: boolean;
-          data?: { nodes?: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean }[] };
-        };
-        const platform = getActiveSession()?.platform;
-        if (platform && envelope.ok && envelope.data?.nodes) {
-          cacheSnapshot(platform, envelope.data.nodes);
-        }
-      } catch { /* best-effort cache */ }
+    const result = await rawSnapshot();
+    const nodes = parseSnapshotNodes(result);
+
+    if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
+      const session = getActiveSession();
+      const recovery = await recoverFromRunnerLeak(
+        { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
+        {
+          closeSession: () => runAgentDevice(['close']),
+          openSession: ({ appId, platform, attachOnly }) =>
+            reopenSessionForRecovery(appId, platform, attachOnly),
+          resnapshot: () => rawSnapshot(),
+          parseNodes: parseSnapshotNodes,
+        },
+      );
+
+      if (recovery.recovered) {
+        cacheSnapshotIfPossible(recovery.result);
+        return wrapWithMeta(recovery.result, {
+          recovered: 'agent-device-runner-leak',
+          recoveryTier: recovery.tier,
+        });
+      }
+
+      return failResult(runnerLeakFailureMessage(recovery.reason, session), {
+        code: 'RUNNER_LEAK',
+        recoveryReason: recovery.reason,
+        hint: runnerLeakFailureHint(recovery.reason, session),
+      });
     }
+
+    cacheSnapshotIfPossible(result);
     return result;
   };
+}
+
+export function runnerLeakFailureMessage(
+  reason: string | undefined,
+  session: { appId?: string } | null,
+): string {
+  if (reason === 'no-session-context' && session && !session.appId) {
+    return 'device_snapshot returned AgentDeviceRunner\'s own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.';
+  }
+  return 'device_snapshot returned AgentDeviceRunner\'s own UI tree instead of the target app (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.';
+}
+
+export function runnerLeakFailureHint(
+  reason: string | undefined,
+  session: { appId?: string } | null,
+): string {
+  if (reason === 'no-session-context' && session && !session.appId) {
+    return 'Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.';
+  }
+  return 'Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.';
+}
+
+async function rawSnapshot(): Promise<ToolResult> {
+  return runAgentDevice(['snapshot', '-i']);
+}
+
+function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
+  if (result.isError) return null;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: { nodes?: RunnerLeakNode[] };
+    };
+    if (!envelope.ok || !envelope.data?.nodes) return null;
+    return envelope.data.nodes;
+  } catch {
+    return null;
+  }
+}
+
+function cacheSnapshotIfPossible(result: ToolResult): void {
+  if (result.isError) return;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: { nodes?: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean }[] };
+    };
+    const platform = getActiveSession()?.platform;
+    if (platform && envelope.ok && envelope.data?.nodes) {
+      cacheSnapshot(platform, envelope.data.nodes);
+    }
+  } catch { /* best-effort cache */ }
+}
+
+function wrapWithMeta(result: ToolResult, meta: Record<string, unknown>): ToolResult {
+  if (result.isError) return result;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: unknown; meta?: Record<string, unknown> };
+    envelope.meta = { ...envelope.meta, ...meta };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+  } catch {
+    return result;
+  }
+}
+
+export async function reopenSessionForRecovery(
+  appId: string,
+  platform: string,
+  attachOnly: boolean,
+): Promise<ToolResult> {
+  // Always mint a fresh recovery name (Gemini G3): reusing the original
+  // session name risks the daemon either rejecting as "already exists" or
+  // silently re-attaching to the corrupted session, defeating the rebuild.
+  const recoveryName = `rn-agent-recovery-${Date.now()}`;
+
+  let cliArgs: string[];
+  if (attachOnly) {
+    // attachOnly only makes sense if the target app is already running.
+    // Otherwise there's nothing to attach to and we should let the caller
+    // escalate (typically to the full-relaunch tier).
+    const running = await isAppRunning(platform, appId);
+    if (!running) {
+      return failResult(
+        `attachOnly recovery aborted: ${appId} is not running on ${platform}.`,
+        { code: 'NOT_CONNECTED', recoveryAbort: true },
+      );
+    }
+    cliArgs = ['open', '--session', recoveryName, '--platform', platform];
+  } else {
+    cliArgs = ['open', appId, '--session', recoveryName, '--platform', platform];
+  }
+
+  const result = await runAgentDevice(cliArgs, { skipSession: true });
+  if (result.isError) return result;
+
+  let deviceId: string | undefined;
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const data = envelope?.data;
+    const rawId = data?.deviceId
+      ?? data?.device_udid
+      ?? data?.id
+      ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
+    const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
+    deviceId = typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
+  } catch { /* best-effort */ }
+
+  setActiveSession({
+    name: recoveryName,
+    platform,
+    deviceId,
+    openedAt: new Date().toISOString(),
+    appId,
+  });
+  return result;
 }
