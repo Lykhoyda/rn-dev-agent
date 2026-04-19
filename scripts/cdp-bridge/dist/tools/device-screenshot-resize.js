@@ -66,11 +66,19 @@ async function getDimensions(path, deps) {
 }
 export function buildSipsResizeArgs(path, maxWidth, quality) {
     const args = ['--resampleWidth', String(maxWidth)];
-    // JPEG quality only applies to .jpg/.jpeg files. sips accepts the flag for
-    // PNG paths but it's a no-op there — still safe, just noise — so we gate it
-    // on extension to keep the args minimal.
-    if (quality !== undefined && /\.jpe?g$/i.test(path)) {
-        args.push('-s', 'formatOptions', String(quality));
+    // B121 follow-up: when the requested path has a .jpg/.jpeg extension we MUST
+    // emit `-s format jpeg`. Without it, sips preserves the input format — and
+    // the fast-runner path produces PNG bytes (XCUIScreen.screenshot.pngRepresentation)
+    // even when the caller asked for .jpg. The result was PNG bytes living in a
+    // .jpg file with `formatOptions` silently no-op'd (PNG ignores it), dropping
+    // savings from ~46% to ~12% under fast-runner. The format flag is idempotent
+    // when input is already JPEG (daemon path), so it's safe to apply unconditionally
+    // for .jpg/.jpeg outputs.
+    if (/\.jpe?g$/i.test(path)) {
+        args.push('-s', 'format', 'jpeg');
+        if (quality !== undefined) {
+            args.push('-s', 'formatOptions', String(quality));
+        }
     }
     args.push(path);
     return args;

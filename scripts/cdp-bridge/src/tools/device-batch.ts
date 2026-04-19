@@ -1,6 +1,7 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
+import { captureAndResizeScreenshot } from './device-list.js';
 
 export interface BatchStep {
   action: 'find' | 'press' | 'fill' | 'swipe' | 'scroll' | 'back' | 'wait' | 'hideKeyboard' | 'snapshot' | 'screenshot';
@@ -68,7 +69,9 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
       return runAgentDevice(['snapshot', '-i']);
     }
     case 'screenshot': {
-      return runAgentDevice(['screenshot']);
+      // B121: route through the resize wrapper (B120 default maxWidth=800)
+      // so batch-step screenshots don't pay native-resolution context cost.
+      return captureAndResizeScreenshot({});
     }
     case 'wait': {
       await sleep(step.ms ?? 500);
@@ -154,7 +157,8 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
         if (screenshotOn === 'failure' || screenshotOn === 'each') {
           try {
-            const ssResult = await runAgentDevice(['screenshot']);
+            // B121: route through resize wrapper.
+            const ssResult = await captureAndResizeScreenshot({});
             if (isOk(ssResult)) {
               stepResult.data = extractData(ssResult);
             }
@@ -165,7 +169,8 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       }
 
       if (screenshotOn === 'each' && step.action !== 'screenshot') {
-        try { await runAgentDevice(['screenshot']); } catch { /* ignore */ }
+        // B121: route through resize wrapper so per-step captures pay budget.
+        try { await captureAndResizeScreenshot({}); } catch { /* ignore */ }
       }
 
       if (i < steps.length - 1 && step.action !== 'wait' && delayMs > 0) {
@@ -175,7 +180,8 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
     if (!failedStep && screenshotOn === 'end') {
       try {
-        const ssResult = await runAgentDevice(['screenshot']);
+        // B121: route through resize wrapper.
+        const ssResult = await captureAndResizeScreenshot({});
         if (isOk(ssResult)) {
           finalSnapshot = extractData(ssResult);
         }
