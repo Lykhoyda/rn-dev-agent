@@ -4,6 +4,47 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.25.0] — 2026-04-19
+
+Three-PR stability sprint: zombie target disambiguation (B111), MCP process lifecycle hardening (B76 + zombie cleanup), and security documentation (B5). MCP server bumped to 0.20.0. Skipped 0.24.0 because the inter-PR version coordination jumped from 0.23.0 → 0.24.0 (PR #32) → 0.25.0 (PR #33) on main without a public release at the intermediate step.
+
+### Added
+- **`cdp_restart` MCP tool** — in-process soft state reset (disconnect + new CDPClient + autoConnect). Recovers from stuck connection state without losing the CC session. Does NOT reload new dist/ — that still requires a full Claude Code restart (B76/D644).
+- **`cdp.bundleId` field on `cdp_status`** — surfaces the connected target's `description` (Metro reports the bundleId there) for "which app am I connected to?" debugging (B111/D643).
+- **README `## Security` section** — documents that `cdp_evaluate` runs unrestricted JS in the app's Hermes runtime; recommends local-dev-only usage and treating the agent like a developer with shell access (B5/PR #34).
+
+### Fixed
+- **B111 (CRITICAL — silent data corruption): CDP target selection picked zombie over fresh app target.** `selectTarget` now hard-fails on explicit `targetId` / `bundleId` mismatch with actionable warnings listing available ids/descriptions; `autoConnect` auto-populates `preferredBundleId` from `resolveBundleId(platform)`; bundleId/preferredBundleId matching is case-insensitive; deterministic sort tie-break (page-id desc → preferredBundleId-matched first → ascending lex by full id) (D643).
+- **B76: MCP server cannot be restarted within a session** — fixed via the new `cdp_restart` tool for in-process reset. SIGUSR2 handler retained for future supervisor wiring (CC does not auto-respawn MCP subprocesses today) (D644).
+- **MCP zombie subprocesses surviving parent CC quit** — root cause: the 5s `setInterval` background Metro poll held the Node event loop alive indefinitely when CC closed stdin without SIGTERM. New `lifecycle/graceful-shutdown.ts` factory funnels SIGTERM/SIGINT/SIGHUP/SIGUSR2/`stdin.end`/`uncaughtException` into a single idempotent shutdown path (clears bgPoll → disconnects CDP → stops fast-runner → exit) with a 3s timeout race for stuck cleanup (D644).
+- **`CDPClient.disconnect()` race safety** — added 2-line idempotent guard so concurrent `cdp_restart` + signal-shutdown don't race (D644).
+- **Latent production bug surfaced by CI: `setTimeout(...).unref()` on the load-bearing graceful-shutdown timeout** meant the timer wouldn't fire when the event loop had no other work, defeating its purpose. Removed `.unref()` so the timer always keeps the loop alive long enough to force-exit (D644 follow-up).
+
+### Verified-stale (closed via empirical sweep, no code change in this release)
+- **B73 (HIGH): MCP dies on Metro restart** — verified empirically already fixed by historical reconnect loop + background poll pattern (D622). MCP survives Metro death and auto-reconnects when Metro returns.
+- **B84, B100, B110, B112** — fixes had already shipped through earlier hardening phases; BUGS.md was stale.
+- **All Phase 85 R-stories (R1-R10 except R7)** — closed; R7 (transparentModal) noted as react-native-screens upstream.
+
+### Tests
+249 → **272** (+23). New: 10 for B111 (selectTarget hard-fail, case-insensitive, deterministic sort tie-break, discoverAndConnect throw-on-empty); 13 for B76 (gracefulShutdown factory + cdp_restart handler, including a concurrent-race test that proves idempotency under parallel invocation).
+
+### Multi-review
+PRs #32 (B111) and #33 (B76) reviewed independently by Gemini + Codex. PR #32: 0 high-confidence issues. PR #33: 1 important (SIGUSR1 → SIGUSR2 to avoid Node `--inspect` collision) + 3 advisories — all 4 applied as follow-ups before merge.
+
+### Upgrade notes
+- Restart Claude Code after `/plugin update rn-dev-agent` to pick up the new MCP server (`/reload-plugins` does NOT restart MCP subprocesses).
+- New tool `cdp_restart` is available immediately. Use it for in-session state reset without losing CC context. Loading new `dist/` after `npm run build` still requires a full CC quit + reopen.
+- **Behavioral change (B111):** callers that previously passed an explicit `targetId` or `bundleId` that didn't match any target used to silently connect to whatever sorted first; now they get a clear error with the available ids/descriptions listed. Any caller relying on the old silent-fallthrough behavior was already getting wrong data — the new error is strictly better.
+- **Behavioral change (B76):** SIGINT, SIGHUP, and stdin EOF now route through graceful shutdown (previously only SIGTERM). Subprocess termination is cleaner; no zombie MCP processes after CC quit.
+
+### Validation
+- 5-gate live smoke for B76 fix (CC restart → `cdp_restart` tool present → invocation → MCP PID unchanged) — all green.
+- 4-gate live smoke for B111 fix (kill Metro test → bad targetId reject → bad bundleId reject → auto-select picks live target) — all green.
+- B73 verification trace at `docs/proof/b73-b76-mcp-lifecycle/b73-verification.log` in the workspace repo.
+
+### Backlog state
+Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining open items in BUGS.md are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
+
 ## [0.23.0] — 2026-04-16
 
 Major session of correctness and performance fixes surfaced by end-to-end benchmarks and a live feature-dev run. MCP server bumped to 0.18.0.
