@@ -46,6 +46,7 @@ import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
+import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './fast-runner-session.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
@@ -474,6 +475,11 @@ trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android
     matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
 }, createCrossPlatformVerifyHandler());
 trackedTool('cdp_open_devtools', 'Report the React Native DevTools frontend URL for the live app + whether DevTools can coexist with the MCP session (RN >= 0.85 native multi-debugger). M1 (Phase 90 Tier 1) ships detection + capability reporting; full proxy auto-wiring for RN < 0.85 is tracked as M1b/Phase 100. Returns { devtoolsUrl, inspectorWsUrl, mode, supportsMultipleDebuggers, rnVersion, guidance }.', {}, createOpenDevToolsHandler(getClient));
+trackedTool('cdp_metro_events', 'Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. M5 (Phase 90 Tier 2 / D656): the MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state — watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.', {
+    limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
+    type: z.string().optional().describe('Filter by event type (e.g. "bundle_build_failed")'),
+    clearErrors: z.boolean().default(false).describe('Reset the build-error counter without reading events'),
+}, createMetroEventsHandler(getClient));
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.

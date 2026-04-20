@@ -36,6 +36,8 @@ export function createMockClient(overrides = {}) {
     get consoleBuffer() { return consoleBuffer; },
     get networkBufferManager() { return networkBufferManager; },
     get activeDeviceKey() { return makeDeviceKey(client._metroPort, client._connectedTarget?.id); },
+    /** M5: mock client defaults to null; tests can override with a stub. */
+    get metroEventsClient() { return client._metroEventsClient; },
     get logBuffer() { return logBuffer; },
     get reconnectState() {
       return { active: false, lastAttempt: null, attemptCount: 0 };
@@ -54,6 +56,7 @@ export function createMockClient(overrides = {}) {
       platform: 'ios',
     },
     _networkMode: 'cdp',
+    _metroEventsClient: null,
     _bridgeDetected: false,
     _bridgeVersion: null,
     _logDomainEnabled: true,
