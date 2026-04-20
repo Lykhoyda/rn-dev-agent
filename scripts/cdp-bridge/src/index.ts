@@ -57,12 +57,32 @@ import { createProofStepHandler } from './tools/proof-step.js';
 import { createConnectHandler, createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
+import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { stopFastRunner } from './fast-runner-session.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
+
+const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
+
+// M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
+// so two racing MCPs don't corrupt telemetry files or fight for the CDP slot. --no-lock
+// opt-out exists for CI parallelism and benchmark harnesses; documented in the conflict
+// message. Release is registered on process.exit so ALL exit paths (graceful, uncaught,
+// signal) clean up the lock.
+const noLock = process.argv.includes('--no-lock');
+if (!noLock) {
+  const lockfile = new Lockfile({ version: pkgVersion });
+  const lockResult = lockfile.acquire();
+  if (lockResult.status === 'conflict') {
+    process.stderr.write(formatLockConflictMessage(lockResult) + '\n');
+    process.exit(11);
+  }
+  process.on('exit', () => lockfile.release());
+}
 
 pruneOldTelemetry();
 autoCompactIfNeeded();
@@ -72,9 +92,6 @@ let client = new CDPClient();
 const getClient = (): CDPClient => client;
 const setClient = (c: CDPClient): void => { client = c; };
 const createClient = (port: number): CDPClient => new CDPClient(port);
-
-const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
 
 const server = new McpServer({
   name: 'rn-dev-agent-cdp-bridge',
