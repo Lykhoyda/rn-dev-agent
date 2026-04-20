@@ -16,7 +16,7 @@ description: >
 # React Native Best Practice Rules
 
 43 rules from [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)
-plus 3 rn-dev-agent rules discovered through story testing.
+plus 4 rn-dev-agent rules discovered through story testing.
 Each rule has full incorrect/correct code examples in `references/<rule-name>.md`.
 
 ---
@@ -43,6 +43,7 @@ category present in the code under review.
 | 3.3 | Use GestureDetector for animated press states | MEDIUM | `references/anim-gesture-press.md` |
 | 4.1 | Never track scroll position in useState | HIGH | `references/scroll-position-no-state.md` |
 | 5.1 | Use native navigators (native-stack, native tabs) | HIGH | `references/navigation-native-navigators.md` |
+| 5.2 | Avoid `presentation: 'transparentModal'` on Bridgeless + rn-screens | HIGH | `references/navigation-transparent-modal.md` |
 | 6.1 | Minimize state variables; derive values | MEDIUM | `references/react-state-minimize.md` |
 | 6.2 | Use fallback state instead of initialState | MEDIUM | `references/react-state-fallback.md` |
 | 6.3 | Use dispatch updaters for state depending on current value | MEDIUM | `references/react-state-dispatcher.md` |
@@ -149,7 +150,7 @@ read `references/list-performance-virtualize.md` and `references/list-performanc
 | 2 | List Performance | 8 | FlatList, ScrollView+map, renderItem, inline objects |
 | 3 | Animation | 3 | Reanimated, useSharedValue, Animated, width/height animation |
 | 4 | Scroll | 1 | useState with scroll position, onScroll |
-| 5 | Navigation | 1 | createStackNavigator, JS-based tabs |
+| 5 | Navigation | 2 | createStackNavigator, JS-based tabs, `transparentModal` on Bridgeless |
 | 6 | React State | 3 | useState, derived state, initialState props |
 | 7 | State Architecture | 1 | shared values storing visuals instead of state |
 | 8 | React Compiler | 2 | .value on shared values, dotting into hook returns |
