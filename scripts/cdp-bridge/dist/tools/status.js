@@ -1,6 +1,7 @@
 import { okResult, failResult, warnResult } from '../utils.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { getSessionReloadCount } from './reload.js';
+import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 const STATUS_PROBE_EXPRESSION = `
 (function() {
   var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
@@ -53,6 +54,7 @@ async function buildStatusResult(client) {
             networkFallback: client.networkMode === 'hook',
             bridgeDetected: client.bridgeDetected,
             bridgeVersion: client.bridgeVersion,
+            supportsMultipleDebuggers: supportsNativeMultiDebugger(appInfo?.rnVersion),
         },
         domains: {
             runtime: client.isConnected,

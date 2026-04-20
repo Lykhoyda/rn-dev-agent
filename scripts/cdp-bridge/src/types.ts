@@ -93,6 +93,8 @@ export interface StatusResult {
     networkFallback: boolean;
     bridgeDetected: boolean;
     bridgeVersion: number | null;
+    /** M1 (D654): true when RN >= 0.85 supports native multi-debugger (DevTools + MCP can coexist without proxy). */
+    supportsMultipleDebuggers: boolean;
   };
   domains: {
     runtime: boolean;

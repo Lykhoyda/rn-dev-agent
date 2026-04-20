@@ -62,6 +62,7 @@ import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
+import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { stopFastRunner } from './fast-runner-session.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 
@@ -788,6 +789,13 @@ trackedTool(
     matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
   },
   createCrossPlatformVerifyHandler(),
+);
+
+trackedTool(
+  'cdp_open_devtools',
+  'Report the React Native DevTools frontend URL for the live app + whether DevTools can coexist with the MCP session (RN >= 0.85 native multi-debugger). M1 (Phase 90 Tier 1) ships detection + capability reporting; full proxy auto-wiring for RN < 0.85 is tracked as M1b/Phase 100. Returns { devtoolsUrl, inspectorWsUrl, mode, supportsMultipleDebuggers, rnVersion, guidance }.',
+  {},
+  createOpenDevToolsHandler(getClient),
 );
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
