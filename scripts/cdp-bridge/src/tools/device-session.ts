@@ -206,7 +206,20 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       const recovery = await recoverFromRunnerLeak(
         { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
         {
-          closeSession: () => runAgentDevice(['close']),
+          // B130 (D659): the recovery close must also clear the local session
+          // state (activeSession → null, ref-map → empty, fast-runner stopped)
+          // so the post-recovery re-snapshot goes through the daemon/CLI path
+          // that populates ref refs, NOT the fast-runner path which returns
+          // a tree-shaped result lacking @eN refs. Without this, `device_fill`
+          // after recovery fails with "No snapshot in session" because the
+          // ref-map is stale (from pre-recovery) OR non-existent (after fresh
+          // session open), and fast-runner serves the (ref-less) snapshot.
+          closeSession: async () => {
+            const closeResult = await runAgentDevice(['close']);
+            clearActiveSession(); // also clears refMap via its side-effect
+            stopFastRunner();
+            return closeResult;
+          },
           openSession: ({ appId, platform, attachOnly }) =>
             reopenSessionForRecovery(appId, platform, attachOnly),
           resnapshot: () => rawSnapshot(),

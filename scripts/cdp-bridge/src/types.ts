@@ -21,6 +21,11 @@ export interface HermesTarget {
   type?: string;
   platform?: 'ios' | 'android';
   /**
+   * Metro /json/list includes this field for RN 0.76+. It disambiguates
+   * iOS vs Android when the same bundleId is installed on both (B131/D660).
+   */
+  deviceName?: string;
+  /**
    * B116 (D639): set true when the bundleId is installed on BOTH iOS sim AND
    * Android emulator and neither inference source could disambiguate. Callers
    * should pass `targetId` or `bundleId + platform` for exact selection.
@@ -74,6 +79,13 @@ export interface StatusResult {
     lastBuild?: { status: 'started' | 'done' | 'failed'; timestamp: string } | null;
     /** M5 (D656): count of bundle_build_failed events observed since MCP connected. */
     buildErrors?: number;
+    /**
+     * B129 (D658): reason the events stream is unusable on this Metro, if any.
+     * `"expo-cli-incompatible"` means Expo CLI is serving the manifest
+     * protocol at /events instead of Metro's reporter stream. When present,
+     * `eventsConnected` will be false and no events will ever arrive.
+     */
+    eventsReason?: 'expo-cli-incompatible' | null;
   };
   cdp: {
     connected: boolean;

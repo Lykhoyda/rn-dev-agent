@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { RingBuffer, DeviceBufferManager, makeDeviceKey } from './ring-buffer.js';
+import { getNetworkBufferManager } from './cdp/network-buffer-manager.js';
 import { MetroEventsClient } from './metro/events-client.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
@@ -42,6 +43,10 @@ export class CDPClient {
   private pending = new Map<number, PendingCall>();
   private eventHandlers = new Map<string, (params: unknown) => void>();
   private _consoleBuffer: RingBuffer<ConsoleEntry>;
+  // B128 (D657): DeviceBufferManager is now a module-level singleton keyed by
+  // `${metroPort}-${targetId}`. Survives CDPClient lifecycle (destroy/rebuild
+  // on force reconnect or cdp_restart). We hold a reference only as a getter
+  // convenience; never instantiate a new one here.
   private _networkBufferManager: DeviceBufferManager<NetworkEntry, string>;
   private _port: number;
   private reconnecting = false;
@@ -72,12 +77,8 @@ export class CDPClient {
   constructor(port?: number) {
     this._port = port ?? 8081;
     this._consoleBuffer = new RingBuffer<ConsoleEntry>(200);
-    this._networkBufferManager = new DeviceBufferManager<NetworkEntry, string>({
-      capacityPerDevice: 100,
-      maxDevices: 10,
-      indexKey: (e) => e.id,
-      timestampOf: (e) => new Date(e.timestamp).getTime(),
-    });
+    // B128 (D657): use process-scoped singleton instead of per-client instance
+    this._networkBufferManager = getNetworkBufferManager();
     this._logBuffer = new RingBuffer<LogEntry>(50);
   }
 

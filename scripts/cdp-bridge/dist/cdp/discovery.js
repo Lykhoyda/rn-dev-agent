@@ -106,10 +106,49 @@ function readIOSPackages() {
  *
  * Readers are injectable for unit testing without spawning subprocesses.
  */
+/**
+ * B131 (D660): infer platform from Metro's `deviceName` field when present.
+ * Metro 0.76+ includes this in /json/list (e.g. `"iPhone 17 Pro"` or
+ * `"sdk_gphone16k_arm64 - 17 - API 37"`). Deterministic and survives the
+ * ambiguous-bundle case where the same appId is installed on both platforms
+ * (which defeats the B116 package-list inference). Returns null if the name
+ * doesn't match either platform convention; caller falls back to package-list
+ * inference.
+ */
+export function inferPlatformFromDeviceName(deviceName) {
+    if (!deviceName)
+        return null;
+    const name = deviceName.toLowerCase();
+    // Check iOS FIRST. Multi-review follow-up (L2): a user-renamed device like
+    // "My Android-tester iPad" should be classified as iOS because it contains
+    // `\bipad\b`. iOS patterns are narrower than Android patterns, so iOS-first
+    // check yields fewer false positives. Android-only signals (sdk_gphone,
+    // emulator, Pixel, Galaxy, OnePlus, API N) are unlikely to appear in iOS
+    // device names the other direction.
+    const iosPatterns = /\biphone\b|\bipad\b|\bipod\b|\bios\b/i;
+    if (iosPatterns.test(name))
+        return 'ios';
+    // Android patterns: emulator names (`sdk_gphone`, `emulator`), physical
+    // device families (`Pixel`, `Galaxy`, `OnePlus`), the literal `android`, or
+    // the `API N` suffix Metro appends on emulators.
+    const androidPatterns = /sdk_gphone|emulator|\bpixel\b|\bgalaxy\b|\boneplus\b|\bandroid\b|\bapi\s+\d+\b/i;
+    if (androidPatterns.test(name))
+        return 'android';
+    return null;
+}
 export function inferPlatforms(targets, readers = {}) {
     const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
     const iosPackages = (readers.readIOS ?? readIOSPackages)();
     for (const t of targets) {
+        // B131 (D660): deviceName is the most reliable signal when present.
+        // It's deterministic (doesn't depend on adb/simctl running) and correct
+        // even when the same bundleId is installed on both iOS and Android
+        // (the exact case B116 marks `ambiguousPlatform`).
+        const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
+        if (fromDeviceName) {
+            t.platform = fromDeviceName;
+            continue;
+        }
         const desc = t.description ?? '';
         const inAndroid = androidPackages?.has(desc) ?? false;
         const inIOS = iosPackages?.has(desc) ?? false;
