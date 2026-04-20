@@ -1,4 +1,4 @@
-export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused) {
+export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey) {
     eventHandlers.set('Runtime.consoleAPICalled', (params) => {
         const p = params;
         const text = p.args?.map(a => a.value !== undefined ? String(a.value) : (a.description ?? '')).join(' ') ?? '';
@@ -12,7 +12,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.requestWillBeSent', (params) => {
         const p = params;
-        buffers.network.push({
+        buffers.network.push(getDeviceKey(), {
             id: p.requestId,
             method: p.request?.method ?? 'GET',
             url: p.request?.url ?? '',
@@ -21,7 +21,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.responseReceived', (params) => {
         const p = params;
-        const entry = buffers.network.getByKey(p.requestId);
+        const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
             entry.status = p.response?.status;
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -29,7 +29,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.loadingFailed', (params) => {
         const p = params;
-        const entry = buffers.network.getByKey(p.requestId);
+        const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
             entry.status = 0;
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -62,7 +62,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
     });
     eventHandlers.set('Network.loadingFinished', (params) => {
         const p = params;
-        const entry = buffers.network.getByKey(p.requestId);
+        const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
             entry.bodyAvailable = true;
             entry.bodySize = p.encodedDataLength;
@@ -79,7 +79,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
         setIsPaused(false);
     });
 }
-export function parseNetworkHookMessage(params, networkMode, networkBuffer) {
+export function parseNetworkHookMessage(params, networkMode, networkManager, deviceKey) {
     if (networkMode !== 'hook')
         return;
     const p = params;
@@ -91,7 +91,7 @@ export function parseNetworkHookMessage(params, networkMode, networkBuffer) {
         const type = parts[1];
         const data = JSON.parse(parts.slice(2).join(':'));
         if (type === 'request') {
-            networkBuffer.push({
+            networkManager.push(deviceKey, {
                 id: data.id,
                 method: data.method ?? 'GET',
                 url: data.url ?? '',
@@ -99,7 +99,7 @@ export function parseNetworkHookMessage(params, networkMode, networkBuffer) {
             });
         }
         else if (type === 'response') {
-            const entry = networkBuffer.getByKey(data.id);
+            const entry = networkManager.getByKey(deviceKey, data.id);
             if (entry) {
                 entry.status = data.status;
                 entry.duration_ms = data.duration_ms;

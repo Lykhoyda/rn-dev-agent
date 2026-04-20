@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { RingBuffer } from './ring-buffer.js';
+import { RingBuffer, DeviceBufferManager, makeDeviceKey } from './ring-buffer.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
@@ -41,7 +41,7 @@ export class CDPClient {
   private pending = new Map<number, PendingCall>();
   private eventHandlers = new Map<string, (params: unknown) => void>();
   private _consoleBuffer: RingBuffer<ConsoleEntry>;
-  private _networkBuffer: RingBuffer<NetworkEntry, string>;
+  private _networkBufferManager: DeviceBufferManager<NetworkEntry, string>;
   private _port: number;
   private reconnecting = false;
   private disposed = false;
@@ -70,7 +70,12 @@ export class CDPClient {
   constructor(port?: number) {
     this._port = port ?? 8081;
     this._consoleBuffer = new RingBuffer<ConsoleEntry>(200);
-    this._networkBuffer = new RingBuffer<NetworkEntry, string>(100, { indexKey: (e) => e.id });
+    this._networkBufferManager = new DeviceBufferManager<NetworkEntry, string>({
+      capacityPerDevice: 100,
+      maxDevices: 10,
+      indexKey: (e) => e.id,
+      timestampOf: (e) => new Date(e.timestamp).getTime(),
+    });
     this._logBuffer = new RingBuffer<LogEntry>(50);
   }
 
@@ -82,7 +87,10 @@ export class CDPClient {
   get connectedTarget(): HermesTarget | null { return this._connectedTarget; }
   get networkMode(): 'cdp' | 'hook' | 'none' { return this._networkMode; }
   get consoleBuffer(): RingBuffer<ConsoleEntry> { return this._consoleBuffer; }
-  get networkBuffer(): RingBuffer<NetworkEntry, string> { return this._networkBuffer; }
+  /** M4 (D655): per-device buffer manager. Use `activeDeviceKey` for single-device queries, `'all'` for cross-device. */
+  get networkBufferManager(): DeviceBufferManager<NetworkEntry, string> { return this._networkBufferManager; }
+  /** M4 (D655): the device key for the currently connected target. Used as the default scope for per-device buffer queries. */
+  get activeDeviceKey(): string { return makeDeviceKey(this._port, this._connectedTarget?.id); }
   get connectionGeneration(): number { return this._connectionGeneration; }
   get bridgeDetected(): boolean { return this._bridgeDetected; }
   get bridgeVersion(): number | null { return this._bridgeVersion; }
@@ -264,7 +272,7 @@ export class CDPClient {
   }
 
   private parseNetworkHookMessage(params: unknown): void {
-    parseNetHook(params, this._networkMode, this._networkBuffer);
+    parseNetHook(params, this._networkMode, this._networkBufferManager, this.activeDeviceKey);
   }
 
   private async setup(): Promise<void> {
@@ -273,7 +281,8 @@ export class CDPClient {
       evaluate: (expr) => this.evaluate(expr),
       port: this._port,
       connectedTarget: this._connectedTarget,
-      networkBuffer: this._networkBuffer,
+      networkManager: this._networkBufferManager,
+      getDeviceKey: () => this.activeDeviceKey,
       setupEventHandlers: () => this.setupEventHandlers(),
       clearScripts: () => this._scripts.clear(),
       clearEventHandlers: () => this.eventHandlers.clear(),
@@ -291,10 +300,11 @@ export class CDPClient {
   private setupEventHandlers(): void {
     wireEventHandlers(
       this.eventHandlers,
-      { console: this._consoleBuffer, network: this._networkBuffer, log: this._logBuffer, scripts: this._scripts },
+      { console: this._consoleBuffer, network: this._networkBufferManager, log: this._logBuffer, scripts: this._scripts },
       (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)),
       () => this._isPaused,
       (v) => { this._isPaused = v; },
+      () => this.activeDeviceKey,
     );
   }
 

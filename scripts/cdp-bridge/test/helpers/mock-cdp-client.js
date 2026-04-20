@@ -1,4 +1,4 @@
-import { RingBuffer } from '../../dist/ring-buffer.js';
+import { RingBuffer, DeviceBufferManager, makeDeviceKey } from '../../dist/ring-buffer.js';
 
 /**
  * Creates a mock CDPClient that satisfies the interface used by tool handlers
@@ -9,7 +9,12 @@ import { RingBuffer } from '../../dist/ring-buffer.js';
  */
 export function createMockClient(overrides = {}) {
   const consoleBuffer = new RingBuffer(200);
-  const networkBuffer = new RingBuffer(100, { indexKey: (e) => e.id });
+  const networkBufferManager = new DeviceBufferManager({
+    capacityPerDevice: 100,
+    maxDevices: 10,
+    indexKey: (e) => e.id,
+    timestampOf: (e) => new Date(e.timestamp).getTime(),
+  });
   const logBuffer = new RingBuffer(50);
 
   const client = {
@@ -29,7 +34,8 @@ export function createMockClient(overrides = {}) {
     get scripts() { return client._scripts; },
     get connectionGeneration() { return client._connectionGeneration; },
     get consoleBuffer() { return consoleBuffer; },
-    get networkBuffer() { return networkBuffer; },
+    get networkBufferManager() { return networkBufferManager; },
+    get activeDeviceKey() { return makeDeviceKey(client._metroPort, client._connectedTarget?.id); },
     get logBuffer() { return logBuffer; },
     get reconnectState() {
       return { active: false, lastAttempt: null, attemptCount: 0 };

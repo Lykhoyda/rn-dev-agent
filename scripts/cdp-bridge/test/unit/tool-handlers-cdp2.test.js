@@ -74,8 +74,8 @@ test('interact: returns warnResult when action_executed with handler_error', asy
 
 test('network_log: returns entries from buffer', async () => {
   const client = createMockClient();
-  client.networkBuffer.push({ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
-  client.networkBuffer.push({ id: 'req2', method: 'POST', url: 'https://api.example.com/login', timestamp: '2026-04-13T00:00:01Z', status: 401 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req2', method: 'POST', url: 'https://api.example.com/login', timestamp: '2026-04-13T00:00:01Z', status: 401 });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, clear: false }));
   assert.equal(data.count, 2);
@@ -84,8 +84,8 @@ test('network_log: returns entries from buffer', async () => {
 
 test('network_log: filters entries by URL substring', async () => {
   const client = createMockClient();
-  client.networkBuffer.push({ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
-  client.networkBuffer.push({ id: 'req2', method: 'GET', url: 'https://cdn.example.com/image.png', timestamp: '2026-04-13T00:00:01Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req2', method: 'GET', url: 'https://cdn.example.com/image.png', timestamp: '2026-04-13T00:00:01Z', status: 200 });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, filter: 'api.example', clear: false }));
   assert.equal(data.count, 1);
@@ -94,7 +94,7 @@ test('network_log: filters entries by URL substring', async () => {
 
 test('network_log: clear mode empties buffer', async () => {
   const client = createMockClient();
-  client.networkBuffer.push({ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, clear: true }));
   assert.equal(data.cleared, true);
@@ -105,7 +105,7 @@ test('network_log: clear mode empties buffer', async () => {
 test('network_log: clamps limit to [1, 100]', async () => {
   const client = createMockClient();
   for (let i = 0; i < 5; i++) {
-    client.networkBuffer.push({ id: `req${i}`, method: 'GET', url: `https://api.example.com/${i}`, timestamp: '2026-04-13T00:00:00Z', status: 200 });
+    client.networkBufferManager.push(client.activeDeviceKey,{ id: `req${i}`, method: 'GET', url: `https://api.example.com/${i}`, timestamp: '2026-04-13T00:00:00Z', status: 200 });
   }
   const handler = createNetworkLogHandler(() => client);
   const dataLow = expectOk(await handler({ limit: 0, clear: false }));
@@ -128,7 +128,7 @@ test('network_body: CDP path success', async () => {
       return {};
     },
   });
-  client.networkBuffer.push({ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkBodyHandler(() => client);
   const data = expectOk(await handler({ requestId: 'req1' }));
   assert.equal(data.source, 'cdp');
@@ -147,7 +147,7 @@ test('network_body: hook path success', async () => {
     _networkMode: 'hook',
     evaluate: async () => ({ value: JSON.stringify({ body: '{"data":"test"}' }) }),
   });
-  client.networkBuffer.push({ id: 'hook-req1', method: 'GET', url: 'https://api.example.com/data', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'hook-req1', method: 'GET', url: 'https://api.example.com/data', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkBodyHandler(() => client);
   const data = expectOk(await handler({ requestId: 'hook-req1' }));
   assert.equal(data.source, 'hook');
@@ -159,7 +159,7 @@ test('network_body: hook path cache miss returns failResult', async () => {
     _networkMode: 'hook',
     evaluate: async () => ({ value: JSON.stringify({ error: 'not_found' }) }),
   });
-  client.networkBuffer.push({ id: 'hook-req2', method: 'GET', url: 'https://api.example.com/other', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'hook-req2', method: 'GET', url: 'https://api.example.com/other', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkBodyHandler(() => client);
   const error = expectFail(await handler({ requestId: 'hook-req2' }));
   assert.match(error, /not in cache/);
@@ -167,7 +167,7 @@ test('network_body: hook path cache miss returns failResult', async () => {
 
 test('network_body: no network mode returns failResult', async () => {
   const client = createMockClient({ _networkMode: 'none' });
-  client.networkBuffer.push({ id: 'req-none', method: 'GET', url: 'https://api.example.com/test', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req-none', method: 'GET', url: 'https://api.example.com/test', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkBodyHandler(() => client);
   const error = expectFail(await handler({ requestId: 'req-none' }));
   assert.match(error, /not active/);
@@ -191,7 +191,7 @@ test('network_body: truncates body when exceeding maxLength', async () => {
       return {};
     },
   });
-  client.networkBuffer.push({ id: 'big-req', method: 'GET', url: 'https://api.example.com/big', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'big-req', method: 'GET', url: 'https://api.example.com/big', timestamp: '2026-04-13T00:00:00Z', status: 200 });
   const handler = createNetworkBodyHandler(() => client);
   const result = await handler({ requestId: 'big-req', maxLength: 100 });
   const env = parseEnvelope(result);

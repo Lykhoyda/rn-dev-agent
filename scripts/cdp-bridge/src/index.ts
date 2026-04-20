@@ -220,22 +220,24 @@ trackedTool(
 
 trackedTool(
   'cdp_network_log',
-  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected).',
+  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). M4/D655: buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session.',
   {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     filter: z.string().optional().describe('Filter by URL substring (e.g. "/api/cart")'),
     clear: z.boolean().default(false).describe('Clear network buffer instead of reading'),
+    device: z.string().optional().describe('Scope: a specific device key OR the literal "all" for a chronologically-merged view across every device. Defaults to the active device.'),
   },
   createNetworkLogHandler(getClient),
 );
 
 trackedTool(
   'cdp_network_body',
-  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached.',
+  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached. M4/D655: pass `device` to look up requestId in a specific device buffer; defaults to the active device.',
   {
     requestId: z.string().describe('Request ID from cdp_network_log output'),
     maxLength: z.number().int().min(100).max(100000).default(10000).optional()
       .describe('Max body length to return (default 10000 chars). Truncated if longer.'),
+    device: z.string().optional().describe('Device key to scope the lookup ("all" to search every device buffer). Defaults to the active device.'),
   },
   createNetworkBodyHandler(getClient),
 );
