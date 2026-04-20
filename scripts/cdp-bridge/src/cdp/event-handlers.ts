@@ -1,9 +1,9 @@
-import type { RingBuffer } from '../ring-buffer.js';
+import type { RingBuffer, DeviceBufferManager } from '../ring-buffer.js';
 import type { ConsoleEntry, NetworkEntry, LogEntry } from '../types.js';
 
 export interface EventBuffers {
   console: RingBuffer<ConsoleEntry>;
-  network: RingBuffer<NetworkEntry, string>;
+  network: DeviceBufferManager<NetworkEntry, string>;
   log: RingBuffer<LogEntry>;
   scripts: Map<string, { scriptId: string; url: string; startLine: number; endLine: number }>;
 }
@@ -14,6 +14,7 @@ export function wireEventHandlers(
   sendFn: (method: string, params?: unknown, ms?: number) => Promise<unknown>,
   getIsPaused: () => boolean,
   setIsPaused: (v: boolean) => void,
+  getDeviceKey: () => string,
 ): void {
   eventHandlers.set('Runtime.consoleAPICalled', (params: unknown) => {
     const p = params as { type: string; args?: Array<{ value?: unknown; description?: string }> };
@@ -28,7 +29,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.requestWillBeSent', (params: unknown) => {
     const p = params as { requestId: string; request?: { method: string; url: string } };
-    buffers.network.push({
+    buffers.network.push(getDeviceKey(), {
       id: p.requestId,
       method: p.request?.method ?? 'GET',
       url: p.request?.url ?? '',
@@ -38,7 +39,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.responseReceived', (params: unknown) => {
     const p = params as { requestId: string; response?: { status: number } };
-    const entry = buffers.network.getByKey(p.requestId);
+    const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
     if (entry) {
       entry.status = p.response?.status;
       entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -47,7 +48,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.loadingFailed', (params: unknown) => {
     const p = params as { requestId: string };
-    const entry = buffers.network.getByKey(p.requestId);
+    const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
     if (entry) {
       entry.status = 0;
       entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
@@ -82,7 +83,7 @@ export function wireEventHandlers(
 
   eventHandlers.set('Network.loadingFinished', (params: unknown) => {
     const p = params as { requestId: string; encodedDataLength?: number };
-    const entry = buffers.network.getByKey(p.requestId);
+    const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
     if (entry) {
       entry.bodyAvailable = true;
       entry.bodySize = p.encodedDataLength;
@@ -103,7 +104,8 @@ export function wireEventHandlers(
 export function parseNetworkHookMessage(
   params: unknown,
   networkMode: 'cdp' | 'hook' | 'none',
-  networkBuffer: RingBuffer<NetworkEntry, string>,
+  networkManager: DeviceBufferManager<NetworkEntry, string>,
+  deviceKey: string,
 ): void {
   if (networkMode !== 'hook') return;
   const p = params as { args?: Array<{ value?: unknown }> };
@@ -116,14 +118,14 @@ export function parseNetworkHookMessage(
     const data = JSON.parse(parts.slice(2).join(':'));
 
     if (type === 'request') {
-      networkBuffer.push({
+      networkManager.push(deviceKey, {
         id: data.id,
         method: data.method ?? 'GET',
         url: data.url ?? '',
         timestamp: new Date().toISOString(),
       });
     } else if (type === 'response') {
-      const entry = networkBuffer.getByKey(data.id);
+      const entry = networkManager.getByKey(deviceKey, data.id);
       if (entry) {
         entry.status = data.status;
         entry.duration_ms = data.duration_ms;

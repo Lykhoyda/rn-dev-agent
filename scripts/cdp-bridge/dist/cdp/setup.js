@@ -5,7 +5,7 @@ import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
 export const REACT_READY_TIMEOUT_MS = 30_000;
 export const REACT_READY_POLL_MS = 500;
 export async function performSetup(opts) {
-    const { send, evaluate, port, connectedTarget, networkBuffer, setupEventHandlers, clearScripts, clearEventHandlers } = opts;
+    const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers } = opts;
     logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
     await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
     await send('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
@@ -53,10 +53,11 @@ export async function performSetup(opts) {
     setActiveFlag(port, connectedTarget);
     // D626 (B1 fix): Probe whether Network.enable actually delivers events.
     if (networkMode === 'cdp') {
-        const bufSizeBefore = networkBuffer.size;
+        const deviceKey = getDeviceKey();
+        const bufSizeBefore = networkManager.size(deviceKey);
         await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
         await new Promise(r => setTimeout(r, 500));
-        if (networkBuffer.size <= bufSizeBefore) {
+        if (networkManager.size(deviceKey) <= bufSizeBefore) {
             logger.info('CDP', 'Network.enable accepted but no events fired (RN < 0.83) — falling back to hooks');
             networkMode = 'none';
         }

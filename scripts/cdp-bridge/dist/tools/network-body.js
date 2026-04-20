@@ -4,7 +4,8 @@ export function createNetworkBodyHandler(getClient) {
         if (!args.requestId) {
             return failResult('requestId is required. Use cdp_network_log to find request IDs.');
         }
-        const entry = client.networkBuffer.getByKey(args.requestId);
+        const scope = args.device ?? client.activeDeviceKey;
+        const entry = client.networkBufferManager.getByKey(scope, args.requestId);
         if (!entry) {
             return failResult(`Request ${args.requestId} not found in network buffer. It may have been evicted (buffer holds last 100 requests).`);
         }

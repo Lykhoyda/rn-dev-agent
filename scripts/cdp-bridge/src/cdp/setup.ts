@@ -2,7 +2,7 @@ import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from '../injected-helpers.js';
 import { logger } from '../logger.js';
 import { setActiveFlag, sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
-import type { RingBuffer } from '../ring-buffer.js';
+import type { DeviceBufferManager } from '../ring-buffer.js';
 import type { NetworkEntry, EvaluateResult, HermesTarget } from '../types.js';
 
 export const REACT_READY_TIMEOUT_MS = 30_000;
@@ -21,12 +21,13 @@ export async function performSetup(opts: {
   evaluate: (expr: string) => Promise<EvaluateResult>;
   port: number;
   connectedTarget: HermesTarget | null;
-  networkBuffer: RingBuffer<NetworkEntry, string>;
+  networkManager: DeviceBufferManager<NetworkEntry, string>;
+  getDeviceKey: () => string;
   setupEventHandlers: () => void;
   clearScripts: () => void;
   clearEventHandlers: () => void;
 }): Promise<SetupResult> {
-  const { send, evaluate, port, connectedTarget, networkBuffer, setupEventHandlers, clearScripts, clearEventHandlers } = opts;
+  const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers } = opts;
 
   logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
   await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
@@ -82,10 +83,11 @@ export async function performSetup(opts: {
 
   // D626 (B1 fix): Probe whether Network.enable actually delivers events.
   if (networkMode === 'cdp') {
-    const bufSizeBefore = networkBuffer.size;
+    const deviceKey = getDeviceKey();
+    const bufSizeBefore = networkManager.size(deviceKey);
     await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
     await new Promise(r => setTimeout(r, 500));
-    if (networkBuffer.size <= bufSizeBefore) {
+    if (networkManager.size(deviceKey) <= bufSizeBefore) {
       logger.info('CDP', 'Network.enable accepted but no events fired (RN < 0.83) — falling back to hooks');
       networkMode = 'none';
     }
