@@ -2,9 +2,49 @@ import { logger } from '../logger.js';
 import { resetState, clearActiveFlag, sleep } from './state.js';
 import type { ResettableState } from './state.js';
 
-const RECONNECT_DELAY_MS = 1500;
 const RECONNECT_ATTEMPTS = 30;
-const RECONNECT_RETRY_MS = 1500;
+
+export interface ReconnectDelayOpts {
+  baseMs?: number;
+  capMs?: number;
+  jitterMs?: number;
+  rng?: () => number;
+}
+
+/**
+ * Exponential reconnect delay with jitter (M2 / Phase 90 Tier 1).
+ *
+ * Replaces the old linear 1.5s × 30 retry loop. The curve keeps attempt 0 at 0ms
+ * so hot-reload reconnects are instant, then grows to cap at 30s:
+ *
+ *   attempt 0  → 0ms        (hot-reload happy path)
+ *   attempt 1  → 500ms     ±jitter
+ *   attempt 2  → 1_000ms   ±jitter
+ *   attempt 3  → 2_000ms   ±jitter
+ *   attempt 4  → 4_000ms   ±jitter
+ *   attempt 5  → 8_000ms   ±jitter
+ *   attempt 6  → 16_000ms  ±jitter
+ *   attempt 7+ → 30_000ms  ±jitter (capped)
+ *
+ * Why the jitter: when two MCPs reconnect in lockstep after a Metro restart,
+ * linear retries hammer Metro synchronously. ±500ms of jitter breaks the lockstep
+ * within a few attempts. The cap prevents a 30-minute Metro outage from tripling
+ * into an hour of reconnect attempts.
+ *
+ * `rng` is injectable so tests can assert exact values without flakiness.
+ */
+export function computeReconnectDelay(attempt: number, opts: ReconnectDelayOpts = {}): number {
+  if (attempt <= 0) return 0;
+  const baseMs = opts.baseMs ?? 500;
+  const capMs = opts.capMs ?? 30_000;
+  const jitterMs = opts.jitterMs ?? 500;
+  const rng = opts.rng ?? Math.random;
+
+  const exponential = baseMs * Math.pow(2, attempt - 1);
+  const capped = Math.min(exponential, capMs);
+  const jitter = Math.floor(rng() * jitterMs);
+  return capped + jitter;
+}
 
 export interface ReconnectContext {
   isDisposed: () => boolean;
@@ -45,10 +85,45 @@ export function handleClose(ctx: ReconnectContext, code: number): void {
   });
 }
 
-export async function reconnect(ctx: ReconnectContext): Promise<void> {
-  await sleep(RECONNECT_DELAY_MS);
+/**
+ * Sleep for `delayMs` total, but check for `isDisposed()` / `isSoftReconnectRequested()`
+ * every `sliceMs` (default 500ms) so soft-reconnect requests are honored within one slice
+ * instead of waiting out the full exponential backoff window.
+ *
+ * Returns `true` if the full delay elapsed without interruption, `false` if a disposal
+ * or soft-reconnect request was observed. Critical for M2 / D653 — once the backoff
+ * curve hits the 30s cap, a non-interruptible sleep would exceed `softReconnect`'s 3s
+ * bail window, letting both paths race to call `discoverAndConnect()` concurrently.
+ */
+// Exported for unit testing — the `reconnect()` loop is a tight ReconnectContext
+// consumer, so exercising the sleep separately from the loop catches preemption
+// bugs without mocking every context field.
+export async function interruptibleSleep(
+  delayMs: number,
+  ctx: ReconnectContext,
+  sliceMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + delayMs;
+  while (Date.now() < deadline) {
+    if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) return false;
+    const remaining = deadline - Date.now();
+    await sleep(Math.min(sliceMs, remaining));
+  }
+  return true;
+}
 
+export async function reconnect(ctx: ReconnectContext): Promise<void> {
   for (let i = 0; i < RECONNECT_ATTEMPTS; i++) {
+    const delayMs = computeReconnectDelay(i);
+    if (delayMs > 0) {
+      logger.info('CDP', `reconnect attempt ${i + 1}/${RECONNECT_ATTEMPTS} in ${delayMs}ms`);
+      const completed = await interruptibleSleep(delayMs, ctx);
+      if (!completed) {
+        ctx.setReconnecting(false);
+        return;
+      }
+    }
+
     ctx.setReconnectAttempt(i + 1, new Date().toISOString());
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) {
       ctx.setReconnecting(false);
@@ -60,13 +135,7 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
       console.error('CDP: reconnected successfully');
       return;
     } catch {
-      if (i < RECONNECT_ATTEMPTS - 1) {
-        if (ctx.isSoftReconnectRequested()) {
-          ctx.setReconnecting(false);
-          return;
-        }
-        await sleep(RECONNECT_RETRY_MS);
-      }
+      // Fall through to next iteration — delay for attempt i+1 applied at top of loop.
     }
   }
   ctx.setReconnecting(false);
