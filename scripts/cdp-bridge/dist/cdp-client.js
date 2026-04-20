@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { RingBuffer, DeviceBufferManager, makeDeviceKey } from './ring-buffer.js';
+import { MetroEventsClient } from './metro/events-client.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
@@ -36,6 +37,7 @@ export class CDPClient {
     _logDomainEnabled = false;
     _profilerAvailable = false;
     _heapProfilerAvailable = false;
+    _metroEventsClient = null;
     // Tier 3: scriptParsed cache (D592)
     _scripts = new Map();
     // Tier 3: reconnection state visibility (D596)
@@ -64,6 +66,8 @@ export class CDPClient {
     get networkBufferManager() { return this._networkBufferManager; }
     /** M4 (D655): the device key for the currently connected target. Used as the default scope for per-device buffer queries. */
     get activeDeviceKey() { return makeDeviceKey(this._port, this._connectedTarget?.id); }
+    /** M5 (D656): Metro /events subscriber; null until first successful CDP setup attaches it. */
+    get metroEventsClient() { return this._metroEventsClient; }
     get connectionGeneration() { return this._connectionGeneration; }
     get bridgeDetected() { return this._bridgeDetected; }
     get bridgeVersion() { return this._bridgeVersion; }
@@ -118,6 +122,14 @@ export class CDPClient {
         resetState(this.buildResettableState());
         clearActiveFlag();
         this.stopBackgroundPoll();
+        // M5 (D656): tear down Metro /events subscriber alongside CDP shutdown.
+        if (this._metroEventsClient) {
+            try {
+                this._metroEventsClient.stop();
+            }
+            catch { /* best-effort */ }
+            this._metroEventsClient = null;
+        }
         if (this.ws) {
             this.ws.removeAllListeners();
             if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
@@ -224,6 +236,10 @@ export class CDPClient {
         parseNetHook(params, this._networkMode, this._networkBufferManager, this.activeDeviceKey);
     }
     async setup() {
+        // M5 (D656): attach Metro /events subscriber on every setup. Idempotent for the
+        // common reconnect case (start() is a no-op when already open). Fire-and-forget —
+        // failure to connect events WS must not block CDP setup.
+        this.ensureMetroEventsClient().catch(() => { });
         const result = await performSetup({
             send: (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)),
             evaluate: (expr) => this.evaluate(expr),
@@ -243,6 +259,21 @@ export class CDPClient {
         if (result.helpersInjected) {
             detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`); }).catch(() => { });
         }
+    }
+    async ensureMetroEventsClient() {
+        // Multi-review catch: if Metro hopped ports (CDPClient's `_port` was updated
+        // via discovery), the existing MetroEventsClient is still bound to the old
+        // port and would silently reconnect-forever to a dead endpoint. Detect the
+        // mismatch and swap in a fresh client. Covers the Metro-restart-on-new-port
+        // scenario this story is supposed to handle gracefully.
+        if (this._metroEventsClient && this._metroEventsClient.port !== this._port) {
+            this._metroEventsClient.stop();
+            this._metroEventsClient = null;
+        }
+        if (!this._metroEventsClient) {
+            this._metroEventsClient = new MetroEventsClient({ port: this._port });
+        }
+        await this._metroEventsClient.start();
     }
     setupEventHandlers() {
         wireEventHandlers(this.eventHandlers, { console: this._consoleBuffer, network: this._networkBufferManager, log: this._logBuffer, scripts: this._scripts }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)), () => this._isPaused, (v) => { this._isPaused = v; }, () => this.activeDeviceKey);

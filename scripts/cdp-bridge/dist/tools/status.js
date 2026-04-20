@@ -35,8 +35,15 @@ async function buildStatusResult(client) {
             catch { /* probe failed */ }
         }
     }
+    const metroEvents = client.metroEventsClient;
     return {
-        metro: { running: true, port: client.metroPort },
+        metro: {
+            running: true,
+            port: client.metroPort,
+            eventsConnected: metroEvents?.isConnected ?? false,
+            lastBuild: metroEvents?.lastBuild ?? null,
+            buildErrors: metroEvents?.buildErrors ?? 0,
+        },
         cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null, bundleId: client.connectedTarget?.description ?? null },
         app: {
             platform: appInfo?.platform ?? null,

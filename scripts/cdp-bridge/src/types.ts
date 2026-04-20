@@ -68,6 +68,12 @@ export interface StatusResult {
   metro: {
     running: boolean;
     port: number | null;
+    /** M5 (D656): true when the MetroEventsClient has an open WS to Metro's /events endpoint. */
+    eventsConnected?: boolean;
+    /** M5 (D656): most recent bundle build status + timestamp (null if no events seen yet). */
+    lastBuild?: { status: 'started' | 'done' | 'failed'; timestamp: string } | null;
+    /** M5 (D656): count of bundle_build_failed events observed since MCP connected. */
+    buildErrors?: number;
   };
   cdp: {
     connected: boolean;
