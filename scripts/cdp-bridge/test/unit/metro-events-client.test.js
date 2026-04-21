@@ -66,7 +66,7 @@ function waitForCondition(check, timeoutMs = 2000, intervalMs = 25) {
 
 test('MetroEventsClient: connects to /events and reports isConnected', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -79,7 +79,7 @@ test('MetroEventsClient: connects to /events and reports isConnected', async () 
 
 test('MetroEventsClient: stop is idempotent (safe to call twice)', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   await client.start();
   await waitForCondition(() => client.isConnected);
 
@@ -91,7 +91,7 @@ test('MetroEventsClient: stop is idempotent (safe to call twice)', async () => {
 
 test('MetroEventsClient: start is idempotent — second call while open is a no-op', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -116,7 +116,7 @@ test('MetroEventsClient: start against unreachable port does not throw; schedule
 
 test('MetroEventsClient: captures bundle_build_started / done / failed into ring buffer', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -152,7 +152,7 @@ test('MetroEventsClient: captures bundle_build_started / done / failed into ring
 
 test('MetroEventsClient: clearBuildErrors resets counter but preserves lastBuild', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -176,6 +176,7 @@ test('MetroEventsClient: invokes onEvent callback for every event', async () => 
   const client = new MetroEventsClient({
     port: server.port,
     onEvent: (e) => received.push(e),
+    skipIncompatibilityProbe: true,
   });
   try {
     await client.start();
@@ -196,7 +197,7 @@ test('MetroEventsClient: invokes onEvent callback for every event', async () => 
 
 test('MetroEventsClient: drops non-object JSON roots (primitives, arrays)', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -219,7 +220,7 @@ test('MetroEventsClient: drops non-object JSON roots (primitives, arrays)', asyn
 
 test('MetroEventsClient: drops unparseable bytes silently (actual JSON.parse failure)', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
@@ -266,7 +267,7 @@ test('MetroEventsClient: D656 regression — start() during reconnecting pre-emp
   // again. Without the fix, start() would connectOnce while the timer still fires
   // later → two parallel connects. With the fix, start() clears the timer first.
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     // Force client into reconnecting by connecting then closing server-side
     await client.start();
@@ -350,7 +351,7 @@ test('cdp_metro_events: reports not-connected when client is null', async () => 
 
 test('cdp_metro_events: returns events from a live client', async () => {
   const server = await makeMockMetroEventsServer();
-  const events = new MetroEventsClient({ port: server.port });
+  const events = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await events.start();
     await waitForCondition(() => events.isConnected);
@@ -373,7 +374,7 @@ test('cdp_metro_events: returns events from a live client', async () => {
 
 test('cdp_metro_events: type filter narrows results', async () => {
   const server = await makeMockMetroEventsServer();
-  const events = new MetroEventsClient({ port: server.port });
+  const events = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await events.start();
     await waitForCondition(() => events.isConnected);
@@ -396,7 +397,7 @@ test('cdp_metro_events: type filter narrows results', async () => {
 
 test('cdp_metro_events: clearErrors resets counter via the tool', async () => {
   const server = await makeMockMetroEventsServer();
-  const events = new MetroEventsClient({ port: server.port });
+  const events = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await events.start();
     await waitForCondition(() => events.isConnected);
@@ -419,7 +420,7 @@ test('cdp_metro_events: clearErrors resets counter via the tool', async () => {
 
 test('MetroEventsClient: auto-reconnects after server drops the connection', async () => {
   const server = await makeMockMetroEventsServer();
-  const client = new MetroEventsClient({ port: server.port });
+  const client = new MetroEventsClient({ port: server.port, skipIncompatibilityProbe: true });
   try {
     await client.start();
     await waitForCondition(() => client.isConnected);
