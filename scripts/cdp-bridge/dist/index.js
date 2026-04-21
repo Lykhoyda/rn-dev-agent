@@ -214,11 +214,10 @@ trackedTool('cdp_set_shared_value', 'Set a Reanimated SharedValue on a component
 }, withConnection(getClient, async (args, client) => {
     const expression = `(function() {
       var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-      if (!hook) return JSON.stringify({ __agent_error: 'No React DevTools hook' });
-      var ids = Array.from(hook.renderers.keys());
+      if (!hook || typeof hook.getFiberRoots !== 'function') return JSON.stringify({ __agent_error: 'No React DevTools hook' });
       var allRoots = [];
-      for (var i = 0; i < ids.length; i++) {
-        var r = hook.getFiberRoots(ids[i]);
+      for (var i = 1; i <= 5; i++) {
+        var r = hook.getFiberRoots(i);
         if (r && r.size) { var it = r.values(); var v; while (!(v = it.next()).done) allRoots.push(v.value); }
       }
       if (!allRoots.length) return JSON.stringify({ __agent_error: 'No fiber roots' });
@@ -474,7 +473,7 @@ trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android
     scanDir: z.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),
     matchBy: z.enum(['testID', 'label', 'any']).default('any').describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
 }, createCrossPlatformVerifyHandler());
-trackedTool('cdp_open_devtools', 'Report the React Native DevTools frontend URL for the live app + whether DevTools can coexist with the MCP session (RN >= 0.85 native multi-debugger). M1 (Phase 90 Tier 1) ships detection + capability reporting; full proxy auto-wiring for RN < 0.85 is tracked as M1b/Phase 100. Returns { devtoolsUrl, inspectorWsUrl, mode, supportsMultipleDebuggers, rnVersion, guidance }.', {}, createOpenDevToolsHandler(getClient));
+trackedTool('cdp_open_devtools', 'Report the React Native DevTools frontend URL for the live app + start a multiplexer proxy so DevTools can coexist with the MCP session on RN < 0.85 (RN >= 0.85 uses native multi-debugger). M1a (Phase 100) shipped detection + capability reporting; M1b (Phase 104) wired the proxy into CDPClient; B132 (Phase 105) added proxy auto-resume across reconnect. Returns { devtoolsUrl, inspectorWsUrl, hermesWsUrl, mode: "native" | "proxy-active", proxyPort, supportsMultipleDebuggers, rnVersion, guidance }.', {}, createOpenDevToolsHandler(getClient));
 trackedTool('cdp_metro_events', 'Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. M5 (Phase 90 Tier 2 / D656): the MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state — watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.', {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     type: z.string().optional().describe('Filter by event type (e.g. "bundle_build_failed")'),

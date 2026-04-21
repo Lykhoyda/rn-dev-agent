@@ -4,6 +4,27 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.36.1] — 2026-04-21
+
+B133 / Phase 107 — M8 loose ends. Closes the carveout logged during M8's Phase 106 review (Gemini finding, flagged at confidence 85, folded out of M8 per story boundary). Ports the 1..5 `getFiberRoots` probe into `cdp_set_shared_value` so that tool works on apps where `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers` is empty or missing. Also refreshes the `cdp_open_devtools` tool description, which had been frozen at M1a-era text and was factually misleading after M1b (Phase 104) and B132 (Phase 105) shipped. MCP server bumped to 0.31.1.
+
+### Fixed
+- **B133**: `cdp_set_shared_value` inline renderer walk in `src/index.ts:356-397`. Replaced the stale `Array.from(hook.renderers.keys())` loop with the 1..5 `getFiberRoots` probe pattern — mirrors M8's `findActiveRenderer` and `REACT_READY_PROBE_JS`. Intentional divergence: the `allRoots` accumulator is preserved (not early-return) because Reanimated worklets can mount in a secondary renderer at a different ID from the React DOM/native renderer, and `cdp_set_shared_value` must tolerate that to locate its target testID.
+
+### Changed
+- **`cdp_open_devtools` tool description** in `src/index.ts:798`. Old text stopped at M1a/Phase 100 detection; new text honestly reflects the Phase 100 (M1a) → Phase 104 (M1b CDPClient proxy wiring) → Phase 105 (B132 auto-resume) chain. Returns shape now documents `hermesWsUrl` + `proxyPort` that the handler has been emitting since M1b.
+
+### Tests
+- **3 new structural guard tests** at `scripts/cdp-bridge/test/unit/shared-value-renderer-probe-guard.test.js`. Walks all `src/*.ts` and fails on any reintroduction of `hook.renderers.keys()`. Pins `index.ts` to contain the 1..5 probe loop + the `typeof getFiberRoots === 'function'` guard. Pattern mirrors the existing `screenshot-bypass-guard.test.js` (B121).
+
+Running total: 485 → **488 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what they flagged during M8 review. Codex noted the `allRoots` accumulator divergence from M8's pattern is intentionally correct for worklet-aware fiber walks.
+
+### Refs
+D664 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 107 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Parent: D663 / M8 / Phase 106.
+
 ## [0.36.0] — 2026-04-21
 
 M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 metro-mcp pattern adoption audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5, mirroring metro-mcp's `FIBER_ROOT_JS` pattern. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
