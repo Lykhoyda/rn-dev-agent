@@ -262,7 +262,7 @@ test('selectTarget: warning includes available ids when targetId not found (B111
 
 // ── B116 / D639: platform inference via simctl listapps + adb pm list ──
 
-import { parseSimctlListapps, inferPlatforms } from '../../dist/cdp/discovery.js';
+import { parseSimctlListapps, inferPlatforms, inferPlatformFromDeviceName } from '../../dist/cdp/discovery.js';
 
 test('parseSimctlListapps extracts top-level bundle IDs only', () => {
   const input = `{
@@ -367,4 +367,74 @@ test('inferPlatforms handles mixed targets correctly', () => {
   assert.equal(targets[2].platform, 'ios');
   assert.equal(targets[2].ambiguousPlatform, true);
   assert.equal(targets[3].platform, 'ios');
+});
+
+// ── B131 / D660: deviceName-based platform inference ──
+
+test('inferPlatformFromDeviceName: detects iOS simulator names', () => {
+  assert.equal(inferPlatformFromDeviceName('iPhone 17 Pro'), 'ios');
+  assert.equal(inferPlatformFromDeviceName('iPhone 15'), 'ios');
+  assert.equal(inferPlatformFromDeviceName('iPad Pro (12.9-inch)'), 'ios');
+  assert.equal(inferPlatformFromDeviceName('iPod touch'), 'ios');
+});
+
+test('inferPlatformFromDeviceName: detects Android emulator names', () => {
+  assert.equal(inferPlatformFromDeviceName('sdk_gphone16k_arm64 - 17 - API 37'), 'android');
+  assert.equal(inferPlatformFromDeviceName('sdk_gphone_x86'), 'android');
+  assert.equal(inferPlatformFromDeviceName('emulator-5554'), 'android');
+  assert.equal(inferPlatformFromDeviceName('Pixel 7'), 'android');
+  assert.equal(inferPlatformFromDeviceName('Galaxy S23'), 'android');
+});
+
+test('inferPlatformFromDeviceName: case-insensitive', () => {
+  assert.equal(inferPlatformFromDeviceName('IPHONE 17 PRO'), 'ios');
+  assert.equal(inferPlatformFromDeviceName('sdk_gphone_ARM64'), 'android');
+});
+
+test('inferPlatformFromDeviceName: returns null for empty / unrecognized', () => {
+  assert.equal(inferPlatformFromDeviceName(undefined), null);
+  assert.equal(inferPlatformFromDeviceName(''), null);
+  assert.equal(inferPlatformFromDeviceName('Unknown Device'), null);
+  assert.equal(inferPlatformFromDeviceName('React Native Bridgeless'), null);
+});
+
+test('inferPlatforms: B131 regression — deviceName overrides package-list inference for dual-install bundle', () => {
+  // The exact B131 scenario: com.rndevagent.testapp installed on both iOS and
+  // Android. Old code marked the android target `platform: ios, ambiguousPlatform: true`.
+  // New code reads deviceName and assigns correctly.
+  const targets = [
+    { id: 'ios1', description: 'com.rndevagent.testapp', deviceName: 'iPhone 17 Pro' },
+    { id: 'and1', description: 'com.rndevagent.testapp', deviceName: 'sdk_gphone16k_arm64 - 17 - API 37' },
+  ];
+  inferPlatforms(targets, {
+    readAndroid: () => new Set(['com.rndevagent.testapp']),
+    readIOS: () => new Set(['com.rndevagent.testapp']),
+  });
+  assert.equal(targets[0].platform, 'ios');
+  assert.equal(targets[1].platform, 'android');
+  // Critically: ambiguousPlatform should NOT be set because deviceName disambiguated
+  assert.notEqual(targets[0].ambiguousPlatform, true);
+  assert.notEqual(targets[1].ambiguousPlatform, true);
+});
+
+test('inferPlatforms: falls back to package-list when deviceName is unrecognized', () => {
+  const targets = [
+    { id: '1', description: 'com.app', deviceName: 'Mystery Device' },
+  ];
+  inferPlatforms(targets, {
+    readAndroid: () => new Set(['com.app']),
+    readIOS: () => new Set(),
+  });
+  assert.equal(targets[0].platform, 'android', 'falls back to package-list → android');
+});
+
+test('inferPlatforms: falls back to package-list when deviceName absent', () => {
+  const targets = [
+    { id: '1', description: 'com.ios.only' }, // no deviceName
+  ];
+  inferPlatforms(targets, {
+    readAndroid: () => new Set(),
+    readIOS: () => new Set(['com.ios.only']),
+  });
+  assert.equal(targets[0].platform, 'ios');
 });

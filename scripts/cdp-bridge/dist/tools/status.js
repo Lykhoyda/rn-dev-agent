@@ -43,6 +43,7 @@ async function buildStatusResult(client) {
             eventsConnected: metroEvents?.isConnected ?? false,
             lastBuild: metroEvents?.lastBuild ?? null,
             buildErrors: metroEvents?.buildErrors ?? 0,
+            eventsReason: metroEvents?.incompatibleReason ?? null,
         },
         cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null, bundleId: client.connectedTarget?.description ?? null },
         app: {

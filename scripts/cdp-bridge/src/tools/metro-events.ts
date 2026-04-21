@@ -27,6 +27,20 @@ export function createMetroEventsHandler(getClient: () => CDPClient) {
       });
     }
 
+    // B129 (D658): if the endpoint was detected as incompatible during probe,
+    // surface that instead of silently returning empty events forever.
+    if (metroEvents.incompatibleReason === 'expo-cli-incompatible') {
+      return okResult({
+        eventsConnected: false,
+        eventsReason: 'expo-cli-incompatible',
+        lastBuild: null,
+        buildErrors: 0,
+        count: 0,
+        events: [],
+        hint: 'Metro /events endpoint is serving the Expo manifest protocol, not Metro\'s reporter stream. This is expected on Expo-managed projects — bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream.',
+      });
+    }
+
     if (args.clearErrors) {
       metroEvents.clearBuildErrors();
       return okResult({
