@@ -4,6 +4,44 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.38.0] — 2026-04-22
+
+M7 / Phase 109 — fast-runner tri-state liveness probe. Closes the Phase 90 Tier 3 M7 story and functionally retires the shape-equivalent leftover from R3. Previously `isFastRunnerAvailable()` only checked PID; a process whose PID was alive but whose HTTP server had wedged was reported as available, and every iOS `device_press` / `device_fill` / `device_swipe` stalled on a 10s fetch timeout before falling through to the daemon. M7 adds a `probeFastRunnerLiveness()` helper that distinguishes `'alive' | 'stale' | 'dead'` via PID check + `/health` probe, plus an explicit `reapStaleFastRunner()` helper for the SIGTERM→grace→SIGKILL escalation. `tryFastRunner` is rewired to branch on the tri-state. MCP server bumped to 0.33.0.
+
+Version note: this release skips 0.37.0 (reserved for unmerged M11 PR #53). When M11 merges it will slot in as 0.37.0 between this and 0.36.1.
+
+### Added
+- **`FastRunnerLiveness` type** + `probeFastRunnerLiveness(deps?)` + `reapStaleFastRunner(deps?)` in `scripts/cdp-bridge/src/fast-runner-session.ts`. All deps injectable (`getState`, `processAlive`, `httpProbe`, `clearState`, `sendSignal`, `sleep`) for hermetic tests — mirrors the `lockfile.ts` pattern.
+- **Tri-state probe semantics**: `'alive'` when `/health` returns `{ok:true}`; `'stale'` on any HTTP error or `ok:false` (including AbortError, ECONNREFUSED, 500, timeout); `'dead'` when no state file or PID has exited (and state is cleared).
+- **Graceful reap**: SIGTERM → 500ms grace → SIGKILL if still alive → clear state. ESRCH tolerance on signal send.
+
+### Changed
+- **`tryFastRunner` in `scripts/cdp-bridge/src/agent-device-wrapper.ts`** now awaits the tri-state probe at entry. `'alive'` proceeds; `'stale'` reaps + returns null (daemon fallthrough); `'dead'` + iOS cold-launches via `startFastRunner`; `'dead'` + non-iOS returns null.
+- **`fastHealthCheck` refactored** to delegate to the new `defaultHttpProbe` helper (single source of truth for the `/health` call shape). Wrapped in try/catch to preserve its original boolean contract — caught during review.
+
+### Fixed
+- **Dangling ChildProcess handle after reap** (Gemini review finding, confidence 84): `clearStateFile()` now nulls `runnerProcess` alongside `runnerState`. Self-heals via `on('exit')` but closes the window cleanly so a concurrent `stopFastRunner()` doesn't double-signal a dead PID.
+
+### Tests
+- **17 new tests** in `test/unit/fast-runner-liveness.test.js`. 8 probe variations (null state, dead PID, alive+healthy, alive+ok:false, HTTP 500, AbortError, ECONNREFUSED, timeout forwarding) + 2 cleanup invariants (probe is read-only on living processes; only `'dead'` discovery clears state) + 6 reap variations (no-op on null state, SIGTERM-only success, SIGTERM-ignored→SIGKILL, ESRCH tolerance, graceMs override, default graceMs) + 1 default-timeout check. All hermetic.
+
+Running total: 488 → **505 passing**, zero failures.
+
+### Known limits
+- **Concurrent `'dead'` probes can race two `xcodebuild` spawns** if two DIFFERENT MCP tool calls arrive within the 30s startup window. Flagged sub-threshold (Gemini, confidence 82) — MCP SDK serializes tool invocations per connection, so the race window is narrow. Will follow up with in-flight promise cache on `startFastRunner` if observed in practice.
+- **SIGKILL on xcodebuild PID may orphan `xctest` children** briefly. macOS launchd reaps within seconds.
+- **Legacy `isFastRunnerAvailable(): boolean`** retained for sync callers (e.g., post-spawn check, status tool). Documented as coarse in JSDoc.
+- **Stale detection conflates "hung" with "misbehaving-but-responsive"**: a runner returning `{ok:false}` is reaped even if it might self-recover. Conservative — prefer respawn over hang.
+
+### Review
+Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fastHealthCheck` refactor dropped its outer try/catch — fixed by re-wrapping. Gemini (confidence 84): reap left `runnerProcess` dangling — fixed by nulling in `clearStateFile`. Two sub-threshold findings deferred (concurrent dead-probe race, SIGKILL xcodebuild orphan) — noted in Known Limits.
+
+### R3 relationship
+Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
+
+### Refs
+D666 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 109 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
+
 ## [0.36.1] — 2026-04-21
 
 B133 / Phase 107 — M8 loose ends. Closes the carveout logged during M8's Phase 106 review (Gemini finding, flagged at confidence 85, folded out of M8 per story boundary). Ports the 1..5 `getFiberRoots` probe into `cdp_set_shared_value` so that tool works on apps where `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers` is empty or missing. Also refreshes the `cdp_open_devtools` tool description, which had been frozen at M1a-era text and was factually misleading after M1b (Phase 104) and B132 (Phase 105) shipped. MCP server bumped to 0.31.1.

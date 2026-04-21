@@ -209,22 +209,101 @@ export async function fastHealthCheck() {
     if (!runnerState)
         return false;
     try {
-        const url = `http://[::1]:${runnerState.port}/health`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2000);
-        try {
-            const res = await fetch(url, { signal: controller.signal });
-            clearTimeout(timer);
-            if (!res.ok)
-                return false;
-            const body = await res.json();
-            return body.ok === true;
-        }
-        finally {
-            clearTimeout(timer);
-        }
+        const result = await defaultHttpProbe(runnerState.port, 2000);
+        return result.ok && result.status === 200 && result.bodyOk === true;
+    }
+    catch {
+        // Preserve the original contract: any network/abort/parse error → false.
+        // (The probe helper throws on fetch errors; M7 review caught this regression.)
+        return false;
+    }
+}
+function defaultProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
     }
     catch {
         return false;
     }
+}
+async function defaultHttpProbe(port, timeoutMs) {
+    const url = `http://[::1]:${port}/health`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok)
+            return { ok: false, status: res.status };
+        let bodyOk;
+        try {
+            const body = await res.json();
+            bodyOk = body.ok === true;
+        }
+        catch {
+            bodyOk = false;
+        }
+        return { ok: true, status: res.status, bodyOk };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+function clearStateFile() {
+    runnerState = null;
+    // M7 review (Gemini): null the child-process handle too. Previously a reap
+    // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
+    // eventually self-heal, but during the window a concurrent stopFastRunner
+    // could signal an already-dead process. Clearing here is defensive.
+    runnerProcess = null;
+    try {
+        unlinkSync(STATE_FILE);
+    }
+    catch { /* already gone */ }
+}
+export async function probeFastRunnerLiveness(deps = {}) {
+    const getState = deps.getState ?? (() => runnerState);
+    const processAlive = deps.processAlive ?? defaultProcessAlive;
+    const httpProbe = deps.httpProbe ?? defaultHttpProbe;
+    const clearState = deps.clearState ?? clearStateFile;
+    const timeoutMs = deps.timeoutMs ?? 2000;
+    const state = getState();
+    if (!state)
+        return 'dead';
+    if (!processAlive(state.pid)) {
+        clearState();
+        return 'dead';
+    }
+    try {
+        const res = await httpProbe(state.port, timeoutMs);
+        if (res.ok && res.status === 200 && res.bodyOk === true)
+            return 'alive';
+        return 'stale';
+    }
+    catch {
+        return 'stale';
+    }
+}
+export async function reapStaleFastRunner(deps = {}) {
+    const getState = deps.getState ?? (() => runnerState);
+    const processAlive = deps.processAlive ?? defaultProcessAlive;
+    const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+    const sleep = deps.sleep ?? ((ms) => new Promise(r => setTimeout(r, ms)));
+    const clearState = deps.clearState ?? clearStateFile;
+    const graceMs = deps.graceMs ?? 500;
+    const state = getState();
+    if (!state)
+        return;
+    try {
+        sendSignal(state.pid, 'SIGTERM');
+    }
+    catch { /* already dead */ }
+    await sleep(graceMs);
+    if (processAlive(state.pid)) {
+        try {
+            sendSignal(state.pid, 'SIGKILL');
+        }
+        catch { /* race: died between checks */ }
+    }
+    clearState();
 }
