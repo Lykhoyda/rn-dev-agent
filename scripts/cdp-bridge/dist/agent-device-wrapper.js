@@ -5,7 +5,7 @@ import { createConnection } from 'node:net';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { okResult, failResult } from './utils.js';
-import { isFastRunnerAvailable, getFastRunnerState, fastTap, fastType, fastSwipe, fastSnapshot, fastScreenshot, fastDismissKeyboard, startFastRunner, } from './fast-runner-session.js';
+import { isFastRunnerAvailable, getFastRunnerState, fastTap, fastType, fastSwipe, fastSnapshot, fastScreenshot, fastDismissKeyboard, startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, } from './fast-runner-session.js';
 import { updateRefMap, refCenter, getScreenRect, hasRefMap, clearRefMap } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 const execFile = promisify(execFileCb);
@@ -198,13 +198,26 @@ function computeSwipeCoords(direction, screen) {
     }
 }
 async function tryFastRunner(command, positionals) {
-    if (!isFastRunnerAvailable()) {
+    // M7 / Phase 109 (D666): tri-state liveness — distinguishes a hung HTTP
+    // server (stale) from a dead process. Before M7, any PID-alive-but-HTTP-hung
+    // state caused every press to wait out the 10s fetch timeout.
+    const liveness = await probeFastRunnerLiveness();
+    if (liveness === 'stale') {
+        // Runner process is alive but its HTTP server is wedged. Reap it now;
+        // fall through to the daemon for this call. Next call probes 'dead'
+        // and will cold-launch a fresh runner if iOS.
+        await reapStaleFastRunner();
+        return null;
+    }
+    if (liveness === 'dead') {
         const session = getActiveSession();
         if (session?.platform === 'ios' && session.deviceId) {
             try {
                 await startFastRunner(session.deviceId, resolveBundleId('ios') ?? 'unknown');
             }
             catch { /* auto-restart failed */ }
+            // startFastRunner only resolves after FASTXCT_READY, so a sync PID
+            // check here is sufficient — avoids a second HTTP round-trip.
             if (!isFastRunnerAvailable())
                 return null;
         }
