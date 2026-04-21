@@ -4,6 +4,38 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.35.0] — 2026-04-21
+
+B132 / Phase 105 — proxy auto-resume across reconnect. Closes the known limitation logged during M1b review: the multiplexer captured `hermesUrl` once at `startProxy` time, so any event that invalidated the target URL (hot reload, target eviction, Metro restart) left the proxy routing to a dead upstream with every MCP call silently timing out. This release auto-suspends the proxy when the MCP's CDP WebSocket closes, runs the normal reconnect loop directly against Hermes, then auto-resumes the proxy against the refreshed target URL. MCP server bumped to 0.30.0.
+
+### Added
+- **`CDPClient._proxyDesired` intent flag**. Tracks user's standing wish for a proxy separately from the live `_proxyUrl`. Set by successful `startProxy()`, cleared by `stopProxy()` / `disconnect()`. Preserved across internal `_suspendProxy()` so auto-resume knows to re-allocate.
+- **`CDPClient._suspendProxy()` / `_resumeProxy()` internal lifecycle**. `_suspendProxy` clears `_proxyUrl` synchronously (so the reconnect loop observes cleared state before the multiplexer's HTTP server finishes its async shutdown) and tears down the old multiplexer best-effort. `_resumeProxy` rehydrates a fresh multiplexer against the CURRENT `_connectedTarget.webSocketDebuggerUrl`.
+- **`ReconnectContext.afterReconnect?: () => Promise<void>`**. New optional callback fired inside `reconnect()` after `discoverAndConnect` resolves successfully. Used by CDPClient to auto-resume the proxy. Hook failures are caught + logged, never propagated — a post-reconnect hook cannot undo a successful reconnect.
+- **`CDPClient._softReconnectDirect()`**. Bypasses the new `softReconnect` wrapper for internal callers like `_doStartProxy`, avoiding infinite-rollback where the wrapper would suspend the just-allocated multiplexer. Named method (not inline call) so tests can stub the direct path independently of the public `softReconnect`.
+
+### Changed (behavioral, forward-compatible)
+- **`CDPClient.softReconnect()` now wraps with suspend→reconnect→resume** when a proxy is active. Covers all auto-recovery paths (e.g., `cdp_status`'s `__DEV__=false` recovery). When no proxy is active, behavior is unchanged.
+- **`CDPClient.handleClose()` now fires-and-forgets `_suspendProxy()` before delegating to the reconnect machinery**. `_suspendProxy` is ordered so its synchronous preamble (clearing `_proxyUrl`) runs before `handleCloseFn` returns control — guaranteeing the reconnect loop's `discoverAndConnect → connectToTarget → ctx.getProxyUrl()` sees `null`. Multiplexer HTTP server shutdown runs concurrently but harmlessly (no one still routes to it).
+
+### Fixed
+- **B132: stale `hermesUrl` in multiplexer after target change or Metro reload** — see Added. The multiplexer now rehydrates against the fresh target URL on every reconnect, eliminating the silent "proxy routes to dead upstream" failure mode.
+
+### Testing
+- 462 → 475 tests passing (+13): 10 CDPClient proxy-lifecycle tests (`_suspendProxy` sync behavior, `_resumeProxy` guards + one-shot failure policy, `softReconnect` wrapper suspend+resume, `stopProxy`/`disconnect` clearing desired flag, end-to-end URL rehydration via both `softReconnect` wrapper and `afterReconnect` callback trigger paths) + 3 reconnect-loop tests (`afterReconnect` fires exactly once on success, undefined-callback backwards compat, hook failure doesn't propagate).
+
+### Multi-review outcome
+Gemini + Codex both returned clean (no high-confidence issues). Six critical race-condition questions verified: suspend-before-reconnect ordering, double-resume hazard on preemption, `_doStartProxy` rollback correctness, `_resumeProxy` failure policy, `_startProxyInFlight` concurrency sharing, end-to-end test soundness. One below-threshold observation from Gemini (the end-to-end test exercised the softReconnect-wrapper path but not the `afterReconnect` trigger specifically) closed with an additional focused test.
+
+### Policy choices documented
+- **`_resumeProxy` failure → clear `_proxyDesired`** (predictable over resilient). Silent-retry-on-every-reconnect would mask structural bugs. User sees the log warning once and can re-run `cdp_open_devtools` to retry manually.
+- **`handleClose` uses `void this._suspendProxy()`** (fire-and-forget). The synchronous preamble is sufficient to redirect the reconnect; awaiting `mux.stop()` would block the `handleClose` path unnecessarily.
+
+### Refs
+- D662 in DECISIONS.md. Phase 105 in ROADMAP.md. B132 closed in BUGS.md. Parent: D661 / Phase 104 (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
+
+---
+
 ## [0.34.0] — 2026-04-21
 
 M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split from 2026-04-20: on RN < 0.85, `cdp_open_devtools` now starts the multiplexer proxy automatically and re-routes the MCP's own CDP WebSocket through it, so React Native DevTools can connect to the same proxy as a second consumer. Both coexist on single-debugger Hermes without evicting each other. MCP server bumped to 0.29.0.

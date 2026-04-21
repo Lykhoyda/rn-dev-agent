@@ -96,6 +96,14 @@ export async function reconnect(ctx) {
             await ctx.discoverAndConnect();
             ctx.setReconnecting(false);
             console.error('CDP: reconnected successfully');
+            if (ctx.afterReconnect) {
+                try {
+                    await ctx.afterReconnect();
+                }
+                catch (err) {
+                    logger.warn('CDP', `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`);
+                }
+            }
             return;
         }
         catch {

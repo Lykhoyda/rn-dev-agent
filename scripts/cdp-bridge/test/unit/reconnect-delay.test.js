@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeReconnectDelay, interruptibleSleep } from '../../dist/cdp/reconnection.js';
+import { computeReconnectDelay, interruptibleSleep, reconnect } from '../../dist/cdp/reconnection.js';
 
 // Minimal mock ReconnectContext — interruptibleSleep only touches isDisposed / isSoftReconnectRequested
 function makeMockCtx(overrides = {}) {
@@ -219,4 +219,84 @@ test('computeReconnectDelay: cumulative delay over 30 attempts vs old linear (re
     attemptsIn60s < 40,
     `new curve must be well under old linear ~40 attempts/60s, got ${attemptsIn60s}`,
   );
+});
+
+// ── B132: afterReconnect callback fires once on successful reconnect ──
+
+function makeReconnectCtx({ succeedOnAttempt = 0, afterReconnect } = {}) {
+  let attempt = 0;
+  const state = {
+    reconnecting: true,
+    disposed: false,
+    softReconnectRequested: false,
+    state: 'reconnecting',
+    attempts: [],
+    afterReconnectCalls: 0,
+    discoverCalls: 0,
+  };
+  const ctx = {
+    isDisposed: () => state.disposed,
+    isSoftReconnectRequested: () => state.softReconnectRequested,
+    isReconnecting: () => state.reconnecting,
+    setReconnecting: (v) => { state.reconnecting = v; },
+    setSoftReconnectRequested: (v) => { state.softReconnectRequested = v; },
+    setState: (s) => { state.state = s; },
+    setReconnectAttempt: (count, ts) => { state.attempts.push({ count, ts }); },
+    closeWs: () => {},
+    rejectAllPending: () => {},
+    discoverAndConnect: async () => {
+      state.discoverCalls++;
+      if (attempt < succeedOnAttempt) {
+        attempt++;
+        throw new Error('mock discover failure');
+      }
+      return 'connected';
+    },
+    getResettableState: () => ({}),
+    getPort: () => 8081,
+    setBgPollTimer: () => {},
+    getBgPollTimer: () => null,
+    isConnected: () => false,
+    afterReconnect: afterReconnect
+      ? async () => { state.afterReconnectCalls++; await afterReconnect(); }
+      : undefined,
+  };
+  return { state, ctx };
+}
+
+test('B132: reconnect() calls afterReconnect exactly once after successful attempt', async () => {
+  let hookCalls = 0;
+  const { state, ctx } = makeReconnectCtx({
+    succeedOnAttempt: 0,  // first attempt succeeds — no backoff waits
+    afterReconnect: async () => { hookCalls++; },
+  });
+
+  await reconnect(ctx);
+
+  assert.equal(state.discoverCalls, 1);
+  assert.equal(hookCalls, 1, 'afterReconnect fired exactly once');
+  assert.equal(state.reconnecting, false, 'reconnecting flag cleared');
+});
+
+test('B132: reconnect() does NOT call afterReconnect when callback is not provided (backwards compat)', async () => {
+  const { state, ctx } = makeReconnectCtx({ succeedOnAttempt: 0 });
+  // ctx.afterReconnect is undefined — reconnect must not throw.
+
+  await reconnect(ctx);
+
+  assert.equal(state.discoverCalls, 1);
+  assert.equal(state.reconnecting, false);
+});
+
+test('B132: afterReconnect failure is caught + logged, never propagates (reconnect success preserved)', async () => {
+  const { state, ctx } = makeReconnectCtx({
+    succeedOnAttempt: 0,
+    afterReconnect: async () => { throw new Error('hook boom'); },
+  });
+
+  // reconnect() must still resolve cleanly — hook failure cannot undo a successful reconnect.
+  await reconnect(ctx);
+
+  assert.equal(state.discoverCalls, 1);
+  assert.equal(state.reconnecting, false, 'reconnect still succeeded despite hook failure');
 });

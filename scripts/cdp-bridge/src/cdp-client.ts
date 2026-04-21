@@ -85,6 +85,12 @@ export class CDPClient {
   // multiplexer, with the second overwriting _multiplexer and orphaning the first.
   // In-flight promise cache serializes concurrent callers on the same startup.
   private _startProxyInFlight: Promise<string> | null = null;
+  // B132 (M1b follow-up): separate user intent from live proxy state. `_proxyUrl`
+  // is the live state (null between suspend and resume). `_proxyDesired` is the
+  // user's standing wish — set by successful startProxy(), cleared by stopProxy()
+  // or disconnect(). Preserved across _suspendProxy() so post-reconnect auto-resume
+  // can rehydrate the proxy against the fresh target URL.
+  private _proxyDesired = false;
 
   constructor(port?: number) {
     this._port = port ?? 8081;
@@ -166,6 +172,28 @@ export class CDPClient {
   }
 
   async softReconnect(): Promise<string> {
+    // B132: if the proxy is active, suspend it first so the reconnect goes
+    // DIRECT to Hermes (not through the potentially-stale proxy), then resume
+    // on success so DevTools can reconnect. This covers auto-recovery paths
+    // like `cdp_status` __DEV__=false recovery.
+    const wasProxyActive = this._proxyUrl !== null;
+    if (wasProxyActive) {
+      await this._suspendProxy();
+    }
+    const result = await this._softReconnectDirect();
+    if (wasProxyActive) {
+      await this._resumeProxy();
+    }
+    return result;
+  }
+
+  /**
+   * B132: softReconnect that BYPASSES the suspend/resume wrapper. Used only
+   * by `_doStartProxy` — we must not suspend the multiplexer we just allocated.
+   * Kept as a named private method (not an inline call) so tests can stub it
+   * independently of the public `softReconnect`.
+   */
+  private async _softReconnectDirect(): Promise<string> {
     return softReconnectFn(this.buildReconnectCtx());
   }
 
@@ -199,7 +227,12 @@ export class CDPClient {
     this._proxyUrl = `ws://127.0.0.1:${port}`;
     logger.info('CDP', `Proxy started on ${this._proxyUrl}, soft-reconnecting current session`);
     try {
-      await this.softReconnect();
+      // B132: call `_softReconnectDirect` instead of `this.softReconnect()`. The
+      // wrapper would observe _proxyUrl just set above and try to suspend the
+      // multiplexer we just allocated — infinite rollback. `_softReconnectDirect`
+      // is also testable in isolation (tests can stub it to simulate failure
+      // without the full softReconnectFn machinery).
+      await this._softReconnectDirect();
     } catch (err) {
       // Soft-reconnect failed — tear the proxy back down so we don't leave a
       // half-switched state (proxy running but CDPClient disconnected).
@@ -208,6 +241,10 @@ export class CDPClient {
       this._proxyUrl = null;
       throw err;
     }
+    // B132: set intent ONLY after the full startup+softReconnect succeeds.
+    // If any step failed, _proxyDesired stays false — no surprise auto-resume
+    // on the next reconnect.
+    this._proxyDesired = true;
     return this._proxyUrl;
   }
 
@@ -216,6 +253,10 @@ export class CDPClient {
    * No-op if the proxy isn't active.
    */
   async stopProxy(): Promise<void> {
+    // B132: clear intent FIRST so the softReconnect wrapper's auto-resume hook
+    // (and any in-flight afterReconnect hook from a concurrent reconnect) sees
+    // _proxyDesired=false and skips re-allocating a new proxy.
+    this._proxyDesired = false;
     if (!this._proxyUrl) return;
     logger.info('CDP', `Stopping proxy at ${this._proxyUrl}`);
     const mux = this._multiplexer;
@@ -230,6 +271,49 @@ export class CDPClient {
       if (mux) {
         try { await mux.stop(); } catch { /* best-effort */ }
       }
+    }
+  }
+
+  /**
+   * B132: stop the multiplexer without reconnecting the MCP. Called from
+   * `handleClose` and the `softReconnect` wrapper BEFORE a reconnect fires, so
+   * the reconnect attempts go DIRECT to Hermes. Preserves `_proxyDesired` so
+   * `_resumeProxy` can rehydrate the proxy against the fresh target URL after
+   * the reconnect succeeds.
+   */
+  private async _suspendProxy(): Promise<void> {
+    if (!this._proxyUrl) return;
+    const mux = this._multiplexer;
+    // Clear _proxyUrl SYNCHRONOUSLY so any concurrent reconnect observes it
+    // cleared before the multiplexer's HTTP server is actually torn down.
+    this._proxyUrl = null;
+    this._multiplexer = null;
+    if (mux) {
+      try { await mux.stop(); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
+   * B132: if `_proxyDesired` is set and no proxy is currently active, restart
+   * the multiplexer against the CURRENT `_connectedTarget` (which may have a
+   * different `webSocketDebuggerUrl` after reconnect — that's the whole point).
+   *
+   * Failure policy: log a warning and CLEAR `_proxyDesired` so we don't
+   * silently loop on every subsequent reconnect. User can re-run
+   * `cdp_open_devtools` to retry manually. This is "predictable over resilient"
+   * — noisy failures are easier to debug than silent retries.
+   */
+  private async _resumeProxy(): Promise<void> {
+    if (!this._proxyDesired) return;
+    if (this.disposed) return;
+    if (!this._connectedTarget) return;
+    if (this._proxyUrl) return;
+    try {
+      await this.startProxy();
+      logger.info('CDP', 'Proxy auto-resumed after reconnect');
+    } catch (err) {
+      logger.warn('CDP', `Proxy auto-resume failed — clearing desired flag. Run cdp_open_devtools to retry: ${err instanceof Error ? err.message : err}`);
+      this._proxyDesired = false;
     }
   }
 
@@ -256,6 +340,9 @@ export class CDPClient {
       this._multiplexer = null;
       this._proxyUrl = null;
     }
+    // B132: clear intent on disposal — a fresh CDPClient must not inherit
+    // desired=true from a previous session.
+    this._proxyDesired = false;
 
     if (this.ws) {
       this.ws.removeAllListeners();
@@ -431,6 +518,15 @@ export class CDPClient {
   }
 
   private handleClose(code: number): void {
+    // B132: if the proxy is active when the upstream closes, suspend it BEFORE
+    // the reconnect loop fires. `_suspendProxy` clears `_proxyUrl` synchronously
+    // at its start (before the first await), so by the time `reconnect()` calls
+    // `discoverAndConnect` → `connectToTarget` → `ctx.getProxyUrl()`, the URL
+    // is already null and reconnect goes direct. Fire-and-forget is fine — the
+    // multiplexer's HTTP server shutdown is bounded and doesn't gate reconnect.
+    if (this._proxyUrl) {
+      void this._suspendProxy();
+    }
     handleCloseFn(this.buildReconnectCtx(), code);
   }
 
@@ -474,6 +570,11 @@ export class CDPClient {
       getPort: () => this._port,
       setBgPollTimer: (timer) => { this._bgPollTimer = timer; },
       getBgPollTimer: () => this._bgPollTimer,
+      // B132: after the exponential-backoff reconnect loop succeeds, rehydrate
+      // the proxy if one was desired. This is the "auto-resume" half of the
+      // suspend→reconnect→resume sequence. softReconnect has its own wrapper
+      // and does NOT go through this hook — would double-fire the resume.
+      afterReconnect: () => this._resumeProxy(),
     };
   }
 
