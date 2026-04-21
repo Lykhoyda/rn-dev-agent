@@ -1,4 +1,4 @@
-import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT } from '../injected-helpers.js';
+import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
 import { logger } from '../logger.js';
 import { setActiveFlag, sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
@@ -137,10 +137,7 @@ export async function waitForReact(
   const start = Date.now();
   while (Date.now() - start < effectiveTimeout) {
     try {
-      const result = await evaluate(
-        'typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ !== "undefined" && ' +
-        '__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers?.size > 0'
-      );
+      const result = await evaluate(REACT_READY_PROBE_JS);
       if (result.value === true) return;
     } catch {
       // Not ready yet

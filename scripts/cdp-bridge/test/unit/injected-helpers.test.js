@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import { INJECTED_HELPERS, REACT_READY_PROBE_JS } from '../../dist/injected-helpers.js';
 
 /**
  * Create a VM sandbox with mock React DevTools globals.
@@ -28,7 +28,9 @@ function createSandbox(opts = {}) {
   sandbox.globalThis = sandbox;
 
   // Set up React DevTools hook with a mock fiber root
-  if (opts.fiberRoot) {
+  if (opts.hook) {
+    sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = opts.hook;
+  } else if (opts.fiberRoot) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map([[1, {}]]),
       getFiberRoots: () => new Set([{ current: opts.fiberRoot }]),
@@ -184,4 +186,95 @@ test('getStoreState: no-store error includes Jotai hint', () => {
   const result = JSON.parse(sandbox.__RN_AGENT.getStoreState());
   assert.ok(result.hint3, 'hint3 should exist for Jotai');
   assert.match(result.hint3, /JOTAI_STORE/);
+});
+
+// ── M8: findActiveRenderer 1..5 probe ────────────────────────────────
+// Mirrors metro-mcp src/utils/fiber.ts FIBER_ROOT_JS. Proves the probe
+// finds fiber roots regardless of hook.renderers population state.
+
+test('M8: findActiveRenderer finds root at renderer ID 1 (happy path, no regression)', () => {
+  const fiber = { type: { name: 'App' }, child: null, sibling: null };
+  const hook = {
+    renderers: new Map([[1, {}]]),
+    getFiberRoots: (id) => id === 1 ? new Set([{ current: fiber }]) : new Set(),
+  };
+  const sandbox = createSandbox({ hook });
+  assert.equal(sandbox.__RN_AGENT.isReady(), true);
+});
+
+test('M8: findActiveRenderer probes past empty IDs to renderer 4', () => {
+  const fiber = { type: { name: 'App' }, child: null, sibling: null };
+  const hook = {
+    renderers: new Map(),
+    getFiberRoots: (id) => id === 4 ? new Set([{ current: fiber }]) : new Set(),
+  };
+  const sandbox = createSandbox({ hook });
+  assert.equal(sandbox.__RN_AGENT.isReady(), true);
+});
+
+test('M8: findActiveRenderer succeeds when hook.renderers is empty (story repro)', () => {
+  const fiber = { type: { name: 'App' }, child: null, sibling: null };
+  const hook = {
+    renderers: new Map(),
+    getFiberRoots: (id) => id === 1 ? new Set([{ current: fiber }]) : new Set(),
+  };
+  const sandbox = createSandbox({ hook });
+  assert.equal(sandbox.__RN_AGENT.isReady(), true);
+});
+
+test('M8: findActiveRenderer returns null when no renderer 1..5 has roots', () => {
+  const hook = {
+    renderers: new Map(),
+    getFiberRoots: () => new Set(),
+  };
+  const sandbox = createSandbox({ hook });
+  assert.equal(sandbox.__RN_AGENT.isReady(), false);
+});
+
+test('M8: findActiveRenderer returns null when hook.getFiberRoots is missing', () => {
+  const sandbox = createSandbox({ hook: { renderers: new Map() } });
+  assert.equal(sandbox.__RN_AGENT.isReady(), false);
+});
+
+// ── M8: REACT_READY_PROBE_JS for waitForReact ──────────────────────
+// Mirrors findActiveRenderer's probe shape so setup.ts's readiness gate
+// stops timing out on apps where hook.renderers is empty.
+
+function evalProbe(hook) {
+  const sandbox = { __REACT_DEVTOOLS_GLOBAL_HOOK__: hook };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  return vm.runInContext(REACT_READY_PROBE_JS, sandbox);
+}
+
+test('M8 probe: returns true when fiber roots exist at renderer ID 1', () => {
+  assert.equal(evalProbe({
+    renderers: new Map(),
+    getFiberRoots: (i) => i === 1 ? new Set([{}]) : new Set(),
+  }), true);
+});
+
+test('M8 probe: returns true when fiber roots only at renderer ID 4 (renderers map empty)', () => {
+  assert.equal(evalProbe({
+    renderers: new Map(),
+    getFiberRoots: (i) => i === 4 ? new Set([{}]) : new Set(),
+  }), true);
+});
+
+test('M8 probe: returns false when no renderer 1..5 has fiber roots', () => {
+  assert.equal(evalProbe({
+    renderers: new Map(),
+    getFiberRoots: () => new Set(),
+  }), false);
+});
+
+test('M8 probe: returns false when hook.getFiberRoots is missing', () => {
+  assert.equal(evalProbe({ renderers: new Map() }), false);
+});
+
+test('M8 probe: returns false when hook itself is absent', () => {
+  const sandbox = {};
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  assert.equal(vm.runInContext(REACT_READY_PROBE_JS, sandbox), false);
 });
