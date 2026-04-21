@@ -126,7 +126,7 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
 
   // Stub softReconnect to simulate the "connection landed, but the full session
   // re-setup failed" path. This is the only branch that triggers rollback.
-  client.softReconnect = async () => { throw new Error('simulated reconnect failure'); };
+  client._softReconnectDirect = async () => { throw new Error('simulated reconnect failure'); };
 
   await assert.rejects(() => client.startProxy(), /simulated reconnect failure/);
 
@@ -137,7 +137,7 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
 
   // A fresh startProxy must succeed (state genuinely reset, not just nulled out).
   let reconnects = 0;
-  client.softReconnect = async () => { reconnects++; };
+  client._softReconnectDirect = async () => { reconnects++; };
   const url = await client.startProxy();
   assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+$/, 'fresh startProxy succeeds after rollback');
   assert.equal(reconnects, 1);
@@ -153,7 +153,7 @@ test('CDPClient.startProxy is concurrency-safe — parallel callers share one mu
 
   // Stub softReconnect with a small delay so both callers definitely race through
   // the guard during the multiplexer.start() await window.
-  client.softReconnect = async () => {
+  client._softReconnectDirect = async () => {
     await new Promise((r) => setTimeout(r, 30));
   };
 
@@ -183,7 +183,7 @@ test('CDPClient.startProxy: after failed start, in-flight guard clears so next c
   plantConnectedTarget(client, hermes.url);
 
   let attempts = 0;
-  client.softReconnect = async () => {
+  client._softReconnectDirect = async () => {
     attempts++;
     if (attempts === 1) throw new Error('first attempt fails');
   };
@@ -198,4 +198,235 @@ test('CDPClient.startProxy: after failed start, in-flight guard clears so next c
 
   await client.disconnect();
   await hermes.stop();
+});
+
+// ── B132 auto-suspend / auto-resume across reconnect ──
+
+test('B132: _suspendProxy clears _proxyUrl synchronously, preserves _proxyDesired', async () => {
+  const client = new CDPClient();
+
+  // Plant active-proxy state.
+  client._proxyUrl = 'ws://127.0.0.1:45678';
+  client._multiplexer = {
+    port: 45678, isRunning: true, consumerCount: 0,
+    stop: async () => {},
+  };
+  client._proxyDesired = true;
+
+  const suspendPromise = client._suspendProxy();
+
+  // Synchronous post-condition: _proxyUrl and _multiplexer cleared BEFORE the await.
+  // This is critical — the handleClose hook relies on this so the reconnect loop
+  // observes cleared state without waiting for multiplexer.stop() to complete.
+  assert.equal(client._proxyUrl, null, '_proxyUrl cleared synchronously');
+  assert.equal(client._multiplexer, null, '_multiplexer cleared synchronously');
+  assert.equal(client._proxyDesired, true, '_proxyDesired preserved — resume hook should re-allocate');
+
+  await suspendPromise;
+});
+
+test('B132: _resumeProxy no-ops when _proxyDesired=false', async () => {
+  const client = new CDPClient();
+  // Plant a target so the "no connected target" guard doesn't trigger.
+  plantConnectedTarget(client, 'ws://127.0.0.1:99999/will-not-use');
+
+  assert.equal(client._proxyDesired, false, 'default desired=false');
+
+  // Track whether startProxy fires.
+  let startCalls = 0;
+  const originalStartProxy = client.startProxy.bind(client);
+  client.startProxy = async (...args) => { startCalls++; return originalStartProxy(...args); };
+
+  await client._resumeProxy();
+  assert.equal(startCalls, 0, '_resumeProxy skipped — no desired intent');
+});
+
+test('B132: _resumeProxy no-ops when _proxyUrl already set (already active)', async () => {
+  const client = new CDPClient();
+  plantConnectedTarget(client, 'ws://127.0.0.1:99999/existing');
+  client._proxyDesired = true;
+  client._proxyUrl = 'ws://127.0.0.1:45678';  // Already active
+
+  let startCalls = 0;
+  const originalStartProxy = client.startProxy.bind(client);
+  client.startProxy = async (...args) => { startCalls++; return originalStartProxy(...args); };
+
+  await client._resumeProxy();
+  assert.equal(startCalls, 0, '_resumeProxy skipped — proxy already active');
+});
+
+test('B132: _resumeProxy failure clears _proxyDesired (predictable one-shot policy)', async () => {
+  const hermes = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermes.url);
+  client._proxyDesired = true;
+
+  // Stub _softReconnectDirect to fail — startProxy rollback fires, resume fails.
+  client._softReconnectDirect = async () => { throw new Error('resume softReconnect failed'); };
+
+  await client._resumeProxy();
+
+  // Failure policy: clear desired so we don't silently retry on every subsequent
+  // reconnect. User sees the log warning + can re-invoke cdp_open_devtools.
+  assert.equal(client._proxyDesired, false, '_proxyDesired cleared after resume failure');
+  assert.equal(client._proxyUrl, null, 'no live proxy after failed resume');
+
+  await hermes.stop();
+});
+
+test('B132: softReconnect wrapper suspends + resumes the proxy across reconnect', async () => {
+  const hermes = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermes.url);
+
+  // First startProxy via the direct path — plants _proxyUrl + _proxyDesired=true.
+  client._softReconnectDirect = async () => {};  // no-op reconnect
+  const originalUrl = await client.startProxy();
+  assert.ok(client._proxyDesired, '_proxyDesired set after successful startProxy');
+
+  const firstMux = client._multiplexer;
+
+  // Now invoke the PUBLIC softReconnect — which should wrap with suspend→resume.
+  // After this returns, _proxyUrl should be populated with a FRESH URL (new mux),
+  // and the old mux should have been stopped.
+  let firstMuxStopped = false;
+  const origStop = firstMux.stop.bind(firstMux);
+  firstMux.stop = async () => { firstMuxStopped = true; return origStop(); };
+
+  await client.softReconnect();
+
+  assert.equal(firstMuxStopped, true, 'suspend stopped the original multiplexer');
+  assert.ok(client._proxyUrl, 'resume allocated a new proxy URL');
+  assert.notEqual(client._multiplexer, firstMux, 'new multiplexer allocated');
+
+  await client.disconnect();
+  await hermes.stop();
+});
+
+test('B132: softReconnect wrapper does NOT suspend/resume when proxy was inactive', async () => {
+  const hermes = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermes.url);
+
+  assert.equal(client._proxyUrl, null, 'precondition: proxy inactive');
+
+  let directCalls = 0;
+  client._softReconnectDirect = async () => { directCalls++; };
+
+  await client.softReconnect();
+
+  assert.equal(directCalls, 1, 'softReconnect ran exactly once — no suspend/resume path');
+  assert.equal(client._proxyUrl, null, 'proxy still inactive');
+  assert.equal(client._proxyDesired, false, 'desired stays false');
+
+  await hermes.stop();
+});
+
+test('B132: stopProxy clears _proxyDesired so post-stop reconnect does not re-allocate', async () => {
+  const hermes = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermes.url);
+
+  client._softReconnectDirect = async () => {};
+  await client.startProxy();
+  assert.equal(client._proxyDesired, true);
+
+  await client.stopProxy();
+  assert.equal(client._proxyDesired, false, 'stopProxy cleared desired intent');
+  assert.equal(client._proxyUrl, null);
+
+  // A subsequent softReconnect should NOT re-allocate a proxy.
+  await client.softReconnect();
+  assert.equal(client._proxyUrl, null, 'no proxy after explicit stop + reconnect');
+
+  await client.disconnect();
+  await hermes.stop();
+});
+
+test('B132: disconnect clears _proxyDesired (no zombie desired-flag across sessions)', async () => {
+  const client = new CDPClient();
+  client._proxyDesired = true;
+
+  await client.disconnect();
+  assert.equal(client._proxyDesired, false, 'disconnect clears desired flag');
+});
+
+test('B132: afterReconnect path — _resumeProxy picks up the new target URL (reconnect-loop trigger)', async () => {
+  // This test complements the softReconnect-wrapper end-to-end below by exercising
+  // the OTHER production trigger: the `handleClose → reconnect() → afterReconnect`
+  // path. Instead of wiring up a fake WS close event, we directly simulate the
+  // post-reconnect state: proxy suspended, _connectedTarget mutated to a new URL,
+  // then `_resumeProxy()` invoked (which is what buildReconnectCtx's afterReconnect
+  // callback does).
+  const hermesA = await makeMockHermes();
+  const hermesB = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermesA.url);
+
+  // Initial proxy start against hermesA.
+  client._softReconnectDirect = async () => {};
+  await client.startProxy();
+  const muxA = client._multiplexer;
+  assert.equal(muxA.opts ? muxA.opts.hermesUrl : undefined, hermesA.url);
+
+  // Simulate handleClose fire-and-forget: suspend the proxy synchronously.
+  // (handleClose itself does this via `void this._suspendProxy()`.)
+  await client._suspendProxy();
+  assert.equal(client.proxyUrl, null);
+  assert.equal(client.proxyMultiplexer, null);
+  assert.equal(client._proxyDesired, true, 'desired flag preserved across suspend');
+
+  // Simulate reconnect loop: discoverAndConnect picked a refreshed target.
+  client._connectedTarget = {
+    id: 'page1', title: 'Mock', vm: 'Hermes',
+    webSocketDebuggerUrl: hermesB.url,
+    platform: 'ios',
+  };
+
+  // afterReconnect hook fires → _resumeProxy() (this is what buildReconnectCtx wires up).
+  await client._resumeProxy();
+
+  const muxB = client._multiplexer;
+  assert.notEqual(muxB, muxA, 'fresh multiplexer allocated via afterReconnect path');
+  assert.equal(muxB.opts ? muxB.opts.hermesUrl : undefined, hermesB.url, 'new proxy points at hermes B');
+
+  await client.disconnect();
+  await hermesA.stop();
+  await hermesB.stop();
+});
+
+test('B132: end-to-end — proxy rehydrates against a NEW target URL after reconnect', async () => {
+  // Two mock Hermes instances simulate "target got a new URL after reload".
+  const hermesA = await makeMockHermes();
+  const hermesB = await makeMockHermes();
+  const client = new CDPClient();
+  plantConnectedTarget(client, hermesA.url);
+
+  client._softReconnectDirect = async () => {};
+  const urlA = await client.startProxy();
+  const muxA = client._multiplexer;
+  assert.equal(muxA.opts ? muxA.opts.hermesUrl : undefined, hermesA.url, 'proxy A points at hermes A');
+
+  // Simulate a reconnect where the target's URL changed. In production, the
+  // reconnect loop would update _connectedTarget via discoverAndConnect; here
+  // we simulate that by mutating the target before softReconnect.
+  client._softReconnectDirect = async () => {
+    // Discovery picked a "refreshed" target with the same ID but a new URL.
+    client._connectedTarget = {
+      id: 'page1', title: 'Mock', vm: 'Hermes',
+      webSocketDebuggerUrl: hermesB.url,
+      platform: 'ios',
+    };
+  };
+
+  await client.softReconnect();
+
+  const muxB = client._multiplexer;
+  assert.notEqual(muxB, muxA, 'new multiplexer allocated on resume');
+  assert.equal(muxB.opts ? muxB.opts.hermesUrl : undefined, hermesB.url, 'new proxy points at hermes B — this is the B132 fix');
+  assert.notEqual(client._proxyUrl, urlA, 'proxy URL changed (new ephemeral port)');
+
+  await client.disconnect();
+  await hermesA.stop();
+  await hermesB.stop();
 });

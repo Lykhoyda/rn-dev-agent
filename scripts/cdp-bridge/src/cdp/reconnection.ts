@@ -62,6 +62,15 @@ export interface ReconnectContext {
   setBgPollTimer: (timer: ReturnType<typeof setInterval> | null) => void;
   getBgPollTimer: () => ReturnType<typeof setInterval> | null;
   isConnected: () => boolean;
+  /**
+   * B132 (M1b follow-up): invoked after a successful reconnect inside the
+   * exponential-backoff `reconnect()` loop. Used by CDPClient to auto-resume
+   * the multiplexer proxy after reconnecting directly to Hermes. NOT fired
+   * by `softReconnect()` — that path has its own wrapper on the CDPClient.
+   * Failures are logged, never propagated — post-reconnect hooks must not
+   * undo a successful reconnect.
+   */
+  afterReconnect?: () => Promise<void>;
 }
 
 export function handleClose(ctx: ReconnectContext, code: number): void {
@@ -133,6 +142,13 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
       await ctx.discoverAndConnect();
       ctx.setReconnecting(false);
       console.error('CDP: reconnected successfully');
+      if (ctx.afterReconnect) {
+        try {
+          await ctx.afterReconnect();
+        } catch (err) {
+          logger.warn('CDP', `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
       return;
     } catch {
       // Fall through to next iteration — delay for attempt i+1 applied at top of loop.
