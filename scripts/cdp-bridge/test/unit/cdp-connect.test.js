@@ -35,6 +35,7 @@ function createMockContext({ initialFilters = {}, port = 8081 } = {}) {
     handleClose: () => {},
     rejectAllPending: () => {},
     setup: async () => {},
+    getProxyUrl: () => null,
   };
   return { state, ctx };
 }

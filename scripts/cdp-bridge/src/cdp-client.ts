@@ -2,6 +2,8 @@ import WebSocket from 'ws';
 import { RingBuffer, DeviceBufferManager, makeDeviceKey } from './ring-buffer.js';
 import { getNetworkBufferManager } from './cdp/network-buffer-manager.js';
 import { MetroEventsClient } from './metro/events-client.js';
+import { CDPMultiplexer } from './cdp/multiplexer.js';
+import type { MultiplexerOptions } from './cdp/multiplexer.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
 import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
@@ -74,6 +76,16 @@ export class CDPClient {
   private _lastReconnectAttempt: string | null = null;
   private _reconnectAttemptCount = 0;
 
+  // M1b (Phase 100+): multiplexer proxy state. When `_proxyUrl` is non-null, the
+  // CDP WebSocket routes through `_multiplexer` instead of connecting directly to
+  // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
+  private _proxyUrl: string | null = null;
+  private _multiplexer: CDPMultiplexer | null = null;
+  // D661 review finding: concurrent startProxy() callers would each allocate a
+  // multiplexer, with the second overwriting _multiplexer and orphaning the first.
+  // In-flight promise cache serializes concurrent callers on the same startup.
+  private _startProxyInFlight: Promise<string> | null = null;
+
   constructor(port?: number) {
     this._port = port ?? 8081;
     this._consoleBuffer = new RingBuffer<ConsoleEntry>(200);
@@ -107,6 +119,12 @@ export class CDPClient {
   get reconnectState(): { active: boolean; lastAttempt: string | null; attemptCount: number } {
     return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
   }
+  /** M1b: URL the CDPClient routes through (null when connected directly). */
+  get proxyUrl(): string | null { return this._proxyUrl; }
+  /** M1b: true when the multiplexer is owned by this client and routing traffic. */
+  get isProxyActive(): boolean { return this._proxyUrl !== null; }
+  /** M1b: the multiplexer instance (null when no proxy is active). */
+  get proxyMultiplexer(): CDPMultiplexer | null { return this._multiplexer; }
 
   helperExpr(call: string): string {
     return helperExprFn(call, this._bridgeDetected);
@@ -151,6 +169,70 @@ export class CDPClient {
     return softReconnectFn(this.buildReconnectCtx());
   }
 
+  /**
+   * M1b (Phase 100+): start the multiplexer proxy and switch this client's CDP
+   * WebSocket to ride through it. After this resolves, React Native DevTools
+   * (or any other WS consumer) can connect to the same port and coexist with
+   * the MCP. Requires an already-connected target — call `autoConnect` first.
+   *
+   * No-op if the proxy is already active (returns existing URL). Concurrent
+   * callers share a single in-flight promise — the multiplexer is allocated
+   * exactly once per successful `(connected → active)` transition.
+   */
+  async startProxy(opts?: Partial<Omit<MultiplexerOptions, 'hermesUrl'>>): Promise<string> {
+    if (this._proxyUrl) return this._proxyUrl;
+    if (this._startProxyInFlight) return this._startProxyInFlight;
+    this._startProxyInFlight = this._doStartProxy(opts).finally(() => {
+      this._startProxyInFlight = null;
+    });
+    return this._startProxyInFlight;
+  }
+
+  private async _doStartProxy(opts?: Partial<Omit<MultiplexerOptions, 'hermesUrl'>>): Promise<string> {
+    if (!this._connectedTarget) {
+      throw new Error('startProxy requires an active CDP connection — call autoConnect first');
+    }
+    const hermesUrl = this._connectedTarget.webSocketDebuggerUrl;
+    const multiplexer = new CDPMultiplexer({ hermesUrl, ...opts });
+    const port = await multiplexer.start();
+    this._multiplexer = multiplexer;
+    this._proxyUrl = `ws://127.0.0.1:${port}`;
+    logger.info('CDP', `Proxy started on ${this._proxyUrl}, soft-reconnecting current session`);
+    try {
+      await this.softReconnect();
+    } catch (err) {
+      // Soft-reconnect failed — tear the proxy back down so we don't leave a
+      // half-switched state (proxy running but CDPClient disconnected).
+      try { await multiplexer.stop(); } catch { /* best-effort */ }
+      this._multiplexer = null;
+      this._proxyUrl = null;
+      throw err;
+    }
+    return this._proxyUrl;
+  }
+
+  /**
+   * M1b: stop the multiplexer and reconnect this client directly to Hermes.
+   * No-op if the proxy isn't active.
+   */
+  async stopProxy(): Promise<void> {
+    if (!this._proxyUrl) return;
+    logger.info('CDP', `Stopping proxy at ${this._proxyUrl}`);
+    const mux = this._multiplexer;
+    this._proxyUrl = null;
+    this._multiplexer = null;
+    // Reconnect first (uses direct target URL now that _proxyUrl is null), then
+    // stop the old proxy. Reverse order would briefly leave the client trying
+    // to route through an already-stopped proxy.
+    try {
+      await this.softReconnect();
+    } finally {
+      if (mux) {
+        try { await mux.stop(); } catch { /* best-effort */ }
+      }
+    }
+  }
+
   async disconnect(): Promise<void> {
     // B76/D644: idempotent guard — graceful-shutdown may race with a tool-triggered
     // disconnect (e.g. cdp_restart calling disconnect() while SIGTERM fires). Second
@@ -165,6 +247,14 @@ export class CDPClient {
     if (this._metroEventsClient) {
       try { this._metroEventsClient.stop(); } catch { /* best-effort */ }
       this._metroEventsClient = null;
+    }
+
+    // M1b: tear down multiplexer if one is active. This is the only reliable
+    // end-of-session cleanup hook for the proxy (SIGTERM → disconnect → here).
+    if (this._multiplexer) {
+      try { await this._multiplexer.stop(); } catch { /* best-effort */ }
+      this._multiplexer = null;
+      this._proxyUrl = null;
     }
 
     if (this.ws) {
@@ -409,6 +499,7 @@ export class CDPClient {
       handleClose: (code) => this.handleClose(code),
       rejectAllPending: (reason) => this.rejectAllPending(reason),
       setup: () => this.setup(),
+      getProxyUrl: () => this._proxyUrl,
     };
   }
 

@@ -42,6 +42,10 @@ export function createMockClient(overrides = {}) {
     get reconnectState() {
       return { active: false, lastAttempt: null, attemptCount: 0 };
     },
+    /** M1b: proxy getters — default "no proxy active", override via _proxyUrl/_proxyMultiplexer. */
+    get proxyUrl() { return client._proxyUrl; },
+    get isProxyActive() { return client._proxyUrl !== null; },
+    get proxyMultiplexer() { return client._proxyMultiplexer; },
 
     // --- Mutable state (set in overrides or mutated in tests) ---
     _isConnected: true,
@@ -57,6 +61,8 @@ export function createMockClient(overrides = {}) {
     },
     _networkMode: 'cdp',
     _metroEventsClient: null,
+    _proxyUrl: null,
+    _proxyMultiplexer: null,
     _bridgeDetected: false,
     _bridgeVersion: null,
     _logDomainEnabled: true,
@@ -89,6 +95,20 @@ export function createMockClient(overrides = {}) {
     async softReconnect() {
       client._isConnected = true;
       client._helpersInjected = true;
+    },
+
+    async startProxy() {
+      // Mock mirrors real behavior: idempotent, sets URL + multiplexer-like stub,
+      // returns URL. Tests that want failure override this.
+      if (client._proxyUrl) return client._proxyUrl;
+      client._proxyUrl = 'ws://127.0.0.1:45678';
+      client._proxyMultiplexer = { port: 45678, isRunning: true, consumerCount: 0 };
+      return client._proxyUrl;
+    },
+
+    async stopProxy() {
+      client._proxyUrl = null;
+      client._proxyMultiplexer = null;
     },
 
     async reinjectHelpers() {

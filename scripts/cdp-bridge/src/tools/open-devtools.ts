@@ -3,46 +3,46 @@ import { okResult, failResult } from '../utils.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 
 /**
- * cdp_open_devtools — M1 / Phase 90 Tier 1 MVP.
+ * cdp_open_devtools — M1 / Phase 90 Tier 1 + M1b (Phase 100).
  *
  * Report the React Native DevTools frontend URL for the currently connected app,
- * along with whether DevTools can coexist with the MCP session (RN >= 0.85 native
- * multi-debugger) or requires the proxy path (RN < 0.85, M1b).
- *
- * This tool is read-only — it does not start the multiplexer proxy or mutate any
- * CDP state. The proxy wiring is deferred to M1b (Phase 100, pending a live
- * simulator session for end-to-end verification).
+ * and on RN < 0.85 automatically start the multiplexer proxy so DevTools can
+ * coexist with the MCP session (native multi-debugger kicks in on RN >= 0.85).
  *
  * Output shape (on success):
  *   {
- *     devtoolsUrl: string | null,  // Metro-served DevTools frontend URL, or null if unavailable
- *     inspectorWsUrl: string,       // Direct Hermes CDP WS URL (what DevTools connects to)
- *     mode: 'native' | 'proxy-required',
+ *     devtoolsUrl: string,          // DevTools frontend URL (points at proxy when proxy-active)
+ *     inspectorWsUrl: string,        // WS URL to connect DevTools to (proxy port in proxy-active mode)
+ *     hermesWsUrl: string,           // Direct Hermes WS URL (what the proxy talks to upstream)
+ *     mode: 'native' | 'proxy-active',
  *     supportsMultipleDebuggers: boolean,
  *     rnVersion: { major, minor, patch } | null,
- *     guidance: string,             // Human-readable instructions
+ *     proxyPort: number | null,      // proxy port when mode='proxy-active'
+ *     guidance: string,              // Human-readable instructions
  *   }
  */
 
 interface OpenDevToolsResult {
-  devtoolsUrl: string | null;
+  devtoolsUrl: string;
   inspectorWsUrl: string;
-  mode: 'native' | 'proxy-required';
+  hermesWsUrl: string;
+  mode: 'native' | 'proxy-active';
   supportsMultipleDebuggers: boolean;
   rnVersion: { major: number; minor: number; patch: number } | null;
+  proxyPort: number | null;
   guidance: string;
 }
 
 const NATIVE_GUIDANCE = [
   'React DevTools can connect to the inspector URL below while your MCP session stays active.',
-  'Open the DevTools URL in Chrome (or paste the inspectorWsUrl directly into a DevTools fusebox instance).',
+  'Open the devtoolsUrl in Chrome (or paste the inspectorWsUrl directly into a DevTools fusebox instance).',
   'Native multi-debugger support on RN >= 0.85 means no proxy is needed — both connections multiplex transparently.',
 ].join('\n');
 
-const PROXY_REQUIRED_GUIDANCE = [
-  'Your RN version does not support native multi-debugger. Using React DevTools will evict the MCP session (CDP close code 1006).',
-  'M1 (this release) ships detection + capability reporting; automatic proxy wiring is tracked as M1b (Phase 100, pending live simulator verification).',
-  'Workaround today: close the MCP CC session while using DevTools, reopen when done. OR upgrade to RN >= 0.85.',
+const PROXY_ACTIVE_GUIDANCE = [
+  'Your RN version does not support native multi-debugger; the multiplexer proxy has been started so React DevTools can coexist with the MCP.',
+  'Open the devtoolsUrl in Chrome. DevTools will connect to the proxy (inspectorWsUrl); the MCP is already routing through it.',
+  'The proxy stops automatically when the MCP disconnects, or explicitly via cdp_disconnect.',
 ].join('\n');
 
 export function createOpenDevToolsHandler(getClient: () => CDPClient) {
@@ -58,14 +58,10 @@ export function createOpenDevToolsHandler(getClient: () => CDPClient) {
     }
 
     const metroPort = client.metroPort;
-    const inspectorWsUrl = `ws://127.0.0.1:${metroPort}/inspector/debug?device=${encodeURIComponent(target.id)}&page=${encodeURIComponent(target.id)}`;
+    const hermesWsUrl = `ws://127.0.0.1:${metroPort}/inspector/debug?device=${encodeURIComponent(target.id)}&page=${encodeURIComponent(target.id)}`;
 
-    // DevTools frontend is served by Metro at /debugger-frontend/rn_fusebox.html
-    // Query params hand the frontend the WS URL it should connect to. Metro auto-loads the React DevTools bundle.
-    const devtoolsUrl = `http://127.0.0.1:${metroPort}/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:${metroPort}/inspector/debug?device=${encodeURIComponent(target.id)}%26page=${encodeURIComponent(target.id)}`;
-
-    // Probe app info for RN version. Best-effort — if probe fails, we still report
-    // inspectorWsUrl and assume proxy-required.
+    // Probe app info for RN version. Best-effort — if probe fails, treat as
+    // proxy-required (conservative default: use the proxy so DevTools doesn't evict the MCP).
     let rnVersion: OpenDevToolsResult['rnVersion'] = null;
     let supportsMultiple = false;
     try {
@@ -84,15 +80,49 @@ export function createOpenDevToolsHandler(getClient: () => CDPClient) {
       }
     } catch { /* leave rnVersion null, supportsMultiple false */ }
 
-    const result: OpenDevToolsResult = {
-      devtoolsUrl: supportsMultiple ? devtoolsUrl : null,
-      inspectorWsUrl,
-      mode: supportsMultiple ? 'native' : 'proxy-required',
-      supportsMultipleDebuggers: supportsMultiple,
-      rnVersion,
-      guidance: supportsMultiple ? NATIVE_GUIDANCE : PROXY_REQUIRED_GUIDANCE,
-    };
+    if (supportsMultiple) {
+      // Native multi-debugger: DevTools connects directly to Hermes via Metro's
+      // /inspector/debug endpoint. No proxy needed.
+      const devtoolsUrl = `http://127.0.0.1:${metroPort}/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:${metroPort}/inspector/debug?device=${encodeURIComponent(target.id)}%26page=${encodeURIComponent(target.id)}`;
+      return okResult({
+        devtoolsUrl,
+        inspectorWsUrl: hermesWsUrl,
+        hermesWsUrl,
+        mode: 'native',
+        supportsMultipleDebuggers: true,
+        rnVersion,
+        proxyPort: null,
+        guidance: NATIVE_GUIDANCE,
+      } satisfies OpenDevToolsResult);
+    }
 
-    return okResult(result);
+    // Proxy path: start (or reuse) the multiplexer so DevTools and MCP coexist.
+    let proxyUrl: string;
+    try {
+      proxyUrl = await client.startProxy();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return failResult(`cdp_open_devtools: failed to start multiplexer proxy: ${message}`);
+    }
+    const proxyPort = client.proxyMultiplexer?.port ?? null;
+    if (proxyPort === null) {
+      // Defensive: startProxy resolved but the multiplexer has no port. Indicates an
+      // internal state drift — fail loudly rather than return a half-working URL.
+      return failResult('cdp_open_devtools: multiplexer started but has no bound port');
+    }
+    // DevTools frontend still lives on Metro (it's static HTML + JS served over HTTP).
+    // Only the WS destination changes: DevTools → proxy (loopback); proxy → Hermes.
+    const devtoolsUrl = `http://127.0.0.1:${metroPort}/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:${proxyPort}`;
+
+    return okResult({
+      devtoolsUrl,
+      inspectorWsUrl: proxyUrl,
+      hermesWsUrl,
+      mode: 'proxy-active',
+      supportsMultipleDebuggers: false,
+      rnVersion,
+      proxyPort,
+      guidance: PROXY_ACTIVE_GUIDANCE,
+    } satisfies OpenDevToolsResult);
   };
 }

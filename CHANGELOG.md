@@ -4,6 +4,40 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.34.0] — 2026-04-21
+
+M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split from 2026-04-20: on RN < 0.85, `cdp_open_devtools` now starts the multiplexer proxy automatically and re-routes the MCP's own CDP WebSocket through it, so React Native DevTools can connect to the same proxy as a second consumer. Both coexist on single-debugger Hermes without evicting each other. MCP server bumped to 0.29.0.
+
+### Added
+- **`CDPClient.startProxy(opts?)` / `stopProxy()`**. Lifecycle methods that create/dispose the multiplexer and soft-reconnect the MCP's CDP WebSocket to route through it. Idempotent when already active.
+- **`cdp_status.proxy` block**. Reports `{ active, port, url, consumerCount }`. `consumerCount` observes the 1 → 2 transition when DevTools connects.
+- **`cdp_open_devtools` proxy-active mode**. New fields: `hermesWsUrl` (direct Hermes URL, upstream of proxy) and `proxyPort` (bound loopback port). `devtoolsUrl` now always non-null and points DevTools at `ws=127.0.0.1:PROXY_PORT` when proxy-active.
+- **`CDPMultiplexer` bounded resources**. `hermesBufferMaxSize` option (default 1000) with drop-oldest enforcement in `sendToHermes()`; `routingTimeoutMs` option (default 60s) with periodic sweeper. Test-only getters `hermesBufferSize` / `routingTableSize` for regression assertions.
+
+### Changed (behavioral, forward-compatible)
+- **`cdp_open_devtools` mode rename**: `'proxy-required'` → `'proxy-active'` when RN < 0.85 is detected (or version probe fails — conservative default). Previously: returned workaround guidance + null `devtoolsUrl`. Now: proxy auto-starts, `devtoolsUrl` populated, DevTools is usable immediately. The old `'proxy-required'` mode no longer exists.
+- **`CDPClient.disconnect()` tears down multiplexer** if one is active. The only reliable SIGTERM hook for the proxy; matches the precedent set by `MetroEventsClient` cleanup in the same path.
+- **`CDPMultiplexer.start()` failure cleanup** sets `state='stopping'` during cleanup (matching `stop()`), not `'stopped'` before. Closes a concurrent-start race where a second caller would observe "stopped" and allocate on top of in-flight teardown.
+
+### Fixed
+- **Unbounded `hermesBuffer` during CONNECTING window** — messages from fast/misbehaving consumers could pile up between `new WebSocket(hermesUrl)` and the `open` event. Cap + drop-oldest now enforced.
+- **`routingTable` leaks when Hermes goes partial-death** — entries allocated per consumer→upstream request were only cleaned up on close events. Unresponsive-but-not-closed upstreams leaked routing entries indefinitely. Periodic sweeper evicts entries past `routingTimeoutMs`.
+
+### Testing
+- 451 → 462 tests passing (+11): 3 prereq regression tests (hermesBuffer drop-oldest, routing sweeper, failed-start cleanup) + 1 open-devtools startProxy-error path + 10 CDPClient lifecycle tests. 2 existing cdp_open_devtools tests rewritten for `proxy-active` mode. Shared helper `test/helpers/mock-hermes.js` extracted for reuse across proxy tests.
+
+### Multi-review fixes (applied pre-commit)
+- **`CDPClient.startProxy` concurrency guard** (flagged by both Gemini + Codex at 92-95% confidence). Two parallel callers would each allocate a `CDPMultiplexer`; the second overwrote `_multiplexer` and orphaned the first (port bound, sweeper running, unreferenced). Fixed with an `_startProxyInFlight` promise cache that serializes concurrent callers on the same in-flight promise and clears in a `finally` so failed attempts don't poison retries.
+- **Rollback-path test coverage** (flagged by both at 85-90% confidence). The catch block tearing the multiplexer back down when `softReconnect` throws post-allocation was unreachable by the existing mock-client tests (`softReconnect` never rejected). Added 3 tests using a real mock Hermes that exercise the rollback, the concurrency guard, and the in-flight-cache-clears-on-failure behavior.
+
+### Known limitation logged (B132)
+Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
+
+### Refs
+- D661 in DECISIONS.md. Phase 104 in ROADMAP.md. Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
+
+---
+
 ## [0.33.0] — 2026-04-21
 
 Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.

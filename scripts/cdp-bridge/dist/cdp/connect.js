@@ -104,7 +104,14 @@ async function connectToTarget(ctx, target, retries = 5) {
             throw new Error('Client disposed or preempted during connection');
         }
         try {
-            await connectWs(ctx, target.webSocketDebuggerUrl);
+            // M1b: ride the multiplexer when _proxyUrl is set (from CDPClient.startProxy).
+            // Falls back to the target's direct webSocketDebuggerUrl when no proxy is active.
+            const proxyUrl = ctx.getProxyUrl();
+            const url = proxyUrl ?? target.webSocketDebuggerUrl;
+            if (proxyUrl) {
+                logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
+            }
+            await connectWs(ctx, url);
             // D594: Early stale-target detection — quick probe before full setup
             try {
                 await ctx.sendWithTimeout('Runtime.evaluate', {
