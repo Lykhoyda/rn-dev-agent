@@ -1,4 +1,5 @@
 import { okResult, failResult, withConnection } from '../utils.js';
+import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from './metro-clear-hint.js';
 export function createConsoleLogHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         if (args.clear) {
@@ -35,6 +36,11 @@ export function createConsoleLogHandler(getClient) {
         else {
             return failResult('Unexpected response from getConsole — expected array or { entries }');
         }
-        return okResult({ count: entries.length, entries });
+        // M11: include hint when buffer has stayed empty for >60s since connect.
+        // Console has no per-buffer lastPush (queries in-app __RN_AGENT.getConsole),
+        // so connectedAt is the only reference point.
+        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, now: client.now }, entries.length === 0) ? METRO_CLEAR_HINT_TEXT : undefined;
+        const resultOpts = hint ? { meta: { hint } } : undefined;
+        return okResult({ count: entries.length, entries }, resultOpts);
     });
 }

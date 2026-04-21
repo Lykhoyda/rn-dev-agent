@@ -23,6 +23,7 @@ function makeTarget() {
     setBridgeDetected: (v) => { calls.push(['bridgeDetected', v]); state.bridgeDetected = v; },
     setBridgeVersion: (v) => { calls.push(['bridgeVersion', v]); state.bridgeVersion = v; },
     setConnectedTarget: (v) => { calls.push(['target', v]); state.connectedTarget = v; },
+    setConnectedAt: (v) => { calls.push(['connectedAt', v]); state.connectedAt = v; },
     setLogDomainEnabled: (v) => { calls.push(['logDomain', v]); state.logDomainEnabled = v; },
     setProfilerAvailable: (v) => { calls.push(['profiler', v]); state.profilerAvailable = v; },
     setHeapProfilerAvailable: (v) => { calls.push(['heapProfiler', v]); state.heapProfilerAvailable = v; },
@@ -65,7 +66,7 @@ test('resetState calls every setter exactly once', () => {
   const names = t.calls.map(c => c[0]);
   assert.deepEqual(names, [
     'state', 'helpers', 'bridgeDetected', 'bridgeVersion',
-    'target', 'logDomain', 'profiler', 'heapProfiler', 'clearScripts',
+    'target', 'connectedAt', 'logDomain', 'profiler', 'heapProfiler', 'clearScripts',
   ]);
 });
 

@@ -33,6 +33,11 @@ export class CDPClient {
     _networkMode = 'none';
     _isPaused = false;
     _connectedTarget = null;
+    // M11 / Phase 108: timestamp (ms) of the current CDP connection; null when disconnected.
+    // Used by cdp_console_log / cdp_network_log to surface the Metro --clear hint after
+    // prolonged empty results. Reset alongside _connectedTarget via buildResettableState.
+    _connectedAt = null;
+    _timeNowFn;
     _state = 'disconnected';
     _connectionGeneration = 0;
     _softReconnectRequested = false;
@@ -64,8 +69,10 @@ export class CDPClient {
     // or disconnect(). Preserved across _suspendProxy() so post-reconnect auto-resume
     // can rehydrate the proxy against the fresh target URL.
     _proxyDesired = false;
-    constructor(port) {
+    constructor(port, timeNowFn) {
         this._port = port ?? 8081;
+        // M11: optional injectable clock for deterministic tests. Production default: Date.now.
+        this._timeNowFn = timeNowFn ?? Date.now;
         this._consoleBuffer = new RingBuffer(200);
         // B128 (D657): use process-scoped singleton instead of per-client instance
         this._networkBufferManager = getNetworkBufferManager();
@@ -77,6 +84,10 @@ export class CDPClient {
     get helpersInjected() { return this._helpersInjected; }
     get metroPort() { return this._port; }
     get connectedTarget() { return this._connectedTarget; }
+    /** M11: timestamp of the current CDP connection (ms since epoch); null when disconnected. */
+    get connectedAt() { return this._connectedAt; }
+    /** M11: clock source for this client (injectable; defaults to Date.now). */
+    get now() { return this._timeNowFn; }
     get networkMode() { return this._networkMode; }
     get consoleBuffer() { return this._consoleBuffer; }
     /** M4 (D655): per-device buffer manager. Use `activeDeviceKey` for single-device queries, `'all'` for cross-device. */
@@ -541,6 +552,8 @@ export class CDPClient {
             setWs: (ws) => { this.ws = ws; },
             setHelpersInjected: (v) => { this._helpersInjected = v; },
             setConnectedTarget: (t) => { this._connectedTarget = t; },
+            setConnectedAt: (ms) => { this._connectedAt = ms; },
+            now: () => this._timeNowFn(),
             incrementConnectionGeneration: () => ++this._connectionGeneration,
             evaluate: (expr) => this.evaluate(expr),
             sendWithTimeout: (method, params, ms) => this.sendWithTimeout(method, params, ms),
@@ -558,6 +571,7 @@ export class CDPClient {
             setBridgeDetected: (v) => { this._bridgeDetected = v; },
             setBridgeVersion: (v) => { this._bridgeVersion = v; },
             setConnectedTarget: (v) => { this._connectedTarget = v; },
+            setConnectedAt: (v) => { this._connectedAt = v; },
             setLogDomainEnabled: (v) => { this._logDomainEnabled = v; },
             setProfilerAvailable: (v) => { this._profilerAvailable = v; },
             setHeapProfilerAvailable: (v) => { this._heapProfilerAvailable = v; },

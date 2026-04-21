@@ -4,11 +4,42 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.39.0] — 2026-04-22
+
+M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story from the metro-mcp pattern adoption audit. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.
+
+Version note: M11 was originally tagged 0.37.0 (reserved before M7 shipped). Main moved to 0.38.0 before this PR merged, so M11 rebased to 0.39.0 above M7. The 0.37.0 reservation was abandoned; no `## [0.37.0]` entry exists.
+
+### Added
+- **`scripts/cdp-bridge/src/tools/metro-clear-hint.ts`** — pure helper. Exports `METRO_CLEAR_HINT_THRESHOLD_MS = 60_000`, `METRO_CLEAR_HINT_TEXT`, and `shouldShowMetroClearHint(deps, resultIsEmpty): boolean` where `deps = { connectedAt, lastEventAt?, now }`. Idle reference is `max(connectedAt, lastEventAt ?? connectedAt)` — any activity resets the clock.
+- **`CDPClient._connectedAt`** — timestamp of the current connection; null when disconnected. Reset via `buildResettableState` so every reconnect (including B132 proxy auto-resume) re-stamps correctly.
+- **`CDPClient._timeNowFn`** — injectable clock. Constructor now accepts `new CDPClient(port?, timeNowFn?)` (backwards compat). Defaults to `Date.now`.
+- **`DeviceBufferManager.getLastPush(deviceKey): number | undefined`** — public accessor over the existing internal `lastPush` map. Used by `cdp_network_log` to gauge per-device idle time.
+
+### Changed (forward-compatible)
+- **`cdp_console_log`** — on empty `entries`, wraps the result with `{ meta: { hint: METRO_CLEAR_HINT_TEXT } }` when the connection has been idle for > 60s. Console has no per-buffer `lastPush` today (it queries in-app `__RN_AGENT.getConsole()` rather than our ring buffer), so the idle reference falls back to `connectedAt` only.
+- **`cdp_network_log`** — same pattern as console, but passes `lastEventAt = client.networkBufferManager.getLastPush(scope)`. For `scope === 'all'` (cross-device query), falls back to `connectedAt` only since there's no single-device `lastPush` to consult.
+
+### Tests
+- **20 new tests**: 10 pure-helper at `test/unit/metro-clear-hint.test.js` (threshold boundaries, null-connectedAt, both-timestamp-max permutations, exactly-at-threshold, undefined-lastEventAt fallback, hint-text content); 10 integration at `test/unit/metro-clear-hint-integration.test.js` (CDPClient surface: null-on-fresh, injected fn returned, Date.now default; console-log handler: present / below / above threshold; network-log handler: present / recent-push / stale-both / scope='all').
+- **Mock helper extended** — `test/helpers/mock-cdp-client.js` gained `connectedAt` + `now` getters with sane defaults that suppress the hint unless explicitly overridden.
+
+Running total after rebase onto M7-included main: 505 → **525 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 auto-resume path correctly re-stamps `_connectedAt` via the existing `handleClose → resetState → reconnect → connectToTarget` chain. Codex flagged one sub-threshold observation (clock-skew between `DeviceBufferManager.push` using real `Date.now()` vs. CDPClient using the injected `_timeNowFn`) — moot in production where both are `Date.now`.
+
+### Known limits
+- **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
+
+### Refs
+D665 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 108 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
+
 ## [0.38.0] — 2026-04-22
 
 M7 / Phase 109 — fast-runner tri-state liveness probe. Closes the Phase 90 Tier 3 M7 story and functionally retires the shape-equivalent leftover from R3. Previously `isFastRunnerAvailable()` only checked PID; a process whose PID was alive but whose HTTP server had wedged was reported as available, and every iOS `device_press` / `device_fill` / `device_swipe` stalled on a 10s fetch timeout before falling through to the daemon. M7 adds a `probeFastRunnerLiveness()` helper that distinguishes `'alive' | 'stale' | 'dead'` via PID check + `/health` probe, plus an explicit `reapStaleFastRunner()` helper for the SIGTERM→grace→SIGKILL escalation. `tryFastRunner` is rewired to branch on the tri-state. MCP server bumped to 0.33.0.
 
-Version note: this release skips 0.37.0 (reserved for unmerged M11 PR #53). When M11 merges it will slot in as 0.37.0 between this and 0.36.1.
+Version note: this release skipped 0.37.0 (reserved for M11 PR #53 at the time). Main moved past 0.37.0 before M11 merged, so M11 shipped as 0.39.0 above this entry instead of slotting in below.
 
 ### Added
 - **`FastRunnerLiveness` type** + `probeFastRunnerLiveness(deps?)` + `reapStaleFastRunner(deps?)` in `scripts/cdp-bridge/src/fast-runner-session.ts`. All deps injectable (`getState`, `processAlive`, `httpProbe`, `clearState`, `sendSignal`, `sleep`) for hermetic tests — mirrors the `lockfile.ts` pattern.

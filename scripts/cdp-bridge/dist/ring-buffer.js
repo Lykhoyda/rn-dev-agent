@@ -194,6 +194,14 @@ export class DeviceBufferManager {
             .sort((a, b) => a[1] - b[1])
             .map(([key]) => key);
     }
+    /**
+     * M11 (D665): timestamp (ms since epoch) of the most recent push to `deviceKey`,
+     * or undefined if this device has never pushed. Used to gauge idle time for
+     * the Metro --clear hint in cdp_network_log.
+     */
+    getLastPush(deviceKey) {
+        return this.lastPush.get(deviceKey);
+    }
     evictOldest() {
         let oldestKey = null;
         let oldestTs = Number.POSITIVE_INFINITY;

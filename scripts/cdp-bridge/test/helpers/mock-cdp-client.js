@@ -46,6 +46,9 @@ export function createMockClient(overrides = {}) {
     get proxyUrl() { return client._proxyUrl; },
     get isProxyActive() { return client._proxyUrl !== null; },
     get proxyMultiplexer() { return client._proxyMultiplexer; },
+    /** M11: connection timestamp + injectable clock. Override _connectedAt / _timeNowFn. */
+    get connectedAt() { return client._connectedAt; },
+    get now() { return client._timeNowFn; },
 
     // --- Mutable state (set in overrides or mutated in tests) ---
     _isConnected: true,
@@ -70,6 +73,11 @@ export function createMockClient(overrides = {}) {
     _heapProfilerAvailable: true,
     _scripts: new Map(),
     _connectionGeneration: 1,
+    // M11 defaults: connectedAt=1_000_000 and timeNowFn returning 1_000_000
+    // means "just connected, 0ms elapsed" — hint should NOT fire by default.
+    // Tests that want the hint to fire override _timeNowFn to a later value.
+    _connectedAt: 1_000_000,
+    _timeNowFn: () => 1_000_000,
 
     // D502 freshness probe needs this — withConnection checks `typeof globalThis.__RN_AGENT`
     // and expects a number. Returning 13 (helpers version) satisfies the probe so tests
