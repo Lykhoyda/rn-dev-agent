@@ -4,6 +4,30 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.36.0] — 2026-04-21
+
+M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 metro-mcp pattern adoption audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5, mirroring metro-mcp's `FIBER_ROOT_JS` pattern. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
+
+### Added
+- **`REACT_READY_PROBE_JS` exported constant** in `scripts/cdp-bridge/src/injected-helpers.ts`. Eval-ready IIFE string with the same 1..5 `getFiberRoots` probe as `findActiveRenderer`. Single source of truth for the cross-file readiness invariant — `setup.ts` now imports and awaits it directly instead of reconstructing a narrower inline check.
+
+### Changed (behavioral, forward-compatible)
+- **`findActiveRenderer()` in the injected helper bundle** now brute-probes `getFiberRoots(1..5)` instead of iterating `hook.renderers.entries()`. Dropped the early-return guard `!hook.renderers || hook.renderers.size === 0` that caused silent empty-tree returns on affected apps. `__HELPERS_VERSION__` bumped 13 → 14 so in-flight sessions pick up the new helper on next connect.
+- **`waitForReact` in `cdp/setup.ts`** now awaits `REACT_READY_PROBE_JS` instead of `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers?.size > 0`. Without this companion fix M8's helper change was blunted — `waitForReact` would time out 30s on exactly the apps M8 was meant to help before injection began. Side benefit: the new probe refuses to declare "ready" until a fiber root actually exists, tightening the gate's semantic correctness.
+
+### Tests
+- **10 new tests** in `scripts/cdp-bridge/test/unit/injected-helpers.test.js`. 5 for `findActiveRenderer` (happy-path, skip-to-renderer-4, renderers-map-empty, all-empty, missing-getFiberRoots) and 5 for `REACT_READY_PROBE_JS` (run in isolated `vm` sandboxes — pin the probe's public behavior so helper + probe can't silently diverge). Running total: 475 → **485**, zero failures.
+
+### Known limits
+- **Renderer IDs 6+ unreachable** — matches metro-mcp's identical bound. Never observed in practice.
+- **`cdp_set_shared_value` in `src/index.ts:359-363`** still uses the `hook.renderers.keys()` pattern. Out-of-scope for M8; filed as **B133** for a separate PR. Low-severity since `cdp_set_shared_value` is a niche proof-capture tool.
+
+### Review
+Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
+
+### Refs
+D663 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 106 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
+
 ## [0.35.0] — 2026-04-21
 
 B132 / Phase 105 — proxy auto-resume across reconnect. Closes the known limitation logged during M1b review: the multiplexer captured `hermesUrl` once at `startProxy` time, so any event that invalidated the target URL (hot reload, target eviction, Metro restart) left the proxy routing to a dead upstream with every MCP call silently timing out. This release auto-suspends the proxy when the MCP's CDP WebSocket closes, runs the normal reconnect loop directly against Hermes, then auto-resumes the proxy against the refreshed target URL. MCP server bumped to 0.30.0.

@@ -1,16 +1,15 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 13;
+  var __HELPERS_VERSION__ = 14;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
   function findActiveRenderer() {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || !hook.renderers || hook.renderers.size === 0) return null;
-    for (var entry of hook.renderers) {
-      var id = entry[0];
-      var roots = hook.getFiberRoots(id);
-      if (roots && roots.size > 0) return { rendererId: id, roots: roots };
+    if (!hook || typeof hook.getFiberRoots !== 'function') return null;
+    for (var i = 1; i <= 5; i++) {
+      var roots = hook.getFiberRoots(i);
+      if (roots && roots.size > 0) return { rendererId: i, roots: roots };
     }
     return null;
   }
@@ -1384,3 +1383,15 @@ export const NETWORK_HOOK_SCRIPT = `
   }
 })();
 `;
+// M8: readiness probe for waitForReact — must mirror findActiveRenderer's
+// guard shape in INJECTED_HELPERS so setup.ts stops gating on a stale
+// renderers-map check. If either diverges the gate becomes a silent no-op.
+export const REACT_READY_PROBE_JS = `(function() {
+  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!h || typeof h.getFiberRoots !== 'function') return false;
+  for (var i = 1; i <= 5; i++) {
+    var r = h.getFiberRoots(i);
+    if (r && r.size > 0) return true;
+  }
+  return false;
+})()`;
