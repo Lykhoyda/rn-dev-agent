@@ -4,6 +4,76 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.33.0] — 2026-04-21
+
+Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.
+
+### Added
+- **`cdp_metro_events` MCP tool** (M5 / D656). Read Metro reporter events (`bundle_build_started` / `bundle_build_done` / `bundle_build_failed`, reloads) captured by the `MetroEventsClient` attached alongside every CDP session. Accepts `limit` / `type` filter / `clearErrors`. Returns `{ eventsConnected, lastBuild, buildErrors, events, count, eventsReason?, hint? }`.
+- **`cdp_open_devtools` MCP tool** (M1a / D654). Reports the React Native DevTools frontend URL + whether DevTools can coexist with the MCP session on the current RN version. On RN ≥ 0.85 returns a direct URL (native multi-debugger). On RN < 0.85 returns explicit guidance — full proxy auto-wiring deferred to M1b.
+- **`cdp_status.metro` fields `eventsConnected` / `lastBuild` / `buildErrors` / `eventsReason`** (M5 + B129). Surface bundler state and incompatibility reasons. On Expo-managed projects `eventsReason: "expo-cli-incompatible"` is set because Expo CLI hijacks `/events` for its manifest protocol.
+- **`cdp_status.capabilities.supportsMultipleDebuggers`** (M1a / D654). True when RN ≥ 0.85.
+- **Single-instance MCP lockfile** at `/tmp/rn-dev-agent-cdp-${uid}-${hash}.lock` (M3 / D652). Two Claude Code windows in the same project no longer fight over the single Hermes CDP slot — the second exits with code 11 and an actionable stderr message. `--no-lock` CLI flag for CI parallelism. Three-tier stale-lock reclaim: PID alive (`kill(pid, 0)`) + process name (`ps -p <pid> -o args=`) + mtime < 24h.
+- **`cdp_network_log` + `cdp_network_body` gain optional `device` arg** (M4 / D655). Default scope is the active device; pass `"all"` for a chronologically-merged union across every device.
+- **`rn-best-practices` rule 5.2** (R7 / D650). Documents the `presentation: 'transparentModal'` blank-white bug on RN 0.76.7 + Bridgeless + react-native-screens 4.4.x and the dark BlurView workaround.
+
+### Changed (behavioral, forward-compatible)
+- **Exponential reconnect with jitter** replaces the old linear 1.5s × 30 retry loop (M2 / D653). Curve: `[0, 500, 1000, 2000, 4000, 8000, 16000, 30000, ...]` ±500ms jitter. Attempt 0 returns 0ms so hot-reload reconnects stay instant. Metro CPU wake-ups in the first 60s of an outage drop from ~40 to ~7 attempts (5× less hammering). `interruptibleSleep` polls the dispose / soft-reconnect flags every 500ms so `softReconnect`'s 3s bail window still preempts a 30s cap sleep.
+- **`DeviceBufferManager` for network events** is now a process-scoped singleton at `src/cdp/network-buffer-manager.ts` (B128 / D657). Previously owned by `CDPClient`, so `cdp_connect(force:true)` / `cdp_restart` wiped all per-device buffers. Now buffers survive the canonical platform-switch use case. Memory unchanged (100 × 10 = 1000 entries total).
+- **Platform inference reads Metro's `deviceName`** before falling back to package-list heuristics (B131 / D660). Dual-install bundles (same `com.example.app` on both iOS sim + Android emulator) are now correctly disambiguated by `"iPhone 17 Pro"` vs `"sdk_gphone16k_arm64 - 17 - API 37"` instead of defaulting to iOS + `ambiguousPlatform: true`.
+- **Runner-leak recovery `closeSession` wrapper** now also calls `clearActiveSession()` + `stopFastRunner()` (B130 / D659). Matches the normal close path. Stale fast-runner ref-map no longer survives recovery, so the post-recovery snapshot lands via daemon/CLI (with `@eN` refs) instead of fast-runner (tree-shaped, no refs) — which means `device_fill` / `press` / `find` actually work after recovery fires.
+
+### Fixed
+- **B128: per-device buffers wiped on reconnect** — see Changed. Root cause: `DeviceBufferManager` lifetime was tied to CDPClient instance, not MCP process.
+- **B129: Expo `/events` endpoint incompatibility surfaces silently** — `MetroEventsClient` now probes HTTP GET `/events` before WS upgrade. If the body matches the Expo manifest shape (`runtimeVersion` string OR `launchAsset.url` string), marks state `'incompatible'` with `eventsReason: "expo-cli-incompatible"` and an actionable hint. Probe failure (timeout / non-200) falls through to WS attempt — doesn't mark incompatible.
+- **B130: `device_fill` "No snapshot in session" after runner-leak recovery** — see Changed.
+- **B131: `cdp_connect({platform: "android"})` errored with "no matches" on dual-install bundles** — see Changed.
+- **M2 multi-review catch: `softReconnect` preemption race at 30s cap** — `interruptibleSleep` polls the dispose/soft-reconnect flags every 500ms so preemption latency stays bounded regardless of the sleep duration.
+- **M5 multi-review catches** — double-schedule on initial connect failure (error + close both fired), `start()` during reconnecting double-connected, port mismatch after CDP port change, `stop()` during CONNECTING state crashed the process via unhandled handshake-abort error. All four fixed with targeted regression tests.
+- **M3 pre-release multi-review catch**: `ps -p <pid> -o comm=` returned only `"node"` for Node-launched scripts, which meant the `cdp-bridge` needle match would NEVER succeed in production → the lockfile would be a no-op. Switched to `-o args=` which returns the full command line. This bug would have shipped silently without multi-review.
+
+### Performance
+- **Unit test suite: 24,246ms → 3,151ms (87% faster)** after adding `skipIncompatibilityProbe: true` to pre-B129 MetroEventsClient tests that use the WS-only mock server. The mock doesn't respond to HTTP GET; every test was paying a 1500ms probe timeout.
+- **Screenshot downscale via sips** (B120/D647 from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
+
+### Tests
+272 → **448** (+176 across the series):
+- M3: 14 hermetic unit + 4 real-process regression (stale-lock reclaim, multi-project coexistence, process-name validation against a real child process)
+- M2: 8 curve tests + 6 interruptibleSleep tests
+- M1a: 7 pure-function + 10 multiplexer integration + 5 tool handler
+- M4: 20 DeviceBufferManager tests + updates to 6 pre-existing network-tool tests
+- M5: 13 feature + 4 pass-1 regression + 1 pass-2 crash regression
+- B128-B131: 4 singleton + 10 Expo detector + 2 recovery-close-wrapper contract + 7 deviceName inference
+
+### Multi-review
+Every feature PR and the fix PR went through a 2-pass multi-review (Gemini + Codex in parallel). Pass 1 blockers caught and fixed pre-merge. Three of the M3/M2/M5 blockers would have silently degraded or broken production had they shipped without review. The pattern "hermetic injection for unit coverage + at least one integration test per feature exercising the real default against a real external thing" captured in D652 and reinforced by every subsequent fix.
+
+### Live validation
+All three cross-platform validation stories (M4 network isolation, M5 Metro events, device interaction parity) and the B128-B131 fix validation story executed live against both iOS and Android simulators. 8/8 assertions pass in the B128-B131 validation. Artifacts in `docs/stories/*.md` and `docs/proof/*.jpg` in the workspace repo.
+
+### Upgrade notes
+- **Required action: restart Claude Code after `/plugin update rn-dev-agent`** to load the new MCP server. `/reload-plugins` alone does not respawn MCP subprocesses.
+- **Expected behavior change (B131):** `cdp_connect({platform: "android"})` now succeeds on apps with the same bundleId installed on both iOS and Android. Callers that relied on explicit `targetId` for disambiguation are unaffected — the platform filter is now an additional valid path.
+- **Expected behavior change (B128):** network buffers persist across `cdp_connect(force:true)` / `cdp_restart`. To explicitly wipe, call `cdp_network_log({clear: true})` (scoped to active device) or pass `device: "<key>"` for a specific device.
+- **Expected behavior change (B129):** on Expo-managed projects, `cdp_status.metro.eventsConnected` is now correctly `false` (previously `true` with silent empty events). Applications watching `lastBuild` should also watch `eventsReason` for the `"expo-cli-incompatible"` signal.
+- **Two-window workflow (M3):** opening the same project in two Claude Code windows now exits the second MCP with code 11 and the conflict message. Kill PID or close the other window to resolve.
+
+### Validation matrix
+| Area | iOS | Android |
+|---|---|---|
+| CDP connect + targets | ✅ | ✅ (after B131 fix) |
+| Per-device network buffers | ✅ | ✅ |
+| Cross-device `'all'` merge | ✅ | ✅ |
+| Metro events (Expo → incompatible) | ✅ | ✅ |
+| `device_fill` post-recovery | ✅ (B130) | n/a (no runner-leak on Android) |
+| `cdp_open_devtools` native mode | n/a (RN 0.76 < 0.85) | n/a |
+| Single-instance lockfile | ✅ | ✅ |
+
+### Backlog state
+- **Closed:** M3 + M2 + M1a + M4 + M5 + R7 (Phase 85) + B128-B131. Phase 90 Tier 1 + Tier 2 complete.
+- **Open (carveouts):** M1b (CDPClient proxy routing — needs live simulator for end-to-end verification); Tier 3 (M6 test recorder, M7 fast-runner liveness, M8 renderer 1..5 loop); Tier 4 (M9–M11 polish).
+- **Noted during validation but not blocking:** `cdp_store_state` dot-path resolver breaks on hyphenated Zustand keys; stale `agent-device` daemon sessions (`rn-agent-recovery-*`) persist across MCP boots and cause `DEVICE_IN_USE` on first session open. Workarounds: pass `storeType` without `path`; `agent-device close --session <name>`.
+
 ## [0.25.0] — 2026-04-19
 
 Three-PR stability sprint: zombie target disambiguation (B111), MCP process lifecycle hardening (B76 + zombie cleanup), and security documentation (B5). MCP server bumped to 0.20.0. Skipped 0.24.0 because the inter-PR version coordination jumped from 0.23.0 → 0.24.0 (PR #32) → 0.25.0 (PR #33) on main without a public release at the intermediate step.
