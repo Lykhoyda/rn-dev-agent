@@ -35,6 +35,13 @@ export interface ConnectContext {
   handleClose(code: number): void;
   rejectAllPending(reason: Error): void;
   setup(): Promise<void>;
+  /**
+   * M1b (Phase 100+): when non-null, connectToTarget routes through this URL
+   * instead of the target's direct `webSocketDebuggerUrl`. This is how the
+   * CDPClient rides the local multiplexer proxy, allowing React Native DevTools
+   * (or any second consumer) to coexist on RN < 0.85.
+   */
+  getProxyUrl(): string | null;
 }
 
 export async function autoConnect(
@@ -151,7 +158,14 @@ async function connectToTarget(
       throw new Error('Client disposed or preempted during connection');
     }
     try {
-      await connectWs(ctx, target.webSocketDebuggerUrl);
+      // M1b: ride the multiplexer when _proxyUrl is set (from CDPClient.startProxy).
+      // Falls back to the target's direct webSocketDebuggerUrl when no proxy is active.
+      const proxyUrl = ctx.getProxyUrl();
+      const url = proxyUrl ?? target.webSocketDebuggerUrl;
+      if (proxyUrl) {
+        logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
+      }
+      await connectWs(ctx, url);
       // D594: Early stale-target detection — quick probe before full setup
       try {
         await ctx.sendWithTimeout('Runtime.evaluate', {

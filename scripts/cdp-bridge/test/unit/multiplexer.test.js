@@ -9,6 +9,7 @@ import {
 } from '../../dist/cdp/multiplexer.js';
 import { createOpenDevToolsHandler } from '../../dist/tools/open-devtools.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { makeMockHermes } from '../helpers/mock-hermes.js';
 import { expectOk, expectFail } from '../helpers/result-helpers.js';
 
 // ── Pure helpers: parseRNVersion / supportsNativeMultiDebugger ──
@@ -56,48 +57,7 @@ test('supportsNativeMultiDebugger: unknown shapes fall back to false (conservati
 });
 
 // ── CDPMultiplexer: full integration tests with real WS ──
-
-function makeMockHermes() {
-  // A tiny Hermes stand-in: echoes request ids back as responses, and can emit events on demand.
-  const server = createServer();
-  const wss = new WebSocketServer({ server });
-  let activeWs = null;
-  const received = [];
-
-  wss.on('connection', (ws) => {
-    if (activeWs) {
-      // Real Hermes would evict; for tests we just ignore
-      ws.close(4000, 'only-one-allowed');
-      return;
-    }
-    activeWs = ws;
-    ws.on('message', (data) => {
-      const raw = data.toString();
-      received.push(raw);
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.id === 'number') {
-        // Echo back a response keyed on the same id
-        ws.send(JSON.stringify({ id: parsed.id, result: { echo: parsed.method, params: parsed.params ?? null } }));
-      }
-    });
-    ws.on('close', () => { activeWs = null; });
-  });
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      resolve({
-        port,
-        url: `ws://127.0.0.1:${port}`,
-        received,
-        emit: (event) => { if (activeWs) activeWs.send(JSON.stringify(event)); },
-        stop: () => new Promise((r) => {
-          wss.close(() => server.close(() => r()));
-        }),
-      });
-    });
-  });
-}
+// (makeMockHermes lives in ../helpers/mock-hermes.js — shared across proxy tests.)
 
 function connectConsumer(port) {
   return new Promise((resolve, reject) => {
@@ -309,7 +269,7 @@ test('cdp_open_devtools: fails when not connected', async () => {
   assert.match(err, /not connected/i);
 });
 
-test('cdp_open_devtools: mode=native when RN >= 0.85', async () => {
+test('cdp_open_devtools: mode=native when RN >= 0.85 (no proxy started)', async () => {
   const client = createMockClient({
     async evaluate() {
       return { value: JSON.stringify({ major: 0, minor: 85, patch: 0 }) };
@@ -321,10 +281,13 @@ test('cdp_open_devtools: mode=native when RN >= 0.85', async () => {
   assert.equal(data.supportsMultipleDebuggers, true);
   assert.ok(data.devtoolsUrl !== null, 'devtoolsUrl populated in native mode');
   assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:8081/);
+  assert.equal(data.inspectorWsUrl, data.hermesWsUrl, 'native mode: inspector and hermes URLs identical');
+  assert.equal(data.proxyPort, null, 'native mode: no proxy port');
+  assert.equal(client.proxyUrl, null, 'native mode does not call startProxy');
   assert.deepEqual(data.rnVersion, { major: 0, minor: 85, patch: 0 });
 });
 
-test('cdp_open_devtools: mode=proxy-required when RN < 0.85', async () => {
+test('cdp_open_devtools: mode=proxy-active when RN < 0.85 (M1b — proxy auto-starts)', async () => {
   const client = createMockClient({
     async evaluate() {
       return { value: JSON.stringify({ major: 0, minor: 76, patch: 7 }) };
@@ -332,14 +295,17 @@ test('cdp_open_devtools: mode=proxy-required when RN < 0.85', async () => {
   });
   const handler = createOpenDevToolsHandler(() => client);
   const data = expectOk(await handler({}));
-  assert.equal(data.mode, 'proxy-required');
+  assert.equal(data.mode, 'proxy-active', 'proxy started automatically on RN < 0.85');
   assert.equal(data.supportsMultipleDebuggers, false);
-  assert.equal(data.devtoolsUrl, null, 'devtoolsUrl null in proxy-required mode');
-  assert.ok(data.inspectorWsUrl, 'inspectorWsUrl still reported even when proxy-required');
-  assert.match(data.guidance, /M1b|Phase 100|evict/i, 'guidance mentions the M1b deferral or eviction risk');
+  assert.ok(data.devtoolsUrl, 'devtoolsUrl populated (points at proxy port)');
+  assert.match(data.devtoolsUrl, /ws=127\.0\.0\.1:\d+$/, 'devtoolsUrl ws= targets the proxy (no /inspector path)');
+  assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:\d+$/, 'inspectorWsUrl is the proxy URL');
+  assert.match(data.hermesWsUrl, /\/inspector\/debug\?device=/, 'hermesWsUrl is still the direct Hermes URL');
+  assert.equal(typeof data.proxyPort, 'number', 'proxyPort is a bound port');
+  assert.match(data.guidance, /proxy has been started|coexist/i, 'guidance reflects active-proxy state');
 });
 
-test('cdp_open_devtools: mode=proxy-required when rnVersion probe fails (conservative default)', async () => {
+test('cdp_open_devtools: mode=proxy-active when rnVersion probe fails (conservative default)', async () => {
   const client = createMockClient({
     async evaluate() {
       return { value: 'null' }; // probe returned null — version unknown
@@ -347,9 +313,25 @@ test('cdp_open_devtools: mode=proxy-required when rnVersion probe fails (conserv
   });
   const handler = createOpenDevToolsHandler(() => client);
   const data = expectOk(await handler({}));
-  assert.equal(data.mode, 'proxy-required');
+  assert.equal(data.mode, 'proxy-active', 'unknown version → conservative: use proxy');
   assert.equal(data.supportsMultipleDebuggers, false);
   assert.equal(data.rnVersion, null);
+  assert.ok(data.devtoolsUrl, 'devtoolsUrl populated in conservative-proxy fallback');
+});
+
+test('cdp_open_devtools: failResult when startProxy throws (M1b error path)', async () => {
+  const client = createMockClient({
+    async evaluate() {
+      return { value: JSON.stringify({ major: 0, minor: 76, patch: 7 }) };
+    },
+    async startProxy() {
+      throw new Error('multiplexer start failed: port already in use');
+    },
+  });
+  const handler = createOpenDevToolsHandler(() => client);
+  const err = expectFail(await handler({}));
+  assert.match(err, /failed to start multiplexer proxy/i);
+  assert.match(err, /port already in use/i, 'underlying error is surfaced');
 });
 
 test('cdp_open_devtools: fails gracefully when no target selected', async () => {
@@ -357,6 +339,145 @@ test('cdp_open_devtools: fails gracefully when no target selected', async () => 
   const handler = createOpenDevToolsHandler(() => client);
   const err = expectFail(await handler({}));
   assert.match(err, /no target/i);
+});
+
+// ── M1b prerequisites: buffer cap, routing sweeper, failed-start cleanup ──
+
+function makeSilentHermes() {
+  // Accepts WS, receives messages, NEVER responds. Lets us accumulate routing entries
+  // that the sweeper should later evict.
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const received = [];
+  wss.on('connection', (ws) => {
+    ws.on('message', (data) => received.push(data.toString()));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: server.address().port,
+        url: `ws://127.0.0.1:${server.address().port}`,
+        received,
+        stop: () => new Promise((r) => { wss.close(() => server.close(() => r())); }),
+      });
+    });
+  });
+}
+
+function makeDelayedHermes(openDelayMs) {
+  // Accepts the TCP connection but delays the WS upgrade by openDelayMs.
+  // This keeps the proxy's upstream hermesWs in the CONNECTING state, forcing
+  // any consumer messages in that window into hermesBuffer.
+  const server = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const received = [];
+
+  server.on('upgrade', (req, socket, head) => {
+    setTimeout(() => {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    }, openDelayMs);
+  });
+
+  wss.on('connection', (ws) => {
+    ws.on('message', (data) => received.push(data.toString()));
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: server.address().port,
+        url: `ws://127.0.0.1:${server.address().port}`,
+        received,
+        stop: () => new Promise((r) => { wss.close(() => server.close(() => r())); }),
+      });
+    });
+  });
+}
+
+test('CDPMultiplexer: M1b prereq — hermesBuffer drops oldest when cap exceeded during CONNECTING window', async () => {
+  const hermes = await makeDelayedHermes(250);
+  const proxy = new CDPMultiplexer({ hermesUrl: hermes.url, hermesBufferMaxSize: 3 });
+  try {
+    // Kick off start WITHOUT awaiting; the consumer server binds synchronously once
+    // startConsumerServer's listen fires, but connectHermes stays pending on upgrade.
+    const startPromise = proxy.start();
+
+    // Poll for the bound port — available as soon as httpServer.listen completes.
+    let port = null;
+    for (let i = 0; i < 30; i++) {
+      if (proxy.port !== null) { port = proxy.port; break; }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.ok(port, 'consumer server should bind before Hermes upgrade delay expires');
+
+    const consumer = await connectConsumer(port);
+
+    // Flood 5 messages while hermesWs is still CONNECTING.
+    for (let i = 1; i <= 5; i++) {
+      consumer.send(JSON.stringify({ id: i, method: `Flood.m${i}` }));
+    }
+
+    // Buffer should be capped at 3 (oldest two dropped).
+    // Small wait to let the consumer's on('message') handlers fire.
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(proxy.hermesBufferSize, 3, 'buffer size capped at hermesBufferMaxSize');
+
+    // Wait for Hermes to open and drain the buffer.
+    await startPromise;
+    await new Promise((r) => setTimeout(r, 150));
+
+    assert.equal(hermes.received.length, 3, 'exactly hermesBufferMaxSize messages reach Hermes');
+    const methods = hermes.received.map((raw) => JSON.parse(raw).method);
+    assert.deepEqual(methods, ['Flood.m3', 'Flood.m4', 'Flood.m5'], 'drop-oldest preserves newest');
+
+    consumer.close();
+  } finally {
+    await proxy.stop();
+    await hermes.stop();
+  }
+});
+
+test('CDPMultiplexer: M1b prereq — routing sweeper evicts entries past routingTimeoutMs', async () => {
+  const hermes = await makeSilentHermes();
+  // 150ms timeout → sweeper interval = max(500, 75) = 500ms. Use slightly longer waits.
+  const proxy = new CDPMultiplexer({ hermesUrl: hermes.url, routingTimeoutMs: 150 });
+  try {
+    const port = await proxy.start();
+    const consumer = await connectConsumer(port);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Send 3 requests; Hermes swallows, so all 3 routes persist.
+    for (let i = 1; i <= 3; i++) {
+      consumer.send(JSON.stringify({ id: i, method: `Silent.m${i}` }));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(proxy.routingTableSize, 3, 'routes accumulate while upstream is silent');
+
+    // Wait past timeout + one sweeper cycle. Sweeper interval is 500ms for a 150ms timeout,
+    // so wait ~700ms to guarantee eviction.
+    await new Promise((r) => setTimeout(r, 700));
+
+    assert.equal(proxy.routingTableSize, 0, 'sweeper cleared all expired routes');
+
+    consumer.close();
+  } finally {
+    await proxy.stop();
+    await hermes.stop();
+  }
+});
+
+test('CDPMultiplexer: M1b prereq — failed start cleans up fully (port released, state=stopped)', async () => {
+  const proxy = new CDPMultiplexer({ hermesUrl: 'ws://127.0.0.1:59994/nope' });
+  await assert.rejects(() => proxy.start(), /ECONNREFUSED|connect/);
+
+  assert.equal(proxy.isRunning, false, 'not running after failure');
+  assert.equal(proxy.port, null, 'boundPort cleared — httpServer was closed in cleanup');
+
+  // Follow-up stop() must be a safe no-op (state === 'stopped').
+  await proxy.stop();
+  assert.equal(proxy.port, null);
 });
 
 test('CDPMultiplexer: consumer disconnect clears its pending routes (no response leak)', async () => {

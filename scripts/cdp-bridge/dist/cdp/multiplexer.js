@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { logger } from '../logger.js';
+const HERMES_BUFFER_MAX_DEFAULT = 1000;
+const ROUTING_TIMEOUT_MS_DEFAULT = 60_000;
 export class CDPMultiplexer {
     opts;
     httpServer = null;
@@ -13,12 +15,15 @@ export class CDPMultiplexer {
     hermesBuffer = [];
     state = 'stopped';
     boundPort = null;
+    routingSweeper = null;
     constructor(opts) {
         this.opts = {
             hermesUrl: opts.hermesUrl,
             host: opts.host ?? '127.0.0.1',
             port: opts.port ?? 0,
             logTag: opts.logTag ?? 'CDP.proxy',
+            hermesBufferMaxSize: opts.hermesBufferMaxSize ?? HERMES_BUFFER_MAX_DEFAULT,
+            routingTimeoutMs: opts.routingTimeoutMs ?? ROUTING_TIMEOUT_MS_DEFAULT,
         };
     }
     get port() {
@@ -30,6 +35,14 @@ export class CDPMultiplexer {
     get consumerCount() {
         return this.consumers.size;
     }
+    /** Test-only: current size of the routing table (how many pending upstream requests). */
+    get routingTableSize() {
+        return this.routingTable.size;
+    }
+    /** Test-only: current size of the CONNECTING-window buffer. */
+    get hermesBufferSize() {
+        return this.hermesBuffer.length;
+    }
     async start() {
         if (this.state !== 'stopped') {
             throw new Error(`CDPMultiplexer cannot start from state '${this.state}'`);
@@ -38,13 +51,15 @@ export class CDPMultiplexer {
         try {
             const port = await this.startConsumerServer();
             await this.connectHermes();
+            this.startRoutingSweeper();
             this.state = 'running';
             logger.info(this.opts.logTag, `multiplexer running on ${this.opts.host}:${port}`);
             return port;
         }
         catch (err) {
-            this.state = 'stopped';
+            this.state = 'stopping';
             await this.cleanup();
+            this.state = 'stopped';
             throw err;
         }
     }
@@ -136,7 +151,7 @@ export class CDPMultiplexer {
         const consumerOriginalId = typeof m.id === 'number' ? m.id : null;
         if (consumerOriginalId !== null) {
             const upstreamId = this.upstreamSeq++;
-            this.routingTable.set(upstreamId, { consumerId, consumerOriginalId });
+            this.routingTable.set(upstreamId, { consumerId, consumerOriginalId, createdAt: Date.now() });
             m.id = upstreamId;
         }
         this.sendToHermes(JSON.stringify(m));
@@ -189,6 +204,10 @@ export class CDPMultiplexer {
             return;
         }
         if (this.hermesWs.readyState === WebSocket.CONNECTING) {
+            if (this.hermesBuffer.length >= this.opts.hermesBufferMaxSize) {
+                this.hermesBuffer.shift();
+                logger.warn(this.opts.logTag, `hermesBuffer exceeded cap (${this.opts.hermesBufferMaxSize}), dropping oldest`);
+            }
             this.hermesBuffer.push(rawMessage);
             return;
         }
@@ -197,6 +216,32 @@ export class CDPMultiplexer {
             return;
         }
         this.hermesWs.send(rawMessage);
+    }
+    startRoutingSweeper() {
+        if (this.routingSweeper)
+            return;
+        const timeoutMs = this.opts.routingTimeoutMs;
+        const sweepMs = Math.max(500, Math.floor(timeoutMs / 2));
+        this.routingSweeper = setInterval(() => {
+            const cutoff = Date.now() - timeoutMs;
+            let dropped = 0;
+            for (const [upstreamId, entry] of this.routingTable) {
+                if (entry.createdAt < cutoff) {
+                    this.routingTable.delete(upstreamId);
+                    dropped++;
+                }
+            }
+            if (dropped > 0) {
+                logger.warn(this.opts.logTag, `routing sweeper dropped ${dropped} expired entries`);
+            }
+        }, sweepMs);
+        this.routingSweeper.unref?.();
+    }
+    stopRoutingSweeper() {
+        if (this.routingSweeper) {
+            clearInterval(this.routingSweeper);
+            this.routingSweeper = null;
+        }
     }
     broadcastToConsumers(rawMessage) {
         for (const ws of this.consumers.values()) {
@@ -209,6 +254,7 @@ export class CDPMultiplexer {
         }
     }
     async cleanup() {
+        this.stopRoutingSweeper();
         if (this.hermesWs) {
             try {
                 this.hermesWs.close(1000, 'proxy stopping');

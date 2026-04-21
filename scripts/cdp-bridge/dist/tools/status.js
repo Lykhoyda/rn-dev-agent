@@ -73,6 +73,12 @@ async function buildStatusResult(client) {
             heapProfiler: client.heapProfilerAvailable,
         },
         reconnect: client.reconnectState,
+        proxy: {
+            active: client.isProxyActive,
+            port: client.proxyMultiplexer?.port ?? null,
+            url: client.proxyUrl,
+            consumerCount: client.proxyMultiplexer?.consumerCount ?? 0,
+        },
     };
 }
 export function createStatusHandler(getClient, setClient, createClient) {

@@ -127,6 +127,18 @@ export interface StatusResult {
     lastAttempt: string | null;
     attemptCount: number;
   };
+  /**
+   * M1b (Phase 100+): multiplexer proxy state. `active: true` means React Native
+   * DevTools can coexist with the MCP by connecting to `port` on localhost.
+   * `consumerCount` is the number of DevTools/other-debugger instances connected
+   * to the proxy (excluding the MCP itself).
+   */
+  proxy: {
+    active: boolean;
+    port: number | null;
+    url: string | null;
+    consumerCount: number;
+  };
 }
 
 export interface EvaluateResult {

@@ -85,6 +85,12 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       heapProfiler: client.heapProfilerAvailable,
     },
     reconnect: client.reconnectState,
+    proxy: {
+      active: client.isProxyActive,
+      port: client.proxyMultiplexer?.port ?? null,
+      url: client.proxyUrl,
+      consumerCount: client.proxyMultiplexer?.consumerCount ?? 0,
+    },
   };
 }
 
