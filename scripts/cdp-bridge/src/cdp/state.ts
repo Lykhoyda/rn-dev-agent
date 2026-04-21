@@ -12,6 +12,7 @@ export interface ResettableState {
   setBridgeDetected(v: boolean): void;
   setBridgeVersion(v: number | null): void;
   setConnectedTarget(v: HermesTarget | null): void;
+  setConnectedAt(v: number | null): void;
   setLogDomainEnabled(v: boolean): void;
   setProfilerAvailable(v: boolean): void;
   setHeapProfilerAvailable(v: boolean): void;
@@ -24,6 +25,7 @@ export function resetState(s: ResettableState): void {
   s.setBridgeDetected(false);
   s.setBridgeVersion(null);
   s.setConnectedTarget(null);
+  s.setConnectedAt(null);
   s.setLogDomainEnabled(false);
   s.setProfilerAvailable(false);
   s.setHeapProfilerAvailable(false);

@@ -123,6 +123,9 @@ async function connectToTarget(ctx, target, retries = 5) {
                 throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
             }
             ctx.setConnectedTarget(target);
+            // M11: stamp connection time so cdp_console_log / cdp_network_log can reason
+            // about "how long have we been connected with nothing happening?"
+            ctx.setConnectedAt(ctx.now());
             await ctx.setup();
             return;
         }

@@ -28,6 +28,8 @@ export interface ConnectContext {
   setWs(ws: WebSocket | null): void;
   setHelpersInjected(v: boolean): void;
   setConnectedTarget(t: HermesTarget | null): void;
+  setConnectedAt(ms: number | null): void;
+  now(): number;
   incrementConnectionGeneration(): number;
   evaluate(expr: string): Promise<EvaluateResult>;
   sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown>;
@@ -176,6 +178,9 @@ async function connectToTarget(
         throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
       }
       ctx.setConnectedTarget(target);
+      // M11: stamp connection time so cdp_console_log / cdp_network_log can reason
+      // about "how long have we been connected with nothing happening?"
+      ctx.setConnectedAt(ctx.now());
       await ctx.setup();
       return;
     } catch (err) {

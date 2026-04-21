@@ -9,6 +9,7 @@ export function resetState(s) {
     s.setBridgeDetected(false);
     s.setBridgeVersion(null);
     s.setConnectedTarget(null);
+    s.setConnectedAt(null);
     s.setLogDomainEnabled(false);
     s.setProfilerAvailable(false);
     s.setHeapProfilerAvailable(false);

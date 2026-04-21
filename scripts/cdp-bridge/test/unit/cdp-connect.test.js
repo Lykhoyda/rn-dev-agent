@@ -28,6 +28,8 @@ function createMockContext({ initialFilters = {}, port = 8081 } = {}) {
     setWs: () => {},
     setHelpersInjected: () => {},
     setConnectedTarget: () => {},
+    setConnectedAt: () => {},
+    now: () => 1_000_000,
     incrementConnectionGeneration: () => 1,
     evaluate: async () => ({ value: undefined }),
     sendWithTimeout: async () => null,
