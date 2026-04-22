@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 14;
+  var __HELPERS_VERSION__ = 15;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -1275,6 +1275,18 @@ export const INJECTED_HELPERS = `
               if (dims && dims.window) info.dimensions = dims.window;
             }
           } catch(e) {}
+        }
+        // M10 / Phase 110: architecture detection. Fabric wins on "both present"
+        // (transient interop state); __fbBatchedBridge alone → classic bridge;
+        // neither → unknown. See docs/DECISIONS.md D667.
+        try {
+          var fabric = typeof globalThis.nativeFabricUIManager === 'object'
+            && globalThis.nativeFabricUIManager !== null;
+          var bridge = typeof globalThis.__fbBatchedBridge === 'object'
+            && globalThis.__fbBatchedBridge !== null;
+          info.architecture = fabric ? 'new' : (bridge ? 'old' : 'unknown');
+        } catch (e) {
+          info.architecture = 'unknown';
         }
         return JSON.stringify(info);
       } catch(e) {

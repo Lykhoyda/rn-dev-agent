@@ -278,3 +278,45 @@ test('M8 probe: returns false when hook itself is absent', () => {
   vm.createContext(sandbox);
   assert.equal(vm.runInContext(REACT_READY_PROBE_JS, sandbox), false);
 });
+
+// ── M10: architecture detection in getAppInfo ─────────────────────────
+// Fabric-wins on "both present" (transient interop state during migration).
+// `__fbBatchedBridge` alone → classic bridge. Neither → unknown.
+
+function appInfoFrom(globals) {
+  const sandbox = createSandbox({ globals });
+  return JSON.parse(sandbox.__RN_AGENT.getAppInfo());
+}
+
+test('M10: getAppInfo returns architecture=new when nativeFabricUIManager present', () => {
+  const info = appInfoFrom({ nativeFabricUIManager: { /* Fabric object */ } });
+  assert.equal(info.architecture, 'new');
+});
+
+test('M10: getAppInfo returns architecture=old when __fbBatchedBridge present and Fabric absent', () => {
+  const info = appInfoFrom({ __fbBatchedBridge: { getCallableModule: () => null } });
+  assert.equal(info.architecture, 'old');
+});
+
+test('M10: getAppInfo returns architecture=unknown when neither signal present', () => {
+  const info = appInfoFrom({});
+  assert.equal(info.architecture, 'unknown');
+});
+
+test('M10: getAppInfo returns architecture=new when BOTH Fabric and bridge present (Fabric wins)', () => {
+  const info = appInfoFrom({
+    nativeFabricUIManager: { /* Fabric */ },
+    __fbBatchedBridge: { getCallableModule: () => null },
+  });
+  assert.equal(info.architecture, 'new');
+});
+
+test('M10: getAppInfo returns architecture=unknown when nativeFabricUIManager is null (guard works)', () => {
+  // Only __fbBatchedBridge falsy too → unknown
+  const info = appInfoFrom({ nativeFabricUIManager: null });
+  assert.equal(info.architecture, 'unknown');
+});
+
+test('M10: helpers bundle version is 15', () => {
+  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*15/);
+});

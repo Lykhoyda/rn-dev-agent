@@ -4,6 +4,37 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.40.0] — 2026-04-22
+
+M10 / Phase 110 — architecture detection + CPU profiler hint. Closes the Phase 90 Tier 4 M10 story. `cdp_status.app.architecture` now surfaces one of `'new' | 'old' | 'unknown'` based on Fabric/bridge globals inside the running app. When `cdp_cpu_profile` fails AND the target is running on Old Architecture, the error result now includes an advisory hint pointing to `cdp_heap_usage` as an alternative and suggesting `newArchitecture: true` in `app.json`. MCP server bumped to 0.35.0.
+
+### Added
+- **`cdp_status.app.architecture`** — new optional field: `'new'` when `globalThis.nativeFabricUIManager` is present (Fabric loaded), `'old'` when `globalThis.__fbBatchedBridge` is present and Fabric is absent (classic bridge), `'unknown'` when neither signal exists or the probe throws. Fabric wins on transient "both present" interop state.
+- **`OLD_ARCH_PROFILER_HINT` exported constant** in `scripts/cdp-bridge/src/tools/profiling.ts`. Attached as `meta.hint` to `cdp_cpu_profile` failures when the architecture probe returns `'old'`.
+- **`narrowArchitecture` exported helper** in `scripts/cdp-bridge/src/tools/status.ts`. Whitelists the union — any unexpected string or missing value collapses to `'unknown'`, so TypeScript's union guarantee holds at runtime regardless of what future helper bundles emit.
+
+### Changed
+- **`__HELPERS_VERSION__` bumped 14 → 15** in `injected-helpers.ts`. Forces Hermes re-injection on next connect so apps pick up the new `getAppInfo()` shape. Existing freshness check (D502) triggers re-injection automatically.
+- **`getAppInfo()` extended** to compute architecture at probe time (wrapped in try/catch — probe failure defaults to `'unknown'`).
+- **`buildStatusResult()` AND the `__DEV__=false` recovery retry path** both write `status.app.architecture` so consumers see consistent values regardless of whether the recovery branch fired.
+- **`cpuProfile` error catch** now performs a single-shot architecture probe (via new internal `safeProbeArchitecture`) before returning `failResult`. Probe failure → `'unknown'` → no hint.
+
+### Tests
+- **16 new tests**. 6 detection in `test/unit/injected-helpers.test.js` (Fabric-only, bridge-only, neither, both-present → `'new'`, null-Fabric guard, helpers version = 15). 10 in new `test/unit/m10-architecture.test.js` (3 `narrowArchitecture` tests, 4 status-handler integration tests, 3 profiler-hint integration tests including a probe-itself-throws path).
+
+Running total: 525 → **541 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Independently validated: Fabric is always object-typed in RN (never function); the extra error-path probe adds only ~50-200ms to an already-failed CPU profile call; `narrowArchitecture` whitelist is injection-safe; `__DEV__=false` recovery-path parity is complete; v14 → v15 cache invalidation is clean via the existing `__v` freshness check.
+
+### Known limits
+- **Fabric-wins on "both present"** is a deliberate heuristic for interop-mode transients. Documented.
+- **`'unknown'` is non-actionable** — consumers should treat as "skip arch-specific hints," not as "assume old."
+- **Profiler hint is advisory, not blocking** — `cdp_cpu_profile` still runs on Old Arch; some profiles do succeed. Hint only fires on actual failures.
+
+### Refs
+D667 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 110 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
+
 ## [0.39.0] — 2026-04-22
 
 M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story from the metro-mcp pattern adoption audit. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.

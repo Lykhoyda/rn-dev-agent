@@ -2,6 +2,12 @@ import { okResult, failResult, warnResult } from '../utils.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
+// M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
+// Any unexpected value collapses to 'unknown' — defensive against future
+// helper versions that might emit new tokens we don't recognize yet.
+export function narrowArchitecture(raw) {
+    return raw === 'new' || raw === 'old' ? raw : 'unknown';
+}
 const STATUS_PROBE_EXPRESSION = `
 (function() {
   var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
@@ -55,6 +61,7 @@ async function buildStatusResult(client) {
             hasRedBox,
             isPaused: client.isPaused,
             errorCount,
+            architecture: narrowArchitecture(appInfo?.architecture),
         },
         capabilities: {
             networkDomain: client.networkMode === 'cdp',
@@ -127,6 +134,7 @@ export function createStatusHandler(getClient, setClient, createClient) {
                                     status.app.hasRedBox = retryProbe.hasRedBox;
                                     status.app.errorCount = retryProbe.errorCount;
                                     status.app.isPaused = client.isPaused;
+                                    status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                                     status.cdp.device = client.connectedTarget?.title ?? null;
                                     status.cdp.pageId = client.connectedTarget?.id ?? null;
                                     status.cdp.bundleId = client.connectedTarget?.description ?? null;
