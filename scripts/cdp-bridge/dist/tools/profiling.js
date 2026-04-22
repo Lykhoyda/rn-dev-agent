@@ -1,4 +1,25 @@
 import { okResult, failResult, withConnection } from '../utils.js';
+// M10 / Phase 110 / D667: advisory hint appended to cpuProfile failures when
+// the target is running on the classic bridge (Fabric absent). CPU profiling
+// via CDP Profiler domain is known to be flaky on Old Arch — this wording
+// points users at the most likely cause + actionable alternatives.
+export const OLD_ARCH_PROFILER_HINT = 'Old architecture detected — CPU profile may be unreliable or incomplete on the classic bridge. ' +
+    'Prefer cdp_heap_usage for memory, or enable New Architecture (newArchitecture: true in app.json) for profiling.';
+// Single-shot probe of app architecture. Used in the error path of cpuProfile
+// so we can surface OLD_ARCH_PROFILER_HINT only when it's actually relevant.
+// Wrapped in try/catch — any failure collapses to 'unknown' so we don't hint.
+async function safeProbeArchitecture(client) {
+    try {
+        const result = await client.evaluate(client.helperExpr('getAppInfo()'));
+        if (typeof result.value !== 'string')
+            return 'unknown';
+        const info = JSON.parse(result.value);
+        return info.architecture === 'new' || info.architecture === 'old' ? info.architecture : 'unknown';
+    }
+    catch {
+        return 'unknown';
+    }
+}
 export function createHeapUsageHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         try {
@@ -101,7 +122,13 @@ export function createCpuProfileHandler(getClient) {
                 await client.send('Profiler.disable', undefined);
             }
             catch { /* cleanup */ }
-            return failResult(`CPU profiling failed: ${err instanceof Error ? err.message : err}`);
+            const base = `CPU profiling failed: ${err instanceof Error ? err.message : err}`;
+            // M10: advisory hint when the cause is likely Old Architecture.
+            const arch = await safeProbeArchitecture(client);
+            if (arch === 'old') {
+                return failResult(base, { hint: OLD_ARCH_PROFILER_HINT, architecture: arch });
+            }
+            return failResult(base);
         }
     });
 }

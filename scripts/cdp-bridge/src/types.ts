@@ -104,6 +104,8 @@ export interface StatusResult {
     hasRedBox: boolean;
     isPaused: boolean;
     errorCount: number;
+    /** M10 / Phase 110: RN architecture — 'new' (Fabric), 'old' (classic bridge), 'unknown' (probe failed or non-RN). Optional for older callers. */
+    architecture?: 'new' | 'old' | 'unknown';
   };
   capabilities: {
     networkDomain: boolean;
