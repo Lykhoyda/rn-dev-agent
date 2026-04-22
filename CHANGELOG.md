@@ -4,6 +4,42 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.41.0] — 2026-04-22
+
+M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi-debugging as unsupported (matching metro-mcp's stance).
+
+**MCP server unchanged** — this is the first story in the Phase 90 pattern-adoption batch with no `scripts/cdp-bridge/` changes. MCP stays at 0.35.0.
+
+### Added
+- **NEW `scripts/check-physical-devices.sh`** (executable). OS-aware bash probe. Android path uses `adb devices` filtered by `emulator-` prefix exclusion, iterates results, auto-runs `adb -s <dev> reverse tcp:8081 tcp:8081`. iOS path (gated on `uname -s == Darwin`) uses `xcrun xctrace list devices`, awk-extracts the `== Devices ==` section, positive-filters for iOS form factors (iPhone/iPad/iPod/Apple TV/Apple Vision/Apple Watch) to exclude the host Mac, checks both `idb_companion` and `idb-companion` binary names on PATH. Linux/WSL hosts see an explicit "Physical iOS probe skipped (requires macOS; host is $HOST_OS)" line rather than a misleading "no iOS device".
+- **New step 10 in `skills/rn-setup/SKILL.md`** — "Physical device prerequisites (optional)" invokes the script. Advisory — exits 0 in all cases. No-op when no physical devices are connected.
+- **8 structural test guards** in `scripts/cdp-bridge/test/unit/physical-devices-script-guard.test.js` — pin the script's invariants (exists + executable, bash shebang, expected probes, emulator filter, form-factor filter, idb-companion binary-name coverage, brew install hint, WiFi stance).
+
+### Changed
+- **`skills/rn-setup/SKILL.md`**: "9 checks" / "9-row" language updated to "10 checks" / "10-row" in three downstream references (Rationalizations, Red Flags, Verification checklist). New row added to the output-format table. New physical-device item added to the Verification checklist.
+
+### Tests
+Running total: 541 → **549 passing**, zero failures. 8 new structural guards — live functional smoke happens during every `/setup` invocation.
+
+### Review
+Multi-LLM (Gemini + Codex). Gemini clean (0 findings). Codex caught two valid issues both applied inline:
+- **Confidence 90** — stale "9 checks" / "9-row" copy after adding section 10. Fixed.
+- **Confidence 85** — no OS guard meant Linux/WSL hosts would silently show "No physical iOS detected" without context. Fixed — `HOST_OS` detected + iOS branch gated on `Darwin`.
+
+Gemini dismissals validated: awk section filter correct against live xctrace output (anchored regex handles "== Devices Offline ==" and name-mid-line `== ` cases); adb reverse is idempotent; idb-companion binary check covers both brew-published variants; form-factor regex correctly matches "Apple TV HD"-style prefix names.
+
+### Live smoke
+Ran on dev machine with no physical devices connected. First run misreported the MacBook itself as a "physical iOS device" — `xcrun xctrace list devices` surfaces the host Mac under `== Devices ==` for Mac Catalyst targeting. Fixed via positive form-factor filter; re-ran correctly reports "No physical iOS devices detected" and explicitly labels Host OS.
+
+### Known limits
+- **`adb reverse` auto-run is stateful** — idempotent per-device port-forwarding, but still a side effect. Documented as expected setup behavior.
+- **`idb-companion` not auto-installed** — brew installs are slow and can fail; hint-only is the canonical pattern for missing deps in this skill.
+- **WiFi debugging not supported automatically** — matches metro-mcp. Users can `adb connect <ip>` manually and the script runs `adb reverse` over the TCP transport.
+- **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
+
+### Refs
+D668 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 111 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Physical Device Setup".
+
 ## [0.40.0] — 2026-04-22
 
 M10 / Phase 110 — architecture detection + CPU profiler hint. Closes the Phase 90 Tier 4 M10 story. `cdp_status.app.architecture` now surfaces one of `'new' | 'old' | 'unknown'` based on Fabric/bridge globals inside the running app. When `cdp_cpu_profile` fails AND the target is running on Old Architecture, the error result now includes an advisory hint pointing to `cdp_heap_usage` as an alternative and suggesting `newArchitecture: true` in `app.json`. MCP server bumped to 0.35.0.

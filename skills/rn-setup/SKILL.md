@@ -107,6 +107,26 @@ command -v ffmpeg && ffmpeg -version 2>&1 | head -1
 ```
 If missing: `brew install ffmpeg` (not critical — videos work without it, GIF conversion doesn't)
 
+### 10. Physical device prerequisites (optional — M9 / Phase 111)
+
+Only runs if a physical device is USB-connected. Simulators/emulators skip
+this section. Runs two checks + applies one (safe, reversible) side-effect:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-physical-devices.sh
+```
+
+Expected outputs:
+- **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed.
+- **Physical iOS present + idb-companion installed**: `[OK] idb-companion installed`.
+- **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
+- **No physical devices**: two "skipping" lines. Add "Physical devices" row to the table as "N/A (no devices connected)".
+
+**WiFi debugging is not supported** automatically. Connect by USB. If users
+need WiFi they can `adb connect <ip>` manually — the script then treats the
+device as physical and runs `adb reverse` over the TCP transport (works
+the same as USB).
+
 ## Output format
 
 Present results as a table:
@@ -122,6 +142,7 @@ Present results as a table:
 | Metro | RUNNING (port 8081) | — |
 | CDP connection | CONNECTED | — |
 | ffmpeg | OK (v7.1) | — |
+| Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 
 If any critical check fails (CDP bridge, agent-device, Metro, or simulator),
 provide step-by-step instructions to fix it. Do not proceed with feature
@@ -144,7 +165,7 @@ Setup is boring — agents skip it and pay for it later.
 | "The SessionStart banner says 'WARNING: agent-device not installed' — it'll auto-install next time" | Auto-install already ran and FAILED. That's why there's a warning. Run the ensure script NOW and read the actual error. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
 | "The user can install agent-device themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact command with the flag they need (sudo? nvm? permission fix?). |
-| "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on all 9 checks passing. Get the environment green first, then proceed. |
+| "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on all 10 checks passing (step 10 is optional — N/A when no physical device). Get the environment green first, then proceed. |
 
 ## Red Flags — Stop and Reconsider
 
@@ -152,7 +173,7 @@ Setup is boring — agents skip it and pay for it later.
 - Proceeding with feature dev when setup shows any RED row
 - Suggesting `sudo npm install -g` without first checking if nvm is available
 - Ignoring "WARNING: not installed" from the SessionStart banner
-- Claiming "setup passed" without showing the 9-row table with evidence
+- Claiming "setup passed" without showing the 10-row table with evidence (row 10 may be "N/A" when no physical device is connected — that's still evidence)
 
 ## Verification — Setup Complete When
 
@@ -163,4 +184,5 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `curl -s http://127.0.0.1:8081/status` returns `packager-status:running`
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true`
-- [ ] Present the 9-row results table to the user — no hidden failures
+- [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
+- [ ] Present the 10-row results table to the user — no hidden failures
