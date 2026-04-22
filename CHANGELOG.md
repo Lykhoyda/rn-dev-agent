@@ -4,6 +4,45 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.42.0] — 2026-04-22
+
+M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
+
+### How it works
+React's `createElement` calls `Object.freeze(props)` in dev mode before sealing them. `cdp_record_test_start` monkey-patches `Object.freeze` inside Hermes — when React asks to freeze a props object that has `onPress`/`onLongPress`/`onChangeText`/`onSubmitEditing`/`onScroll*`, we wrap each handler with event-emission BEFORE letting the freeze proceed. Already-mounted scroll containers are caught via a fiber re-render walk (`stateNode.forceUpdate()` for class, `renderer.overrideProps(fiber, ['__mcpInit'], 1)` for function). Route is captured via the `onCommitFiberRoot` hook reading `__RN_AGENT.getNavState()`, cached into a closure variable so the Object.freeze hot-path stays synchronous.
+
+### Three deliberate deviations from metro-mcp's reference
+1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')`. metro-mcp emits the inverted content-delta direction, producing YAML that replays in the wrong direction.
+2. **500-event cap with priority eviction** — long sessions are capped; on overflow, oldest `swipe`/`type` events are dropped first (taps + navigates carry higher information value). `truncated: true` bubbles up to the `stop` envelope.
+3. **Route caching via the commit hook** — eliminates per-event CDP round-trips. metro-mcp expects the user app to install `globalThis.__METRO_MCP_NAV_REF__`; we instead read our existing `__RN_AGENT.getNavState()` once per React commit and cache the active route name in the IIFE closure.
+
+### Added
+- **NEW `scripts/cdp-bridge/src/cdp/test-recorder-helpers.ts`** — five injected JS string constants (`DEV_CHECK_JS`, `START_RECORDING_JS`, `STOP_RECORDING_JS`, `READ_EVENTS_JS`, `buildAnnotationJs(note)` template). The Object.freeze interceptor IIFE is ~250 lines, mirrors metro-mcp's structure with the deviations above. Includes the M8 1..5 renderer-loop port for fiber root resolution and a session-token (`__METRO_MCP_REC_SESSION__`) so stale wrappers from a prior start-stop cycle gracefully no-op when a new session begins.
+- **NEW `scripts/cdp-bridge/src/tools/test-recorder.ts`** — 7 handler factories (`createRecordTestStartHandler`, `createRecordTestStopHandler`, `createRecordTestGenerateHandler`, `createRecordTestAnnotateHandler`, `createRecordTestSaveHandler`, `createRecordTestLoadHandler`, `createRecordTestListHandler`), the `RecordedEvent` discriminated union, module-level `storedEvents` state, and pure helpers (`deduplicateEvents`, `sanitizeFilename`, `getRecordingsDir`, `typeCounts`). Test-only DI hooks (`_resetState`, `_setStoredEvents`, `_getStoredEvents`) for hermetic integration tests.
+- **NEW `scripts/cdp-bridge/src/tools/test-recorder-generators.ts`** — `generateMaestro` + `generateDetox` + selector helpers (`maestroSelector`, `detoxSelector`, `nextSelector`). All user-controlled string interpolation (annotations, testName, bundleId, route names) goes through `stripNewlines()` to prevent comment-context escape (Gemini/Codex review).
+- **7 new tools registered in `src/index.ts`**: `cdp_record_test_start`, `cdp_record_test_stop`, `cdp_record_test_generate`, `cdp_record_test_annotate`, `cdp_record_test_save`, `cdp_record_test_load`, `cdp_record_test_list`. Storage location: `<projectRoot>/.rn-agent/recordings/<sanitized>.json`. Appium format accepted in zod schema but returns `NOT_IMPLEMENTED` at runtime — Maestro + Detox cover our use cases.
+- **11 new error codes** in `ToolErrorCode` (`DEV_MODE_REQUIRED`, `EVAL_FAILED`, `BAD_RESPONSE`, `START_FAILED`, `NO_EVENTS`, `NOT_IMPLEMENTED`, `NOT_RECORDING`, `NO_PROJECT_ROOT`, `BAD_FILENAME`, `LOAD_FAILED`, `BAD_RECORDING`).
+- **`__HELPERS_VERSION__` 15 → 16** in `injected-helpers.ts` to invalidate cached helpers on devices that connected before this release.
+
+### Tests
+Running total: 549 → **605 passing**, zero failures. **+56 M6 tests** across 5 files:
+- `test-recorder-deduplicate.test.js` (6) — type/tap collision rules
+- `test-recorder-storage.test.js` (5) — sanitizeFilename, getRecordingsDir
+- `test-recorder-generators.test.js` (15) — Maestro YAML + Detox JS output snapshots, swipe direction semantic, newline sanitization regression
+- `test-recorder-js-guard.test.js` (14) — structural invariants of the injected JS strings (Object.freeze override, cleanup, session token, 1..5 renderer loop, eviction policy, all 7 handler names, fiber re-render walk, finger-direction comment)
+- `test-recorder-integration.test.js` (15) — handler-level mock-CDP round-trips including DEV gate, start→stop→generate flow, save→load round-trip, NO_EVENTS / NOT_IMPLEMENTED / LOAD_FAILED error paths
+
+### Review
+Multi-LLM (Gemini + Codex). Three high-confidence findings, all applied inline before commit:
+- **Codex (conf 95) + Gemini (conf 90)** — newline injection in generators. Annotation `note`, `testName`, `bundleId`, and route names are user-controlled strings interpolated into single-line YAML/JS comments. A multi-line note (`"reached checkout\nstep:malicious"`) escapes the comment context and either corrupts Maestro YAML (stray top-level mapping) or executes arbitrary JS in Detox tests. Fix: `stripNewlines()` helper in generators applied at every interpolation site, plus regression tests asserting attack strings stay inside comments.
+- **Codex (conf 85)** — Detox `submit` fallback used `device.pressBack()` which is Android-only and semantically wrong (back button vs return key). Fix: replaced with `// submit: missing testID/label — replay manually` comment.
+- **Gemini (conf 80)** — start-stop-start within a single MCP process leaves stale wrappers on already-frozen props from session 1. Their captured `__currentRoute` closure is stale in session 2 and they emit events with wrong route. Fix: session token (`globalThis.__METRO_MCP_REC_SESSION__` + closure-captured `sessionId`); each wrapper checks the current global token against its captured token before emitting. Stale wrappers from prior sessions silently call through to the original handler without recording.
+
+### Notes for users
+- This is a Dev Client / dev-mode feature only. Calling `cdp_record_test_start` on a release build returns `DEV_MODE_REQUIRED` (release builds pre-freeze props at Metro bundling time, so the interceptor can never fire).
+- Recordings are stored project-locally (`<projectRoot>/.rn-agent/recordings/`) — commit them with feature branches or `.gitignore` the directory if you prefer ephemeral recording.
+- The existing `maestro_generate` (replay-based, no recording required) stays available for the case where you already know the steps.
+
 ## [0.41.0] — 2026-04-22
 
 M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi-debugging as unsupported (matching metro-mcp's stance).

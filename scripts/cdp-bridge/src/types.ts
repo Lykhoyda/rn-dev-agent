@@ -153,7 +153,19 @@ export type ToolErrorCode =
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
   | 'NOT_CONNECTED'
-  | 'HELPERS_NOT_INJECTED';
+  | 'HELPERS_NOT_INJECTED'
+  // M6 / Phase 112 (D669): cdp_record_test_* tool family.
+  | 'DEV_MODE_REQUIRED'
+  | 'EVAL_FAILED'
+  | 'BAD_RESPONSE'
+  | 'START_FAILED'
+  | 'NO_EVENTS'
+  | 'NOT_IMPLEMENTED'
+  | 'NOT_RECORDING'
+  | 'NO_PROJECT_ROOT'
+  | 'BAD_FILENAME'
+  | 'LOAD_FAILED'
+  | 'BAD_RECORDING';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

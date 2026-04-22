@@ -44,6 +44,7 @@ import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
+import { createRecordTestStartHandler, createRecordTestStopHandler, createRecordTestGenerateHandler, createRecordTestAnnotateHandler, createRecordTestSaveHandler, createRecordTestLoadHandler, createRecordTestListHandler, } from './tools/test-recorder.js';
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
@@ -464,6 +465,24 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .maestro/
     timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
 }, createMaestroTestAllHandler());
+// M6 / Phase 112 (D669): Object.freeze test recorder.
+trackedTool('cdp_record_test_start', 'Start recording UI interactions via Object.freeze interceptor. Captures taps, long-presses, text input, submits, and scroll-derived swipes from the running app — no app changes required. Requires __DEV__=true (release builds pre-freeze props at bundle time). Pair with cdp_record_test_stop and cdp_record_test_generate to produce Maestro YAML or Detox JS.', {}, createRecordTestStartHandler(getClient));
+trackedTool('cdp_record_test_stop', 'Stop recording, deduplicate consecutive type/tap bursts, freeze the buffer, and return event count + per-type breakdown. Sets `truncated: true` when the 500-event cap was hit. Recorded events stay in MCP memory for cdp_record_test_generate / cdp_record_test_save until the next start.', {}, createRecordTestStopHandler(getClient));
+trackedTool('cdp_record_test_generate', 'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first).', {
+    format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
+    testName: z.string().optional().describe('Name shown in describe()/comment header'),
+    bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header'),
+}, createRecordTestGenerateHandler());
+trackedTool('cdp_record_test_annotate', 'Push a human-readable note into the live event stream — appears as a comment in generated tests. Useful for marking flow checkpoints ("reached checkout", "error appeared"). Only valid during an active recording.', {
+    note: z.string().min(1).describe('Annotation text'),
+}, createRecordTestAnnotateHandler(getClient));
+trackedTool('cdp_record_test_save', 'Persist current recording events to <projectRoot>/.rn-agent/recordings/<filename>.json. Filename is sanitized (only [a-zA-Z0-9_-] kept). Use cdp_record_test_load to restore later for re-generation in a different format.', {
+    filename: z.string().min(1).describe('Recording name (without .json — sanitized)'),
+}, createRecordTestSaveHandler());
+trackedTool('cdp_record_test_load', 'Restore a previously-saved recording from <projectRoot>/.rn-agent/recordings/. Replaces any in-memory events. After loading, call cdp_record_test_generate to render in any format.', {
+    filename: z.string().min(1).describe('Recording name (without .json)'),
+}, createRecordTestLoadHandler());
+trackedTool('cdp_record_test_list', 'List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.', {}, createRecordTestListHandler());
 trackedTool('cdp_restart', 'In-process soft state reset (B76/D644). Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.', {
     metroPort: z.number().optional().describe('Override Metro port for reconnection (default: keep current)'),
     platform: z.string().optional().describe('Platform filter for reconnection (e.g. "ios", "android")'),
