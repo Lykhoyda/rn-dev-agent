@@ -186,6 +186,24 @@ export const START_RECORDING_JS = `(function() {
         };
         wrapped = true;
       }
+      // B141: TextInput components fire onFocus (not onPress) on first tap —
+      // emit as 'tap' so Maestro replay (which uses tapOn) focuses the field.
+      // Skip the focus hook if the same props object already has an onPress
+      // handler (Gemini review 2026-04-23, confidence 85): same element firing
+      // both onPress and onFocus would double-emit on every tap, and the
+      // existing same-testID dedup only collapses when testIDs match exactly —
+      // it would NOT protect a Pressable-wraps-TextInput where the wrapper
+      // and field carry different testIDs.
+      if (typeof obj.onFocus === 'function' && typeof obj.onPress !== 'function') {
+        var ofn = obj.onFocus;
+        obj.onFocus = function(e) {
+          if (globalThis.__METRO_MCP_REC_ACTIVE__ && globalThis.__METRO_MCP_REC_SESSION__ === sessionId) {
+            pushEvent({ type: 'tap', testID: tid, label: lbl, route: __currentRoute, t: Date.now() });
+          }
+          return ofn.call(this, e);
+        };
+        wrapped = true;
+      }
       if (typeof obj.onLongPress === 'function') {
         var olp = obj.onLongPress;
         obj.onLongPress = function(e) {

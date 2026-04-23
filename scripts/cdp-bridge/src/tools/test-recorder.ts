@@ -39,6 +39,11 @@ export type RecordedEvent =
 
 let storedEvents: RecordedEvent[] | null = null;
 let recordingTruncated = false;
+// B136: route captured at record_start — used by the generator to emit a
+// `# startRoute: <name>` preamble so replay users know where the recorded
+// flow assumes the app is. Null when the recorder couldn't resolve a route
+// (no __NAV_REF__ yet, or app is on its default/landing route).
+let recordingStartRoute: string | null = null;
 
 // --- Pure helpers (easy to unit-test) ---
 
@@ -127,6 +132,7 @@ export function createRecordTestStartHandler(getClient: () => CDPClient): (args:
     }
     storedEvents = null;
     recordingTruncated = false;
+    recordingStartRoute = parsed.activeRoute ?? null;
     return okResult({
       started: true,
       alreadyRunning: !!parsed.alreadyRunning,
@@ -180,12 +186,16 @@ export function createRecordTestGenerateHandler(): (args: GenerateArgs) => Promi
         'NOT_IMPLEMENTED',
       );
     }
-    const opts: GenerateOpts = { testName: args.testName, bundleId: args.bundleId };
+    const opts: GenerateOpts = {
+      testName: args.testName,
+      bundleId: args.bundleId,
+      startRoute: recordingStartRoute ?? undefined,
+    };
     const text =
       args.format === 'maestro'
         ? generateMaestro(storedEvents, opts)
         : generateDetox(storedEvents, opts);
-    return okResult({ format: args.format, eventCount: storedEvents.length, text });
+    return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
   };
 }
 
@@ -313,4 +323,9 @@ export function _getStoredEvents(): RecordedEvent[] | null {
 export function _resetState(): void {
   storedEvents = null;
   recordingTruncated = false;
+  recordingStartRoute = null;
+}
+
+export function _setRecordingStartRoute(route: string | null): void {
+  recordingStartRoute = route;
 }

@@ -205,10 +205,19 @@ export const INJECTED_HELPERS = `
     if (filter) {
       var f = String(filter).toLowerCase();
       var matchFibers = [];
+      var matchFiberSet = new WeakSet();
       var queue = [root.current];
       var seen = new WeakSet();
       var scanned = 0;
       var bfsStart = Date.now();
+      function hasMatchedAncestor(f2) {
+        var cur = f2.return;
+        while (cur) {
+          if (matchFiberSet.has(cur)) return true;
+          cur = cur.return;
+        }
+        return false;
+      }
       while (queue.length > 0 && scanned < 2000 && (Date.now() - bfsStart) < 3000) {
         var fiber = queue.shift();
         if (!fiber || seen.has(fiber)) continue;
@@ -218,7 +227,10 @@ export const INJECTED_HELPERS = `
         var ftid = fiber.memoizedProps && (fiber.memoizedProps.testID || fiber.memoizedProps.nativeID);
         var matchesName = fname && fname.toLowerCase().indexOf(f) >= 0;
         var matchesTestID = ftid && ftid.toLowerCase().indexOf(f) >= 0;
-        if (matchesName || matchesTestID) matchFibers.push(fiber);
+        if ((matchesName || matchesTestID) && !hasMatchedAncestor(fiber)) {
+          matchFibers.push(fiber);
+          matchFiberSet.add(fiber);
+        }
         var ch = fiber.child;
         while (ch) {
           queue.push(ch);

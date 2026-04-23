@@ -1,9 +1,18 @@
 import { okResult, failResult, withConnection } from '../utils.js';
 export function createDispatchHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
+        let payload = args.payload;
+        if (typeof args.payloadJson === 'string') {
+            try {
+                payload = JSON.parse(args.payloadJson);
+            }
+            catch (e) {
+                return failResult(`Invalid payloadJson — must be valid JSON literal (e.g. '"42"' for the string "42"): ${e.message}`);
+            }
+        }
         const opts = JSON.stringify({
             action: args.action,
-            payload: args.payload,
+            payload: payload,
             readPath: args.readPath,
         });
         const result = await client.evaluate(client.helperExpr(`dispatchAction(${opts})`));
