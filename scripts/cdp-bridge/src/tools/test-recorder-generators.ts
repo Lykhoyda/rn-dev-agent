@@ -9,6 +9,41 @@ import type { RecordedEvent } from './test-recorder.js';
 export interface GenerateOpts {
   testName?: string;
   bundleId?: string;
+  // B136: route captured at record_test_start. Emitted as a `# startRoute: X`
+  // comment after the header so replay users know the flow assumes the app is
+  // already on <X>. When unset, flows assume the app's default landing route.
+  startRoute?: string | null;
+}
+
+// B137: window (ms) after a tap in which a subsequent `navigate` event is
+// considered to be caused by the tap. 1000ms handles human-pace UI transitions
+// plus async navigator resolution without false-positives spanning unrelated
+// user pauses.
+const TAP_TO_NAV_WINDOW_MS = 1000;
+
+// B137: look forward from a tap for the next navigate event. If it lies within
+// the correlation window AND no other tap/swipe/submit event precedes it, the
+// tap is treated as the navigation trigger. Returns the navigate event index
+// so the caller can (a) emit a `# navigated:` comment and (b) mark the event
+// as consumed so the navigate branch doesn't double-emit.
+export function lookaheadNavigate(
+  events: RecordedEvent[],
+  fromIndex: number,
+  windowMs: number = TAP_TO_NAV_WINDOW_MS,
+): { event: Extract<RecordedEvent, { type: 'navigate' }>; index: number } | null {
+  const source = events[fromIndex];
+  if (!source || (source.type !== 'tap' && source.type !== 'long_press')) return null;
+  for (let j = fromIndex + 1; j < events.length; j++) {
+    const ev = events[j];
+    if (ev.type === 'navigate') {
+      if (ev.t - source.t <= windowMs) return { event: ev, index: j };
+      return null;
+    }
+    if (ev.type === 'tap' || ev.type === 'long_press' || ev.type === 'swipe' || ev.type === 'submit') {
+      return null;
+    }
+  }
+  return null;
 }
 
 // Strip CR/LF from any user-controlled string before interpolating into a
@@ -65,7 +100,15 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     lines.push('---');
   }
   lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
+  if (opts.startRoute) {
+    lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
+    lines.push('# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).');
+  }
   lines.push('- launchApp');
+
+  // B137: navigate events reached via tap lookahead are emitted inline with the
+  // tap; skip them here to avoid double-emission.
+  const consumedNavIndices = new Set<number>();
 
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
@@ -74,12 +117,26 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         const sel = maestroSelector(ev);
         if (sel) lines.push(`- tapOn:\n    ${sel}`);
         else lines.push('# tap: missing testID/label');
+        const hit = lookaheadNavigate(events, i);
+        if (hit) {
+          lines.push(`# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          const next = nextSelector(events, hit.index, maestroSelector);
+          if (next) lines.push(`- assertVisible:\n    ${next}`);
+          consumedNavIndices.add(hit.index);
+        }
         break;
       }
       case 'long_press': {
         const sel = maestroSelector(ev);
         if (sel) lines.push(`- longPressOn:\n    ${sel}`);
         else lines.push('# long_press: missing testID/label');
+        const hit = lookaheadNavigate(events, i);
+        if (hit) {
+          lines.push(`# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          const next = nextSelector(events, hit.index, maestroSelector);
+          if (next) lines.push(`- assertVisible:\n    ${next}`);
+          consumedNavIndices.add(hit.index);
+        }
         break;
       }
       case 'type': {
@@ -101,6 +158,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         break;
       }
       case 'navigate': {
+        if (consumedNavIndices.has(i)) break;
         const next = nextSelector(events, i, maestroSelector);
         lines.push(`# navigated: ${stripNewlines(ev.from ?? '?')} -> ${stripNewlines(ev.to)}`);
         if (next) lines.push(`- assertVisible:\n    ${next}`);
@@ -120,8 +178,13 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
   const lines: string[] = [];
   const name = stripNewlines(opts.testName ?? 'Recorded flow');
   lines.push(`describe(${JSON.stringify(name)}, () => {`);
+  if (opts.startRoute) {
+    lines.push(`  // startRoute: ${stripNewlines(opts.startRoute)} — ensure app is on this route before running`);
+  }
   lines.push('  beforeAll(async () => { await device.launchApp(); });');
   lines.push("  it('replays recorded steps', async () => {");
+
+  const consumedNavIndices = new Set<number>();
 
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
@@ -130,12 +193,26 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
         const sel = detoxSelector(ev);
         if (sel) lines.push(`    await ${sel}.tap();`);
         else lines.push('    // tap: missing testID/label');
+        const hit = lookaheadNavigate(events, i);
+        if (hit) {
+          lines.push(`    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          const next = nextSelector(events, hit.index, detoxSelector);
+          if (next) lines.push(`    await expect(${next}).toBeVisible();`);
+          consumedNavIndices.add(hit.index);
+        }
         break;
       }
       case 'long_press': {
         const sel = detoxSelector(ev);
         if (sel) lines.push(`    await ${sel}.longPress();`);
         else lines.push('    // long_press: missing testID/label');
+        const hit = lookaheadNavigate(events, i);
+        if (hit) {
+          lines.push(`    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          const next = nextSelector(events, hit.index, detoxSelector);
+          if (next) lines.push(`    await expect(${next}).toBeVisible();`);
+          consumedNavIndices.add(hit.index);
+        }
         break;
       }
       case 'type': {
@@ -159,6 +236,7 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
         break;
       }
       case 'navigate': {
+        if (consumedNavIndices.has(i)) break;
         const next = nextSelector(events, i, detoxSelector);
         lines.push(`    // navigated: ${stripNewlines(ev.from ?? '?')} -> ${stripNewlines(ev.to)}`);
         if (next) lines.push(`    await expect(${next}).toBeVisible();`);

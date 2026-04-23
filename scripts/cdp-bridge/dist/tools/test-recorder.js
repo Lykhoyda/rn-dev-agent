@@ -16,6 +16,11 @@ import { generateMaestro, generateDetox, } from './test-recorder-generators.js';
 // hermetic integration tests.
 let storedEvents = null;
 let recordingTruncated = false;
+// B136: route captured at record_start — used by the generator to emit a
+// `# startRoute: <name>` preamble so replay users know where the recorded
+// flow assumes the app is. Null when the recorder couldn't resolve a route
+// (no __NAV_REF__ yet, or app is on its default/landing route).
+let recordingStartRoute = null;
 // --- Pure helpers (easy to unit-test) ---
 // Collapse consecutive duplicates: same-testID type bursts keep the latest
 // value; identical-testID taps within 100ms collapse to one. Mirrors
@@ -87,6 +92,7 @@ export function createRecordTestStartHandler(getClient) {
         }
         storedEvents = null;
         recordingTruncated = false;
+        recordingStartRoute = parsed.activeRoute ?? null;
         return okResult({
             started: true,
             alreadyRunning: !!parsed.alreadyRunning,
@@ -129,11 +135,15 @@ export function createRecordTestGenerateHandler() {
         if (args.format === 'appium') {
             return failResult('Appium generator not implemented in M6 — file a GitHub issue if needed', 'NOT_IMPLEMENTED');
         }
-        const opts = { testName: args.testName, bundleId: args.bundleId };
+        const opts = {
+            testName: args.testName,
+            bundleId: args.bundleId,
+            startRoute: recordingStartRoute ?? undefined,
+        };
         const text = args.format === 'maestro'
             ? generateMaestro(storedEvents, opts)
             : generateDetox(storedEvents, opts);
-        return okResult({ format: args.format, eventCount: storedEvents.length, text });
+        return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
     };
 }
 export function createRecordTestAnnotateHandler(getClient) {
@@ -254,4 +264,8 @@ export function _getStoredEvents() {
 export function _resetState() {
     storedEvents = null;
     recordingTruncated = false;
+    recordingStartRoute = null;
+}
+export function _setRecordingStartRoute(route) {
+    recordingStartRoute = route;
 }

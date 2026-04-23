@@ -253,7 +253,9 @@ trackedTool('cdp_set_shared_value', 'Set a Reanimated SharedValue on a component
       }
       if (!sv || typeof sv !== 'object' || !('value' in sv)) return JSON.stringify({ __agent_error: 'SharedValue prop found but not accessible on the resolved fiber' });
       sv.value = ${args.value};
-      return JSON.stringify({ ok: true, testID: ${JSON.stringify(args.testID)}, prop: ${JSON.stringify(args.prop)}, value: ${args.value} });
+      var observed = sv.value;
+      var drift = observed !== ${args.value};
+      return JSON.stringify({ ok: true, testID: ${JSON.stringify(args.testID)}, prop: ${JSON.stringify(args.prop)}, written: ${args.value}, observed: observed, drift: drift });
     })()`;
     const result = await client.evaluate(expression);
     if (result.error)
@@ -274,7 +276,8 @@ trackedTool('cdp_set_shared_value', 'Set a Reanimated SharedValue on a component
 }));
 trackedTool('cdp_dispatch', 'Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). NOTE: Best used for state verification, not UI interaction testing — React components may not re-render immediately after CDP-dispatched actions. For UI testing, use device_press/device_find to trigger the action through the UI instead.', {
     action: z.string().describe('Redux action type (e.g. "tasks/softDelete", "cart/addItem")'),
-    payload: z.any().optional().describe('Action payload'),
+    payload: z.any().optional().describe('Action payload. WARNING: JSON-RPC between LLM and MCP does not preserve the distinction between string "42" and number 42 — the LLM\'s JSON encoder may serialize either way. For type-critical payloads (e.g. a string that happens to be numeric), use payloadJson instead.'),
+    payloadJson: z.string().optional().describe('Stringified JSON payload with guaranteed type preservation. Takes precedence over `payload` when provided. Example: payloadJson=\'"42"\' dispatches the STRING "42"; payloadJson=\'42\' dispatches the NUMBER 42; payloadJson=\'{"id":"42","qty":5}\' dispatches an object.'),
     readPath: z.string().optional().describe('Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete")'),
 }, createDispatchHandler(getClient));
 trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses shake-to-show dev menu (use before proof recordings). For reload with auto-reconnect, use cdp_reload instead.', {
