@@ -145,22 +145,70 @@ test('defensive: bails after 20 levels of nesting (no infinite loop on self-refe
 
 // --- Regression check: the in-IIFE source in START_RECORDING_JS uses the same logic ---
 
-test('B135 regression guard: in-IIFE source matches TS mirror (function shape)', () => {
-  // This test imports the module source and checks that the START_RECORDING_JS
-  // constant contains the Shape #1 handling (routeName check). If someone edits
-  // the in-IIFE copy and forgets to mirror, this catches the drift.
-  // We import the TS source (from dist/) and scan for the expected token pattern.
-  //
-  // This is a brittle test by design — it's a drift detector, not a semantic one.
-  // The real behavior is tested by the per-shape tests above.
+test('B135 regression guard: in-IIFE source matches TS mirror (function shape + semantics)', () => {
+  // Drift detector: scans the in-IIFE source for token patterns that must stay
+  // synced with the TS mirror. Reviewers (Gemini + Codex) caught a real drift
+  // on the Shape #2 leaf return in the initial fix — this guard now includes
+  // tokens for every behavioral contract, not just shape detection.
   return import('../../dist/cdp/test-recorder-helpers.js').then(mod => {
     const src = mod.START_RECORDING_JS;
     assert.ok(typeof src === 'string', 'START_RECORDING_JS should be a string constant');
+
+    // Shape detection tokens (must be present)
     assert.ok(src.includes("typeof s.routeName === 'string'"),
-      'B135 drift: in-IIFE extractActiveRoute must handle routeName shape');
-    assert.ok(src.includes('s.nested'),
-      'B135 drift: in-IIFE extractActiveRoute must walk via .nested');
+      'B135 drift: in-IIFE extractActiveRoute must handle plugin routeName shape');
     assert.ok(src.includes('Array.isArray(s.routes)'),
-      'B135 drift: in-IIFE extractActiveRoute must still support legacy React Navigation routes[] shape');
+      'B135 drift: in-IIFE extractActiveRoute must handle legacy React Navigation routes[] shape');
+
+    // Shape #1 walks via `.nested` as an object (not just truthy)
+    assert.ok(src.includes("typeof s.nested === 'object'"),
+      'B135 drift: in-IIFE extractActiveRoute must check s.nested is an object before recursing');
+
+    // Shape #2 leaf return uses strict string check (NOT `r.name || null`,
+    // which would swallow `r.name = 42` as 42). Catches the exact drift the
+    // reviewers flagged.
+    assert.ok(src.includes("typeof r.name === 'string'"),
+      'B135 drift: in-IIFE extractActiveRoute must use strict typeof string for routes[index].name (no `|| null` fallback)');
+    assert.ok(!/return r\.name \|\| null\s*;/.test(src),
+      'B135 drift: in-IIFE extractActiveRoute must NOT use loose `r.name || null` (TS mirror uses strict typeof)');
+
+    // Depth guard must remain at 20 to prevent circular-reference infinite loops
+    assert.ok(/depth\s*<\s*20/.test(src),
+      'B135 drift: depth guard must remain at 20 levels');
   });
+});
+
+test('B135: Shape #1 takes precedence over Shape #2 on hybrid objects', () => {
+  // Defensive: if a nav state object somehow has BOTH routeName (Shape #1)
+  // AND routes[] + index (Shape #2), Shape #1 must win. __RN_AGENT.getNavState
+  // is always Shape #1; nothing else produces hybrids today, but locking the
+  // precedence prevents future refactors from silently flipping behavior.
+  const hybrid = {
+    routeName: 'Shape1Wins',
+    index: 0,
+    routes: [{ name: 'Shape2Loses' }],
+    nested: null,
+  };
+  assert.equal(extractActiveRouteForTest(hybrid), 'Shape1Wins');
+});
+
+test('B135: malformed Shape #2 — r.name of wrong type returns null (not the bad value)', () => {
+  // Guards against the drift the reviewers caught: `r.name || null` would
+  // return 42 for `{name: 42}`. Strict typeof returns null.
+  assert.equal(extractActiveRouteForTest({
+    index: 0,
+    routes: [{ name: 42 }],  // number, not string
+  }), null);
+  assert.equal(extractActiveRouteForTest({
+    index: 0,
+    routes: [{ name: { toString: () => 'BadObj' } }],  // object with toString
+  }), null);
+  // Empty string IS a string — strict typeof returns it as-is. This is a
+  // subtle but correct behavior. Downstream consumers should treat empty
+  // route names as malformed state (recorder's prevRoute check will still
+  // catch it: '' !== null so one navigate event fires with to: '').
+  assert.equal(extractActiveRouteForTest({
+    index: 0,
+    routes: [{ name: '' }],
+  }), '');
 });

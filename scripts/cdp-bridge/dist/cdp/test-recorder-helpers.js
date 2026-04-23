@@ -146,7 +146,7 @@ export const START_RECORDING_JS = `(function() {
           var r = s.routes[s.index];
           if (!r) return null;
           if (r.state) { s = r.state; depth++; continue; }
-          return r.name || null;
+          return typeof r.name === 'string' ? r.name : null;
         }
         return null;
       }
