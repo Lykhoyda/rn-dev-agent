@@ -88,7 +88,8 @@ interface NavGraphArgs {
 
 export function createNavGraphHandler(getClient: () => CDPClient) {
   const scanHandler = withConnection(getClient, async (args: NavGraphArgs, client) => {
-    const projectRoot = findProjectRoot();
+    const bundleId = getClient().connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
     if (!projectRoot) {
       return failResult('Cannot find project root (no package.json found). Run from inside a React Native project.');
     }
@@ -201,7 +202,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
   });
 
   const readHandler = async (args: NavGraphArgs) => {
-    const projectRoot = findProjectRoot();
+    const bundleId = getClient().connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
     if (!projectRoot) {
       return failResult('Cannot find project root (no package.json found).');
     }
@@ -248,7 +250,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
       return failResult('screen parameter is required for action="navigate".');
     }
 
-    const projectRoot = findProjectRoot();
+    const bundleId = getClient().connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
     if (!projectRoot) {
       return failResult('Cannot find project root (no package.json found).');
     }
@@ -292,7 +295,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
     if (!args.method) return failResult('method is required for action="record" (programmatic, deep_link, or ui_interaction).');
     if (args.success === undefined) return failResult('success is required for action="record" (true or false).');
 
-    const projectRoot = findProjectRoot();
+    const bundleId = getClient().connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
     if (!projectRoot) return failResult('Cannot find project root.');
 
     const result = recordNavigation(projectRoot, {
@@ -310,7 +314,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
   };
 
   const stalenessHandler = async () => {
-    const projectRoot = findProjectRoot();
+    const bundleId = getClient().connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
     if (!projectRoot) return failResult('Cannot find project root.');
     const result = checkStaleness(projectRoot);
     return result.stale
@@ -346,7 +351,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
       graph_scanned: false,
     };
 
-    const projectRoot = findProjectRoot();
+    const bundleId = client.connectedTarget?.description ?? null;
+    const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
 
     // 1. Staleness check + auto-rescan
     if (projectRoot) {
@@ -624,7 +630,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
             reconnect_attempts: replayResult.reconnect_attempts,
           },
         };
-        const projectRoot = findProjectRoot();
+        const replayBundleId = client.connectedTarget?.description ?? null;
+        const projectRoot = findProjectRoot(replayBundleId ? { bundleId: replayBundleId } : undefined);
         if (projectRoot) {
           recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: true, latency_ms: replayResult.latency_ms });
         }

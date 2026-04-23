@@ -825,7 +825,7 @@ trackedTool(
   {
     filename: z.string().min(1).describe('Recording name (without .json — sanitized)'),
   },
-  createRecordTestSaveHandler(),
+  createRecordTestSaveHandler(getClient),
 );
 
 trackedTool(
@@ -834,14 +834,14 @@ trackedTool(
   {
     filename: z.string().min(1).describe('Recording name (without .json)'),
   },
-  createRecordTestLoadHandler(),
+  createRecordTestLoadHandler(getClient),
 );
 
 trackedTool(
   'cdp_record_test_list',
   'List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.',
   {},
-  createRecordTestListHandler(),
+  createRecordTestListHandler(getClient),
 );
 
 trackedTool(

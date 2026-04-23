@@ -44,6 +44,10 @@ let recordingTruncated = false;
 // flow assumes the app is. Null when the recorder couldn't resolve a route
 // (no __NAV_REF__ yet, or app is on its default/landing route).
 let recordingStartRoute: string | null = null;
+// B144: bundleId captured at record_start time — used by save/load/list to
+// resolve the project root to the app the recording was made against, rather
+// than whichever RN project happens to sort first in the sibling scan.
+let recordingBundleId: string | null = null;
 
 // --- Pure helpers (easy to unit-test) ---
 
@@ -86,6 +90,23 @@ export function getRecordingsDir(rootResolver: () => string | null = findProject
   const root = rootResolver();
   if (!root) return null;
   return join(root, '.rn-agent', 'recordings');
+}
+
+// B144: resolver factory that threads a bundleId into findProjectRoot so
+// save/load/list land in the correct project when the plugin CWD has
+// multiple sibling RN projects. Prefers the bundleId captured at start
+// time (save's happy path), falls back to the live CDP client's connected
+// target for load/list calls that occur without a prior start in the same
+// session (Gemini review 2026-04-23, conf 80 — addresses the gap where
+// load/list in a fresh session would otherwise hit the original B144
+// alphabetical fallback).
+function makeRecordingRootResolver(getClient?: () => CDPClient): () => string | null {
+  return () => {
+    const liveBundleId = getClient?.().connectedTarget?.description ?? null;
+    const bundleId = recordingBundleId ?? liveBundleId;
+    if (bundleId) return findProjectRoot({ bundleId });
+    return findProjectRoot();
+  };
 }
 
 export function typeCounts(events: RecordedEvent[]): Record<string, number> {
@@ -133,6 +154,10 @@ export function createRecordTestStartHandler(getClient: () => CDPClient): (args:
     storedEvents = null;
     recordingTruncated = false;
     recordingStartRoute = parsed.activeRoute ?? null;
+    // B144: capture the connected bundleId so save/load/list resolve the
+    // project root for this specific app, not whichever sibling happens to
+    // sort first alphabetically.
+    recordingBundleId = client.connectedTarget?.description ?? null;
     return okResult({
       started: true,
       alreadyRunning: !!parsed.alreadyRunning,
@@ -224,12 +249,12 @@ export function createRecordTestAnnotateHandler(getClient: () => CDPClient): (ar
   });
 }
 
-export function createRecordTestSaveHandler(): (args: { filename: string }) => Promise<ToolResult> {
+export function createRecordTestSaveHandler(getClient?: () => CDPClient): (args: { filename: string }) => Promise<ToolResult> {
   return async (args) => {
     if (!storedEvents) {
       return failResult('No events to save — stop a recording first', 'NO_EVENTS');
     }
-    const dir = getRecordingsDir();
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
     if (!dir) {
       return failResult(
         'Could not resolve project root (no package.json ancestor). Set RN_PROJECT_ROOT env var.',
@@ -253,9 +278,9 @@ export function createRecordTestSaveHandler(): (args: { filename: string }) => P
   };
 }
 
-export function createRecordTestLoadHandler(): (args: { filename: string }) => Promise<ToolResult> {
+export function createRecordTestLoadHandler(getClient?: () => CDPClient): (args: { filename: string }) => Promise<ToolResult> {
   return async (args) => {
-    const dir = getRecordingsDir();
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
     if (!dir) {
       return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
     }
@@ -289,9 +314,9 @@ export function createRecordTestLoadHandler(): (args: { filename: string }) => P
   };
 }
 
-export function createRecordTestListHandler(): (args: Record<string, never>) => Promise<ToolResult> {
+export function createRecordTestListHandler(getClient?: () => CDPClient): (args: Record<string, never>) => Promise<ToolResult> {
   return async () => {
-    const dir = getRecordingsDir();
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
     if (!dir) {
       return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
     }
@@ -324,8 +349,19 @@ export function _resetState(): void {
   storedEvents = null;
   recordingTruncated = false;
   recordingStartRoute = null;
+  recordingBundleId = null;
 }
 
 export function _setRecordingStartRoute(route: string | null): void {
   recordingStartRoute = route;
+}
+
+// B144: test-only setter for module state. Production code captures this at
+// record_test_start time from the CDP client's connectedTarget.description.
+export function _setRecordingBundleId(bundleId: string | null): void {
+  recordingBundleId = bundleId;
+}
+
+export function _getRecordingBundleId(): string | null {
+  return recordingBundleId;
 }
