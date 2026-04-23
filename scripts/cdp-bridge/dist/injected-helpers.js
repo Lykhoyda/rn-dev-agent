@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 16;
+  var __HELPERS_VERSION__ = 17;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -12,6 +12,36 @@ export const INJECTED_HELPERS = `
       if (roots && roots.size > 0) return { rendererId: i, roots: roots };
     }
     return null;
+  }
+
+  // B143: collect root.current fibers from EVERY registered React renderer.
+  // findActiveRenderer returns only the first non-empty renderer, which is
+  // typically LogBox (a tiny shell). The main app tree often lives on a
+  // later rendererID (common with Bridgeless + Reanimated, which register
+  // their own secondary renderer). For query tools that must reach all
+  // user components, use this helper instead.
+  // Gemini A3 (2026-04-23, conf 80): per-renderer try/catch protects against
+  // one renderer's getFiberRoots throwing during teardown/HMR/worklet init —
+  // a single bad renderer shouldn't poison the union.
+  function findAllRootFibers() {
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (!hook || typeof hook.getFiberRoots !== 'function') return [];
+    var out = [];
+    for (var ri = 1; ri <= 5; ri++) {
+      try {
+        var roots = hook.getFiberRoots(ri);
+        if (roots && roots.size) {
+          var it = roots.values();
+          var v;
+          while (!(v = it.next()).done) {
+            if (v.value && v.value.current) {
+              out.push({ rendererId: ri, fiber: v.value.current });
+            }
+          }
+        }
+      } catch (_) { /* skip bad renderer, keep going */ }
+    }
+    return out;
   }
 
   // Sanitize an object by enumerating properties safely — getters that throw
@@ -100,7 +130,17 @@ export const INJECTED_HELPERS = `
       return false;
     }
 
-    if (hasErrorOverlay(root.current)) {
+    // B143 A1 (Gemini, conf 85): check for RedBox/LogBox across ALL renderers,
+    // not just the first. A user-code Error Boundary on the main renderer
+    // would otherwise be silently missed while the filter path happily walks
+    // past it. Performance is negligible — each root's hasErrorOverlay walk
+    // is already depth-capped at 15.
+    var overlayRoots = findAllRootFibers();
+    var overlayFound = false;
+    for (var oi = 0; oi < overlayRoots.length && !overlayFound; oi++) {
+      if (hasErrorOverlay(overlayRoots[oi].fiber)) overlayFound = true;
+    }
+    if (overlayFound) {
       return JSON.stringify({
         warning: 'APP_HAS_REDBOX',
         message: 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.'
@@ -201,12 +241,24 @@ export const INJECTED_HELPERS = `
       return result;
     }
 
-    // For filtered queries: BFS to find matches, then build compact subtrees
+    // For filtered queries: BFS to find matches, then build compact subtrees.
+    // B143: seed the BFS queue from EVERY renderer's root — not just the
+    // first one findActiveRenderer picked. Apps with multiple React
+    // renderers (LogBox + main Fabric, or main + Reanimated worklet) have
+    // their user components spread across renderer IDs; walking only the
+    // first found renderer misses the bulk of testIDs.
     if (filter) {
       var f = String(filter).toLowerCase();
       var matchFibers = [];
       var matchFiberSet = new WeakSet();
-      var queue = [root.current];
+      var allRoots = findAllRootFibers();
+      // Codex review (conf 82): scale the scan budget with the number of
+      // seeded roots so later renderers aren't starved by earlier (typically
+      // LogBox) ones. Hard cap at 5000 to stay under the 3s wall-clock
+      // budget on Hermes.
+      var scanBudget = Math.min(5000, 2000 * Math.max(1, allRoots.length));
+      var queue = [];
+      for (var qi = 0; qi < allRoots.length; qi++) queue.push(allRoots[qi].fiber);
       var seen = new WeakSet();
       var scanned = 0;
       var bfsStart = Date.now();
@@ -218,7 +270,7 @@ export const INJECTED_HELPERS = `
         }
         return false;
       }
-      while (queue.length > 0 && scanned < 2000 && (Date.now() - bfsStart) < 3000) {
+      while (queue.length > 0 && scanned < scanBudget && (Date.now() - bfsStart) < 3000) {
         var fiber = queue.shift();
         if (!fiber || seen.has(fiber)) continue;
         seen.add(fiber);
@@ -238,8 +290,11 @@ export const INJECTED_HELPERS = `
         }
       }
 
+      // Codex review (conf 80): field renamed from renderersScanned to
+      // rootsSeeded to match actual semantic (roots pushed into the BFS
+      // queue, not renderers walked 1..5).
       if (matchFibers.length === 0) {
-        return JSON.stringify({ tree: null, totalNodes: scanned });
+        return JSON.stringify({ tree: null, totalNodes: scanned, rootsSeeded: allRoots.length });
       }
 
       var matches = [];
@@ -250,9 +305,9 @@ export const INJECTED_HELPERS = `
       }
       totalNodes = scanned;
       var tree = matches.length === 1 ? matches[0] : { matches: matches };
-      var output = safeStringify({ tree: tree, totalNodes: totalNodes }, 999999);
+      var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRoots.length }, 999999);
       if (output.length > 50000) {
-        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, truncated: true });
+        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, rootsSeeded: allRoots.length, truncated: true });
       }
       return output;
     }
@@ -1419,3 +1474,22 @@ export const REACT_READY_PROBE_JS = `(function() {
   }
   return false;
 })()`;
+export function findAllRootFibersForTest(hook) {
+    if (!hook || typeof hook.getFiberRoots !== 'function')
+        return [];
+    const out = [];
+    for (let ri = 1; ri <= 5; ri++) {
+        const roots = hook.getFiberRoots(ri);
+        if (roots && roots.size) {
+            const it = roots.values();
+            let step = it.next();
+            while (!step.done) {
+                const r = step.value;
+                if (r && r.current)
+                    out.push({ rendererId: ri, fiber: r.current });
+                step = it.next();
+            }
+        }
+    }
+    return out;
+}
