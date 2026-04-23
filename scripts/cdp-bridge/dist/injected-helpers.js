@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 17;
+  var __HELPERS_VERSION__ = 18;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -10,6 +10,33 @@ export const INJECTED_HELPERS = `
     for (var i = 1; i <= 5; i++) {
       var roots = hook.getFiberRoots(i);
       if (roots && roots.size > 0) return { rendererId: i, roots: roots };
+    }
+    return null;
+  }
+
+  // B145: iterate root.current fibers across ALL renderers. Callback
+  // returns truthy to short-circuit. Used by tools that want "find first
+  // match across renderers" semantics — Redux Provider, NavigationContainer,
+  // target testID. Returns the first truthy callback result, or null if no
+  // match in any renderer. Per-renderer try/catch so one bad renderer
+  // doesn't poison the search.
+  function forEachRootFiber(cb) {
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (!hook || typeof hook.getFiberRoots !== 'function') return null;
+    for (var ri = 1; ri <= 5; ri++) {
+      try {
+        var roots = hook.getFiberRoots(ri);
+        if (roots && roots.size) {
+          var it = roots.values();
+          var v;
+          while (!(v = it.next()).done) {
+            if (v.value && v.value.current) {
+              var result = cb(v.value.current, ri);
+              if (result) return result;
+            }
+          }
+        }
+      } catch (_) { /* skip bad renderer, keep searching */ }
     }
     return null;
   }
@@ -333,11 +360,6 @@ export const INJECTED_HELPERS = `
       if (devtools && devtools.getNavState) return safeStringify(devtools.getNavState(), 50000);
     } catch(e) {}
 
-    var renderer = findActiveRenderer();
-    if (!renderer) return JSON.stringify({ error: 'No navigation state found' });
-
-    var root = renderer.roots.values().next().value;
-
     function isNavLike(obj) {
       return obj && Array.isArray(obj.routes) && typeof obj.index === 'number';
     }
@@ -371,7 +393,11 @@ export const INJECTED_HELPERS = `
       return null;
     }
 
-    var navState = findNav(root && root.current);
+    // B145: walk every renderer's root — NavigationContainer may live on
+    // the main Fabric renderer while LogBox shell occupies renderer 1.
+    var navState = forEachRootFiber(function(rootFiber) {
+      return findNav(rootFiber);
+    });
 
     if (!navState) {
       var fallbackRef = findNavRef();
@@ -572,43 +598,44 @@ export const INJECTED_HELPERS = `
 
       // -- Fallback: fiber walk --
       if (!rootState) {
-        var renderer = findActiveRenderer();
-        if (renderer) {
-          var fiberRoot = renderer.roots.values().next().value;
-          if (fiberRoot && fiberRoot.current) {
-            var containerFibers = [];
-            (function findContainers(fiber, d) {
-              if (!fiber || d > 30) return;
-              var fname = fiber.type && (fiber.type.displayName || fiber.type.name);
-              if (fname === 'NavigationContainer' || fname === 'ExpoRoot') {
-                containerFibers.push(fiber);
-              }
-              findContainers(fiber.child, d + 1);
-              if (fiber.sibling) findContainers(fiber.sibling, d);
-            })(fiberRoot.current, 0);
-
-            containersFound = containerFibers.length;
-            for (var ci = 0; ci < containerFibers.length; ci++) {
-              var cf = containerFibers[ci];
-              var fiberState = findNavStateInHooks(cf.memoizedState);
-              if (!fiberState && globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getRootState) {
-                fiberState = globalThis.__NAV_REF__.getRootState();
-              }
-              if (fiberState && isNavState(fiberState)) {
-                if (!rootState) rootState = fiberState;
-                // Harvest linking config from fiber props
-                try {
-                  var linking = cf.memoizedProps && cf.memoizedProps.linking;
-                  if (!linking && cf.return) linking = cf.return.memoizedProps && cf.return.memoizedProps.linking;
-                  if (linking && linking.config) {
-                    linkingMap = flattenLinking(linking.config, '');
-                  }
-                } catch(e) {}
-                var fName = cf.type && (cf.type.displayName || cf.type.name);
-                if (fName === 'ExpoRoot') library = 'expo-router';
-                else library = 'react-navigation';
-              }
+        // B145: collect NavigationContainer/ExpoRoot fibers across every
+        // renderer. Containers can live on any renderer — main Fabric
+        // usually, but an Expo Dev Client + Reanimated app may register
+        // more than one. Previously this only scanned renderer 1.
+        var containerFibers = [];
+        var allRoots = findAllRootFibers();
+        for (var ar = 0; ar < allRoots.length; ar++) {
+          (function findContainers(fiber, d) {
+            if (!fiber || d > 30) return;
+            var fname = fiber.type && (fiber.type.displayName || fiber.type.name);
+            if (fname === 'NavigationContainer' || fname === 'ExpoRoot') {
+              containerFibers.push(fiber);
             }
+            findContainers(fiber.child, d + 1);
+            if (fiber.sibling) findContainers(fiber.sibling, d);
+          })(allRoots[ar].fiber, 0);
+        }
+
+        containersFound = containerFibers.length;
+        for (var ci = 0; ci < containerFibers.length; ci++) {
+          var cf = containerFibers[ci];
+          var fiberState = findNavStateInHooks(cf.memoizedState);
+          if (!fiberState && globalThis.__NAV_REF__ && globalThis.__NAV_REF__.getRootState) {
+            fiberState = globalThis.__NAV_REF__.getRootState();
+          }
+          if (fiberState && isNavState(fiberState)) {
+            if (!rootState) rootState = fiberState;
+            // Harvest linking config from fiber props
+            try {
+              var linking = cf.memoizedProps && cf.memoizedProps.linking;
+              if (!linking && cf.return) linking = cf.return.memoizedProps && cf.return.memoizedProps.linking;
+              if (linking && linking.config) {
+                linkingMap = flattenLinking(linking.config, '');
+              }
+            } catch(e) {}
+            var fName = cf.type && (cf.type.displayName || cf.type.name);
+            if (fName === 'ExpoRoot') library = 'expo-router';
+            else library = 'react-navigation';
           }
         }
       }
@@ -657,28 +684,27 @@ export const INJECTED_HELPERS = `
     // After Dev Client rebuilds, __REDUX_STORE__ may reference the old store instance
     // while the fiber tree always reflects the current React context.
     if (!requestedType || requestedType === 'redux') {
-      var storeRenderer = findActiveRenderer();
-      if (storeRenderer) {
-        var fiberRoot = storeRenderer.roots.values().next().value;
-        function findFiberReduxStore(fiber, depth) {
-          var current = fiber;
-          while (current) {
-            if ((depth || 0) > 30) return null;
-            var name = current.type && (current.type.displayName || current.type.name);
-            if (name === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.getState) {
-              return current.memoizedProps.store;
-            }
-            var found = findFiberReduxStore(current.child, (depth || 0) + 1);
-            if (found) return found;
-            current = current.sibling;
+      function findFiberReduxStore(fiber, depth) {
+        var current = fiber;
+        while (current) {
+          if ((depth || 0) > 30) return null;
+          var name = current.type && (current.type.displayName || current.type.name);
+          if (name === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.getState) {
+            return current.memoizedProps.store;
           }
-          return null;
+          var found = findFiberReduxStore(current.child, (depth || 0) + 1);
+          if (found) return found;
+          current = current.sibling;
         }
-        var fiberStore = findFiberReduxStore(fiberRoot && fiberRoot.current);
-        if (fiberStore) {
-          state = fiberStore.getState();
-          storeType = 'redux';
-        }
+        return null;
+      }
+      // B145: walk all renderers for the Redux Provider — first match wins.
+      var fiberStore = forEachRootFiber(function(rootFiber) {
+        return findFiberReduxStore(rootFiber);
+      });
+      if (fiberStore) {
+        state = fiberStore.getState();
+        storeType = 'redux';
       }
       if (!state && globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.getState) {
         state = globalThis.__REDUX_STORE__.getState();
@@ -715,40 +741,38 @@ export const INJECTED_HELPERS = `
     }
 
     if (!state) {
-      var storeRenderer = findActiveRenderer();
-      if (storeRenderer) {
-        var root = storeRenderer.roots.values().next().value;
-
-        function findStore(fiber, depth) {
-          var current = fiber;
-          while (current) {
-            if ((depth || 0) > 30) return null;
-            var name = current.type && (current.type.displayName || current.type.name);
-            var props = current.memoizedProps;
-            if (name === 'Provider' && props && props.store && props.store.getState) {
-              return { store: props.store.getState(), type: 'redux' };
-            }
-            if (name === 'QueryClientProvider' && props && props.client && typeof props.client.getQueryCache === 'function') {
-              try {
-                var queries = props.client.getQueryCache().getAll();
-                var mapped = {};
-                for (var q = 0; q < queries.length; q++) {
-                  var key = JSON.stringify(queries[q].queryKey);
-                  mapped[key] = { data: queries[q].state.data, status: queries[q].state.status, dataUpdatedAt: queries[q].state.dataUpdatedAt };
-                }
-                return { store: mapped, type: 'react-query' };
-              } catch(e) { /* fall through */ }
-            }
-            var found = findStore(current.child, (depth || 0) + 1);
-            if (found) return found;
-            current = current.sibling;
+      function findStore(fiber, depth) {
+        var current = fiber;
+        while (current) {
+          if ((depth || 0) > 30) return null;
+          var name = current.type && (current.type.displayName || current.type.name);
+          var props = current.memoizedProps;
+          if (name === 'Provider' && props && props.store && props.store.getState) {
+            return { store: props.store.getState(), type: 'redux' };
           }
-          return null;
+          if (name === 'QueryClientProvider' && props && props.client && typeof props.client.getQueryCache === 'function') {
+            try {
+              var queries = props.client.getQueryCache().getAll();
+              var mapped = {};
+              for (var q = 0; q < queries.length; q++) {
+                var key = JSON.stringify(queries[q].queryKey);
+                mapped[key] = { data: queries[q].state.data, status: queries[q].state.status, dataUpdatedAt: queries[q].state.dataUpdatedAt };
+              }
+              return { store: mapped, type: 'react-query' };
+            } catch(e) { /* fall through */ }
+          }
+          var found = findStore(current.child, (depth || 0) + 1);
+          if (found) return found;
+          current = current.sibling;
         }
-
-        var found = findStore(root && root.current);
-        if (found) { state = found.store; storeType = found.type; }
+        return null;
       }
+
+      // B145: walk all renderers for Provider / QueryClientProvider.
+      var found = forEachRootFiber(function(rootFiber) {
+        return findStore(rootFiber);
+      });
+      if (found) { state = found.store; storeType = found.type; }
     }
 
     if (!state) {
@@ -894,11 +918,6 @@ export const INJECTED_HELPERS = `
     if (!action) return JSON.stringify({ error: 'action is required' });
     if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
 
-    var renderer = findActiveRenderer();
-    if (!renderer) {
-      return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots — app may still be loading' });
-    }
-
     var found = null;
     var findCount = 0;
 
@@ -918,8 +937,12 @@ export const INJECTED_HELPERS = `
       }
     }
 
-    renderer.roots.forEach(function(root) {
-      if (!found && root && root.current) findFiber(root.current);
+    // B145: walk root.current across every renderer until the testID is
+    // found. Previously only the first renderer's roots were searched.
+    forEachRootFiber(function(rootFiber) {
+      if (found) return found; // short-circuit forEachRootFiber
+      findFiber(rootFiber);
+      return found;
     });
 
     if (!found) {
@@ -1016,26 +1039,24 @@ export const INJECTED_HELPERS = `
     // is missing — common for minified/bundled Providers. Mirrors what
     // findFiberReduxStore already does for getStoreState. Without this,
     // cdp_store_state succeeds but cdp_dispatch fails on the same app.
-    var store = null;
-    var storeRenderer = findActiveRenderer();
-    if (storeRenderer) {
-      var storeRoot = storeRenderer.roots.values().next().value;
-      function findDispatchStore(fiber, depth) {
-        var current = fiber;
-        while (current) {
-          if ((depth || 0) > 30) return null;
-          var typeName = current.type && (current.type.displayName || current.type.name);
-          if (typeName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
-            return current.memoizedProps.store;
-          }
-          var found = findDispatchStore(current.child, (depth || 0) + 1);
-          if (found) return found;
-          current = current.sibling;
+    function findDispatchStore(fiber, depth) {
+      var current = fiber;
+      while (current) {
+        if ((depth || 0) > 30) return null;
+        var typeName = current.type && (current.type.displayName || current.type.name);
+        if (typeName === 'Provider' && current.memoizedProps && current.memoizedProps.store && current.memoizedProps.store.dispatch) {
+          return current.memoizedProps.store;
         }
-        return null;
+        var found = findDispatchStore(current.child, (depth || 0) + 1);
+        if (found) return found;
+        current = current.sibling;
       }
-      store = findDispatchStore(storeRoot && storeRoot.current);
+      return null;
     }
+    // B145: walk all renderers for the Redux Provider.
+    var store = forEachRootFiber(function(rootFiber) {
+      return findDispatchStore(rootFiber);
+    });
 
     if (!store && globalThis.__REDUX_STORE__ && globalThis.__REDUX_STORE__.dispatch) {
       store = globalThis.__REDUX_STORE__;
@@ -1071,14 +1092,15 @@ export const INJECTED_HELPERS = `
     if (globalThis.__NAV_REF__ && globalThis.__NAV_REF__.navigate) return globalThis.__NAV_REF__;
     if (globalThis.__NAVIGATION_REF__ && globalThis.__NAVIGATION_REF__.navigate) return globalThis.__NAVIGATION_REF__;
     if (globalThis.navigationRef && globalThis.navigationRef.navigate) return globalThis.navigationRef;
-    var renderer = findActiveRenderer();
-    if (!renderer) return null;
-    var found = null;
-    renderer.roots.forEach(function(root) {
-      if (found || !root || !root.current) return;
+    // B145: scan every renderer for a NavigationContainer fiber with a
+    // navigate() ref. The fiber ref lives on the same renderer as the
+    // container itself, so no cross-renderer lookup is needed — we just
+    // have to reach the right renderer.
+    return forEachRootFiber(function(rootFiber) {
+      var localFound = null;
       var count = 0;
-      var stack = [root.current];
-      while (stack.length > 0 && !found && count < 5000) {
+      var stack = [rootFiber];
+      while (stack.length > 0 && !localFound && count < 5000) {
         var fiber = stack.pop();
         if (!fiber) continue;
         count++;
@@ -1086,19 +1108,19 @@ export const INJECTED_HELPERS = `
         if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
           var r = fiber.ref;
           if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {
-            found = r.current;
+            localFound = r.current;
             break;
           }
           if (fiber.stateNode && typeof fiber.stateNode.navigate === 'function') {
-            found = fiber.stateNode;
+            localFound = fiber.stateNode;
             break;
           }
         }
         if (fiber.sibling) stack.push(fiber.sibling);
         if (fiber.child) stack.push(fiber.child);
       }
+      return localFound;
     });
-    return found;
   }
 
   function navigateTo(screen, params) {
@@ -1196,10 +1218,6 @@ export const INJECTED_HELPERS = `
 
   function getComponentState(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var renderer = findActiveRenderer();
-    if (!renderer) return JSON.stringify({ __agent_error: 'No active renderer' });
-    var root = renderer.roots.values().next().value;
-    if (!root || !root.current) return JSON.stringify({ __agent_error: 'No fiber root' });
     var targetFiber = null;
 
     function findByTestID(fiber) {
@@ -1216,7 +1234,13 @@ export const INJECTED_HELPERS = `
       }
     }
 
-    findByTestID(root.current);
+    // B145: search every renderer for the testID. Closure-mutated target-
+    // Fiber lets the forEachRootFiber helper short-circuit as soon as any
+    // renderer yields the match.
+    forEachRootFiber(function(rootFiber) {
+      findByTestID(rootFiber);
+      return targetFiber;
+    });
     if (!targetFiber) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
 
     var compName = targetFiber.type && (targetFiber.type.displayName || targetFiber.type.name) || null;
@@ -1297,7 +1321,10 @@ export const INJECTED_HELPERS = `
     clearConsole: clearConsole,
     interact: interact,
     isReady: function() {
-      return !!findActiveRenderer();
+      // B145: ready when ANY renderer has at least one root fiber. The
+      // single-renderer short-circuit from findActiveRenderer would return
+      // true as soon as LogBox mounted — before the app tree was ready.
+      return findAllRootFibers().length > 0;
     },
     getAppInfo: function() {
       try {
