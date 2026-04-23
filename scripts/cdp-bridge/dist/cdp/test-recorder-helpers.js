@@ -30,6 +30,44 @@
 // Release builds pre-freeze props at Metro bundling time so the interceptor
 // can never fire — better to fail fast than silently record nothing.
 export const DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
+// B135: exported TS mirror of the in-IIFE `extractActiveRoute()` inside
+// START_RECORDING_JS. The in-IIFE copy MUST be kept in sync with this logic.
+// Tests exercise this mirror; the IIFE version runs in Hermes and has to be
+// pure-JS (no TS, no imports). See test-recorder-extract-route.test.js for
+// the contract both versions satisfy.
+export function extractActiveRouteForTest(state) {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let s = state;
+        let depth = 0;
+        while (s && depth < 20) {
+            // Shape #1: plugin's __RN_AGENT.getNavState() format
+            if (typeof s.routeName === 'string') {
+                if (s.nested && typeof s.nested === 'object') {
+                    s = s.nested;
+                    depth++;
+                    continue;
+                }
+                return s.routeName;
+            }
+            // Shape #2: React Navigation's native state format
+            if (typeof s.index === 'number' && Array.isArray(s.routes)) {
+                const r = s.routes[s.index];
+                if (!r)
+                    return null;
+                if (r.state) {
+                    s = r.state;
+                    depth++;
+                    continue;
+                }
+                return typeof r.name === 'string' ? r.name : null;
+            }
+            return null;
+        }
+    }
+    catch (e) { /* fall through */ }
+    return null;
+}
 export const READ_EVENTS_JS = `JSON.stringify({
   active: !!globalThis.__METRO_MCP_REC_ACTIVE__,
   truncated: !!globalThis.__METRO_MCP_REC_TRUNCATED__,
@@ -79,17 +117,36 @@ export const START_RECORDING_JS = `(function() {
     evts.push(ev);
   }
 
-  // Walk a React Navigation state object to its leaf route.
+  // Walk a nav state object to its leaf route. Handles TWO shapes:
+  //   1. Plugin's __RN_AGENT.getNavState() shape:
+  //      { routeName, params, stack, index, nested: <recursive>|null }
+  //      Walk via .nested until null, return the deepest routeName.
+  //   2. React Navigation's native state shape (legacy / raw ref):
+  //      { index, routes: [{ name, state: <recursive>|undefined }] }
+  //      Walk via routes[index].state until undefined, return r.name.
+  // B135: original code only handled shape #2, but __RN_AGENT.getNavState()
+  // returns shape #1, so readCurrentRoute() always returned null on this
+  // plugin → recorder never emitted navigate events for any navigation.
   function extractActiveRoute(state) {
     try {
       var s = state;
       var depth = 0;
       while (s && depth < 20) {
+        // Shape #1: plugin's own nav-state format (routeName + nested)
+        if (typeof s.routeName === 'string') {
+          if (s.nested && typeof s.nested === 'object') {
+            s = s.nested;
+            depth++;
+            continue;
+          }
+          return s.routeName;
+        }
+        // Shape #2: React Navigation's raw state (routes[] + index)
         if (typeof s.index === 'number' && Array.isArray(s.routes)) {
           var r = s.routes[s.index];
           if (!r) return null;
           if (r.state) { s = r.state; depth++; continue; }
-          return r.name || null;
+          return typeof r.name === 'string' ? r.name : null;
         }
         return null;
       }
