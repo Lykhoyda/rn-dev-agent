@@ -15,6 +15,59 @@ function isRnProject(dir) {
         return false;
     }
 }
+// B134: scan one directory for an RN project, recursing up to maxDepth into
+// subdirectories. Used as the last resort when the standard cwd + walk-up cascade
+// fails — handles the plugin-repo ↔ sibling-workspace/test-app layout where cwd
+// is the plugin repo but the RN project lives as a sibling's child (common when
+// Claude Code is launched from a plugin directory without --plugin-dir override).
+//
+// Traversal is **breadth-first with sorted entries**:
+// - All direct children at each level are checked before any recursion, so a
+//   direct-sibling RN project always wins over a grandchild RN project of
+//   another sibling (per review finding — prevents "aaa-unrelated/demo-rn/"
+//   beating "zzz-real-rn/" when both exist as siblings).
+// - `entries.sort()` makes the pick deterministic across filesystems whose
+//   readdirSync ordering differs (APFS sorts, ext4 doesn't). When multiple RN
+//   projects exist, alphabetical order is a stable default.
+function scanForRnProject(rootDir, maxDepth) {
+    if (maxDepth < 0)
+        return null;
+    let entries;
+    try {
+        entries = readdirSync(rootDir);
+    }
+    catch {
+        return null;
+    }
+    entries.sort();
+    // Pass 1 at this level: check all direct children for an RN project.
+    const subdirs = [];
+    for (const name of entries) {
+        if (name.startsWith('.') || name === 'node_modules')
+            continue;
+        const full = join(rootDir, name);
+        try {
+            const stat = lstatSync(full);
+            if (!(stat.isDirectory() || stat.isSymbolicLink()))
+                continue;
+        }
+        catch {
+            continue;
+        }
+        if (isRnProject(full))
+            return full;
+        subdirs.push(full);
+    }
+    // Pass 2 at this level: recurse into non-matching subdirs (breadth-first).
+    if (maxDepth > 0) {
+        for (const dir of subdirs) {
+            const deeper = scanForRnProject(dir, maxDepth - 1);
+            if (deeper)
+                return deeper;
+        }
+    }
+    return null;
+}
 export function findProjectRoot() {
     const candidates = [
         process.env.RN_PROJECT_ROOT,
@@ -34,21 +87,23 @@ export function findProjectRoot() {
             dir = parent;
         }
     }
-    // Last resort: scan subdirectories of cwd for an RN project (e.g. plugin repo with test-app/ symlink)
+    // Pass 2: scan direct subdirectories of cwd (legacy last resort — handles
+    // old test-app/ symlink layout inside a plugin repo).
     const cwd = process.cwd();
-    try {
-        for (const entry of readdirSync(cwd)) {
-            const full = join(cwd, entry);
-            try {
-                if (lstatSync(full).isDirectory() || lstatSync(full).isSymbolicLink()) {
-                    if (isRnProject(full))
-                        return full;
-                }
-            }
-            catch { /* skip */ }
-        }
+    const cwdScan = scanForRnProject(cwd, 0);
+    if (cwdScan)
+        return cwdScan;
+    // Pass 3 (B134): cwd is not an RN project and has no RN child — walk up one
+    // level and scan siblings + grandchildren. Catches the common sibling-repo
+    // layout: plugin-repo/ and workspace-repo/ as peers with test-app/ nested in
+    // the workspace. Bounded to 1 level of siblings + 1 level of grandchildren to
+    // keep the scan cheap and deterministic (no unbounded recursion).
+    const parentOfCwd = join(cwd, '..');
+    if (parentOfCwd !== cwd) {
+        const siblingScan = scanForRnProject(parentOfCwd, 1);
+        if (siblingScan)
+            return siblingScan;
     }
-    catch { /* skip */ }
     return null;
 }
 function getProjectSlug(projectRoot) {
