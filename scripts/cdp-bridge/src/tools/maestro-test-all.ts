@@ -2,11 +2,11 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 
 const execFile = promisify(execFileCb);
 
@@ -42,16 +42,16 @@ function discoverFlows(dir: string, pattern?: string): string[] {
 
 export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Promise<ToolResult> {
   return async (args) => {
-    const runnerPath = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-    if (!existsSync(runnerPath)) {
-      return failResult(
-        'maestro-runner not found. Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
-      );
-    }
-
-    const platform = args.platform ?? getActiveSession()?.platform;
+    const platform = (args.platform ?? getActiveSession()?.platform) as 'ios' | 'android' | undefined;
     if (!platform) {
       return failResult('Cannot determine platform. Pass platform or open a device session first.');
+    }
+
+    // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
+    // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
+    const dispatch = chooseMaestroDispatch({ platform });
+    if ('error' in dispatch) {
+      return failResult(dispatch.error);
     }
 
     const root = findProjectRoot();
@@ -76,8 +76,8 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
       try {
         const { stdout, stderr } = await execFile(
-          runnerPath,
-          ['--platform', platform, 'test', flow],
+          dispatch.binPath,
+          dispatch.buildArgs(platform, flow),
           { timeout, encoding: 'utf8' },
         );
         const output = (stdout + '\n' + stderr).trim();
@@ -114,11 +114,23 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       failed,
       platform,
       flowDir,
+      runner: dispatch.runner,
+      ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
       results,
     };
 
     if (failed > 0) {
-      return warnResult(summary, `${failed} of ${results.length} flows failed`);
+      const baseMsg = `${failed} of ${results.length} flows failed`;
+      return warnResult(
+        summary,
+        dispatch.fallbackReason ? `${dispatch.fallbackReason}; ${baseMsg}` : baseMsg,
+      );
+    }
+    // B59 (Gemini review, conf 82): suppress repeated success-with-fallback
+    // warnings within the same process — first call surfaces, subsequent
+    // calls keep the reason in meta only.
+    if (dispatch.fallbackReason && shouldWarnFallback(dispatch.fallbackReason)) {
+      return warnResult(summary, dispatch.fallbackReason);
     }
     return okResult(summary);
   };

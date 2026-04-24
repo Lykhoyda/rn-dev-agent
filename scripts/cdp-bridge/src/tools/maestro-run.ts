@@ -1,12 +1,11 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 
 const execFile = promisify(execFileCb);
 
@@ -18,15 +17,10 @@ interface MaestroRunArgs {
   timeoutMs?: number;
 }
 
-function getRunnerPath(): string | null {
-  const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
-  return existsSync(path) ? path : null;
-}
-
-function resolvePlatform(override?: string): string | null {
-  if (override) return override;
+function resolvePlatform(override?: string): 'ios' | 'android' | null {
+  if (override === 'ios' || override === 'android') return override;
   const session = getActiveSession();
-  return session?.platform ?? null;
+  return (session?.platform as 'ios' | 'android' | undefined) ?? null;
 }
 
 function resolveAppId(override?: string, platform?: string): string {
@@ -37,18 +31,18 @@ function resolveAppId(override?: string, platform?: string): string {
 
 export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<ToolResult> {
   return async (args) => {
-    const runnerPath = getRunnerPath();
-    if (!runnerPath) {
-      return failResult(
-        'maestro-runner not found. Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
-      );
-    }
-
     const platform = resolvePlatform(args.platform);
     if (!platform) {
       return failResult(
         'Cannot determine platform. Pass platform or open a device session first.',
       );
+    }
+
+    // B59: tiered dispatch — maestro-runner when viable, Maestro CLI fallback
+    // when iOS-only and adb is missing, fail-fast with install hints when neither.
+    const dispatch = chooseMaestroDispatch({ platform });
+    if ('error' in dispatch) {
+      return failResult(dispatch.error);
     }
 
     let flowFile: string;
@@ -72,31 +66,44 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
 
     try {
       const { stdout, stderr } = await execFile(
-        runnerPath,
-        ['--platform', platform, 'test', flowFile],
+        dispatch.binPath,
+        dispatch.buildArgs(platform, flowFile),
         { timeout, encoding: 'utf8' },
       );
 
       const output = (stdout + '\n' + stderr).trim();
       const passed = !output.includes('FAILED') && !output.includes('Error:');
+      const meta = {
+        passed,
+        flowFile,
+        platform,
+        runner: dispatch.runner,
+        output: output.slice(0, 2000),
+        ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
+      };
 
       if (passed) {
-        return okResult({
-          passed: true,
-          flowFile,
-          platform,
-          output: output.slice(0, 2000),
-        });
+        // B59 (Gemini review, conf 82): on success-with-fallback, only emit
+        // a loud warning the FIRST time per process so a 100-flow loop
+        // doesn't generate 100 identical warnings. Subsequent successes
+        // carry the reason silently in meta.fallbackReason.
+        if (dispatch.fallbackReason && shouldWarnFallback(dispatch.fallbackReason)) {
+          return warnResult(meta, dispatch.fallbackReason);
+        }
+        return okResult(meta);
       }
       return warnResult(
-        { passed: false, flowFile, platform, output: output.slice(0, 2000) },
-        'Flow completed with warnings or failures',
+        meta,
+        dispatch.fallbackReason
+          ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
+          : 'Flow completed with warnings or failures',
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return failResult(`Maestro flow failed: ${msg.slice(0, 500)}`, {
         flowFile,
         platform,
+        runner: dispatch.runner,
       });
     }
   };
