@@ -188,9 +188,18 @@ test('B144: legacy behavior unchanged when bundleId is omitted', () => {
   assert.equal(findProjectRoot(), join(root, 'target'));
 });
 
-test('B144: env var RN_PROJECT_ROOT wins even over bundleId match', () => {
-  // Principle: explicit user config > heuristics. If user sets
-  // RN_PROJECT_ROOT, respect it regardless of bundleId preference.
+test('B144 Codex #1 (conf ≥80): RN_PROJECT_ROOT is absolute priority — wins even when bundleId mismatches', () => {
+  // User-explicit config > heuristics. When the user sets RN_PROJECT_ROOT,
+  // the plugin must honor it regardless of what bundleId the caller
+  // requests. If the user has a reason to point elsewhere, they should
+  // update or unset the env var — the plugin should not second-guess.
+  //
+  // This is the behavior change from the original B144 fix (2026-04-23
+  // review): previously, when bundleId was passed and env's bundleId
+  // didn't match, a sibling scan could override env. Codex review
+  // (2026-04-24, conf ≥80) flagged that as a regression against the
+  // documented "env var is absolute first priority" contract. Fixed
+  // by short-circuiting on RN_PROJECT_ROOT before the heuristic cascade.
   makeRnProject(join(root, 'env-target'), 'env-target', {
     expo: { ios: { bundleIdentifier: 'com.envtarget' } },
   });
@@ -201,21 +210,13 @@ test('B144: env var RN_PROJECT_ROOT wins even over bundleId match', () => {
   process.chdir(join(root, 'cwd'));
   process.env.RN_PROJECT_ROOT = join(root, 'env-target');
 
-  // env-target matches the env var AND its bundleId is com.envtarget. Even
-  // when the caller asks for com.autotarget, env wins (the starts[] loop
-  // checks env first and its bundleId doesn't match, so it's remembered as
-  // walkupHit and then we scan siblings for the bundleId — auto-target
-  // matches).
-  //
-  // This test documents the actual behavior: when bundleId is passed AND
-  // env doesn't match, sibling scan can override. If the user wants env
-  // to win absolutely, they should OMIT bundleId.
-  assert.equal(findProjectRoot({ bundleId: 'com.autotarget' }), join(root, 'auto-target'));
+  // Even when the caller asks for com.autotarget, env wins absolutely.
+  assert.equal(findProjectRoot({ bundleId: 'com.autotarget' }), join(root, 'env-target'));
 
-  // When bundleId is omitted, env wins (legacy behavior preserved).
+  // When bundleId is omitted, env wins (unchanged).
   assert.equal(findProjectRoot(), join(root, 'env-target'));
 
-  // When bundleId MATCHES env, env wins (first-hit-matches short-circuit).
+  // When bundleId matches env, env wins (short-circuit on env still applies).
   assert.equal(findProjectRoot({ bundleId: 'com.envtarget' }), join(root, 'env-target'));
 });
 

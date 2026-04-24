@@ -94,16 +94,39 @@ export function getRecordingsDir(rootResolver: () => string | null = findProject
 
 // B144: resolver factory that threads a bundleId into findProjectRoot so
 // save/load/list land in the correct project when the plugin CWD has
-// multiple sibling RN projects. Prefers the bundleId captured at start
-// time (save's happy path), falls back to the live CDP client's connected
-// target for load/list calls that occur without a prior start in the same
-// session (Gemini review 2026-04-23, conf 80 — addresses the gap where
-// load/list in a fresh session would otherwise hit the original B144
-// alphabetical fallback).
-function makeRecordingRootResolver(getClient?: () => CDPClient): () => string | null {
+// multiple sibling RN projects.
+//
+// Codex review 2026-04-24 (conf ≥80) caught that a single resolver for all
+// three operations leaks stale state: after start → stop → save against app
+// A, a later load/list in the same session against app B would still prefer
+// the captured bundleId (A). Fix: split semantics by operation mode.
+//
+//   - mode='save'       captured bundleId wins; fall back to live client.
+//                       A save finalizes a recording against the app it was
+//                       made from, even if the user has since reconnected
+//                       elsewhere (the recording's identity is bound to
+//                       capture time, not dispatch time).
+//   - mode='load-list'  live client bundleId wins; fall back to captured.
+//                       Load/list reflect "what's the current app's
+//                       recording dir?" When the user has reconnected to a
+//                       different app, we want its recordings, not the
+//                       last-captured one's.
+export function _makeRecordingRootResolverForTest(
+  getClient?: () => CDPClient,
+  mode: 'save' | 'load-list' = 'save',
+): () => string | null {
+  return makeRecordingRootResolver(getClient, mode);
+}
+
+function makeRecordingRootResolver(
+  getClient?: () => CDPClient,
+  mode: 'save' | 'load-list' = 'save',
+): () => string | null {
   return () => {
     const liveBundleId = getClient?.().connectedTarget?.description ?? null;
-    const bundleId = recordingBundleId ?? liveBundleId;
+    const bundleId = mode === 'save'
+      ? (recordingBundleId ?? liveBundleId)
+      : (liveBundleId ?? recordingBundleId);
     if (bundleId) return findProjectRoot({ bundleId });
     return findProjectRoot();
   };
@@ -254,7 +277,7 @@ export function createRecordTestSaveHandler(getClient?: () => CDPClient): (args:
     if (!storedEvents) {
       return failResult('No events to save — stop a recording first', 'NO_EVENTS');
     }
-    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'save'));
     if (!dir) {
       return failResult(
         'Could not resolve project root (no package.json ancestor). Set RN_PROJECT_ROOT env var.',
@@ -280,7 +303,7 @@ export function createRecordTestSaveHandler(getClient?: () => CDPClient): (args:
 
 export function createRecordTestLoadHandler(getClient?: () => CDPClient): (args: { filename: string }) => Promise<ToolResult> {
   return async (args) => {
-    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
     if (!dir) {
       return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
     }
@@ -316,7 +339,7 @@ export function createRecordTestLoadHandler(getClient?: () => CDPClient): (args:
 
 export function createRecordTestListHandler(getClient?: () => CDPClient): (args: Record<string, never>) => Promise<ToolResult> {
   return async () => {
-    const dir = getRecordingsDir(makeRecordingRootResolver(getClient));
+    const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
     if (!dir) {
       return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
     }

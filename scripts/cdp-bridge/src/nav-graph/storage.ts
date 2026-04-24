@@ -156,12 +156,20 @@ export interface FindProjectRootOpts {
 export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
   const targetBundleId = opts.bundleId;
 
-  // Cascade 1: env vars + walk-up. If bundleId is provided and any cascade
-  // hit matches it, return immediately. Otherwise remember the first hit as
-  // a fallback for when no sibling matches either.
+  // B144 Codex #1 (conf ≥80): RN_PROJECT_ROOT is user-explicit config and
+  // MUST be absolute priority. Return immediately when it points at an RN
+  // project, regardless of bundleId. Bundle disambiguation only applies
+  // to heuristic sources (CLAUDE_USER_CWD, cwd, sibling scans). If env and
+  // the requested bundleId conflict, the user-explicit env wins — if the
+  // user wants a different app, they should update env or unset it.
+  const envRoot = process.env.RN_PROJECT_ROOT;
+  if (envRoot && isRnProject(envRoot)) return envRoot;
+
+  // Cascade 1: non-env starts + walk-up. If bundleId is provided and any
+  // cascade hit matches it, return immediately. Otherwise remember the
+  // first hit as a fallback for when no sibling matches either.
   let walkupHit: string | null = null;
   const starts = [
-    process.env.RN_PROJECT_ROOT,
     process.env.CLAUDE_USER_CWD,
     process.cwd(),
   ].filter(Boolean) as string[];
