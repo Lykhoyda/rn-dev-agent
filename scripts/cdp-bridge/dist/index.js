@@ -481,11 +481,11 @@ trackedTool('cdp_record_test_annotate', 'Push a human-readable note into the liv
 }, createRecordTestAnnotateHandler(getClient));
 trackedTool('cdp_record_test_save', 'Persist current recording events to <projectRoot>/.rn-agent/recordings/<filename>.json. Filename is sanitized (only [a-zA-Z0-9_-] kept). Use cdp_record_test_load to restore later for re-generation in a different format.', {
     filename: z.string().min(1).describe('Recording name (without .json — sanitized)'),
-}, createRecordTestSaveHandler());
+}, createRecordTestSaveHandler(getClient));
 trackedTool('cdp_record_test_load', 'Restore a previously-saved recording from <projectRoot>/.rn-agent/recordings/. Replaces any in-memory events. After loading, call cdp_record_test_generate to render in any format.', {
     filename: z.string().min(1).describe('Recording name (without .json)'),
-}, createRecordTestLoadHandler());
-trackedTool('cdp_record_test_list', 'List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.', {}, createRecordTestListHandler());
+}, createRecordTestLoadHandler(getClient));
+trackedTool('cdp_record_test_list', 'List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.', {}, createRecordTestListHandler(getClient));
 trackedTool('cdp_restart', 'In-process soft state reset (B76/D644). Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.', {
     metroPort: z.number().optional().describe('Override Metro port for reconnection (default: keep current)'),
     platform: z.string().optional().describe('Platform filter for reconnection (e.g. "ios", "android")'),

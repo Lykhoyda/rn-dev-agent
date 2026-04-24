@@ -68,37 +68,137 @@ function scanForRnProject(rootDir, maxDepth) {
     }
     return null;
 }
-export function findProjectRoot() {
-    const candidates = [
-        process.env.RN_PROJECT_ROOT,
+// B144: collect ALL RN projects reachable from rootDir up to maxDepth. Same
+// breadth-first traversal as scanForRnProject but does not short-circuit —
+// used by the bundleId-aware path in findProjectRoot which needs every
+// candidate to pick the matching one.
+function collectRnProjects(rootDir, maxDepth, out) {
+    if (maxDepth < 0)
+        return;
+    let entries;
+    try {
+        entries = readdirSync(rootDir);
+    }
+    catch {
+        return;
+    }
+    entries.sort();
+    const subdirs = [];
+    for (const name of entries) {
+        if (name.startsWith('.') || name === 'node_modules')
+            continue;
+        const full = join(rootDir, name);
+        try {
+            const stat = lstatSync(full);
+            if (!(stat.isDirectory() || stat.isSymbolicLink()))
+                continue;
+        }
+        catch {
+            continue;
+        }
+        if (isRnProject(full)) {
+            out.push(full);
+        }
+        else {
+            subdirs.push(full);
+        }
+    }
+    if (maxDepth > 0) {
+        for (const dir of subdirs)
+            collectRnProjects(dir, maxDepth - 1, out);
+    }
+}
+// B144: extract the declared bundleId from a project's app.json. Covers the
+// two common Expo/RN shapes: expo.ios.bundleIdentifier (iOS) and
+// expo.android.package (Android). Returns the iOS bundleIdentifier when both
+// are present (matches the platform Metro typically reports as the Hermes
+// target's description). Bare RN apps with native Xcode configs aren't
+// covered — parsing pbxproj is fragile and those apps won't gain
+// bundleId-matching. They gracefully fall back to the current alphabetical
+// sibling pick.
+export function readProjectBundleId(projectRoot) {
+    const appJsonPath = join(projectRoot, 'app.json');
+    if (!existsSync(appJsonPath))
+        return null;
+    try {
+        const raw = JSON.parse(readFileSync(appJsonPath, 'utf-8'));
+        const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
+        const androidId = raw.expo?.android?.package ?? raw.android?.package;
+        if (typeof iosId === 'string' && iosId.length > 0)
+            return iosId;
+        if (typeof androidId === 'string' && androidId.length > 0)
+            return androidId;
+        return null;
+    }
+    catch {
+        return null;
+    }
+}
+export function findProjectRoot(opts = {}) {
+    const targetBundleId = opts.bundleId;
+    // B144 Codex #1 (conf ≥80): RN_PROJECT_ROOT is user-explicit config and
+    // MUST be absolute priority. Return immediately when it points at an RN
+    // project, regardless of bundleId. Bundle disambiguation only applies
+    // to heuristic sources (CLAUDE_USER_CWD, cwd, sibling scans). If env and
+    // the requested bundleId conflict, the user-explicit env wins — if the
+    // user wants a different app, they should update env or unset it.
+    const envRoot = process.env.RN_PROJECT_ROOT;
+    if (envRoot && isRnProject(envRoot))
+        return envRoot;
+    // Cascade 1: non-env starts + walk-up. If bundleId is provided and any
+    // cascade hit matches it, return immediately. Otherwise remember the
+    // first hit as a fallback for when no sibling matches either.
+    let walkupHit = null;
+    const starts = [
         process.env.CLAUDE_USER_CWD,
         process.cwd(),
     ].filter(Boolean);
-    for (const start of candidates) {
-        if (isRnProject(start))
-            return start;
+    for (const start of starts) {
+        if (isRnProject(start)) {
+            if (targetBundleId && readProjectBundleId(start) === targetBundleId)
+                return start;
+            walkupHit = walkupHit ?? start;
+            continue;
+        }
         let dir = start;
         for (let i = 0; i < 10; i++) {
-            if (isRnProject(dir))
-                return dir;
+            if (isRnProject(dir)) {
+                if (targetBundleId && readProjectBundleId(dir) === targetBundleId)
+                    return dir;
+                walkupHit = walkupHit ?? dir;
+                break;
+            }
             const parent = join(dir, '..');
             if (parent === dir)
                 break;
             dir = parent;
         }
     }
-    // Pass 2: scan direct subdirectories of cwd (legacy last resort — handles
-    // old test-app/ symlink layout inside a plugin repo).
+    if (!targetBundleId && walkupHit)
+        return walkupHit;
+    // Cascade 2: scan cwd subdirs and sibling + grandchildren. If bundleId
+    // is provided, collect all candidates and prefer the match. Otherwise
+    // stop at the first hit (legacy behavior).
     const cwd = process.cwd();
+    const parentOfCwd = join(cwd, '..');
+    if (targetBundleId) {
+        const all = [];
+        collectRnProjects(cwd, 0, all);
+        if (parentOfCwd !== cwd)
+            collectRnProjects(parentOfCwd, 1, all);
+        for (const candidate of all) {
+            if (readProjectBundleId(candidate) === targetBundleId)
+                return candidate;
+        }
+        // No match — fall back to first candidate from cascade 1 or 2.
+        if (walkupHit)
+            return walkupHit;
+        return all[0] ?? null;
+    }
+    // Legacy path (no bundleId): preserve current behavior exactly.
     const cwdScan = scanForRnProject(cwd, 0);
     if (cwdScan)
         return cwdScan;
-    // Pass 3 (B134): cwd is not an RN project and has no RN child — walk up one
-    // level and scan siblings + grandchildren. Catches the common sibling-repo
-    // layout: plugin-repo/ and workspace-repo/ as peers with test-app/ nested in
-    // the workspace. Bounded to 1 level of siblings + 1 level of grandchildren to
-    // keep the scan cheap and deterministic (no unbounded recursion).
-    const parentOfCwd = join(cwd, '..');
     if (parentOfCwd !== cwd) {
         const siblingScan = scanForRnProject(parentOfCwd, 1);
         if (siblingScan)
