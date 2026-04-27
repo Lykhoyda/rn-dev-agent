@@ -114,6 +114,93 @@ test('network_log: clamps limit to [1, 100]', async () => {
   assert.equal(dataHigh.requests.length, 5, 'limit:200 clamps to 100, but only 5 entries exist');
 });
 
+// ── #73: method: filter, since: filter, truncated: warning ─────────────
+
+test('network_log: method filter (string) isolates POST from GET noise', async () => {
+  const client = createMockClient();
+  const ts = (i) => `2026-04-23T16:56:${String(i).padStart(2, '0')}Z`;
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/external_coverages', timestamp: ts(26), status: 201 });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET',  url: '/external_coverages', timestamp: ts(27), status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET',  url: '/external_coverages', timestamp: ts(28), status: 200 });
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 5, filter: 'external_coverages', method: 'POST', clear: false }));
+  assert.equal(data.count, 1);
+  assert.equal(data.requests[0].id, 'r1');
+});
+
+test('network_log: method filter (array) accepts multiple verbs case-insensitively', async () => {
+  const client = createMockClient();
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST',   url: '/a', timestamp: '2026-04-23T16:56:26Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET',    url: '/a', timestamp: '2026-04-23T16:56:27Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'PATCH',  url: '/a', timestamp: '2026-04-23T16:56:28Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r4', method: 'PUT',    url: '/a', timestamp: '2026-04-23T16:56:29Z' });
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 10, method: ['post', 'patch'], clear: false }));
+  assert.equal(data.count, 2);
+  assert.deepEqual(data.requests.map((r) => r.id), ['r1', 'r3']);
+});
+
+test('network_log: since filter drops entries with timestamp < since', async () => {
+  const client = createMockClient();
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'GET', url: '/a', timestamp: '2026-04-23T16:55:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET', url: '/a', timestamp: '2026-04-23T16:56:30Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET', url: '/a', timestamp: '2026-04-23T16:57:00Z' });
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 10, since: '2026-04-23T16:56:00Z', clear: false }));
+  assert.equal(data.count, 2);
+  assert.deepEqual(data.requests.map((r) => r.id), ['r2', 'r3']);
+});
+
+test('network_log: since filter normalizes non-Z offset ISO to UTC for safe compare', async () => {
+  const client = createMockClient();
+  // Entry timestamps are always Z-form (per Date.toISOString())
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'GET', url: '/a', timestamp: '2026-04-23T14:55:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET', url: '/a', timestamp: '2026-04-23T14:56:30Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET', url: '/a', timestamp: '2026-04-23T14:57:00Z' });
+  const handler = createNetworkLogHandler(() => client);
+  // User passes since in +02:00 offset; 16:56:00+02:00 == 14:56:00Z
+  // Naive string compare would treat "2026-04-23T16:56:00+02:00" > "2026-04-23T14:57:00Z" → 0 results
+  // After normalization, it correctly drops only r1.
+  const data = expectOk(await handler({ limit: 10, since: '2026-04-23T16:56:00+02:00', clear: false }));
+  assert.equal(data.count, 2);
+  assert.deepEqual(data.requests.map((r) => r.id), ['r2', 'r3']);
+});
+
+test('network_log: filter + method + since AND-combine', async () => {
+  const client = createMockClient();
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/users',   timestamp: '2026-04-23T16:55:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'POST', url: '/orders',  timestamp: '2026-04-23T16:56:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET',  url: '/orders',  timestamp: '2026-04-23T16:57:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r4', method: 'POST', url: '/orders',  timestamp: '2026-04-23T16:58:00Z' });
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 10, filter: '/orders', method: 'POST', since: '2026-04-23T16:57:00Z', clear: false }));
+  assert.equal(data.count, 1);
+  assert.equal(data.requests[0].id, 'r4');
+});
+
+test('network_log: truncated flag set when matches > limit', async () => {
+  const client = createMockClient();
+  for (let i = 0; i < 12; i++) {
+    client.networkBufferManager.push(client.activeDeviceKey, { id: `r${i}`, method: 'POST', url: '/orders', timestamp: `2026-04-23T16:56:${String(i).padStart(2, '0')}Z` });
+  }
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 5, filter: '/orders', clear: false }));
+  assert.equal(data.count, 5);
+  assert.equal(data.truncated, true);
+  assert.equal(data.total_matches, 12);
+  assert.deepEqual(data.requests.map((r) => r.id), ['r7', 'r8', 'r9', 'r10', 'r11'], 'returns the most recent 5');
+});
+
+test('network_log: truncated absent when matches fit within limit', async () => {
+  const client = createMockClient();
+  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/orders', timestamp: '2026-04-23T16:56:00Z' });
+  const handler = createNetworkLogHandler(() => client);
+  const data = expectOk(await handler({ limit: 5, filter: '/orders', clear: false }));
+  assert.equal(data.count, 1);
+  assert.equal(data.truncated, undefined);
+  assert.equal(data.total_matches, undefined);
+});
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // cdp_network_body
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

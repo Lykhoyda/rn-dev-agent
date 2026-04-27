@@ -230,10 +230,12 @@ trackedTool(
 
 trackedTool(
   'cdp_network_log',
-  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). M4/D655: buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session.',
+  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). M4/D655: buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session. Filters AND-combine: `filter` (URL substring), `method` (HTTP verb), `since` (ISO timestamp). When more entries match than `limit` allows, response includes `truncated:true` + `total_matches`.',
   {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     filter: z.string().optional().describe('Filter by URL substring (e.g. "/api/cart")'),
+    method: z.union([z.string(), z.array(z.string())]).optional().describe('Filter by HTTP method, case-insensitive (e.g. "POST" or ["POST","PUT"]). AND-combined with `filter`. Use to isolate mutations from follow-up GETs.'),
+    since: z.string().optional().describe('ISO timestamp — drop entries with timestamp < since before applying limit. Use to pin a checkpoint before an action and ask for everything since.'),
     clear: z.boolean().default(false).describe('Clear network buffer instead of reading'),
     device: z.string().optional().describe('Scope: a specific device key OR the literal "all" for a chronologically-merged view across every device. Defaults to the active device.'),
   },
