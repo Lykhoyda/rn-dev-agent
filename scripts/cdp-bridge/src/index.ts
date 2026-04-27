@@ -23,6 +23,7 @@ import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.j
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
 import { createDispatchHandler } from './tools/dispatch.js';
+import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
 import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
@@ -430,6 +431,19 @@ trackedTool(
     readPath: z.string().optional().describe('Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete")'),
   },
   createDispatchHandler(getClient),
+);
+
+trackedTool(
+  'cdp_mmkv',
+  'Read/write the app\'s MMKV storage from Hermes. Closes the iteration-loop gap where tests had to xcrun simctl uninstall + reinstall to clear cooldowns/timestamps/feature flags. Requires react-native-mmkv v3+ (Nitro-based) — older versions exposed via TurboModule are not reachable. Returns __agent_error if MMKV / NitroModulesProxy is unavailable in the runtime. Actions: get|set|delete|has|keys|clear. Use sparingly: writing to MMKV bypasses the real user flow, so only use during test setup/teardown, not as a substitute for UI interaction (see "Verification Fidelity" rule).',
+  {
+    action: z.enum(['get', 'set', 'delete', 'has', 'keys', 'clear']).describe('MMKV action: get/set/delete/has by key, keys (list all), clear (wipe instance)'),
+    key: z.string().optional().describe('Required for get/set/delete/has actions'),
+    value: z.union([z.string(), z.number(), z.boolean()]).optional().describe('Required for set action. Combine with `type` to disambiguate (default: string)'),
+    type: z.enum(['string', 'number', 'boolean']).optional().describe('Value type for get/set (default: string)'),
+    instanceId: z.string().optional().describe('MMKV instance id (default: "mmkv.default")'),
+  },
+  createMmkvHandler(getClient),
 );
 
 trackedTool(
