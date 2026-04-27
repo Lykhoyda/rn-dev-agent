@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 18;
+  var __HELPERS_VERSION__ = 19;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -1096,6 +1096,14 @@ export const INJECTED_HELPERS = `
     // navigate() ref. The fiber ref lives on the same renderer as the
     // container itself, so no cross-renderer lookup is needed — we just
     // have to reach the right renderer.
+    //
+    // GH #72: when the app renders <NavigationContainer> without a ref prop
+    // (common in Expo Router and minimalist setups), neither fiber.ref nor
+    // fiber.stateNode carry a navigate() function. React Navigation's
+    // internal ref from useNavigationContainerRef() lives on the hooks
+    // linked list at fiber.memoizedState. Walk that chain too — strict
+    // match on { navigate, dispatch, getRootState } avoids picking up
+    // unrelated refs in apps with multiple navigation libraries.
     return forEachRootFiber(function(rootFiber) {
       var localFound = null;
       var count = 0;
@@ -1115,6 +1123,22 @@ export const INJECTED_HELPERS = `
             localFound = fiber.stateNode;
             break;
           }
+          // GH #72: walk the hooks linked list for the internal ref.
+          var hook = fiber.memoizedState;
+          var hopGuard = 0;
+          while (hook && hopGuard < 100) {
+            hopGuard++;
+            var hms = hook.memoizedState;
+            if (hms && hms.current
+                && typeof hms.current.navigate === 'function'
+                && typeof hms.current.dispatch === 'function'
+                && typeof hms.current.getRootState === 'function') {
+              localFound = hms.current;
+              break;
+            }
+            hook = hook.next;
+          }
+          if (localFound) break;
         }
         if (fiber.sibling) stack.push(fiber.sibling);
         if (fiber.child) stack.push(fiber.child);
@@ -1125,7 +1149,12 @@ export const INJECTED_HELPERS = `
 
   function navigateTo(screen, params) {
     var ref = findNavRef();
-    if (!ref) return JSON.stringify({ __agent_error: 'Navigation ref not found. Add globalThis.__NAV_REF__ = navigationRef in your app, or ensure NavigationContainer has a ref prop.' });
+    // GH #72: error message updated to reflect the wider discovery surface.
+    // findNavRef() now checks 3 globals + fiber.ref + fiber.stateNode +
+    // fiber.memoizedState hooks chain. If all of those miss, the app is
+    // likely on React Navigation < 6.x (no NavigationContainer fiber name)
+    // or has wrapped the container in something unrecognized.
+    if (!ref) return JSON.stringify({ __agent_error: 'Navigation ref not found. The plugin walks 3 globals (__NAV_REF__, __NAVIGATION_REF__, navigationRef), NavigationContainer fiber.ref + fiber.stateNode, and the useNavigationContainerRef() hooks chain. None matched. If you are on React Navigation 6+, ensure <NavigationContainer> is rendered. As a last resort, expose globalThis.__NAV_REF__ = navigationRef in your app entry.' });
 
     try {
       var state = ref.getRootState();
