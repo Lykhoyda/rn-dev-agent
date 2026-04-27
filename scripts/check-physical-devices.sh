@@ -48,10 +48,17 @@ else
 fi
 
 # --- Physical iOS ---
-# `xcrun xctrace list devices` is the canonical source on macOS.
-# Output has a "== Devices ==" section for physical iOS distinct from
-# "== Simulators ==". Awk extracts just the physical block.
+# Two probes — modern Xcode (15+) ships `devicectl` which lists devices
+# missed by the legacy `xctrace` tool, especially iOS 17+ devices that
+# only appear via CoreDevice. GH #59 #2: a paired iPhone 15 Pro Max
+# was visible to `devicectl list devices` but invisible to xctrace,
+# so the script reported "No physical iOS devices detected" despite
+# `available (paired)` state.
+#
+# Strategy: try xctrace first (compatible across older Xcode), then
+# fall back to devicectl. Either tool finding a device counts.
 PHYSICAL_IOS=""
+PHYSICAL_IOS_SOURCE=""
 if [ "$HOST_OS" != "Darwin" ]; then
   echo "Physical iOS probe skipped (requires macOS; host is $HOST_OS)"
 elif command -v xcrun >/dev/null 2>&1; then
@@ -61,10 +68,28 @@ elif command -v xcrun >/dev/null 2>&1; then
   PHYSICAL_IOS=$(xcrun xctrace list devices 2>/dev/null \
     | awk '/^== Devices ==$/{flag=1; next} /^== /{flag=0} flag && NF>0' \
     | grep -E '(iPhone|iPad|iPod|Apple TV|Apple Vision|Apple Watch)' || true)
+  if [ -n "$PHYSICAL_IOS" ]; then
+    PHYSICAL_IOS_SOURCE="xctrace"
+  fi
+
+  # Augment with devicectl when available (Xcode 15+). Catches iOS 17+
+  # devices that xctrace misses. devicectl prints a header banner + table;
+  # filter rows where the State column contains "available" (skips
+  # "unavailable"/"connecting" states) and the Model column starts with
+  # an iOS form factor (skips the host Mac when present).
+  if [ -z "$PHYSICAL_IOS" ] && xcrun --find devicectl >/dev/null 2>&1; then
+    PHYSICAL_IOS=$(xcrun devicectl list devices 2>/dev/null \
+      | grep -E '(iPhone|iPad|iPod|Apple Vision|Apple Watch|Apple TV)' \
+      | grep 'available' \
+      | grep -v 'unavailable' || true)
+    if [ -n "$PHYSICAL_IOS" ]; then
+      PHYSICAL_IOS_SOURCE="devicectl"
+    fi
+  fi
 fi
 
 if [ -n "${PHYSICAL_IOS:-}" ]; then
-  echo "Physical iOS detected:"
+  echo "Physical iOS detected (via $PHYSICAL_IOS_SOURCE):"
   echo "$PHYSICAL_IOS" | sed 's/^/  /'
   # idb ships the binary as idb_companion on some installs, idb-companion on
   # others. Check both; either satisfies the prerequisite.
