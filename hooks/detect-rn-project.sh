@@ -62,6 +62,17 @@ if [ "$has_rn_config" = true ]; then
     INSTALL_WARNINGS+=("WARNING: agent-device not installed. Run: npm install -g agent-device")
   fi
 
+  # GH #59 #3: surface (and optionally auto-install) idb-companion when a
+  # physical iOS device is connected. Default behavior: print a one-time
+  # warning + brew command. Auto-install is opt-in via
+  # RN_DEV_AGENT_AUTO_INSTALL_IDB=1 because brew install can compile from
+  # source for several minutes — too long to block SessionStart by default.
+  # The script handles its own user-facing output; only bubble up a banner
+  # warning when an opt-in install actually failed.
+  if ! bash "$PLUGIN_ROOT/scripts/ensure-idb-companion.sh" 2>&1; then
+    INSTALL_WARNINGS+=("WARNING: opt-in idb-companion install failed. Run: brew install idb-companion (required for physical iOS device automation)")
+  fi
+
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
 
