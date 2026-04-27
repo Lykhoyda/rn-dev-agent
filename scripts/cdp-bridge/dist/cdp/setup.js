@@ -52,15 +52,12 @@ export async function performSetup(opts) {
     logger.info('CDP', `Helpers injected (v11), network mode: ${networkMode}`);
     setActiveFlag(port, connectedTarget);
     // D626 (B1 fix): Probe whether Network.enable actually delivers events.
+    // GH #59 #9: a single 500ms probe is too tight after platform switches /
+    // reload — the fresh JS context needs time to flush the probe fetch through
+    // its CDP event channel. Retry once at a longer interval before declaring
+    // RN<0.83. Total worst-case wait for legitimate fallback: 500ms + 1500ms.
     if (networkMode === 'cdp') {
-        const deviceKey = getDeviceKey();
-        const bufSizeBefore = networkManager.size(deviceKey);
-        await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
-        await new Promise(r => setTimeout(r, 500));
-        if (networkManager.size(deviceKey) <= bufSizeBefore) {
-            logger.info('CDP', 'Network.enable accepted but no events fired (RN < 0.83) — falling back to hooks');
-            networkMode = 'none';
-        }
+        networkMode = await probeNetworkDomain({ evaluate, port, networkManager, getDeviceKey });
     }
     if (networkMode === 'none') {
         const hookResult = await evaluate(NETWORK_HOOK_SCRIPT);
@@ -77,6 +74,36 @@ export async function performSetup(opts) {
         }
     }
     return { networkMode, helpersInjected: true, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
+}
+/**
+ * GH #59 #9: probe whether Network.enable actually delivers events on the
+ * current Hermes context. RN >= 0.83 (Bridgeless) accepts Network.enable AND
+ * fires events; older runtimes accept the call but no events flow. The probe
+ * fires a localhost fetch and watches the per-device buffer for growth.
+ *
+ * Two attempts at increasing timeouts (500ms, 1500ms). One-shot 500ms was
+ * the original D626 implementation but produced false negatives after
+ * platform switches and reloads where the fresh context needs longer to
+ * flush the probe fetch through CDP. Total worst-case latency for legitimate
+ * RN<0.83 fallback: ~2 seconds (was 500ms).
+ *
+ * Returns the post-probe network mode: 'cdp' if events fired, 'none'
+ * otherwise (caller will then try hook injection).
+ */
+export async function probeNetworkDomain(opts) {
+    const { evaluate, port, networkManager, getDeviceKey } = opts;
+    const waits = opts.waits ?? [500, 1500];
+    const deviceKey = getDeviceKey();
+    for (let attempt = 0; attempt < waits.length; attempt++) {
+        const bufSizeBefore = networkManager.size(deviceKey);
+        await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
+        await new Promise(r => setTimeout(r, waits[attempt]));
+        if (networkManager.size(deviceKey) > bufSizeBefore) {
+            return 'cdp';
+        }
+    }
+    logger.info('CDP', `Network.enable accepted but no events fired after ${waits.length} attempt(s) — falling back to hooks`);
+    return 'none';
 }
 export async function reinjectHelpers(evaluate, waitTimeout) {
     await waitForReact(evaluate, waitTimeout ?? REACT_READY_TIMEOUT_MS);
