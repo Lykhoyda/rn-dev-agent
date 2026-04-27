@@ -94,8 +94,33 @@ discoverFn = discover) {
     }
     const generation = ctx.incrementConnectionGeneration();
     logger.info('CDP', `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation}`);
+    // GH #59 #5: persist the resolved platform into _connectFilters when the
+    // caller didn't pin one explicitly. Without this, softReconnect after
+    // cdp_reload has nothing to filter on and may pick the wrong simulator
+    // (e.g. iOS user reloads, sortTargets returns Android first, reconnect
+    // lands on Android). Explicit filters from the caller already survive
+    // (B111/D643/G7); this closes the auto-detect gap.
+    const stickyFilters = stickyPlatformFilters(ctx.getConnectFilters(), connectedTarget.platform);
+    if (stickyFilters)
+        ctx.setConnectFilters(stickyFilters);
     const msg = `Connected to ${connectedTarget.title} on port ${metroPort}`;
     return selectionWarning ? `${msg}. WARNING: ${selectionWarning}` : msg;
+}
+/**
+ * GH #59 #5: pure helper that pins the resolved platform into a copy of the
+ * current connect filters when (a) no platform filter was explicitly set and
+ * (b) the connect resolved a target whose platform we now know. Returns null
+ * when no update is needed — caller skips the setConnectFilters call.
+ *
+ * Extracted so the auto-detect → reconnect-stays-on-same-platform invariant
+ * can be unit-tested without spinning a real WebSocket connect.
+ */
+export function stickyPlatformFilters(current, resolvedPlatform) {
+    if (current.platform)
+        return null;
+    if (!resolvedPlatform)
+        return null;
+    return { ...current, platform: resolvedPlatform };
 }
 async function connectToTarget(ctx, target, retries = 5) {
     let lastError = null;
