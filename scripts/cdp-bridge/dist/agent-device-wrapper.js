@@ -166,12 +166,17 @@ export function listCachedSnapshots() {
     return [...snapshotCache.keys()];
 }
 // Returns the `-s <serial>` args for adb when a specific device/emulator is
-// targeted. Prefers the active session's deviceId, then ANDROID_SERIAL env.
-// Returns an empty array when no target is set (adb will pick the only
-// connected device, or fail with "more than one device" if multiple exist).
+// targeted. Prefers the active session's deviceId IFF that session is Android,
+// then ANDROID_SERIAL env. Returns an empty array when no target is set (adb
+// will pick the only connected device, or fail with "more than one device" if
+// multiple exist).
+//
+// GH #60: prior to this gate, an active iOS session would leak its UDID into
+// adb commands (e.g. `device_deeplink platform:"android"` → `adb -s <iOS-UDID>
+// not found`) when both iOS and Android were booted simultaneously.
 export function getAdbSerial() {
     const session = getActiveSession();
-    if (session?.deviceId)
+    if (session?.platform === 'android' && session.deviceId)
         return ['-s', session.deviceId];
     if (process.env.ANDROID_SERIAL)
         return ['-s', process.env.ANDROID_SERIAL];
@@ -357,7 +362,13 @@ function cacheRefMapFromResult(result) {
     catch { /* not a snapshot response — ignore */ }
 }
 export async function runAgentDevice(cliArgs, opts = {}) {
-    const sessionName = (!opts.skipSession && activeSession) ? activeSession.name : '';
+    // GH #60: when an explicit platform is requested AND it doesn't match the
+    // active session's platform (e.g. user asks for android while an iOS
+    // session is active from prior work), skip the session-bound dispatch
+    // tiers (fast-runner, daemon) — they would otherwise route to the wrong
+    // device. Forcing CLI with `--platform` is correct in this case.
+    const platformMismatch = !!opts.platform && !!activeSession?.platform && opts.platform !== activeSession.platform;
+    const sessionName = (!opts.skipSession && !platformMismatch && activeSession) ? activeSession.name : '';
     const isSnapshotCmd = cliArgs[0] === 'snapshot';
     // Fastest path: XCTest fast-runner HTTP (iOS only, ~5-30ms/op)
     // Note: fast-runner snapshots return { tree: ... } (nested XCUIElement dict), not { nodes: [...] }
