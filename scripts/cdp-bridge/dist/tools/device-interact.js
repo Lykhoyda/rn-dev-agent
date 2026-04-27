@@ -20,6 +20,68 @@ function candidateFromNode(n) {
         position: n.rect ? { x: n.rect.x, y: n.rect.y } : undefined,
     };
 }
+// GH #59 #4: when device_find returns AMBIGUOUS_MATCH, the agent has to
+// pick a candidate by index. Without ranking, the order is arbitrary —
+// in the reporter's iOS share-sheet case, "Copy" matched 5 candidates
+// (ScrollView, Cell, Other, Other, StaticText) and the actual tap target
+// was the Cell, which sat in position 1 by luck. We rank candidates so
+// the most likely tap target sits at index 0.
+//
+// Ranking signals (highest weight first):
+//   1. hittable: true beats hittable: false (XCUITest's hittable flag
+//      means "directly tappable" — the most reliable tap-intent signal).
+//   2. Element-type priority for tap intent: Button/Cell/Switch >
+//      Other/Link > StaticText/Image > ScrollView. Containers like
+//      ScrollView are usually parents of the real tap target.
+//   3. Dedupe by visual rect — when two elements share the same bounds
+//      (e.g. a Cell wrapping a StaticText), keep only the higher-scored
+//      one. The user wants ONE candidate per unique screen position.
+//
+// Pure helper exported for unit testing.
+const TYPE_PRIORITY_FOR_TAP = {
+    Button: 100,
+    Cell: 95,
+    Switch: 90,
+    Link: 80,
+    Other: 60,
+    StaticText: 30,
+    Image: 25,
+    ScrollView: 10,
+};
+function typePriority(type) {
+    if (!type)
+        return 50;
+    return TYPE_PRIORITY_FOR_TAP[type] ?? 50;
+}
+function rectKey(rect) {
+    if (!rect)
+        return null;
+    return `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}`;
+}
+export function rankSnapshotNodes(nodes) {
+    const withScore = nodes.map((node, originalIndex) => ({
+        node,
+        originalIndex,
+        score: (node.hittable === true ? 1000 : 0) + typePriority(node.type),
+    }));
+    withScore.sort((a, b) => {
+        if (b.score !== a.score)
+            return b.score - a.score;
+        return a.originalIndex - b.originalIndex;
+    });
+    const seenRects = new Set();
+    const ranked = [];
+    for (const s of withScore) {
+        const key = rectKey(s.node.rect);
+        if (key !== null) {
+            if (seenRects.has(key))
+                continue;
+            seenRects.add(key);
+        }
+        ranked.push(s.node);
+    }
+    return ranked;
+}
 function parseSnapshotEnvelope(result) {
     if (result.isError)
         return null;
@@ -67,16 +129,19 @@ async function fetchFindCandidates(query, exact) {
     if (!snap.ok)
         return snap;
     const needle = query.toLowerCase();
-    const candidates = snap.nodes
-        .filter((n) => {
+    const matched = snap.nodes.filter((n) => {
         const label = n.label ?? '';
         const id = n.identifier ?? '';
         if (exact)
             return label === query || id === query;
         return label.toLowerCase().includes(needle) || id.toLowerCase().includes(needle);
-    })
-        .slice(0, 10)
-        .map(candidateFromNode);
+    });
+    // GH #59 #4: rank before slicing so the truncation never drops the
+    // most-likely tap target. Without this, a query that matches 12
+    // elements (10 ScrollViews + 2 Cells) could lose both Cells to the
+    // 10-element cap.
+    const ranked = rankSnapshotNodes(matched);
+    const candidates = ranked.slice(0, 10).map(candidateFromNode);
     return { ok: true, candidates, recoveredTier: snap.recoveredTier };
 }
 function runnerLeakFailResult(query, recoveryReason) {
