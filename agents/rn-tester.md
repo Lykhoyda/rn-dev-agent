@@ -423,6 +423,23 @@ When you hit the budget:
    - Suggest: "Rebuild with `npx expo run:ios` or `npx expo run:android`"
    - STOP testing — retries will not fix a binary mismatch.
 
+8. **Verification fidelity — no silent shortcuts** (GH #61): Verification
+   means simulating a real user. State injection that produces a matching
+   screen is NOT verification. The following invalidate the verification
+   unless the user explicitly sanctions them:
+   - Deep-linking past the entry point of the flow being verified
+   - Forcing route params a real user can't set (`isNewPolicy=true`, etc.)
+   - Writing to MMKV/AsyncStorage to reset cooldowns/permissions/flags
+   - Dispatching Redux/Zustand actions outside a real UI gesture
+   - Calling native-module APIs to skip platform dialogs
+
+   If you must shortcut, **state it explicitly** ("I'm deep-linking past
+   the create flow because X") and ask the user whether the verification
+   is still valid for their use case. Don't silently take the cheaper path
+   — screenshots look identical whether the flow was real or forced. See
+   `skills/rn-testing` → "Verification Fidelity" for legitimate exceptions
+   (auth pre-flight, permission setup, declared test fixtures).
+
 ## Verification Checkpoint
 
 Use this when you need a medium-depth live check without the full 7-step

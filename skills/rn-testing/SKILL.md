@@ -41,6 +41,44 @@ $RUNNER test flows/my-flow.yaml
 
 ---
 
+## Verification Fidelity — No Silent Shortcuts (#61)
+
+**Verification means simulating a real user. State injection that produces a matching screen is NOT verification.**
+
+The following count as **shortcuts** that invalidate verification unless the user explicitly sanctions them:
+
+1. **Deep-linking past the entry point** of the flow being verified (e.g. deep-linking to `success-details/<existingId>` instead of walking the create flow).
+2. **Forcing route params a real user can't set** (e.g. `isNewPolicy=true`, `fromSuccess=true`, `mode=edit` injected via URL).
+3. **Writing to MMKV / AsyncStorage / SecureStore** to reset cooldowns, permissions, "has-seen" flags, or session state.
+4. **Dispatching Redux / Zustand actions directly** rather than through UI (`cdp_dispatch` from outside a real user gesture).
+5. **Calling native-module APIs** to skip platform dialogs (e.g. faking permission grants, dismissing system prompts via JS).
+
+These tools work equally well from inside a real flow and as state injection — the plugin can't tell the difference. **The agent is the safeguard.**
+
+### Why this matters
+
+A regression in steps 1–4 of a real user flow (e.g. a mutation not firing, a navigation prop wired wrong) is **invisible** to a verification that deep-links past those steps. Screenshots look identical. The verification claims "passed" while the actual feature is broken.
+
+### Rule
+
+If a real user cannot reach the screen you're verifying via UI alone (no terminal commands, no URL bar, no dev menu), and you are about to use any of the shortcuts above, **STOP and either**:
+
+- **(preferred)** walk the actual user flow through the UI, or
+- **state the shortcut explicitly** ("I'm deep-linking past the create flow because X") **and ask the user whether the verification is still valid for their use case**.
+
+Do not silently take the cheaper path. The user reviewing your output cannot tell from screenshots whether the flow was real.
+
+### When shortcuts are legitimate
+
+- **Auth pre-flight** (auto-login via deep-link) — bootstrap, not verification surface
+- **Permission pre-flight** (granting via `device_permission`) — platform setup, declared upfront
+- **Test data seeding** (via app's test-only fixtures) — declared in the test plan
+- **Explicit user instruction** ("just deep-link to the details screen and check the layout") — user-sanctioned scope
+
+In all these cases: **declare the shortcut in the test report**, don't bury it.
+
+---
+
 ## Optimized Test Loop (Timing Reference)
 
 ```
