@@ -1,6 +1,7 @@
 import { okResult, warnResult, withConnection } from '../utils.js';
 import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
+import { annotateMutationAbsence } from '../verification/mutation-absence.js';
 export function createProofStepHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const result = {
@@ -93,9 +94,15 @@ export function createProofStepHandler(getClient) {
         if (errors.length > 0)
             result.errors = errors;
         const hasFailure = errors.length > 0 && !result.verified && args.verifyText || args.verifyTestID;
+        // GH #91: derive a screen-name signal from whichever input is freshest.
+        // Prefer the screen we navigated to (driving signal), then the verified
+        // testID (success-shape testIDs like "AddPolicySuccessSheet" trigger too),
+        // then the verified text. nul allowed — annotateMutationAbsence handles it.
+        const screenName = args.screen ?? args.verifyTestID ?? args.verifyText ?? null;
+        const ctx = { client, screenName, source: 'proof_step' };
         if (hasFailure && result.verified === false) {
-            return warnResult(result, errors.join('; '));
+            return annotateMutationAbsence(warnResult(result, errors.join('; ')), ctx);
         }
-        return okResult(result);
+        return annotateMutationAbsence(okResult(result), ctx);
     });
 }
