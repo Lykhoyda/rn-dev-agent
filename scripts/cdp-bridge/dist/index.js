@@ -33,6 +33,7 @@ import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
+import { createDeviceRecordHandler } from './tools/device-record.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
@@ -411,6 +412,13 @@ trackedTool('device_dismiss_system_dialog', 'Tap an OS-level system dialog dismi
     platform: z.enum(['ios', 'android']).optional().describe('Force platform. Auto-detected from the active session or booted devices if omitted.'),
     timeoutMs: z.number().int().min(1000).max(60000).optional().describe('Maestro invocation timeout (default 15000ms).'),
 }, createDeviceDismissSystemDialogHandler());
+trackedTool('device_record', 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. Session-less.', {
+    action: z.enum(['start', 'stop', 'status']).describe('start: begin recording. stop: finalize and save (all active recordings). status: list active recordings.'),
+    platform: z.enum(['ios', 'android']).optional().describe('(start only) Force platform. Auto-detected from booted devices if omitted.'),
+    outputPath: z.string().optional().describe('(start only) Absolute output path. Defaults to /tmp/rn-dev-agent-proof-<platform>-<timestamp>.mp4.'),
+    gif: z.boolean().optional().describe('(stop only) When true, also convert each saved recording to GIF via ffmpeg.'),
+    gifPath: z.string().optional().describe('(stop only) Override GIF output path. Defaults to the recording path with .gif extension.'),
+}, createDeviceRecordHandler());
 trackedTool('device_pick_value', 'Select a value in a UIPickerView / Android picker wheel by tapping the target row. Works for any picker that exposes row labels via accessibility. If pickerTestId is provided, taps the picker open first. Known limitation: only works when the target value is already visible in the wheel window (scroll-to-visible is not yet implemented).', {
     value: z.string().describe('The visible row label to select (e.g. "Claim damages", "Male", "USD")'),
     pickerTestId: z.string().optional().describe('Optional testID of the picker itself — tapped first to ensure the picker is open.'),
