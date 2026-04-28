@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { okResult, failResult } from '../utils.js';
 import { detectPlatform } from './platform-utils.js';
 import { getAdbSerial } from '../agent-device-wrapper.js';
+import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
 async function openIosDeeplink(url) {
@@ -64,8 +65,11 @@ export function createDeviceDeeplinkHandler() {
         if (!platform) {
             return failResult('No iOS simulator or Android device detected. Pass platform explicitly or boot a device.', { code: 'NO_DEVICE' });
         }
-        if (platform === 'ios')
-            return openIosDeeplink(args.url);
-        return openAndroidDeeplink(args.url, args.packageName);
+        const result = platform === 'ios'
+            ? await openIosDeeplink(args.url)
+            : await openAndroidDeeplink(args.url, args.packageName);
+        // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
+        // success-state suffix). Stateless heuristic; no overhead on short URLs.
+        return annotateDeepLinkDepth(result, { url: args.url });
     };
 }

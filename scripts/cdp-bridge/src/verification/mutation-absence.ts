@@ -1,5 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
+import { attachVerificationWarning } from './envelope.js';
 
 // GH #91 / D688: mutation-absence detector. Catches the IX-2950 verification-
 // fidelity failure where an agent reaches a "success-shape" screen
@@ -178,19 +179,7 @@ export function annotateMutationAbsence(result: ToolResult, ctx: AnnotateContext
     hint,
   };
 
-  return augmentMeta(result, { verification_warning: warning });
-}
-
-function augmentMeta(result: ToolResult, extra: Record<string, unknown>): ToolResult {
-  try {
-    const text = result.content[0]?.text;
-    if (!text) return result;
-    const env = JSON.parse(text) as { ok?: boolean; data?: unknown; meta?: Record<string, unknown> };
-    env.meta = { ...env.meta, ...extra };
-    return { content: [{ type: 'text' as const, text: JSON.stringify(env) }] };
-  } catch {
-    return result;
-  }
+  return attachVerificationWarning(result, warning);
 }
 
 /** Test seam: clear the per-device state map. Not exported via index.ts. */
