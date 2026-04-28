@@ -1,28 +1,8 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { resolveBundleId } from '../project-config.js';
-const execFile = promisify(execFileCb);
-async function launchApp(bundleId, platform) {
-    if (platform === 'ios') {
-        await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {
-            timeout: 10_000, encoding: 'utf8',
-        }).catch(() => { });
-        await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
-            timeout: 15_000, encoding: 'utf8',
-        });
-    }
-    else {
-        await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
-            timeout: 10_000, encoding: 'utf8',
-        }).catch(() => { });
-        await execFile('adb', ['shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', bundleId], {
-            timeout: 15_000, encoding: 'utf8',
-        });
-    }
-}
-async function waitForNavigationReady(client, timeoutMs = 12_000) {
+import { terminateApp, launchApp } from './app-lifecycle.js';
+export async function waitForNavigationReady(client, timeoutMs = 12_000) {
     const checkExpr = `(function() {
     var ref = globalThis.__NAV_REF__;
     if (ref && typeof ref.getRootState === 'function') {
@@ -65,6 +45,7 @@ export async function launchAndNavigate(client, screen, params, opts = {}) {
     let pickerDismissed = false;
     let reconnectAttempts = 0;
     try {
+        await terminateApp(bundleId, platform).catch(() => { });
         await launchApp(bundleId, platform);
     }
     catch (err) {

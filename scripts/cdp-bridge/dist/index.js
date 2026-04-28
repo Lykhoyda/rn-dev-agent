@@ -32,6 +32,7 @@ import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
+import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
@@ -397,6 +398,19 @@ trackedTool('device_permission', 'Grant, revoke, reset, or query app permissions
     appId: z.string().describe('App bundle ID (e.g. "com.example.app")'),
     platform: z.string().optional().describe('Force platform: "ios" or "android". Auto-detected if omitted.'),
 }, createDevicePermissionHandler());
+trackedTool('device_reset_state', 'One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP. Composes device_permission + cdp_mmkv + simctl/adb terminate+launch in one atomic call. Best-effort with per-step status — never silently rolls back. Sequence: permission → storage → terminate → launch → reconnect → helpers (→ optional nav_ready). On iOS, permission state is not queryable post-revoke (simctl limitation) — `ok: true` only means the shell-out exited 0. Returns { summary: {ok, failed, skipped}, steps: [...], reconnected, helpersInjected }.', {
+    appId: z.string().describe('App bundle ID, e.g. "com.example.app".'),
+    platform: z.enum(['ios', 'android']).optional().describe('Force platform. Auto-detected from booted devices if omitted.'),
+    permissions: z.array(z.union([
+        z.string(),
+        z.object({ name: z.string(), action: z.enum(['revoke', 'reset']).optional() }),
+    ])).optional().describe('Permissions to revoke/reset before relaunch. String shorthand defaults to revoke. Each entry is processed via device_permission.'),
+    storageKeys: z.array(z.string()).optional().describe('MMKV keys to delete before terminate (so the app reads cleared values on next launch). Skipped if CDP is not connected.'),
+    mmkvInstanceId: z.string().optional().describe('Forwarded to cdp_mmkv. Defaults to mmkv.default.'),
+    relaunch: z.boolean().optional().describe('Launch the app after terminate. Default true.'),
+    waitForReady: z.boolean().optional().describe('After relaunch, wait for CDP reconnect + helpers injection. Default true. Set false to return immediately and let the caller poll.'),
+    waitForNavReady: z.boolean().optional().describe('After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.'),
+}, createDeviceResetStateHandler(getClient));
 trackedTool('device_deeplink', 'Open a deep link or universal URL on the booted simulator/emulator. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
     url: z.string().describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
     platform: z.enum(['ios', 'android']).optional().describe('Force platform. Auto-detected from the active session or booted devices if omitted.'),

@@ -165,7 +165,12 @@ export type ToolErrorCode =
   | 'NO_PROJECT_ROOT'
   | 'BAD_FILENAME'
   | 'LOAD_FAILED'
-  | 'BAD_RECORDING';
+  | 'BAD_RECORDING'
+  // GH #60 Feature-c (D687): device_reset_state composite tool.
+  | 'DEVICE_RESET_INVALID_ARGS'
+  | 'DEVICE_RESET_STATE_PARTIAL'
+  | 'DEVICE_RESET_RECONNECT_FAILED'
+  | 'CDP_NOT_CONNECTED';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

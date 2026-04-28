@@ -1,11 +1,8 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { resolveBundleId } from '../project-config.js';
-
-const execFile = promisify(execFileCb);
+import { terminateApp, launchApp } from './app-lifecycle.js';
 
 export interface StartupReplayResult {
   arrived: boolean;
@@ -18,25 +15,7 @@ export interface StartupReplayResult {
   error?: string;
 }
 
-async function launchApp(bundleId: string, platform: string): Promise<void> {
-  if (platform === 'ios') {
-    await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {
-      timeout: 10_000, encoding: 'utf8',
-    }).catch(() => {});
-    await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
-      timeout: 15_000, encoding: 'utf8',
-    });
-  } else {
-    await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
-      timeout: 10_000, encoding: 'utf8',
-    }).catch(() => {});
-    await execFile('adb', ['shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', bundleId], {
-      timeout: 15_000, encoding: 'utf8',
-    });
-  }
-}
-
-async function waitForNavigationReady(client: CDPClient, timeoutMs = 12_000): Promise<boolean> {
+export async function waitForNavigationReady(client: CDPClient, timeoutMs = 12_000): Promise<boolean> {
   const checkExpr = `(function() {
     var ref = globalThis.__NAV_REF__;
     if (ref && typeof ref.getRootState === 'function') {
@@ -87,7 +66,8 @@ export async function launchAndNavigate(
   let reconnectAttempts = 0;
 
   try {
-    await launchApp(bundleId, platform);
+    await terminateApp(bundleId, platform as 'ios' | 'android').catch(() => { /* idempotent */ });
+    await launchApp(bundleId, platform as 'ios' | 'android');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
