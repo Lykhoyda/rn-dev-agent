@@ -1,3 +1,4 @@
+import { attachVerificationWarning } from './envelope.js';
 // GH #91 / D688: mutation-absence detector. Catches the IX-2950 verification-
 // fidelity failure where an agent reaches a "success-shape" screen
 // (OrderConfirmation, AddPolicySuccess, ...) via deep-link or state-injection
@@ -138,20 +139,7 @@ export function annotateMutationAbsence(result, ctx) {
         last_mutation_age_ms: lastMutationAgeMs,
         hint,
     };
-    return augmentMeta(result, { verification_warning: warning });
-}
-function augmentMeta(result, extra) {
-    try {
-        const text = result.content[0]?.text;
-        if (!text)
-            return result;
-        const env = JSON.parse(text);
-        env.meta = { ...env.meta, ...extra };
-        return { content: [{ type: 'text', text: JSON.stringify(env) }] };
-    }
-    catch {
-        return result;
-    }
+    return attachVerificationWarning(result, warning);
 }
 /** Test seam: clear the per-device state map. Not exported via index.ts. */
 export function _resetForTests() {
