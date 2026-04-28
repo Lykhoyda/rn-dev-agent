@@ -107,7 +107,7 @@ trackedTool('cdp_reload', 'Trigger a full reload of the app. Auto-reconnects to 
     full: z.boolean().default(true).describe('Always performs a full reload via DevSettings.reload()'),
 }, createReloadHandler(getClient, setClient, createClient));
 trackedTool('cdp_component_tree', 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns.', {
-    filter: z.string().optional().describe('Component name or testID to scope query (e.g. "CartBadge", "product-list")'),
+    filter: z.string().optional().describe('Case-insensitive substring match against component name, testID/nativeID, or accessibilityLabel (e.g. "CartBadge", "product-list", "Continue")'),
     depth: z.number().int().min(1).max(12).default(4).describe('Max depth (default 4, max 12)'),
 }, createComponentTreeHandler(getClient));
 trackedTool('cdp_navigation_state', 'Get current navigation state: active route, params, stack history, nested navigators, active tab. Works with React Navigation and Expo Router.', {}, createNavigationStateHandler(getClient));
@@ -303,10 +303,10 @@ trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatica
     action: z.enum(['reload', 'toggleInspector', 'togglePerfMonitor', 'dismissRedBox', 'disableDevMenu'])
         .describe('Dev menu action to execute'),
 }, createDevSettingsHandler(getClient));
-trackedTool('cdp_interact', 'Interact with React components by testID — press buttons, long-press, type text, scroll. Calls JS handlers directly (not native touch). Reliable for all React-level interactions including elements inside gesture handlers. For native gestures (swipe, drag), use device_swipe/device_press instead.', {
+trackedTool('cdp_interact', 'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead.', {
     action: z.enum(['press', 'longPress', 'typeText', 'scroll']).describe('press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll.'),
-    testID: z.string().optional().describe('testID prop of the target component'),
-    accessibilityLabel: z.string().optional().describe('accessibilityLabel prop (used if testID not provided)'),
+    testID: z.string().optional().describe('testID prop of the target component (strict match — preferred)'),
+    accessibilityLabel: z.string().optional().describe('accessibilityLabel prop (used if testID not provided). Tiered match: exact → normalized (trim+lowercase) → substring. Returns Ambiguous error if >1 component matches.'),
     text: z.string().optional().describe('Required for typeText: the text to enter'),
     scrollX: z.number().optional().describe('For scroll: horizontal offset in pixels (default 0)'),
     scrollY: z.number().optional().describe('For scroll: vertical offset in pixels (default 300)'),

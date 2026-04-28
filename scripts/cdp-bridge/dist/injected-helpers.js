@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 19;
+  var __HELPERS_VERSION__ = 20;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -304,9 +304,11 @@ export const INJECTED_HELPERS = `
         scanned++;
         var fname = getName(fiber);
         var ftid = fiber.memoizedProps && (fiber.memoizedProps.testID || fiber.memoizedProps.nativeID);
+        var flabel = fiber.memoizedProps && fiber.memoizedProps.accessibilityLabel;
         var matchesName = fname && fname.toLowerCase().indexOf(f) >= 0;
-        var matchesTestID = ftid && ftid.toLowerCase().indexOf(f) >= 0;
-        if ((matchesName || matchesTestID) && !hasMatchedAncestor(fiber)) {
+        var matchesTestID = ftid && String(ftid).toLowerCase().indexOf(f) >= 0;
+        var matchesLabel = flabel && String(flabel).toLowerCase().indexOf(f) >= 0;
+        if ((matchesName || matchesTestID || matchesLabel) && !hasMatchedAncestor(fiber)) {
           matchFibers.push(fiber);
           matchFiberSet.add(fiber);
         }
@@ -914,6 +916,7 @@ export const INJECTED_HELPERS = `
     var action = opts.action;
     var selector = opts.testID || opts.accessibilityLabel;
     var matchField = opts.testID ? 'testID' : 'accessibilityLabel';
+    var isLabelMatch = matchField === 'accessibilityLabel';
 
     if (!action) return JSON.stringify({ error: 'action is required' });
     if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
@@ -921,29 +924,97 @@ export const INJECTED_HELPERS = `
     var found = null;
     var findCount = 0;
 
+    // B5/D684: testID stays strict + early-return (fast happy path).
+    // accessibilityLabel uses tiered matching: exact === → normalized
+    // (trim+collapse-ws+lowercase) → substring contains. Ambiguity in the
+    // looser tiers surfaces as a structured error so we never silently pick
+    // among multiple "Continue" buttons.
+    function norm(v) {
+      return String(v).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '').toLowerCase();
+    }
+    var normSelector = isLabelMatch ? norm(selector) : null;
+    var exactMatches = [];
+    var normMatches = [];
+    var containsMatches = [];
+
     function findFiber(fiber) {
       var current = fiber;
       while (current) {
         findCount++;
         if (findCount > 8000) return;
         var props = current.memoizedProps;
-        if (props && props[matchField] === selector) {
-          found = current;
-          return;
+        if (props) {
+          if (!isLabelMatch) {
+            if (props[matchField] === selector) {
+              found = current;
+              return;
+            }
+          } else {
+            var raw = props.accessibilityLabel;
+            if (raw !== undefined && raw !== null && raw !== '') {
+              if (raw === selector) {
+                exactMatches.push(current);
+              } else {
+                var nv = norm(raw);
+                if (nv === normSelector) {
+                  normMatches.push(current);
+                } else if (nv.indexOf(normSelector) >= 0) {
+                  containsMatches.push(current);
+                }
+              }
+            }
+          }
         }
         if (current.child) findFiber(current.child);
-        if (found) return;
+        if (!isLabelMatch && found) return;
         current = current.sibling;
       }
     }
 
     // B145: walk root.current across every renderer until the testID is
     // found. Previously only the first renderer's roots were searched.
+    // For label matching, walk ALL renderers (no short-circuit) so duplicate
+    // labels split across renderers (LogBox vs Fabric) are detected.
     forEachRootFiber(function(rootFiber) {
-      if (found) return found; // short-circuit forEachRootFiber
+      if (!isLabelMatch && found) return found;
       findFiber(rootFiber);
-      return found;
+      return isLabelMatch ? null : found;
     });
+
+    if (isLabelMatch) {
+      var tier = exactMatches.length > 0
+        ? exactMatches
+        : (normMatches.length > 0 ? normMatches : containsMatches);
+      if (tier.length === 0) {
+        return JSON.stringify({
+          error: 'Component not found',
+          selector: selector,
+          matchField: matchField,
+          hint: 'Tried exact, case/whitespace-normalized, and substring match. Use cdp_component_tree filter:"' + selector + '" to verify the label is mounted, or pass a testID instead.'
+        });
+      }
+      if (tier.length > 1) {
+        var descriptors = [];
+        for (var di = 0; di < tier.length && di < 10; di++) {
+          var dp = tier[di].memoizedProps || {};
+          var dt = (tier[di].type && (tier[di].type.displayName || tier[di].type.name)) || 'Unknown';
+          descriptors.push({
+            component: dt,
+            testID: dp.testID,
+            accessibilityLabel: dp.accessibilityLabel,
+          });
+        }
+        return JSON.stringify({
+          error: 'Ambiguous component match',
+          selector: selector,
+          matchField: matchField,
+          count: tier.length,
+          matches: descriptors,
+          hint: 'Multiple components match this accessibilityLabel. Add a testID to the target component for unambiguous matching.'
+        });
+      }
+      found = tier[0];
+    }
 
     if (!found) {
       return JSON.stringify({
