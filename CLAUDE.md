@@ -97,9 +97,9 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 
 ### MCP Server (cdp-bridge)
 
-52 tools exposed via MCP:
+64 tools exposed via MCP (count last audited 2026-04-28; per-category breakdown below predates several additions and is approximate):
 
-**CDP tools** (25 — React internals via Chrome DevTools Protocol over WebSocket):
+**CDP tools** (React internals via Chrome DevTools Protocol over WebSocket):
 - `cdp_status` — health check with domain capabilities + reconnect state
 - `cdp_connect` / `cdp_disconnect` / `cdp_targets` — connection management
 - `cdp_evaluate` — arbitrary JS execution in Hermes
@@ -109,6 +109,7 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 - `cdp_navigation_state` / `cdp_nav_graph` / `cdp_navigate` — navigation
 - `cdp_store_state` / `cdp_dispatch` — Redux/Zustand/React Query state
 - `cdp_network_log` / `cdp_network_body` / `cdp_console_log` / `cdp_error_log` — buffered events
+- `cdp_wait_for_network` — block until a network request matching url_pattern + method completes (D682, GH #65 P3) — collapses "tap → check → tap" into a single deterministic call
 - `cdp_interact` — press/type/scroll by testID via fiber tree
 - `cdp_heap_usage` — JS memory usage
 - `cdp_cpu_profile` — CPU profiling with hot function ranking
