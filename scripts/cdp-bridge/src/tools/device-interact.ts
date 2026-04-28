@@ -299,9 +299,99 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
           );
         }
       }
+
+      // GH #60 Bug 7: Maestro/agent-device daemon timeouts leave callers
+      // staring at "Daemon error: daemon timeout" with no obvious recovery.
+      // Try the snapshot-based fuzzy path as a self-recovery before giving up
+      // — it routes through agent-device's daemon-less snapshot tier (or its
+      // CLI fallback) and delivers a usable result without the user needing
+      // to know the workaround.
+      if (isDaemonTimeoutError(text)) {
+        const find = await fetchFindCandidates(args.text, false);
+        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        if (find.ok) {
+          const candidates = find.candidates;
+          if (candidates.length === 0) {
+            return failResult(
+              `No element matches "${args.text}". Original daemon timeout: ${truncate(text, 200)}`,
+              {
+                code: 'NOT_FOUND',
+                query: args.text,
+                recovered_via: 'snapshot_fallback_after_daemon_timeout',
+                hint: 'agent-device daemon timed out; recovered via snapshot but found no matches. Try cdp_interact with a testID instead.',
+              },
+            );
+          }
+          if (candidates.length === 1) {
+            const pressed = tagPressIfRecovered(
+              await pressCandidate(candidates[0], args.action),
+              find.recoveredTier,
+            );
+            return mergeMeta(pressed, {
+              recovered_via: 'snapshot_fallback_after_daemon_timeout',
+              note: 'agent-device daemon timed out; recovered via snapshot-based match. If this repeats, restart the daemon (`agent-device daemon restart`) or use cdp_interact for testID-based interactions.',
+            });
+          }
+          return failResult(
+            `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements (recovered via snapshot after daemon timeout).`,
+            {
+              code: 'AMBIGUOUS_MATCH',
+              query: args.text,
+              candidates,
+              recovered_via: 'snapshot_fallback_after_daemon_timeout',
+              hint: 'Pass index: N or use device_press(ref="...") directly. The snapshot fallback succeeded, but the daemon itself remains unhealthy — consider restarting it.',
+            },
+          );
+        }
+        // Snapshot fallback also failed — surface both error sources.
+        return failResult(
+          `agent-device daemon timed out AND snapshot fallback failed. Original: ${truncate(text, 200)}`,
+          {
+            code: 'DAEMON_TIMEOUT',
+            query: args.text,
+            hint: 'Restart the daemon (`agent-device daemon restart`) and retry, or fall back to cdp_interact with a testID.',
+          },
+        );
+      }
     }
     return result;
   });
+}
+
+// GH #60 Bug 7: agent-device + Maestro emit a few different timeout strings
+// ("daemon timeout", "Daemon error: daemon timeout", "request timed out")
+// depending on tier. Match the patterns broadly enough to catch all of them
+// without snagging unrelated timeouts (e.g. CDP evaluate timeouts inside
+// other tools have different shapes that don't reach this path).
+export function isDaemonTimeoutError(text: string): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  return (
+    t.includes('daemon timeout') ||
+    t.includes('daemon error: daemon') ||
+    /\bdaemon\b.*\btimed?\s?out\b/.test(t)
+  );
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function mergeMeta(result: ToolResult, extra: Record<string, unknown>): ToolResult {
+  if (result.isError) return result;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: unknown;
+      meta?: Record<string, unknown>;
+    };
+    envelope.meta = { ...envelope.meta, ...extra };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+  } catch {
+    return result;
+  }
 }
 
 // B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
