@@ -49,7 +49,8 @@
     "./commands/rn-agent-health.md",
     "./commands/nav-graph.md",
     "./commands/send-feedback.md",
-    "./commands/setup.md"
+    "./commands/setup.md",
+    "./commands/doctor.md"
   ],
   "userConfig": {
     "RN_METRO_PORT": {
