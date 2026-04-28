@@ -55,12 +55,15 @@ test('B145: findNavRef walks all renderers for NavigationContainer ref', () => {
 });
 
 test('B145: interact tool walks all renderers for the testID', () => {
-  // The pattern is: forEachRootFiber(fn => { findFiber(rootFiber); return found; })
+  // GH #60-5: testID early-returns `found`; accessibilityLabel walks every
+  // renderer and collects matches across them, so the callback can return
+  // null to keep iterating. We assert the callback uses both findFiber and
+  // forEachRootFiber, without pinning the exact return statement.
   const src = INJECTED_HELPERS;
   const idx = src.indexOf('function interact');
   assert.ok(idx >= 0, 'interact definition missing');
   const slice = src.slice(idx, idx + 3000);
-  assert.match(slice, /forEachRootFiber\(function\(rootFiber\)\s*\{[\s\S]*?findFiber\(rootFiber\);[\s\S]*?return found;/, 'interact did not migrate to forEachRootFiber');
+  assert.match(slice, /forEachRootFiber\(function\(rootFiber\)\s*\{[\s\S]*?findFiber\(rootFiber\);/, 'interact did not call findFiber inside forEachRootFiber');
 });
 
 test('B145: getComponentState walks all renderers for the testID', () => {

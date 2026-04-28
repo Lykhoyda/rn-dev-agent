@@ -317,6 +317,6 @@ test('M10: getAppInfo returns architecture=unknown when nativeFabricUIManager is
   assert.equal(info.architecture, 'unknown');
 });
 
-test('GH #72: helpers bundle version is 19 (bumped for findNavRef hooks-chain walker)', () => {
-  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*19/);
+test('GH #60-5: helpers bundle version is 20 (bumped for tiered accessibilityLabel matching)', () => {
+  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*20/);
 });
