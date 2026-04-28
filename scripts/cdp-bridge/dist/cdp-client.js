@@ -84,6 +84,8 @@ export class CDPClient {
     get helpersInjected() { return this._helpersInjected; }
     get metroPort() { return this._port; }
     get connectedTarget() { return this._connectedTarget; }
+    /** B132: whether DevTools attachment was requested. Survives soft reconnect (auto-resumes via afterReconnect). Lost on `disconnect()` — caller must re-run cdp_open_devtools after a force-recreate. */
+    get proxyDesired() { return this._proxyDesired; }
     /** M11: timestamp of the current CDP connection (ms since epoch); null when disconnected. */
     get connectedAt() { return this._connectedAt; }
     /** M11: clock source for this client (injectable; defaults to Date.now). */

@@ -102,9 +102,9 @@ trackedTool('cdp_evaluate', 'CAUTION: Executes arbitrary JavaScript directly in 
     expression: z.string().describe('JavaScript expression to evaluate'),
     awaitPromise: z.boolean().default(false).describe('Wait for promise resolution'),
 }, createEvaluateHandler(getClient));
-trackedTool('cdp_reload', 'Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 retries). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if reconnect fails.', {
+trackedTool('cdp_reload', 'Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 soft retries; on failure, falls back once to a 10s force-recreate that mirrors `cdp_connect force=true`). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if both paths fail. When the force fallback recovers, `meta.recovered_via` is "force_reconnect" and `meta.proxy_was_active` indicates whether DevTools was attached (re-run cdp_open_devtools to re-attach).', {
     full: z.boolean().default(true).describe('Always performs a full reload via DevSettings.reload()'),
-}, createReloadHandler(getClient));
+}, createReloadHandler(getClient, setClient, createClient));
 trackedTool('cdp_component_tree', 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns.', {
     filter: z.string().optional().describe('Component name or testID to scope query (e.g. "CartBadge", "product-list")'),
     depth: z.number().int().min(1).max(12).default(4).describe('Max depth (default 4, max 12)'),
