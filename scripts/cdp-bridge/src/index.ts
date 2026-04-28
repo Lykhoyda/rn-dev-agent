@@ -159,7 +159,7 @@ trackedTool(
 
 trackedTool(
   'cdp_evaluate',
-  'CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. Prefer cdp_component_tree, cdp_store_state, and other targeted tools over raw evaluate.',
+  'CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. The Hermes dev runtime has NO Node `require()` — Metro bundles modules internally and only the live React tree is reachable. Use cdp_mmkv for storage R/W, cdp_dispatch for Redux/Zustand state changes, cdp_component_tree / cdp_store_state for introspection. Reach for raw evaluate only when no targeted tool fits.',
   {
     expression: z.string().describe('JavaScript expression to evaluate'),
     awaitPromise: z.boolean().default(false).describe('Wait for promise resolution'),
@@ -213,7 +213,7 @@ trackedTool(
 
 trackedTool(
   'cdp_error_log',
-  'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — call cdp_native_errors to check native logs (B114/D642).',
+  'Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE — call cdp_native_errors to check native logs.',
   {
     clear: z.boolean().default(false).describe('Clear all captured errors instead of reading them'),
   },
@@ -233,7 +233,7 @@ trackedTool(
 
 trackedTool(
   'cdp_network_log',
-  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). M4/D655: buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session. Filters AND-combine: `filter` (URL substring), `method` (HTTP verb), `since` (ISO timestamp). When more entries match than `limit` allows, response includes `truncated:true` + `total_matches`.',
+  'Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). Buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session. Filters AND-combine: `filter` (URL substring), `method` (HTTP verb), `since` (ISO timestamp). When more entries match than `limit` allows, response includes `truncated:true` + `total_matches`.',
   {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     filter: z.string().optional().describe('Filter by URL substring (e.g. "/api/cart")'),
@@ -247,7 +247,7 @@ trackedTool(
 
 trackedTool(
   'cdp_network_body',
-  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached. M4/D655: pass `device` to look up requestId in a specific device buffer; defaults to the active device.',
+  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached. Pass `device` to look up requestId in a specific device buffer; defaults to the active device.',
   {
     requestId: z.string().describe('Request ID from cdp_network_log output'),
     maxLength: z.number().int().min(100).max(100000).default(10000).optional()
@@ -530,13 +530,13 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races — B112).',
+  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).',
   {
     action: z.enum(['open', 'close', 'snapshot']).default('snapshot').describe('open: start session for an app. snapshot: capture UI tree with element refs. close: end session.'),
     appId: z.string().optional().describe('App bundle ID — required for action=open (e.g. "com.example.app")'),
     platform: z.enum(['ios', 'android']).optional().describe('Target platform — used with action=open to select device'),
     sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
-    attachOnly: z.boolean().optional().describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races (B112/D641).'),
+    attachOnly: z.boolean().optional().describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.'),
   },
   createDeviceSnapshotHandler(),
 );
@@ -568,7 +568,7 @@ trackedTool(
 
 trackedTool(
   'device_fill',
-  'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (B122 — common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.',
+  'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.',
   {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
@@ -770,7 +770,7 @@ trackedTool(
 
 trackedTool(
   'proof_step',
-  'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in Phase 8 proof flows to reduce tool-call overhead.',
+  'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.',
   {
     screen: z.string().optional().describe('Screen to navigate to (omit to stay on current screen)'),
     params: z.record(z.unknown()).optional().describe('Navigation params (e.g. { id: "1" })'),
@@ -798,7 +798,7 @@ trackedTool(
 
 trackedTool(
   'maestro_generate',
-  'Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/<name>.yaml in the project root. Use after Phase 5.5 verification to create regression tests.',
+  'Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/<name>.yaml in the project root. Use after live verification to create regression tests.',
   {
     name: z.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
     steps: z.array(z.object({
@@ -891,7 +891,7 @@ trackedTool(
 
 trackedTool(
   'cdp_restart',
-  'In-process soft state reset (B76/D644). Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.',
+  'In-process soft state reset. Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.',
   {
     metroPort: z.number().optional().describe('Override Metro port for reconnection (default: keep current)'),
     platform: z.string().optional().describe('Platform filter for reconnection (e.g. "ios", "android")'),
@@ -912,14 +912,14 @@ trackedTool(
 
 trackedTool(
   'cdp_open_devtools',
-  'Report the React Native DevTools frontend URL for the live app + start a multiplexer proxy so DevTools can coexist with the MCP session on RN < 0.85 (RN >= 0.85 uses native multi-debugger). M1a (Phase 100) shipped detection + capability reporting; M1b (Phase 104) wired the proxy into CDPClient; B132 (Phase 105) added proxy auto-resume across reconnect. Returns { devtoolsUrl, inspectorWsUrl, hermesWsUrl, mode: "native" | "proxy-active", proxyPort, supportsMultipleDebuggers, rnVersion, guidance }.',
+  'Report the React Native DevTools frontend URL for the live app + start a multiplexer proxy so DevTools can coexist with the MCP session on RN < 0.85 (RN >= 0.85 uses native multi-debugger). The proxy auto-resumes across reconnects. Returns { devtoolsUrl, inspectorWsUrl, hermesWsUrl, mode: "native" | "proxy-active", proxyPort, supportsMultipleDebuggers, rnVersion, guidance }.',
   {},
   createOpenDevToolsHandler(getClient),
 );
 
 trackedTool(
   'cdp_metro_events',
-  'Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. M5 (Phase 90 Tier 2 / D656): the MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state — watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.',
+  'Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. The MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state — watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.',
   {
     limit: z.number().int().min(1).max(100).default(20).describe('Max entries to return (default 20, max 100)'),
     type: z.string().optional().describe('Filter by event type (e.g. "bundle_build_failed")'),
