@@ -7,6 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { CDPClient } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { logger } from './logger.js';
 import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
@@ -200,7 +201,15 @@ trackedTool('cdp_navigate', 'Navigate to any screen by name, including nested st
     if (parsed !== null && typeof parsed === 'object' && '__agent_error' in parsed) {
         return failResult(String(parsed.__agent_error));
     }
-    return okResult(parsed);
+    // GH #91: surface verification_warning when the requested screen matches
+    // the success-shape regex AND the 5s rolling window has no qualifying
+    // mutation. Uses args.screen as the signal — the user asked to navigate
+    // there, so even if the actual landing route differs we capture intent.
+    return annotateMutationAbsence(okResult(parsed), {
+        client,
+        screenName: args.screen,
+        source: 'cdp_navigate',
+    });
 }));
 trackedTool('cdp_component_state', 'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).', {
     testID: z.string().describe('testID of the target component'),

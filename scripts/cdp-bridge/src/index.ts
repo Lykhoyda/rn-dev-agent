@@ -7,6 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { CDPClient } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { logger } from './logger.js';
 import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
@@ -350,7 +351,15 @@ trackedTool(
     if (parsed !== null && typeof parsed === 'object' && '__agent_error' in (parsed as Record<string, unknown>)) {
       return failResult(String((parsed as Record<string, unknown>).__agent_error));
     }
-    return okResult(parsed);
+    // GH #91: surface verification_warning when the requested screen matches
+    // the success-shape regex AND the 5s rolling window has no qualifying
+    // mutation. Uses args.screen as the signal — the user asked to navigate
+    // there, so even if the actual landing route differs we capture intent.
+    return annotateMutationAbsence(okResult(parsed), {
+      client,
+      screenName: args.screen,
+      source: 'cdp_navigate',
+    });
   }),
 );
 
