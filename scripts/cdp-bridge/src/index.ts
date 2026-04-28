@@ -16,6 +16,7 @@ import { createNavigationStateHandler } from './tools/navigation-state.js';
 import { createErrorLogHandler } from './tools/error-log.js';
 import { createNativeErrorsHandler } from './tools/native-errors.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
+import { createWaitForNetworkHandler } from './tools/wait-for-network.js';
 import { createNetworkBodyHandler } from './tools/network-body.js';
 import { createHeapUsageHandler, createCpuProfileHandler } from './tools/profiling.js';
 import { createObjectInspectHandler } from './tools/object-inspect.js';
@@ -253,6 +254,20 @@ trackedTool(
     device: z.string().optional().describe('Device key to scope the lookup ("all" to search every device buffer). Defaults to the active device.'),
   },
   createNetworkBodyHandler(getClient),
+);
+
+trackedTool(
+  'cdp_wait_for_network',
+  'Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses. Two-phase: scans the existing buffer first (retroactive match), then polls every poll_interval_ms until deadline. Returns {matched:true, mutation, network_log_since} on success or {matched:false, timeout_ms, candidates_seen} (capped at 10) on timeout — never errors on timeout; agents should check `data.matched`. Use after triggering an action that fires a request to deterministically confirm it landed without buffer-churn races. Pin `since` to a timestamp captured BEFORE the trigger (Date.now() ISO) to also catch mutations that land in the MCP transport window.',
+  {
+    url_pattern: z.string().describe('URL substring to match (e.g. "/api/cart/add", "checkout"). Same matching semantics as cdp_network_log filter.'),
+    method: z.union([z.string(), z.array(z.string())]).optional().describe('HTTP method filter, case-insensitive (e.g. "POST" or ["POST","PUT"]). Omit to match any method.'),
+    timeout_ms: z.number().int().min(100).max(60000).default(5000).optional().describe('Max wait in ms (default 5000, range 100-60000)'),
+    poll_interval_ms: z.number().int().min(50).max(500).default(100).optional().describe('Buffer poll cadence in ms (default 100, range 50-500)'),
+    since: z.string().optional().describe('ISO timestamp checkpoint — ignore entries older than this. Defaults to the moment the tool is called. Capture `new Date().toISOString()` before the trigger action to avoid missing the mutation in the transport window.'),
+    device: z.string().optional().describe('Device key OR "all". Defaults to the active device.'),
+  },
+  createWaitForNetworkHandler(getClient),
 );
 
 trackedTool(
