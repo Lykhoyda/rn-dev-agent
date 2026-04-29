@@ -79,15 +79,31 @@ export function createProofStepHandler(getClient: () => CDPClient) {
         result.verifyDetail = `testID "${args.verifyTestID}" not found`;
         errors.push(result.verifyDetail);
       } else {
+        // CDP-002: a successful helper envelope can still mean "no match" —
+        // check for null tree, empty matches, and parse failures explicitly
+        // rather than treating "no __agent_error" as proof the element exists.
         try {
-          const tree = JSON.parse(treeResult.value);
-          result.verified = !tree.__agent_error;
-          result.verifyDetail = tree.__agent_error
-            ? `testID "${args.verifyTestID}" not found: ${tree.__agent_error}`
-            : `testID "${args.verifyTestID}" found`;
+          const parsed = JSON.parse(treeResult.value);
+          const matches = parsed && Array.isArray(parsed.matches) ? parsed.matches : null;
+          const treeNode = parsed ? parsed.tree : null;
+          const hasMatch = (matches !== null && matches.length > 0)
+            || (treeNode !== null && treeNode !== undefined);
+          if (parsed && parsed.__agent_error) {
+            result.verified = false;
+            result.verifyDetail = `testID "${args.verifyTestID}" not found: ${parsed.__agent_error}`;
+            errors.push(result.verifyDetail);
+          } else if (!hasMatch) {
+            result.verified = false;
+            result.verifyDetail = `testID "${args.verifyTestID}" not found (helper returned no matches)`;
+            errors.push(result.verifyDetail);
+          } else {
+            result.verified = true;
+            result.verifyDetail = `testID "${args.verifyTestID}" found`;
+          }
         } catch {
-          result.verified = true;
-          result.verifyDetail = `testID "${args.verifyTestID}" response received`;
+          result.verified = false;
+          result.verifyDetail = `testID "${args.verifyTestID}" — failed to parse helper response`;
+          errors.push(result.verifyDetail);
         }
       }
     }
@@ -111,15 +127,24 @@ export function createProofStepHandler(getClient: () => CDPClient) {
     if (args.label) result.label = args.label;
     if (errors.length > 0) result.errors = errors;
 
-    const hasFailure = errors.length > 0 && !result.verified && args.verifyText || args.verifyTestID;
+    // CDP-005: previously the warn-vs-ok decision used a confused boolean
+    // (errors && !verified && verifyText) || verifyTestID — which meant a
+    // missing screenshot or no-active-session was silently reported as
+    // ok:true. Now we explicitly fire warn for either failure mode:
+    //   1. verification was requested AND failed (verified === false)
+    //   2. ANY error was accumulated (screenshot failure, missing session,
+    //      navigation error) regardless of verification args
+    const verifyRequested = !!(args.verifyText || args.verifyTestID);
+    const verifyFailed = verifyRequested && result.verified === false;
+    const hasFailure = verifyFailed || errors.length > 0;
     // GH #91: derive a screen-name signal from whichever input is freshest.
     // Prefer the screen we navigated to (driving signal), then the verified
     // testID (success-shape testIDs like "AddPolicySuccessSheet" trigger too),
-    // then the verified text. nul allowed — annotateMutationAbsence handles it.
+    // then the verified text. null allowed — annotateMutationAbsence handles it.
     const screenName = args.screen ?? args.verifyTestID ?? args.verifyText ?? null;
     const ctx = { client, screenName, source: 'proof_step' as const };
-    if (hasFailure && result.verified === false) {
-      return annotateMutationAbsence(warnResult(result, errors.join('; ')), ctx);
+    if (hasFailure) {
+      return annotateMutationAbsence(warnResult(result, errors.join('; ') || 'proof_step verification failed'), ctx);
     }
     return annotateMutationAbsence(okResult(result), ctx);
   });

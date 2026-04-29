@@ -392,7 +392,13 @@ export function createNavGraphHandler(getClient) {
         var target = ${JSON.stringify(args.screen)};
         var deepestMatches = currentScreen === target;
         var anywhereMatches = allRoutes.indexOf(target) >= 0;
-        var arrived = deepestMatches || anywhereMatches;
+        // CDP-010: default to STRICT leaf-route arrival. A target that
+        // appears only in a parent stack or inactive tab history is no
+        // longer treated as success — the handler now classifies that
+        // case as a warn (parent-of-current). The arrived_via field
+        // continues to be exposed for callers that opt in to relaxed
+        // matching downstream.
+        var arrived = deepestMatches;
         return JSON.stringify({
           arrived: arrived,
           current_screen: currentScreen,
@@ -436,7 +442,13 @@ export function createNavGraphHandler(getClient) {
         var target = ${JSON.stringify(args.screen)};
         var deepestMatches = currentScreen === target;
         var anywhereMatches = allRoutes.indexOf(target) >= 0;
-        var arrived = deepestMatches || anywhereMatches;
+        // CDP-010: default to STRICT leaf-route arrival. A target that
+        // appears only in a parent stack or inactive tab history is no
+        // longer treated as success — the handler now classifies that
+        // case as a warn (parent-of-current). The arrived_via field
+        // continues to be exposed for callers that opt in to relaxed
+        // matching downstream.
+        var arrived = deepestMatches;
 
         return JSON.stringify({
           arrived: arrived,

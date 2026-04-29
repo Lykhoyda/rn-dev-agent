@@ -170,7 +170,12 @@ export type ToolErrorCode =
   | 'DEVICE_RESET_INVALID_ARGS'
   | 'DEVICE_RESET_STATE_PARTIAL'
   | 'DEVICE_RESET_RECONNECT_FAILED'
-  | 'CDP_NOT_CONNECTED';
+  | 'CDP_NOT_CONNECTED'
+  // CDP tool review batch 2026-04-29.
+  | 'CDP_TARGET_APP_MISMATCH'   // CDP-003
+  | 'INVALID_PLATFORM'          // CDP-014
+  | 'PROFILER_UNAVAILABLE'      // CDP-007
+  | 'NATIVE_LOG_UNAVAILABLE';   // CDP-016
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

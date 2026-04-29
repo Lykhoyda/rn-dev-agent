@@ -89,9 +89,10 @@ test('B137: Maestro tap + nav emits navigated comment inline', () => {
     { type: 'tap', testID: 'task-row-1', t: 1500 },
   ];
   const out = generateMaestro(events);
-  assert.match(out, /- tapOn:\s+id: "tab-tasks"\s+# navigated: Home -> Tasks/);
+  // CDP-013: yaml-serialized scalars — simple identifiers as plain scalars.
+  assert.match(out, /- tapOn:\s+id:\s+["']?tab-tasks["']?\s+# navigated: Home -> Tasks/);
   // lookahead assertVisible should point at task-row-1 (next selector after navigate)
-  assert.match(out, /- assertVisible:\s+id: "task-row-1"/);
+  assert.match(out, /- assertVisible:\s+id:\s+["']?task-row-1["']?/);
 });
 
 test('B137: Maestro does NOT double-emit navigate — only once, not from both branches', () => {
@@ -113,7 +114,7 @@ test('B137: Maestro falls back to navigate branch when tap is NOT followed by na
   ];
   const out = generateMaestro(events);
   assert.match(out, /# navigated: A -> B/);
-  assert.match(out, /- assertVisible:\s+id: "on-b"/);
+  assert.match(out, /- assertVisible:\s+id:\s+["']?on-b["']?/);
 });
 
 test('B137: Maestro emits navigate branch when no preceding tap exists', () => {
@@ -123,7 +124,7 @@ test('B137: Maestro emits navigate branch when no preceding tap exists', () => {
   ];
   const out = generateMaestro(events);
   assert.match(out, /# navigated: Splash -> Login/);
-  assert.match(out, /- assertVisible:\s+id: "username"/);
+  assert.match(out, /- assertVisible:\s+id:\s+["']?username["']?/);
 });
 
 test('B137: Detox tap + nav emits navigated comment + toBeVisible inline', () => {

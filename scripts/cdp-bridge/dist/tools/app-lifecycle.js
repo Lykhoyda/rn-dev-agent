@@ -26,9 +26,33 @@ export async function terminateApp(bundleId, platform) {
     }
 }
 /**
+ * CDP-004: build a package-scoped Android launch argv for `adb`.
+ *
+ * Why `-p` (not a bare trailing bundleId): the bare form was parsed by
+ * `am start` as an intent URI, which let unrelated packages match the
+ * implicit MAIN/LAUNCHER resolution. `-p <package>` restricts intent
+ * resolution to the requested package. `-W` waits for launch so failures
+ * surface as non-zero exits instead of being silently lost.
+ *
+ * Exported as a pure helper so the argv shape can be regression-tested
+ * without spawning adb.
+ */
+export function buildAndroidLaunchArgv(bundleId) {
+    if (typeof bundleId !== 'string' || bundleId.length === 0) {
+        throw new Error('buildAndroidLaunchArgv: bundleId is required');
+    }
+    return [
+        'shell', 'am', 'start',
+        '-W',
+        '-a', 'android.intent.action.MAIN',
+        '-c', 'android.intent.category.LAUNCHER',
+        '-p', bundleId,
+    ];
+}
+/**
  * Launch the app. iOS: `xcrun simctl launch booted <bundleId>`. Android:
- * the standard MAIN/LAUNCHER intent (NOT `monkey`, which the brainstorm
- * flagged as flakier on Android 13+). Throws on failure.
+ * the MAIN/LAUNCHER intent scoped to the package via `-p` (CDP-004).
+ * Throws on failure.
  */
 export async function launchApp(bundleId, platform) {
     if (platform === 'ios') {
@@ -37,6 +61,8 @@ export async function launchApp(bundleId, platform) {
         });
     }
     else {
-        await execFile('adb', ['shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', bundleId], { timeout: LAUNCH_TIMEOUT_MS, encoding: 'utf8' });
+        await execFile('adb', buildAndroidLaunchArgv(bundleId), {
+            timeout: LAUNCH_TIMEOUT_MS, encoding: 'utf8',
+        });
     }
 }

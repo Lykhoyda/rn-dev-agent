@@ -109,6 +109,9 @@ test('storageKeys when CDP not connected: each key marked skipped with CDP_NOT_C
 test('storageKeys when MMKV unavailable: __agent_error surfaces per-key failure', async () => {
   const { createDeviceResetStateHandler } = await import(MOD_PATH);
   const client = makeMockClient({
+    // CDP-003 guard: target description must include the appId so the
+    // app-mismatch guard doesn't pre-empt the storage step under test.
+    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.example.app', platform: 'ios' },
     evaluateImpl: () => ({
       value: JSON.stringify({ __agent_error: 'NitroModulesProxy not available — MMKV requires react-native-mmkv v3+' }),
     }),
@@ -134,6 +137,8 @@ test('storageKeys when MMKV unavailable: __agent_error surfaces per-key failure'
 test('storageKeys success: each key reports ok with action=delete', async () => {
   const { createDeviceResetStateHandler } = await import(MOD_PATH);
   const client = makeMockClient({
+    // CDP-003 guard: matching target description.
+    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.example.app', platform: 'ios' },
     evaluateImpl: () => ({ value: JSON.stringify({ deleted: true }) }),
   });
   const handler = createDeviceResetStateHandler(() => client);
@@ -150,6 +155,32 @@ test('storageKeys success: each key reports ok with action=delete', async () => 
   assert.equal(storage[0].action, 'delete');
   assert.equal(storage[0].target, 'k1');
   assert.equal(storage[1].target, 'k2');
+});
+
+// ── CDP-003: orchestrator-level wrong-app guard ─────────────────────────
+
+test('CDP-003: storage skipped with CDP_TARGET_APP_MISMATCH when connected target belongs to a different app', async () => {
+  const { createDeviceResetStateHandler } = await import(MOD_PATH);
+  const client = makeMockClient({
+    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.actual.different', platform: 'ios' },
+    evaluateImpl: () => ({ value: JSON.stringify({ deleted: true }) }),
+  });
+  const handler = createDeviceResetStateHandler(() => client);
+  const result = await handler({
+    appId: 'com.requested.app',
+    platform: 'ios',
+    storageKeys: ['k1'],
+    relaunch: false,
+  });
+  const env = parseEnvelope(result);
+  const storage = env.data.steps.find((s) => s.step === 'storage');
+  assert.equal(storage.ok, false);
+  assert.equal(storage.code, 'CDP_TARGET_APP_MISMATCH');
+  assert.match(storage.error, /com\.requested\.app/);
+  // Crucially: evaluate must NOT have been called — that's the wrong-app
+  // deletion that the guard prevents.
+  assert.equal(client._calls.evaluate.length, 0,
+    'guard must short-circuit before any MMKV mutation');
 });
 
 // ── Permission shorthand string defaults to revoke ──────────────────────

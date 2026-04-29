@@ -26,25 +26,32 @@ export function createConnectHandler(
   return async (args: ConnectArgs): Promise<ToolResult> => {
     let client = getClient();
 
-    // GH #21: Check if already connected to the correct platform
+    // CDP-001 + GH #21: when already connected, compare ALL requested filter
+    // dimensions before short-circuiting. Previous logic only checked platform
+    // and silently kept stale targets when targetId/bundleId/metroPort
+    // changed, leaving callers attached to the wrong Hermes page.
     if (client.isConnected && !args.force) {
       const target = client.connectedTarget;
-      if (args.platform) {
+      const haystack = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase();
+
+      const portMismatch = typeof args.metroPort === 'number' && args.metroPort !== client.metroPort;
+      const targetIdMismatch = typeof args.targetId === 'string' && args.targetId.length > 0 && args.targetId !== target?.id;
+      const bundleMismatch = typeof args.bundleId === 'string' && args.bundleId.length > 0
+        && !haystack.includes(args.bundleId.toLowerCase());
+      let platformMismatch = false;
+      if (typeof args.platform === 'string' && args.platform.length > 0) {
         const requestedPlatform = args.platform.toLowerCase();
         const currentPlatform = target?.platform?.toLowerCase();
-        const titleMatch = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase().includes(requestedPlatform);
-        if (currentPlatform !== requestedPlatform && !titleMatch) {
-          // Platform mismatch — force reconnection to correct target
-          await client.disconnect();
-          client = createClient(client.metroPort);
-          setClient(client);
-        } else {
-          return okResult({
-            alreadyConnected: true,
-            port: client.metroPort,
-            target: target ? { id: target.id, title: target.title, vm: target.vm, platform: target.platform ?? null } : null,
-          });
-        }
+        const titleMatch = haystack.includes(requestedPlatform);
+        platformMismatch = currentPlatform !== requestedPlatform && !titleMatch;
+      }
+
+      if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
+        // Honour requested filters by reconnecting; fall through to autoConnect below.
+        const port = args.metroPort ?? client.metroPort;
+        await client.disconnect();
+        client = createClient(port);
+        setClient(client);
       } else {
         return okResult({
           alreadyConnected: true,
@@ -58,9 +65,9 @@ export function createConnectHandler(
       await client.disconnect();
       client = createClient(port);
       setClient(client);
-    }
-
-    if (args.metroPort && args.metroPort !== client.metroPort) {
+    } else if (typeof args.metroPort === 'number' && args.metroPort !== client.metroPort) {
+      // Not connected yet but a different port was requested — re-create the
+      // client on the new port before autoConnect.
       await client.disconnect();
       client = createClient(args.metroPort);
       setClient(client);

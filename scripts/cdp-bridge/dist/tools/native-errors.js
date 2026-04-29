@@ -108,17 +108,27 @@ export async function readNativeErrors(opts = {}) {
     const platform = (opts.platform ?? 'ios').toLowerCase();
     const sinceSeconds = opts.sinceSeconds ?? 60;
     const limit = opts.limit ?? 10;
+    const command = platform === 'android' ? 'adb logcat' : 'xcrun simctl spawn ... log show';
     try {
         if (platform === 'android') {
             const out = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
-            return parseAndroidLog(out).slice(-limit);
+            return { ok: true, entries: parseAndroidLog(out).slice(-limit), unavailable: false, error: '', command };
         }
         const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
-        return parseIOSLog(out).slice(-limit);
+        return { ok: true, entries: parseIOSLog(out).slice(-limit), unavailable: false, error: '', command };
     }
-    catch {
-        // Native log tool unavailable (no xcrun / no adb) — return empty rather than throw.
-        return [];
+    catch (err) {
+        // CDP-016: surface tool-unavailability as a structured failure. Returning
+        // [] previously made "no native errors" indistinguishable from "the log
+        // tool itself failed", which let agents conclude the app was clean while
+        // the diagnostic surface was actually offline.
+        return {
+            ok: false,
+            entries: [],
+            unavailable: true,
+            error: err instanceof Error ? err.message : String(err),
+            command,
+        };
     }
 }
 export function createNativeErrorsHandler(getClient) {
@@ -128,11 +138,23 @@ export function createNativeErrorsHandler(getClient) {
             ?? client.connectedTarget?.platform
             ?? 'ios';
         try {
-            const entries = await readNativeErrors({
+            const result = await readNativeErrors({
                 platform,
                 sinceSeconds: args.sinceSeconds,
                 limit: args.limit,
             });
+            // CDP-016: when the log tool itself is unavailable, fail loudly so
+            // callers cannot mistake "diagnostic offline" for "no native errors".
+            if (result.unavailable) {
+                return failResult(`Native log tool unavailable (${result.command}): ${result.error}`, 'NATIVE_LOG_UNAVAILABLE', {
+                    platform,
+                    command: result.command,
+                    hint: platform === 'ios'
+                        ? 'Verify Xcode command-line tools are installed (xcode-select --install) and a simulator is booted.'
+                        : 'Verify the Android SDK is installed and adb is on PATH (e.g. via $ANDROID_HOME/platform-tools).',
+                });
+            }
+            const entries = result.entries;
             return okResult({
                 platform,
                 count: entries.length,

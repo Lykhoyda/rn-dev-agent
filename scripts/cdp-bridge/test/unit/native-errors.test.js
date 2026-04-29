@@ -83,32 +83,42 @@ test('parseAndroidLog catches "Could not connect to development server"', () => 
 
 // ── readNativeErrors — dispatch + injection ──────────────────────────
 
+// CDP-016: readNativeErrors now returns a structured envelope so a runner
+// failure (xcrun/adb missing, timeout) is no longer indistinguishable from
+// a clean log. Tests updated accordingly.
 test('readNativeErrors dispatches to iOS runner by default', async () => {
   const mockOut = '2026-04-16 22:15:00.123 Error Cannot find native module "Foo"';
-  const entries = await readNativeErrors({
+  const result = await readNativeErrors({
     runIOS: async () => mockOut,
     runAndroid: async () => { throw new Error('should not run'); },
   });
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].source, 'ios-simctl-log');
+  assert.equal(result.ok, true);
+  assert.equal(result.unavailable, false);
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].source, 'ios-simctl-log');
 });
 
 test('readNativeErrors dispatches to Android runner for platform=android', async () => {
   const mockOut = '04-16 22:15:00.123 E/ReactNative: FATAL EXCEPTION: main';
-  const entries = await readNativeErrors({
+  const result = await readNativeErrors({
     platform: 'android',
     runIOS: async () => { throw new Error('should not run'); },
     runAndroid: async () => mockOut,
   });
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].source, 'android-logcat');
+  assert.equal(result.ok, true);
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].source, 'android-logcat');
 });
 
-test('readNativeErrors returns empty on runner failure (no xcrun/adb installed)', async () => {
-  const entries = await readNativeErrors({
+test('CDP-016: readNativeErrors surfaces runner failure as unavailable (was returning empty)', async () => {
+  const result = await readNativeErrors({
     runIOS: async () => { throw new Error('xcrun not found'); },
   });
-  assert.deepEqual(entries, []);
+  assert.equal(result.ok, false, 'tool failure must NOT be reported as success');
+  assert.equal(result.unavailable, true, 'unavailable flag must be set');
+  assert.match(result.error, /xcrun not found/);
+  assert.deepEqual(result.entries, []);
+  assert.match(result.command, /xcrun simctl|log show/);
 });
 
 test('readNativeErrors respects limit', async () => {
@@ -116,9 +126,9 @@ test('readNativeErrors respects limit', async () => {
   for (let i = 0; i < 20; i++) {
     lines.push(`2026-04-16 22:15:${String(i).padStart(2, '0')}.000 Error Cannot find native module "Mod${i}"`);
   }
-  const entries = await readNativeErrors({
+  const result = await readNativeErrors({
     limit: 5,
     runIOS: async () => lines.join('\n'),
   });
-  assert.equal(entries.length, 5);
+  assert.equal(result.entries.length, 5);
 });

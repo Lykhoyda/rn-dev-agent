@@ -34,7 +34,17 @@ export async function launchAndNavigate(client, screen, params, opts = {}) {
             error: 'Cannot determine platform. Open a device session first or pass platform explicitly.',
         };
     }
-    const bundleId = opts.bundleId ?? resolveBundleId(platform);
+    // CDP-011: bundleId precedence is now: explicit opt -> active session
+    // appId -> connected target description -> project default. The previous
+    // shape (`opts.bundleId ?? resolveBundleId(platform)`) ignored the active
+    // session entirely, so a session opened for a non-default app could be
+    // killed and replaced by the project's default app on startup replay.
+    const sessionAppId = session?.appId ?? null;
+    const targetAppId = client.connectedTarget?.description ?? null;
+    const bundleId = opts.bundleId
+        ?? sessionAppId
+        ?? targetAppId
+        ?? resolveBundleId(platform);
     if (!bundleId) {
         return {
             arrived: false, screen, current_screen: null, method: 'startup_replay_failed',

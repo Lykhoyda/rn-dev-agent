@@ -174,6 +174,24 @@ async function runNavReadyStep(client) {
         ...(ready ? {} : { error: `nav ref not ready within ${NAV_READY_TIMEOUT_MS}ms` }),
     };
 }
+/**
+ * CDP-003: heuristic "does this CDP target belong to this app?" check used to
+ * gate storage mutations. Looks for the bundle id (case-insensitive) in the
+ * target's description/title — Hermes target metadata typically embeds the
+ * bundle id verbatim. Conservative: returns false if there's no target or
+ * the haystack is empty, forcing the caller to skip rather than guess.
+ */
+export function cdpTargetMatchesApp(client, appId) {
+    if (!client.isConnected)
+        return false;
+    const target = client.connectedTarget;
+    if (!target)
+        return false;
+    const haystack = `${target.description ?? ''} ${target.title ?? ''}`.toLowerCase();
+    if (haystack.length === 0)
+        return false;
+    return haystack.includes(appId.toLowerCase());
+}
 function safeParseError(r) {
     try {
         const text = r.content[0]?.text;
@@ -218,6 +236,20 @@ export function createDeviceResetStateHandler(getClient) {
                         step: 'storage', target: key, action: 'delete', ok: false, durationMs: 0,
                         code: 'CDP_NOT_CONNECTED',
                         error: 'CDP not connected — storage keys skipped. Connect first to clear MMKV before terminate.',
+                    });
+                }
+            }
+            else if (!cdpTargetMatchesApp(client, args.appId)) {
+                // CDP-003: refuse to mutate MMKV when the connected target does not
+                // belong to args.appId — otherwise we silently delete keys from a
+                // sibling app in monorepos / multi-simulator workflows.
+                const target = client.connectedTarget;
+                const desc = target?.description ?? target?.title ?? target?.id ?? '?';
+                for (const key of storageKeys) {
+                    steps.push({
+                        step: 'storage', target: key, action: 'delete', ok: false, durationMs: 0,
+                        code: 'CDP_TARGET_APP_MISMATCH',
+                        error: `CDP target "${desc}" does not appear to belong to ${args.appId} — storage skipped to avoid wrong-app deletion. Reconnect to ${args.appId} (cdp_connect bundleId=...) first.`,
                     });
                 }
             }
