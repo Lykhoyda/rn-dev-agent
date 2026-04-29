@@ -1294,10 +1294,35 @@ export const INJECTED_HELPERS = `
 
       ref.navigate(screen, params || undefined);
       var afterFallback = ref.getRootState();
-      var found = false;
+
+      // CDP-009: previously the fallback used a recursive checkRoute that
+      // walked ALL routes including inactive tab branches and parent
+      // history. A target sitting in an inactive tab's stack would
+      // satisfy found=true and the helper would report success, but the
+      // requested screen was NOT the visible leaf. Now we verify the
+      // deepest ACTIVE route matches the target.
+      function getDeepestActive(s) {
+        if (!s) return null;
+        if (s.routes && typeof s.index === 'number' && s.routes[s.index]) {
+          var route = s.routes[s.index];
+          if (route.state) return getDeepestActive(route.state);
+          return route.name || null;
+        }
+        return s.name || null;
+      }
+      var deepestActive = getDeepestActive(afterFallback);
+      if (deepestActive === screen) {
+        return JSON.stringify({ navigated: true, screen: screen, method: 'fallback-navigate', deepest_active: deepestActive });
+      }
+
+      // Target may exist somewhere in the tree (inactive tab or parent of
+      // current) — we report this as a failure but with metadata so the
+      // caller can distinguish "not found at all" from "exists but not
+      // the active leaf".
+      var existsInTree = false;
       function checkRoute(rs) {
         if (!rs) return;
-        if (rs.name === screen) { found = true; return; }
+        if (rs.name === screen) { existsInTree = true; return; }
         if (rs.routes) {
           for (var ri = 0; ri < rs.routes.length; ri++) {
             checkRoute(rs.routes[ri]);
@@ -1306,10 +1331,15 @@ export const INJECTED_HELPERS = `
         }
       }
       checkRoute(afterFallback);
-      if (!found) {
-        return JSON.stringify({ __agent_error: 'Navigate failed: screen "' + screen + '" not found in any navigator after dispatch. Check screen name spelling and that it is registered in a navigator.' });
+      if (existsInTree) {
+        return JSON.stringify({
+          __agent_error: 'Navigate failed: screen "' + screen + '" exists in the navigation tree but is not the active leaf (currently: "' + deepestActive + '"). Likely covered by a stacked modal or parked in an inactive tab history.',
+          arrived: false,
+          deepest_active: deepestActive,
+          arrived_via: 'inactive-or-covered',
+        });
       }
-      return JSON.stringify({ navigated: true, screen: screen, method: 'fallback-navigate' });
+      return JSON.stringify({ __agent_error: 'Navigate failed: screen "' + screen + '" not found in any navigator after dispatch. Check screen name spelling and that it is registered in a navigator.' });
 
     } catch(e) {
       return JSON.stringify({ __agent_error: 'Navigation failed: ' + (e && e.message || String(e)) });
