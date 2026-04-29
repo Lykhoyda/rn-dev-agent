@@ -69,6 +69,38 @@ layers, then applying targeted fixes.
 
 ## Diagnostic Flow
 
+### Step 0a: Reusable Reproduction Scan (artifact-first)
+
+**Before reproducing the bug manually, check whether a Maestro flow already
+reproduces it.** A flow that fails the same way in CI is far better evidence
+than a manual walk-through, and gives you a deterministic re-run after the
+fix. Codified in `feedback_execute_artifacts_before_manual.md`.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+  --json --section b --filter "<feature-or-screen-keyword>" \
+  --workspace-root "$PWD" --memory-cwd "$PWD" \
+  > /tmp/learned-actions.json
+jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions.json
+```
+
+**Decide:**
+1. **Match found**: replay the flow first.
+   `maestro-runner --platform <ios|android> test [-e KEY=VAL …] <path>`.
+   - If it **fails** with the same symptom the user reported, you have a
+     deterministic reproduction. Capture the failure output, then proceed
+     to Step 1 with the failing screen as your starting state.
+   - If it **passes**, the bug is environment-dependent or below the flow's
+     coverage. Proceed to manual reproduction in Step 1, but check the
+     flow's preconditions (auth state, permissions, data seed) for clues.
+   - After fixing, **re-run the same flow** in Step 6 to confirm recovery.
+2. **No match**: proceed to Step 1 (manual reproduction). When the fix is
+   verified in Step 6, **persist a new flow** that reproduces the original
+   bug — this becomes a regression test for CI.
+
+Skip this step only if the symptom is purely environmental (Metro down, sim
+unbooted, native crash on launch) — those need Step 0 first.
+
 ### Step 0: Identify the App
 Before running any commands, determine the app's actual identifiers:
 - **Bundle ID**: from `app.json` (`expo.ios.bundleIdentifier`, `expo.android.package`), `app.config.js/ts`, or `android/app/build.gradle`

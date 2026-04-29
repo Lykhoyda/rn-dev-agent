@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code. **51 MCP tools**, **5 agents**, **13 commands**, **6 skills**.
+The React Native development plugin for Claude Code. **64 MCP tools**, **5 agents**, **16 commands**, **7 skills**.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -21,13 +21,27 @@ This skill is your front door. Before starting any RN work, use the decision tre
 ```
 What is the user asking for?
 │
+├── INVENTORY of reusable actions ("what's already automated for this?")
+│   └─► /rn-dev-agent:list-learned-actions [keyword]
+│       (Scans feedback memories + .maestro/flows + .ui-skeleton.yaml.
+│        ALWAYS run this BEFORE any device_* sequence — replay an
+│        existing flow instead of recomposing primitives manually.
+│        See feedback_execute_artifacts_before_manual.md.)
+│
+├── REPLAY a learned action (Maestro flow)
+│   └─► /rn-dev-agent:run-action <name> [-e KEY=VALUE …] [--platform ios|android]
+│       (Counterpart to list-learned-actions: list discovers, run executes.
+│        Pre-flights mutates flag, appId match, parameter coverage. Use to
+│        skip a 7-min manual walk when a 23-sec flow already exists.)
+│
 ├── BUILD a new feature / "add X to the app"
 │   └─► /rn-dev-agent:rn-feature-dev <description>
 │       (8-phase pipeline — see rn-feature-development skill)
 │
 ├── TEST an existing feature
 │   └─► /rn-dev-agent:test-feature <description>
-│       (Runs rn-tester protocol INLINE in parent session — MCP tools required)
+│       (Runs rn-tester protocol INLINE in parent session — MCP tools required.
+│        Step 0 is automatic artifact-first scan via list-learned-actions.)
 │
 ├── BUILD + TEST (app not yet installed)
 │   └─► /rn-dev-agent:build-and-test <description>
@@ -79,6 +93,7 @@ These apply to every RN task:
 4. **Do cross-platform checks** unless the user explicitly scoped to one platform
 5. **Filter `cdp_component_tree` queries** — never dump the full tree (10K+ tokens wasted)
 6. **Stop at the first red flag** from the agent's red flags list
+7. **Run `/rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a Maestro flow already covers the request, replay it via `maestro_run` first — manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
 
 ### Ask First
 - Adding new dependencies to the user's project
@@ -175,6 +190,7 @@ Things that repeatedly go wrong, cataloged for prevention:
 
 | Failure | Cause | Fix |
 |---------|-------|-----|
+| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `maestro_run` |
 | Feature ships with broken Android | Skipped `cross_platform_verify` | Always run it in Phase 5.5 unless explicitly scoped |
 | "Works on my machine" bug | Claimed done without Phase 5.5 evidence | Every row in the results table must have a concrete Evidence value |
 | Native crash missed entirely | Only checked `cdp_error_log`, not native logs | Use `collect_logs(sources=["js_console","native_ios"])` together |

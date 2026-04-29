@@ -14,8 +14,28 @@ Test this React Native feature: $ARGUMENTS
 > Execute the rn-tester protocol directly in this parent session using the
 > `rn-testing` and `rn-device-control` skills as your reference.
 
-Load the `rn-testing` skill and follow this 7-step protocol in this session:
+Load the `rn-testing` skill and follow this 8-step protocol in this session:
 
+0. **Artifact-first scan (MANDATORY before any device_* call).** Glob
+   `**/test-app/.maestro/flows/*.yaml` (and `.ui-skeleton.yaml`) within the
+   current project AND the sibling workspace at
+   `../rn-dev-agent-workspace/test-app/.maestro/flows/`. For each candidate,
+   read the file header / appId and decide if it matches the requested
+   feature by:
+   - filename keyword overlap with `$ARGUMENTS`
+   - first-comment-block intent overlap with `$ARGUMENTS`
+   If a match exists, **REPLAY IT FIRST** via:
+   ```bash
+   maestro-runner --platform <ios|android> test -e KEY=VAL <flow-path>
+   ```
+   If the replay passes, you have your evidence — proceed to step 7
+   (verification + generate-or-refresh artifact). If the replay fails with a
+   concrete error (`Element not found`, `assertion failed`), fix the flow
+   rather than abandoning to manual primitives. Falling back to `device_*`
+   walks WITHOUT having tried the existing flow is a captured anti-pattern
+   (see `feedback_execute_artifacts_before_manual.md` in auto-memory). Run
+   `/rn-dev-agent:list-learned-actions` if you want to inspect the
+   inventory.
 1. **Environment check** — call `cdp_status`. If it fails, stop and tell the
    user to run `/rn-dev-agent:setup`.
 2. **Understand the feature** — read implementation files, find testIDs, routes,
@@ -29,14 +49,32 @@ Load the `rn-testing` skill and follow this 7-step protocol in this session:
    - Verify UI (`cdp_component_tree(filter=...)`)
    - Verify data (`cdp_store_state(path=...)` + `cdp_network_log`)
 6. **Edge cases** — test empty state, error state, back navigation, rapid taps.
-7. **Generate persistent test** — write `flows/<feature-name>.yaml` for CI.
+7. **Generate or refresh persistent test (MANDATORY).** Always end the run by
+   ensuring a Maestro flow exists for the tested feature:
+   - If step 0 found and replayed an existing flow: re-validate it still
+     covers the new edge cases; if you discovered a gap, ADD steps to the
+     existing flow (don't fork a new file).
+   - If step 0 found NO matching flow: WRITE one at
+     `<test-app>/.maestro/flows/<feature-slug>.yaml`, parameterised via
+     `${VAR}` placeholders for any input strings. Reference testIDs
+     symbolically — if the test-app has a `.ui-skeleton.yaml`, add the
+     mapping there too. Make the flow self-bootstrapping
+     (`launchApp: { stopApp: false }` plus a conditional `runFlow … when:
+     visible: id: tab-X` to land on the starting screen).
+   - If step 0 found a flow that doesn't cleanly extend (different feature
+     overlap), still add a NEW flow. Two short flows beat one tangled flow.
 
 ## Verification (mandatory before declaring "tested")
 
+- [ ] Step 0 was performed: existing flows scanned, candidate replayed (or
+      explicit "no match" + plan to write one)
 - [ ] `cdp_status` returned `ok:true` with `cdp.connected: true`
 - [ ] Every assertion has concrete Evidence (not "looks fine")
 - [ ] At least one `device_screenshot` saved
-- [ ] `flows/<feature-name>.yaml` written
+- [ ] `<test-app>/.maestro/flows/<feature>.yaml` exists at end of run (either
+      pre-existed and was replayed, or was newly written this session)
+- [ ] If `<test-app>/.ui-skeleton.yaml` exists, any new testIDs the flow
+      references are added there
 - [ ] `cdp_error_log` shows 0 new errors at end of flow
 - [ ] Cross-platform check via `cross_platform_verify` (or single-platform noted)
 
