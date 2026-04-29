@@ -54,13 +54,16 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    - If step 0 found and replayed an existing flow: re-validate it still
      covers the new edge cases; if you discovered a gap, ADD steps to the
      existing flow (don't fork a new file).
-   - If step 0 found NO matching flow: WRITE one at
-     `<test-app>/.maestro/flows/<feature-slug>.yaml`, parameterised via
-     `${VAR}` placeholders for any input strings. Reference testIDs
-     symbolically — if the test-app has a `.ui-skeleton.yaml`, add the
-     mapping there too. Make the flow self-bootstrapping
-     (`launchApp: { stopApp: false }` plus a conditional `runFlow … when:
-     visible: id: tab-X` to land on the starting screen).
+   - If step 0 found NO matching flow: prefer **auto-emission** over hand-
+     authoring. Wrap the manual walk between `cdp_record_test_start` and
+     `cdp_record_test_stop`, then `cdp_record_test_save` to write
+     `<test-app>/.maestro/flows/<feature-slug>.yaml` with the metadata
+     header pre-populated (`id`, `intent`, `tags`, `mutates`, `status` —
+     see `skills/rn-testing/SKILL.md` "Reusable Action Metadata Schema").
+     Hand-edit the result to parameterise input strings via `${VAR}`
+     placeholders and add a `when: visible: id: tab-X` self-bootstrap if
+     the flow assumes a starting screen. If `<test-app>/.ui-skeleton.yaml`
+     exists, add any new testIDs the flow references there too.
    - If step 0 found a flow that doesn't cleanly extend (different feature
      overlap), still add a NEW flow. Two short flows beat one tangled flow.
 

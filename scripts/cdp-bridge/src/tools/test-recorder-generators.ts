@@ -28,6 +28,29 @@ export interface GenerateOpts {
   // comment after the header so replay users know the flow assumes the app is
   // already on <X>. When unset, flows assume the app's default landing route.
   startRoute?: string | null;
+  // Reusable Action Metadata (M7 / Phase 116). Emitted as `# key: value`
+  // comments so Maestro ignores them but `learned-actions.mjs` can parse them
+  // for the artifact-first inventory.
+  id?: string;
+  intent?: string;
+  tags?: string[];
+  mutates?: boolean;
+  status?: 'active' | 'deprecated' | 'experimental';
+}
+
+type MetaPair = [string, string];
+
+function metaPairs(opts: GenerateOpts): MetaPair[] {
+  const out: MetaPair[] = [];
+  if (opts.id) out.push(['id', stripNewlines(opts.id)]);
+  if (opts.intent) out.push(['intent', stripNewlines(opts.intent)]);
+  if (opts.tags && opts.tags.length) {
+    const cleaned = opts.tags.map((t) => stripNewlines(t)).filter(Boolean);
+    if (cleaned.length) out.push(['tags', `[${cleaned.join(', ')}]`]);
+  }
+  if (typeof opts.mutates === 'boolean') out.push(['mutates', String(opts.mutates)]);
+  if (opts.status) out.push(['status', stripNewlines(opts.status)]);
+  return out;
 }
 
 // B137: window (ms) after a tap in which a subsequent `navigate` event is
@@ -120,6 +143,9 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     lines.push('---');
   }
   lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
+  for (const [k, v] of metaPairs(opts)) {
+    lines.push(`# ${k}: ${v}`);
+  }
   if (opts.startRoute) {
     lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
     lines.push('# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).');
@@ -198,6 +224,9 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
   const lines: string[] = [];
   const name = stripNewlines(opts.testName ?? 'Recorded flow');
   lines.push(`describe(${JSON.stringify(name)}, () => {`);
+  for (const [k, v] of metaPairs(opts)) {
+    lines.push(`  // ${k}: ${v}`);
+  }
   if (opts.startRoute) {
     lines.push(`  // startRoute: ${stripNewlines(opts.startRoute)} — ensure app is on this route before running`);
   }

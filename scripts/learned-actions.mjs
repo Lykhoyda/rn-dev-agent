@@ -106,7 +106,8 @@ function scanFlows() {
       const text = fs.readFileSync(fp, 'utf8');
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId) continue;
-      if (!matchKw(meta.purpose, meta.appId, f, fp)) continue;
+      const tagsStr = (meta.tags || []).join(',');
+      if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp)) continue;
       const params = (text.match(/\$\{([A-Z_]+)\}/g) || []).map((s) => s.slice(2, -1));
       const uniqParams = Array.from(new Set(params));
       const replay = uniqParams.length
@@ -117,6 +118,11 @@ function scanFlows() {
         path: fp,
         appId: meta.appId,
         purpose: truncate(meta.purpose, 140),
+        id: meta.id,
+        intent: meta.intent,
+        tags: meta.tags,
+        mutates: meta.mutates,
+        status: meta.status,
         params: uniqParams,
         replay,
       });
@@ -147,23 +153,56 @@ function collectFlowRoots(start) {
 function parseFlowMeta(text) {
   // Maestro YAML has a top section before the `---` separator with appId etc.
   // Grab `appId:` and the first non-blank comment block as purpose.
+  // Reusable Action Metadata (M7): also surface `# id|intent|tags|mutates|status: ...`
+  // lines anywhere in the header so machine-readable filtering is possible
+  // without parsing the full YAML body.
   const appIdMatch = text.match(/^appId:\s*([^\s#]+)/m);
   const lines = text.split('\n');
   const purposeLines = [];
+  const meta = { id: null, intent: null, tags: null, mutates: null, status: null };
+  const META_KEYS = new Set(['id', 'intent', 'tags', 'mutates', 'status']);
   let inComment = false;
   for (const line of lines) {
     if (line.startsWith('#')) {
       inComment = true;
       const stripped = line.replace(/^#\s?/, '').trim();
-      if (stripped) purposeLines.push(stripped);
+      if (!stripped) continue;
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      if (kv && META_KEYS.has(kv[1])) {
+        const key = kv[1];
+        const raw = kv[2].trim();
+        if (key === 'tags') {
+          meta.tags = raw
+            .replace(/^\[|\]$/g, '')
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean);
+        } else if (key === 'mutates') {
+          meta.mutates = /^true$/i.test(raw);
+        } else {
+          meta[key] = raw;
+        }
+        continue;
+      }
+      purposeLines.push(stripped);
     } else if (inComment && line.trim() === '') {
       if (purposeLines.length) break; // first comment block
     } else if (inComment) {
       break;
     }
   }
-  const purpose = purposeLines.length ? purposeLines.join(' ') : '(no description comment)';
-  return { appId: appIdMatch ? appIdMatch[1] : null, purpose };
+  const fallbackPurpose = purposeLines.length ? purposeLines.join(' ') : '(no description comment)';
+  // Prefer explicit intent over the heuristic purpose extraction.
+  const purpose = meta.intent || fallbackPurpose;
+  return {
+    appId: appIdMatch ? appIdMatch[1] : null,
+    purpose,
+    id: meta.id,
+    intent: meta.intent,
+    tags: meta.tags,
+    mutates: meta.mutates,
+    status: meta.status,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,10 +355,13 @@ if (want('b')) {
       parts.push(`_Searched: ${flows.roots.map((r) => '`' + r + '`').join(', ')}_`);
     }
   } else {
-    parts.push('| Flow | Purpose | App ID | Replay |');
-    parts.push('|---|---|---|---|');
+    parts.push('| Flow | Purpose | App ID | Mutates | Status | Tags | Replay |');
+    parts.push('|---|---|---|---|---|---|---|');
     for (const f of flows.items) {
-      parts.push(`| \`${f.flow}\` | ${esc(f.purpose)} | \`${f.appId || '?'}\` | \`${f.replay}\` |`);
+      const mut = f.mutates === null || f.mutates === undefined ? '?' : (f.mutates ? 'yes' : 'no');
+      const status = f.status || '?';
+      const tags = (f.tags && f.tags.length) ? f.tags.join(', ') : '?';
+      parts.push(`| \`${f.flow}\` | ${esc(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${esc(tags)} | \`${f.replay}\` |`);
     }
   }
   parts.push('');

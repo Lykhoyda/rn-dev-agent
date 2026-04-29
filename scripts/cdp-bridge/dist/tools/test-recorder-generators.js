@@ -17,6 +17,23 @@ function maestroScalar(value) {
     const safe = stripNewlines(value);
     return yamlStringify(safe).replace(/\n+$/, '');
 }
+function metaPairs(opts) {
+    const out = [];
+    if (opts.id)
+        out.push(['id', stripNewlines(opts.id)]);
+    if (opts.intent)
+        out.push(['intent', stripNewlines(opts.intent)]);
+    if (opts.tags && opts.tags.length) {
+        const cleaned = opts.tags.map((t) => stripNewlines(t)).filter(Boolean);
+        if (cleaned.length)
+            out.push(['tags', `[${cleaned.join(', ')}]`]);
+    }
+    if (typeof opts.mutates === 'boolean')
+        out.push(['mutates', String(opts.mutates)]);
+    if (opts.status)
+        out.push(['status', stripNewlines(opts.status)]);
+    return out;
+}
 // B137: window (ms) after a tap in which a subsequent `navigate` event is
 // considered to be caused by the tap. 1000ms handles human-pace UI transitions
 // plus async navigator resolution without false-positives spanning unrelated
@@ -100,6 +117,9 @@ export function generateMaestro(events, opts = {}) {
         lines.push('---');
     }
     lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
+    for (const [k, v] of metaPairs(opts)) {
+        lines.push(`# ${k}: ${v}`);
+    }
     if (opts.startRoute) {
         lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
         lines.push('# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).');
@@ -183,6 +203,9 @@ export function generateDetox(events, opts = {}) {
     const lines = [];
     const name = stripNewlines(opts.testName ?? 'Recorded flow');
     lines.push(`describe(${JSON.stringify(name)}, () => {`);
+    for (const [k, v] of metaPairs(opts)) {
+        lines.push(`  // ${k}: ${v}`);
+    }
     if (opts.startRoute) {
         lines.push(`  // startRoute: ${stripNewlines(opts.startRoute)} — ensure app is on this route before running`);
     }
