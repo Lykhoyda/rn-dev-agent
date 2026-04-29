@@ -102,7 +102,7 @@ Maestro flows + `maestro-runner` (Go, 3× faster than JVM Maestro). Every verifi
 </div>
 </div>
 
-**64 MCP tools total.** All exposed to Claude through the Model Context Protocol.
+**67 MCP tools total.** All exposed to Claude through the Model Context Protocol.
 
 ---
 
@@ -248,7 +248,7 @@ Knowledge dies in the chat log.
 
 **With plugin**
 
-`maestro_generate` writes the verified flow to `<test-app>/.maestro/flows/wizard-create-task.yaml` — parameterised, replayable, committed to git.
+`maestro_generate` writes the verified flow to `<test-app>/.maestro/flows/wizard-create-task.yaml` — parameterised, replayable, committed to git. Carries an **M7 metadata header** (`id`, `intent`, `tags`, `mutates`, `status`) so future sessions can find and replay it safely.
 
 ```bash
 maestro-runner test \
@@ -257,7 +257,7 @@ maestro-runner test \
 # 16/16 commands, 19s, status=passed
 ```
 
-CI runs this on every PR. Claude reuses it next session.
+CI runs this on every PR. Claude reuses it next session via `/run-action`.
 
 </div>
 </div>
@@ -295,6 +295,46 @@ The agent gathers evidence from **every layer** before guessing — instead of g
 
 </div>
 </div>
+
+---
+
+## Discovery off camera. Replay on camera.
+
+The dev video used to show 5 minutes of LLM fumbling:
+
+> *"Let me check `cdp_component_tree`… wait, the FAB testID is different on this screen… let me try again…"*
+
+The plugin's Phase 8 forbids that. **Recording captures a known-good replay, never the search for it.**
+
+1. Rehearse the flow once with `device_*` / `cdp_*` — no video
+2. Persist as Maestro YAML with M7 metadata (`id`, `intent`, `tags`, `mutates`, `status`)
+3. Smoke-test via `maestro-runner` — must replay clean (max 3 retry budget)
+4. **Now** start recording
+5. Replay via `maestro-runner` — deterministic, hesitation-free, native speed
+
+Result: 23s of feature, not 5min of fumbling. The PR reviewer sees the work, not the workings.
+
+---
+
+## Reusable actions, cross-session
+
+Once a flow is persisted with metadata, the next session doesn't rediscover — it **replays**.
+
+```
+/rn-dev-agent:list-learned-actions
+# A. Memories (feedback heuristics)
+# B. Reusable Maestro flows (id, intent, tags, mutates, status)
+# C. UI skeletons (semantic testID maps)
+# D. Plugin commands available
+
+/rn-dev-agent:run-action wizard-create-task \
+  -e TITLE="Buy milk" -e PRIORITY=high
+# Pre-flight: mutates=true → confirm safe
+# Pre-flight: appId match ✓ — TITLE, PRIORITY supplied ✓
+# Replay: 4.2s
+```
+
+Tomorrow's bug report becomes a 4-second replay instead of a 7-minute walk.
 
 ---
 
@@ -338,7 +378,8 @@ The plugin ships as a workflow stack:
 | `/rn-dev-agent:test-feature` | Artifact-first: scan existing flows → replay → only fall back to manual |
 | `/rn-dev-agent:debug-screen` | Parallel evidence gather → root cause → fix → verify recovery |
 | `/rn-dev-agent:list-learned-actions` | Inventory of memories + flows + skeletons available in this project |
-| `/rn-dev-agent:proof-capture` | Video + screenshots + PR body for the feature |
+| `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage) |
+| `/rn-dev-agent:proof-capture` | Video + screenshots + PR body — rehearsal-gated so the recording shows replay, not discovery |
 
 Each command is a **forcing function** for discipline AI agents otherwise skip.
 
@@ -359,8 +400,8 @@ You stay in the IDE. The simulator and Claude talk to each other.
 <div class="col2">
 <div>
 
-<span class="stat">64</span> MCP tools
-<span class="stat">988</span> unit tests in cdp-bridge
+<span class="stat">67</span> MCP tools
+<span class="stat">994</span> unit tests in cdp-bridge
 <span class="stat">216 ms</span> tap latency (iOS, fast-runner)
 <span class="stat">5 ms</span> snapshot latency
 
@@ -369,8 +410,8 @@ You stay in the IDE. The simulator and Claude talk to each other.
 
 <span class="stat">23 s</span> end-to-end Maestro replay
 <span class="stat">3×</span> faster than JVM Maestro
-<span class="stat">v0.44.3</span> current plugin
-<span class="stat">v0.38.3</span> current MCP server
+<span class="stat">v0.44.5</span> current plugin
+<span class="stat">v0.38.5</span> current MCP server
 
 </div>
 </div>
@@ -381,10 +422,12 @@ Free, MIT-licensed, runs entirely on your machine — no cloud, no telemetry.
 
 ## What's next
 
+- **M7 wiring through MCP**: the metadata fields (`id`, `intent`, `tags`, `mutates`, `status`) are plumbed through the YAML generator but the MCP tool schema doesn't yet forward them — agents currently prepend the header by hand. Wiring it through drops one manual step from the rehearsal pass.
+- **`maestro_run` env-var pass-through**: today the MCP tool replays env-free flows; `${VAR}` substitution requires the `maestro-runner` Bash CLI. Closing this gap removes the dual-path documentation.
 - **Phase 90 — metro-mcp adoption**: switch from polling to Metro's WebSocket event stream (sub-100ms reactivity to bundle / build / log events).
 - **Cross-platform parity**: every test gates on `cross_platform_verify`. iOS-only tests are explicitly flagged.
 - **Experience Engine**: the plugin learns heuristics from your sessions (recovery patterns, common testID conventions, your team's flow naming) and shares them across projects.
-- **Open backlog** at github.com/Lykhoyda/rn-dev-agent/issues — 30 stories shipped via Ralph Loop, 3 stability sprints, 1 epic in flight.
+- **Open backlog** at github.com/Lykhoyda/rn-dev-agent/issues — 35 stories shipped via Ralph Loop, 3 stability sprints, M6 + M7 reusable-actions epic complete.
 
 ---
 
