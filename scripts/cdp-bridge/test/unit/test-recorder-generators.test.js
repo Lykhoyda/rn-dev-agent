@@ -135,3 +135,65 @@ test('M6 Detox: submit fallback is a manual-replay comment, not pressBack()', ()
   assert.doesNotMatch(out, /device\.pressBack/);
   assert.match(out, /\/\/ submit: missing testID\/label/);
 });
+
+// M7 / Phase 116: Reusable Action Metadata header emission.
+test('M7 Maestro: metadata header emits id/intent/tags/mutates/status', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], {
+    testName: 'wizard create',
+    id: 'wizard-create-task',
+    intent: 'Create a task via the FAB',
+    tags: ['tasks', 'wizard'],
+    mutates: true,
+    status: 'active',
+  });
+  assert.match(out, /# id: wizard-create-task/);
+  assert.match(out, /# intent: Create a task via the FAB/);
+  assert.match(out, /# tags: \[tasks, wizard\]/);
+  assert.match(out, /# mutates: true/);
+  assert.match(out, /# status: active/);
+});
+
+test('M7 Maestro: omitted metadata fields are not emitted', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], {
+    intent: 'just intent',
+  });
+  assert.match(out, /# intent: just intent/);
+  assert.doesNotMatch(out, /# id:/);
+  assert.doesNotMatch(out, /# tags:/);
+  assert.doesNotMatch(out, /# mutates:/);
+  assert.doesNotMatch(out, /# status:/);
+});
+
+test('M7 Maestro: mutates=false still emits the line', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], { mutates: false });
+  assert.match(out, /# mutates: false/);
+});
+
+test('M7 Maestro: metadata strings are newline-stripped', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], {
+    id: 'evil\nappId: com.bad',
+    intent: 'first\nrm -rf',
+  });
+  assert.match(out, /# id: evil appId: com\.bad/);
+  assert.match(out, /# intent: first rm -rf/);
+});
+
+test('M7 Detox: metadata header emits as // comments inside describe block', () => {
+  const out = generateDetox([{ type: 'tap', testID: 'x', t: 1 }], {
+    id: 'wizard-create-task',
+    intent: 'Create a task',
+    tags: ['tasks'],
+    mutates: true,
+    status: 'active',
+  });
+  assert.match(out, /\/\/ id: wizard-create-task/);
+  assert.match(out, /\/\/ intent: Create a task/);
+  assert.match(out, /\/\/ tags: \[tasks\]/);
+  assert.match(out, /\/\/ mutates: true/);
+  assert.match(out, /\/\/ status: active/);
+});
+
+test('M7 Maestro: empty tags array is treated as omitted', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], { tags: [] });
+  assert.doesNotMatch(out, /# tags:/);
+});

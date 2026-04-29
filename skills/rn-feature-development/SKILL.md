@@ -429,6 +429,66 @@ mkdir -p docs/proof/<feature-slug>
 
 Use the feature slug from Phase 1 (e.g., `s4-notification-snooze`, `profile-edit-modal`).
 
+### Step 1.4: Rehearsal pass — discovery happens OFF camera (MANDATORY)
+
+**Rule.** The video must capture a known-good replay of the feature, NOT
+the LLM figuring out how to navigate. Recording during discovery produces
+multi-minute videos full of dead-ends, wrong screens, and "let me check the
+testID" pauses — nobody wants that in a PR. Discovery is cheap; re-recording
+is expensive.
+
+**Protocol — perform every step BEFORE pressing record:**
+
+1. **Dry-run the architect's E2E Proof Flow once with NO video.** Use
+   `device_*` / `cdp_*` calls to walk every row of the blueprint table from
+   start to end. Verify each interaction lands and each assertion holds.
+2. **Fix discovered drift.** The blueprint is the contract, but the live app
+   is reality — wrong testID, renamed route, store-path typo, late-mounted
+   component. Reconcile both. Update the blueprint table if the rehearsal
+   reveals a missing step.
+3. **Persist the verified sequence as a Maestro flow.** Once the rehearsal
+   completes clean end-to-end, write the flow to
+   `<test-app>/.maestro/flows/<feature-slug>.yaml`. Two authoring paths:
+   - `maestro_generate(name="<feature-slug>", steps=[...], appId="...")` —
+     structured-step authoring; the MCP tool writes the YAML but does NOT
+     emit the M7 metadata header.
+   - `cdp_record_test_generate(format="maestro")` — converts the recorder
+     buffer (started via `cdp_record_test_start` during rehearsal) into
+     YAML text returned in the response; the MCP tool schema does not
+     forward the M7 fields, so the header is not auto-populated.
+   In both cases, the agent MUST then read the file (or capture the
+   returned text) and PREPEND the 5-key M7 metadata header by hand
+   (`id`, `intent`, `tags`, `mutates`, `status`) — see
+   `skills/rn-testing/SKILL.md` § "Reusable Action Metadata Schema".
+4. **Smoke-test the flow.** Replay it once before recording. For flows
+   with `${VAR}` placeholders, use the Bash CLI (which supports `-e`
+   substitution):
+   ```bash
+   maestro-runner --platform <ios|android> test \
+     <test-app>/.maestro/flows/<feature-slug>.yaml \
+     -e KEY=VALUE
+   ```
+   For env-free flows, the MCP tool also works:
+   `maestro_run(flowPath="<test-app>/.maestro/flows/<feature-slug>.yaml")`.
+   The replay must pass end-to-end without a single failure.
+5. **Retry budget: max 3 fix-and-replay loops.** If the rehearsal still
+   fails after 3 attempts, escalate to the user with (a) the failing
+   step, (b) the failing assertion, and (c) snapshots from
+   `cdp_navigation_state` and `cdp_store_state`. Do NOT loop indefinitely.
+
+**Maestro-inexpressible carve-out.** If the flow genuinely cannot be
+expressed in Maestro (custom gestures, native-module side-effects,
+Reanimated proof captures via `cdp_set_shared_value`, JS-introspection
+mid-flow), the rehearsal walk itself via `device_*` / `cdp_*` becomes the
+artifact. Document the specific Maestro primitive that is missing in
+PROOF.md "Deviations" — naming the inexpressibility is mandatory; without
+it you must keep trying to express the flow.
+
+**Hard gate.** Do not proceed to Step 1.5 until either step 4 passes
+cleanly OR the inexpressibility carve-out has been written into PROOF.md.
+If you catch yourself thinking "I'll just record while I work out the
+last step," stop — that's the failure mode this gate exists to prevent.
+
 ### Step 1.5: Pre-recording setup and start video
 
 **Pre-recording readiness (GH #8, #9):**
@@ -453,35 +513,55 @@ rn-record-proof start $PLATFORM docs/proof/<feature-slug>/flow-$PLATFORM.mp4
 If recording fails to start (no simulator, permissions), log a warning and
 continue — video is a nice-to-have, not a gate. Screenshots remain primary.
 
-### Step 2: Execute the E2E Proof Flow from the blueprint
+### Step 2: Replay the rehearsed flow ON CAMERA
 
-Read the **E2E Proof Flow** table from the Phase 4 blueprint. For each row
-in the table, execute in order:
+**Preferred path: replay the Maestro flow generated in Step 1.4.** With
+recording running, invoke the rehearsed flow.
 
-1. **Perform the action** exactly as specified:
-   - Navigation: use `cdp_evaluate` with the expression from the table
-   - Interaction: use `device_find(text="<text>", action="click")`,
-     `device_press(ref="@<ref>")`, or `device_fill(ref="@<ref>", text="<input>")`
-   - Wait 1-2 seconds for state to settle (or use `device_snapshot` to confirm)
+For flows with `${VAR}` placeholders (need env substitution):
+```bash
+maestro-runner --platform <ios|android> test \
+  <test-app>/.maestro/flows/<feature-slug>.yaml \
+  -e KEY=VALUE
+```
 
-2. **Capture the screenshot** using the exact filename from the table:
-   ```
-   device_screenshot(path="docs/proof/<feature-slug>/<filename>")
-   ```
+For env-free flows, use the MCP tool:
+- `maestro_run(flowPath="<test-app>/.maestro/flows/<feature-slug>.yaml")`
 
-3. **Verify the expected state** as specified in the table:
-   - If the table specifies a store assertion: call `cdp_store_state` and
-     verify the value matches
-   - If the table specifies a navigation assertion: call `cdp_navigation_state`
-   - If the table specifies a visual assertion: verify via the screenshot
-   - Record the actual value for the PROOF.md
+(The MCP `maestro_run` tool schema accepts `flowPath`, `inlineYaml`,
+`platform`, `appId`, `timeoutMs` — there is no `-e` env-var pass-through.
+For substitution you need the `maestro-runner` CLI via Bash.)
 
-4. **If a step fails**: fix the issue and retry that step. Do NOT skip steps
-   or proceed with a failing assertion. Maximum 2 retries per step before
-   escalating to the user.
+Either path produces a deterministic, hesitation-free recording. The LLM
+is NOT in the loop during the actual replay — Maestro drives the device
+at native speed. While the flow runs, take numbered screenshots at meaningful state
+changes via `device_screenshot(path="docs/proof/<feature-slug>/<NN-stepname>.jpg")`.
 
-Execute ALL rows in the table. Do not stop early or skip "optional" steps —
-the architect included them for a reason.
+**Flow assertion failure during recording = stop and re-rehearse.** A
+failure here means the flow drifted between rehearsal and recording (timing,
+state, leftover residue from a `mutates: true` flow). Stop the recording,
+rebase to a clean app state, redo Step 1.4. Do not "fix it on camera."
+
+**Fallback: only when Maestro cannot express the flow** — custom gestures,
+native-module side-effects, Reanimated proof captures via
+`cdp_set_shared_value`, or anything that needs JS-level introspection
+mid-flow. In that case, execute the rehearsed sequence step-by-step using
+the same `device_*` / `cdp_*` calls you ran in Step 1.4. Every action must
+be one you already executed cleanly during rehearsal — do NOT debug,
+explore, or improvise on camera.
+
+For each meaningful state change (whether driven by Maestro or by the
+fallback path), capture:
+
+1. **Screenshot** with the exact filename from the blueprint table:
+   `device_screenshot(path="docs/proof/<feature-slug>/<filename>")`
+2. **State assertion** matching what the table specified:
+   - Store assertion → `cdp_store_state` value matches
+   - Navigation assertion → `cdp_navigation_state`
+   - Visual assertion → verified via the screenshot
+3. **Record the actual value** for PROOF.md — the rehearsal already proved
+   this works, so deviations here are recording-environment bugs, not
+   feature bugs.
 
 ### Step 2.5: Stop recording and convert
 
@@ -626,6 +706,7 @@ Each phase has shortcuts agents reach for. Don't.
 | "I tested iOS — Android works the same" | Wrong ~40% of the time. Keyboard, permissions, back button, text input, safe-area all differ. `cross_platform_verify` is mandatory unless explicitly single-platform. |
 | "Phase 6 found 1 issue — ship it" | Review agents already filter by confidence. If ONE flags an issue, read it fully. |
 | "Phase 8 (E2E Proof) is just for PR theater" | Proof flows become the permanent Maestro test file. Skip them and you pay in manual testing every sprint. |
+| "I'll record while I figure out the flow — saves a pass" | The video then shows you stuck on a wrong testID for 90 seconds. Rehearsal (Step 1.4) is the cheap pass; re-recording is the expensive one. Discovery happens off camera, replay happens on camera. |
 
 ## Red Flags — Stop and Reconsider
 
@@ -635,15 +716,20 @@ Each phase has shortcuts agents reach for. Don't.
 - About to skip a phase "because the feature is small"
 - About to add a dependency without asking the user first
 - Editing files outside the architect's blueprint "while I'm here"
+- About to call `rn-record-proof start` before the Step 1.4 rehearsal flow has replayed clean (via `maestro-runner` CLI or `maestro_run`)
+- About to use `device_*` exploratory calls during recording to "find the right testID"
+- About to take the `device_*` / `cdp_*` fallback path in Phase 8 Step 2 without naming the specific Maestro primitive that cannot express the step in PROOF.md "Deviations"
+- About to enter a fourth rehearsal-fix loop in Step 1.4 without escalating to the user
 
 ## Boundaries
 
 ### Always
 - Call `cdp_status` before Phase 5.5 starts
-- Run the architect's proof flow step-by-step in Phase 8
+- Replay the architect's proof flow on camera in Phase 8 — Maestro-driven (`maestro-runner` CLI for env-substituted flows or `maestro_run` MCP tool for env-free flows) when expressible, step-by-step `device_*` / `cdp_*` only when Maestro genuinely cannot capture it AND the inexpressibility is documented in PROOF.md Deviations
 - Use MCP tools (cdp_*, device_*) for app state reads
 - Present the Phase 5.5 verification table with concrete Evidence
 - Gate Phase 5 on user approval of the architecture
+- Run the Phase 8 Step 1.4 rehearsal pass and confirm `maestro_run` replays the generated flow cleanly BEFORE starting any video recording
 
 ### Ask First
 - Adding any new dependency to the user's project
@@ -661,6 +747,7 @@ Each phase has shortcuts agents reach for. Don't.
 - Add `console.log` calls and leave them in committed code
 - Proceed past Phase 4 without user approval on architecture
 - Commit with `cdp_error_log` showing new errors
+- Start `rn-record-proof start` while still discovering testIDs, navigation paths, or state shapes — recording is for verified replay, not exploration
 
 ## Verification — Feature Complete When
 
