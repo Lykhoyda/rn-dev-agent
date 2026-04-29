@@ -96,6 +96,38 @@ export function withConnection<T>(
         while (!client.helpersInjected && Date.now() < helperDeadline) {
           await new Promise(r => setTimeout(r, 300));
         }
+        // D1202: Active 1-shot re-inject. The initial inject during connect
+        // setup can race with bundle re-load on app relaunch (Hermes recreates
+        // the runtime mid-injection, dropping __RN_AGENT). Without an active
+        // retry the loop above just spins because nothing triggers a fresh
+        // injection — sessions get stuck on HELPERS_NOT_INJECTED until the
+        // caller switches tools or calls cdp_reload. One bounded reinject
+        // covers the race; falls through to picker logic on failure.
+        //
+        // Latency budget: the 3s arg here only bounds waitForReact's slice.
+        // The subsequent evaluate(INJECTED_HELPERS) + verify each carry their
+        // own per-method CDP timeouts, so worst-case wall time on a hung JS
+        // world is ~6-7s, not 3s. That's still well under the user-visible
+        // 30s picker fallback.
+        //
+        // Concurrency: two simultaneous withConnection callers can both reach
+        // this branch and both fire reinjectHelpers. The injected bundle is
+        // idempotent (reassigns globalThis.__RN_AGENT), so this is wasted
+        // work but not a correctness bug. Coalescing is logged as a future
+        // optimisation in workspace BUGS.md.
+        if (!client.helpersInjected && client.isConnected) {
+          try {
+            const reinjected = await client.reinjectHelpers(3_000);
+            // reinjectHelpersFn already verified __RN_AGENT === "object" before
+            // returning true, so we can pre-seed the freshness cache and skip
+            // the redundant proactive probe at line ~135.
+            if (reinjected) rememberFreshness(client);
+          } catch (err) {
+            console.error(
+              `CDP: active re-inject during freshness wait failed: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+        }
         // D503: If helpers still not ready, Dev Client picker may be blocking React
         if (!client.helpersInjected) {
           const pickerResult = await handleDevClientPicker();
@@ -107,7 +139,10 @@ export function withConnection<T>(
             }
           }
           if (!client.helpersInjected) {
-            return failResult('Connected but helpers not injected. App may still be loading — retry in a few seconds.', 'HELPERS_NOT_INJECTED');
+            return failResult(
+              'Connected but helpers still not injected after passive wait, active re-inject, and Dev Client picker dismissal. The JS world may be hung. Fall back to device_* tools (XCTest path — no helpers required) or call cdp_reload to restart the bundle.',
+              'HELPERS_NOT_INJECTED',
+            );
           }
         }
       }

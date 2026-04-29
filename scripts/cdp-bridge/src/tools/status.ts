@@ -83,6 +83,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       bridgeDetected: client.bridgeDetected,
       bridgeVersion: client.bridgeVersion,
       supportsMultipleDebuggers: supportsNativeMultiDebugger(appInfo?.rnVersion),
+      helpersInjected: client.helpersInjected,
     },
     domains: {
       runtime: client.isConnected,

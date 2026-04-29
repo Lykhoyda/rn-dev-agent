@@ -150,6 +150,7 @@ Agents skip this skill at the start of conversations. Don't.
 | "The user said 'fix the bug' — I'll just edit the file directly" | Route to `/rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
 | "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
+| "I got `HELPERS_NOT_INJECTED` — let me retry `cdp_status`" | Retrying `cdp_status` does NOT re-run helper injection if the bridge thinks it's connected; it just returns status. The plugin auto-retries injection internally on every gated call (see "Recovering from HELPERS_NOT_INJECTED" below). If the auto-retry exhausted, switch to `device_*` tools (XCTest path — no helpers required) or call `cdp_reload`. Don't spin on `cdp_status`. |
 
 ---
 
@@ -180,6 +181,27 @@ Things that repeatedly go wrong, cataloged for prevention:
 | Wasted 10K tokens on component tree | Called `cdp_component_tree()` without filter | Always filter by testID or component name |
 | Tests silently broken after refactor | No Maestro flow exists | `/rn-dev-agent:proof-capture` generates one; use it |
 | CDP session lost mid-task | Another debugger (DevTools, Flipper) connected | Close all other debuggers before starting |
+| Stuck on `HELPERS_NOT_INJECTED` for minutes | Retrying `cdp_status` instead of letting the auto-retry surface a final answer, or instead of falling back to device tools | The bridge auto-retries injection once before failing. When the error finally returns, it's authoritative — switch to `device_*` tools or call `cdp_reload`. Never sit in a `cdp_status` retry loop. |
+
+---
+
+## Recovering from HELPERS_NOT_INJECTED
+
+When a `cdp_*` tool returns `code: HELPERS_NOT_INJECTED`, the bridge has already done all of this for you:
+
+1. Waited up to 5s for the connect-time injection to flip the flag
+2. Actively re-injected `__RN_AGENT` once with a 3s React-ready timeout
+3. Attempted a Dev Client picker dismissal (in case a native overlay was blocking React)
+4. Waited up to another 30s if the picker was dismissed
+
+So when you see this error, **the JS world is genuinely hung** — Hermes is up but `__RN_AGENT` won't land. Two recovery paths, in order:
+
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | Switch the immediate task to `device_*` tools (`device_press`, `device_fill`, `device_snapshot`, `device_screenshot`) | These run through XCTest / adb and don't depend on injected JS at all. The user's task usually doesn't need React fiber introspection — it just needs to interact with the visible UI. |
+| 2 | If you specifically need React state (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`), call `cdp_reload` once | Forces a clean bundle reload + reconnect, which re-runs the full injection handshake. Note: any open modals, in-progress forms, or unsaved screen state are wiped — confirm with the user before reloading if their work is at risk. |
+
+**Anti-pattern**: retrying `cdp_status` in a loop. The connection is up; status calls don't re-trigger injection in this state. They just return immediately and let you spin. The error code is your signal to change strategy, not to wait longer.
 
 ---
 

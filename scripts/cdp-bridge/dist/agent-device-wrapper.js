@@ -212,6 +212,14 @@ export function clearActiveSession() {
 }
 // Exported for tests + diagnostics.
 export function getSessionFilePathForTest() { return SESSION_FILE; }
+// Test-only: reset the in-memory session pointer without touching the on-disk
+// file. Tests that exercise paths gated on hasActiveSession() (e.g. the
+// HELPERS_NOT_INJECTED → handleDevClientPicker fallback) need this so they
+// don't trip over a real session left behind by the developer's live MCP run.
+// clearActiveSession() unlinks the file too, which would break that live run.
+export function resetActiveSessionInMemoryForTest() {
+    activeSession = null;
+}
 export function hasActiveSession() {
     return activeSession !== null;
 }

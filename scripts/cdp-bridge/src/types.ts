@@ -115,6 +115,14 @@ export interface StatusResult {
     bridgeVersion: number | null;
     /** M1 (D654): true when RN >= 0.85 supports native multi-debugger (DevTools + MCP can coexist without proxy). */
     supportsMultipleDebuggers: boolean;
+    /**
+     * D1202: explicit __RN_AGENT helpers status. true when the helper bundle
+     * is loaded into Hermes; false during the post-launch race window or when
+     * the JS world is hung. /doctor and `cdp_status` callers should treat
+     * false as "JS-tier tools (cdp_*) won't work — fall back to device_* or
+     * cdp_reload."
+     */
+    helpersInjected: boolean;
   };
   domains: {
     runtime: boolean;

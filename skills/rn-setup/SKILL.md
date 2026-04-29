@@ -101,6 +101,14 @@ Should return `packager-status:running`. If not: suggest `npx expo start` or `np
 Call `cdp_status` MCP tool. Should return `ok: true` with `cdp.connected: true`.
 If it fails: check Metro is running, app is loaded on simulator, no other debugger connected.
 
+### 8b. Injected helpers (`__RN_AGENT`)
+From the same `cdp_status` response, check `capabilities.helpersInjected`. Should be `true` once `cdp.connected: true`.
+
+If `helpersInjected: false`:
+- The bridge's auto-reinject already ran 1-shot during the call. If it's still false, the JS world is hung — Hermes is up but `__RN_AGENT` won't land.
+- Surface this in the table as MISSING with action: "JS-tier tools (`cdp_interact`, `cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`) will fail with HELPERS_NOT_INJECTED. Fall back to `device_*` tools (XCTest path — no helpers required) for UI work, or call `cdp_reload` once to rebuild the JS context. If you also see `app.hasRedBox: true` or `app.errorCount > 0`, fix those first — `cdp_reload` won't help if the bundle itself errors out."
+- Also mention: don't sit in a `cdp_status` retry loop expecting it to flip — the bridge already retried and gave you the authoritative answer.
+
 ### 9. ffmpeg (optional — for video recording)
 ```bash
 command -v ffmpeg && ffmpeg -version 2>&1 | head -1
@@ -141,6 +149,7 @@ Present results as a table:
 | Android Emulator | NOT RUNNING | Boot an emulator |
 | Metro | RUNNING (port 8081) | — |
 | CDP connection | CONNECTED | — |
+| Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 
@@ -183,6 +192,6 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `curl -s http://127.0.0.1:8081/status` returns `packager-status:running`
-- [ ] `cdp_status` returns `ok:true` with `cdp.connected: true`
+- [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` AND `capabilities.helpersInjected: true`
 - [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
 - [ ] Present the 10-row results table to the user — no hidden failures
