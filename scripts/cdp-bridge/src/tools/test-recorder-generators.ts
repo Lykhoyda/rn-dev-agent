@@ -4,7 +4,22 @@
 // the handler layer with NOT_IMPLEMENTED). Both generators consume the same
 // RecordedEvent[] shape and emit replayable test code.
 
+import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
+
+/**
+ * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
+ * Quoting / escaping rules are delegated to the `yaml` package, which picks
+ * the safest form (plain, single-quote, double-quote, block) automatically
+ * and emits one line per scalar. Without this, recorded labels containing
+ * `"`, `:`, `#`, `\n`, or leading `-` corrupted the generated flow file.
+ */
+function maestroScalar(value: string): string {
+  // yamlStringify always appends a trailing newline; strip it so we can
+  // place the scalar inline after `id: ` / `text: `.
+  const safe = stripNewlines(value);
+  return yamlStringify(safe).replace(/\n+$/, '');
+}
 
 export interface GenerateOpts {
   testName?: string;
@@ -61,8 +76,13 @@ function stripNewlines(s: string | null | undefined): string {
 export function maestroSelector(ev: RecordedEvent): string | null {
   const tid = (ev as { testID?: string | null }).testID;
   const lbl = (ev as { label?: string | null }).label;
-  if (tid) return `id: "${tid}"`;
-  if (lbl) return `id: "${lbl}"`;
+  // CDP-013: route user-controlled values through maestroScalar() so
+  // quotes / colons / newlines / leading hyphens cannot escape the YAML
+  // scalar position. Label-only events emit `text:` (Maestro's correct
+  // selector for visible-text matching) instead of the previously-misused
+  // `id:` form, which would not match label-only Maestro selectors at all.
+  if (tid) return `id: ${maestroScalar(tid)}`;
+  if (lbl) return `text: ${maestroScalar(lbl)}`;
   return null;
 }
 

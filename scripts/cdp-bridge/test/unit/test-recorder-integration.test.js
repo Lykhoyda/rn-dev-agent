@@ -133,10 +133,11 @@ test('M6 generate: maestro round-trip produces expected YAML', async () => {
   assert.match(data.text, /appId: com\.x\.app/);
   assert.match(data.text, /# Login flow/);
   assert.match(data.text, /- launchApp/);
-  assert.match(data.text, /- tapOn:\s+id: "login-btn"/);
+  // CDP-013: yaml-serialized scalars (plain for simple identifiers).
+  assert.match(data.text, /- tapOn:\s+id:\s+["']?login-btn["']?/);
   assert.match(data.text, /- inputText: "a@b\.c"/);
   assert.match(data.text, /- pressKey: Enter/);
-  assert.match(data.text, /- assertVisible:\s+id: "home-greeting"/);
+  assert.match(data.text, /- assertVisible:\s+id:\s+["']?home-greeting["']?/);
   _resetState();
 });
 

@@ -11,14 +11,15 @@ import {
 
 test('M6 Maestro: tap with testID emits tapOn id selector', () => {
   const out = generateMaestro([{ type: 'tap', testID: 'login-btn', t: 1 }]);
-  assert.match(out, /- tapOn:\s+id: "login-btn"/);
+  // CDP-013: yaml serializer emits simple identifiers as plain scalars (no quotes).
+  assert.match(out, /- tapOn:\s+id:\s+["']?login-btn["']?/);
 });
 
 test('M6 Maestro: type emits tapOn + inputText pair', () => {
   const out = generateMaestro([
     { type: 'type', testID: 'email-input', value: 'a@b.c', t: 1 },
   ]);
-  assert.match(out, /- tapOn:\s+id: "email-input"/);
+  assert.match(out, /- tapOn:\s+id:\s+["']?email-input["']?/);
   assert.match(out, /- inputText: "a@b\.c"/);
 });
 
@@ -44,7 +45,7 @@ test('M6 Maestro: navigate emits assertVisible on next selector', () => {
     { type: 'tap', testID: 'home-greeting', t: 2 },
   ]);
   assert.match(out, /# navigated: Login -> Home/);
-  assert.match(out, /- assertVisible:\s+id: "home-greeting"/);
+  assert.match(out, /- assertVisible:\s+id:\s+["']?home-greeting["']?/);
 });
 
 test('M6 Maestro: annotation becomes YAML comment', () => {
@@ -54,7 +55,7 @@ test('M6 Maestro: annotation becomes YAML comment', () => {
 
 test('M6 Maestro: long_press emits longPressOn', () => {
   const out = generateMaestro([{ type: 'long_press', testID: 'avatar', t: 1 }]);
-  assert.match(out, /- longPressOn:\s+id: "avatar"/);
+  assert.match(out, /- longPressOn:\s+id:\s+["']?avatar["']?/);
 });
 
 test('M6 Detox: tap uses by.id selector', () => {
@@ -77,7 +78,11 @@ test('M6 Detox: swipe passes direction verbatim (finger-direction matches Detox)
 });
 
 test('M6 selectors: maestroSelector falls back to label when no testID', () => {
-  assert.equal(maestroSelector({ type: 'tap', label: 'Submit', t: 1 }), 'id: "Submit"');
+  // CDP-013: label-only events emit `text:` (the correct Maestro selector
+  // for visible-text matching) instead of `id:`. Simple label strings
+  // serialize as plain scalars without quotes.
+  const sel = maestroSelector({ type: 'tap', label: 'Submit', t: 1 });
+  assert.match(sel, /^text:\s+["']?Submit["']?$/);
 });
 
 test('M6 selectors: detoxSelector returns null when nothing identifies the event', () => {
