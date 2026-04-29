@@ -1,9 +1,10 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, unlinkSync, existsSync, copyFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, copyFileSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
 import type { SessionState } from './types.js';
 import { okResult, failResult } from './utils.js';
@@ -24,7 +25,38 @@ import { updateRefMap, refCenter, getScreenRect, hasRefMap, clearRefMap } from '
 import { resolveBundleId } from './project-config.js';
 
 const execFile = promisify(execFileCb);
-const SESSION_FILE = '/tmp/rn-dev-agent-session.json';
+
+/**
+ * CDP-015: derive a per-user, per-project session file path. The previous
+ * fixed `/tmp/rn-dev-agent-session.json` location bled state across repos,
+ * users, and bridge processes on the same host, and was vulnerable to
+ * symlink races on multi-tenant systems.
+ *
+ * Layout:
+ *   $XDG_STATE_HOME/rn-dev-agent/session-<projectHash>.json     (Linux/CI)
+ *   ~/Library/Application Support/rn-dev-agent/session-<hash>.json (macOS)
+ *   ~/.rn-dev-agent/session-<projectHash>.json                  (fallback)
+ *
+ * `<projectHash>` is sha256(cwd).slice(0, 12) so two checkouts of the same
+ * repo at different paths get different session files.
+ */
+function getStateDir(): string {
+  if (process.env.XDG_STATE_HOME) {
+    return join(process.env.XDG_STATE_HOME, 'rn-dev-agent');
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', 'rn-dev-agent');
+  }
+  return join(homedir(), '.rn-dev-agent');
+}
+
+function getSessionFilePath(): string {
+  const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
+  return join(getStateDir(), `session-${projectId}.json`);
+}
+
+const SESSION_FILE = getSessionFilePath();
+const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 const EXEC_TIMEOUT = 30_000;
 const DAEMON_TIMEOUT = 30_000;
 
@@ -152,11 +184,34 @@ async function runViaDaemon(command: string, positionals: string[], session: str
 
 let activeSession: SessionState | null = null;
 
-try {
-  const raw = readFileSync(SESSION_FILE, 'utf8');
-  activeSession = JSON.parse(raw) as SessionState;
-} catch {
-  // No persisted session or invalid JSON — start fresh
+// CDP-015: load session, refusing to follow symlinks (defends against the
+// classic /tmp/<predictable-name> -> arbitrary-write attack). On failure
+// silently start fresh — the next setActiveSession() call writes the
+// canonical per-project location.
+function readSessionSafely(path: string): SessionState | null {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return null; // refuse to follow
+    const raw = readFileSync(path, 'utf8');
+    return JSON.parse(raw) as SessionState;
+  } catch {
+    return null;
+  }
+}
+
+activeSession = readSessionSafely(SESSION_FILE);
+if (!activeSession) {
+  // Migrate from the legacy /tmp location if present — one-time best-effort
+  // so existing users don't lose their open session on upgrade. We only
+  // migrate when the new location has nothing — never overwrite.
+  const legacy = readSessionSafely(LEGACY_SESSION_FILE);
+  if (legacy) {
+    activeSession = legacy;
+    try {
+      mkdirSync(dirname(SESSION_FILE), { recursive: true });
+      writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
+    } catch { /* migration is best-effort */ }
+  }
 }
 
 export function getActiveSession(): SessionState | null {
@@ -165,7 +220,14 @@ export function getActiveSession(): SessionState | null {
 
 export function setActiveSession(info: SessionState): void {
   activeSession = info;
-  try { writeFileSync(SESSION_FILE, JSON.stringify(info), 'utf8'); } catch { /* ignore */ }
+  // CDP-015: atomic write via tmp + rename, restrictive perms (0600 — only
+  // the user can read).
+  try {
+    mkdirSync(dirname(SESSION_FILE), { recursive: true });
+    const tmpPath = `${SESSION_FILE}.tmp.${process.pid}`;
+    writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
+    renameSync(tmpPath, SESSION_FILE);
+  } catch { /* ignore — in-memory session is still valid */ }
 }
 
 export function clearActiveSession(): void {
@@ -173,6 +235,9 @@ export function clearActiveSession(): void {
   clearRefMap();
   try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
 }
+
+// Exported for tests + diagnostics.
+export function getSessionFilePathForTest(): string { return SESSION_FILE; }
 
 export function hasActiveSession(): boolean {
   return activeSession !== null;
@@ -255,7 +320,12 @@ async function tryFastRunner(command: string, positionals: string[]): Promise<To
   if (liveness === 'dead') {
     const session = getActiveSession();
     if (session?.platform === 'ios' && session.deviceId) {
-      try { await startFastRunner(session.deviceId, resolveBundleId('ios') ?? 'unknown'); } catch { /* auto-restart failed */ }
+      // CDP-012: prefer the active session's appId over project-wide
+      // resolveBundleId(). Previously a session opened for a non-default
+      // bundle would be restarted against the project default app, leaving
+      // subsequent taps and snapshots targeting the wrong process.
+      const restartAppId = session.appId ?? resolveBundleId('ios') ?? 'unknown';
+      try { await startFastRunner(session.deviceId, restartAppId); } catch { /* auto-restart failed */ }
       // startFastRunner only resolves after FASTXCT_READY, so a sync PID
       // check here is sufficient — avoids a second HTTP round-trip.
       if (!isFastRunnerAvailable()) return null;
