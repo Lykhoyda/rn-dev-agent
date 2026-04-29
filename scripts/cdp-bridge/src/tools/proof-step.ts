@@ -127,15 +127,24 @@ export function createProofStepHandler(getClient: () => CDPClient) {
     if (args.label) result.label = args.label;
     if (errors.length > 0) result.errors = errors;
 
-    const hasFailure = errors.length > 0 && !result.verified && args.verifyText || args.verifyTestID;
+    // CDP-005: previously the warn-vs-ok decision used a confused boolean
+    // (errors && !verified && verifyText) || verifyTestID — which meant a
+    // missing screenshot or no-active-session was silently reported as
+    // ok:true. Now we explicitly fire warn for either failure mode:
+    //   1. verification was requested AND failed (verified === false)
+    //   2. ANY error was accumulated (screenshot failure, missing session,
+    //      navigation error) regardless of verification args
+    const verifyRequested = !!(args.verifyText || args.verifyTestID);
+    const verifyFailed = verifyRequested && result.verified === false;
+    const hasFailure = verifyFailed || errors.length > 0;
     // GH #91: derive a screen-name signal from whichever input is freshest.
     // Prefer the screen we navigated to (driving signal), then the verified
     // testID (success-shape testIDs like "AddPolicySuccessSheet" trigger too),
-    // then the verified text. nul allowed — annotateMutationAbsence handles it.
+    // then the verified text. null allowed — annotateMutationAbsence handles it.
     const screenName = args.screen ?? args.verifyTestID ?? args.verifyText ?? null;
     const ctx = { client, screenName, source: 'proof_step' as const };
-    if (hasFailure && result.verified === false) {
-      return annotateMutationAbsence(warnResult(result, errors.join('; ')), ctx);
+    if (hasFailure) {
+      return annotateMutationAbsence(warnResult(result, errors.join('; ') || 'proof_step verification failed'), ctx);
     }
     return annotateMutationAbsence(okResult(result), ctx);
   });
