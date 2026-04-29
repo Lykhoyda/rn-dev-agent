@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code. **51 MCP tools**, **5 agents**, **13 commands**, **6 skills**.
+The React Native development plugin for Claude Code. **64 MCP tools**, **5 agents**, **16 commands**, **7 skills**.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -21,13 +21,27 @@ This skill is your front door. Before starting any RN work, use the decision tre
 ```
 What is the user asking for?
 │
+├── INVENTORY of reusable actions ("what's already automated for this?")
+│   └─► /rn-dev-agent:list-learned-actions [keyword]
+│       (Scans feedback memories + .maestro/flows + .ui-skeleton.yaml.
+│        ALWAYS run this BEFORE any device_* sequence — replay an
+│        existing flow instead of recomposing primitives manually.
+│        See feedback_execute_artifacts_before_manual.md.)
+│
+├── REPLAY a learned action (Maestro flow)
+│   └─► /rn-dev-agent:run-action <name> [-e KEY=VALUE …] [--platform ios|android]
+│       (Counterpart to list-learned-actions: list discovers, run executes.
+│        Pre-flights mutates flag, appId match, parameter coverage. Use to
+│        skip a 7-min manual walk when a 23-sec flow already exists.)
+│
 ├── BUILD a new feature / "add X to the app"
 │   └─► /rn-dev-agent:rn-feature-dev <description>
 │       (8-phase pipeline — see rn-feature-development skill)
 │
 ├── TEST an existing feature
 │   └─► /rn-dev-agent:test-feature <description>
-│       (Runs rn-tester protocol INLINE in parent session — MCP tools required)
+│       (Runs rn-tester protocol INLINE in parent session — MCP tools required.
+│        Step 0 is automatic artifact-first scan via list-learned-actions.)
 │
 ├── BUILD + TEST (app not yet installed)
 │   └─► /rn-dev-agent:build-and-test <description>
@@ -79,6 +93,7 @@ These apply to every RN task:
 4. **Do cross-platform checks** unless the user explicitly scoped to one platform
 5. **Filter `cdp_component_tree` queries** — never dump the full tree (10K+ tokens wasted)
 6. **Stop at the first red flag** from the agent's red flags list
+7. **Run `/rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a Maestro flow already covers the request, replay it via `maestro_run` first — manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
 
 ### Ask First
 - Adding new dependencies to the user's project
@@ -150,6 +165,7 @@ Agents skip this skill at the start of conversations. Don't.
 | "The user said 'fix the bug' — I'll just edit the file directly" | Route to `/rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
 | "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
+| "I got `HELPERS_NOT_INJECTED` — let me retry `cdp_status`" | Retrying `cdp_status` does NOT re-run helper injection if the bridge thinks it's connected; it just returns status. The plugin auto-retries injection internally on every gated call (see "Recovering from HELPERS_NOT_INJECTED" below). If the auto-retry exhausted, switch to `device_*` tools (XCTest path — no helpers required) or call `cdp_reload`. Don't spin on `cdp_status`. |
 
 ---
 
@@ -174,12 +190,34 @@ Things that repeatedly go wrong, cataloged for prevention:
 
 | Failure | Cause | Fix |
 |---------|-------|-----|
+| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `maestro_run` |
 | Feature ships with broken Android | Skipped `cross_platform_verify` | Always run it in Phase 5.5 unless explicitly scoped |
 | "Works on my machine" bug | Claimed done without Phase 5.5 evidence | Every row in the results table must have a concrete Evidence value |
 | Native crash missed entirely | Only checked `cdp_error_log`, not native logs | Use `collect_logs(sources=["js_console","native_ios"])` together |
 | Wasted 10K tokens on component tree | Called `cdp_component_tree()` without filter | Always filter by testID or component name |
 | Tests silently broken after refactor | No Maestro flow exists | `/rn-dev-agent:proof-capture` generates one; use it |
 | CDP session lost mid-task | Another debugger (DevTools, Flipper) connected | Close all other debuggers before starting |
+| Stuck on `HELPERS_NOT_INJECTED` for minutes | Retrying `cdp_status` instead of letting the auto-retry surface a final answer, or instead of falling back to device tools | The bridge auto-retries injection once before failing. When the error finally returns, it's authoritative — switch to `device_*` tools or call `cdp_reload`. Never sit in a `cdp_status` retry loop. |
+
+---
+
+## Recovering from HELPERS_NOT_INJECTED
+
+When a `cdp_*` tool returns `code: HELPERS_NOT_INJECTED`, the bridge has already done all of this for you:
+
+1. Waited up to 5s for the connect-time injection to flip the flag
+2. Actively re-injected `__RN_AGENT` once with a 3s React-ready timeout
+3. Attempted a Dev Client picker dismissal (in case a native overlay was blocking React)
+4. Waited up to another 30s if the picker was dismissed
+
+So when you see this error, **the JS world is genuinely hung** — Hermes is up but `__RN_AGENT` won't land. Two recovery paths, in order:
+
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | Switch the immediate task to `device_*` tools (`device_press`, `device_fill`, `device_snapshot`, `device_screenshot`) | These run through XCTest / adb and don't depend on injected JS at all. The user's task usually doesn't need React fiber introspection — it just needs to interact with the visible UI. |
+| 2 | If you specifically need React state (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`), call `cdp_reload` once | Forces a clean bundle reload + reconnect, which re-runs the full injection handshake. Note: any open modals, in-progress forms, or unsaved screen state are wiped — confirm with the user before reloading if their work is at risk. |
+
+**Anti-pattern**: retrying `cdp_status` in a loop. The connection is up; status calls don't re-trigger injection in this state. They just return immediately and let you spin. The error code is your signal to change strategy, not to wait longer.
 
 ---
 

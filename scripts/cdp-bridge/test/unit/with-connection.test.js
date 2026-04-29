@@ -1,8 +1,18 @@
-import { test, mock } from 'node:test';
+import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { withConnection, okResult, failResult } from '../../dist/utils.js';
+import { resetActiveSessionInMemoryForTest } from '../../dist/agent-device-wrapper.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { parseEnvelope } from '../helpers/result-helpers.js';
+
+// Test isolation: clear the in-memory agent-device session pointer (without
+// unlinking the on-disk file, which would break a developer's live MCP run).
+// handleDevClientPicker is gated on hasActiveSession(); without this the
+// HELPERS_NOT_INJECTED fallback in withConnection would shell out to the real
+// agent-device daemon and burn ~70s per test.
+beforeEach(() => {
+  resetActiveSessionInMemoryForTest();
+});
 
 // ── Happy path ────────────────────────────────────────────────────────
 
@@ -85,6 +95,81 @@ test('withConnection waits for helpers to be injected', async () => {
   );
   const result = await handler({});
   assert.equal(parseEnvelope(result).ok, true);
+});
+
+// ── Active 1-shot re-inject when passive wait expires (D###) ──────────
+
+test('withConnection actively re-injects helpers when passive wait expires', async () => {
+  let reinjectCalled = 0;
+  const client = createMockClient({
+    _helpersInjected: false,
+    async reinjectHelpers() {
+      reinjectCalled++;
+      client._helpersInjected = true;
+      return true;
+    },
+    evaluate: async () => ({ value: 13 }),
+  });
+  // Note: do NOT auto-flip the flag — let the 5s passive wait expire so the
+  // active reinject path runs.
+
+  const handler = withConnection(
+    () => client,
+    async () => okResult({ recovered: true }),
+  );
+  const result = await handler({});
+  assert.equal(reinjectCalled, 1, 'reinjectHelpers should fire exactly once after passive wait expires');
+  const env = parseEnvelope(result);
+  assert.equal(env.ok, true);
+  assert.deepEqual(env.data, { recovered: true });
+});
+
+test('withConnection returns actionable HELPERS_NOT_INJECTED error when active re-inject also fails', async () => {
+  let reinjectCalled = 0;
+  const client = createMockClient({
+    _helpersInjected: false,
+    async reinjectHelpers() {
+      reinjectCalled++;
+      // Simulate JS world hung — re-inject can't land
+      return false;
+    },
+    evaluate: async () => ({ value: 13 }),
+  });
+
+  const handler = withConnection(
+    () => client,
+    async () => okResult({ unreachable: true }),
+  );
+  const result = await handler({});
+  assert.equal(reinjectCalled, 1, 'reinjectHelpers should still be attempted once');
+  const env = parseEnvelope(result);
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'HELPERS_NOT_INJECTED');
+  assert.match(env.error, /device_\* tools/, 'error must guide caller to fallback path');
+  assert.match(env.error, /cdp_reload/, 'error must mention cdp_reload as escape hatch');
+});
+
+test('withConnection skips active re-inject when not connected', async () => {
+  let reinjectCalled = 0;
+  const client = createMockClient({
+    _isConnected: false,
+    _helpersInjected: false,
+    async autoConnect() {
+      throw new Error('Metro not running');
+    },
+    async reinjectHelpers() {
+      reinjectCalled++;
+      return true;
+    },
+  });
+
+  const handler = withConnection(
+    () => client,
+    async () => okResult({}),
+  );
+  const result = await handler({});
+  assert.equal(reinjectCalled, 0, 'reinjectHelpers must NOT be attempted when autoConnect failed');
+  assert.equal(parseEnvelope(result).ok, false);
 });
 
 // ── requireHelpers: false skips helper check ──────────────────────────

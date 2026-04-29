@@ -62,6 +62,41 @@ implemented, you verify it works correctly on a real simulator/emulator.
 
 ## Your Testing Protocol
 
+### Step 0a: Reusable Action Scan (artifact-first)
+
+**Before composing ANY `device_*` sequence, scan for existing automation.**
+This is the single highest-leverage rule in the plugin — a 7-minute manual
+walk has been documented for a flow that already existed as a 23-second
+Maestro replay. Codified in
+`feedback_execute_artifacts_before_manual.md`.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+  --json --section b --filter "<feature-keyword>" \
+  --workspace-root "$PWD" --memory-cwd "$PWD" \
+  > /tmp/learned-actions.json
+jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions.json
+```
+
+**Decide:**
+1. **Exact match** (filename or first-comment-block contains the feature
+   keyword AND `appId` matches the test-app): replay it via
+   `/rn-dev-agent:run-action <flow-name>` or directly with
+   `maestro-runner --platform <ios|android> test [-e KEY=VALUE …] <path>`.
+   A passing replay IS evidence — proceed to Step 6 (Generate / Refresh)
+   and Step 7 (Report). Skip the rest.
+2. **Partial match** (covers part of the flow, e.g. login is automated but
+   the feature is post-login): replay the prefix flow, then continue with
+   `device_*` from where it left off.
+3. **No match**: continue to Step 0 below. **You MUST persist the new flow
+   in Step 6** so the next session can replay instead of recomposing.
+
+**Do NOT silently replay flows whose YAML metadata declares
+`mutates: true` or `destructive: true`** (creates DB rows, posts to APIs,
+sends notifications). For those, either (a) run with parameters that
+produce idempotent rows (timestamp-suffixed TITLE, etc.), or (b) skip the
+replay and run manually with explicit user confirmation.
+
 ### Step 0: Environment Check
 Call `cdp_status`. If not connected, it auto-connects.
 

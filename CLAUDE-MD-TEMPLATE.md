@@ -11,6 +11,78 @@ This project uses the **rn-dev-agent** plugin for React Native development and t
 It provides MCP tools across three categories: CDP introspection, device control, and testing.
 Run `/rn-dev-agent:check-env` to verify the current plugin version and tool count.
 
+### 🚨 MANDATORY PRE-FLIGHT (before ANY device_* call)
+
+Run this 3-step checklist at the start of every UI-touching task. This is the
+single highest-leverage rule in the plugin — it prevents the most common
+failure mode (multi-minute manual `device_*` walks for flows that already
+exist as YAML).
+
+1. **List existing automation:** `/rn-dev-agent:list-learned-actions [feature-keyword]`
+   — surfaces matching Maestro flows + UI skeletons + feedback memories for the
+   current project.
+2. **If a flow matches your intent:** replay it first.
+   `/rn-dev-agent:run-action <flow-name> [-e KEY=VALUE …]` — pre-flights
+   mutates flag, appId match, and parameter coverage; falls back to direct
+   `maestro-runner --platform <ios|android> test … <flow-path>` if you
+   need to inspect the run yourself. A passing replay IS your evidence —
+   skip ahead to capturing proof.
+3. **Only if no match (or replay fails with a concrete error):** fall back to
+   manual primitives (`device_press` / `device_fill` / `device_find`). When
+   you do, **end the session by persisting the verified flow** as a new YAML
+   under `<test-app>/.maestro/flows/<feature-slug>.yaml` so the next session
+   starts at step 2, not step 3.
+
+Manual walks are a fallback, not a default. Codified in
+`feedback_execute_artifacts_before_manual.md`. Enforced as Step 0 of
+`/rn-dev-agent:test-feature` and Step 0a of the `rn-tester` / `rn-debugger`
+agent protocols.
+
+---
+
+### 🚨 Tool Routing — STRICT RULES (read this second)
+
+All app interaction MUST go through plugin MCP tools — never raw shell. The plugin's tools
+handle waits, multi-device routing, session reuse, retry logic, and timing that
+`xcrun simctl` / `adb shell` / `screencapture` do not. **Bypassing them is the #1 source
+of flaky agent behavior.** When in doubt, prefer the plugin tool; the escape hatches below
+are documented exceptions, not defaults.
+
+| Action | ✅ ALWAYS use | 🚫 NEVER use |
+|---|---|---|
+| Screenshot the screen | `device_screenshot` | `xcrun simctl io booted screenshot`, `adb shell screencap`, `screencapture` |
+| Read the UI / accessibility tree | `device_snapshot` (returns @ref handles) | parsing `xcrun simctl io ui`, `uiautomator dump`, ad-hoc tree dumps |
+| Tap an element | `device_press(ref=…)` or `device_find(text=…, action="click")` | `xcrun simctl io booted input tap`, `adb shell input tap`, coordinate guesses |
+| Type into a field | `device_fill(ref=…, text=…)` | `xcrun simctl spawn booted … keyboard`, `adb shell input text` |
+| Open an in-app URL / deep link | `device_deeplink` / `cdp_navigate` / `cdp_nav_graph` | `xcrun simctl openurl`, `adb shell am start -a android.intent.action.VIEW` |
+| Read app state (Redux/Zustand/Jotai/RQ) | `cdp_store_state(path=…)` | `console.log` + log-tailing, dispatching probes via `cdp_evaluate` |
+| Inspect React internals | `cdp_component_tree(filter=…)`, `cdp_component_state` | guessing from screenshots, walking the fiber via raw `cdp_evaluate` |
+| Check connection / Metro / errors | `cdp_status` | `curl http://localhost:8081/json`, `xcrun simctl list`, `adb devices` |
+| Read JS errors / console / network | `cdp_error_log`, `cdp_console_log`, `cdp_network_log` | `tail -f` log files, `adb logcat | grep` (those are NATIVE-error fallbacks only — see Error Recovery below) |
+| Reload the app | `cdp_reload` (auto-reconnects) | `xcrun simctl terminate … && launch …`, `adb shell am force-stop` |
+| Manage permissions | `device_permission(action=…)` | raw `xcrun simctl privacy`, `adb shell pm grant` |
+| Run an E2E flow | **First**: replay any existing `<test-app>/.maestro/flows/*.yaml` via `maestro_run`. **Then**: `device_*` for novel verification. **Last**: `maestro_generate` to persist the new flow. | hand-rolled bash loops, ad-hoc xdotool/AppleScript, recreating a flow that already exists |
+
+**Artifact-first rule (paired with the table):** Before composing any `device_*` sequence,
+scan for existing automation. Run `/rn-dev-agent:list-learned-actions` to see the inventory
+of feedback memories + Maestro flows + UI skeletons available in this project. If a flow
+matches what you're about to do manually, replay it instead. This rule is enforced as
+**Step 0** of `/rn-dev-agent:test-feature` and codified in the auto-memory entry
+`feedback_execute_artifacts_before_manual.md`. Manual primitives are a fallback, not a
+default.
+
+**Documented escape hatches** (use ONLY when the listed condition fires):
+
+| Condition | Escape | Why |
+|---|---|---|
+| Multiple Hermes targets, `cdp_connect` picked the wrong one | `curl -s http://localhost:8081/json` to enumerate, then `cdp_connect(targetId="…")` | The plugin can't disambiguate without the explicit ID |
+| Multi-device routing bug — `device_screenshot` captured the wrong platform | `xcrun simctl io <UDID> screenshot` (iOS) / `adb -s <id> exec-out screencap -p` (Android) | Tracked: [Lykhoyda/rn-dev-agent#60](https://github.com/Lykhoyda/rn-dev-agent/issues/60) |
+| `cdp_error_log` empty but app is broken | `collect_logs` (parallel JS+native) — drops to native log streams | Native crashes don't surface in the JS error buffer |
+| App fully crashed / picker stuck | `xcrun simctl terminate` + manual relaunch + `cdp_connect force: true` | When `cdp_reload` can't recover |
+
+If you find yourself reaching for `xcrun simctl` / `adb shell` and your situation is NOT in
+the escape-hatch table above, **stop** — you're routing around a plugin tool that exists.
+
 ### Operating Modes
 
 The rules tighten as you move rightward:
