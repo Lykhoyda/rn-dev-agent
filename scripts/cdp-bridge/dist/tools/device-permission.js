@@ -157,6 +157,12 @@ export function createDevicePermissionHandler() {
         const platform = args.platform ?? await detectPlatform();
         if (!platform)
             return failResult('No iOS simulator or Android device detected');
+        // CDP-014: validate platform value before routing. Previously a typo
+        // such as "andriod" fell through to the Android branch and could
+        // mutate adb-side permissions on a wrong-platform misroute.
+        if (platform !== 'ios' && platform !== 'android') {
+            return failResult(`Invalid platform "${platform}". Supported values: "ios", "android".`, 'INVALID_PLATFORM');
+        }
         if (args.action === 'query') {
             return platform === 'ios'
                 ? iosQueryPermission(args.permission, args.appId)

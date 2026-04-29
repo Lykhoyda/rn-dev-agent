@@ -34,8 +34,15 @@ export function createExceptionBreakpointHandler(getClient) {
             client['eventHandlers'].set('Debugger.paused', captureHandler);
             await new Promise(r => setTimeout(r, duration));
             await client.send('Debugger.setPauseOnExceptions', { state: 'none' });
+            // CDP-006: when no prior handler existed, the temporary capture
+            // handler must be DELETED (not left in place) — otherwise later
+            // debugging/profiling flows inherit a stale pause handler that
+            // resumes unrelated pauses.
             if (savedHandler) {
                 client['eventHandlers'].set('Debugger.paused', savedHandler);
+            }
+            else {
+                client['eventHandlers'].delete('Debugger.paused');
             }
             return okResult({
                 state: 'none',
@@ -45,8 +52,13 @@ export function createExceptionBreakpointHandler(getClient) {
             });
         }
         catch (err) {
+            // CDP-006: same restore/delete guard on the error path so a thrown
+            // capture doesn't leak the temporary handler either.
             if (savedHandler) {
                 client['eventHandlers'].set('Debugger.paused', savedHandler);
+            }
+            else {
+                client['eventHandlers'].delete('Debugger.paused');
             }
             try {
                 await client.send('Debugger.setPauseOnExceptions', { state: 'none' });

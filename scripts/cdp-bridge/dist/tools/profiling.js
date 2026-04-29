@@ -40,54 +40,26 @@ export function createHeapUsageHandler(getClient) {
 export function createCpuProfileHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const duration = Math.min(Math.max(args.durationMs ?? 3000, 500), 30000);
-        // D597: JS-based sampling fallback when Profiler domain unavailable
+        // CDP-007 (was D597): when the CDP Profiler domain is unavailable, the
+        // previous fallback sampled `new Error().stack` inside its own
+        // `setInterval` callback. Those frames describe the SAMPLER's call
+        // stack (`Timeout.eval`, `listOnTimeout`, `process.processTimers`),
+        // not the app — labelling them as `hotFunctions` actively misled
+        // optimization work.
+        //
+        // We now refuse to fabricate hotFunctions when Profiler is missing.
+        // Caller gets a clear unavailability error with actionable hints.
         if (!client.profilerAvailable) {
-            try {
-                const sampleScript = `
-          (function() {
-            var samples = {};
-            var count = 0;
-            var interval = setInterval(function() {
-              try {
-                var stack = new Error().stack || '';
-                var lines = stack.split('\\n').slice(1, 6);
-                lines.forEach(function(line) {
-                  var match = line.match(/at\\s+(.+?)\\s*\\(/);
-                  var name = match ? match[1].trim() : line.trim();
-                  if (name && name !== 'anonymous' && name !== '') {
-                    samples[name] = (samples[name] || 0) + 1;
-                  }
-                });
-              } catch(e) {}
-              count++;
-              if (count >= ${Math.floor(duration / 50)}) {
-                clearInterval(interval);
-                globalThis.__RN_AGENT_PROFILE_RESULT__ = JSON.stringify(samples);
-              }
-            }, 50);
-            return 'sampling';
-          })()
-        `;
-                await client.evaluate(sampleScript);
-                await new Promise(r => setTimeout(r, duration + 200));
-                const result = await client.evaluate('globalThis.__RN_AGENT_PROFILE_RESULT__ || "{}"');
-                void client.evaluate('delete globalThis.__RN_AGENT_PROFILE_RESULT__');
-                const samples = JSON.parse(String(result.value || '{}'));
-                const hotFunctions = Object.entries(samples)
-                    .sort(([, a], [, b]) => b - a)
-                    .slice(0, 20)
-                    .map(([name, hitCount]) => ({ name, hitCount, url: '', line: 0 }));
-                return okResult({
-                    durationMs: duration,
-                    nodeCount: hotFunctions.length,
-                    hotFunctions,
-                    source: 'js-sampling',
-                    note: 'Approximate — using Error().stack sampling (Profiler domain unavailable)',
-                });
-            }
-            catch (err) {
-                return failResult(`JS-based profiling failed: ${err instanceof Error ? err.message : err}`);
-            }
+            const arch = await safeProbeArchitecture(client);
+            const archHint = arch === 'old' ? OLD_ARCH_PROFILER_HINT : null;
+            return failResult('CPU profiling unavailable: CDP Profiler domain is not exposed by this Hermes target. ' +
+                'No JS-based fallback is provided because sampling the sampler\'s own stack produced ' +
+                'misleading hotFunctions (CDP-007).', 'PROFILER_UNAVAILABLE', {
+                architecture: arch,
+                hint: archHint
+                    ?? 'For memory analysis use cdp_heap_usage. For diagnostics use cdp_console_log/cdp_error_log. ' +
+                        'Profiler domain availability varies across React Native + Hermes versions.',
+            });
         }
         try {
             await client.send('Profiler.enable', undefined);

@@ -429,23 +429,23 @@ test('cpu_profile: CDP path success with hot functions', async () => {
   assert.ok(data.startTime !== undefined);
 });
 
-test('cpu_profile: JS sampling fallback when profilerAvailable is false', async () => {
-  let evaluateCallCount = 0;
+test('CDP-007: cpu_profile fails clearly when Profiler domain is unavailable (no misleading fallback)', async () => {
+  // Previous behaviour: sampled `new Error().stack` inside the sampler's own
+  // setInterval callback and emitted hotFunctions like "Timeout.eval" /
+  // "listOnTimeout" / "process.processTimers". Those described the sampler,
+  // not the app. Now the handler refuses to fabricate hotFunctions.
   const client = createMockClient({
     _profilerAvailable: false,
-    evaluate: async (expr) => {
-      evaluateCallCount++;
-      if (expr.includes('__RN_AGENT_PROFILE_RESULT__') && !expr.includes('delete')) {
-        return { value: JSON.stringify({ renderApp: 15, processData: 8 }) };
-      }
-      return { value: 'sampling' };
-    },
+    // Architecture probe — return 'new' so the OLD_ARCH-specific hint isn't fired.
+    evaluate: async () => ({ value: JSON.stringify({ architecture: 'new' }) }),
   });
   const handler = createCpuProfileHandler(() => client);
-  const data = expectOk(await handler({ durationMs: 500 }));
-  assert.equal(data.source, 'js-sampling');
-  assert.ok(data.hotFunctions.length > 0);
-  assert.equal(data.hotFunctions[0].name, 'renderApp');
+  const result = await handler({ durationMs: 500 });
+  assert.equal(result.isError, true, 'must fail when Profiler domain is unavailable');
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'PROFILER_UNAVAILABLE');
+  assert.match(env.error, /unavailable/i);
+  assert.ok(!env.data?.hotFunctions, 'must not emit hotFunctions sampled from sampler stack');
 }, { timeout: 3000 });
 
 test('cpu_profile: CDP path returns failResult when send throws', async () => {
