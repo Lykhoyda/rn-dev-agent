@@ -455,18 +455,21 @@ trackedTool('device_pick_date', 'Select a date in a UIDatePicker (wheels mode) /
     timeoutMs: z.number().int().min(1000).max(120000).optional().describe('Maestro timeout (default 20000ms).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', 'Move keyboard focus to the next input field by tapping the soft keyboard\'s Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.', {}, createDeviceFocusNextHandler());
-trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find (text + optional tap), fill (ref + text), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Fails fast on error unless step has optional=true.', {
+trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.', {
     steps: z.array(z.object({
         action: z.enum(['find', 'press', 'fill', 'swipe', 'scroll', 'back', 'wait', 'hideKeyboard', 'snapshot', 'screenshot']).describe('Step action'),
-        text: z.string().optional().describe('(find/fill) Text to find or type'),
-        ref: z.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5")'),
+        text: z.string().optional().describe('(find) Visible text to match. (fill) Text to type into the field.'),
+        ref: z.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.'),
+        testID: z.string().optional().describe('(find/press/fill) PREFERRED for known testIDs — re-resolves via snapshot at execution time, immune to layout-change drift. Slower per-step than ref (each call snapshots) but eliminates stale-ref failures across step transitions. When set, ignores text/ref.'),
         tap: z.boolean().optional().describe('(find) Tap the found element'),
         direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('(scroll/swipe) Direction'),
         ms: z.number().optional().describe('(wait) Milliseconds to wait'),
         optional: z.boolean().optional().describe('Skip this step on failure instead of aborting'),
+        timeoutMs: z.number().optional().describe('Per-step timeout override in ms. Default 15000.'),
     })).describe('Ordered list of UI interaction steps'),
     delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
     screenshotOn: z.enum(['none', 'failure', 'end', 'each']).default('failure').describe('When to capture screenshots'),
+    continueOnError: z.boolean().default(false).describe('When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort.'),
 }, createDeviceBatchHandler());
 trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.', {
     appId: z.string().optional().describe('App bundle ID override (auto-detected from app.json if omitted)'),
