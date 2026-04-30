@@ -30,7 +30,7 @@ exist as YAML).
 3. **Only if no match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
    you do, **end the session by persisting the verified flow** as a new YAML
-   under `<test-app>/.maestro/flows/<feature-slug>.yaml` so the next session
+   under `<test-app>/.rn-agent/actions/<feature-slug>.yaml` so the next session
    starts at step 2, not step 3.
 
 Manual walks are a fallback, not a default. Codified in
@@ -61,7 +61,7 @@ are documented exceptions, not defaults.
 | Read JS errors / console / network | `cdp_error_log`, `cdp_console_log`, `cdp_network_log` | `tail -f` log files, `adb logcat | grep` (those are NATIVE-error fallbacks only — see Error Recovery below) |
 | Reload the app | `cdp_reload` (auto-reconnects) | `xcrun simctl terminate … && launch …`, `adb shell am force-stop` |
 | Manage permissions | `device_permission(action=…)` | raw `xcrun simctl privacy`, `adb shell pm grant` |
-| Run an E2E flow | **First**: replay any existing `<test-app>/.maestro/flows/*.yaml` via `maestro_run`. **Then**: `device_*` for novel verification. **Last**: `maestro_generate` to persist the new flow. | hand-rolled bash loops, ad-hoc xdotool/AppleScript, recreating a flow that already exists |
+| Run an E2E flow | **First**: replay any existing `<test-app>/.rn-agent/actions/*.yaml` via `maestro_run` (agent corpus). Read-only awareness of `<test-app>/.maestro/flows/*.yaml` (team's core E2E suite — never auto-run). **Then**: `device_*` for novel verification. **Last**: `maestro_generate` to persist the new flow under `.rn-agent/actions/`. | hand-rolled bash loops, ad-hoc xdotool/AppleScript, recreating a flow that already exists, auto-running `.maestro/flows/` |
 
 **Artifact-first rule (paired with the table):** Before composing any `device_*` sequence,
 scan for existing automation. Run `/rn-dev-agent:list-learned-actions` to see the inventory

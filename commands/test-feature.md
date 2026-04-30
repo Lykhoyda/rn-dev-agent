@@ -17,9 +17,9 @@ Test this React Native feature: $ARGUMENTS
 Load the `rn-testing` skill and follow this 8-step protocol in this session:
 
 0. **Artifact-first scan (MANDATORY before any device_* call).** Glob
-   `**/test-app/.maestro/flows/*.yaml` (and `.ui-skeleton.yaml`) within the
+   `**/test-app/.rn-agent/actions/*.yaml` (and `.rn-agent/skeleton.yaml`) within the
    current project AND the sibling workspace at
-   `../rn-dev-agent-workspace/test-app/.maestro/flows/`. For each candidate,
+   `../rn-dev-agent-workspace/test-app/.rn-agent/actions/`. For each candidate,
    read the file header / appId and decide if it matches the requested
    feature by:
    - filename keyword overlap with `$ARGUMENTS`
@@ -57,12 +57,12 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    - If step 0 found NO matching flow: prefer **auto-emission** over hand-
      authoring. Wrap the manual walk between `cdp_record_test_start` and
      `cdp_record_test_stop`, then `cdp_record_test_save` to write
-     `<test-app>/.maestro/flows/<feature-slug>.yaml` with the metadata
+     `<test-app>/.rn-agent/actions/<feature-slug>.yaml` with the metadata
      header pre-populated (`id`, `intent`, `tags`, `mutates`, `status` —
      see `skills/rn-testing/SKILL.md` "Reusable Action Metadata Schema").
      Hand-edit the result to parameterise input strings via `${VAR}`
      placeholders and add a `when: visible: id: tab-X` self-bootstrap if
-     the flow assumes a starting screen. If `<test-app>/.ui-skeleton.yaml`
+     the flow assumes a starting screen. If `<test-app>/.rn-agent/skeleton.yaml`
      exists, add any new testIDs the flow references there too.
    - If step 0 found a flow that doesn't cleanly extend (different feature
      overlap), still add a NEW flow. Two short flows beat one tangled flow.
@@ -74,9 +74,9 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 - [ ] `cdp_status` returned `ok:true` with `cdp.connected: true`
 - [ ] Every assertion has concrete Evidence (not "looks fine")
 - [ ] At least one `device_screenshot` saved
-- [ ] `<test-app>/.maestro/flows/<feature>.yaml` exists at end of run (either
+- [ ] `<test-app>/.rn-agent/actions/<feature>.yaml` exists at end of run (either
       pre-existed and was replayed, or was newly written this session)
-- [ ] If `<test-app>/.ui-skeleton.yaml` exists, any new testIDs the flow
+- [ ] If `<test-app>/.rn-agent/skeleton.yaml` exists, any new testIDs the flow
       references are added there
 - [ ] `cdp_error_log` shows 0 new errors at end of flow
 - [ ] Cross-platform check via `cross_platform_verify` (or single-platform noted)

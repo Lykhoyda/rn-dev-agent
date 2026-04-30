@@ -23,8 +23,8 @@ Provide the path to an export YAML file:
 3. **Adds** new heuristics with **70% of original confidence** (imported knowledge is less trusted)
 4. **Marks** imported entries with source attribution and original date
 5. **Skips** heuristics below 20% effective confidence
-6. **Imports flows + skeleton** (default ON) into `<test-app>/.maestro/flows/`
-   and `<test-app>/.ui-skeleton.yaml`. Existing flows with the same `id:`
+6. **Imports flows + skeleton** (default ON) into `<test-app>/.rn-agent/actions/`
+   and `<test-app>/.rn-agent/skeleton.yaml`. Existing flows with the same `id:`
    are NOT overwritten — they land at `<id>.imported.yaml` so you can diff
    and merge manually. Pass `--no-flows` / `--no-skeleton` to skip these.
 

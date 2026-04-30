@@ -32,9 +32,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
 
 The script auto-discovers:
 - The user's per-project auto-memory directory (Section A)
-- `.maestro/flows/*.yaml` in the cwd, in `<cwd>/test-app/`, and in any
-  `<sibling>/test-app/` adjacent to the cwd (Section B)
-- `.ui-skeleton.yaml` in the same locations (Section C)
+- `.rn-agent/actions/*.yaml` in the cwd, in `<cwd>/test-app/`, and in any
+  `<sibling>/test-app/` adjacent to the cwd (Section B — agent corpus only;
+  team-owned core E2E tests in `.maestro/flows/` are intentionally excluded)
+- `.rn-agent/skeleton.yaml` in the same locations (Section C)
 - Plugin commands (Section D — only populated when running inside the plugin repo)
 
 It exits 0 when results found, 3 when nothing matches, 2 on bad flags.

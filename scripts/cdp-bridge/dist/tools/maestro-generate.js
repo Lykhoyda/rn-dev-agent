@@ -52,7 +52,8 @@ export function createMaestroGenerateHandler() {
             return failResult('Provide a flow name and at least one step.');
         }
         const root = findProjectRoot();
-        const outputDir = args.outputDir ?? (root ? join(root, '.maestro', 'flows') : null);
+        // D1207: agent corpus lives in .rn-agent/actions/, distinct from team-owned .maestro/flows/.
+        const outputDir = args.outputDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
         if (!outputDir) {
             return failResult('Cannot determine project root. Pass outputDir explicitly.');
         }

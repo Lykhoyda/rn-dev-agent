@@ -497,7 +497,7 @@ trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flow
     appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
     timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
 }, createMaestroRunHandler());
-trackedTool('maestro_generate', 'Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/<name>.yaml in the project root. Use after live verification to create regression tests.', {
+trackedTool('maestro_generate', 'Generate a persistent Maestro YAML flow file from structured steps. Writes to .rn-agent/actions/<name>.yaml in the project root (agent corpus, distinct from team-owned .maestro/flows/). Use after live verification to create reusable actions.', {
     name: z.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
     steps: z.array(z.object({
         action: z.enum(['tap', 'fill', 'assert', 'scroll', 'navigate', 'back', 'wait', 'swipe', 'launch']).describe('Step action'),
@@ -509,11 +509,11 @@ trackedTool('maestro_generate', 'Generate a persistent Maestro YAML flow file fr
         waitMs: z.number().optional().describe('Wait duration in ms (for wait action)'),
     })).describe('Ordered list of Maestro steps'),
     appId: z.string().optional().describe('App bundle ID to include in YAML header'),
-    outputDir: z.string().optional().describe('Output directory (default: <project>/.maestro/flows/)'),
+    outputDir: z.string().optional().describe('Output directory (default: <project>/.rn-agent/actions/ — agent corpus). Pass an explicit path for non-default targets.'),
 }, createMaestroGenerateHandler());
-trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .maestro/flows/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions.', {
+trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .rn-agent/actions/ (agent corpus) as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to point at a different directory (e.g. team-owned .maestro/flows/).', {
     platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
-    flowDir: z.string().optional().describe('Directory to scan for .yaml flows (default: <project>/.maestro/flows/)'),
+    flowDir: z.string().optional().describe('Directory to scan for .yaml flows (default: <project>/.rn-agent/actions/ — agent corpus)'),
     pattern: z.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
     timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),

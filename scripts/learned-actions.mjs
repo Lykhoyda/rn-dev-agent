@@ -4,10 +4,12 @@
 // Scans, in this order:
 //   A. Per-project auto-memory feedback files
 //      (~/.claude/projects/<encoded-cwd>/memory/feedback_*.md)
-//   B. Reusable Maestro flows
-//      (./.maestro/flows/*.yaml AND ../<sibling>/test-app/.maestro/flows/*.yaml)
+//   B. Reusable Maestro flows (agent-owned, .rn-agent/actions/)
+//      (./.rn-agent/actions/*.yaml AND ../<sibling>/test-app/.rn-agent/actions/*.yaml)
+//      Core team-owned E2E tests in .maestro/flows/ are intentionally NOT
+//      scanned here — those are read-only, never auto-replayed by the agent.
 //   C. UI skeletons
-//      (./.ui-skeleton.yaml AND ../<sibling>/test-app/.ui-skeleton.yaml)
+//      (./.rn-agent/skeleton.yaml AND ../<sibling>/test-app/.rn-agent/skeleton.yaml)
 //   D. Plugin commands available in this session
 //      (./commands/*.md when running inside the plugin repo)
 //
@@ -133,19 +135,22 @@ function scanFlows() {
 }
 
 function collectFlowRoots(start) {
+  // D1207 hard-cut: agent-owned reusable actions live in .rn-agent/actions/.
+  // Core team-owned E2E tests in .maestro/flows/ are read-only awareness only;
+  // they are NOT scanned here (separate scanCoreTests() will surface them later).
   const candidates = new Set();
-  const own = path.join(start, '.maestro', 'flows');
+  const own = path.join(start, '.rn-agent', 'actions');
   candidates.add(own);
   // Sibling test-app convention
   const parent = path.dirname(start);
   if (fs.existsSync(parent)) {
     for (const sib of safeReaddir(parent)) {
-      const ta = path.join(parent, sib, 'test-app', '.maestro', 'flows');
+      const ta = path.join(parent, sib, 'test-app', '.rn-agent', 'actions');
       if (fs.existsSync(ta)) candidates.add(ta);
     }
   }
   // Direct test-app under cwd
-  const ta2 = path.join(start, 'test-app', '.maestro', 'flows');
+  const ta2 = path.join(start, 'test-app', '.rn-agent', 'actions');
   if (fs.existsSync(ta2)) candidates.add(ta2);
   return Array.from(candidates);
 }
@@ -209,20 +214,26 @@ function parseFlowMeta(text) {
 // C. UI skeletons
 // ─────────────────────────────────────────────────────────────────────────────
 function scanSkeletons() {
+  // D1207 hard-cut: skeleton lives at .rn-agent/skeleton.yaml.
+  // Old root-level .ui-skeleton.yaml is deprecated and no longer scanned.
   const candidates = [
-    path.join(flags.workspaceRoot, '.ui-skeleton.yaml'),
-    path.join(flags.workspaceRoot, 'test-app', '.ui-skeleton.yaml'),
+    path.join(flags.workspaceRoot, '.rn-agent', 'skeleton.yaml'),
+    path.join(flags.workspaceRoot, 'test-app', '.rn-agent', 'skeleton.yaml'),
   ];
   // Sibling test-app
   const parent = path.dirname(flags.workspaceRoot);
   if (fs.existsSync(parent)) {
     for (const sib of safeReaddir(parent)) {
-      candidates.push(path.join(parent, sib, 'test-app', '.ui-skeleton.yaml'));
+      candidates.push(path.join(parent, sib, 'test-app', '.rn-agent', 'skeleton.yaml'));
     }
   }
   const items = [];
+  const seen = new Set();
   for (const fp of candidates) {
     if (!fs.existsSync(fp)) continue;
+    const real = fs.realpathSync(fp);
+    if (seen.has(real)) continue;
+    seen.add(real);
     const text = fs.readFileSync(fp, 'utf8');
     const appIdMatch = text.match(/^appId:\s*([^\s#]+)/m);
     const screenKeys = (text.match(/^  [a-z][^:]*:\s*$/gm) || [])
@@ -348,7 +359,8 @@ if (want('a')) {
 }
 
 if (want('b')) {
-  parts.push(`## B. Reusable Maestro flows (${flows.items.length})`);
+  parts.push(`## B. Reusable Maestro flows — agent-owned (${flows.items.length})`);
+  parts.push('_Source: `.rn-agent/actions/`. Core E2E tests in `.maestro/flows/` are read-only and not listed here._');
   if (flows.items.length === 0) {
     parts.push('_None match._');
     if (flows.roots.length) {

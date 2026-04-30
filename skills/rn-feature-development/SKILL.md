@@ -448,7 +448,7 @@ is expensive.
    reveals a missing step.
 3. **Persist the verified sequence as a Maestro flow.** Once the rehearsal
    completes clean end-to-end, write the flow to
-   `<test-app>/.maestro/flows/<feature-slug>.yaml`. Two authoring paths:
+   `<test-app>/.rn-agent/actions/<feature-slug>.yaml`. Two authoring paths:
    - `maestro_generate(name="<feature-slug>", steps=[...], appId="...")` —
      structured-step authoring; the MCP tool writes the YAML but does NOT
      emit the M7 metadata header.
@@ -465,11 +465,11 @@ is expensive.
    substitution):
    ```bash
    maestro-runner --platform <ios|android> test \
-     <test-app>/.maestro/flows/<feature-slug>.yaml \
+     <test-app>/.rn-agent/actions/<feature-slug>.yaml \
      -e KEY=VALUE
    ```
    For env-free flows, the MCP tool also works:
-   `maestro_run(flowPath="<test-app>/.maestro/flows/<feature-slug>.yaml")`.
+   `maestro_run(flowPath="<test-app>/.rn-agent/actions/<feature-slug>.yaml")`.
    The replay must pass end-to-end without a single failure.
 5. **Retry budget: max 3 fix-and-replay loops.** If the rehearsal still
    fails after 3 attempts, escalate to the user with (a) the failing
@@ -521,12 +521,12 @@ recording running, invoke the rehearsed flow.
 For flows with `${VAR}` placeholders (need env substitution):
 ```bash
 maestro-runner --platform <ios|android> test \
-  <test-app>/.maestro/flows/<feature-slug>.yaml \
+  <test-app>/.rn-agent/actions/<feature-slug>.yaml \
   -e KEY=VALUE
 ```
 
 For env-free flows, use the MCP tool:
-- `maestro_run(flowPath="<test-app>/.maestro/flows/<feature-slug>.yaml")`
+- `maestro_run(flowPath="<test-app>/.rn-agent/actions/<feature-slug>.yaml")`
 
 (The MCP `maestro_run` tool schema accepts `flowPath`, `inlineYaml`,
 `platform`, `appId`, `timeoutMs` — there is no `-e` env-var pass-through.
