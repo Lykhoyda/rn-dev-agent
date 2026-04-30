@@ -75,6 +75,36 @@ export function wrapResultWithResize(result, resize) {
         return result;
     }
 }
+export function computeScreenshotAdvisories(args, requestedPath) {
+    const out = [];
+    if (requestedPath.startsWith('/tmp/') || requestedPath.startsWith('/var/folders/')) {
+        out.push({
+            code: 'EPHEMERAL_PATH',
+            message: `Screenshot saved to an ephemeral path (${requestedPath}). The OS may clean it without warning, so it is not safe for PR artifacts or longer-running sessions. ` +
+                'Pass path="docs/proof/<feature-slug>/<NN>-<step>.jpg" for deliverables, or path="docs/diag/<YYYY-MM-DD>/<NN>-<symptom>.jpg" for debug captures.',
+        });
+    }
+    if (args.maxWidth === 0) {
+        out.push({
+            code: 'FULL_RESOLUTION',
+            message: 'maxWidth=0 disables auto-downscaling — capturing at full native resolution. iPhone 15/17 Pro JPEGs can be 1.5-2.5MB, which is expensive in LLM context. ' +
+                'Default 800px preserves label readability and visual confirmation. Use maxWidth=0 only for visual-diff or design-review captures.',
+        });
+    }
+    return out;
+}
+export function wrapResultWithAdvisories(result, advisories) {
+    if (result.isError || advisories.length === 0)
+        return result;
+    try {
+        const envelope = JSON.parse(result.content[0].text);
+        envelope.meta = { ...envelope.meta, advisories };
+        return { content: [{ type: 'text', text: JSON.stringify(envelope) }] };
+    }
+    catch {
+        return result;
+    }
+}
 /**
  * B121: shared capture + resize helper. Extracted from
  * `createDeviceScreenshotHandler` so internal callers like `device_batch`
@@ -89,6 +119,7 @@ export async function captureAndResizeScreenshot(args) {
     // Pin the path explicitly so the post-resize step targets the same file
     // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
     const argsWithPath = { ...args, path: requestedPath };
+    const advisories = computeScreenshotAdvisories(args, requestedPath);
     const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
     if (result.isError)
         return result;
@@ -99,7 +130,8 @@ export async function captureAndResizeScreenshot(args) {
     if (args.quality !== undefined)
         resizeOpts.quality = args.quality;
     const resize = await resizeWithSips(actualPath, resizeOpts);
-    return wrapResultWithResize(result, resize);
+    const resized = wrapResultWithResize(result, resize);
+    return wrapResultWithAdvisories(resized, advisories);
 }
 /**
  * B117/D638: device_screenshot accepts an optional `platform` and, when not

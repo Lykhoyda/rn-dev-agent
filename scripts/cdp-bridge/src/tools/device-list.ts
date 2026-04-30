@@ -74,6 +74,69 @@ export function wrapResultWithResize(result: ToolResult, resize: ResizeResult): 
   }
 }
 
+/**
+ * B150 / Phase 124: non-blocking screenshot guardrails.
+ *
+ * The plugin can't refuse a screenshot — too many legitimate one-off uses —
+ * but agents over-screenshot in two predictable ways:
+ *   1. Saving to /tmp (or /var/folders) and treating it as a deliverable.
+ *      OS cleanup wipes those files; PR artifacts vanish.
+ *   2. Passing maxWidth=0 reflexively (full native resolution), blowing
+ *      LLM context with 1.5-2.5MB JPEGs when an 800px JPEG would do.
+ *
+ * Advisories surface in `meta.advisories[]` on the tool result so the
+ * caller (and the skill prose that frames the result) can react without
+ * the call itself failing.
+ */
+export type ScreenshotAdvisoryCode = 'EPHEMERAL_PATH' | 'FULL_RESOLUTION';
+
+export interface ScreenshotAdvisory {
+  code: ScreenshotAdvisoryCode;
+  message: string;
+}
+
+export function computeScreenshotAdvisories(
+  args: { maxWidth?: number },
+  requestedPath: string,
+): ScreenshotAdvisory[] {
+  const out: ScreenshotAdvisory[] = [];
+  if (requestedPath.startsWith('/tmp/') || requestedPath.startsWith('/var/folders/')) {
+    out.push({
+      code: 'EPHEMERAL_PATH',
+      message:
+        `Screenshot saved to an ephemeral path (${requestedPath}). The OS may clean it without warning, so it is not safe for PR artifacts or longer-running sessions. ` +
+        'Pass path="docs/proof/<feature-slug>/<NN>-<step>.jpg" for deliverables, or path="docs/diag/<YYYY-MM-DD>/<NN>-<symptom>.jpg" for debug captures.',
+    });
+  }
+  if (args.maxWidth === 0) {
+    out.push({
+      code: 'FULL_RESOLUTION',
+      message:
+        'maxWidth=0 disables auto-downscaling — capturing at full native resolution. iPhone 15/17 Pro JPEGs can be 1.5-2.5MB, which is expensive in LLM context. ' +
+        'Default 800px preserves label readability and visual confirmation. Use maxWidth=0 only for visual-diff or design-review captures.',
+    });
+  }
+  return out;
+}
+
+export function wrapResultWithAdvisories(
+  result: ToolResult,
+  advisories: ScreenshotAdvisory[],
+): ToolResult {
+  if (result.isError || advisories.length === 0) return result;
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: Record<string, unknown>;
+      meta?: Record<string, unknown>;
+    };
+    envelope.meta = { ...envelope.meta, advisories };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+  } catch {
+    return result;
+  }
+}
+
 export interface ScreenshotArgs {
   path?: string;
   format?: string;
@@ -98,6 +161,7 @@ export async function captureAndResizeScreenshot(
   // Pin the path explicitly so the post-resize step targets the same file
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
   const argsWithPath = { ...args, path: requestedPath };
+  const advisories = computeScreenshotAdvisories(args, requestedPath);
   const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
   if (result.isError) return result;
 
@@ -106,7 +170,8 @@ export async function captureAndResizeScreenshot(
   if (args.maxWidth !== undefined) resizeOpts.maxWidth = args.maxWidth;
   if (args.quality !== undefined) resizeOpts.quality = args.quality;
   const resize = await resizeWithSips(actualPath, resizeOpts);
-  return wrapResultWithResize(result, resize);
+  const resized = wrapResultWithResize(result, resize);
+  return wrapResultWithAdvisories(resized, advisories);
 }
 
 /**
