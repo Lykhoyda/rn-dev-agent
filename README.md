@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
-**53 MCP tools** | **5 agents** | **13 commands** | **249 tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**67 MCP tools** | **5 agents** | **16 commands** | **994 tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -60,18 +60,37 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | 5. Implementation | Build the feature — store, components, navigation, testIDs |
 | 5.5. Verification | **Prove it works live** — CDP health, component tree, store state, interaction, screenshot |
 | 6. Review | Parallel review agents check correctness and RN conventions |
-| 7. Proof | Execute proof flow step by step, capture screenshots |
+| 7. Proof | **Rehearse off camera**, persist a Maestro action with metadata, then record a deterministic replay — discovery never appears in the video |
 
 ### Other commands
 
-| Command | Purpose | Docs |
-|---------|---------|------|
-| `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/test-feature/) |
-| `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/debug-screen/) |
-| `/rn-dev-agent:build-and-test <desc>` | Build app, then test | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/build-and-test/) |
-| `/rn-dev-agent:check-env` | Verify environment readiness | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/check-env/) |
-| `/rn-dev-agent:proof-capture <desc>` | Record proof video + screenshots | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/proof-capture/) |
-| `/rn-dev-agent:nav-graph` | Extract navigation graph | [docs](https://lykhoyda.github.io/rn-dev-agent/commands/nav-graph/) |
+**Develop & test:**
+
+| Command | Purpose |
+|---------|---------|
+| `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature; auto-replays an existing Maestro action if one matches |
+| `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — gathers parallel evidence from CDP + native logs + component tree |
+| `/rn-dev-agent:build-and-test <desc>` | Build app (local or EAS), install on device, then test |
+| `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + PR body |
+
+**Reusable actions (M7):**
+
+| Command | Purpose |
+|---------|---------|
+| `/rn-dev-agent:list-learned-actions` | Browse memories + Maestro flows + UI skeletons + commands available in this project |
+| `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage) |
+
+**Setup & diagnostics:**
+
+| Command | Purpose |
+|---------|---------|
+| `/rn-dev-agent:setup` | Inject CLAUDE.md tool-routing rules + nav-ref + Zustand exposure |
+| `/rn-dev-agent:doctor` | 11-row diagnostic table — Node, CDP, agent-device, maestro-runner, simulators, Metro, helpers freshness |
+| `/rn-dev-agent:check-env` | Quick environment-readiness check |
+| `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
+| `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
+
+**Experience Engine** (cross-session learning): `/rn-dev-agent:rn-agent-export`, `/rn-dev-agent:rn-agent-import`, `/rn-dev-agent:rn-agent-health`, `/rn-dev-agent:rn-agent-compact` — see [docs](https://lykhoyda.github.io/rn-dev-agent/commands/).
 
 ## What makes this different
 
@@ -103,21 +122,21 @@ if (__DEV__) {
 
 ## MCP Tools
 
-53 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
+67 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
 | Category | Count | Examples | Docs |
 |----------|-------|---------|------|
-| **CDP** (React internals) | 26 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value`, `cdp_native_errors` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
-| **Device** (native interaction) | 14 | `device_find`, `device_press`, `device_fill`, `device_screenshot` | [Device tools](https://lykhoyda.github.io/rn-dev-agent/tools/#device-tools) |
-| **Testing** (E2E + proof) | 13 | `proof_step`, `cross_platform_verify`, `maestro_run` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
+| **CDP** (React internals) | 38 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value`, `cdp_native_errors`, `cdp_record_test_*` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
+| **Device** (native interaction) | 22 | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_pick_value` | [Device tools](https://lykhoyda.github.io/rn-dev-agent/tools/#device-tools) |
+| **Testing** (E2E + proof) | 7 | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_generate`, `maestro_test_all` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
 
-### What's new in v0.23.0 (2026-04-16)
+### What's new in v0.44.5 (2026-04-29)
 
-- **`cdp_native_errors`** — surfaces `simctl log`/`adb logcat` entries for errors that fire before `__RN_AGENT` injects (missing native modules, bundle-fetch failures, FATAL EXCEPTIONs). `cdp_status` hints at it automatically when JS-layer signals are blank.
-- **Multi-device correctness** — `cdp_connect` accepts `targetId`/`bundleId` filters to disambiguate zombie Expo Go pages; `inferPlatforms` cross-checks `simctl listapps` and `adb pm list`; `device_screenshot` accepts `platform` and inherits from the connected CDP target.
-- **Android speed parity** — platform-aware CDP timeouts (2× on Android emulator) eliminate `typeText` false-negatives; real Android flow went from **16.1s/3 fails to 7.2s/0 fails** in the same benchmark.
-- **`device_snapshot attachOnly: true`** — skip app launch when already running, saving the ~12s restart cascade.
-- **91 new unit tests** (158 → 249) locking in the extracted `cdp/*` modules, platform filters, and native-error parsers.
+- **M7 reusable-actions metadata schema** — every Maestro flow now carries a 5-key header (`id`, `intent`, `tags`, `mutates`, `status`) so future sessions can find, filter, and replay it safely. New `/list-learned-actions` browses the inventory; new `/run-action` replays with safety pre-flights (mutates flag, appId match, parameter coverage).
+- **Phase 8 rehearsal-before-recording gate** — discovery happens off camera, recording captures replay of a verified Maestro flow. Eliminates multi-minute videos of the LLM hunting for testIDs. Max-3 retry budget, Maestro-inexpressibility carve-out documented.
+- **CDP helpers auto-reinject** (B149) — `withConnection` does a 1-shot active reinject on `HELPERS_NOT_INJECTED`; `cdp_status` exposes `capabilities.helpersInjected`. Doctor row 8b surfaces the new freshness signal.
+- **CDP-001 → CDP-016 review batch** — 15 high-confidence fixes from the multi-LLM CDP tool review (15/16 closed; CDP-008 deferred pending a live keyboard+button accessibility fixture). Session state now lives at `~/Library/Application Support/rn-dev-agent/` per project (CDP-015), off `/tmp`.
+- **994 unit tests** in cdp-bridge (was 249 in v0.23.0).
 
 ## Architecture
 
@@ -126,7 +145,7 @@ Claude Code
   ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
-  │   52 tools: component tree, store state, profiling, network, interaction
+  │   67 tools: component tree, store state, profiling, network, interaction, recording
   │
   └── Bash (device lifecycle)
       xcrun simctl / adb / maestro-runner / agent-device
@@ -193,7 +212,7 @@ cd rn-dev-agent/scripts/cdp-bridge && npm install && npm run build && cd ../..
 cd /path/to/your-rn-app && claude --plugin-dir /path/to/rn-dev-agent
 ```
 
-Tests: `cd scripts/cdp-bridge && npm test` (148 tests, [CI](../../actions))
+Tests: `cd scripts/cdp-bridge && npm test` (994 tests, [CI](../../actions))
 
 ## License
 
