@@ -24,6 +24,7 @@ import { createObjectInspectHandler } from './tools/object-inspect.js';
 import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
+import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisibleByTestIDHandler, createExpectTextHandler, } from './tools/macro-asserts.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -554,6 +555,42 @@ trackedTool('cdp_metro_events', 'Read Metro reporter events (bundle_build_starte
     type: z.string().optional().describe('Filter by event type (e.g. "bundle_build_failed")'),
     clearErrors: z.boolean().default(false).describe('Reset the build-error counter without reading events'),
 }, createMetroEventsHandler(getClient));
+// D1206 Tier 2 Sprint B / Phase 126 — Macro-Asserts.
+// State-assertive primitives that wrap CDP introspection with assertion
+// semantics. The differentiated capability over Maestro Cloud / KaneAI /
+// BrowserStack — visual-only test runners cannot read Redux state or
+// navigation params mid-flow.
+trackedTool('expect_redux', 'Assert against Redux/Zustand store state at a path. Returns ok when the assertion matches; failResult with code=ASSERTION_FAILED when it does not. Operators (compose with AND): equals (deep), exists (default if no other op), notExists, length (array/string), contains (array), gt/lt/gte/lte (numbers). Pass timeoutMs to retry until match — useful when the store updates asynchronously after a tap. Differentiated capability over Maestro: Maestro asserts pixels; this asserts internal state.', {
+    path: z.string().describe('Dot-path into the store, e.g. "cart.items" or "auth.user.id". Required.'),
+    storeType: z.string().optional().describe('Restrict to a specific store ("redux" | "zustand" | a Zustand store name). Default: auto-detect.'),
+    equals: z.unknown().optional().describe('Deep-equal against this value.'),
+    exists: z.boolean().optional().describe('When true, value must be defined and non-null. When false, value must be undefined or null. Implicit default if no other operator is supplied.'),
+    notExists: z.boolean().optional().describe('Inverse of exists.'),
+    length: z.number().int().optional().describe('Asserts (Array | string).length === this number.'),
+    contains: z.unknown().optional().describe('Asserts an array contains this element (deep-equal).'),
+    gt: z.number().optional().describe('Asserts actual > this number.'),
+    lt: z.number().optional().describe('Asserts actual < this number.'),
+    gte: z.number().optional().describe('Asserts actual >= this number.'),
+    lte: z.number().optional().describe('Asserts actual <= this number.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0 = no retry). Useful for async state updates.'),
+}, createExpectReduxHandler(getClient));
+trackedTool('expect_route', 'Assert against the navigation state — current route name, current route params, or a route\'s presence in the stack. Returns ok when the assertion matches; failResult with code=ASSERTION_FAILED otherwise. Differentiated capability over Maestro: Maestro doesn\'t know what route you\'re on, only what\'s rendered. Pass timeoutMs to retry through navigation animations.', {
+    name: z.string().optional().describe('Asserts the current top-of-stack route name === this.'),
+    paramsEquals: z.unknown().optional().describe('Asserts deep-equal against the current route params object.'),
+    inStack: z.string().optional().describe('Asserts a route with this name exists somewhere in the stack (not necessarily current).'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0). Use 1000-2000 to wait through navigation animations.'),
+}, createExpectRouteHandler(getClient));
+trackedTool('expect_visible_by_testid', 'Assert that an element with a given testID is (or is not) currently rendered in the device accessibility tree. Snapshot-based — re-resolves on each retry. Pass exists=false to assert NOT visible. Pass timeoutMs to wait through animations / late mounts. Convenience wrapper over device_snapshot + manual scan.', {
+    testID: z.string().describe('The testID to look for in the accessibility tree.'),
+    exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0). Use 1000-3000 for late-mounted elements.'),
+}, createExpectVisibleByTestIDHandler());
+trackedTool('expect_text', 'Assert that visible text is (or is not) currently rendered in the device accessibility tree. Default substring match; pass exact=true for full-string match. Pass exists=false to assert NOT visible. Convenience wrapper over device_snapshot + label scan; equivalent to Maestro\'s assertVisible: "..." but callable mid-batch and during interactive walks without leaving the LLM context.', {
+    text: z.string().describe('The visible text to look for.'),
+    exact: z.boolean().optional().describe('Default false (substring match). Pass true to require exact label equality.'),
+    exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0).'),
+}, createExpectTextHandler());
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.
