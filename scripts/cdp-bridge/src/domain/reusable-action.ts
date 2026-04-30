@@ -1,0 +1,399 @@
+// D1206 Tier 2 Sprint C / Phase 127 — ReusableAction domain entity.
+//
+// Single source of truth for L3 reusable actions: the immutable contract
+// (M7 metadata header in the YAML), the mutable runtime state (sidecar
+// JSON), and the lifecycle transitions between them.
+//
+// Storage layout (per D1207):
+//   <project>/.rn-agent/actions/<id>.yaml          — the YAML body + M7 header
+//   <project>/.rn-agent/state/<id>.state.json      — sidecar (this entity's
+//                                                     ActionRuntimeState)
+//
+// This file is the ONLY place that defines the schema. Emitters
+// (test-recorder-generators, maestro-generate), parsers (learned-actions),
+// and runtime tools (run-action, future self-repair) all import from here.
+// Schema drift becomes a compile error.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lifecycle + classification enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Action lifecycle. Transitions:
+ *   experimental → active        when first replay passes clean
+ *   active → experimental         when self-repair patches the YAML
+ *                                 (re-validation needed before re-promotion)
+ *   * → deprecated                manual archival; do NOT auto-route or replay
+ */
+export type ActionLifecycle = 'experimental' | 'active' | 'deprecated';
+
+/**
+ * Failure codes returned by /run-action. Drives the recovery path:
+ *   SELECTOR_NOT_FOUND   → repair-eligible (UI drift, L3→L2 self-repair)
+ *   STATE_MISMATCH       → real regression (escalate to user / debug session)
+ *   MUTATE_PRECONDITION  → state setup needed (e.g. user not logged in)
+ *   ENV_UNREACHABLE      → app/CDP/Metro down (out-of-band)
+ *   TIMEOUT              → flaky (flag for review; bounded retries)
+ *   UNKNOWN              → un-classified Maestro error (surface raw stderr)
+ */
+export type ActionFailureCode =
+  | 'SELECTOR_NOT_FOUND'
+  | 'STATE_MISMATCH'
+  | 'MUTATE_PRECONDITION_FAILED'
+  | 'ENV_UNREACHABLE'
+  | 'TIMEOUT'
+  | 'UNKNOWN';
+
+/**
+ * Author of the action — drives diff-noise expectations and trust.
+ *   auto      — emitted by L2→L3 auto-emission (LLM walk → cdp_record_test_save)
+ *   human     — hand-authored YAML
+ *   imported  — landed via /rn-agent-import (foreign provenance)
+ */
+export type ActionAuthor = 'auto' | 'human' | 'imported';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M7 metadata — IMMUTABLE contract, lives in the YAML header
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The M7 metadata header (D1203). Lives as `# key: value` comments above
+ * the Maestro YAML body; the YAML executor ignores them but
+ * learned-actions.mjs and the run-action pre-flight parse them.
+ *
+ * Required: id, intent, status. The rest are optional.
+ */
+export interface M7Metadata {
+  /**
+   * Stable slug. Default: filename without `.yaml`. Set explicitly only
+   * when you want to rename the file later without breaking references
+   * to the action.
+   */
+  id: string;
+
+  /** Human-readable goal. Surfaced verbatim by /list-learned-actions. */
+  intent: string;
+
+  /**
+   * Filterable lower-case kebab-case keywords. Conventions:
+   *   feature-area: tasks, auth, profile
+   *   operation:    create, update, delete, search
+   *   markers:      smoke, regression
+   */
+  tags?: string[];
+
+  /**
+   * `true` if the flow leaves persistent residue (created/deleted rows,
+   * toggled settings, anything a subsequent test would need to clean
+   * up). Read-only flows are `false`. Consumed by /run-action to require
+   * confirmation before replay.
+   */
+  mutates?: boolean;
+
+  status: ActionLifecycle;
+
+  /**
+   * `${VAR}` placeholders the YAML expects via -e KEY=VAL when running
+   * via the maestro-runner CLI. Auto-extracted from the body if absent.
+   */
+  params?: string[];
+
+  /**
+   * App bundle ID this action was authored against. Pre-flight rejects
+   * replay if the connected target's bundleId differs. Optional but
+   * strongly recommended for cross-app safety.
+   */
+  appId?: string;
+
+  /**
+   * ISO timestamp of action creation. Optional — older flows may not
+   * carry this; in that case fall back to file ctime.
+   */
+  createdAt?: string;
+
+  author?: ActionAuthor;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime state — MUTABLE, lives in the sidecar JSON
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
+export interface RunRecord {
+  timestamp: string;          // ISO
+  durationMs: number;
+  status: 'pass' | 'fail';
+  failureCode?: ActionFailureCode;
+  failureDetail?: string;     // raw stderr summary, max ~500 chars
+  trigger: 'agent' | 'ci' | 'human';
+}
+
+/** A single self-repair attempt (only emitted on successful repair). */
+export interface RepairRecord {
+  timestamp: string;
+  failureCode: ActionFailureCode;
+  /** Concrete change made. Only fields that changed are populated. */
+  diff: {
+    selector?: { from: string; to: string };
+    step?: { from: string; to: string };
+  };
+  durationMs: number;
+  /** Free-form one-liner the agent recorded; max ~200 chars. */
+  agentReasoning?: string;
+}
+
+export interface ActionStats {
+  totalRuns: number;
+  successCount: number;
+  failureCount: number;
+  /** Mean duration over successful runs only. */
+  avgDurationMs: number;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+}
+
+/**
+ * Sidecar JSON — read/written at
+ * `<project>/.rn-agent/state/<id>.state.json`. High-churn, may be
+ * gitignored per `.rn-agent/.gitignore` defaults.
+ */
+export interface ActionRuntimeState {
+  /** Schema version — bump when ActionRuntimeState shape changes. */
+  schemaVersion: 1;
+  /** Incremented on every YAML edit (manual or auto-repair). */
+  revision: number;
+  updatedAt: string;
+  /**
+   * Last YAML mtime the agent saw. Used to detect human-edits-since-
+   * last-write and abort auto-repair before clobbering them.
+   */
+  lastSeenMtimeMs: number;
+  runHistory: RunRecord[];
+  repairHistory: RepairRecord[];
+  stats: ActionStats;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Composite — the full entity loaded at runtime
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The full `ReusableAction` — composed from disk at load time by
+ * combining the YAML header + body with the sidecar JSON.
+ *
+ * Consumers should treat `metadata` and `body` as immutable for the
+ * lifetime of an in-memory copy; mutating means rewriting the YAML.
+ * `state` is the only mutable field — all updates go through the
+ * helpers below to ensure schema invariants.
+ */
+export interface ReusableAction {
+  metadata: M7Metadata;
+  body: string;            // raw YAML body, post-header
+  filePath: string;        // absolute path to the .yaml
+  state: ActionRuntimeState;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bounded constants (single source for repair budgets, history limits)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const REPAIR_BUDGET = {
+  /** Max successful self-repairs allowed in a rolling 24h window. */
+  ATTEMPTS_PER_24H: 3,
+  /** Max repair attempts per run before escalating to user. */
+  ATTEMPTS_PER_RUN: 1,
+} as const;
+
+export const HISTORY_LIMITS = {
+  /** Cap runHistory at this many records; oldest dropped on append. */
+  RUN_HISTORY_MAX: 50,
+  /** Cap repairHistory at this many records; oldest dropped on append. */
+  REPAIR_HISTORY_MAX: 25,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure constructors + transitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build an empty runtime state for a brand-new action. Caller passes the
+ * file's mtime so subsequent edits-vs-self-repair detection works.
+ */
+export function freshRuntimeState(now: () => Date = () => new Date(), mtimeMs: number = 0): ActionRuntimeState {
+  const ts = now().toISOString();
+  return {
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: ts,
+    lastSeenMtimeMs: mtimeMs,
+    runHistory: [],
+    repairHistory: [],
+    stats: {
+      totalRuns: 0,
+      successCount: 0,
+      failureCount: 0,
+      avgDurationMs: 0,
+    },
+  };
+}
+
+/**
+ * Append a RunRecord and recompute stats. Bounded by HISTORY_LIMITS.
+ * Pure function — caller persists the returned state.
+ */
+export function appendRunRecord(state: ActionRuntimeState, record: RunRecord): ActionRuntimeState {
+  const newHistory = [...state.runHistory, record];
+  while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX) newHistory.shift();
+
+  const totalRuns = state.stats.totalRuns + 1;
+  const successCount = state.stats.successCount + (record.status === 'pass' ? 1 : 0);
+  const failureCount = state.stats.failureCount + (record.status === 'fail' ? 1 : 0);
+
+  // Recompute avg over successful records only.
+  const successDurations = newHistory.filter((r) => r.status === 'pass').map((r) => r.durationMs);
+  const avgDurationMs = successDurations.length
+    ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length)
+    : state.stats.avgDurationMs;
+
+  return {
+    ...state,
+    updatedAt: record.timestamp,
+    runHistory: newHistory,
+    stats: {
+      totalRuns,
+      successCount,
+      failureCount,
+      avgDurationMs,
+      lastSuccessAt: record.status === 'pass' ? record.timestamp : state.stats.lastSuccessAt,
+      lastFailureAt: record.status === 'fail' ? record.timestamp : state.stats.lastFailureAt,
+    },
+  };
+}
+
+/**
+ * Append a RepairRecord, bump revision. Bounded by HISTORY_LIMITS.
+ * Caller is responsible for actually patching the YAML body separately
+ * — this only updates the runtime state.
+ */
+export function appendRepairRecord(state: ActionRuntimeState, record: RepairRecord): ActionRuntimeState {
+  const newHistory = [...state.repairHistory, record];
+  while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX) newHistory.shift();
+  return {
+    ...state,
+    updatedAt: record.timestamp,
+    revision: state.revision + 1,
+    repairHistory: newHistory,
+  };
+}
+
+/**
+ * Check whether a self-repair attempt is within the rolling-24h budget.
+ * Pure function — `now` is injectable for tests.
+ */
+export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date = () => new Date()): boolean {
+  const cutoff = now().getTime() - 24 * 60 * 60 * 1000;
+  const recent = state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+  return recent.length < REPAIR_BUDGET.ATTEMPTS_PER_24H;
+}
+
+/**
+ * Promote `experimental → active` after a clean replay.
+ * Used by /run-action when an experimental flow passes; also used after
+ * a self-repair's verification replay succeeds.
+ */
+export function shouldAutoPromoteToActive(metadata: M7Metadata, lastRun: RunRecord | undefined): boolean {
+  return metadata.status === 'experimental' && lastRun?.status === 'pass';
+}
+
+/**
+ * Demote `active → experimental` after a self-repair patches the body.
+ * Forces a re-validation pass before treating the flow as production-quality
+ * again.
+ */
+export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
+  return metadata.status === 'active';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M7 header parsing/serialization
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse the M7 metadata block from a YAML file's header — the comment
+ * lines above the body that look like `# key: value`. Robust to extra
+ * whitespace and missing fields. Returns null if no `id` or `intent` is
+ * found (the two required keys).
+ *
+ * Pure function — pass the file's text. Mirrors the parsing rules in
+ * `scripts/learned-actions.mjs` parseFlowMeta() so they stay in sync.
+ */
+export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata | null {
+  const lines = yamlText.split('\n');
+  const meta: Record<string, unknown> = {};
+  let inComment = false;
+  for (const line of lines) {
+    if (line.startsWith('#')) {
+      inComment = true;
+      const stripped = line.replace(/^#\s?/, '').trim();
+      if (!stripped) continue;
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      if (!kv) continue;
+      const key = kv[1];
+      const raw = kv[2].trim();
+      if (key === 'tags') {
+        meta.tags = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+      } else if (key === 'mutates') {
+        meta.mutates = /^true$/i.test(raw);
+      } else if (key === 'params') {
+        meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+      } else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
+        meta[key] = raw;
+      }
+    } else if (inComment && line.trim() === '') {
+      // First blank line after a comment block — stop parsing header.
+      if (Object.keys(meta).length > 0) break;
+    } else if (inComment) {
+      break;
+    }
+  }
+  const id = (meta.id as string) ?? fallbackId;
+  const intent = meta.intent as string | undefined;
+  if (!id || !intent) return null;
+  const status = (meta.status as ActionLifecycle | undefined) ?? 'experimental';
+  return {
+    id,
+    intent,
+    tags: meta.tags as string[] | undefined,
+    mutates: meta.mutates as boolean | undefined,
+    status,
+    params: meta.params as string[] | undefined,
+    appId: meta.appId as string | undefined,
+    createdAt: meta.createdAt as string | undefined,
+    author: meta.author as ActionAuthor | undefined,
+  };
+}
+
+/**
+ * Serialize an M7Metadata object as YAML comment lines. Output is
+ * suitable for prepending to a Maestro YAML body. Stable field order.
+ */
+export function serializeM7Header(metadata: M7Metadata): string {
+  const lines: string[] = [];
+  const stripNewlines = (s: string) => String(s).replace(/[\r\n]+/g, ' ');
+  lines.push(`# id: ${stripNewlines(metadata.id)}`);
+  lines.push(`# intent: ${stripNewlines(metadata.intent)}`);
+  if (metadata.tags && metadata.tags.length) {
+    lines.push(`# tags: [${metadata.tags.map(stripNewlines).join(', ')}]`);
+  }
+  if (typeof metadata.mutates === 'boolean') {
+    lines.push(`# mutates: ${metadata.mutates}`);
+  }
+  lines.push(`# status: ${stripNewlines(metadata.status)}`);
+  if (metadata.params && metadata.params.length) {
+    lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);
+  }
+  if (metadata.appId) lines.push(`# appId: ${stripNewlines(metadata.appId)}`);
+  if (metadata.createdAt) lines.push(`# createdAt: ${stripNewlines(metadata.createdAt)}`);
+  if (metadata.author) lines.push(`# author: ${stripNewlines(metadata.author)}`);
+  return lines.join('\n');
+}
