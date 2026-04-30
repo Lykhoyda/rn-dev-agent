@@ -8,6 +8,8 @@ import {
   evaluateReduxAssertions,
   evaluateRouteAssertions,
   findRefsByText,
+  unwrapStoreEnvelope,
+  extractStack,
 } from '../../dist/tools/macro-asserts.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -212,4 +214,120 @@ test('Phase126 findRefsByText: malformed envelope returns empty', () => {
 test('Phase126 findRefsByText: ok=false envelope returns empty', () => {
   const err = JSON.stringify({ ok: false, error: 'no session' });
   assert.deepEqual(findRefsByText(err, 'Tasks', false), []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 128 — post-review fixes
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Bug #1: unwrap {type, state} envelope from getStoreState
+
+test('Phase128: unwrapStoreEnvelope returns state from {type, state} wrapper', () => {
+  assert.deepEqual(
+    unwrapStoreEnvelope({ type: 'redux', state: [1, 2, 3] }),
+    [1, 2, 3],
+  );
+  assert.equal(
+    unwrapStoreEnvelope({ type: 'zustand', state: 'active' }),
+    'active',
+  );
+});
+
+test('Phase128: unwrapStoreEnvelope leaves bare values untouched', () => {
+  assert.deepEqual(unwrapStoreEnvelope([1, 2, 3]), [1, 2, 3]);
+  assert.equal(unwrapStoreEnvelope(42), 42);
+  assert.equal(unwrapStoreEnvelope(null), null);
+  assert.equal(unwrapStoreEnvelope(undefined), undefined);
+});
+
+test('Phase128: unwrapStoreEnvelope leaves objects without {type, state} keys', () => {
+  assert.deepEqual(unwrapStoreEnvelope({ items: [1, 2] }), { items: [1, 2] });
+  assert.deepEqual(unwrapStoreEnvelope({ type: 'foo' }), { type: 'foo' });
+  assert.deepEqual(unwrapStoreEnvelope({ state: 'foo' }), { state: 'foo' });
+});
+
+test('Phase128: end-to-end — wrapper unwrap fixes length operator', () => {
+  // The bug: pre-fix, evaluateReduxAssertions saw {type, state} and matched
+  // length=2 against the wrapper, which has no .length → assertion failed.
+  // Post-fix: caller unwraps first, so length sees the array.
+  const wrapped = { type: 'redux', state: [{ id: 1 }, { id: 2 }] };
+  const actual = unwrapStoreEnvelope(wrapped);
+  const ev = evaluateReduxAssertions(actual, { length: 2 });
+  assert.deepEqual(ev, { matched: true });
+});
+
+test('Phase128: end-to-end — wrapper unwrap fixes contains operator', () => {
+  const wrapped = { type: 'zustand', state: ['login', 'home'] };
+  const actual = unwrapStoreEnvelope(wrapped);
+  const ev = evaluateReduxAssertions(actual, { contains: 'home' });
+  assert.deepEqual(ev, { matched: true });
+});
+
+// Bug #2: extractStack supports both shapes (stack: [string], routes: [{name}])
+
+test('Phase128: extractStack reads simplified shape (stack: [string])', () => {
+  const navState = {
+    routeName: 'TaskDetail',
+    stack: ['Home', 'TaskList', 'TaskDetail'],
+  };
+  assert.deepEqual(extractStack(navState), ['Home', 'TaskList', 'TaskDetail']);
+});
+
+test('Phase128: extractStack reads raw shape (routes: [{name}])', () => {
+  const navState = {
+    routeName: 'X',
+    routes: [{ name: 'Home' }, { name: 'X' }],
+  };
+  assert.deepEqual(extractStack(navState), ['Home', 'X']);
+});
+
+test('Phase128: extractStack walks nested simplified shapes (Expo Router)', () => {
+  const navState = {
+    routeName: 'TaskDetail',
+    stack: ['Tabs'],
+    nested: {
+      routeName: 'TaskDetail',
+      stack: ['TaskList', 'TaskDetail'],
+    },
+  };
+  const out = extractStack(navState);
+  assert.ok(out.includes('Tabs'));
+  assert.ok(out.includes('TaskList'));
+  assert.ok(out.includes('TaskDetail'));
+});
+
+test('Phase128: extractStack returns empty when no stack/routes present', () => {
+  assert.deepEqual(extractStack({}), []);
+  assert.deepEqual(extractStack({ routeName: 'X' }), []);
+});
+
+test('Phase128: extractStack dedupes when both shapes present', () => {
+  const navState = {
+    stack: ['Home', 'X'],
+    routes: [{ name: 'X' }, { name: 'Home' }],
+  };
+  const out = extractStack(navState);
+  // Set-based dedupe.
+  assert.equal(out.length, 2);
+  assert.ok(out.includes('Home'));
+  assert.ok(out.includes('X'));
+});
+
+test('Phase128: end-to-end — evaluateRouteAssertions inStack now works on simplified shape', () => {
+  // The bug: pre-fix, evaluateRouteAssertions read navState.routes which
+  // doesn't exist on the simplified path → empty stack → false negative.
+  // Post-fix: extractStack reads stack OR routes.
+  const simplifiedNav = { routeName: 'TaskDetail', stack: ['Home', 'TaskList', 'TaskDetail'] };
+  const ev = evaluateRouteAssertions(simplifiedNav, { inStack: 'TaskList' });
+  assert.deepEqual(ev, { matched: true });
+});
+
+test('Phase128: end-to-end — inStack failure on simplified shape carries the actual stack', () => {
+  const simplifiedNav = { routeName: 'X', stack: ['A', 'B'] };
+  const ev = evaluateRouteAssertions(simplifiedNav, { inStack: 'Missing' });
+  assert.equal(ev.matched, false);
+  if (!ev.matched) {
+    assert.deepEqual(ev.failure.actual, ['A', 'B']);
+    assert.equal(ev.failure.expected, 'Missing');
+  }
 });

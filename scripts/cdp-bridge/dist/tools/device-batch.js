@@ -6,26 +6,73 @@ import { captureAndResizeScreenshot } from './device-list.js';
  * testID-keyed batch steps. Each call snapshots, returning the fresh ref so
  * layout-change drift can't invalidate refs across step boundaries.
  *
- * Exported for unit tests; pure once a snapshot is provided externally.
+ * Phase 128 (post-review #3): supports BOTH snapshot shapes.
+ *   - Daemon/CLI shape: `{data: {nodes: [{ref, identifier, ...}]}}` (flat)
+ *   - iOS fast-runner shape: `{data: {tree: {ref?, identifier?, children?: [...]}}}`
+ *     (nested XCUIElement dict). agent-device-wrapper.ts:483 documents this.
+ *     Fast-runner snapshots populate AFTER the first daemon snapshot warms
+ *     up the ref-map, so subsequent iOS testID lookups hit the tree shape
+ *     and used to silently fail.
+ *
+ * Exported for unit tests; pure once a snapshot envelope is provided.
  */
 export function findRefByTestID(snapshotEnvelope, testID) {
     try {
         const env = JSON.parse(snapshotEnvelope);
-        if (!env.ok)
+        if (env.ok === false)
             return null;
-        const node = env.data?.nodes?.find((n) => n.identifier === testID);
-        return node?.ref ?? null;
+        // Daemon/CLI shape — flat array.
+        const nodes = env.data?.nodes;
+        if (Array.isArray(nodes)) {
+            const hit = nodes.find((n) => n.identifier === testID);
+            return hit?.ref ?? null;
+        }
+        // Fast-runner shape — nested tree.
+        if (env.data?.tree) {
+            return findRefInTree(env.data.tree, testID);
+        }
+        return null;
     }
     catch {
         return null;
     }
 }
+function findRefInTree(node, testID) {
+    if (node.identifier === testID && typeof node.ref === 'string')
+        return node.ref;
+    if (Array.isArray(node.children)) {
+        for (const child of node.children) {
+            const hit = findRefInTree(child, testID);
+            if (hit)
+                return hit;
+        }
+    }
+    return null;
+}
+/**
+ * Phase 128 (post-review #5/#6): peek the agent-device envelope's ok flag
+ * BEFORE computing testID resolution / visibility. Distinguishes
+ * "snapshot infrastructure failed" from "element not present" so callers
+ * can route to SNAPSHOT_FAILED vs TESTID_NOT_FOUND with accurate hints.
+ */
+export function snapshotEnvelopeFailed(envelope) {
+    if (!envelope)
+        return true;
+    try {
+        const env = JSON.parse(envelope);
+        return env.ok === false;
+    }
+    catch {
+        return true;
+    }
+}
 async function resolveTestIDViaSnapshot(testID) {
     const result = await runAgentDevice(['snapshot', '-i']);
     const envelope = result.content?.[0]?.text ?? null;
-    if (!envelope)
-        return { ref: null, envelope: null };
-    return { ref: findRefByTestID(envelope, testID), envelope };
+    const snapshotFailed = snapshotEnvelopeFailed(envelope);
+    if (snapshotFailed)
+        return { ref: null, envelope, snapshotFailed: true };
+    return { ref: findRefByTestID(envelope, testID), envelope, snapshotFailed: false };
 }
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
@@ -34,11 +81,19 @@ async function executeStep(step) {
     switch (step.action) {
         case 'find': {
             // Phase 125: testID-keyed find re-resolves via snapshot per call.
+            // Phase 128 (post-review #5/#6): distinguish snapshot infrastructure
+            // failure from "testID not present" so the user gets the right hint.
             if (step.testID) {
-                const { ref, envelope } = await resolveTestIDViaSnapshot(step.testID);
+                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                if (snapshotFailed) {
+                    return failResult(`Snapshot failed while resolving testID "${step.testID}" — agent-device unreachable, daemon crashed, or snapshot timed out`, 'SNAPSHOT_FAILED', {
+                        testID: step.testID,
+                        envelope: envelope?.slice(0, 500),
+                        hint: 'Run cdp_status / device_list to verify the device + agent-device session are healthy. This is NOT a "testID missing" condition.',
+                    });
+                }
                 if (!ref) {
-                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, {
-                        code: 'TESTID_NOT_FOUND',
+                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
                         hint: 'Element may not be on-screen yet (animation? modal not mounted?). Re-snapshot after a short wait, or use device_snapshot directly to inspect the tree.',
                     });
@@ -56,10 +111,12 @@ async function executeStep(step) {
         }
         case 'press': {
             if (step.testID) {
-                const { ref } = await resolveTestIDViaSnapshot(step.testID);
+                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                if (snapshotFailed) {
+                    return failResult(`Snapshot failed while resolving testID "${step.testID}" for press — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
+                }
                 if (!ref) {
-                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, {
-                        code: 'TESTID_NOT_FOUND',
+                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
                     });
                 }
@@ -74,10 +131,12 @@ async function executeStep(step) {
             if (!step.text)
                 return failResult('fill requires text');
             if (step.testID) {
-                const { ref } = await resolveTestIDViaSnapshot(step.testID);
+                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                if (snapshotFailed) {
+                    return failResult(`Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
+                }
                 if (!ref) {
-                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, {
-                        code: 'TESTID_NOT_FOUND',
+                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
                     });
                 }

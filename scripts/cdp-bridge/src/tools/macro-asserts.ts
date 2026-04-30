@@ -16,7 +16,27 @@ import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { runAgentDevice } from '../agent-device-wrapper.js';
-import { findRefByTestID } from './device-batch.js';
+import { findRefByTestID, snapshotEnvelopeFailed } from './device-batch.js';
+
+/**
+ * Phase 128 (post-review #1): unwrap the {type, state} envelope produced
+ * by getStoreState() in injected-helpers.ts:810. Without this, all
+ * non-trivial assertions (length/contains/equals) compare against the
+ * wrapper object instead of the resolved state value.
+ *
+ * Exported for unit tests.
+ */
+export function unwrapStoreEnvelope(value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'type' in (value as Record<string, unknown>) &&
+    'state' in (value as Record<string, unknown>)
+  ) {
+    return (value as { state: unknown }).state;
+  }
+  return value;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers — testable in isolation
@@ -125,8 +145,41 @@ export interface RouteFailure {
   actual: unknown;
 }
 
+/**
+ * Phase 128 (post-review #2): the simplify() path in injected-helpers.ts:411
+ * produces `{ routeName, params, stack: [string,...], index, nested? }` —
+ * note `stack` (array of strings), not `routes` (array of objects). The raw
+ * pre-simplify React Navigation devtools state uses `routes: [{name,...}]`.
+ * Support both so inStack assertions work on the most common production
+ * path (simplify branch).
+ */
+export function extractStack(navState: {
+  routeName?: string;
+  stack?: unknown;
+  routes?: unknown;
+  nested?: { stack?: unknown; routes?: unknown };
+}): string[] {
+  const out = new Set<string>();
+  // Simplified shape: stack is array of strings.
+  if (Array.isArray(navState.stack)) {
+    for (const n of navState.stack) if (typeof n === 'string') out.add(n);
+  }
+  // Raw shape: routes is array of {name}.
+  if (Array.isArray(navState.routes)) {
+    for (const r of navState.routes) {
+      const name = (r as { name?: unknown })?.name;
+      if (typeof name === 'string') out.add(name);
+    }
+  }
+  // Walk nested nav stacks if present (Expo Router nests).
+  if (navState.nested) {
+    for (const n of extractStack(navState.nested)) out.add(n);
+  }
+  return Array.from(out);
+}
+
 export function evaluateRouteAssertions(
-  navState: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }> },
+  navState: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }>; stack?: unknown; nested?: unknown },
   assertions: RouteAssertions,
 ): { matched: true } | { matched: false; failure: RouteFailure } {
   if (assertions.name !== undefined) {
@@ -140,7 +193,7 @@ export function evaluateRouteAssertions(
     }
   }
   if (assertions.inStack !== undefined) {
-    const stack = (navState.routes ?? []).map((r) => r?.name).filter((n): n is string => typeof n === 'string');
+    const stack = extractStack(navState as Parameters<typeof extractStack>[0]);
     if (!stack.includes(assertions.inStack)) {
       return { matched: false, failure: { field: 'inStack', expected: assertions.inStack, actual: stack } };
     }
@@ -205,39 +258,101 @@ export function createExpectReduxHandler(getClient: () => CDPClient) {
     const typeArg = args.storeType ? JSON.stringify(args.storeType) : 'undefined';
     const expression = client.bridgeWithFallback(`getStoreState(${pathArg}, ${typeArg})`);
 
-    const probe = async (): Promise<{ matched: boolean; result: { actual: unknown; eval: ReturnType<typeof evaluateReduxAssertions> } }> => {
+    type Probe =
+      | { kind: 'matched'; actual: unknown }
+      | { kind: 'mismatched'; actual: unknown; eval: ReturnType<typeof evaluateReduxAssertions> }
+      | { kind: 'eval-failed'; reason: string }
+      | { kind: 'path-not-found'; agentError: string; availableKeys?: unknown; hints?: string[] }
+      | { kind: 'truncated'; previewSize?: unknown };
+
+    const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
       const result = await client.evaluate(expression);
       if (result.error || typeof result.value !== 'string') {
-        return { matched: false, result: { actual: undefined, eval: { matched: false, failure: { op: 'exists', expected: true, actual: undefined } } } };
+        return { matched: false, result: { kind: 'eval-failed', reason: result.error ?? 'No string response from getStoreState' } };
       }
-      let actual: unknown = undefined;
+      let raw: unknown = undefined;
       try {
-        actual = JSON.parse(result.value);
-        if (actual !== null && typeof actual === 'object' && '__agent_truncated' in (actual as Record<string, unknown>)) {
-          // Truncated — assertions on full payload aren't safe; treat as fail with hint.
-          return { matched: false, result: { actual: '<truncated>', eval: { matched: false, failure: { op: 'exists', expected: 'untruncated value', actual: '<truncated>' } } } };
-        }
+        raw = JSON.parse(result.value);
       } catch {
-        actual = result.value;
+        return { matched: false, result: { kind: 'eval-failed', reason: 'getStoreState returned non-JSON' } };
       }
+      // Phase 128 (post-review #8): truncation surfaces with the user's
+      // original op preserved so the failure shape is accurate.
+      if (raw !== null && typeof raw === 'object' && '__agent_truncated' in (raw as Record<string, unknown>)) {
+        return { matched: false, result: { kind: 'truncated', previewSize: (raw as { originalLength?: unknown }).originalLength } };
+      }
+      // Phase 128 (post-review #7): surface __agent_error from getStoreState
+      // (path not found, no store mounted) as a distinct failure code.
+      if (raw !== null && typeof raw === 'object' && '__agent_error' in (raw as Record<string, unknown>)) {
+        const obj = raw as { __agent_error?: unknown; availableKeys?: unknown; hint?: unknown; hint2?: unknown; hint3?: unknown };
+        const hints: string[] = [];
+        if (typeof obj.hint === 'string') hints.push(obj.hint);
+        if (typeof obj.hint2 === 'string') hints.push(obj.hint2);
+        if (typeof obj.hint3 === 'string') hints.push(obj.hint3);
+        return {
+          matched: false,
+          result: {
+            kind: 'path-not-found',
+            agentError: typeof obj.__agent_error === 'string' ? obj.__agent_error : 'unknown error',
+            availableKeys: obj.availableKeys,
+            hints: hints.length ? hints : undefined,
+          },
+        };
+      }
+      // Phase 128 (post-review #1): unwrap {type, state} envelope from
+      // getStoreState before asserting against operators.
+      const actual = unwrapStoreEnvelope(raw);
       const ev = evaluateReduxAssertions(actual, assertions);
-      return { matched: ev.matched, result: { actual, eval: ev } };
+      if (ev.matched) return { matched: true, result: { kind: 'matched', actual } };
+      return { matched: false, result: { kind: 'mismatched', actual, eval: ev } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
-    const { actual, eval: ev } = polled.result;
+    const result = polled.result;
 
-    if (ev.matched) {
-      return okResult({ matched: true, path: args.path, actual });
+    if (result.kind === 'matched') {
+      return okResult({ matched: true, path: args.path, actual: result.actual });
     }
-    return failResult(
-      `expect_redux assertion failed at ${args.path}: ${ev.failure.op}`,
-      {
-        code: 'ASSERTION_FAILED',
+    if (result.kind === 'eval-failed') {
+      return failResult(`expect_redux: store evaluator failed: ${result.reason}`, 'EVAL_FAILED', {
         path: args.path,
-        actual,
-        expected: ev.failure.expected,
-        op: ev.failure.op,
+      });
+    }
+    if (result.kind === 'path-not-found') {
+      return failResult(
+        `expect_redux: path "${args.path}" not found — ${result.agentError}`,
+        'PATH_NOT_FOUND',
+        {
+          path: args.path,
+          availableKeys: result.availableKeys,
+          hints: result.hints,
+          hint: 'Call cdp_store_state with no path to inspect the full store shape, then narrow.',
+        },
+      );
+    }
+    if (result.kind === 'truncated') {
+      // Phase 128 (post-review #8): preserve the user's intended op so
+      // the failure shape is meaningful even when the payload was clipped.
+      return failResult(
+        `expect_redux: store payload at "${args.path}" exceeded the 30KB safe-stringify cap; assertion not evaluated`,
+        'STORE_TRUNCATED',
+        {
+          path: args.path,
+          requestedAssertions: assertions,
+          originalLength: result.previewSize,
+          hint: 'Narrow the path to a smaller slice (e.g. "cart.items" instead of "cart") so the payload fits under the cap.',
+        },
+      );
+    }
+    // Mismatched (assertion failure proper).
+    return failResult(
+      `expect_redux assertion failed at ${args.path}: ${result.eval.matched ? '' : result.eval.failure.op}`,
+      'ASSERTION_FAILED',
+      {
+        path: args.path,
+        actual: result.actual,
+        expected: result.eval.matched ? undefined : result.eval.failure.expected,
+        op: result.eval.matched ? undefined : result.eval.failure.op,
         hint: 'If state is async (post-mutation), pass timeoutMs (e.g. 1000) to retry. If the path is wrong, call cdp_store_state without operators to inspect the shape.',
       },
     );
@@ -284,8 +399,8 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
     }
     return failResult(
       `expect_route assertion failed: ${ev.failure.field}`,
+      'ASSERTION_FAILED',
       {
-        code: 'ASSERTION_FAILED',
         field: ev.failure.field,
         actual: ev.failure.actual,
         expected: ev.failure.expected,
@@ -313,15 +428,37 @@ export function createExpectVisibleByTestIDHandler() {
     }
     const expectVisible = args.exists !== false; // default true
 
-    const probe = async (): Promise<{ matched: boolean; result: { ref: string | null } }> => {
+    type Probe =
+      | { kind: 'snapshot-failed'; envelope: string }
+      | { kind: 'resolved'; ref: string | null };
+
+    const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
       const result = await runAgentDevice(['snapshot', '-i']);
       const envelope = result.content?.[0]?.text ?? '';
+      // Phase 128 (post-review #5): peek ok flag BEFORE computing
+      // visibility — distinguishes infrastructure failure from "not present"
+      // so we can't silent-pass an exists:false assertion when the snapshot
+      // call actually failed.
+      if (snapshotEnvelopeFailed(envelope)) {
+        return { matched: false, result: { kind: 'snapshot-failed', envelope } };
+      }
       const ref = findRefByTestID(envelope, args.testID);
       const visible = ref !== null;
-      return { matched: visible === expectVisible, result: { ref } };
+      return { matched: visible === expectVisible, result: { kind: 'resolved', ref } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
+    if (polled.result.kind === 'snapshot-failed') {
+      return failResult(
+        `expect_visible_by_testid: snapshot failed while resolving testID "${args.testID}" — agent-device unreachable, daemon crashed, or snapshot timed out`,
+        'SNAPSHOT_FAILED',
+        {
+          testID: args.testID,
+          envelope: polled.result.envelope.slice(0, 500),
+          hint: 'Run cdp_status / device_list to verify the device + agent-device session are healthy. This is NOT a "testID missing" condition.',
+        },
+      );
+    }
     const { ref } = polled.result;
     const visible = ref !== null;
 
@@ -330,8 +467,8 @@ export function createExpectVisibleByTestIDHandler() {
     }
     return failResult(
       `expect_visible_by_testid: testID "${args.testID}" was ${visible ? 'visible' : 'NOT visible'}; expected ${expectVisible ? 'visible' : 'NOT visible'}`,
+      'ASSERTION_FAILED',
       {
-        code: 'ASSERTION_FAILED',
         testID: args.testID,
         actualVisible: visible,
         expectedVisible: expectVisible,
@@ -379,15 +516,35 @@ export function createExpectTextHandler() {
     const expectVisible = args.exists !== false;
     const exact = args.exact === true;
 
-    const probe = async (): Promise<{ matched: boolean; result: { refs: string[] } }> => {
+    type Probe =
+      | { kind: 'snapshot-failed'; envelope: string }
+      | { kind: 'resolved'; refs: string[] };
+
+    const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
       const result = await runAgentDevice(['snapshot', '-i']);
       const envelope = result.content?.[0]?.text ?? '';
+      // Phase 128 (post-review #5): same snapshot-failure peek as
+      // expect_visible_by_testid. exists:false would otherwise silent-pass.
+      if (snapshotEnvelopeFailed(envelope)) {
+        return { matched: false, result: { kind: 'snapshot-failed', envelope } };
+      }
       const refs = findRefsByText(envelope, args.text, exact);
       const visible = refs.length > 0;
-      return { matched: visible === expectVisible, result: { refs } };
+      return { matched: visible === expectVisible, result: { kind: 'resolved', refs } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
+    if (polled.result.kind === 'snapshot-failed') {
+      return failResult(
+        `expect_text: snapshot failed while searching for "${args.text}" — agent-device unreachable, daemon crashed, or snapshot timed out`,
+        'SNAPSHOT_FAILED',
+        {
+          text: args.text,
+          envelope: polled.result.envelope.slice(0, 500),
+          hint: 'Run cdp_status / device_list to verify the device + agent-device session are healthy. This is NOT a "text not present" condition.',
+        },
+      );
+    }
     const { refs } = polled.result;
     const visible = refs.length > 0;
 
@@ -396,8 +553,8 @@ export function createExpectTextHandler() {
     }
     return failResult(
       `expect_text: text "${args.text}" was ${visible ? 'visible' : 'NOT visible'}; expected ${expectVisible ? 'visible' : 'NOT visible'}`,
+      'ASSERTION_FAILED',
       {
-        code: 'ASSERTION_FAILED',
         text: args.text,
         exact,
         actualVisible: visible,
