@@ -25,6 +25,7 @@ import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.j
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
 import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisibleByTestIDHandler, createExpectTextHandler, } from './tools/macro-asserts.js';
+import { createRepairActionHandler } from './tools/repair-action.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -591,6 +592,18 @@ trackedTool('expect_text', 'Assert that visible text is (or is not) currently re
     exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
     timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0).'),
 }, createExpectTextHandler());
+// D1206 Tier 2 Sprint D / Phase 129 — L3→L2 self-repair. When a Maestro
+// flow fails with "element not found", this tool patches the YAML in place
+// using fuzzy matching against the current device snapshot. Drives the
+// "self-recoverable on UI changes" L3 promise in D1206.
+trackedTool('cdp_repair_action', 'Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/<actionId>.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.', {
+    actionId: z.string().describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
+    failedSelector: z.string().describe('The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id \'X\' not found" → X.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    threshold: z.number().min(0).max(1).optional().describe('Fuzzy-match similarity threshold (0..1). Default 0.6. Lower if the screen has many similar testIDs and Levenshtein on the original is too strict.'),
+    dryRun: z.boolean().optional().describe('Don\'t write changes — return the diff that WOULD be applied. Useful for previewing repairs before committing.'),
+    agentReasoning: z.string().optional().describe('Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.'),
+}, createRepairActionHandler());
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.
