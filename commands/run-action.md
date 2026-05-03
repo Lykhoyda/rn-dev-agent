@@ -42,7 +42,7 @@ Example calls:
    anything else as a passthrough flag.
 
 2. **Resolve the action via the script** (single source of truth — never glob
-   `.maestro/flows/` directly):
+   `.rn-agent/actions/` directly):
    ```bash
    ACTION_NAME="<first-arg>"
    RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \

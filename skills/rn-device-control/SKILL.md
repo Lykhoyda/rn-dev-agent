@@ -355,6 +355,91 @@ If agent-device is unavailable, fall back to:
 
 ---
 
+## Screenshot Guardrails (B150)
+
+Screenshots are expensive to take (50-200ms), expensive in LLM tokens
+(an 800px JPEG ≈ 1500-3000 image tokens), and easy to over-use during
+debug spirals. The plugin enforces these rules and emits non-blocking
+advisories on the tool result so you can self-correct.
+
+### Use the right tool for the question
+
+Before reaching for `device_screenshot`, ask what question you're answering:
+
+| Question | Wrong | Right |
+|---|---|---|
+| "What's on screen?" | `device_screenshot` | `device_snapshot` (a11y tree + `@ref` handles, ~5ms, ~300 tokens) |
+| "Is `testID X` visible?" | `device_screenshot` | `cdp_component_tree(filter='X')` (~200ms, ~200 tokens, exact match) |
+| "What's the store value?" | Screenshot a debug overlay | `cdp_store_state(path='...')` (~50ms, structured JSON) |
+| "Did the value update?" | Take 2 screenshots and eyeball-diff | `cdp_dispatch(...readBack='cart')` returns the diff in one call |
+| "Show the user the bug" | This IS the legitimate case | `device_screenshot` ✓ |
+| "PR proof of feature" | This IS the legitimate case | `device_screenshot(path='docs/proof/<feat>/...')` ✓ |
+
+### When you DO screenshot, follow these rules
+
+**WHERE — output path:**
+- E2E proof (Phase 8): `docs/proof/<feature-slug>/<NN>-<step>.jpg`
+- Debug capture: `docs/diag/<YYYY-MM-DD>/<NN>-<symptom>.jpg`
+- Throwaway / scratch: leave `path` unset (defaults to `/tmp`)
+- The tool emits `meta.advisories[{code: "EPHEMERAL_PATH", ...}]` whenever
+  the path resolves under `/tmp/` or `/var/folders/`. Heed it — those
+  files will be cleaned by the OS and are unsafe for PR artifacts.
+
+**WHEN — pre-conditions:**
+- `cdp_status` returned `ok:true` (otherwise you may capture a black screen
+  or the wrong app)
+- `cdp_navigation_state` returned a real route name — NOT `"DevClientLauncher"`,
+  NOT `"ServerPicker"`, NOT empty/null. A screenshot of the dev-loader is
+  noise; dismiss the picker first.
+- UI has settled — 1-2s after the last interaction, OR `device_snapshot`
+  confirmed the expected element is on screen.
+
+**HOW — format and size:**
+- Default JPEG (4× smaller than PNG; only use PNG when you need alpha or
+  pixel-exact comparison)
+- Default `maxWidth=800` — saves ~46% on iPhone 15/17 Pro screenshots
+  without losing label readability or visual confirmation.
+- `maxWidth=0` (full native resolution) is reserved for visual-diff or
+  design-review captures only. The tool emits
+  `meta.advisories[{code: "FULL_RESOLUTION", ...}]` so you don't reach
+  for it reflexively.
+
+**HOW MANY — volume:**
+- E2E proof: exactly N screenshots = number of rows in the architect's
+  Phase 4 flow table. No more, no fewer.
+- Debug session: max 5 captures per session. Past 5, you're rationalising
+  visual inspection over `cdp_*` introspection — switch to
+  `cdp_component_tree`, `cdp_store_state`, or `cdp_error_log`.
+- Identical-state captures (same UI, same store, same screen) are wasted —
+  use `cdp_component_tree(filter=...)` to compare structurally instead.
+
+### How to read `meta.advisories[]`
+
+The screenshot tool returns advisories alongside `meta.resize`:
+
+```json
+{
+  "ok": true,
+  "data": { "path": "/tmp/rn-screenshot-1730289600.jpg" },
+  "meta": {
+    "resize": { "resized": true, "savedPercent": 46 },
+    "advisories": [
+      {
+        "code": "EPHEMERAL_PATH",
+        "message": "Screenshot saved to an ephemeral path (/tmp/...). Pass path=\"docs/proof/...\" for deliverables."
+      }
+    ]
+  }
+}
+```
+
+Treat advisories as guidance, not errors — the call still succeeded. But
+if you're capturing PR proof artifacts and see `EPHEMERAL_PATH`, you have
+the wrong path; re-take with the correct one before declaring the proof
+complete.
+
+---
+
 ## Common Rationalizations
 
 Device control commands are low-level — agents reach for bash too readily.
@@ -366,6 +451,11 @@ Device control commands are low-level — agents reach for bash too readily.
 | "I'll `adb shell input text` directly instead of `device_fill`" | `device_fill` handles percent-escaping (B97), `%s` literals, and shell quoting. Direct `adb input text` breaks on spaces and special characters silently. |
 | "I need to read UI — `xcrun simctl ui` gives hierarchy" | For React components, use `cdp_component_tree`. For the native a11y tree, use `device_snapshot`. Both give structured data agents can filter — raw `simctl ui` output is lossy. |
 | "The simulator isn't booted, I'll `xcrun simctl boot` quickly" | Fine for one-off boots. But if you're booting to run the agent, `device_list` first — the user may already have a target booted, and you'd boot a different one. |
+| "Let me screenshot to see what's on screen" | Use `device_snapshot` — returns the a11y tree with `@ref` handles in ~5ms vs ~150ms for a screenshot, and the JSON is far cheaper in LLM context than an image. Screenshot only when a human needs to see it. |
+| "I'll just screenshot to verify the testID rendered" | Use `cdp_component_tree(filter='<testID>')` — it returns the rendered fiber, props, and children. A screenshot tells you the pixel exists; the fiber tells you the React state is correct. |
+| "I took a screenshot to /tmp because I wasn't sure where it goes" | The tool returns `meta.advisories[{code: "EPHEMERAL_PATH"}]` for that exact case. Use `docs/proof/<feature>/<NN>-<step>.jpg` for deliverables and `docs/diag/<YYYY-MM-DD>/...` for debug. |
+| "I always set `maxWidth=0` so I get the real image" | Native iPhone screenshots are 1.5-2.5MB JPEGs and blow context budgets. Default 800px keeps label readability. The tool flags `FULL_RESOLUTION` so you can audit when you actually needed it. |
+| "I'll take 10 screenshots and pick the right one later" | Past 5 in a debug session you're substituting visual inspection for `cdp_*` introspection. Re-frame the question: what state are you trying to read, and which `cdp_*` tool surfaces it? |
 
 ## Red Flags — Stop and Reconsider
 
@@ -374,3 +464,8 @@ Device control commands are low-level — agents reach for bash too readily.
 - Calling `adb shell input text` — use `device_fill`
 - Booting a simulator without first running `device_list` (user may have one booted)
 - Running bash commands in a tight loop — use `device_batch` instead
+- About to call `device_screenshot` to answer "what's on screen" / "is X visible" / "what's the store value" — none of those are screenshot questions. Use `device_snapshot` / `cdp_component_tree` / `cdp_store_state` instead.
+- Saving a PR-proof screenshot to `/tmp/` — the tool's `meta.advisories[]` flagged it; re-route to `docs/proof/<feature>/<NN>-<step>.jpg` before claiming the proof is done.
+- Setting `maxWidth=0` for a non-visual-diff capture — full-resolution screenshots blow context budgets; the tool flags `FULL_RESOLUTION` so you can catch this.
+- Past 5 screenshots in a single debug session without using `cdp_component_tree` / `cdp_store_state` / `cdp_error_log` to investigate state.
+- Capturing a screenshot when `cdp_navigation_state` returned `"DevClientLauncher"` / `"ServerPicker"` / empty — that's a screenshot of the dev loader, not your app.

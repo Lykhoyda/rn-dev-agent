@@ -183,7 +183,13 @@ export type ToolErrorCode =
   | 'CDP_TARGET_APP_MISMATCH'   // CDP-003
   | 'INVALID_PLATFORM'          // CDP-014
   | 'PROFILER_UNAVAILABLE'      // CDP-007
-  | 'NATIVE_LOG_UNAVAILABLE';   // CDP-016
+  | 'NATIVE_LOG_UNAVAILABLE'    // CDP-016
+  // D1206 Tier 2 Sprint A/B post-review batch 2026-04-30.
+  | 'TESTID_NOT_FOUND'          // device_batch testID-keyed step / expect_visible_by_testid
+  | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
+  | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
+  | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
+  | 'STORE_TRUNCATED';          // expect_redux when store payload exceeded safeStringify cap
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

@@ -23,7 +23,7 @@ What is the user asking for?
 │
 ├── INVENTORY of reusable actions ("what's already automated for this?")
 │   └─► /rn-dev-agent:list-learned-actions [keyword]
-│       (Scans feedback memories + .maestro/flows + .ui-skeleton.yaml.
+│       (Scans feedback memories + .rn-agent/actions/ + .rn-agent/skeleton.yaml.
 │        ALWAYS run this BEFORE any device_* sequence — replay an
 │        existing flow instead of recomposing primitives manually.
 │        See feedback_execute_artifacts_before_manual.md.)

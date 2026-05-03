@@ -60,10 +60,24 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 | Standard tap on visible button | `device_press` (Tier 2) |
 | Long-press with confirmation | `device_press` with holdMs (Tier 2) |
 | Tap inside PanResponder/gesture | `cdp_interact` (Tier 1) |
+| Tap a KNOWN testID (single action) | `cdp_interact(testID=...)` (Tier 1) — fiber-tree-resolved, no coord caching |
+| Multi-step flow with KNOWN testIDs | `device_batch` with `testID=` on find/press/fill (Phase 125) — snapshot-resolves per step, no stale-ref drift across step transitions |
 | Navigate to a screen | `cdp_navigate` (Tier 1) |
 | Dispatch Redux action | `cdp_dispatch` (Tier 1) |
 | Android element interaction | Maestro (Tier 3) or `device_find` (Tier 2) |
 | Generate persistent test | Maestro YAML (Tier 3) |
-| Form input | `device_fill` (Tier 2) |
+| Form input (known testID) | `device_batch` with `fill` step + `testID=` (Tier 2) |
+| Form input (unknown element) | `device_snapshot` → `device_fill(ref="@eN", text=…)` (Tier 2) |
 | Verify element exists | `device_find` (Tier 2) |
 | Read component state after tap | `device_press` → `cdp_component_tree` (Tier 2 + CDP) |
+
+## When to choose `cdp_interact` vs `device_batch.testID` (D1206 Tier 2 / Phase 125)
+
+Both re-resolve testIDs at execution time (no cached coords, no stale refs). Choose by call shape:
+
+- **Single action, known testID** → `cdp_interact(testID=…, action="press"|"fill"|...)`. Single call, fiber-tree-resolved, fastest.
+- **Sequence of N actions on known testIDs** → `device_batch` with `testID=` on each step. One round-trip; snapshot-resolves per step. Use this for multi-step wizards or forms.
+- **Single action, unknown element** → `device_snapshot` (one-time discover) → `device_press(ref="@eN")`. The ref is valid only until the next layout change.
+- **Sequence on unknown elements where layout changes** → `device_batch` with `snapshot` steps interleaved, then `press(ref=...)` on the same screen. Don't reuse refs across step boundaries that transition screens.
+
+The 13:55 experiment (D1206) failed because the agent used `device_press(ref=…)` with refs cached from an earlier screen's snapshot. After a step transition, those refs pointed at off-screen coordinates. **Rule of thumb:** for any cross-step interaction on a known testID, prefer the testID-keyed primitives — they're slightly slower per call but immune to layout drift.

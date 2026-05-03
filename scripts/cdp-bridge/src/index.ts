@@ -24,6 +24,14 @@ import { createObjectInspectHandler } from './tools/object-inspect.js';
 import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
+import {
+  createExpectReduxHandler,
+  createExpectRouteHandler,
+  createExpectVisibleByTestIDHandler,
+  createExpectTextHandler,
+} from './tools/macro-asserts.js';
+import { createRepairActionHandler } from './tools/repair-action.js';
+import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -527,7 +535,7 @@ trackedTool(
 
 trackedTool(
   'device_screenshot',
-  'Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 800px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened.',
+  'Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 800px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened. Result may include meta.advisories[] (EPHEMERAL_PATH when saving to /tmp, FULL_RESOLUTION when maxWidth=0) — non-blocking nudges to use docs/proof/<feature>/<NN>-<step>.jpg for deliverables and the default 800px width for everyday captures.',
   {
     path: z.string().optional().describe('Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG.'),
     format: z.enum(['jpeg', 'png']).optional().describe('Image format (default: auto-detect from path extension, or jpeg)'),
@@ -764,19 +772,22 @@ trackedTool(
 
 trackedTool(
   'device_batch',
-  'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find (text + optional tap), fill (ref + text), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Fails fast on error unless step has optional=true.',
+  'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.',
   {
     steps: z.array(z.object({
       action: z.enum(['find', 'press', 'fill', 'swipe', 'scroll', 'back', 'wait', 'hideKeyboard', 'snapshot', 'screenshot']).describe('Step action'),
-      text: z.string().optional().describe('(find/fill) Text to find or type'),
-      ref: z.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5")'),
+      text: z.string().optional().describe('(find) Visible text to match. (fill) Text to type into the field.'),
+      ref: z.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.'),
+      testID: z.string().optional().describe('(find/press/fill) PREFERRED for known testIDs — re-resolves via snapshot at execution time, immune to layout-change drift. Slower per-step than ref (each call snapshots) but eliminates stale-ref failures across step transitions. When set, ignores text/ref.'),
       tap: z.boolean().optional().describe('(find) Tap the found element'),
       direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('(scroll/swipe) Direction'),
       ms: z.number().optional().describe('(wait) Milliseconds to wait'),
       optional: z.boolean().optional().describe('Skip this step on failure instead of aborting'),
+      timeoutMs: z.number().optional().describe('Per-step timeout override in ms. Default 15000.'),
     })).describe('Ordered list of UI interaction steps'),
     delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
     screenshotOn: z.enum(['none', 'failure', 'end', 'each']).default('failure').describe('When to capture screenshots'),
+    continueOnError: z.boolean().default(false).describe('When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort.'),
   },
   createDeviceBatchHandler(),
 );
@@ -827,7 +838,7 @@ trackedTool(
 
 trackedTool(
   'maestro_generate',
-  'Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/<name>.yaml in the project root. Use after live verification to create regression tests.',
+  'Generate a persistent Maestro YAML flow file from structured steps. Writes to .rn-agent/actions/<name>.yaml in the project root (agent corpus, distinct from team-owned .maestro/flows/). Use after live verification to create reusable actions.',
   {
     name: z.string().describe('Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename.'),
     steps: z.array(z.object({
@@ -840,17 +851,17 @@ trackedTool(
       waitMs: z.number().optional().describe('Wait duration in ms (for wait action)'),
     })).describe('Ordered list of Maestro steps'),
     appId: z.string().optional().describe('App bundle ID to include in YAML header'),
-    outputDir: z.string().optional().describe('Output directory (default: <project>/.maestro/flows/)'),
+    outputDir: z.string().optional().describe('Output directory (default: <project>/.rn-agent/actions/ — agent corpus). Pass an explicit path for non-default targets.'),
   },
   createMaestroGenerateHandler(),
 );
 
 trackedTool(
   'maestro_test_all',
-  'Discover and run all Maestro flows in .maestro/flows/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions.',
+  'Discover and run all Maestro flows in .rn-agent/actions/ (agent corpus) as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to point at a different directory (e.g. team-owned .maestro/flows/).',
   {
     platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
-    flowDir: z.string().optional().describe('Directory to scan for .yaml flows (default: <project>/.maestro/flows/)'),
+    flowDir: z.string().optional().describe('Directory to scan for .yaml flows (default: <project>/.rn-agent/actions/ — agent corpus)'),
     pattern: z.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
     timeoutPerFlow: z.number().int().min(5000).max(300000).default(120000).describe('Timeout per flow in ms'),
     stopOnFailure: z.boolean().default(false).describe('Stop after first failure'),
@@ -875,11 +886,16 @@ trackedTool(
 
 trackedTool(
   'cdp_record_test_generate',
-  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first).',
+  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header (D1203) into the YAML so the result is a first-class reusable action.',
   {
     format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
     testName: z.string().optional().describe('Name shown in describe()/comment header'),
     bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header'),
+    id: z.string().optional().describe('M7 action id (stable slug). When set, emitted as `# id: <slug>` header line. Default: filename without `.yaml`.'),
+    intent: z.string().optional().describe('M7 one-line goal. When set, emitted as `# intent: <intent>` header line.'),
+    tags: z.array(z.string()).optional().describe('M7 filterable tags. When set, emitted as `# tags: [a, b, c]`.'),
+    mutates: z.boolean().optional().describe('M7 side-effect flag. When set, emitted as `# mutates: true|false`.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. When set, emitted as `# status: <status>`.'),
   },
   createRecordTestGenerateHandler(),
 );
@@ -955,6 +971,109 @@ trackedTool(
     clearErrors: z.boolean().default(false).describe('Reset the build-error counter without reading events'),
   },
   createMetroEventsHandler(getClient),
+);
+
+// D1206 Tier 2 Sprint B / Phase 126 — Macro-Asserts.
+// State-assertive primitives that wrap CDP introspection with assertion
+// semantics. The differentiated capability over Maestro Cloud / KaneAI /
+// BrowserStack — visual-only test runners cannot read Redux state or
+// navigation params mid-flow.
+
+trackedTool(
+  'expect_redux',
+  'Assert against Redux/Zustand store state at a path. Returns ok when the assertion matches; failResult with code=ASSERTION_FAILED when it does not. Operators (compose with AND): equals (deep), exists (default if no other op), notExists, length (array/string), contains (array), gt/lt/gte/lte (numbers). Pass timeoutMs to retry until match — useful when the store updates asynchronously after a tap. Differentiated capability over Maestro: Maestro asserts pixels; this asserts internal state.',
+  {
+    path: z.string().describe('Dot-path into the store, e.g. "cart.items" or "auth.user.id". Required.'),
+    storeType: z.string().optional().describe('Restrict to a specific store ("redux" | "zustand" | a Zustand store name). Default: auto-detect.'),
+    equals: z.unknown().optional().describe('Deep-equal against this value.'),
+    exists: z.boolean().optional().describe('When true, value must be defined and non-null. When false, value must be undefined or null. Implicit default if no other operator is supplied.'),
+    notExists: z.boolean().optional().describe('Inverse of exists.'),
+    length: z.number().int().optional().describe('Asserts (Array | string).length === this number.'),
+    contains: z.unknown().optional().describe('Asserts an array contains this element (deep-equal).'),
+    gt: z.number().optional().describe('Asserts actual > this number.'),
+    lt: z.number().optional().describe('Asserts actual < this number.'),
+    gte: z.number().optional().describe('Asserts actual >= this number.'),
+    lte: z.number().optional().describe('Asserts actual <= this number.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0 = no retry). Useful for async state updates.'),
+  },
+  createExpectReduxHandler(getClient),
+);
+
+trackedTool(
+  'expect_route',
+  'Assert against the navigation state — current route name, current route params, or a route\'s presence in the stack. Returns ok when the assertion matches; failResult with code=ASSERTION_FAILED otherwise. Differentiated capability over Maestro: Maestro doesn\'t know what route you\'re on, only what\'s rendered. Pass timeoutMs to retry through navigation animations.',
+  {
+    name: z.string().optional().describe('Asserts the current top-of-stack route name === this.'),
+    paramsEquals: z.unknown().optional().describe('Asserts deep-equal against the current route params object.'),
+    inStack: z.string().optional().describe('Asserts a route with this name exists somewhere in the stack (not necessarily current).'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0). Use 1000-2000 to wait through navigation animations.'),
+  },
+  createExpectRouteHandler(getClient),
+);
+
+trackedTool(
+  'expect_visible_by_testid',
+  'Assert that an element with a given testID is (or is not) currently rendered in the device accessibility tree. Snapshot-based — re-resolves on each retry. Pass exists=false to assert NOT visible. Pass timeoutMs to wait through animations / late mounts. Convenience wrapper over device_snapshot + manual scan.',
+  {
+    testID: z.string().describe('The testID to look for in the accessibility tree.'),
+    exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0). Use 1000-3000 for late-mounted elements.'),
+  },
+  createExpectVisibleByTestIDHandler(),
+);
+
+trackedTool(
+  'expect_text',
+  'Assert that visible text is (or is not) currently rendered in the device accessibility tree. Default substring match; pass exact=true for full-string match. Pass exists=false to assert NOT visible. Convenience wrapper over device_snapshot + label scan; equivalent to Maestro\'s assertVisible: "..." but callable mid-batch and during interactive walks without leaving the LLM context.',
+  {
+    text: z.string().describe('The visible text to look for.'),
+    exact: z.boolean().optional().describe('Default false (substring match). Pass true to require exact label equality.'),
+    exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
+    timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0).'),
+  },
+  createExpectTextHandler(),
+);
+
+// D1206 Tier 2 Sprint D-2 / Phase 130 — L2→L3 auto-emission. After an
+// interactive walk completes, this turns the recorder buffer into a
+// first-class L3 reusable action: emits Maestro YAML with full M7
+// metadata header at <project>/.rn-agent/actions/<id>.yaml AND
+// initialises the sidecar runtime state. Closes the L2→L3 loop.
+
+trackedTool(
+  'cdp_record_test_save_as_action',
+  'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action.',
+  {
+    id: z.string().describe('Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen).'),
+    intent: z.string().describe('One-line goal — surfaced verbatim by /list-learned-actions. Required.'),
+    tags: z.array(z.string()).optional().describe('Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]).'),
+    mutates: z.boolean().optional().describe('Does this flow leave persistent residue (created rows, toggled settings)? Required for /run-action safety pre-flight to know whether to confirm before replay.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. Default: experimental (auto-promotes on first clean replay).'),
+    bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header. Strongly recommended — /run-action uses it to refuse cross-app replays.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    overwrite: z.boolean().optional().describe('If an action with this id already exists, replace it. Default false (refuse with hint).'),
+    testName: z.string().optional().describe('Optional one-line description shown as a comment above the M7 header. Falls back to intent.'),
+  },
+  createSaveAsActionHandler(),
+);
+
+// D1206 Tier 2 Sprint D / Phase 129 — L3→L2 self-repair. When a Maestro
+// flow fails with "element not found", this tool patches the YAML in place
+// using fuzzy matching against the current device snapshot. Drives the
+// "self-recoverable on UI changes" L3 promise in D1206.
+
+trackedTool(
+  'cdp_repair_action',
+  'Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/<actionId>.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.',
+  {
+    actionId: z.string().describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
+    failedSelector: z.string().describe('The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id \'X\' not found" → X.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    threshold: z.number().min(0).max(1).optional().describe('Fuzzy-match similarity threshold (0..1). Default 0.6. Lower if the screen has many similar testIDs and Levenshtein on the original is too strict.'),
+    dryRun: z.boolean().optional().describe('Don\'t write changes — return the diff that WOULD be applied. Useful for previewing repairs before committing.'),
+    agentReasoning: z.string().optional().describe('Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.'),
+  },
+  createRepairActionHandler(),
 );
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end

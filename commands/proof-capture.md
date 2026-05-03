@@ -64,7 +64,7 @@ without the camera capturing the search.
    continuing.
 2. Fix any discovered drift (wrong testID, missing route, store-path typo).
 3. **Generate a Maestro flow** capturing the verified sequence at
-   `<test-app>/.maestro/flows/<slug>.yaml`. Two authoring paths:
+   `<test-app>/.rn-agent/actions/<slug>.yaml`. Two authoring paths:
    - `maestro_generate(name="<slug>", steps=[...], appId="...")` — writes
      the YAML from structured steps; does NOT emit the M7 metadata header.
    - `cdp_record_test_generate(format="maestro")` — converts the recorder
@@ -79,10 +79,10 @@ without the camera capturing the search.
    Bash CLI (which supports `-e`):
    ```bash
    maestro-runner --platform <ios|android> test \
-     <test-app>/.maestro/flows/<slug>.yaml -e KEY=VALUE
+     <test-app>/.rn-agent/actions/<slug>.yaml -e KEY=VALUE
    ```
    For env-free flows, the MCP tool also works:
-   `maestro_run(flowPath="<test-app>/.maestro/flows/<slug>.yaml")`.
+   `maestro_run(flowPath="<test-app>/.rn-agent/actions/<slug>.yaml")`.
    The replay must pass end-to-end without a single failure.
 6. **Retry budget: max 3 fix-and-replay loops.** If the rehearsal still
    fails after 3 attempts, escalate to the user with the failing step,
@@ -125,11 +125,11 @@ in Step 2.5.
 For flows with `${VAR}` placeholders (need env substitution):
 ```bash
 maestro-runner --platform <ios|android> test \
-  <test-app>/.maestro/flows/<slug>.yaml -e KEY=VALUE
+  <test-app>/.rn-agent/actions/<slug>.yaml -e KEY=VALUE
 ```
 
 For env-free flows, the MCP tool also works:
-- `maestro_run(flowPath="<test-app>/.maestro/flows/<slug>.yaml")`
+- `maestro_run(flowPath="<test-app>/.rn-agent/actions/<slug>.yaml")`
 
 (The MCP `maestro_run` tool schema does not forward `-e` env vars; for
 substitution use the `maestro-runner` Bash CLI.)

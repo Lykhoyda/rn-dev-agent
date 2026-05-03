@@ -16,8 +16,8 @@ Export your accumulated experience as an anonymized YAML bundle.
 | Confidence scores | Yes | As-is |
 | Environment fingerprint | Yes | Coarsened (major.minor only) |
 | Failure statistics | Yes | Normalized errors only |
-| **Maestro flows** (`<test-app>/.maestro/flows/*.yaml`) | **Yes (default)** | **`appId` redacted to `com.example.<slug>`; `${VAR}` placeholders preserved** |
-| **UI skeleton** (`<test-app>/.ui-skeleton.yaml`) | **Yes (default)** | **`appId` redacted; testID strings preserved (they're already semantic)** |
+| **Reusable actions** (`<test-app>/.rn-agent/actions/*.yaml`) | **Yes (default)** | **`appId` redacted to `com.example.<slug>`; `${VAR}` placeholders preserved** |
+| **UI skeleton** (`<test-app>/.rn-agent/skeleton.yaml`) | **Yes (default)** | **`appId` redacted; testID strings preserved (they're already semantic)** |
 | Raw telemetry | No | Never exported |
 | Candidate files | No | Not included |
 

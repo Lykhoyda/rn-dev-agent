@@ -30,7 +30,7 @@ exist as YAML).
 3. **Only if no match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
    you do, **end the session by persisting the verified flow** as a new YAML
-   under `<test-app>/.maestro/flows/<feature-slug>.yaml` so the next session
+   under `<test-app>/.rn-agent/actions/<feature-slug>.yaml` so the next session
    starts at step 2, not step 3.
 
 Manual walks are a fallback, not a default. Codified in
@@ -61,7 +61,7 @@ are documented exceptions, not defaults.
 | Read JS errors / console / network | `cdp_error_log`, `cdp_console_log`, `cdp_network_log` | `tail -f` log files, `adb logcat | grep` (those are NATIVE-error fallbacks only — see Error Recovery below) |
 | Reload the app | `cdp_reload` (auto-reconnects) | `xcrun simctl terminate … && launch …`, `adb shell am force-stop` |
 | Manage permissions | `device_permission(action=…)` | raw `xcrun simctl privacy`, `adb shell pm grant` |
-| Run an E2E flow | **First**: replay any existing `<test-app>/.maestro/flows/*.yaml` via `maestro_run`. **Then**: `device_*` for novel verification. **Last**: `maestro_generate` to persist the new flow. | hand-rolled bash loops, ad-hoc xdotool/AppleScript, recreating a flow that already exists |
+| Run an E2E flow | **First**: replay any existing `<test-app>/.rn-agent/actions/*.yaml` via `maestro_run` (agent corpus). Read-only awareness of `<test-app>/.maestro/flows/*.yaml` (team's core E2E suite — never auto-run). **Then**: `device_*` for novel verification. **Last**: `maestro_generate` to persist the new flow under `.rn-agent/actions/`. | hand-rolled bash loops, ad-hoc xdotool/AppleScript, recreating a flow that already exists, auto-running `.maestro/flows/` |
 
 **Artifact-first rule (paired with the table):** Before composing any `device_*` sequence,
 scan for existing automation. Run `/rn-dev-agent:list-learned-actions` to see the inventory
@@ -144,7 +144,8 @@ Use `cdp_status` — it checks Metro, CDP connection, app info, active errors, a
 - **Swipe/scroll**: `device_swipe`, `device_scroll`, `device_scrollintoview`
 - **Long press**: `device_longpress(ref="@e7")` or with coordinates
 - **NEVER** use `xcrun simctl` or `adb input` for UI interaction
-- **`cdp_interact` is DEPRECATED** — always use device tools instead
+- **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the new `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode.
+- **For UNKNOWN elements** (need to discover what's on screen): `device_snapshot` first, then `device_press(ref="@eN")`.
 
 #### "I need to navigate to a specific screen"
 - **Best option:** `cdp_nav_graph(action="go", screen="ProfileScreen")` — scans navigation graph, plans route, navigates in one call
@@ -260,7 +261,7 @@ Tool calls must follow this sequence to avoid race conditions:
 2. `xcrun simctl list` / `adb devices` for status — use `cdp_status`
 3. `xcrun simctl openurl` / `adb shell am start` for in-app navigation — use `cdp_nav_graph` or `device_deeplink`
 4. `xcrun simctl` / `adb input` for UI taps — use `device_press` / `device_find`
-5. `cdp_interact` — DEPRECATED, use `device_press` / `device_find` / `device_fill`
+5. `device_press(ref=@eN)` with a stale ref from an earlier-screen snapshot (the "13:55 experiment" failure mode — refs don't survive step transitions) — use `cdp_interact(testID=…)` or `device_batch.{find,press,fill}(testID=…)` for known testIDs, which re-resolve per call
 6. Coordinate taps (`input tap 640 2300`) without prior `device_snapshot`
 7. **Deep-linking past the entry point during verification** (see Verification Discipline)
 8. **Forcing transient route params (`isNewPolicy=true`, `fromSuccess=true`) during verification**
@@ -282,7 +283,7 @@ Tool calls must follow this sequence to avoid race conditions:
 | Network request missing | `cdp_network_log(filter="...")` | Request not yet made or filtered | Widen filter or check `cdp_console_log` for fetch errors |
 | `cdp_reload` reports `reconnected: false` | Wait 5-10s | New Hermes target not yet registered | `cdp_connect force: true`; if ambiguous target, pass `targetId:` |
 | `device_screenshot` captures the wrong platform | — | Multi-device routing bug | Pass `platform:` explicitly, or fall back to raw `adb screencap` / `simctl io` |
-| `cdp_interact accessibilityLabel="..."` fails | `device_snapshot` first | Label matching unreliable | Switch to `device_press(ref="@eN")` using snapshot output |
+| `cdp_interact accessibilityLabel="..."` fails (label matching is fuzzy) | Prefer testID-keyed calls: `cdp_interact(testID="...")` or `device_batch` with `testID=` field. Fall back to `device_snapshot` + `device_press(ref="@eN")` only when no testID exists. | Label matching unreliable; testID matching is exact and fiber-tree-resolved | — |
 
 ### Authentication & Permission Pre-flight
 

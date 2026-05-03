@@ -176,16 +176,41 @@ export function createRecordTestGenerateHandler() {
         if (args.format === 'appium') {
             return failResult('Appium generator not implemented in M6 — file a GitHub issue if needed', 'NOT_IMPLEMENTED');
         }
+        // D1204 follow-up close-out (Phase 130): forward the M7 metadata
+        // fields so the emitted YAML carries the full reusable-action header
+        // (id, intent, tags, mutates, status) per D1203 schema.
         const opts = {
             testName: args.testName,
             bundleId: args.bundleId,
             startRoute: recordingStartRoute ?? undefined,
+            id: args.id,
+            intent: args.intent,
+            tags: args.tags,
+            mutates: args.mutates,
+            status: args.status,
         };
         const text = args.format === 'maestro'
             ? generateMaestro(storedEvents, opts)
             : generateDetox(storedEvents, opts);
         return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
     };
+}
+/**
+ * Phase 130 — read-only accessor for the recorder's event buffer.
+ * Used by `cdp_record_test_save_as_action` (in tools/save-as-action.ts)
+ * to compose Maestro YAML + sidecar without duplicating the buffer in
+ * another module.
+ */
+export function getStoredEvents() {
+    return storedEvents ?? [];
+}
+/**
+ * Phase 130 — read-only accessor for the start-of-recording route.
+ * Surfaces alongside getStoredEvents() so save_as_action can stamp
+ * `# startRoute: <name>` into the emitted YAML.
+ */
+export function getRecordingStartRoute() {
+    return recordingStartRoute;
 }
 export function createRecordTestAnnotateHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
