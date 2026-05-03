@@ -19,7 +19,7 @@ import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
 import { freshRuntimeState, } from '../domain/reusable-action.js';
 import { actionPathFor } from '../domain/action-store.js';
-import { saveSidecar, sidecarPathFor } from '../domain/sidecar-io.js';
+import { saveSidecar } from '../domain/sidecar-io.js';
 export function createSaveAsActionHandler() {
     return async (args) => {
         if (!args.id || typeof args.id !== 'string') {
@@ -39,7 +39,12 @@ export function createSaveAsActionHandler() {
         }
         const projectRoot = args.projectRoot ?? process.cwd();
         const filePath = actionPathFor(projectRoot, args.id);
-        if (existsSync(filePath) && !args.overwrite) {
+        // Phase 130 (post-review): capture pre-existence ONCE before any
+        // write — `existsSync(filePath)` after `writeFileSync` is always
+        // true and inverted the `created`/`overwritten` flags in the
+        // success payload (multi-LLM review caught this).
+        const preexisted = existsSync(filePath);
+        if (preexisted && !args.overwrite) {
             return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`, 'BAD_FILENAME', {
                 actionId: args.id,
                 filePath,
@@ -74,11 +79,14 @@ export function createSaveAsActionHandler() {
         const state = freshRuntimeState(() => new Date(), mtimeMs);
         const { path: sidecarPath } = saveSidecar(filePath, state);
         return okResult({
-            created: !args.overwrite,
-            overwritten: args.overwrite === true && existsSync(filePath),
+            // Phase 130 (post-review): use captured pre-existence, not the
+            // post-write existsSync (always true) and not args.overwrite
+            // (an authorization, not a state).
+            created: !preexisted,
+            overwritten: preexisted,
             actionId: args.id,
             filePath,
-            sidecarPath: sidecarPath ?? sidecarPathFor(filePath),
+            sidecarPath,
             eventCount: events.length,
             metadata: {
                 id: args.id,
