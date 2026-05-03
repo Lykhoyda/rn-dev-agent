@@ -31,6 +31,7 @@ import {
   createExpectTextHandler,
 } from './tools/macro-asserts.js';
 import { createRepairActionHandler } from './tools/repair-action.js';
+import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -885,11 +886,16 @@ trackedTool(
 
 trackedTool(
   'cdp_record_test_generate',
-  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first).',
+  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header (D1203) into the YAML so the result is a first-class reusable action.',
   {
     format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
     testName: z.string().optional().describe('Name shown in describe()/comment header'),
     bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header'),
+    id: z.string().optional().describe('M7 action id (stable slug). When set, emitted as `# id: <slug>` header line. Default: filename without `.yaml`.'),
+    intent: z.string().optional().describe('M7 one-line goal. When set, emitted as `# intent: <intent>` header line.'),
+    tags: z.array(z.string()).optional().describe('M7 filterable tags. When set, emitted as `# tags: [a, b, c]`.'),
+    mutates: z.boolean().optional().describe('M7 side-effect flag. When set, emitted as `# mutates: true|false`.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. When set, emitted as `# status: <status>`.'),
   },
   createRecordTestGenerateHandler(),
 );
@@ -1026,6 +1032,29 @@ trackedTool(
     timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0).'),
   },
   createExpectTextHandler(),
+);
+
+// D1206 Tier 2 Sprint D-2 / Phase 130 — L2→L3 auto-emission. After an
+// interactive walk completes, this turns the recorder buffer into a
+// first-class L3 reusable action: emits Maestro YAML with full M7
+// metadata header at <project>/.rn-agent/actions/<id>.yaml AND
+// initialises the sidecar runtime state. Closes the L2→L3 loop.
+
+trackedTool(
+  'cdp_record_test_save_as_action',
+  'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action.',
+  {
+    id: z.string().describe('Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen).'),
+    intent: z.string().describe('One-line goal — surfaced verbatim by /list-learned-actions. Required.'),
+    tags: z.array(z.string()).optional().describe('Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]).'),
+    mutates: z.boolean().optional().describe('Does this flow leave persistent residue (created rows, toggled settings)? Required for /run-action safety pre-flight to know whether to confirm before replay.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. Default: experimental (auto-promotes on first clean replay).'),
+    bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header. Strongly recommended — /run-action uses it to refuse cross-app replays.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    overwrite: z.boolean().optional().describe('If an action with this id already exists, replace it. Default false (refuse with hint).'),
+    testName: z.string().optional().describe('Optional one-line description shown as a comment above the M7 header. Falls back to intent.'),
+  },
+  createSaveAsActionHandler(),
 );
 
 // D1206 Tier 2 Sprint D / Phase 129 — L3→L2 self-repair. When a Maestro

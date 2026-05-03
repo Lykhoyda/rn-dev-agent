@@ -26,6 +26,7 @@ import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
 import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisibleByTestIDHandler, createExpectTextHandler, } from './tools/macro-asserts.js';
 import { createRepairActionHandler } from './tools/repair-action.js';
+import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -526,10 +527,15 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .rn-agent
 // M6 / Phase 112 (D669): Object.freeze test recorder.
 trackedTool('cdp_record_test_start', 'Start recording UI interactions via Object.freeze interceptor. Captures taps, long-presses, text input, submits, and scroll-derived swipes from the running app — no app changes required. Requires __DEV__=true (release builds pre-freeze props at bundle time). Pair with cdp_record_test_stop and cdp_record_test_generate to produce Maestro YAML or Detox JS.', {}, createRecordTestStartHandler(getClient));
 trackedTool('cdp_record_test_stop', 'Stop recording, deduplicate consecutive type/tap bursts, freeze the buffer, and return event count + per-type breakdown. Sets `truncated: true` when the 500-event cap was hit. Recorded events stay in MCP memory for cdp_record_test_generate / cdp_record_test_save until the next start.', {}, createRecordTestStopHandler(getClient));
-trackedTool('cdp_record_test_generate', 'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first).', {
+trackedTool('cdp_record_test_generate', 'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header (D1203) into the YAML so the result is a first-class reusable action.', {
     format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
     testName: z.string().optional().describe('Name shown in describe()/comment header'),
     bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header'),
+    id: z.string().optional().describe('M7 action id (stable slug). When set, emitted as `# id: <slug>` header line. Default: filename without `.yaml`.'),
+    intent: z.string().optional().describe('M7 one-line goal. When set, emitted as `# intent: <intent>` header line.'),
+    tags: z.array(z.string()).optional().describe('M7 filterable tags. When set, emitted as `# tags: [a, b, c]`.'),
+    mutates: z.boolean().optional().describe('M7 side-effect flag. When set, emitted as `# mutates: true|false`.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. When set, emitted as `# status: <status>`.'),
 }, createRecordTestGenerateHandler());
 trackedTool('cdp_record_test_annotate', 'Push a human-readable note into the live event stream — appears as a comment in generated tests. Useful for marking flow checkpoints ("reached checkout", "error appeared"). Only valid during an active recording.', {
     note: z.string().min(1).describe('Annotation text'),
@@ -592,6 +598,22 @@ trackedTool('expect_text', 'Assert that visible text is (or is not) currently re
     exists: z.boolean().optional().describe('Default true (assert visible). Pass false to assert NOT visible.'),
     timeoutMs: z.number().int().min(0).optional().describe('Polling timeout in ms (default 0).'),
 }, createExpectTextHandler());
+// D1206 Tier 2 Sprint D-2 / Phase 130 — L2→L3 auto-emission. After an
+// interactive walk completes, this turns the recorder buffer into a
+// first-class L3 reusable action: emits Maestro YAML with full M7
+// metadata header at <project>/.rn-agent/actions/<id>.yaml AND
+// initialises the sidecar runtime state. Closes the L2→L3 loop.
+trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action.', {
+    id: z.string().describe('Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen).'),
+    intent: z.string().describe('One-line goal — surfaced verbatim by /list-learned-actions. Required.'),
+    tags: z.array(z.string()).optional().describe('Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]).'),
+    mutates: z.boolean().optional().describe('Does this flow leave persistent residue (created rows, toggled settings)? Required for /run-action safety pre-flight to know whether to confirm before replay.'),
+    status: z.enum(['experimental', 'active', 'deprecated']).optional().describe('M7 lifecycle status. Default: experimental (auto-promotes on first clean replay).'),
+    bundleId: z.string().optional().describe('App bundle ID for the Maestro appId header. Strongly recommended — /run-action uses it to refuse cross-app replays.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    overwrite: z.boolean().optional().describe('If an action with this id already exists, replace it. Default false (refuse with hint).'),
+    testName: z.string().optional().describe('Optional one-line description shown as a comment above the M7 header. Falls back to intent.'),
+}, createSaveAsActionHandler());
 // D1206 Tier 2 Sprint D / Phase 129 — L3→L2 self-repair. When a Maestro
 // flow fails with "element not found", this tool patches the YAML in place
 // using fuzzy matching against the current device snapshot. Drives the
