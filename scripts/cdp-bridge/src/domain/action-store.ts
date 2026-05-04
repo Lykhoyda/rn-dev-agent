@@ -6,7 +6,7 @@
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
 
-import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type ReusableAction,
@@ -16,9 +16,10 @@ import {
 } from './reusable-action.js';
 import {
   loadOrInitSidecar,
-  saveSidecar,
+  sidecarPathFor,
   yamlEditedSinceLastSeen,
 } from './sidecar-io.js';
+import { atomicWriter } from './atomic-writer.js';
 
 /**
  * Resolve the canonical YAML path for an action id under a project root.
@@ -162,14 +163,16 @@ export function saveAction(action: ReusableAction): { filePath: string; sidecarP
   const headerLines = serializeM7Header(action.metadata).split('\n');
   const bodyLines = action.body.split('\n');
   const yamlText = joinYaml({ topSection, headerLines, bodyLines });
-  writeFileSync(action.filePath, yamlText, 'utf8');
 
-  // After write, mtime changes — refresh state.lastSeenMtimeMs so the
-  // next yamlEditedSinceLastSeen() call doesn't think a human edited it.
-  const newMtimeMs = statSync(action.filePath).mtimeMs;
-  const stateToWrite = { ...action.state, lastSeenMtimeMs: newMtimeMs };
-  const { path: sidecarPath } = saveSidecar(action.filePath, stateToWrite);
-  // Also reflect in-memory.
+  // Issue #101: sidecar-first atomic pair-write. The atomicWriter owns
+  // `lastSeenMtimeMs` correctness — even on partial failure, the
+  // persisted sidecar will have lastSeenMtimeMs ≥ the YAML's actual
+  // mtime, so the next yamlEditedSinceLastSeen() check returns false
+  // (no false-positive alarm).
+  const sidecarPath = sidecarPathFor(action.filePath);
+  const result = atomicWriter.pairWrite(action.filePath, yamlText, sidecarPath, action.state);
+  const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
+  // Reflect in-memory so subsequent calls share the just-written mtime.
   action.state = stateToWrite;
   return { filePath: action.filePath, sidecarPath };
 }
