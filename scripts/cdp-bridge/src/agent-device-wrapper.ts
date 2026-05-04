@@ -465,10 +465,27 @@ function cacheRefMapFromResult(result: ToolResult): void {
   } catch { /* not a snapshot response — ignore */ }
 }
 
+// Issue #103 — test-only override hook. Tests that exercise handlers
+// orchestrating agent-device snapshots (e.g. cdp_repair_action) can
+// inject a fake CLI response without booting a device. Production code
+// path is untouched when the override is null.
+type RunAgentDeviceFn = (
+  cliArgs: string[],
+  opts?: { skipSession?: boolean; platform?: 'ios' | 'android' | null },
+) => Promise<ToolResult>;
+let _runAgentDeviceOverrideForTest: RunAgentDeviceFn | null = null;
+
+export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
+  _runAgentDeviceOverrideForTest = fn;
+}
+
 export async function runAgentDevice(
   cliArgs: string[],
   opts: { skipSession?: boolean; platform?: 'ios' | 'android' | null } = {},
 ): Promise<ToolResult> {
+  if (_runAgentDeviceOverrideForTest) {
+    return _runAgentDeviceOverrideForTest(cliArgs, opts);
+  }
   // GH #60: when an explicit platform is requested AND it doesn't match the
   // active session's platform (e.g. user asks for android while an iOS
   // session is active from prior work), skip the session-bound dispatch

@@ -434,7 +434,14 @@ function cacheRefMapFromResult(result) {
     }
     catch { /* not a snapshot response — ignore */ }
 }
+let _runAgentDeviceOverrideForTest = null;
+export function _setRunAgentDeviceForTest(fn) {
+    _runAgentDeviceOverrideForTest = fn;
+}
 export async function runAgentDevice(cliArgs, opts = {}) {
+    if (_runAgentDeviceOverrideForTest) {
+        return _runAgentDeviceOverrideForTest(cliArgs, opts);
+    }
     // GH #60: when an explicit platform is requested AND it doesn't match the
     // active session's platform (e.g. user asks for android while an iOS
     // session is active from prior work), skip the session-bound dispatch
