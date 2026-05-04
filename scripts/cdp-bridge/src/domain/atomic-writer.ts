@@ -46,6 +46,18 @@ import {
 import { dirname } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
 
+// Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
+// breaks the safety invariant in two scenarios — (a) slow writes where
+// the actual YAML mtime exceeds `projectedMtimeMs` and step 5 happens
+// to swallow a follow-on error, leaving the persisted sidecar at the
+// stale projected value; (b) clock-skew on networked filesystems where
+// the server-side mtime is *behind* `projectedMtimeMs`, regressing
+// `lastSeenMtimeMs` and hiding real human edits within the skew window.
+// Both are fixed by (i) using `Math.max(actual, projected)` so the
+// recorded value never goes backwards, and (ii) dropping the step-5
+// try/catch — the action isn't safely written without it, so a caller
+// that retries on failure produces the correct behaviour.
+
 /**
  * Number of milliseconds the projected `lastSeenMtimeMs` is set ahead of
  * `Date.now()` during the sidecar-first phase. Must be:
@@ -107,42 +119,54 @@ function pairWriteImpl(
   atomicWriter._writeFile(yamlTmp, yamlContent);
   atomicWriter._rename(yamlTmp, yamlPath);
 
-  // Step 5 (optional): resync sidecar to actual mtime. Wrapped in a
-  // try so that an error here doesn't poison the result — partial
-  // failure leaves sidecar with the projected future mtime, which is
-  // already safe per the crash analysis above.
-  let refreshedSidecar = false;
-  let finalMtimeMs = projectedMtimeMs;
-  try {
-    finalMtimeMs = atomicWriter._statMtimeMs(yamlPath);
-    const finalState: ActionRuntimeState = {
-      ...state,
-      lastSeenMtimeMs: finalMtimeMs,
-    };
-    atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n');
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    refreshedSidecar = true;
-  } catch {
-    // Step 5 failed but the sidecar still holds projectedMtimeMs which
-    // is ≥ any real YAML mtime — no false-positive alarm possible.
-  }
+  // Step 5 (mandatory after PR #109 review): resync sidecar to the
+  // ACTUAL YAML mtime, but never let the recorded value regress below
+  // `projectedMtimeMs`. This handles two failure modes the original
+  // try/catch silently allowed:
+  //
+  //   - Slow writes (CI fsync queue saturation, antivirus stalls):
+  //     actual_yaml_mtime > projectedMtimeMs. Math.max picks actual,
+  //     so the sidecar ends up with a value ≥ what's on disk.
+  //
+  //   - Clock skew on NFS / Docker bind mounts: actual_yaml_mtime <
+  //     projectedMtimeMs. Math.max keeps projectedMtimeMs, so the
+  //     recorded value doesn't regress and a future legitimate edit
+  //     within the skew window still produces mtime > recorded.
+  //
+  // Errors are NOT swallowed — if step 5 fails, the operation is not
+  // safely complete. Caller should retry; the on-disk sidecar already
+  // holds `projectedMtimeMs` (from step 1+2), so a retry won't see a
+  // false-positive alarm.
+  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
+  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
+  const finalState: ActionRuntimeState = {
+    ...state,
+    lastSeenMtimeMs: finalMtimeMs,
+  };
+  atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n');
+  atomicWriter._rename(sidecarTmp, sidecarPath);
 
-  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar };
+  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
 
 function ensureDir(filePath: string): void {
   const dir = dirname(filePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!atomicWriter._exists(dir)) atomicWriter._mkdir(dir);
 }
 
 /**
  * Best-effort cleanup of orphaned `.tmp` files left by a crashed previous
  * call. Called by `pairWrite` before each operation. Idempotent.
+ *
+ * Routes through `atomicWriter._unlink` / `_exists` so PR #109 review
+ * finding (E) — "tests can't simulate mkdir/unlink failures" — is
+ * resolved: the seam is now complete across all fs operations the
+ * writer performs.
  */
 function cleanupOrphans(yamlPath: string, sidecarPath: string): void {
   for (const orphan of [`${yamlPath}.tmp`, `${sidecarPath}.tmp`]) {
-    if (existsSync(orphan)) {
-      try { unlinkSync(orphan); } catch { /* ignore */ }
+    if (atomicWriter._exists(orphan)) {
+      try { atomicWriter._unlink(orphan); } catch { /* ignore */ }
     }
   }
 }
@@ -163,6 +187,20 @@ export const atomicWriter = {
   /** Underlying `fs.statSync(path).mtimeMs`. */
   _statMtimeMs(path: string): number {
     return statSync(path).mtimeMs;
+  },
+  /** Underlying `fs.existsSync(path)`. Routed through the seam so test
+   *  cases for ensureDir / cleanupOrphans can simulate exotic failures
+   *  (PR #109 review). */
+  _exists(path: string): boolean {
+    return existsSync(path);
+  },
+  /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
+  _mkdir(path: string): void {
+    mkdirSync(path, { recursive: true });
+  },
+  /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
+  _unlink(path: string): void {
+    unlinkSync(path);
   },
 
   /**

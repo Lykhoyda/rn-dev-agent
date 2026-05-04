@@ -324,10 +324,11 @@ test('repair-action: dryRun returns diff without writing to disk', async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('repair-action: when YAML write fails after sidecar succeeds, no false-positive external-edit alarm', async () => {
-  project.seedAction(
+  const seeded = project.seedAction(
     'partial-fail',
     fixtureYaml({ id: 'partial-fail', selectors: ['fab-create-task'] }),
   );
+  const originalMtimeMs = seeded.mtimeMs;
 
   _setRunAgentDeviceForTest(async () => ({
     content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn']) }],
@@ -365,14 +366,30 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
 
   stub.mock.restore();
 
-  // Critical invariant: the persisted sidecar's lastSeenMtimeMs must be
-  // ≥ the on-disk YAML mtime, so yamlEditedSinceLastSeen returns false.
+  // Critical invariant #1: the persisted sidecar's lastSeenMtimeMs must
+  // be ≥ the on-disk YAML mtime, so yamlEditedSinceLastSeen returns
+  // false (no false-positive alarm).
   const action = loadAction(project.root, 'partial-fail');
   assert.ok(action, 'action should still load after partial failure');
   assert.equal(
     yamlEditedSinceLastSeen(action.filePath, action.state),
     false,
     'no false-positive external-edit alarm after partial failure',
+  );
+
+  // Critical invariant #2 (PR #109 review finding C): the test must
+  // strongly distinguish sidecar-first from a hypothetical YAML-first
+  // implementation. Under sidecar-first, step 1+2 successfully overwrite
+  // the seeded sidecar with `lastSeenMtimeMs = Date.now() + buffer`
+  // BEFORE the YAML write throws. The persisted sidecar therefore has
+  // a strictly LARGER mtime than the original seed — a YAML-first
+  // implementation would leave the sidecar untouched (still equal to
+  // `originalMtimeMs`), so this assertion would fail under that ordering.
+  assert.ok(
+    action.state.lastSeenMtimeMs > originalMtimeMs,
+    `sidecar-first ordering must overwrite the sidecar with a future mtime ` +
+    `before failing on the YAML write; got ${action.state.lastSeenMtimeMs} ` +
+    `vs original ${originalMtimeMs}`,
   );
 
   // The YAML body should still be the ORIGINAL — partial failure must

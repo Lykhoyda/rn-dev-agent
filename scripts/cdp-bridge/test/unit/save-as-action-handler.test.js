@@ -262,14 +262,18 @@ test('save-as-action: when YAML write fails after sidecar succeeds, no false-pos
   assert.equal(project.yamlExists('partial-fail'), false, 'YAML should not be present after partial failure');
 
   // Sidecar exists (step 1+2 succeeded). Its lastSeenMtimeMs is the
-  // projected future mtime (≥ Date.now()) — so a subsequent
-  // yamlEditedSinceLastSeen() call against any future YAML creation
-  // would see lastSeenMtimeMs ahead, suppressing a false alarm.
+  // projected future mtime — strictly ≥ Date.now() at the moment of
+  // step 1's `Date.now() + FUTURE_MTIME_BUFFER_MS`. PR #109 review
+  // finding (D): the previous `>= Date.now() - 1_000` bound was too
+  // loose and would have permitted a buggy implementation that wrote
+  // `Date.now() - 500`. Tightened to `> Date.now() - 100` (small slack
+  // covers wall-clock advance during the test, but rules out values in
+  // the pre-test past).
   assert.equal(project.sidecarExists('partial-fail'), true, 'sidecar should exist with projected mtime');
   const sidecar = project.readSidecar('partial-fail');
   assert.ok(
-    sidecar.lastSeenMtimeMs >= Date.now() - 1_000,
-    `expected projected lastSeenMtimeMs near now or future, got ${sidecar.lastSeenMtimeMs}`,
+    sidecar.lastSeenMtimeMs > Date.now() - 100,
+    `expected projected lastSeenMtimeMs near now or future, got ${sidecar.lastSeenMtimeMs} vs now=${Date.now()}`,
   );
 
   // Restore writer, reset mocks, simulate recovery: a subsequent call
