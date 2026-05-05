@@ -118,6 +118,29 @@ export interface M7Metadata {
 // Runtime state — MUTABLE, lives in the sidecar JSON
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Why an auto-repair was refused (when `autoRepair.outcome === 'refused'`). */
+export type AutoRepairRefusedReason =
+  | 'BUDGET_EXHAUSTED'
+  | 'EXTERNAL_EDIT'
+  | 'NO_MATCH'
+  | 'SNAPSHOT_FAILED'
+  | 'NOT_REPAIRABLE_KIND';
+
+/**
+ * Outcome of an auto-repair attempt orchestrated by `cdp_run_action`.
+ * Embedded in RunRecord so MTTR analysis (#105) can classify cleanly.
+ */
+export interface AutoRepairOutcome {
+  /** Did the orchestrator reach the repair step at all? */
+  attempted: boolean;
+  /** What happened: passed / failed / refused (skipped / never tried). */
+  outcome: 'passed' | 'failed' | 'refused' | 'skipped';
+  /** Populated when outcome === 'refused' or 'skipped'. */
+  refusedReason?: AutoRepairRefusedReason;
+  /** Populated when outcome === 'passed' or 'failed' — what got patched. */
+  diff?: { selector: { from: string; to: string } };
+}
+
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
 export interface RunRecord {
   timestamp: string;          // ISO
@@ -126,6 +149,12 @@ export interface RunRecord {
   failureCode?: ActionFailureCode;
   failureDetail?: string;     // raw stderr summary, max ~500 chars
   trigger: 'agent' | 'ci' | 'human';
+  /**
+   * Populated by `cdp_run_action` when auto-repair was either attempted
+   * or considered. Absent on plain `maestro_run` calls outside the
+   * run-action orchestrator.
+   */
+  autoRepair?: AutoRepairOutcome;
 }
 
 /** A single self-repair attempt (only emitted on successful repair). */
