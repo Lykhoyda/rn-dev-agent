@@ -64,16 +64,35 @@ export function splitYaml(text: string): {
   }
   // No separator → treat the entire text as body, no top section, parse
   // header out of leading `#` lines if present.
+  //
+  // Issue #102 A1: prior implementation flipped `inBody=true` on the
+  // first blank line BEFORE any header had been seen, so a YAML with a
+  // leading blank line followed by `# id: foo` would put the header in
+  // bodyLines (round-trip then duplicated the header on save). Fix:
+  // treat leading blank lines as a "leading-blanks" zone that doesn't
+  // flip inBody — the body proper starts at the first non-blank,
+  // non-comment line.
   if (separatorIdx === -1) {
     const headerLines: string[] = [];
     const bodyLines: string[] = [];
     let inBody = false;
+    let seenAnyContent = false;
     for (const line of allLines) {
-      if (!inBody && line.startsWith('#')) headerLines.push(line);
-      else if (!inBody && line.trim() === '' && headerLines.length > 0) {
-        inBody = true; // first blank after header — flip to body
+      if (!inBody && !seenAnyContent && line.trim() === '') {
+        // Leading blank — skip; don't add to either bucket. Preserves
+        // exact round-trip for files that start with blank lines.
+        continue;
+      }
+      if (!inBody && line.startsWith('#')) {
+        seenAnyContent = true;
+        headerLines.push(line);
+      } else if (!inBody && line.trim() === '' && headerLines.length > 0) {
+        // First blank after the header — flip to body and capture this
+        // blank as the header/body separator.
+        inBody = true;
         bodyLines.push(line);
       } else {
+        seenAnyContent = true;
         inBody = true;
         bodyLines.push(line);
       }
@@ -138,6 +157,19 @@ export function loadAction(projectRoot: string, actionId: string): ReusableActio
 }
 
 /**
+ * Discriminated result for `saveActionWithCAS` — see issue #117. When
+ * `ok: false, conflict: 'EXTERNAL_WRITE'` the on-disk sidecar's
+ * `lastSeenMtimeMs` is greater than the in-memory `action.state.
+ * lastSeenMtimeMs`, meaning some other writer (concurrent
+ * `cdp_run_action`, `cdp_repair_action`, or external tool) raced and
+ * persisted between our load and our save. Caller should reload the
+ * action and retry.
+ */
+export type SaveActionCASResult =
+  | { ok: true; filePath: string; sidecarPath: string }
+  | { ok: false; conflict: 'EXTERNAL_WRITE'; diskMtimeMs: number; expectedMtimeMs: number };
+
+/**
  * Persist a ReusableAction back to disk. Updates the YAML file, the
  * sidecar JSON, and the lastSeenMtimeMs so subsequent
  * yamlEditedSinceLastSeen() checks don't false-alarm on the agent's own
@@ -146,6 +178,13 @@ export function loadAction(projectRoot: string, actionId: string): ReusableActio
  * Caller is responsible for having computed the new metadata/body —
  * this function does not validate transitions (use the lifecycle helpers
  * from reusable-action.ts).
+ *
+ * NOTE: this overload does NOT do the CAS check (issue #117). Use
+ * `saveActionWithCAS` from `cdp_run_action`'s persistRun to detect
+ * read-modify-write races on concurrent writers. `saveAction` is kept
+ * for callers that already gate concurrency another way (e.g.
+ * `cdp_repair_action`, which checks `actionWasEditedExternally` before
+ * patching).
  */
 export function saveAction(action: ReusableAction): { filePath: string; sidecarPath: string } {
   // Read existing top section so we don't lose the `appId:` line.
@@ -185,6 +224,60 @@ export function saveAction(action: ReusableAction): { filePath: string; sidecarP
  */
 export function actionWasEditedExternally(action: ReusableAction): boolean {
   return yamlEditedSinceLastSeen(action.filePath, action.state);
+}
+
+/**
+ * Issue #117: CAS variant of `saveAction`. Compares the on-disk
+ * sidecar's `lastSeenMtimeMs` to the in-memory `action.state.
+ * lastSeenMtimeMs` BEFORE writing. If disk has advanced (some other
+ * writer raced between the caller's `loadAction` and this save), returns
+ * `{ ok: false, conflict: 'EXTERNAL_WRITE' }` instead of writing —
+ * caller reloads the action and retries.
+ *
+ * The two saveAction variants exist because:
+ *
+ *   - `saveAction` (no CAS): used by `cdp_repair_action` after its
+ *     `actionWasEditedExternally` guard runs. The repair handler
+ *     already gates concurrency at the entry; CAS would be redundant.
+ *
+ *   - `saveActionWithCAS` (CAS): used by `cdp_run_action`'s persistRun.
+ *     The orchestrator emits multiple RunRecord appends per call (first
+ *     attempt + retry) and competing `cdp_run_action` calls on the same
+ *     actionId need lost-update protection. CAS + retry-on-conflict
+ *     makes the read-modify-write atomic at the orchestrator layer.
+ *
+ * The CAS check uses `lastSeenMtimeMs` rather than `revision` because:
+ * (a) `revision` doesn't bump on RunRecord appends today (only on YAML
+ * edits + repair), so it's not a unique-per-write counter; (b)
+ * `atomicWriter.pairWrite` already advances `lastSeenMtimeMs` on every
+ * successful write, so it's a natural monotonic counter.
+ */
+export function saveActionWithCAS(action: ReusableAction): SaveActionCASResult {
+  const sidecarPath = sidecarPathFor(action.filePath);
+
+  // CAS: re-read the on-disk sidecar's lastSeenMtimeMs and compare
+  // against the in-memory snapshot.
+  if (existsSync(sidecarPath)) {
+    try {
+      const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
+        lastSeenMtimeMs?: number;
+      };
+      const diskMtimeMs = onDisk.lastSeenMtimeMs ?? 0;
+      const expectedMtimeMs = action.state.lastSeenMtimeMs;
+      // CAS skip on first save (action loaded with a placeholder zero
+      // mtime — happens when `loadOrInitSidecar` couldn't find an
+      // existing sidecar). In that case there's nothing to conflict
+      // against — proceed to write.
+      if (expectedMtimeMs > 0 && diskMtimeMs > expectedMtimeMs) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE', diskMtimeMs, expectedMtimeMs };
+      }
+    } catch {
+      // Corrupted sidecar — treat as no prior state, proceed to write.
+    }
+  }
+
+  const { filePath, sidecarPath: writtenSidecarPath } = saveAction(action);
+  return { ok: true, filePath, sidecarPath: writtenSidecarPath };
 }
 
 /**

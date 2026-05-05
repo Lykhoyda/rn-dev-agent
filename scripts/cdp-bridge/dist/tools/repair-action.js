@@ -66,9 +66,17 @@ export function createRepairActionHandler() {
         }
         const result = attemptRepair(action, args.failedSelector, candidates, args.threshold ?? DEFAULT_REPAIR_THRESHOLD);
         if (result.kind === 'no-stale-selector') {
-            return failResult(`cdp_repair_action: ${result.reason}`, 'TESTID_NOT_FOUND', {
+            // Issue #102 A3: this surfaces "the caller passed a failedSelector
+            // that's not actually present in the YAML body" — a HINT bug, not
+            // a screen-state bug. Distinct from TESTID_NOT_FOUND (which means
+            // "we have a body selector but the live screen doesn't have it").
+            // BAD_FILENAME is the codebase's existing umbrella for "the
+            // caller's input doesn't match the contract" — reuse rather than
+            // adding a new ToolErrorCode for a single call site.
+            return failResult(`cdp_repair_action: ${result.reason}`, 'BAD_FILENAME', {
                 actionId: args.actionId,
                 failedSelector: args.failedSelector,
+                hint: 'failedSelector is not present in the action body. Re-parse the Maestro stderr — the prior selector hint may be wrong.',
                 bodyPreview: action.body.slice(0, 800),
             });
         }

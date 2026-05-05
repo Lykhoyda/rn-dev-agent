@@ -31,7 +31,7 @@
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
-import { loadAction, saveAction } from '../domain/action-store.js';
+import { loadAction, saveActionWithCAS } from '../domain/action-store.js';
 import {
   type RunRecord,
   type AutoRepairOutcome,
@@ -194,27 +194,39 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // bubbling up unwrapped to the MCP framework.
     try {
       // ─── First attempt ───────────────────────────────────────────────
+      // Issue #120: capture per-phase timing so MTTR analysis (#105) can
+      // distinguish "fast detection / slow repair" from "slow detection
+      // / fast repair". Phase boundaries: t0 → tFirstDone → tRepairDone
+      // → tRetryDone.
+      const tBeforeFirst = Date.now();
       const firstResult = await maestroRun({
         flowPath: action.filePath,
         platform: args.platform,
         timeoutMs,
       });
+      const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
 
       if (firstPassed) {
         // Happy path — append RunRecord with no auto-repair.
+        const autoRepair: AutoRepairOutcome = {
+          attempted: false,
+          outcome: 'skipped',
+          phases: { firstAttemptMs },
+        };
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'pass',
           trigger,
+          autoRepair,
         });
         return okResult({
           passed: true,
           actionId: args.actionId,
-          autoRepair: { attempted: false, outcome: 'skipped' as const, refusedReason: undefined },
+          autoRepair,
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500),
@@ -230,8 +242,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         // (USER_DISABLED) from the kind-not-repairable skip path so MTTR
         // analysis can tell "user said no" from "kind isn't repairable".
         const autoRepair: AutoRepairOutcome = autoRepairEnabled
-          ? { attempted: false, outcome: 'skipped', refusedReason: 'NOT_REPAIRABLE_KIND' }
-          : { attempted: false, outcome: 'refused', refusedReason: 'USER_DISABLED' };
+          ? { attempted: false, outcome: 'skipped', refusedReason: 'NOT_REPAIRABLE_KIND', phases: { firstAttemptMs } }
+          : { attempted: false, outcome: 'refused', refusedReason: 'USER_DISABLED', phases: { firstAttemptMs } };
         const { actionCode, toolCode } = classifyFailure(failure);
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
@@ -264,12 +276,14 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         throw new Error('Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure');
       }
 
+      const tBeforeRepair = Date.now();
       const repairResult = await repairAction({
         actionId: args.actionId,
         failedSelector: failure.selector,
         projectRoot,
         agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
       });
+      const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
       const repairPatched = repairEnv.ok === true && (repairEnv.data as { patched?: boolean })?.patched === true;
 
@@ -282,6 +296,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           attempted: true,
           outcome: 'refused',
           refusedReason,
+          phases: { firstAttemptMs, repairMs },
         };
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
@@ -324,7 +339,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           failureCode: 'UNKNOWN',
           failureDetail: 'action disappeared between repair and retry',
           trigger,
-          autoRepair: { attempted: true, outcome: 'refused', refusedReason: 'INTERNAL_ERROR' },
+          autoRepair: {
+            attempted: true,
+            outcome: 'refused',
+            refusedReason: 'INTERNAL_ERROR',
+            phases: { firstAttemptMs, repairMs },
+          },
         });
         return failResult(
           `cdp_run_action: action disappeared between repair and retry — investigate filesystem`,
@@ -332,22 +352,39 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         );
       }
 
+      const tBeforeRetry = Date.now();
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
         platform: args.platform,
         timeoutMs,
       });
+      const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
 
-    const autoRepair: AutoRepairOutcome = {
-      attempted: true,
-      outcome: retryPassed ? 'passed' : 'failed',
-      diff: {
-        selector: { from: repairData.oldSelector, to: repairData.newSelector },
-      },
-    };
+      // Issue #120: pull the repair-engine's similarity score and the
+      // RepairRecord's timestamp into the AutoRepairOutcome so MTTR can
+      // both rank patches by confidence and cross-reference to the
+      // RepairRecord without timestamp-fuzzy-matching.
+      const repairScore = (repairEnv.data as { score?: number } | undefined)?.score;
+      const repairTimestamp = reloadedAction.state.repairHistory.length > 0
+        ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp
+        : undefined;
+
+      const autoRepair: AutoRepairOutcome = {
+        attempted: true,
+        outcome: retryPassed ? 'passed' : 'failed',
+        diff: {
+          selector: {
+            from: repairData.oldSelector,
+            to: repairData.newSelector,
+            ...(typeof repairScore === 'number' ? { score: repairScore } : {}),
+          },
+        },
+        phases: { firstAttemptMs, repairMs, retryMs },
+        repairTimestamp,
+      };
 
       await persistRun(args.actionId, projectRoot, {
         timestamp: new Date().toISOString(),
@@ -436,13 +473,33 @@ async function persistRun(
 ): Promise<void> {
   // Re-load to get the freshest state — repair-action may have just
   // bumped revision/repairHistory between our two saveAction calls.
-  const fresh = loadAction(projectRoot, actionId);
-  if (!fresh) {
-    console.error(
-      `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,
-    );
-    return;
+  // Issue #117: lost-update guard via CAS + bounded retry. Two
+  // concurrent `cdp_run_action` calls against the same actionId would
+  // otherwise interleave their read-modify-write and lose one
+  // RunRecord. saveActionWithCAS detects an in-flight conflict by
+  // comparing on-disk lastSeenMtimeMs to the snapshot we loaded; on
+  // conflict, reload + retry. Bounded at 5 attempts so persistent
+  // contention surfaces as a console.error instead of a hang.
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const fresh = loadAction(projectRoot, actionId);
+    if (!fresh) {
+      console.error(
+        `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,
+      );
+      return;
+    }
+    const next = { ...fresh, state: appendRunRecord(fresh.state, record) };
+    const result = saveActionWithCAS(next);
+    if (result.ok) return;
+    // CAS conflict — another writer raced us. Reload and retry.
+    if (attempt === MAX_ATTEMPTS) {
+      console.error(
+        `cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
+          `disk mtime=${result.diskMtimeMs}, expected=${result.expectedMtimeMs}. ` +
+          `RunRecord dropped — investigate concurrent writers.`,
+      );
+      return;
+    }
   }
-  const next = { ...fresh, state: appendRunRecord(fresh.state, record) };
-  saveAction(next);
 }

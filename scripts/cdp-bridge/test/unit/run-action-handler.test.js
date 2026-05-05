@@ -127,12 +127,17 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   assert.equal(env.data.autoRepair.attempted, false);
   assert.equal(env.data.autoRepair.outcome, 'skipped');
 
-  // Sidecar should have one RunRecord with status 'pass' and no autoRepair.
+  // Sidecar should have one RunRecord with status 'pass'.
+  // Issue #120: even on the happy path we now record an autoRepair
+  // entry with `outcome: 'skipped'` and `phases.firstAttemptMs` so MTTR
+  // can compute baseline detection latency without auto-repair.
   const sidecar = project.readSidecar('demo');
   assert.equal(sidecar.runHistory.length, 1);
   assert.equal(sidecar.runHistory[0].status, 'pass');
   assert.equal(sidecar.runHistory[0].trigger, 'agent');
-  assert.equal(sidecar.runHistory[0].autoRepair, undefined);
+  assert.equal(sidecar.runHistory[0].autoRepair?.attempted, false);
+  assert.equal(sidecar.runHistory[0].autoRepair?.outcome, 'skipped');
+  assert.equal(typeof sidecar.runHistory[0].autoRepair?.phases?.firstAttemptMs, 'number');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,10 +160,30 @@ test('run-action: SELECTOR_NOT_FOUND → repair patched → retry passes; RunRec
   assert.equal(env.data.retriedAfterRepair, true);
   assert.equal(env.data.autoRepair.attempted, true);
   assert.equal(env.data.autoRepair.outcome, 'passed');
+  // Issue #120: AutoRepairOutcome.diff.selector now also surfaces the
+  // repair-engine's similarity score (was discarded prior).
   assert.deepEqual(env.data.autoRepair.diff.selector, {
     from: 'fab-create-task',
     to: 'fab-create-task-btn',
+    score: 0.91,
   });
+
+  // Issue #120: phase-level timing breakdown for MTTR analysis (#105).
+  assert.equal(typeof env.data.autoRepair.phases?.firstAttemptMs, 'number');
+  assert.equal(typeof env.data.autoRepair.phases?.repairMs, 'number');
+  assert.equal(typeof env.data.autoRepair.phases?.retryMs, 'number');
+  assert.ok(env.data.autoRepair.phases.firstAttemptMs >= 0);
+  assert.ok(env.data.autoRepair.phases.repairMs >= 0);
+  assert.ok(env.data.autoRepair.phases.retryMs >= 0);
+  // Sanity: total of phase durations should not exceed the orchestration's
+  // wall-clock total (within ~10ms slack for arithmetic + JSON serialization).
+  const phaseSum = env.data.autoRepair.phases.firstAttemptMs
+    + env.data.autoRepair.phases.repairMs
+    + env.data.autoRepair.phases.retryMs;
+  assert.ok(
+    phaseSum <= env.data.durationMs + 50,
+    `phase sum ${phaseSum} should be ≤ total ${env.data.durationMs} (+50ms slack)`,
+  );
 
   // Telemetry: one RunRecord, status 'pass', autoRepair.outcome = 'passed'.
   const sidecar = project.readSidecar('demo');
@@ -168,6 +193,8 @@ test('run-action: SELECTOR_NOT_FOUND → repair patched → retry passes; RunRec
   assert.equal(r.autoRepair?.attempted, true);
   assert.equal(r.autoRepair?.outcome, 'passed');
   assert.equal(r.autoRepair?.diff?.selector?.from, 'fab-create-task');
+  assert.equal(r.autoRepair?.diff?.selector?.score, 0.91);
+  assert.equal(typeof r.autoRepair?.phases?.firstAttemptMs, 'number');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -425,6 +452,86 @@ test('run-action: TIMEOUT failure does NOT invoke repair (phase 1 scope)', async
 // ─────────────────────────────────────────────────────────────────────────────
 // trigger annotation
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #120 — phase-breakdown timing for MTTR analysis. Each phase
+// boundary should produce a discrete number; introducing a deliberate
+// stall at one phase boundary should show up cleanly in that phase's
+// duration without contaminating the others.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('run-action #120: phase timings isolate slow repair from fast first-attempt and fast retry', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const SLOW_REPAIR_MS = 80;
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV, PASS_ENV]),
+    repairAction: async () => {
+      await new Promise((r) => setTimeout(r, SLOW_REPAIR_MS));
+      return { content: [{ type: 'text', text: JSON.stringify(REPAIR_PATCHED_ENV) }] };
+    },
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+
+  const phases = env.data.autoRepair.phases;
+  // Repair phase should reflect the deliberate stall (with some slack
+  // for setTimeout's coarse resolution).
+  assert.ok(
+    phases.repairMs >= SLOW_REPAIR_MS - 10,
+    `repairMs ${phases.repairMs} should be at least ${SLOW_REPAIR_MS - 10}`,
+  );
+  // First-attempt and retry should be much faster than the repair phase.
+  assert.ok(phases.firstAttemptMs < SLOW_REPAIR_MS, `firstAttemptMs ${phases.firstAttemptMs} should be far below ${SLOW_REPAIR_MS}`);
+  assert.ok(phases.retryMs < SLOW_REPAIR_MS, `retryMs ${phases.retryMs} should be far below ${SLOW_REPAIR_MS}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #117 — concurrency CAS. Two concurrent `cdp_run_action` calls
+// against the same actionId must not lose RunRecords through
+// read-modify-write interleaving.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Issue #117: concurrent cdp_run_action calls on the same actionId do not lose RunRecords', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  // Both calls should succeed (first-attempt pass) and both should
+  // append a RunRecord. Pre-#117 fix this test would intermittently
+  // fail because Call B's loadAction snapshot pre-dates Call A's
+  // saveAction, and B's saveAction overwrites A's append. With CAS
+  // + retry, B detects the conflict, reloads, and re-appends.
+  const handler1 = createRunActionHandler({
+    maestroRun: fakeMaestroRun([PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const handler2 = createRunActionHandler({
+    maestroRun: fakeMaestroRun([PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+
+  // Fire in parallel. Note: Node's await microtask scheduling makes
+  // this strictly sequential at the JS-loop level — to actually
+  // interleave the read-modify-write we need to delay the saveAction
+  // step. Easiest way: await Promise.all on handlers that yield to
+  // the event loop between loadAction and saveAction. The handler's
+  // own awaits (parseEnvelope, persistRun's await) provide that
+  // interleaving naturally, but to make the race deterministic across
+  // CI environments we just verify both records land on disk.
+  const [r1, r2] = await Promise.all([
+    handler1({ actionId: 'demo', projectRoot: project.root }),
+    handler2({ actionId: 'demo', projectRoot: project.root }),
+  ]);
+
+  assert.equal(r1.isError, undefined, 'first concurrent call should succeed');
+  assert.equal(r2.isError, undefined, 'second concurrent call should succeed');
+
+  const sidecar = project.readSidecar('demo');
+  assert.equal(
+    sidecar.runHistory.length,
+    2,
+    `both RunRecords must persist; got ${sidecar.runHistory.length} (pre-#117 fix this would be 1 due to lost-update)`,
+  );
+});
 
 test('run-action: trigger="ci" surfaces in the RunRecord', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
