@@ -245,7 +245,7 @@ test('run-action: repair refused (no fuzzy match) → autoRepair.refusedReason =
 // Auto-repair gating: autoRepair=false explicitly disables the path.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('run-action: autoRepair=false skips repair entirely on selector failure', async () => {
+test('run-action: autoRepair=false skips repair entirely AND records USER_DISABLED refusedReason (PR #115 review)', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
 
   let repairCalled = false;
@@ -264,6 +264,131 @@ test('run-action: autoRepair=false skips repair entirely on selector failure', a
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.meta.autoRepair.attempted, false);
   assert.equal(env.meta.autoRepair.outcome, 'refused');
+  assert.equal(
+    env.meta.autoRepair.refusedReason,
+    'USER_DISABLED',
+    'autoRepair=false must surface USER_DISABLED so MTTR can distinguish opt-out from genuine refusals',
+  );
+
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory[0].autoRepair.refusedReason, 'USER_DISABLED');
+});
+
+// PR #115 multi-LLM review (Gemini conf 95): a thrown exception during
+// orchestration must NOT propagate uncaught to the MCP framework. It
+// must be caught, persisted as a fail RunRecord with INTERNAL_ERROR
+// refusedReason, and surfaced as a structured failResult.
+test('run-action: maestroRun throwing during first attempt is caught + RunRecord persisted', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: async () => {
+      throw new Error('SIMULATED_TIMEOUT: maestro execFile killed');
+    },
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+
+  // Should NOT throw — should return a structured failResult.
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  assert.equal(result.isError, true, 'expected failResult, got envelope: ' + result.content[0].text);
+
+  const env = JSON.parse(result.content[0].text);
+  assert.match(env.error, /SIMULATED_TIMEOUT/);
+  assert.equal(env.meta.autoRepair.outcome, 'refused');
+  assert.equal(env.meta.autoRepair.refusedReason, 'INTERNAL_ERROR');
+
+  // Telemetry survived the throw.
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory.length, 1);
+  assert.equal(sidecar.runHistory[0].status, 'fail');
+  assert.equal(sidecar.runHistory[0].failureCode, 'UNKNOWN');
+  assert.equal(sidecar.runHistory[0].autoRepair.refusedReason, 'INTERNAL_ERROR');
+});
+
+test('run-action: maestroRun throwing during retry-after-repair is caught + RunRecord persisted', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  let callCount = 0;
+  const handler = createRunActionHandler({
+    maestroRun: async () => {
+      callCount++;
+      if (callCount === 1) {
+        // First attempt fails with a parseable selector failure.
+        return {
+          content: [{ type: 'text', text: JSON.stringify(FAIL_SELECTOR_ENV) }],
+          isError: true,
+        };
+      }
+      // Second attempt (retry after repair) throws.
+      throw new Error('SIMULATED_OOM: retry maestro killed');
+    },
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.match(env.error, /SIMULATED_OOM/);
+
+  // The retry threw, so we never wrote an "outcome: passed/failed"
+  // RunRecord — but the catch path persisted the INTERNAL_ERROR record
+  // so MTTR doesn't lose the event.
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory.length, 1);
+  assert.equal(sidecar.runHistory[0].autoRepair.refusedReason, 'INTERNAL_ERROR');
+});
+
+// PR #115 multi-LLM review (both providers conf ~88): mapRefusedReason
+// disambiguates STALE_TARGET into BUDGET_EXHAUSTED vs EXTERNAL_EDIT by
+// regexing the literal phrase "repair budget" in repair-action's
+// error string. If repair-action's wording changes, BUDGET_EXHAUSTED
+// would silently flip to EXTERNAL_EDIT and MTTR analytics would
+// mis-categorise. This test locks the wording.
+test('run-action: wording-lock — repair-action MUST emit "repair budget" substring on STALE_TARGET budget path', async () => {
+  // The lock works at two levels:
+  //   1. The fixture envelope below MUST contain "repair budget" — if
+  //      the test author copies a future repair-action error string
+  //      that lacks this substring, mapRefusedReason will fall through
+  //      to EXTERNAL_EDIT and this test will fail.
+  //   2. Real repair-action.ts:101's error string ("exhausted its 24h
+  //      repair budget") is verified by repair-action-handler.test.js
+  //      asserting `/repair budget/` against the production handler.
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const budgetEnv = {
+    ok: false,
+    code: 'STALE_TARGET',
+    error: 'cdp_repair_action: action "demo" exhausted its 24h repair budget — refusing to repair.',
+  };
+  // Sanity check the fixture itself.
+  assert.match(budgetEnv.error, /repair budget/, 'fixture must contain the disambiguation phrase');
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+    repairAction: fakeRepairAction(budgetEnv),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.meta.autoRepair.refusedReason, 'BUDGET_EXHAUSTED');
+});
+
+test('run-action: unmapped repair-action error code → INTERNAL_ERROR (not NO_MATCH)', async () => {
+  // PR #115 review (Codex C3 conf 90): unknown repair codes must NOT
+  // fall through to NO_MATCH (which means "screen state legitimately
+  // doesn't have the testID") — they should surface as INTERNAL_ERROR
+  // so MTTR distinguishes contract bugs from genuine no-match outcomes.
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const unknownEnv = {
+    ok: false,
+    code: 'BAD_FILENAME', // shouldn't reach here on well-formed calls but classify defensively
+    error: 'unexpected error from repair-action',
+  };
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+    repairAction: fakeRepairAction(unknownEnv),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.meta.autoRepair.refusedReason, 'INTERNAL_ERROR');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

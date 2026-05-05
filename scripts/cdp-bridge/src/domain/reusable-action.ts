@@ -124,7 +124,16 @@ export type AutoRepairRefusedReason =
   | 'EXTERNAL_EDIT'
   | 'NO_MATCH'
   | 'SNAPSHOT_FAILED'
-  | 'NOT_REPAIRABLE_KIND';
+  | 'NOT_REPAIRABLE_KIND'
+  // PR #115 multi-LLM review: distinguish user-driven opt-outs from
+  // genuine refusals so MTTR analysis (#105) can see "user disabled
+  // repair" as operationally healthy vs. budget/edit/match refusals.
+  | 'USER_DISABLED'
+  // Internal/unexpected: parseEnvelope failed, repair-action returned
+  // an unmapped error code, or the orchestrator hit a defensive path.
+  // Keep separate from NO_MATCH so MTTR doesn't conflate transport
+  // bugs with "screen state legitimately doesn't have the testID".
+  | 'INTERNAL_ERROR';
 
 /**
  * Outcome of an auto-repair attempt orchestrated by `cdp_run_action`.

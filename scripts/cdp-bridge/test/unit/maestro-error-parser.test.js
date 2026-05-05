@@ -165,6 +165,34 @@ test('isAutoRepairable: UNKNOWN is NOT auto-repairable', () => {
 // captures — keeps the regex grounded in real wire format).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Asymmetric-quote handling — multi-LLM review of PR #115 (Gemini conf 95):
+// the previous `[^'"]+` capture rejected BOTH quote types, so a testID
+// containing the OPPOSITE quote silently failed to parse. The
+// `(['"])((?:(?!\1).)+)\1` pattern matches the same quote at both ends
+// and allows the opposite inside.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('parser: id-keyed selector containing a single-quote (RN convention "user\'s-tasks") inside double-quotes', () => {
+  const out = parseMaestroFailure(`Element with id "user's-tasks" not found`);
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, "user's-tasks");
+});
+
+test('parser: id-keyed selector containing a double-quote inside single-quotes', () => {
+  const out = parseMaestroFailure(`Element with id 'say-"hi"' not found`);
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'say-"hi"');
+});
+
+test('parser: timeout selector containing the opposite quote', () => {
+  const out = parseMaestroFailure(`Timed out waiting for element with id "don't-tap-me"`);
+  assert.equal(out.kind, 'TIMEOUT');
+  assert.equal(out.selector, "don't-tap-me");
+});
+
 test('parser: realistic maestro-runner failure output', () => {
   const realistic = `
 === Running ./.rn-agent/actions/wizard-create-task.yaml ===
