@@ -32,6 +32,7 @@ import {
 } from './tools/macro-asserts.js';
 import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
+import { createRunActionHandler } from './tools/run-action.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -1074,6 +1075,22 @@ trackedTool(
     agentReasoning: z.string().optional().describe('Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.'),
   },
   createRepairActionHandler(),
+);
+
+// Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
+// stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
+trackedTool(
+  'cdp_run_action',
+  'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.',
+  {
+    actionId: z.string().describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
+    projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
+    platform: z.enum(['ios', 'android']).optional().describe('Force a specific platform; otherwise auto-detected from the active device session.'),
+    autoRepair: z.boolean().optional().describe('Auto-repair on SELECTOR_NOT_FOUND failures. Default true. Pass false to disable (e.g. when investigating a failure manually).'),
+    timeoutMs: z.number().optional().describe('Maestro execution timeout per attempt (ms). Default 120_000.'),
+    trigger: z.enum(['agent', 'ci', 'human']).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
+  },
+  createRunActionHandler(),
 );
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
