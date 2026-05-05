@@ -158,11 +158,23 @@ export function replaceIdSelector(body, oldId, newId) {
 export function extractIdSelectors(body) {
     const out = [];
     const lines = body.split('\n');
+    // Issue #102 A2: previous regex `[^"'\\n]*?` greedily included
+    // trailing inline comments — `id: foo-bar  # human note` captured
+    // `foo-bar  # human note` as the testID. Hand-authored YAML
+    // sometimes has these comments; the bug fails safely (no fuzzy
+    // match) but produces a UX issue. Fix: strip trailing
+    // `\s+#.*` from the captured group before pushing. Also tighten
+    // the bare-form regex to reject `#` directly so quoted forms are
+    // unaffected.
     const re = /^\s*id:\s*"?'?([^"'\s][^"'\n]*?)"?'?\s*$/;
     for (const line of lines) {
         const m = line.match(re);
-        if (m)
-            out.push(m[1]);
+        if (m) {
+            // Trim any trailing `<space>#<rest-of-line>` that the lazy
+            // capture could not exclude.
+            const cleaned = m[1].replace(/\s+#.*$/, '');
+            out.push(cleaned);
+        }
     }
     return out;
 }

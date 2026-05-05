@@ -18,34 +18,47 @@
 // match. If none match, returns `{ kind: 'UNKNOWN', raw }` so the caller
 // can decide whether to surface it verbatim or escalate to the user.
 // Order matters: more-specific patterns first.
+//
+// Matched-quote pattern `(['"])((?:(?!\1).)+)\1` captures a testID
+// surrounded by quotes (single OR double) AND allows the OPPOSITE quote
+// inside the captured value. Multi-LLM review of PR #115 caught that
+// the prior `[^'"]+` capture broke on testIDs like "user's-tasks" or
+// `say-"hi"` — Maestro outputs the literal id verbatim, and React
+// Native testIDs are not constrained to kebab-case ASCII. The new
+// pattern uses a back-reference to require the same opening + closing
+// quote, with `(?!\1).` allowing every character that isn't the
+// matching closer.
+//
+// Group 1 = the quote character (consumed but unused);
+// Group 2 = the actual selector value.
 const PATTERNS = [
     {
-        re: /Element with id ['"]([^'"]+)['"] (?:was )?not found/i,
-        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[1], raw }),
+        re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
     },
     {
-        re: /Element with text ['"]([^'"]+)['"] (?:was )?not found/i,
-        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[1], raw }),
+        re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
     },
     {
-        re: /Element ['"]([^'"]+)['"] (?:was )?not found/i,
-        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'unknown', selector: m[1], raw }),
+        re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'unknown', selector: m[2], raw }),
     },
     {
-        re: /Timed out waiting for element with id ['"]([^'"]+)['"]/i,
-        build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[1], raw }),
+        re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[2], raw }),
     },
     {
-        re: /Timed out waiting for element ['"]([^'"]+)['"]/i,
-        build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[1], raw }),
+        re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
+        build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[2], raw }),
     },
     {
-        re: /Assertion failed: ['"]([^'"]+)['"] (?:is )?not visible/i,
-        build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[1], raw }),
+        re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
+        build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
     },
     {
-        re: /Element ['"]([^'"]+)['"] is not visible/i,
-        build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[1], raw }),
+        re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
+        build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
     },
 ];
 /**

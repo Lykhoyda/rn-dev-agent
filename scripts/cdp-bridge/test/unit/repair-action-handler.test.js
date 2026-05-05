@@ -128,6 +128,41 @@ test('repair-action: missing failedSelector returns BAD_FILENAME', async () => {
   assert.equal(env.code, 'BAD_FILENAME');
 });
 
+// Issue #102 A3 — distinguish "caller passed a wrong selector hint"
+// from "screen state doesn't have the testID". The first surfaces as
+// BAD_FILENAME (the codebase's umbrella for "caller's input doesn't
+// match the contract"); the second remains TESTID_NOT_FOUND.
+test('Issue #102 A3: failedSelector not present in action body returns BAD_FILENAME (not TESTID_NOT_FOUND)', async () => {
+  // Seed an action whose body references "fab-create-task" only.
+  project.seedAction(
+    'wrong-hint',
+    fixtureYaml({ id: 'wrong-hint', selectors: ['fab-create-task'] }),
+  );
+
+  // A device snapshot exists (so the upstream guards don't short-
+  // circuit), but the caller's failedSelector hint doesn't match
+  // anything in the body.
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn']) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'wrong-hint',
+    failedSelector: 'totally-different-selector-not-in-body',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(
+    env.code,
+    'BAD_FILENAME',
+    `pre-#102-A3 fix this would have been TESTID_NOT_FOUND; the new code distinguishes hint-bug from screen-state-bug`,
+  );
+  assert.match(env.error, /not found in the action body|may be wrong/);
+});
+
 test('repair-action: action not found returns NO_PROJECT_ROOT', async () => {
   const handler = createRepairActionHandler();
   const result = await handler({

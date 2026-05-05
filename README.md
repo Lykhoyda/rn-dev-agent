@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
-**67 MCP tools** | **5 agents** | **16 commands** | **994 tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**74 MCP tools** | **5 agents** | **17 commands** | **1180+ tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -73,12 +73,13 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | `/rn-dev-agent:build-and-test <desc>` | Build app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + PR body |
 
-**Reusable actions (M7):**
+**Reusable actions (M7) + L3 self-healing corpus:**
 
 | Command | Purpose |
 |---------|---------|
 | `/rn-dev-agent:list-learned-actions` | Browse memories + Maestro flows + UI skeletons + commands available in this project |
-| `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage) |
+| `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage); auto-repairs SELECTOR_NOT_FOUND failures via `cdp_run_action` |
+| `/rn-dev-agent:promote-action` | Elevate an agent-owned action into the team's core E2E suite |
 
 **Setup & diagnostics:**
 
@@ -122,21 +123,27 @@ if (__DEV__) {
 
 ## MCP Tools
 
-67 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
+74 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
 | Category | Count | Examples | Docs |
 |----------|-------|---------|------|
-| **CDP** (React internals) | 38 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value`, `cdp_native_errors`, `cdp_record_test_*` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
+| **CDP** (React internals) | 39 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value`, `cdp_native_errors`, `cdp_record_test_*`, `cdp_repair_action` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
 | **Device** (native interaction) | 22 | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_pick_value` | [Device tools](https://lykhoyda.github.io/rn-dev-agent/tools/#device-tools) |
-| **Testing** (E2E + proof) | 7 | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_generate`, `maestro_test_all` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
+| **Testing** (E2E + proof) | 8 | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_generate`, `maestro_test_all`, `cdp_run_action` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
+| **Macro-Asserts** (L3 state checks) | 4 | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | [Macro-Asserts](https://lykhoyda.github.io/rn-dev-agent/tools/#macro-asserts) |
 
-### What's new in v0.44.5 (2026-04-29)
+### What's new in v0.44.18 (2026-05-05)
 
-- **M7 reusable-actions metadata schema** — every Maestro flow now carries a 5-key header (`id`, `intent`, `tags`, `mutates`, `status`) so future sessions can find, filter, and replay it safely. New `/list-learned-actions` browses the inventory; new `/run-action` replays with safety pre-flights (mutates flag, appId match, parameter coverage).
-- **Phase 8 rehearsal-before-recording gate** — discovery happens off camera, recording captures replay of a verified Maestro flow. Eliminates multi-minute videos of the LLM hunting for testIDs. Max-3 retry budget, Maestro-inexpressibility carve-out documented.
-- **CDP helpers auto-reinject** (B149) — `withConnection` does a 1-shot active reinject on `HELPERS_NOT_INJECTED`; `cdp_status` exposes `capabilities.helpersInjected`. Doctor row 8b surfaces the new freshness signal.
-- **CDP-001 → CDP-016 review batch** — 15 high-confidence fixes from the multi-LLM CDP tool review (15/16 closed; CDP-008 deferred pending a live keyboard+button accessibility fixture). Session state now lives at `~/Library/Application Support/rn-dev-agent/` per project (CDP-015), off `/tmp`.
-- **994 unit tests** in cdp-bridge (was 249 in v0.23.0).
+- **L3 self-healing corpus** — new `cdp_repair_action` patches a flow's stale testID via fuzzy match against the live snapshot when `/run-action` fails with `SELECTOR_NOT_FOUND`. Guardrails: refuses on human edits (mtime check), refuses past 3 repairs in 24h, refuses on snapshot infrastructure failure.
+- **Auto-repair-aware action replay** — new `cdp_run_action` orchestrates `maestro_run` + parser + `cdp_repair_action` + retry, then persists a `RunRecord` with structured `autoRepair` telemetry (passed / failed / refused / skipped, plus phase-level timing for MTTR analysis).
+- **L2→L3 auto-emission** — new `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with full M7 metadata header + initialised sidecar. Auto-promotes to `status: active` on first clean replay.
+- **Macro-Asserts** — `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` for state-assertive replays. Maestro asserts pixels; these assert internal state. Differentiated capability over Maestro Cloud / KaneAI / BrowserStack.
+- **testID-keyed `device_batch`** — re-resolves via fresh fiber-tree snapshot per call, immune to stale-ref-across-step-transitions failures.
+- **`/promote-action` slash command** — explicit human gesture to elevate an agent-owned action into the team's core `.maestro/flows/` E2E suite.
+- **Three-layer architecture** — D1206 codifies L1 Workflow / L2 Discovery / L3 Reproducible Actions as the canonical mental model.
+- **Atomic YAML+sidecar pair-write** — sidecar-first ordering with future-mtime buffer guarantees no false-positive "external edit" alarms even on partial-write failures (D1101 / issue #101).
+- **CAS read-modify-write protection** — `saveActionWithCAS` detects concurrent writer races on the same actionId and retries, so RunRecord history doesn't lose entries under heavy parallel runs (issue #117).
+- **1180+ unit tests** in cdp-bridge (was 994 in v0.44.5, 249 in v0.23.0).
 
 ## Architecture
 
@@ -145,7 +152,7 @@ Claude Code
   ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
-  │   67 tools: component tree, store state, profiling, network, interaction, recording
+  │   74 tools: component tree, store state, profiling, network, interaction, recording, self-healing
   │
   └── Bash (device lifecycle)
       xcrun simctl / adb / maestro-runner / agent-device
@@ -212,7 +219,7 @@ cd rn-dev-agent/scripts/cdp-bridge && npm install && npm run build && cd ../..
 cd /path/to/your-rn-app && claude --plugin-dir /path/to/rn-dev-agent
 ```
 
-Tests: `cd scripts/cdp-bridge && npm test` (994 tests, [CI](../../actions))
+Tests: `cd scripts/cdp-bridge && npm test` (1180+ tests, [CI](../../actions))
 
 ## License
 

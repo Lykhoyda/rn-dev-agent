@@ -100,10 +100,26 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Multi-LLM review of PR #115 (Codex conf 95): when execFile
+      // throws on timeout (or kill), Node attaches the partial stdout
+      // and stderr to the error object. Preserve them in `data.output`
+      // so downstream parsers (notably `cdp_run_action`'s
+      // `parseMaestroFailure`) can still classify the underlying
+      // failure — e.g. a SELECTOR_NOT_FOUND emitted just before the
+      // timeout boundary. Without this, auto-repair is silently
+      // pessimised exactly when devices are slow / under load.
+      const errAny = err as { stdout?: unknown; stderr?: unknown };
+      const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
+      const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
+      const combined = (stdout + '\n' + stderr).trim();
       return failResult(`Maestro flow failed: ${msg.slice(0, 500)}`, {
         flowFile,
         platform,
         runner: dispatch.runner,
+        passed: false,
+        // `output` mirrors the success/warn shape so callers can read
+        // it the same way regardless of which path they hit.
+        output: combined.slice(0, 4000),
       });
     }
   };

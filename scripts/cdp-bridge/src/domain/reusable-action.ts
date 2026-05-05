@@ -124,7 +124,34 @@ export type AutoRepairRefusedReason =
   | 'EXTERNAL_EDIT'
   | 'NO_MATCH'
   | 'SNAPSHOT_FAILED'
-  | 'NOT_REPAIRABLE_KIND';
+  | 'NOT_REPAIRABLE_KIND'
+  // PR #115 multi-LLM review: distinguish user-driven opt-outs from
+  // genuine refusals so MTTR analysis (#105) can see "user disabled
+  // repair" as operationally healthy vs. budget/edit/match refusals.
+  | 'USER_DISABLED'
+  // Internal/unexpected: parseEnvelope failed, repair-action returned
+  // an unmapped error code, or the orchestrator hit a defensive path.
+  // Keep separate from NO_MATCH so MTTR doesn't conflate transport
+  // bugs with "screen state legitimately doesn't have the testID".
+  | 'INTERNAL_ERROR';
+
+/**
+ * Phase-level timing breakdown for an auto-repair attempt. Issue #120:
+ * MTTR analysis (#105) needs to distinguish "fast detection + slow
+ * repair" from "slow detection + fast repair" — the orchestration's
+ * total `RunRecord.durationMs` collapses both, so we surface each phase
+ * here. All fields optional so plain `maestro_run` calls outside the
+ * orchestrator (which don't go through these phases) still produce
+ * valid RunRecords.
+ */
+export interface AutoRepairPhases {
+  /** Time from orchestration start until first maestro_run returned. */
+  firstAttemptMs: number;
+  /** Time from first-attempt fail until repair handler returned (snapshot + match + saveAction). */
+  repairMs?: number;
+  /** Time from repair-patched until retry maestro_run returned. */
+  retryMs?: number;
+}
 
 /**
  * Outcome of an auto-repair attempt orchestrated by `cdp_run_action`.
@@ -137,8 +164,33 @@ export interface AutoRepairOutcome {
   outcome: 'passed' | 'failed' | 'refused' | 'skipped';
   /** Populated when outcome === 'refused' or 'skipped'. */
   refusedReason?: AutoRepairRefusedReason;
-  /** Populated when outcome === 'passed' or 'failed' — what got patched. */
-  diff?: { selector: { from: string; to: string } };
+  /**
+   * Populated when outcome === 'passed' or 'failed' — what got patched.
+   * Issue #120 extension: optional `score` from the fuzzy-match engine.
+   * (cdp_repair_action already returns this; we now pipe it through.)
+   */
+  diff?: {
+    selector: {
+      from: string;
+      to: string;
+      /** Levenshtein-derived similarity score 0..1 returned by the repair engine. */
+      score?: number;
+    };
+  };
+  /**
+   * Phase-level timing breakdown. Issue #120: MTTR experiments need
+   * this to compute "median seconds saved" and to spot pathological
+   * phase distributions (e.g. a slow snapshot dominating repair time).
+   */
+  phases?: AutoRepairPhases;
+  /**
+   * ISO timestamp linking this AutoRepairOutcome to the matching
+   * RepairRecord in `state.repairHistory`. RepairRecord.timestamp is
+   * the natural primary key — no separate id field. Populated only
+   * when outcome === 'passed' or 'failed' (i.e. a repair actually ran
+   * and emitted a RepairRecord).
+   */
+  repairTimestamp?: string;
 }
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */

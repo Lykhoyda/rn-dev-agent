@@ -198,6 +198,23 @@ test('Phase129 extractIdSelectors: body without id: returns []', () => {
   assert.deepEqual(extractIdSelectors('- launchApp\n- waitForAnimationToEnd'), []);
 });
 
+// Issue #102 A2 — strip trailing inline comments on bare-form selectors.
+test('Issue #102 A2: extractIdSelectors strips trailing inline comments on bare-form selectors', () => {
+  const out = extractIdSelectors([
+    '- tapOn:',
+    '    id: foo-bar  # this is a comment',
+  ].join('\n'));
+  assert.deepEqual(out, ['foo-bar']);
+});
+
+test('Issue #102 A2: quoted forms remain unaffected by the comment-strip', () => {
+  const out = extractIdSelectors([
+    '- tapOn:',
+    '    id: "with-quotes"',
+  ].join('\n'));
+  assert.deepEqual(out, ['with-quotes']);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // replaceIdSelector
 // ─────────────────────────────────────────────────────────────────────────────
