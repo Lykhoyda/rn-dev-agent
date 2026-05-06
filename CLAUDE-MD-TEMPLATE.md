@@ -40,6 +40,41 @@ agent protocols.
 
 ---
 
+### Reusable Actions (the L3 corpus)
+
+An "action" is a Maestro YAML flow stored at `<project>/.rn-agent/actions/<id>.yaml`
+paired with a runtime sidecar at `<project>/.rn-agent/state/<id>.state.json`.
+The YAML is the executable test; the sidecar tracks `revision`, `status`
+(`experimental` / `active` / `deprecated`), `runHistory[]`, and `repairHistory[]`.
+The plugin records, replays, and self-heals these flows so an identical user
+flow that took ~13 minutes the first time costs ~4 seconds on every replay
+afterward — discovery is a one-time cost, replay is the steady state.
+
+**Lifecycle and tooling:**
+
+| Stage | Tool / command | What it does |
+|---|---|---|
+| **Discover** (record) | `cdp_record_test_start` → walk the app → `cdp_record_test_stop` | Buffers events to `.rn-agent/recordings/<id>.json` (pre-save) |
+| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`) |
+| **List** | `/rn-dev-agent:list-learned-actions [keyword]` | Browse the corpus by intent / tags / appId. Section B of the output shows actions, Section C shows the UI skeleton, Section A surfaces feedback memories |
+| **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
+| **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
+| **Assert state** | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | Macro-Asserts — embed internal-state assertions inside replays. Maestro asserts pixels; these assert what the app actually believes |
+| **Compact** | `/rn-dev-agent:rn-agent-compact` | Periodic corpus health report — flags cold (90+ day), flaky (>50% failure), or high-churn (5+ repairs/30d) actions. Deletion is human-in-the-loop |
+
+**Canonical loop.** Record a verified walk once → save as an action → in the
+next session, `list-learned-actions` surfaces it for the agent → `run-action`
+replays it in ~4 seconds → if a testID drifted, `cdp_run_action` auto-invokes
+`cdp_repair_action`, patches the YAML, retries once, and persists the result
+to the sidecar's `runHistory[]` with auto-repair telemetry.
+
+**Status maturity.** New actions ship as `experimental`. The first clean
+replay auto-promotes them to `active`. Self-repair demotes back to
+`experimental` until the next clean replay re-validates. `deprecated` is a
+manual gesture for actions you want to retain for history but no longer run.
+
+---
+
 ### 🚨 Tool Routing — STRICT RULES (read this second)
 
 All app interaction MUST go through plugin MCP tools — never raw shell. The plugin's tools
