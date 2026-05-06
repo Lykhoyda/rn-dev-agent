@@ -267,3 +267,65 @@ test('Phase127 serializeM7Header: newlines stripped from VALUES (not between fie
   // Verify count: 3 lines, exactly 2 newlines between them.
   assert.equal(out.split('\n').length, 3);
 });
+
+// D1209 produces field — hybrid composition state postconditions.
+test('D1209 serializeM7Header: produces emits inline map with sorted keys', () => {
+  const meta = {
+    id: 'x',
+    intent: 'y',
+    status: 'active',
+    produces: { route: 'home', authenticated: true, count: 3 },
+  };
+  const out = serializeM7Header(meta);
+  // Sorted alphabetically: authenticated, count, route.
+  assert.match(out, /# produces: \{ authenticated: true, count: 3, route: home \}/);
+});
+
+test('D1209 serializeM7Header: omits produces when undefined or empty', () => {
+  const omitted = serializeM7Header({ id: 'x', intent: 'y', status: 'active' });
+  assert.doesNotMatch(omitted, /# produces:/);
+  const emptyMap = serializeM7Header({ id: 'x', intent: 'y', status: 'active', produces: {} });
+  assert.doesNotMatch(emptyMap, /# produces:/);
+});
+
+test('D1209 parseM7Header: produces map roundtrips with mixed types', () => {
+  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { authenticated: true, route: home, retries: 3 }\n';
+  const meta = parseM7Header(yaml);
+  assert.deepEqual(meta.produces, { authenticated: true, route: 'home', retries: 3 });
+});
+
+test('D1209 parseM7Header: produces handles boolean false + negative + decimal', () => {
+  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { dirty: false, offset: -2, ratio: 0.75 }\n';
+  const meta = parseM7Header(yaml);
+  assert.deepEqual(meta.produces, { dirty: false, offset: -2, ratio: 0.75 });
+});
+
+test('D1209 parseM7Header: produces strips quotes around string values', () => {
+  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { route: "Settings", lang: \'en-US\' }\n';
+  const meta = parseM7Header(yaml);
+  assert.deepEqual(meta.produces, { route: 'Settings', lang: 'en-US' });
+});
+
+test('D1209 parseM7Header: produces empty braces yields undefined', () => {
+  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { }\n';
+  const meta = parseM7Header(yaml);
+  assert.equal(meta.produces, undefined);
+});
+
+test('D1209 parseM7Header: produces missing field stays undefined', () => {
+  const yaml = '# id: foo\n# intent: bar\n# status: active\n';
+  const meta = parseM7Header(yaml);
+  assert.equal(meta.produces, undefined);
+});
+
+test('D1209 serializeM7Header → parseM7Header: full produces roundtrip', () => {
+  const original = {
+    id: 'user-login',
+    intent: 'Log in via email + password',
+    status: 'active',
+    produces: { authenticated: true, route: 'home', userTier: 'premium' },
+  };
+  const out = serializeM7Header(original);
+  const parsed = parseM7Header(out);
+  assert.deepEqual(parsed.produces, original.produces);
+});

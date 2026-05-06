@@ -124,6 +124,7 @@ function scanFlows() {
         mutates: meta.mutates,
         status: meta.status,
         params: uniqParams,
+        produces: meta.produces,
         replay,
       });
     }
@@ -160,8 +161,8 @@ function parseFlowMeta(text) {
   const appIdMatch = text.match(/^appId:\s*([^\s#]+)/m);
   const lines = text.split('\n');
   const purposeLines = [];
-  const meta = { id: null, intent: null, tags: null, mutates: null, status: null };
-  const META_KEYS = new Set(['id', 'intent', 'tags', 'mutates', 'status']);
+  const meta = { id: null, intent: null, tags: null, mutates: null, status: null, produces: null };
+  const META_KEYS = new Set(['id', 'intent', 'tags', 'mutates', 'status', 'produces']);
   let inComment = false;
   for (const line of lines) {
     if (line.startsWith('#')) {
@@ -180,6 +181,8 @@ function parseFlowMeta(text) {
             .filter(Boolean);
         } else if (key === 'mutates') {
           meta.mutates = /^true$/i.test(raw);
+        } else if (key === 'produces') {
+          meta.produces = parseProducesMap(raw);
         } else {
           meta[key] = raw;
         }
@@ -203,7 +206,32 @@ function parseFlowMeta(text) {
     tags: meta.tags,
     mutates: meta.mutates,
     status: meta.status,
+    produces: meta.produces,
   };
+}
+
+// D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
+// Values are typed as boolean (true/false), number, or string. Returns
+// null when empty or unparseable so callers can omit the field. Mirrors
+// parseProducesMap() in scripts/cdp-bridge/src/domain/reusable-action.ts.
+function parseProducesMap(raw) {
+  const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+  if (!inner) return null;
+  const result = {};
+  for (const part of inner.split(',')) {
+    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const valueRaw = kv[2].trim();
+    if (/^(true|false)$/i.test(valueRaw)) {
+      result[key] = /^true$/i.test(valueRaw);
+    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
+      result[key] = Number(valueRaw);
+    } else {
+      result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
+    }
+  }
+  return Object.keys(result).length ? result : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -363,13 +391,14 @@ if (want('b')) {
       parts.push(`_Searched: ${flows.roots.map((r) => '`' + r + '`').join(', ')}_`);
     }
   } else {
-    parts.push('| Flow | Purpose | App ID | Mutates | Status | Tags | Replay |');
-    parts.push('|---|---|---|---|---|---|---|');
+    parts.push('| Flow | Purpose | App ID | Mutates | Status | Tags | Produces | Replay |');
+    parts.push('|---|---|---|---|---|---|---|---|');
     for (const f of flows.items) {
       const mut = f.mutates === null || f.mutates === undefined ? '?' : (f.mutates ? 'yes' : 'no');
       const status = f.status || '?';
       const tags = (f.tags && f.tags.length) ? f.tags.join(', ') : '?';
-      parts.push(`| \`${f.flow}\` | ${esc(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${esc(tags)} | \`${f.replay}\` |`);
+      const produces = formatProducesCell(f.produces);
+      parts.push(`| \`${f.flow}\` | ${esc(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${esc(tags)} | ${esc(produces)} | \`${f.replay}\` |`);
     }
   }
   parts.push('');
@@ -408,4 +437,13 @@ process.exit(total === 0 ? 3 : 0);
 
 function esc(s) {
   return (s || '').toString().replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+// D1209 — render the parsed produces map as a compact table cell.
+// Empty / null returns '?'.
+function formatProducesCell(produces) {
+  if (!produces || typeof produces !== 'object') return '?';
+  const keys = Object.keys(produces).sort();
+  if (keys.length === 0) return '?';
+  return keys.map((k) => `${k}=${produces[k]}`).join(', ');
 }
