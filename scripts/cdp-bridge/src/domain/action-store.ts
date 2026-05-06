@@ -23,7 +23,8 @@ import { atomicWriter } from './atomic-writer.js';
 
 /**
  * Resolve the canonical YAML path for an action id under a project root.
- * Mirrors the .rn-agent/actions/ convention (D1207).
+ * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
+ * supersedes D1207).
  */
 export function actionPathFor(projectRoot: string, actionId: string): string {
   return join(projectRoot, '.rn-agent', 'actions', `${actionId}.yaml`);

@@ -1,0 +1,19 @@
+---
+title: "cdp_restart"
+description: "In-process soft state reset"
+---
+
+In-process soft state reset. Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `metroPort` | `number` | No |  |  | Override Metro port for reconnection (default: keep current) |
+| `platform` | `string` | No |  |  | Platform filter for reconnection (e.g. "ios", "android") |
+
+## Usage
+
+```
+cdp_restart()
+```

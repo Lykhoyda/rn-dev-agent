@@ -9,6 +9,403 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.42.0] — 2026-04-22
+
+M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
+
+### How it works
+React's `createElement` calls `Object.freeze(props)` in dev mode before sealing them. `cdp_record_test_start` monkey-patches `Object.freeze` inside Hermes — when React asks to freeze a props object that has `onPress`/`onLongPress`/`onChangeText`/`onSubmitEditing`/`onScroll*`, we wrap each handler with event-emission BEFORE letting the freeze proceed. Already-mounted scroll containers are caught via a fiber re-render walk (`stateNode.forceUpdate()` for class, `renderer.overrideProps(fiber, ['__mcpInit'], 1)` for function). Route is captured via the `onCommitFiberRoot` hook reading `__RN_AGENT.getNavState()`, cached into a closure variable so the Object.freeze hot-path stays synchronous.
+
+### Three deliberate deviations from metro-mcp's reference
+1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')`. metro-mcp emits the inverted content-delta direction, producing YAML that replays in the wrong direction.
+2. **500-event cap with priority eviction** — long sessions are capped; on overflow, oldest `swipe`/`type` events are dropped first (taps + navigates carry higher information value). `truncated: true` bubbles up to the `stop` envelope.
+3. **Route caching via the commit hook** — eliminates per-event CDP round-trips. metro-mcp expects the user app to install `globalThis.__METRO_MCP_NAV_REF__`; we instead read our existing `__RN_AGENT.getNavState()` once per React commit and cache the active route name in the IIFE closure.
+
+### Added
+- **NEW `scripts/cdp-bridge/src/cdp/test-recorder-helpers.ts`** — five injected JS string constants (`DEV_CHECK_JS`, `START_RECORDING_JS`, `STOP_RECORDING_JS`, `READ_EVENTS_JS`, `buildAnnotationJs(note)` template). The Object.freeze interceptor IIFE is ~250 lines, mirrors metro-mcp's structure with the deviations above. Includes the M8 1..5 renderer-loop port for fiber root resolution and a session-token (`__METRO_MCP_REC_SESSION__`) so stale wrappers from a prior start-stop cycle gracefully no-op when a new session begins.
+- **NEW `scripts/cdp-bridge/src/tools/test-recorder.ts`** — 7 handler factories (`createRecordTestStartHandler`, `createRecordTestStopHandler`, `createRecordTestGenerateHandler`, `createRecordTestAnnotateHandler`, `createRecordTestSaveHandler`, `createRecordTestLoadHandler`, `createRecordTestListHandler`), the `RecordedEvent` discriminated union, module-level `storedEvents` state, and pure helpers (`deduplicateEvents`, `sanitizeFilename`, `getRecordingsDir`, `typeCounts`). Test-only DI hooks (`_resetState`, `_setStoredEvents`, `_getStoredEvents`) for hermetic integration tests.
+- **NEW `scripts/cdp-bridge/src/tools/test-recorder-generators.ts`** — `generateMaestro` + `generateDetox` + selector helpers (`maestroSelector`, `detoxSelector`, `nextSelector`). All user-controlled string interpolation (annotations, testName, bundleId, route names) goes through `stripNewlines()` to prevent comment-context escape (Gemini/Codex review).
+- **7 new tools registered in `src/index.ts`**: `cdp_record_test_start`, `cdp_record_test_stop`, `cdp_record_test_generate`, `cdp_record_test_annotate`, `cdp_record_test_save`, `cdp_record_test_load`, `cdp_record_test_list`. Storage location: `<projectRoot>/.rn-agent/recordings/<sanitized>.json`. Appium format accepted in zod schema but returns `NOT_IMPLEMENTED` at runtime — Maestro + Detox cover our use cases.
+- **11 new error codes** in `ToolErrorCode` (`DEV_MODE_REQUIRED`, `EVAL_FAILED`, `BAD_RESPONSE`, `START_FAILED`, `NO_EVENTS`, `NOT_IMPLEMENTED`, `NOT_RECORDING`, `NO_PROJECT_ROOT`, `BAD_FILENAME`, `LOAD_FAILED`, `BAD_RECORDING`).
+- **`__HELPERS_VERSION__` 15 → 16** in `injected-helpers.ts` to invalidate cached helpers on devices that connected before this release.
+
+### Tests
+Running total: 549 → **605 passing**, zero failures. **+56 M6 tests** across 5 files:
+- `test-recorder-deduplicate.test.js` (6) — type/tap collision rules
+- `test-recorder-storage.test.js` (5) — sanitizeFilename, getRecordingsDir
+- `test-recorder-generators.test.js` (15) — Maestro YAML + Detox JS output snapshots, swipe direction semantic, newline sanitization regression
+- `test-recorder-js-guard.test.js` (14) — structural invariants of the injected JS strings (Object.freeze override, cleanup, session token, 1..5 renderer loop, eviction policy, all 7 handler names, fiber re-render walk, finger-direction comment)
+- `test-recorder-integration.test.js` (15) — handler-level mock-CDP round-trips including DEV gate, start→stop→generate flow, save→load round-trip, NO_EVENTS / NOT_IMPLEMENTED / LOAD_FAILED error paths
+
+### Review
+Multi-LLM (Gemini + Codex). Three high-confidence findings, all applied inline before commit:
+- **Codex (conf 95) + Gemini (conf 90)** — newline injection in generators. Annotation `note`, `testName`, `bundleId`, and route names are user-controlled strings interpolated into single-line YAML/JS comments. A multi-line note (`"reached checkout\nstep:malicious"`) escapes the comment context and either corrupts Maestro YAML (stray top-level mapping) or executes arbitrary JS in Detox tests. Fix: `stripNewlines()` helper in generators applied at every interpolation site, plus regression tests asserting attack strings stay inside comments.
+- **Codex (conf 85)** — Detox `submit` fallback used `device.pressBack()` which is Android-only and semantically wrong (back button vs return key). Fix: replaced with `// submit: missing testID/label — replay manually` comment.
+- **Gemini (conf 80)** — start-stop-start within a single MCP process leaves stale wrappers on already-frozen props from session 1. Their captured `__currentRoute` closure is stale in session 2 and they emit events with wrong route. Fix: session token (`globalThis.__METRO_MCP_REC_SESSION__` + closure-captured `sessionId`); each wrapper checks the current global token against its captured token before emitting. Stale wrappers from prior sessions silently call through to the original handler without recording.
+
+### Notes for users
+- This is a Dev Client / dev-mode feature only. Calling `cdp_record_test_start` on a release build returns `DEV_MODE_REQUIRED` (release builds pre-freeze props at Metro bundling time, so the interceptor can never fire).
+- Recordings are stored project-locally (`<projectRoot>/.rn-agent/recordings/`) — commit them with feature branches or `.gitignore` the directory if you prefer ephemeral recording.
+- The existing `maestro_generate` (replay-based, no recording required) stays available for the case where you already know the steps.
+
+## [0.41.0] — 2026-04-22
+
+M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi-debugging as unsupported (matching metro-mcp's stance).
+
+**MCP server unchanged** — this is the first story in the Phase 90 pattern-adoption batch with no `scripts/cdp-bridge/` changes. MCP stays at 0.35.0.
+
+### Added
+- **NEW `scripts/check-physical-devices.sh`** (executable). OS-aware bash probe. Android path uses `adb devices` filtered by `emulator-` prefix exclusion, iterates results, auto-runs `adb -s <dev> reverse tcp:8081 tcp:8081`. iOS path (gated on `uname -s == Darwin`) uses `xcrun xctrace list devices`, awk-extracts the `== Devices ==` section, positive-filters for iOS form factors (iPhone/iPad/iPod/Apple TV/Apple Vision/Apple Watch) to exclude the host Mac, checks both `idb_companion` and `idb-companion` binary names on PATH. Linux/WSL hosts see an explicit "Physical iOS probe skipped (requires macOS; host is $HOST_OS)" line rather than a misleading "no iOS device".
+- **New step 10 in `skills/rn-setup/SKILL.md`** — "Physical device prerequisites (optional)" invokes the script. Advisory — exits 0 in all cases. No-op when no physical devices are connected.
+- **8 structural test guards** in `scripts/cdp-bridge/test/unit/physical-devices-script-guard.test.js` — pin the script's invariants (exists + executable, bash shebang, expected probes, emulator filter, form-factor filter, idb-companion binary-name coverage, brew install hint, WiFi stance).
+
+### Changed
+- **`skills/rn-setup/SKILL.md`**: "9 checks" / "9-row" language updated to "10 checks" / "10-row" in three downstream references (Rationalizations, Red Flags, Verification checklist). New row added to the output-format table. New physical-device item added to the Verification checklist.
+
+### Tests
+Running total: 541 → **549 passing**, zero failures. 8 new structural guards — live functional smoke happens during every `/setup` invocation.
+
+### Review
+Multi-LLM (Gemini + Codex). Gemini clean (0 findings). Codex caught two valid issues both applied inline:
+- **Confidence 90** — stale "9 checks" / "9-row" copy after adding section 10. Fixed.
+- **Confidence 85** — no OS guard meant Linux/WSL hosts would silently show "No physical iOS detected" without context. Fixed — `HOST_OS` detected + iOS branch gated on `Darwin`.
+
+Gemini dismissals validated: awk section filter correct against live xctrace output (anchored regex handles "== Devices Offline ==" and name-mid-line `== ` cases); adb reverse is idempotent; idb-companion binary check covers both brew-published variants; form-factor regex correctly matches "Apple TV HD"-style prefix names.
+
+### Live smoke
+Ran on dev machine with no physical devices connected. First run misreported the MacBook itself as a "physical iOS device" — `xcrun xctrace list devices` surfaces the host Mac under `== Devices ==` for Mac Catalyst targeting. Fixed via positive form-factor filter; re-ran correctly reports "No physical iOS devices detected" and explicitly labels Host OS.
+
+### Known limits
+- **`adb reverse` auto-run is stateful** — idempotent per-device port-forwarding, but still a side effect. Documented as expected setup behavior.
+- **`idb-companion` not auto-installed** — brew installs are slow and can fail; hint-only is the canonical pattern for missing deps in this skill.
+- **WiFi debugging not supported automatically** — matches metro-mcp. Users can `adb connect <ip>` manually and the script runs `adb reverse` over the TCP transport.
+- **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
+
+### Refs
+D668 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 111 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Physical Device Setup".
+
+## [0.40.0] — 2026-04-22
+
+M10 / Phase 110 — architecture detection + CPU profiler hint. Closes the Phase 90 Tier 4 M10 story. `cdp_status.app.architecture` now surfaces one of `'new' | 'old' | 'unknown'` based on Fabric/bridge globals inside the running app. When `cdp_cpu_profile` fails AND the target is running on Old Architecture, the error result now includes an advisory hint pointing to `cdp_heap_usage` as an alternative and suggesting `newArchitecture: true` in `app.json`. MCP server bumped to 0.35.0.
+
+### Added
+- **`cdp_status.app.architecture`** — new optional field: `'new'` when `globalThis.nativeFabricUIManager` is present (Fabric loaded), `'old'` when `globalThis.__fbBatchedBridge` is present and Fabric is absent (classic bridge), `'unknown'` when neither signal exists or the probe throws. Fabric wins on transient "both present" interop state.
+- **`OLD_ARCH_PROFILER_HINT` exported constant** in `scripts/cdp-bridge/src/tools/profiling.ts`. Attached as `meta.hint` to `cdp_cpu_profile` failures when the architecture probe returns `'old'`.
+- **`narrowArchitecture` exported helper** in `scripts/cdp-bridge/src/tools/status.ts`. Whitelists the union — any unexpected string or missing value collapses to `'unknown'`, so TypeScript's union guarantee holds at runtime regardless of what future helper bundles emit.
+
+### Changed
+- **`__HELPERS_VERSION__` bumped 14 → 15** in `injected-helpers.ts`. Forces Hermes re-injection on next connect so apps pick up the new `getAppInfo()` shape. Existing freshness check (D502) triggers re-injection automatically.
+- **`getAppInfo()` extended** to compute architecture at probe time (wrapped in try/catch — probe failure defaults to `'unknown'`).
+- **`buildStatusResult()` AND the `__DEV__=false` recovery retry path** both write `status.app.architecture` so consumers see consistent values regardless of whether the recovery branch fired.
+- **`cpuProfile` error catch** now performs a single-shot architecture probe (via new internal `safeProbeArchitecture`) before returning `failResult`. Probe failure → `'unknown'` → no hint.
+
+### Tests
+- **16 new tests**. 6 detection in `test/unit/injected-helpers.test.js` (Fabric-only, bridge-only, neither, both-present → `'new'`, null-Fabric guard, helpers version = 15). 10 in new `test/unit/m10-architecture.test.js` (3 `narrowArchitecture` tests, 4 status-handler integration tests, 3 profiler-hint integration tests including a probe-itself-throws path).
+
+Running total: 525 → **541 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Independently validated: Fabric is always object-typed in RN (never function); the extra error-path probe adds only ~50-200ms to an already-failed CPU profile call; `narrowArchitecture` whitelist is injection-safe; `__DEV__=false` recovery-path parity is complete; v14 → v15 cache invalidation is clean via the existing `__v` freshness check.
+
+### Known limits
+- **Fabric-wins on "both present"** is a deliberate heuristic for interop-mode transients. Documented.
+- **`'unknown'` is non-actionable** — consumers should treat as "skip arch-specific hints," not as "assume old."
+- **Profiler hint is advisory, not blocking** — `cdp_cpu_profile` still runs on Old Arch; some profiles do succeed. Hint only fires on actual failures.
+
+### Refs
+D667 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 110 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
+
+## [0.39.0] — 2026-04-22
+
+M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story from the metro-mcp pattern adoption audit. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.
+
+Version note: M11 was originally tagged 0.37.0 (reserved before M7 shipped). Main moved to 0.38.0 before this PR merged, so M11 rebased to 0.39.0 above M7. The 0.37.0 reservation was abandoned; no `## [0.37.0]` entry exists.
+
+### Added
+- **`scripts/cdp-bridge/src/tools/metro-clear-hint.ts`** — pure helper. Exports `METRO_CLEAR_HINT_THRESHOLD_MS = 60_000`, `METRO_CLEAR_HINT_TEXT`, and `shouldShowMetroClearHint(deps, resultIsEmpty): boolean` where `deps = { connectedAt, lastEventAt?, now }`. Idle reference is `max(connectedAt, lastEventAt ?? connectedAt)` — any activity resets the clock.
+- **`CDPClient._connectedAt`** — timestamp of the current connection; null when disconnected. Reset via `buildResettableState` so every reconnect (including B132 proxy auto-resume) re-stamps correctly.
+- **`CDPClient._timeNowFn`** — injectable clock. Constructor now accepts `new CDPClient(port?, timeNowFn?)` (backwards compat). Defaults to `Date.now`.
+- **`DeviceBufferManager.getLastPush(deviceKey): number | undefined`** — public accessor over the existing internal `lastPush` map. Used by `cdp_network_log` to gauge per-device idle time.
+
+### Changed (forward-compatible)
+- **`cdp_console_log`** — on empty `entries`, wraps the result with `{ meta: { hint: METRO_CLEAR_HINT_TEXT } }` when the connection has been idle for > 60s. Console has no per-buffer `lastPush` today (it queries in-app `__RN_AGENT.getConsole()` rather than our ring buffer), so the idle reference falls back to `connectedAt` only.
+- **`cdp_network_log`** — same pattern as console, but passes `lastEventAt = client.networkBufferManager.getLastPush(scope)`. For `scope === 'all'` (cross-device query), falls back to `connectedAt` only since there's no single-device `lastPush` to consult.
+
+### Tests
+- **20 new tests**: 10 pure-helper at `test/unit/metro-clear-hint.test.js` (threshold boundaries, null-connectedAt, both-timestamp-max permutations, exactly-at-threshold, undefined-lastEventAt fallback, hint-text content); 10 integration at `test/unit/metro-clear-hint-integration.test.js` (CDPClient surface: null-on-fresh, injected fn returned, Date.now default; console-log handler: present / below / above threshold; network-log handler: present / recent-push / stale-both / scope='all').
+- **Mock helper extended** — `test/helpers/mock-cdp-client.js` gained `connectedAt` + `now` getters with sane defaults that suppress the hint unless explicitly overridden.
+
+Running total after rebase onto M7-included main: 505 → **525 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 auto-resume path correctly re-stamps `_connectedAt` via the existing `handleClose → resetState → reconnect → connectToTarget` chain. Codex flagged one sub-threshold observation (clock-skew between `DeviceBufferManager.push` using real `Date.now()` vs. CDPClient using the injected `_timeNowFn`) — moot in production where both are `Date.now`.
+
+### Known limits
+- **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
+
+### Refs
+D665 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 108 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
+
+## [0.38.0] — 2026-04-22
+
+M7 / Phase 109 — fast-runner tri-state liveness probe. Closes the Phase 90 Tier 3 M7 story and functionally retires the shape-equivalent leftover from R3. Previously `isFastRunnerAvailable()` only checked PID; a process whose PID was alive but whose HTTP server had wedged was reported as available, and every iOS `device_press` / `device_fill` / `device_swipe` stalled on a 10s fetch timeout before falling through to the daemon. M7 adds a `probeFastRunnerLiveness()` helper that distinguishes `'alive' | 'stale' | 'dead'` via PID check + `/health` probe, plus an explicit `reapStaleFastRunner()` helper for the SIGTERM→grace→SIGKILL escalation. `tryFastRunner` is rewired to branch on the tri-state. MCP server bumped to 0.33.0.
+
+Version note: this release skipped 0.37.0 (reserved for M11 PR #53 at the time). Main moved past 0.37.0 before M11 merged, so M11 shipped as 0.39.0 above this entry instead of slotting in below.
+
+### Added
+- **`FastRunnerLiveness` type** + `probeFastRunnerLiveness(deps?)` + `reapStaleFastRunner(deps?)` in `scripts/cdp-bridge/src/fast-runner-session.ts`. All deps injectable (`getState`, `processAlive`, `httpProbe`, `clearState`, `sendSignal`, `sleep`) for hermetic tests — mirrors the `lockfile.ts` pattern.
+- **Tri-state probe semantics**: `'alive'` when `/health` returns `{ok:true}`; `'stale'` on any HTTP error or `ok:false` (including AbortError, ECONNREFUSED, 500, timeout); `'dead'` when no state file or PID has exited (and state is cleared).
+- **Graceful reap**: SIGTERM → 500ms grace → SIGKILL if still alive → clear state. ESRCH tolerance on signal send.
+
+### Changed
+- **`tryFastRunner` in `scripts/cdp-bridge/src/agent-device-wrapper.ts`** now awaits the tri-state probe at entry. `'alive'` proceeds; `'stale'` reaps + returns null (daemon fallthrough); `'dead'` + iOS cold-launches via `startFastRunner`; `'dead'` + non-iOS returns null.
+- **`fastHealthCheck` refactored** to delegate to the new `defaultHttpProbe` helper (single source of truth for the `/health` call shape). Wrapped in try/catch to preserve its original boolean contract — caught during review.
+
+### Fixed
+- **Dangling ChildProcess handle after reap** (Gemini review finding, confidence 84): `clearStateFile()` now nulls `runnerProcess` alongside `runnerState`. Self-heals via `on('exit')` but closes the window cleanly so a concurrent `stopFastRunner()` doesn't double-signal a dead PID.
+
+### Tests
+- **17 new tests** in `test/unit/fast-runner-liveness.test.js`. 8 probe variations (null state, dead PID, alive+healthy, alive+ok:false, HTTP 500, AbortError, ECONNREFUSED, timeout forwarding) + 2 cleanup invariants (probe is read-only on living processes; only `'dead'` discovery clears state) + 6 reap variations (no-op on null state, SIGTERM-only success, SIGTERM-ignored→SIGKILL, ESRCH tolerance, graceMs override, default graceMs) + 1 default-timeout check. All hermetic.
+
+Running total: 488 → **505 passing**, zero failures.
+
+### Known limits
+- **Concurrent `'dead'` probes can race two `xcodebuild` spawns** if two DIFFERENT MCP tool calls arrive within the 30s startup window. Flagged sub-threshold (Gemini, confidence 82) — MCP SDK serializes tool invocations per connection, so the race window is narrow. Will follow up with in-flight promise cache on `startFastRunner` if observed in practice.
+- **SIGKILL on xcodebuild PID may orphan `xctest` children** briefly. macOS launchd reaps within seconds.
+- **Legacy `isFastRunnerAvailable(): boolean`** retained for sync callers (e.g., post-spawn check, status tool). Documented as coarse in JSDoc.
+- **Stale detection conflates "hung" with "misbehaving-but-responsive"**: a runner returning `{ok:false}` is reaped even if it might self-recover. Conservative — prefer respawn over hang.
+
+### Review
+Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fastHealthCheck` refactor dropped its outer try/catch — fixed by re-wrapping. Gemini (confidence 84): reap left `runnerProcess` dangling — fixed by nulling in `clearStateFile`. Two sub-threshold findings deferred (concurrent dead-probe race, SIGKILL xcodebuild orphan) — noted in Known Limits.
+
+### R3 relationship
+Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
+
+### Refs
+D666 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 109 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
+
+## [0.36.1] — 2026-04-21
+
+B133 / Phase 107 — M8 loose ends. Closes the carveout logged during M8's Phase 106 review (Gemini finding, flagged at confidence 85, folded out of M8 per story boundary). Ports the 1..5 `getFiberRoots` probe into `cdp_set_shared_value` so that tool works on apps where `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers` is empty or missing. Also refreshes the `cdp_open_devtools` tool description, which had been frozen at M1a-era text and was factually misleading after M1b (Phase 104) and B132 (Phase 105) shipped. MCP server bumped to 0.31.1.
+
+### Fixed
+- **B133**: `cdp_set_shared_value` inline renderer walk in `src/index.ts:356-397`. Replaced the stale `Array.from(hook.renderers.keys())` loop with the 1..5 `getFiberRoots` probe pattern — mirrors M8's `findActiveRenderer` and `REACT_READY_PROBE_JS`. Intentional divergence: the `allRoots` accumulator is preserved (not early-return) because Reanimated worklets can mount in a secondary renderer at a different ID from the React DOM/native renderer, and `cdp_set_shared_value` must tolerate that to locate its target testID.
+
+### Changed
+- **`cdp_open_devtools` tool description** in `src/index.ts:798`. Old text stopped at M1a/Phase 100 detection; new text honestly reflects the Phase 100 (M1a) → Phase 104 (M1b CDPClient proxy wiring) → Phase 105 (B132 auto-resume) chain. Returns shape now documents `hermesWsUrl` + `proxyPort` that the handler has been emitting since M1b.
+
+### Tests
+- **3 new structural guard tests** at `scripts/cdp-bridge/test/unit/shared-value-renderer-probe-guard.test.js`. Walks all `src/*.ts` and fails on any reintroduction of `hook.renderers.keys()`. Pins `index.ts` to contain the 1..5 probe loop + the `typeof getFiberRoots === 'function'` guard. Pattern mirrors the existing `screenshot-bypass-guard.test.js` (B121).
+
+Running total: 485 → **488 passing**, zero failures.
+
+### Review
+Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what they flagged during M8 review. Codex noted the `allRoots` accumulator divergence from M8's pattern is intentionally correct for worklet-aware fiber walks.
+
+### Refs
+D664 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 107 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Parent: D663 / M8 / Phase 106.
+
+## [0.36.0] — 2026-04-21
+
+M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 metro-mcp pattern adoption audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5, mirroring metro-mcp's `FIBER_ROOT_JS` pattern. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
+
+### Added
+- **`REACT_READY_PROBE_JS` exported constant** in `scripts/cdp-bridge/src/injected-helpers.ts`. Eval-ready IIFE string with the same 1..5 `getFiberRoots` probe as `findActiveRenderer`. Single source of truth for the cross-file readiness invariant — `setup.ts` now imports and awaits it directly instead of reconstructing a narrower inline check.
+
+### Changed (behavioral, forward-compatible)
+- **`findActiveRenderer()` in the injected helper bundle** now brute-probes `getFiberRoots(1..5)` instead of iterating `hook.renderers.entries()`. Dropped the early-return guard `!hook.renderers || hook.renderers.size === 0` that caused silent empty-tree returns on affected apps. `__HELPERS_VERSION__` bumped 13 → 14 so in-flight sessions pick up the new helper on next connect.
+- **`waitForReact` in `cdp/setup.ts`** now awaits `REACT_READY_PROBE_JS` instead of `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers?.size > 0`. Without this companion fix M8's helper change was blunted — `waitForReact` would time out 30s on exactly the apps M8 was meant to help before injection began. Side benefit: the new probe refuses to declare "ready" until a fiber root actually exists, tightening the gate's semantic correctness.
+
+### Tests
+- **10 new tests** in `scripts/cdp-bridge/test/unit/injected-helpers.test.js`. 5 for `findActiveRenderer` (happy-path, skip-to-renderer-4, renderers-map-empty, all-empty, missing-getFiberRoots) and 5 for `REACT_READY_PROBE_JS` (run in isolated `vm` sandboxes — pin the probe's public behavior so helper + probe can't silently diverge). Running total: 475 → **485**, zero failures.
+
+### Known limits
+- **Renderer IDs 6+ unreachable** — matches metro-mcp's identical bound. Never observed in practice.
+- **`cdp_set_shared_value` in `src/index.ts:359-363`** still uses the `hook.renderers.keys()` pattern. Out-of-scope for M8; filed as **B133** for a separate PR. Low-severity since `cdp_set_shared_value` is a niche proof-capture tool.
+
+### Review
+Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
+
+### Refs
+D663 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 106 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
+
+## [0.35.0] — 2026-04-21
+
+B132 / Phase 105 — proxy auto-resume across reconnect. Closes the known limitation logged during M1b review: the multiplexer captured `hermesUrl` once at `startProxy` time, so any event that invalidated the target URL (hot reload, target eviction, Metro restart) left the proxy routing to a dead upstream with every MCP call silently timing out. This release auto-suspends the proxy when the MCP's CDP WebSocket closes, runs the normal reconnect loop directly against Hermes, then auto-resumes the proxy against the refreshed target URL. MCP server bumped to 0.30.0.
+
+### Added
+- **`CDPClient._proxyDesired` intent flag**. Tracks user's standing wish for a proxy separately from the live `_proxyUrl`. Set by successful `startProxy()`, cleared by `stopProxy()` / `disconnect()`. Preserved across internal `_suspendProxy()` so auto-resume knows to re-allocate.
+- **`CDPClient._suspendProxy()` / `_resumeProxy()` internal lifecycle**. `_suspendProxy` clears `_proxyUrl` synchronously (so the reconnect loop observes cleared state before the multiplexer's HTTP server finishes its async shutdown) and tears down the old multiplexer best-effort. `_resumeProxy` rehydrates a fresh multiplexer against the CURRENT `_connectedTarget.webSocketDebuggerUrl`.
+- **`ReconnectContext.afterReconnect?: () => Promise<void>`**. New optional callback fired inside `reconnect()` after `discoverAndConnect` resolves successfully. Used by CDPClient to auto-resume the proxy. Hook failures are caught + logged, never propagated — a post-reconnect hook cannot undo a successful reconnect.
+- **`CDPClient._softReconnectDirect()`**. Bypasses the new `softReconnect` wrapper for internal callers like `_doStartProxy`, avoiding infinite-rollback where the wrapper would suspend the just-allocated multiplexer. Named method (not inline call) so tests can stub the direct path independently of the public `softReconnect`.
+
+### Changed (behavioral, forward-compatible)
+- **`CDPClient.softReconnect()` now wraps with suspend→reconnect→resume** when a proxy is active. Covers all auto-recovery paths (e.g., `cdp_status`'s `__DEV__=false` recovery). When no proxy is active, behavior is unchanged.
+- **`CDPClient.handleClose()` now fires-and-forgets `_suspendProxy()` before delegating to the reconnect machinery**. `_suspendProxy` is ordered so its synchronous preamble (clearing `_proxyUrl`) runs before `handleCloseFn` returns control — guaranteeing the reconnect loop's `discoverAndConnect → connectToTarget → ctx.getProxyUrl()` sees `null`. Multiplexer HTTP server shutdown runs concurrently but harmlessly (no one still routes to it).
+
+### Fixed
+- **B132: stale `hermesUrl` in multiplexer after target change or Metro reload** — see Added. The multiplexer now rehydrates against the fresh target URL on every reconnect, eliminating the silent "proxy routes to dead upstream" failure mode.
+
+### Testing
+- 462 → 475 tests passing (+13): 10 CDPClient proxy-lifecycle tests (`_suspendProxy` sync behavior, `_resumeProxy` guards + one-shot failure policy, `softReconnect` wrapper suspend+resume, `stopProxy`/`disconnect` clearing desired flag, end-to-end URL rehydration via both `softReconnect` wrapper and `afterReconnect` callback trigger paths) + 3 reconnect-loop tests (`afterReconnect` fires exactly once on success, undefined-callback backwards compat, hook failure doesn't propagate).
+
+### Multi-review outcome
+Gemini + Codex both returned clean (no high-confidence issues). Six critical race-condition questions verified: suspend-before-reconnect ordering, double-resume hazard on preemption, `_doStartProxy` rollback correctness, `_resumeProxy` failure policy, `_startProxyInFlight` concurrency sharing, end-to-end test soundness. One below-threshold observation from Gemini (the end-to-end test exercised the softReconnect-wrapper path but not the `afterReconnect` trigger specifically) closed with an additional focused test.
+
+### Policy choices documented
+- **`_resumeProxy` failure → clear `_proxyDesired`** (predictable over resilient). Silent-retry-on-every-reconnect would mask structural bugs. User sees the log warning once and can re-run `cdp_open_devtools` to retry manually.
+- **`handleClose` uses `void this._suspendProxy()`** (fire-and-forget). The synchronous preamble is sufficient to redirect the reconnect; awaiting `mux.stop()` would block the `handleClose` path unnecessarily.
+
+### Refs
+- D662 in DECISIONS.md. Phase 105 in ROADMAP.md. B132 closed in BUGS.md. Parent: D661 / Phase 104 (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
+
+---
+
+## [0.34.0] — 2026-04-21
+
+M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split from 2026-04-20: on RN < 0.85, `cdp_open_devtools` now starts the multiplexer proxy automatically and re-routes the MCP's own CDP WebSocket through it, so React Native DevTools can connect to the same proxy as a second consumer. Both coexist on single-debugger Hermes without evicting each other. MCP server bumped to 0.29.0.
+
+### Added
+- **`CDPClient.startProxy(opts?)` / `stopProxy()`**. Lifecycle methods that create/dispose the multiplexer and soft-reconnect the MCP's CDP WebSocket to route through it. Idempotent when already active.
+- **`cdp_status.proxy` block**. Reports `{ active, port, url, consumerCount }`. `consumerCount` observes the 1 → 2 transition when DevTools connects.
+- **`cdp_open_devtools` proxy-active mode**. New fields: `hermesWsUrl` (direct Hermes URL, upstream of proxy) and `proxyPort` (bound loopback port). `devtoolsUrl` now always non-null and points DevTools at `ws=127.0.0.1:PROXY_PORT` when proxy-active.
+- **`CDPMultiplexer` bounded resources**. `hermesBufferMaxSize` option (default 1000) with drop-oldest enforcement in `sendToHermes()`; `routingTimeoutMs` option (default 60s) with periodic sweeper. Test-only getters `hermesBufferSize` / `routingTableSize` for regression assertions.
+
+### Changed (behavioral, forward-compatible)
+- **`cdp_open_devtools` mode rename**: `'proxy-required'` → `'proxy-active'` when RN < 0.85 is detected (or version probe fails — conservative default). Previously: returned workaround guidance + null `devtoolsUrl`. Now: proxy auto-starts, `devtoolsUrl` populated, DevTools is usable immediately. The old `'proxy-required'` mode no longer exists.
+- **`CDPClient.disconnect()` tears down multiplexer** if one is active. The only reliable SIGTERM hook for the proxy; matches the precedent set by `MetroEventsClient` cleanup in the same path.
+- **`CDPMultiplexer.start()` failure cleanup** sets `state='stopping'` during cleanup (matching `stop()`), not `'stopped'` before. Closes a concurrent-start race where a second caller would observe "stopped" and allocate on top of in-flight teardown.
+
+### Fixed
+- **Unbounded `hermesBuffer` during CONNECTING window** — messages from fast/misbehaving consumers could pile up between `new WebSocket(hermesUrl)` and the `open` event. Cap + drop-oldest now enforced.
+- **`routingTable` leaks when Hermes goes partial-death** — entries allocated per consumer→upstream request were only cleaned up on close events. Unresponsive-but-not-closed upstreams leaked routing entries indefinitely. Periodic sweeper evicts entries past `routingTimeoutMs`.
+
+### Testing
+- 451 → 462 tests passing (+11): 3 prereq regression tests (hermesBuffer drop-oldest, routing sweeper, failed-start cleanup) + 1 open-devtools startProxy-error path + 10 CDPClient lifecycle tests. 2 existing cdp_open_devtools tests rewritten for `proxy-active` mode. Shared helper `test/helpers/mock-hermes.js` extracted for reuse across proxy tests.
+
+### Multi-review fixes (applied pre-commit)
+- **`CDPClient.startProxy` concurrency guard** (flagged by both Gemini + Codex at 92-95% confidence). Two parallel callers would each allocate a `CDPMultiplexer`; the second overwrote `_multiplexer` and orphaned the first (port bound, sweeper running, unreferenced). Fixed with an `_startProxyInFlight` promise cache that serializes concurrent callers on the same in-flight promise and clears in a `finally` so failed attempts don't poison retries.
+- **Rollback-path test coverage** (flagged by both at 85-90% confidence). The catch block tearing the multiplexer back down when `softReconnect` throws post-allocation was unreachable by the existing mock-client tests (`softReconnect` never rejected). Added 3 tests using a real mock Hermes that exercise the rollback, the concurrency guard, and the in-flight-cache-clears-on-failure behavior.
+
+### Known limitation logged (B132)
+Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
+
+### Refs
+- D661 in DECISIONS.md. Phase 104 in ROADMAP.md. Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
+
+---
+
+## [0.33.0] — 2026-04-21
+
+Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.
+
+### Added
+- **`cdp_metro_events` MCP tool** (M5 / D656). Read Metro reporter events (`bundle_build_started` / `bundle_build_done` / `bundle_build_failed`, reloads) captured by the `MetroEventsClient` attached alongside every CDP session. Accepts `limit` / `type` filter / `clearErrors`. Returns `{ eventsConnected, lastBuild, buildErrors, events, count, eventsReason?, hint? }`.
+- **`cdp_open_devtools` MCP tool** (M1a / D654). Reports the React Native DevTools frontend URL + whether DevTools can coexist with the MCP session on the current RN version. On RN ≥ 0.85 returns a direct URL (native multi-debugger). On RN < 0.85 returns explicit guidance — full proxy auto-wiring deferred to M1b.
+- **`cdp_status.metro` fields `eventsConnected` / `lastBuild` / `buildErrors` / `eventsReason`** (M5 + B129). Surface bundler state and incompatibility reasons. On Expo-managed projects `eventsReason: "expo-cli-incompatible"` is set because Expo CLI hijacks `/events` for its manifest protocol.
+- **`cdp_status.capabilities.supportsMultipleDebuggers`** (M1a / D654). True when RN ≥ 0.85.
+- **Single-instance MCP lockfile** at `/tmp/rn-dev-agent-cdp-${uid}-${hash}.lock` (M3 / D652). Two Claude Code windows in the same project no longer fight over the single Hermes CDP slot — the second exits with code 11 and an actionable stderr message. `--no-lock` CLI flag for CI parallelism. Three-tier stale-lock reclaim: PID alive (`kill(pid, 0)`) + process name (`ps -p <pid> -o args=`) + mtime < 24h.
+- **`cdp_network_log` + `cdp_network_body` gain optional `device` arg** (M4 / D655). Default scope is the active device; pass `"all"` for a chronologically-merged union across every device.
+- **`rn-best-practices` rule 5.2** (R7 / D650). Documents the `presentation: 'transparentModal'` blank-white bug on RN 0.76.7 + Bridgeless + react-native-screens 4.4.x and the dark BlurView workaround.
+
+### Changed (behavioral, forward-compatible)
+- **Exponential reconnect with jitter** replaces the old linear 1.5s × 30 retry loop (M2 / D653). Curve: `[0, 500, 1000, 2000, 4000, 8000, 16000, 30000, ...]` ±500ms jitter. Attempt 0 returns 0ms so hot-reload reconnects stay instant. Metro CPU wake-ups in the first 60s of an outage drop from ~40 to ~7 attempts (5× less hammering). `interruptibleSleep` polls the dispose / soft-reconnect flags every 500ms so `softReconnect`'s 3s bail window still preempts a 30s cap sleep.
+- **`DeviceBufferManager` for network events** is now a process-scoped singleton at `src/cdp/network-buffer-manager.ts` (B128 / D657). Previously owned by `CDPClient`, so `cdp_connect(force:true)` / `cdp_restart` wiped all per-device buffers. Now buffers survive the canonical platform-switch use case. Memory unchanged (100 × 10 = 1000 entries total).
+- **Platform inference reads Metro's `deviceName`** before falling back to package-list heuristics (B131 / D660). Dual-install bundles (same `com.example.app` on both iOS sim + Android emulator) are now correctly disambiguated by `"iPhone 17 Pro"` vs `"sdk_gphone16k_arm64 - 17 - API 37"` instead of defaulting to iOS + `ambiguousPlatform: true`.
+- **Runner-leak recovery `closeSession` wrapper** now also calls `clearActiveSession()` + `stopFastRunner()` (B130 / D659). Matches the normal close path. Stale fast-runner ref-map no longer survives recovery, so the post-recovery snapshot lands via daemon/CLI (with `@eN` refs) instead of fast-runner (tree-shaped, no refs) — which means `device_fill` / `press` / `find` actually work after recovery fires.
+
+### Fixed
+- **B128: per-device buffers wiped on reconnect** — see Changed. Root cause: `DeviceBufferManager` lifetime was tied to CDPClient instance, not MCP process.
+- **B129: Expo `/events` endpoint incompatibility surfaces silently** — `MetroEventsClient` now probes HTTP GET `/events` before WS upgrade. If the body matches the Expo manifest shape (`runtimeVersion` string OR `launchAsset.url` string), marks state `'incompatible'` with `eventsReason: "expo-cli-incompatible"` and an actionable hint. Probe failure (timeout / non-200) falls through to WS attempt — doesn't mark incompatible.
+- **B130: `device_fill` "No snapshot in session" after runner-leak recovery** — see Changed.
+- **B131: `cdp_connect({platform: "android"})` errored with "no matches" on dual-install bundles** — see Changed.
+- **M2 multi-review catch: `softReconnect` preemption race at 30s cap** — `interruptibleSleep` polls the dispose/soft-reconnect flags every 500ms so preemption latency stays bounded regardless of the sleep duration.
+- **M5 multi-review catches** — double-schedule on initial connect failure (error + close both fired), `start()` during reconnecting double-connected, port mismatch after CDP port change, `stop()` during CONNECTING state crashed the process via unhandled handshake-abort error. All four fixed with targeted regression tests.
+- **M3 pre-release multi-review catch**: `ps -p <pid> -o comm=` returned only `"node"` for Node-launched scripts, which meant the `cdp-bridge` needle match would NEVER succeed in production → the lockfile would be a no-op. Switched to `-o args=` which returns the full command line. This bug would have shipped silently without multi-review.
+
+### Performance
+- **Unit test suite: 24,246ms → 3,151ms (87% faster)** after adding `skipIncompatibilityProbe: true` to pre-B129 MetroEventsClient tests that use the WS-only mock server. The mock doesn't respond to HTTP GET; every test was paying a 1500ms probe timeout.
+- **Screenshot downscale via sips** (B120/D647 from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
+
+### Tests
+272 → **448** (+176 across the series):
+- M3: 14 hermetic unit + 4 real-process regression (stale-lock reclaim, multi-project coexistence, process-name validation against a real child process)
+- M2: 8 curve tests + 6 interruptibleSleep tests
+- M1a: 7 pure-function + 10 multiplexer integration + 5 tool handler
+- M4: 20 DeviceBufferManager tests + updates to 6 pre-existing network-tool tests
+- M5: 13 feature + 4 pass-1 regression + 1 pass-2 crash regression
+- B128-B131: 4 singleton + 10 Expo detector + 2 recovery-close-wrapper contract + 7 deviceName inference
+
+### Multi-review
+Every feature PR and the fix PR went through a 2-pass multi-review (Gemini + Codex in parallel). Pass 1 blockers caught and fixed pre-merge. Three of the M3/M2/M5 blockers would have silently degraded or broken production had they shipped without review. The pattern "hermetic injection for unit coverage + at least one integration test per feature exercising the real default against a real external thing" captured in D652 and reinforced by every subsequent fix.
+
+### Live validation
+All three cross-platform validation stories (M4 network isolation, M5 Metro events, device interaction parity) and the B128-B131 fix validation story executed live against both iOS and Android simulators. 8/8 assertions pass in the B128-B131 validation. Artifacts in `docs/stories/*.md` and `docs/proof/*.jpg` in the workspace repo.
+
+### Upgrade notes
+- **Required action: restart Claude Code after `/plugin update rn-dev-agent`** to load the new MCP server. `/reload-plugins` alone does not respawn MCP subprocesses.
+- **Expected behavior change (B131):** `cdp_connect({platform: "android"})` now succeeds on apps with the same bundleId installed on both iOS and Android. Callers that relied on explicit `targetId` for disambiguation are unaffected — the platform filter is now an additional valid path.
+- **Expected behavior change (B128):** network buffers persist across `cdp_connect(force:true)` / `cdp_restart`. To explicitly wipe, call `cdp_network_log({clear: true})` (scoped to active device) or pass `device: "<key>"` for a specific device.
+- **Expected behavior change (B129):** on Expo-managed projects, `cdp_status.metro.eventsConnected` is now correctly `false` (previously `true` with silent empty events). Applications watching `lastBuild` should also watch `eventsReason` for the `"expo-cli-incompatible"` signal.
+- **Two-window workflow (M3):** opening the same project in two Claude Code windows now exits the second MCP with code 11 and the conflict message. Kill PID or close the other window to resolve.
+
+### Validation matrix
+| Area | iOS | Android |
+|---|---|---|
+| CDP connect + targets | ✅ | ✅ (after B131 fix) |
+| Per-device network buffers | ✅ | ✅ |
+| Cross-device `'all'` merge | ✅ | ✅ |
+| Metro events (Expo → incompatible) | ✅ | ✅ |
+| `device_fill` post-recovery | ✅ (B130) | n/a (no runner-leak on Android) |
+| `cdp_open_devtools` native mode | n/a (RN 0.76 < 0.85) | n/a |
+| Single-instance lockfile | ✅ | ✅ |
+
+### Backlog state
+- **Closed:** M3 + M2 + M1a + M4 + M5 + R7 (Phase 85) + B128-B131. Phase 90 Tier 1 + Tier 2 complete.
+- **Open (carveouts):** M1b (CDPClient proxy routing — needs live simulator for end-to-end verification); Tier 3 (M6 test recorder, M7 fast-runner liveness, M8 renderer 1..5 loop); Tier 4 (M9–M11 polish).
+- **Noted during validation but not blocking:** `cdp_store_state` dot-path resolver breaks on hyphenated Zustand keys; stale `agent-device` daemon sessions (`rn-agent-recovery-*`) persist across MCP boots and cause `DEVICE_IN_USE` on first session open. Workarounds: pass `storeType` without `path`; `agent-device close --session <name>`.
+
+## [0.25.0] — 2026-04-19
+
+Three-PR stability sprint: zombie target disambiguation (B111), MCP process lifecycle hardening (B76 + zombie cleanup), and security documentation (B5). MCP server bumped to 0.20.0. Skipped 0.24.0 because the inter-PR version coordination jumped from 0.23.0 → 0.24.0 (PR #32) → 0.25.0 (PR #33) on main without a public release at the intermediate step.
+
+### Added
+- **`cdp_restart` MCP tool** — in-process soft state reset (disconnect + new CDPClient + autoConnect). Recovers from stuck connection state without losing the CC session. Does NOT reload new dist/ — that still requires a full Claude Code restart (B76/D644).
+- **`cdp.bundleId` field on `cdp_status`** — surfaces the connected target's `description` (Metro reports the bundleId there) for "which app am I connected to?" debugging (B111/D643).
+- **README `## Security` section** — documents that `cdp_evaluate` runs unrestricted JS in the app's Hermes runtime; recommends local-dev-only usage and treating the agent like a developer with shell access (B5/PR #34).
+
+### Fixed
+- **B111 (CRITICAL — silent data corruption): CDP target selection picked zombie over fresh app target.** `selectTarget` now hard-fails on explicit `targetId` / `bundleId` mismatch with actionable warnings listing available ids/descriptions; `autoConnect` auto-populates `preferredBundleId` from `resolveBundleId(platform)`; bundleId/preferredBundleId matching is case-insensitive; deterministic sort tie-break (page-id desc → preferredBundleId-matched first → ascending lex by full id) (D643).
+- **B76: MCP server cannot be restarted within a session** — fixed via the new `cdp_restart` tool for in-process reset. SIGUSR2 handler retained for future supervisor wiring (CC does not auto-respawn MCP subprocesses today) (D644).
+- **MCP zombie subprocesses surviving parent CC quit** — root cause: the 5s `setInterval` background Metro poll held the Node event loop alive indefinitely when CC closed stdin without SIGTERM. New `lifecycle/graceful-shutdown.ts` factory funnels SIGTERM/SIGINT/SIGHUP/SIGUSR2/`stdin.end`/`uncaughtException` into a single idempotent shutdown path (clears bgPoll → disconnects CDP → stops fast-runner → exit) with a 3s timeout race for stuck cleanup (D644).
+- **`CDPClient.disconnect()` race safety** — added 2-line idempotent guard so concurrent `cdp_restart` + signal-shutdown don't race (D644).
+- **Latent production bug surfaced by CI: `setTimeout(...).unref()` on the load-bearing graceful-shutdown timeout** meant the timer wouldn't fire when the event loop had no other work, defeating its purpose. Removed `.unref()` so the timer always keeps the loop alive long enough to force-exit (D644 follow-up).
+
+### Verified-stale (closed via empirical sweep, no code change in this release)
+- **B73 (HIGH): MCP dies on Metro restart** — verified empirically already fixed by historical reconnect loop + background poll pattern (D622). MCP survives Metro death and auto-reconnects when Metro returns.
+- **B84, B100, B110, B112** — fixes had already shipped through earlier hardening phases; BUGS.md was stale.
+- **All Phase 85 R-stories (R1-R10 except R7)** — closed; R7 (transparentModal) noted as react-native-screens upstream.
+
+### Tests
+249 → **272** (+23). New: 10 for B111 (selectTarget hard-fail, case-insensitive, deterministic sort tie-break, discoverAndConnect throw-on-empty); 13 for B76 (gracefulShutdown factory + cdp_restart handler, including a concurrent-race test that proves idempotency under parallel invocation).
+
+### Multi-review
+PRs #32 (B111) and #33 (B76) reviewed independently by Gemini + Codex. PR #32: 0 high-confidence issues. PR #33: 1 important (SIGUSR1 → SIGUSR2 to avoid Node `--inspect` collision) + 3 advisories — all 4 applied as follow-ups before merge.
+
+### Upgrade notes
+- Restart Claude Code after `/plugin update rn-dev-agent` to pick up the new MCP server (`/reload-plugins` does NOT restart MCP subprocesses).
+- New tool `cdp_restart` is available immediately. Use it for in-session state reset without losing CC context. Loading new `dist/` after `npm run build` still requires a full CC quit + reopen.
+- **Behavioral change (B111):** callers that previously passed an explicit `targetId` or `bundleId` that didn't match any target used to silently connect to whatever sorted first; now they get a clear error with the available ids/descriptions listed. Any caller relying on the old silent-fallthrough behavior was already getting wrong data — the new error is strictly better.
+- **Behavioral change (B76):** SIGINT, SIGHUP, and stdin EOF now route through graceful shutdown (previously only SIGTERM). Subprocess termination is cleaner; no zombie MCP processes after CC quit.
+
+### Validation
+- 5-gate live smoke for B76 fix (CC restart → `cdp_restart` tool present → invocation → MCP PID unchanged) — all green.
+- 4-gate live smoke for B111 fix (kill Metro test → bad targetId reject → bad bundleId reject → auto-select picks live target) — all green.
+- B73 verification trace at `docs/proof/b73-b76-mcp-lifecycle/b73-verification.log` in the workspace repo.
+
+### Backlog state
+Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining open items in BUGS.md are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
+
 ## [0.23.0] — 2026-04-16
 
 Major session of correctness and performance fixes surfaced by end-to-end benchmarks and a live feature-dev run. MCP server bumped to 0.18.0.
@@ -16,46 +413,66 @@ Major session of correctness and performance fixes surfaced by end-to-end benchm
 ### Added
 - **`cdp_native_errors` MCP tool** — reads `xcrun simctl log show` on iOS / `adb logcat -d` on Android, parses known native-module / bundle-fetch / FATAL EXCEPTION patterns, dedupes by message body. Fills the gap when `cdp_error_log` / `cdp_console_log` stay empty because native errors fired before `__RN_AGENT` injected. `cdp_status` also emits a suspicion hint pointing at this tool when `connected && !helpersInjected && !hasRedBox && errorCount === 0` (B114/D642).
 - **`targetId` + `bundleId` filters on `cdp_connect`** — disambiguate zombie Expo Go host pages from real app targets (B111/D635).
-- **`attachOnly: true` on `device_snapshot`** — skip app launch when it's already running; verifies via `xcrun simctl spawn booted launchctl list` / `adb shell pidof`. Prevents the ~12s app-restart cascade (B112/D641).
-- **Platform-aware CDP timeouts** — `defaultTimeout(platform)` and `timeoutForMethod(method, platform)` apply a 2× Android multiplier. iOS unchanged (B118/D637).
-- **`platform` param on `device_screenshot`** — inherits from `client.connectedTarget?.platform` or accepts explicit override. When a device session is open, session-bound dispatch routes correctly (B117/D638).
-- **`simctl listapps` cross-check in platform inference** — `inferPlatforms` reads both `adb shell pm list packages` AND `xcrun simctl listapps booted`; targets on both platforms are flagged with `ambiguousPlatform: true` (B116/D639).
-- **Tab-dispatch fix for `cdp_nav_graph`** — `buildTabNavigateArgs` emits the flat `ref.navigate(tab, params)` when target === tab, nested form when they differ (B115/D640).
+- **`attachOnly: true` on `device_snapshot`** — skip app launch when it's already running; verifies via `xcrun simctl spawn booted launchctl list` / `adb shell pidof`. Prevents the ~12s app-restart cascade. Exported `isAppRunning(platform, bundleId, probes?)` helper (B112/D641).
+- **Platform-aware CDP timeouts** — `defaultTimeout(platform)` and `timeoutForMethod(method, platform)` apply a 2× Android multiplier via a single constant `ANDROID_MULTIPLIER`. `CDPClient` routes `Runtime.evaluate` paths through it using `this._connectedTarget?.platform`. iOS unchanged (B118/D637).
+- **`platform` param on `device_screenshot`** — inherits from `client.connectedTarget?.platform` or accepts explicit override. When no active session is open, the wrapper appends `--platform <p>` to agent-device CLI args. Session-bound dispatch remains the canonical path (B117/D638, partial — upstream agent-device CLI ignores `--platform` without a session; workaround via open session).
+- **`simctl listapps` cross-check in platform inference** — `cdp/discovery.ts::inferPlatforms` now reads both `adb shell pm list packages` AND `xcrun simctl listapps booted`; targets installed on both platforms are flagged with `ambiguousPlatform: true`. Readers are injectable for unit testing (B116/D639).
+- **Tab-dispatch fix for `cdp_nav_graph`** — `buildTabNavigateArgs(tab, screen, params)` emits the flat `ref.navigate(tab, params)` when target === tab, nested form when they differ. Prevents self-referential `navigate('TasksTab', { screen: 'TasksTab' })` that left RN stuck on the old tab (B115/D640).
 
 ### Fixed
-- **B110: MCP server reports stale version** — server version now read from `package.json` at module load; `sync-versions.sh` guards against hardcoded `version:` literals (D630).
-- **B113: `device_screenshot --format` always rejected** — now uses `--out <path>` explicitly; extension drives encoding (D636).
-- **Freshness probe caching** — 2s TTL per `connectionGeneration`, WeakMap-keyed. Saves 30-150ms per back-to-back tool call (D631).
-- **Structured error codes on `ResultEnvelope`** — `ToolErrorCode` union lets agents branch on `code` instead of regex on error text (D634).
-- **Extracted `cdp/recovery.ts`** — `probeFreshness()` + `recoverFromStaleTarget()` moved out of `utils.ts`. Replaced error-string matching with the `__RN_AGENT.__v` probe (D633).
-- **`RingBuffer` requestId index** — `getByKey(id)` is O(1); swapped 5 call sites from `findLast` → `getByKey` (D632).
+- **B110: MCP server reports stale version** — server version now read from `package.json` at module load; `sync-versions.sh` gained a regex guard against hardcoded `version:` literals in src/ (D630).
+- **B113: `device_screenshot --format` always rejected** — agent-device >= 0.8.0 doesn't accept `--format`. Refactored into `buildScreenshotArgs()` + thin delegate; now uses `--out <path>` explicitly, extension drives encoding (D636).
+- **Freshness probe caching** — 2s TTL per `connectionGeneration`, WeakMap-keyed. Saves 30-150ms per back-to-back tool call by skipping redundant `__RN_AGENT.__v` round-trips (D631).
+- **Structured error codes on `ResultEnvelope`** — `ToolErrorCode` union (`STALE_TARGET`, `HELPERS_STALE`, `RECONNECT_TIMEOUT`, `NOT_CONNECTED`, `HELPERS_NOT_INJECTED`). Agents can branch on `code` instead of regex on error text. Back-compat preserved (D634).
+- **Extracted `cdp/recovery.ts`** — `probeFreshness()` + `recoverFromStaleTarget()` moved out of `utils.ts`. Replaced error-string matching for stale detection with the `__RN_AGENT.__v` probe as the primary signal (D633).
+- **`RingBuffer` requestId index** — optional `indexKey` extractor builds a parallel `Map<key, item>`; `getByKey(id)` is O(1). Swapped 5 call sites (`event-handlers.ts` ×4, `tools/network-body.ts` ×1) from `findLast` → `getByKey` (D632).
+
+### Refactors
+- **CDP module extraction continued** — `cdp/connect.ts` (213 lines), `cdp/helper-expr.ts`, `cdp/recovery.ts` (99 lines). CDPClient facade shrunk further; every module now has a typed Context interface instead of reaching into the facade directly.
+- **`cdp/state.ts` setter-based `ResettableState` interface** — replaces `as unknown as CDPResettableState` cast. Renaming a private field on `CDPClient` now produces a real TypeScript error.
 
 ### Benchmarks validated live
 
 Cross-platform benchmark (Task Power User flow + Priority Filter Row feature):
-- **iOS**: 3.37s / 29 calls / 0 failures (`cdp_interact` p50 7ms)
-- **Android pre-fix**: 16.11s / 32 calls / 3 failures (incl. 5.3s `typeText` timeout)
+- **iOS (iPhone 17 Pro, iOS 26.3)**: 3.37s / 29 calls / 0 failures (`cdp_interact` p50 7ms)
+- **Android (Pixel_9_Pro, API 37) pre-fix**: 16.11s / 32 calls / 3 failures (incl. 5.3s `typeText` timeout)
 - **Android post-fix**: ~7.2s / 24 calls / 0 failures — **55% faster, zero false-negative timeouts** (`cdp_interact` p50 16ms, p95 45ms)
 
 ### Test count
 158 → **249** (+91 this release cycle).
 
+### Decisions logged
+D630 through D642 in `rn-dev-agent-workspace/docs/DECISIONS.md`.
+
 ## [0.22.0] — 2026-04-16
 
-Proof-capture infrastructure, fast-runner robustness, and the `cdp_set_shared_value` tool for Reanimated animation proofs.
-
 ### Added
-- **`cdp_set_shared_value` tool** — Drive Reanimated SharedValue animations by testID for proof captures.
-- **Fast-runner auto-restart** — When fast-runner dies mid-session, `tryFastRunner` automatically attempts one restart.
-- **Reload counter + NativeWind corruption warning** — `cdp_status` warns after 5+ `cdp_reload` calls in a session.
-- **Auto-open device session in Phase 5.5** — Pipeline mandates opening a device session at verification start.
+- **`cdp_set_shared_value` tool** — Drive Reanimated SharedValue animations by testID for proof captures when gesture/scroll synthesis is unavailable. Walks the React fiber tree, finds the named prop, sets `.value` on the JS thread (D623).
+- **Fast-runner auto-restart** — When fast-runner dies mid-session, `tryFastRunner` automatically attempts one restart using the session's deviceId. `isFastRunnerAvailable()` now probes process liveness via `kill(pid, 0)` instead of just checking state file (D620).
+- **Reload counter + NativeWind corruption warning** — `cdp_status` warns after 5+ `cdp_reload` calls in a session: "NativeWind stylesheet may be corrupted" (D622).
+- **Auto-open device session in Phase 5.5** — The 8-phase pipeline skill now mandates opening a device session at verification start, preventing fallback to bash commands (D619).
+- **9 new unit tests** for deviceId parsing — covers all 4 agent-device response shapes, UDID regex validation, priority ordering, and edge cases. Test count: 139 → 148 (D625).
 
 ### Fixed
-- **B103**: `cdp_navigate` false success — fallback now verifies target screen exists.
-- **B106**: `device_scroll`/`device_swipe` deadlock on Reanimated screens.
-- **B107**: `deviceId` parsing for agent-device v0.8.0.
-- **R2**: `device_screenshot` ignores requested path.
-- **R5**: Scroll amount semantics diverge.
+- **B103: `cdp_navigate` false success** — Fallback navigation path now verifies the target screen exists in the navigation state after dispatch. Returns error if screen not found in any navigator (D616).
+- **B106: `device_scroll`/`device_swipe` deadlock on Reanimated screens** — Routes through fast-runner HID synthesis when available, bypassing agent-device daemon's `waitForIdle` which deadlocks with Reanimated worklets (D610).
+- **B107: `deviceId` parsing for agent-device v0.8.0** — Parses `data.device_udid`, `data.id`, and `data.device.id` (when object). Prefers `device_udid` over generic `id`. Validates against UDID regex before `ensureFastRunner` (D611, D618).
+- **R2: `device_screenshot` ignores requested path** — Fast-runner screenshot tier now copies the captured PNG to the requested output path instead of always writing to `/tmp` (D617).
+- **R5: Scroll amount semantics diverge** — Dropped `* 2` factor in fast-runner scroll computation to match agent-device daemon's interpretation of `amount` (D621).
+- **MCP-only proof capture enforcement** — Added "Never use `xcrun simctl` for screenshots" and "Never use `sleep` for settling" to skill boundaries (D624).
+
+### Security
+- **hono 4.12.12 → 4.12.14** — Fixes HTML injection in JSX SSR (Dependabot #5). Transitive dep of `@modelcontextprotocol/sdk`.
+
+### Changed
+- MCP tool count: 51 → 52 (`cdp_set_shared_value`). CDP tools: 24 → 25.
+- Plugin version: 0.21.1 → 0.22.0. MCP server: 0.16.0 → 0.17.0.
+- Decisions logged: D610-D625 (16 new).
+
+## [0.21.1] — 2026-04-15
+
+### Fixed
+- **MCP tools unavailable in spawned subagents** (GH #31) — Agents split into protocol playbooks (parent-session-only) and spawnable workers.
 
 ## [0.19.2] — 2026-04-13
 

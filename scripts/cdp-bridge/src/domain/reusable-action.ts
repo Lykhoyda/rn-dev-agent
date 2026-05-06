@@ -4,7 +4,7 @@
 // (M7 metadata header in the YAML), the mutable runtime state (sidecar
 // JSON), and the lifecycle transitions between them.
 //
-// Storage layout (per D1207):
+// Storage layout (per D1208 single-folder doctrine, supersedes D1207):
 //   <project>/.rn-agent/actions/<id>.yaml          — the YAML body + M7 header
 //   <project>/.rn-agent/state/<id>.state.json      — sidecar (this entity's
 //                                                     ActionRuntimeState)

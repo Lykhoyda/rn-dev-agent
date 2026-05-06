@@ -1,8 +1,9 @@
 #!/bin/bash
-# rn-verify — Headless CI runner for Maestro E2E regression suite
+# rn-verify — Headless CI runner for Maestro flows in .rn-agent/actions/
 #
-# Discovers and runs all Maestro flows in .maestro/flows/ without requiring
-# a Claude Code session. Wraps maestro-runner directly.
+# Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
+# without requiring a Claude Code session. Wraps maestro-runner directly.
+# Pass --flow-dir to point at any other directory (e.g. your own .maestro/flows/).
 #
 # Usage:
 #   rn-verify                              # Run all flows on auto-detected platform
@@ -67,17 +68,28 @@ fi
 
 # Find flow directory
 if [ -z "$FLOW_DIR" ]; then
-  # Walk up from CWD to find .maestro/flows/
+  # Walk up from CWD to find .rn-agent/actions/
+  LEGACY_FOUND=""
   DIR="$PWD"
   while [ "$DIR" != "/" ]; do
-    if [ -d "$DIR/.maestro/flows" ]; then
-      FLOW_DIR="$DIR/.maestro/flows"
+    if [ -d "$DIR/.rn-agent/actions" ]; then
+      FLOW_DIR="$DIR/.rn-agent/actions"
       break
+    fi
+    if [ -z "$LEGACY_FOUND" ] && [ -d "$DIR/.maestro/flows" ]; then
+      LEGACY_FOUND="$DIR/.maestro/flows"
     fi
     DIR=$(dirname "$DIR")
   done
   if [ -z "$FLOW_DIR" ]; then
-    echo "ERROR: No .maestro/flows/ directory found. Pass --flow-dir explicitly."
+    if [ -n "$LEGACY_FOUND" ]; then
+      echo "ERROR: No .rn-agent/actions/ directory found." >&2
+      echo "NOTE: D1208 changed the default flow directory from .maestro/flows/ to .rn-agent/actions/." >&2
+      echo "      Found .maestro/flows/ at $LEGACY_FOUND — run with --flow-dir $LEGACY_FOUND" >&2
+      echo "      to keep prior behavior, or run /rn-dev-agent:setup to scaffold the new layout." >&2
+    else
+      echo "ERROR: No .rn-agent/actions/ directory found. Run /rn-dev-agent:setup or pass --flow-dir explicitly." >&2
+    fi
     exit 2
   fi
 fi
