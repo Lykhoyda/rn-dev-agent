@@ -1073,37 +1073,52 @@ export const INJECTED_HELPERS = `
 
         // Issue #126 Fix A — typeText handler resolution.
         //
-        // Path 1 (preserved for backwards compatibility): when the matched
-        // fiber itself has onChangeText / onChange, fire them (existing
-        // behavior fires both if both exist — kept to avoid silent
-        // regressions on consumers depending on the order/double-fire).
+        // Path 1: matched fiber itself has onChangeText / onChange. SINGLE-
+        // fire — pick onChangeText if present, else onChange. Avoids the
+        // double-fire bug: when an RHF Controller wraps a TextInput via
+        // <TextInput {...field} />, both onChangeText and onChange are bound
+        // to field.onChange. Firing both ran field.onChange twice with
+        // different argument shapes (string then {nativeEvent}), corrupting
+        // the form state and double-triggering validators.
         //
-        // Path 2 (new): when neither handler is on the matched fiber,
-        // walk descendants for a typeable child. Common case: design-system
+        // Path 2: when matched fiber has no typeable handler, walk
+        // descendants for a typeable child. Common case: design-system
         // TextField wraps TextInput in an outer Pressable/View; the wrapper
         // testID resolves to the wrapper fiber whose props don't carry
         // onChangeText. Walking down finds the inner TextInput. Bounds:
         // depth ≤ 16, visit cap 200 across both passes. Two-pass: pass 1
         // considers only onChangeText; pass 2 falls back to onChange (the
-        // overloaded RN/web handler) only if no onChangeText descendant
+        // overloaded RN handler) only if no onChangeText descendant
         // exists. Within each pass: prefer fibers whose type matches a
-        // TextInput-family fingerprint; if multiple typed candidates
-        // match, return Ambiguous error rather than guess.
+        // TextInput-family fingerprint, then dedupe candidates that share
+        // the same handler function reference (react-native-paper wraps
+        // TextInputOutlined → TextInput → InternalTextInput each forwarding
+        // the same onChangeText — pick the deepest leaf), and return
+        // Ambiguous only when truly distinct typed handlers compete.
         if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
-          if (typeof props.onChangeText === 'function') props.onChangeText(text);
-          if (typeof props.onChange === 'function') props.onChange({ nativeEvent: { text: text } });
+          var p1Handler;
+          if (typeof props.onChangeText === 'function') {
+            p1Handler = 'onChangeText';
+            props.onChangeText(text);
+          } else {
+            p1Handler = 'onChange';
+            props.onChange({ nativeEvent: { text: text } });
+          }
           return JSON.stringify({
             success: true,
             action: 'typeText',
             component: typeName,
             testID: selector,
             text: text,
-            handlerCalled: typeof props.onChangeText === 'function' ? 'onChangeText' : 'onChange',
+            handlerCalled: p1Handler,
             resolvedFrom: 'matched-fiber'
           });
         }
 
-        var TYPEABLE_TYPE_RE = /(TextInput|Input|Field|TextField|EditText)/;
+        // Anchored on TextInput-family names. Drops bare Input/Field
+        // substrings to avoid false-positives on RadioGroupField,
+        // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
+        var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
         var visited = 0;
         var DESCENDANT_DEPTH_CAP = 16;
         var DESCENDANT_VISIT_CAP = 200;
@@ -1120,6 +1135,7 @@ export const INJECTED_HELPERS = `
                 fiber: node,
                 props: nProps,
                 name: nName,
+                depth: depth,
                 typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
               });
             }
@@ -1130,14 +1146,40 @@ export const INJECTED_HELPERS = `
           return matches;
         }
 
+        // Dedupe candidates that share the same handler function reference.
+        // react-native-paper's TextInputOutlined → TextInput → InternalTextInput
+        // chain each forwards the SAME onChangeText down — they're the same
+        // logical handler, not three independent typeable fields. Keep the
+        // deepest leaf so the call lands on the host-component fiber that
+        // actually owns the input. (Codex M4 / multi-LLM review of issue #126.)
+        function dedupeByHandlerIdentity(matches, handlerName) {
+          var byFn = [];
+          for (var i = 0; i < matches.length; i++) {
+            var m = matches[i];
+            var fn = m.props[handlerName];
+            var existingIdx = -1;
+            for (var j = 0; j < byFn.length; j++) {
+              if (byFn[j].props[handlerName] === fn) { existingIdx = j; break; }
+            }
+            if (existingIdx === -1) {
+              byFn.push(m);
+            } else if (m.depth > byFn[existingIdx].depth) {
+              // Same handler, deeper fiber — replace with the leaf.
+              byFn[existingIdx] = m;
+            }
+          }
+          return byFn;
+        }
+
         function pickFromMatches(matches, handlerName) {
           if (matches.length === 0) return { kind: 'none' };
+          var deduped = dedupeByHandlerIdentity(matches, handlerName);
           var typed = [];
-          for (var i = 0; i < matches.length; i++) if (matches[i].typeFingerprint) typed.push(matches[i]);
+          for (var i = 0; i < deduped.length; i++) if (deduped[i].typeFingerprint) typed.push(deduped[i]);
           if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
           if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
-          if (matches.length === 1) return { kind: 'one', match: matches[0], handler: handlerName };
-          return { kind: 'ambiguous', matches: matches, handler: handlerName };
+          if (deduped.length === 1) return { kind: 'one', match: deduped[0], handler: handlerName };
+          return { kind: 'ambiguous', matches: deduped, handler: handlerName };
         }
 
         var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
