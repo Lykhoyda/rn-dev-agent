@@ -24,6 +24,7 @@ import { createObjectInspectHandler } from './tools/object-inspect.js';
 import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
+import { createDiagnosticRenderersHandler } from './tools/diagnostic-renderers.js';
 import {
   createExpectReduxHandler,
   createExpectRouteHandler,
@@ -137,6 +138,15 @@ trackedTool(
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
   },
   createStatusHandler(getClient, setClient, createClient),
+);
+
+trackedTool(
+  'cdp_diagnostic_renderers',
+  'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.',
+  {
+    maxRendererId: z.number().int().min(1).max(100).optional().describe('How many renderer IDs to scan. Default 20 (matches IIFE MAX_RENDERER_IDS).'),
+  },
+  createDiagnosticRenderersHandler(getClient),
 );
 
 trackedTool(

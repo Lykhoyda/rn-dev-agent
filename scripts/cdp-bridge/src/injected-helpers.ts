@@ -1,15 +1,33 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 20;
+  var __HELPERS_VERSION__ = 21;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
+
+  // Issue #126 — renderer iteration cap. Was hard-coded 5; bumped to 20
+  // with an early-exit-after-3-empty heuristic so the common case (1-3
+  // renderers) still exits fast. Each getFiberRoots(N) call is a Map
+  // lookup so iteration cost is negligible. Kept as a single constant
+  // so all call sites stay in sync (multi-LLM review of issue #126
+  // identified 5 hard-coded sites that previously drifted).
+  var MAX_RENDERER_IDS = 20;
+  var EARLY_EXIT_EMPTY_STREAK = 3;
 
   function findActiveRenderer() {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    for (var i = 1; i <= 5; i++) {
-      var roots = hook.getFiberRoots(i);
-      if (roots && roots.size > 0) return { rendererId: i, roots: roots };
+    var emptyStreak = 0;
+    for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
+      try {
+        var roots = hook.getFiberRoots(i);
+        if (roots && roots.size > 0) {
+          return { rendererId: i, roots: roots };
+        }
+        emptyStreak++;
+        if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return null;
   }
@@ -23,10 +41,12 @@ export const INJECTED_HELPERS = `
   function forEachRootFiber(cb) {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    for (var ri = 1; ri <= 5; ri++) {
+    var emptyStreak = 0;
+    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size) {
+          emptyStreak = 0;
           var it = roots.values();
           var v;
           while (!(v = it.next()).done) {
@@ -35,8 +55,13 @@ export const INJECTED_HELPERS = `
               if (result) return result;
             }
           }
+        } else {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) { /* skip bad renderer, keep searching */ }
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return null;
   }
@@ -54,10 +79,12 @@ export const INJECTED_HELPERS = `
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return [];
     var out = [];
-    for (var ri = 1; ri <= 5; ri++) {
+    var emptyStreak = 0;
+    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size) {
+          emptyStreak = 0;
           var it = roots.values();
           var v;
           while (!(v = it.next()).done) {
@@ -65,8 +92,13 @@ export const INJECTED_HELPERS = `
               out.push({ rendererId: ri, fiber: v.value.current });
             }
           }
+        } else {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return out;
         }
-      } catch (_) { /* skip bad renderer, keep going */ }
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return out;
   }
@@ -1038,16 +1070,139 @@ export const INJECTED_HELPERS = `
 
       if (action === 'typeText') {
         var text = opts.text !== undefined ? opts.text : '';
-        if (typeof props.onChangeText === 'function') {
-          props.onChangeText(text);
+
+        // Issue #126 Fix A — typeText handler resolution.
+        //
+        // Path 1 (preserved for backwards compatibility): when the matched
+        // fiber itself has onChangeText / onChange, fire them (existing
+        // behavior fires both if both exist — kept to avoid silent
+        // regressions on consumers depending on the order/double-fire).
+        //
+        // Path 2 (new): when neither handler is on the matched fiber,
+        // walk descendants for a typeable child. Common case: design-system
+        // TextField wraps TextInput in an outer Pressable/View; the wrapper
+        // testID resolves to the wrapper fiber whose props don't carry
+        // onChangeText. Walking down finds the inner TextInput. Bounds:
+        // depth ≤ 16, visit cap 200 across both passes. Two-pass: pass 1
+        // considers only onChangeText; pass 2 falls back to onChange (the
+        // overloaded RN/web handler) only if no onChangeText descendant
+        // exists. Within each pass: prefer fibers whose type matches a
+        // TextInput-family fingerprint; if multiple typed candidates
+        // match, return Ambiguous error rather than guess.
+        if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
+          if (typeof props.onChangeText === 'function') props.onChangeText(text);
+          if (typeof props.onChange === 'function') props.onChange({ nativeEvent: { text: text } });
+          return JSON.stringify({
+            success: true,
+            action: 'typeText',
+            component: typeName,
+            testID: selector,
+            text: text,
+            handlerCalled: typeof props.onChangeText === 'function' ? 'onChangeText' : 'onChange',
+            resolvedFrom: 'matched-fiber'
+          });
         }
-        if (typeof props.onChange === 'function') {
-          props.onChange({ nativeEvent: { text: text } });
+
+        var TYPEABLE_TYPE_RE = /(TextInput|Input|Field|TextField|EditText)/;
+        var visited = 0;
+        var DESCENDANT_DEPTH_CAP = 16;
+        var DESCENDANT_VISIT_CAP = 200;
+
+        function findHandlerDescendants(handlerName) {
+          var matches = [];
+          function walk(node, depth) {
+            if (!node || depth > DESCENDANT_DEPTH_CAP || visited > DESCENDANT_VISIT_CAP) return;
+            visited++;
+            var nProps = node.memoizedProps || {};
+            if (typeof nProps[handlerName] === 'function') {
+              var nName = (node.type && (node.type.displayName || node.type.name)) || '';
+              matches.push({
+                fiber: node,
+                props: nProps,
+                name: nName,
+                typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
+              });
+            }
+            if (node.child) walk(node.child, depth + 1);
+            if (node.sibling) walk(node.sibling, depth);
+          }
+          if (found.child) walk(found.child, 1);
+          return matches;
         }
-        if (typeof props.onChangeText !== 'function' && typeof props.onChange !== 'function') {
-          return JSON.stringify({ error: 'Component has no onChangeText or onChange handler', component: typeName, testID: selector });
+
+        function pickFromMatches(matches, handlerName) {
+          if (matches.length === 0) return { kind: 'none' };
+          var typed = [];
+          for (var i = 0; i < matches.length; i++) if (matches[i].typeFingerprint) typed.push(matches[i]);
+          if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
+          if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
+          if (matches.length === 1) return { kind: 'one', match: matches[0], handler: handlerName };
+          return { kind: 'ambiguous', matches: matches, handler: handlerName };
         }
-        return JSON.stringify({ success: true, action: 'typeText', component: typeName, testID: selector, text: text });
+
+        var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
+        var picked = null;
+        if (pass1.kind === 'one') {
+          picked = pass1;
+        } else if (pass1.kind === 'ambiguous') {
+          return JSON.stringify({
+            error: 'Ambiguous typeText resolution',
+            testID: selector,
+            handler: 'onChangeText',
+            count: pass1.matches.length,
+            candidates: pass1.matches.slice(0, 5).map(function(m) {
+              return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
+            }),
+            hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
+          });
+        } else {
+          // pass 2 — onChange fallback
+          var pass2 = pickFromMatches(findHandlerDescendants('onChange'), 'onChange');
+          if (pass2.kind === 'one') {
+            picked = pass2;
+          } else if (pass2.kind === 'ambiguous') {
+            return JSON.stringify({
+              error: 'Ambiguous typeText resolution',
+              testID: selector,
+              handler: 'onChange',
+              count: pass2.matches.length,
+              candidates: pass2.matches.slice(0, 5).map(function(m) {
+                return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
+              }),
+              hint: 'Multiple onChange descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
+            });
+          }
+        }
+
+        if (!picked) {
+          return JSON.stringify({
+            error: 'Component has no onChangeText or onChange handler',
+            component: typeName,
+            testID: selector,
+            hint: 'Walked up to ' + DESCENDANT_DEPTH_CAP + ' levels (' + visited + ' fibers) — no descendant has a typeable handler. The matched fiber may not contain a TextInput. Use cdp_component_tree to inspect, or pass the inner field testID directly.'
+          });
+        }
+
+        // Single-fire — call only the picked handler. Avoids the
+        // double-fire bug on RHF Controllers where field.onChange wired
+        // to onChangeText + RN HostComponent onChange would each run
+        // with different argument shapes.
+        if (picked.handler === 'onChangeText') {
+          picked.match.props.onChangeText(text);
+        } else {
+          picked.match.props.onChange({ nativeEvent: { text: text } });
+        }
+
+        return JSON.stringify({
+          success: true,
+          action: 'typeText',
+          component: typeName,
+          testID: selector,
+          text: text,
+          handlerCalled: picked.handler,
+          resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
+          visitedFibers: visited
+        });
       }
 
       if (action === 'scroll') {
@@ -1638,6 +1793,9 @@ export const REACT_READY_PROBE_JS = `(function() {
 // INJECTED_HELPERS. The in-IIFE copy MUST be kept in sync with this logic.
 // Tests exercise this mirror; the IIFE version runs in Hermes as pure JS.
 // See test/unit/component-tree-multi-renderer.test.js for the contract.
+//
+// Issue #126: bumped MAX_RENDERER_IDS from 5 → 20 with early-exit-after-3-empty
+// heuristic so apps that register a renderer at id 6+ are no longer invisible.
 export interface FiberLike { current?: unknown }
 export interface RendererRootsLike {
   size: number;
@@ -1647,19 +1805,31 @@ export interface DevToolsHookLike {
   getFiberRoots?: (rendererId: number) => RendererRootsLike | null | undefined;
 }
 
+export const MAX_RENDERER_IDS = 20;
+export const EARLY_EXIT_EMPTY_STREAK = 3;
+
 export function findAllRootFibersForTest(hook: DevToolsHookLike | null | undefined): Array<{ rendererId: number; fiber: unknown }> {
   if (!hook || typeof hook.getFiberRoots !== 'function') return [];
   const out: Array<{ rendererId: number; fiber: unknown }> = [];
-  for (let ri = 1; ri <= 5; ri++) {
-    const roots = hook.getFiberRoots(ri);
-    if (roots && roots.size) {
-      const it = roots.values();
-      let step = it.next();
-      while (!step.done) {
-        const r = step.value;
-        if (r && r.current) out.push({ rendererId: ri, fiber: r.current });
-        step = it.next();
+  let emptyStreak = 0;
+  for (let ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+    try {
+      const roots = hook.getFiberRoots(ri);
+      if (roots && roots.size) {
+        emptyStreak = 0;
+        const it = roots.values();
+        let step = it.next();
+        while (!step.done) {
+          const r = step.value;
+          if (r && r.current) out.push({ rendererId: ri, fiber: r.current });
+          step = it.next();
+        }
+      } else {
+        emptyStreak++;
+        if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return out;
       }
+    } catch {
+      emptyStreak++;
     }
   }
   return out;
