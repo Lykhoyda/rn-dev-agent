@@ -19,17 +19,36 @@ function typeTextSlice() {
   return INJECTED_HELPERS.slice(open, close);
 }
 
-test('Issue #126: typeText branch preserves immediate-fiber path for backwards compat', () => {
+test('Issue #126: typeText Path 1 (matched-fiber) is single-fire — picks onChangeText if present, else onChange', () => {
   const slice = typeTextSlice();
-  // Path 1 still fires both handlers when present on the matched fiber.
+  // Path 1 single-fires after multi-LLM review caught the double-fire
+  // bug on RHF Controllers (Gemini H1 from implementation review).
   assert.match(slice, /typeof props\.onChangeText === 'function' \|\| typeof props\.onChange === 'function'/);
   assert.match(slice, /resolvedFrom: 'matched-fiber'/);
+  // Single-fire structure: if-onChangeText-else-onChange (NOT if-then-if).
+  assert.match(slice, /if \(typeof props\.onChangeText === 'function'\) \{[^}]*p1Handler = 'onChangeText';[^}]*props\.onChangeText\(text\);[^}]*\} else \{[^}]*p1Handler = 'onChange';[^}]*props\.onChange\(/);
 });
 
-test('Issue #126: typeText descendant walk has TextInput-family type fingerprint', () => {
+test('Issue #126: typeText descendant walk has TextInput-family type fingerprint (anchored, no bare Input/Field)', () => {
   const slice = typeTextSlice();
-  // TYPEABLE_TYPE_RE matches the React Native + design-system TextInput component naming.
-  assert.match(slice, /TYPEABLE_TYPE_RE\s*=\s*\/\(TextInput\|Input\|Field\|TextField\|EditText\)\//);
+  // TYPEABLE_TYPE_RE was tightened after multi-LLM review: bare `Input`
+  // and `Field` substrings produced false positives on RadioGroupField,
+  // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
+  assert.match(slice, /TYPEABLE_TYPE_RE\s*=\s*\/\(TextInput\|TextField\|EditText\)\//);
+  // Negative guard — make sure the loose form doesn't sneak back in.
+  assert.doesNotMatch(slice, /\(TextInput\|Input\|Field\|TextField\|EditText\)/);
+});
+
+test('Issue #126: dedupe candidates by handler-function identity (Codex M4 from impl review)', () => {
+  const slice = typeTextSlice();
+  // react-native-paper's TextInputOutlined → TextInput → InternalTextInput
+  // chain forwards the same onChangeText down. Without dedupe, the impl
+  // returns Ambiguous error on a perfectly normal Paper TextField. Fix:
+  // group candidates by handler function reference, keep the deepest leaf.
+  assert.match(slice, /function dedupeByHandlerIdentity/);
+  assert.match(slice, /byFn\[j\]\.props\[handlerName\] === fn/);
+  // Prefer-deepest tiebreak.
+  assert.match(slice, /m\.depth > byFn\[existingIdx\]\.depth/);
 });
 
 test('Issue #126: typeText descendant walk is depth- and visit-bounded', () => {
@@ -83,10 +102,11 @@ test('Issue #126: typeText error message hints at depth + visited count for debu
   assert.match(slice, /cdp_component_tree to inspect/);
 });
 
-test('Issue #126: source guard — typeText branch length sanity (~5KB ± 1KB)', () => {
-  // The new descendant walk is ~5KB. If this assertion fails wildly, a
-  // recent edit may have either removed the new code path or doubled it.
+test('Issue #126: source guard — typeText branch length sanity', () => {
+  // Loose bounds — only catches "code path completely removed" (lower)
+  // or "accidental duplication of the entire branch" (upper). Codex M5
+  // from impl review flagged tight bounds as fragile; widened.
   const slice = typeTextSlice();
   assert.ok(slice.length > 3500, `typeText branch unexpectedly short (${slice.length} bytes); descendant walk may have been removed`);
-  assert.ok(slice.length < 7000, `typeText branch unexpectedly long (${slice.length} bytes); duplicated code or accidental copy?`);
+  assert.ok(slice.length < 15000, `typeText branch unexpectedly long (${slice.length} bytes); accidental copy or runaway code?`);
 });

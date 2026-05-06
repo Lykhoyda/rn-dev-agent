@@ -21,11 +21,17 @@ const DIAGNOSTIC_RENDERERS_JS = `(function(opts) {
     });
   }
 
-  var max = (opts && opts.maxRendererId) ? opts.maxRendererId : 20;
+  var max = (opts && typeof opts.maxRendererId === 'number') ? opts.maxRendererId : 20;
   var notes = [];
+  // Use getOwnPropertyNames so non-enumerable hook properties (e.g. those
+  // installed by React DevTools backend via Object.defineProperty with
+  // enumerable:false — renderers, getFiberRoots, inject on some
+  // versions) are surfaced. for...in / Object.keys would miss them.
   var hookKeys = [];
-  for (var k in hook) {
-    if (Object.prototype.hasOwnProperty.call(hook, k)) hookKeys.push(k);
+  try {
+    hookKeys = Object.getOwnPropertyNames(hook);
+  } catch (_) {
+    hookKeys = [];
   }
 
   var rendererKeys = [];
@@ -95,15 +101,28 @@ const DIAGNOSTIC_RENDERERS_JS = `(function(opts) {
     }
   }
 
+  // Single consolidated "registered but unscanned" note (Gemini H3 +
+  // Codex M1 from PR #130 review): list ALL unscanned IDs once with a
+  // single re-run suggestion at the max needed value. Avoids N misleading
+  // "+5 buffer" notes that confused the user about the actual cause.
   if (earlyExited) {
+    var unscanned = [];
     for (var rk = 0; rk < rendererKeys.length; rk++) {
       var matched = false;
       for (var rr = 0; rr < rows.length; rr++) {
         if (rows[rr].rendererId === rendererKeys[rk]) { matched = true; break; }
       }
-      if (!matched) {
-        notes.push('Renderer ID ' + rendererKeys[rk] + ' was registered but not scanned (early-exit). Pass maxRendererId=' + (rendererKeys[rk] + 5) + ' to include it.');
-      }
+      if (!matched) unscanned.push(rendererKeys[rk]);
+    }
+    if (unscanned.length > 0) {
+      var needed = unscanned[0];
+      for (var ui = 1; ui < unscanned.length; ui++) if (unscanned[ui] > needed) needed = unscanned[ui];
+      notes.push('Renderer ID' + (unscanned.length > 1 ? 's' : '') + ' ' + unscanned.join(', ') + ' ' + (unscanned.length > 1 ? 'were' : 'was') + ' registered but not scanned (early-exit). Re-run with maxRendererId=' + needed + ' to include ' + (unscanned.length > 1 ? 'them' : 'it') + '.');
+    } else if (rendererKeys.length === 0) {
+      // hook.renderers was missing — we can't tell which IDs were skipped.
+      // Surface the gap explicitly so the user knows to re-run wider.
+      var lastScanned = rows.length ? rows[rows.length - 1].rendererId : 0;
+      notes.push('Early-exited at renderer ' + lastScanned + '. hook.renderers is unavailable so we cannot detect skipped renderers. Re-run with maxRendererId=' + (lastScanned + 10) + ' if you suspect a renderer at id ' + (lastScanned + 1) + '+.');
     }
   }
 
