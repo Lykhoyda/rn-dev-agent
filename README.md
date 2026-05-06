@@ -102,7 +102,7 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 
 ## App setup
 
-**Most apps need zero setup** — the plugin reads the React fiber tree directly via Metro's CDP endpoint.
+**Most apps need zero setup** — the plugin reads the React fiber tree directly via Metro's CDP endpoint. Run `/rn-dev-agent:setup` once in your project to inject the CLAUDE.md routing rules, instrument the navigation ref, expose Zustand stores, and scaffold `.rn-agent/` (the plugin's home for actions, skeleton, nav-graph, and recordings).
 
 **Zustand stores** — one line in your app entry ([details](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)):
 ```typescript
@@ -131,11 +131,18 @@ if (__DEV__) {
 | **Testing** (E2E + proof) | 8 | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_generate`, `maestro_test_all`, `cdp_run_action` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
 | **Macro-Asserts** (L3 state checks) | 4 | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | [Macro-Asserts](https://lykhoyda.github.io/rn-dev-agent/tools/#macro-asserts) |
 
-### What's new in v0.44.18 (2026-05-05)
+### What's new in v0.44.21 (2026-05-06)
 
-- **L3 self-healing corpus** — new `cdp_repair_action` patches a flow's stale testID via fuzzy match against the live snapshot when `/run-action` fails with `SELECTOR_NOT_FOUND`. Guardrails: refuses on human edits (mtime check), refuses past 3 repairs in 24h, refuses on snapshot infrastructure failure.
-- **Auto-repair-aware action replay** — new `cdp_run_action` orchestrates `maestro_run` + parser + `cdp_repair_action` + retry, then persists a `RunRecord` with structured `autoRepair` telemetry (passed / failed / refused / skipped, plus phase-level timing for MTTR analysis).
-- **L2→L3 auto-emission** — new `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with full M7 metadata header + initialised sidecar. Auto-promotes to `status: active` on first clean replay.
+- **Single-folder doctrine (D1208)** — `.rn-agent/` is the plugin's only home in your project. The plugin has zero awareness of `.maestro/` (one carve-out: `cdp_auto_login` still reads user-authored login subflows). `/promote-action` is removed — the agent vs team-territory split is gone; status maturity stays internal to the sidecar.
+- **`/setup` scaffolds `.rn-agent/`** — new Phase 2 Step D copies a versioned template from `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` into your project on first onboarding. Idempotent across re-runs via `.scaffold-version`. Partial-add path safely fills in any template files missing from an existing scaffold without overwriting your work.
+- **Nav-graph relocation** — `cdp_nav_graph` now caches at `<project>/.rn-agent/nav-graph.yaml` (was `.rn-nav-graph.yaml` at the project root). One-shot legacy-path fallback on read, so accumulated reliability scores + strike-map state survive the upgrade.
+- **`rn-verify` CI defaults** — the bundled CI runner now scans `.rn-agent/actions/` by default (was `.maestro/flows/`). When `.maestro/flows/` is found in walk-up, prints a one-line transition notice naming the legacy directory.
+
+### What shipped in v0.44.18–v0.44.19 (2026-05-05)
+
+- **L3 self-healing corpus** — `cdp_repair_action` patches a flow's stale testID via fuzzy match against the live snapshot when `/run-action` fails with `SELECTOR_NOT_FOUND`. Guardrails: refuses on human edits (mtime check), refuses past 3 repairs in 24h, refuses on snapshot infrastructure failure.
+- **Auto-repair-aware action replay** — `cdp_run_action` orchestrates `maestro_run` + parser + `cdp_repair_action` + retry, then persists a `RunRecord` with structured `autoRepair` telemetry (passed / failed / refused / skipped, plus phase-level timing for MTTR analysis).
+- **L2→L3 auto-emission** — `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with full M7 metadata header + initialised sidecar.
 - **Macro-Asserts** — `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` for state-assertive replays. Maestro asserts pixels; these assert internal state. Differentiated capability over Maestro Cloud / KaneAI / BrowserStack.
 - **testID-keyed `device_batch`** — re-resolves via fresh fiber-tree snapshot per call, immune to stale-ref-across-step-transitions failures.
 - **Three-layer architecture** — D1206 codifies L1 Workflow / L2 Discovery / L3 Reproducible Actions as the canonical mental model.

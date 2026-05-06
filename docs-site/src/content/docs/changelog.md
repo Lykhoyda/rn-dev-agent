@@ -9,6 +9,47 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.21] — 2026-05-06
+
+D1208 follow-up: tighten `/setup` Step D's partial-add path so `.gitkeep` markers are not re-copied into directories that already hold real artifacts. Surfaced by smoke-testing the D1208 scaffold against the workspace test-app, where `actions/.gitkeep` was flagged as missing despite populated `actions/*.yaml` flows.
+
+### Fixed
+- `commands/setup.md` Step 1a — adds an explicit filter on the missing-files set: for any `.gitkeep` whose parent directory exists in the destination AND already contains non-`.gitkeep` content, the marker is dropped. Its sole purpose (keeping an empty directory git-trackable) is already satisfied by real content; copying it would just add noise next to artifacts (issue #123).
+
+### Refs
+- Issue #123 — Setup Step D partial-add: skip `.gitkeep` when parent dir has content
+- PR #122 — D1208 single-folder doctrine (the change being patched)
+- Multi-LLM review of D1208 (2026-05-06) — Codex M4 (deferred at the time, smoke test elevated to a real bug)
+
+## [0.44.20] — 2026-05-06
+
+D1208 single-folder plugin doctrine — supersedes D1207. The rn-dev-agent plugin's entire world is `<consumer-project>/.rn-agent/`. The plugin has zero awareness of `<consumer-project>/.maestro/` (one intentional carve-out: `cdp_auto_login` still reads user-authored login subflows from `.maestro/subflows/`).
+
+### Added
+- **`templates/rn-agent/`** at plugin root — project-agnostic seed for `/setup` scaffolding: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml` (with `schemaVersion`, `appId: REPLACE_ME` placeholder, and one commented example screen), and `.gitkeep` markers for `actions/`, `fixtures/`, `proposals/`.
+- **`/setup` Phase 2 Step D** — atomic scaffold copy via tmp+rename for first-time install, explicit per-file copy for partial-add upgrades. `.scaffold-version` marker for idempotency. Two-prompt confirm UX (meta files, then `skeleton.yaml`).
+- **Nav-graph migration read** — `readGraph` falls back to legacy `<root>/.rn-nav-graph.yaml` when `<root>/.rn-agent/nav-graph.yaml` doesn't exist, so existing reliability scores + strike-map state survive the upgrade. Next `writeGraph` lands at the new path.
+
+### Changed
+- **`/promote-action` deleted** — no second territory to promote to. Status maturity (`experimental` → `stable`) stays internal to the sidecar.
+- **`commands/list-learned-actions.md`, `scripts/learned-actions.mjs`, `scripts/cdp-bridge/src/tools/maestro-{generate,test-all}.ts`, `scripts/cdp-bridge/src/index.ts`** strip the `.maestro/flows/` disclaimers and dual-folder framing.
+- **`scripts/verify.sh`** (rn-verify CI runner) — default flow-dir flips from `.maestro/flows/` to `.rn-agent/actions/`. When `.maestro/flows/` is found in walk-up but `.rn-agent/actions/` is not, prints a one-line stderr transition notice.
+- **`scripts/cdp-bridge/src/nav-graph/storage.ts`** — `getGraphPath()` returns `<root>/.rn-agent/nav-graph.yaml`. `writeGraph` auto-creates the parent directory.
+- **`CLAUDE-MD-TEMPLATE.md`, `README.md`** drop `.maestro/flows/` framing from Tool Routing entries and the `/promote-action` row.
+
+### Fixed (multi-LLM review, applied before commit)
+- Bootstrap nudge in `/setup` pointed users at `/nav-graph scan` (writes to `nav-graph.yaml`, not `skeleton.yaml`). Corrected to `cdp_component_tree({ filter: '...' })`. (Gemini H1, conf 95)
+- `CLAUDE-MD-TEMPLATE.md` retained a stale "maestro_test_all runs flows from .maestro/" line. Fixed to `.rn-agent/actions/`. (Gemini H3, conf 92)
+- `domain/action-store.ts` and `reusable-action.ts` comments still cited D1207. Updated to D1208. (Codex L1, conf 90)
+
+### Tests
+1185 / 1185 pass. TypeScript build clean.
+
+### Refs
+- PR #122 — implementation
+- Workspace `docs/DECISIONS.md` D1208 (supersedes D1207); D1206 (three-layer architecture, unchanged)
+- Multi-LLM review session 2026-05-06 (Gemini + Codex)
+
 ## [0.42.0] — 2026-04-22
 
 M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
