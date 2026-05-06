@@ -79,7 +79,6 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 |---------|---------|
 | `/rn-dev-agent:list-learned-actions` | Browse memories + Maestro flows + UI skeletons + commands available in this project |
 | `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage); auto-repairs SELECTOR_NOT_FOUND failures via `cdp_run_action` |
-| `/rn-dev-agent:promote-action` | Elevate an agent-owned action into the team's core E2E suite |
 
 **Setup & diagnostics:**
 
@@ -139,7 +138,6 @@ if (__DEV__) {
 - **L2→L3 auto-emission** — new `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with full M7 metadata header + initialised sidecar. Auto-promotes to `status: active` on first clean replay.
 - **Macro-Asserts** — `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` for state-assertive replays. Maestro asserts pixels; these assert internal state. Differentiated capability over Maestro Cloud / KaneAI / BrowserStack.
 - **testID-keyed `device_batch`** — re-resolves via fresh fiber-tree snapshot per call, immune to stale-ref-across-step-transitions failures.
-- **`/promote-action` slash command** — explicit human gesture to elevate an agent-owned action into the team's core `.maestro/flows/` E2E suite.
 - **Three-layer architecture** — D1206 codifies L1 Workflow / L2 Discovery / L3 Reproducible Actions as the canonical mental model.
 - **Atomic YAML+sidecar pair-write** — sidecar-first ordering with future-mtime buffer guarantees no false-positive "external edit" alarms even on partial-write failures (D1101 / issue #101).
 - **CAS read-modify-write protection** — `saveActionWithCAS` detects concurrent writer races on the same actionId and retries, so RunRecord history doesn't lose entries under heavy parallel runs (issue #117).

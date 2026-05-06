@@ -4,10 +4,8 @@
 // Scans, in this order:
 //   A. Per-project auto-memory feedback files
 //      (~/.claude/projects/<encoded-cwd>/memory/feedback_*.md)
-//   B. Reusable Maestro flows (agent-owned, .rn-agent/actions/)
+//   B. Reusable Maestro flows
 //      (./.rn-agent/actions/*.yaml AND ../<sibling>/test-app/.rn-agent/actions/*.yaml)
-//      Core team-owned E2E tests in .maestro/flows/ are intentionally NOT
-//      scanned here — those are read-only, never auto-replayed by the agent.
 //   C. UI skeletons
 //      (./.rn-agent/skeleton.yaml AND ../<sibling>/test-app/.rn-agent/skeleton.yaml)
 //   D. Plugin commands available in this session
@@ -135,9 +133,7 @@ function scanFlows() {
 }
 
 function collectFlowRoots(start) {
-  // D1207 hard-cut: agent-owned reusable actions live in .rn-agent/actions/.
-  // Core team-owned E2E tests in .maestro/flows/ are read-only awareness only;
-  // they are NOT scanned here (separate scanCoreTests() will surface them later).
+  // D1208: .rn-agent/actions/ is the single source of plugin-managed flows.
   const candidates = new Set();
   const own = path.join(start, '.rn-agent', 'actions');
   candidates.add(own);
@@ -359,8 +355,8 @@ if (want('a')) {
 }
 
 if (want('b')) {
-  parts.push(`## B. Reusable Maestro flows — agent-owned (${flows.items.length})`);
-  parts.push('_Source: `.rn-agent/actions/`. Core E2E tests in `.maestro/flows/` are read-only and not listed here._');
+  parts.push(`## B. Reusable Maestro flows (${flows.items.length})`);
+  parts.push('_Source: `.rn-agent/actions/`._');
   if (flows.items.length === 0) {
     parts.push('_None match._');
     if (flows.roots.length) {

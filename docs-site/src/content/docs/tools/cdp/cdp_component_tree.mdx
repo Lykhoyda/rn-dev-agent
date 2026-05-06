@@ -11,7 +11,7 @@ Get React component tree. Returns components with props, state, testIDs. Use fil
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `filter` | `string` | No |  |  | Component name or testID to scope query (e.g. "CartBadge", "product-list") |
+| `filter` | `string` | No |  |  | Case-insensitive substring match against component name, testID/nativeID, or accessibilityLabel (e.g. "CartBadge", "product-list", "Continue") |
 | `depth` | `number` | No | `4` | min: 1, max: 12, integer | Max depth (default 4, max 12) |
 
 ## Usage

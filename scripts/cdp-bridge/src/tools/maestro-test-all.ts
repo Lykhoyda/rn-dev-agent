@@ -55,7 +55,6 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
     }
 
     const root = findProjectRoot();
-    // D1207: agent corpus lives in .rn-agent/actions/. Pass flowDir explicitly to scan team-owned .maestro/flows/.
     const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
     if (!flowDir) {
       return failResult('Cannot determine project root. Pass flowDir explicitly.');

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 retries). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if reconnect fails.
+Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 soft retries; on failure, falls back once to a 10s force-recreate that mirrors `cdp_connect force=true`). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if both paths fail. When the force fallback recovers, `meta.recovered_via` is "force_reconnect" and `meta.proxy_was_active` indicates whether DevTools was attached (re-run cdp_open_devtools to re-attach).
 
 ## Parameters
 

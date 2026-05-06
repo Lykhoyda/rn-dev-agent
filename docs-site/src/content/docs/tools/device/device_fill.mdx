@@ -5,7 +5,7 @@ sidebar:
   order: 24
 ---
 
-Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.
+Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.
 
 ## Parameters
 
@@ -13,6 +13,7 @@ Type text into an input field by its @ref from device_snapshot. Always re-taps t
 |------|------|----------|---------|-------------|-------------|
 | `ref` | `string` | Yes |  |  | Input field ref from device_snapshot (e.g. "e5" or "@e5") |
 | `text` | `string` | Yes |  |  | Text to type into the field |
+| `waitForKeyboardMs` | `number` | No |  | min: 0, max: 5000, integer | Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land. |
 
 ## Usage
 

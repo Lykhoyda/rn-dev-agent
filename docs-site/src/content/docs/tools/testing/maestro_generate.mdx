@@ -5,7 +5,7 @@ sidebar:
   order: 36
 ---
 
-Generate a persistent Maestro YAML flow file from structured steps. Writes to .maestro/flows/&lt;name>.yaml in the project root. Use after Phase 5.5 verification to create regression tests.
+Generate a persistent Maestro YAML flow file from structured steps. Writes to .rn-agent/actions/&lt;name>.yaml in the project root. Use after live verification to create reusable actions.
 
 ## Parameters
 
@@ -14,7 +14,7 @@ Generate a persistent Maestro YAML flow file from structured steps. Writes to .m
 | `name` | `string` | Yes |  |  | Flow name (e.g. "add-to-cart", "profile-edit"). Becomes filename. |
 | `steps` | `object[]` | No |  |  | Ordered list of Maestro steps |
 | `appId` | `string` | No |  |  | App bundle ID to include in YAML header |
-| `outputDir` | `string` | No |  |  | Output directory (default: &lt;project>/.maestro/flows/) |
+| `outputDir` | `string` | No |  |  | Output directory (default: &lt;project>/.rn-agent/actions/). Pass an explicit path for non-default targets. |
 
 ## Usage
 

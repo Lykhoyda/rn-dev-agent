@@ -13,7 +13,7 @@ Past sessions accumulate two kinds of reusable knowledge that future sessions
 should look at BEFORE re-deriving anything from scratch:
 
 1. **Feedback memories** at `~/.claude/projects/<encoded-cwd>/memory/feedback_*.md`
-2. **Executable artifacts**: `.maestro/flows/*.yaml`, `.ui-skeleton.yaml`
+2. **Executable artifacts**: `.rn-agent/actions/*.yaml`, `.rn-agent/skeleton.yaml`
 
 This command surfaces both lists in one place — and the underlying
 `scripts/learned-actions.mjs` is the **same script** invoked programmatically
@@ -33,8 +33,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
 The script auto-discovers:
 - The user's per-project auto-memory directory (Section A)
 - `.rn-agent/actions/*.yaml` in the cwd, in `<cwd>/test-app/`, and in any
-  `<sibling>/test-app/` adjacent to the cwd (Section B — agent corpus only;
-  team-owned core E2E tests in `.maestro/flows/` are intentionally excluded)
+  `<sibling>/test-app/` adjacent to the cwd (Section B)
 - `.rn-agent/skeleton.yaml` in the same locations (Section C)
 - Plugin commands (Section D — only populated when running inside the plugin repo)
 

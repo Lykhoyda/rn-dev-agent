@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 import type {
   NavGraph,
@@ -16,7 +16,9 @@ import type {
   RawRoute,
 } from './types.js';
 
-const GRAPH_FILENAME = '.rn-nav-graph.yaml';
+const RN_AGENT_DIR = '.rn-agent';
+const GRAPH_FILENAME = 'nav-graph.yaml';
+const LEGACY_GRAPH_FILENAME = '.rn-nav-graph.yaml';
 
 function isRnProject(dir: string): boolean {
   const pkgPath = join(dir, 'package.json');
@@ -232,13 +234,21 @@ function getProjectSlug(projectRoot: string): string {
 }
 
 export function getGraphPath(projectRoot: string): string {
-  return join(projectRoot, GRAPH_FILENAME);
+  return join(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
 }
 
 export function readGraph(projectRoot: string): NavGraph | null {
   try {
-    const filePath = getGraphPath(projectRoot);
-    if (!existsSync(filePath)) return null;
+    let filePath = getGraphPath(projectRoot);
+    if (!existsSync(filePath)) {
+      // D1208 one-shot migration: fall back to legacy <root>/.rn-nav-graph.yaml.
+      // Next writeGraph() call lays the data down at the new path; legacy file
+      // is left in place for the user to delete (deleting it from a read path
+      // would risk data loss if the read succeeded but the next write failed).
+      const legacyPath = join(projectRoot, LEGACY_GRAPH_FILENAME);
+      if (!existsSync(legacyPath)) return null;
+      filePath = legacyPath;
+    }
     const raw = yamlParse(readFileSync(filePath, 'utf-8')) as { nav_graph?: NavGraph } | null;
     if (!raw || !raw.nav_graph) return null;
     hydrateStrikesFromGraph(raw.nav_graph);
@@ -250,6 +260,7 @@ export function readGraph(projectRoot: string): NavGraph | null {
 
 export function writeGraph(projectRoot: string, graph: NavGraph): string {
   const filePath = getGraphPath(projectRoot);
+  mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml = yamlStringify({ nav_graph: graph }, { lineWidth: 120 });
   writeFileSync(tmpPath, yaml, 'utf-8');
