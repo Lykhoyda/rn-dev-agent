@@ -10,15 +10,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
-test('B145: forEachRootFiber helper is defined in the IIFE', () => {
+test('B145 + Issue #126: forEachRootFiber helper is defined in the IIFE', () => {
   assert.match(INJECTED_HELPERS, /function forEachRootFiber\(cb\)/, 'forEachRootFiber helper missing');
-  // Iterates renderers 1..5 with try/catch per renderer
+  // Issue #126: cap bumped from 5 → 20 with early-exit-after-3-empty.
   const slice = INJECTED_HELPERS.split('function forEachRootFiber')[1]?.split('function ')[0] ?? '';
-  assert.match(slice, /for \(var ri = 1; ri <= 5; ri\+\+\)/, 'forEachRootFiber missing renderer loop');
+  assert.match(slice, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'forEachRootFiber missing renderer loop');
   assert.match(slice, /try \{/, 'forEachRootFiber missing try guard');
   assert.match(slice, /catch \(_\)/, 'forEachRootFiber missing per-renderer catch');
   // Short-circuits on truthy callback return
   assert.match(slice, /if \(result\) return result;/, 'forEachRootFiber short-circuit missing');
+  // Cap is 20
+  assert.match(INJECTED_HELPERS, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
 });
 
 test('B145: getStoreState redux fiber walk uses forEachRootFiber (not single-renderer)', () => {

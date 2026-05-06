@@ -324,6 +324,6 @@ test('source guard: getTree filter checks accessibilityLabel', () => {
   assert.match(INJECTED_HELPERS, /matchesName \|\| matchesTestID \|\| matchesLabel/);
 });
 
-test('source guard: helpers version bumped to 20', () => {
-  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__ = 20;/);
+test('source guard: helpers version bumped to 21', () => {
+  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__ = 21;/);
 });

@@ -160,26 +160,45 @@ test('B143: root without .current is filtered out', () => {
   assert.equal(result[0].fiber.tag, 'real');
 });
 
-test('B143 A3 (Gemini 80): per-renderer throw does NOT poison the union (TS mirror contract)', () => {
-  // Current TS mirror does bubble, but the injected IIFE now has try/catch
-  // guards around each renderer access (see regression guard below).
-  // If the TS mirror is hardened later, update this test to assert partial
-  // results rather than throw.
+test('B143 A3 (Gemini 80) + Issue #126: per-renderer throw does NOT poison the union — TS mirror hardened', () => {
+  // Issue #126: TS mirror was hardened to add per-renderer try/catch
+  // (matching the IIFE behavior, B143 A3). A throwing renderer is treated
+  // as empty for that ID and counts toward the early-exit-after-3-empty
+  // streak. This test now asserts partial-results rather than throw.
   const hook = {
     getFiberRoots(ri) {
       if (ri === 2) throw new Error('boom');
+      if (ri === 1) {
+        return {
+          size: 1,
+          values() {
+            let sent = false;
+            return {
+              next() {
+                if (sent) return { done: true, value: undefined };
+                sent = true;
+                return { done: false, value: { current: { tag: 'real' } } };
+              },
+            };
+          },
+        };
+      }
       return null;
     },
   };
-  assert.throws(() => findAllRootFibersForTest(hook), /boom/);
+  const result = findAllRootFibersForTest(hook);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].rendererId, 1);
 });
 
 // ── Regression guard against IIFE/TS-mirror drift ─────────────────────
 
-test('B143: injected helpers contain findAllRootFibers with 1..5 loop', () => {
+test('B143 + Issue #126: injected helpers contain findAllRootFibers with MAX_RENDERER_IDS loop', () => {
   const src = INJECTED_HELPERS;
   assert.match(src, /function findAllRootFibers\(\)/, 'findAllRootFibers function missing from injected helpers');
-  assert.match(src, /for \(var ri = 1; ri <= 5; ri\+\+\)/, '1..5 renderer loop missing');
+  // Issue #126: cap bumped from 5 → 20. Loop condition uses the constant.
+  assert.match(src, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'renderer loop missing or no longer uses MAX_RENDERER_IDS constant');
+  assert.match(src, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
   assert.match(src, /hook\.getFiberRoots\(ri\)/, 'hook.getFiberRoots(ri) iteration missing');
   assert.match(src, /out\.push\(\{ rendererId: ri, fiber: v\.value\.current \}\)/, 'out.push signature drifted from TS mirror');
 });
