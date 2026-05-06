@@ -159,6 +159,9 @@ export function parseM7Header(yamlText, fallbackId) {
             else if (key === 'params') {
                 meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
             }
+            else if (key === 'produces') {
+                meta.produces = parseProducesMap(raw);
+            }
             else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
                 meta[key] = raw;
             }
@@ -187,7 +190,40 @@ export function parseM7Header(yamlText, fallbackId) {
         appId: meta.appId,
         createdAt: meta.createdAt,
         author: meta.author,
+        produces: meta.produces,
     };
+}
+/**
+ * D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
+ * Values are typed as boolean (`true`/`false`), number (digits + optional
+ * dot + optional sign), or string (everything else, with surrounding
+ * single/double quotes stripped). Returns undefined when the input is
+ * empty or unparseable so the caller can omit the field rather than
+ * carry a half-parsed object. Single-line only; commas + newlines
+ * inside values are not supported in v1.
+ */
+function parseProducesMap(raw) {
+    const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+    if (!inner)
+        return undefined;
+    const result = {};
+    for (const part of inner.split(',')) {
+        const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
+        if (!kv)
+            continue;
+        const key = kv[1];
+        const valueRaw = kv[2].trim();
+        if (/^(true|false)$/i.test(valueRaw)) {
+            result[key] = /^true$/i.test(valueRaw);
+        }
+        else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
+            result[key] = Number(valueRaw);
+        }
+        else {
+            result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
+        }
+    }
+    return Object.keys(result).length ? result : undefined;
 }
 /**
  * Serialize an M7Metadata object as YAML comment lines. Output is
@@ -214,5 +250,15 @@ export function serializeM7Header(metadata) {
         lines.push(`# createdAt: ${stripNewlines(metadata.createdAt)}`);
     if (metadata.author)
         lines.push(`# author: ${stripNewlines(metadata.author)}`);
+    if (metadata.produces && Object.keys(metadata.produces).length > 0) {
+        const pairs = Object.keys(metadata.produces)
+            .sort()
+            .map((k) => {
+            const v = metadata.produces[k];
+            const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+            return `${k}: ${formatted}`;
+        });
+        lines.push(`# produces: { ${pairs.join(', ')} }`);
+    }
     return lines.join('\n');
 }
