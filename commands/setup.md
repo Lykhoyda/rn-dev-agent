@@ -32,77 +32,95 @@ The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEM
    - **CLAUDE.md exists, marker present**: skip with a note ("already injected; re-run after editing CLAUDE-MD-TEMPLATE if you want to refresh").
 4. Show the diff before writing. After writing, confirm with the user.
 
-### B. NavigationContainer ref instrumentation
+### B. NavigationContainer ref — fiber-walk-first, bridge fallback
 
-`cdp_navigate` and `cdp_nav_graph go` need `globalThis.__NAV_REF__` set in dev mode. Without it, those tools fail with "Navigation ref not found" and agents have to fall back to `device_deeplink` (which has its own caveats — see #61 verification fidelity).
+`cdp_navigate` and `cdp_nav_graph go` need a navigation ref to drive. The plugin's CDP-injected helpers (`__RN_AGENT.findNavRef()`) walk three globals + the React fiber tree + the `useNavigationContainerRef()` hooks chain and find the ref automatically for any project using React Navigation's blessed `<NavigationContainer ref={navigationRef}>` pattern. **Most apps need NO source mutation.** This step probes whether instrumentation is required and, if it is, prefers the dev-bridge pattern (1 call site in `App.tsx`) over the prior surgical patches.
 
-1. Search the project for `NavigationContainer`:
-   ```bash
-   grep -rln "NavigationContainer" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" . 2>/dev/null | grep -vE "node_modules|\.expo|build|dist"
-   ```
-2. **No NavigationContainer found**: skip with a note. Likely Expo Router (uses `Slot`/`Stack` from `expo-router` which does its own ref management) — `cdp_navigate` should still work via Expo Router's nav state hook.
-3. **Exactly one NavigationContainer**: read the file and detect which of the three setup shapes it has, then patch ONLY what's missing:
-   - **Shape 1: existing `createNavigationContainerRef()` at module scope (preferred — React Navigation's blessed pattern).** Look for `import { createNavigationContainerRef }` and a top-level `const navigationRef = createNavigationContainerRef<...>()`. If present, only inject the `onReady` handler:
-     ```typescript
-     <NavigationContainer
-       ref={navigationRef}
-       onReady={() => {
-         if (__DEV__) globalThis.__NAV_REF__ = navigationRef.current;
-       }}
-     >
-     ```
-     If the user already has an `onReady` handler, AUGMENT it (add the `if (__DEV__)` line) rather than replace it.
-   - **Shape 2: existing `useRef` inside a function component.** Look for `const navigationRef = useRef<NavigationContainerRef<...>>(null)`. Add or augment the `onReady` handler the same way.
-   - **Shape 3: no navigationRef at all (function-component root).** Add the full snippet:
-     ```typescript
-     // Recommended: createNavigationContainerRef at module scope. Works in
-     // class components too and matches React Navigation's docs.
-     import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
-     
-     export const navigationRef = createNavigationContainerRef<any>();
-     
-     // Inside the component:
-     <NavigationContainer
-       ref={navigationRef}
-       onReady={() => {
-         if (__DEV__) globalThis.__NAV_REF__ = navigationRef.current;
-       }}
-     >
-     ```
-   - **Shape 4: class-component root (rare, legacy apps).** Detect via `class App extends React.Component` or similar. Same module-scope `createNavigationContainerRef()` pattern as Shape 3 — class components can't `useRef` at the top level, so don't suggest the function-component variant.
-4. **Multiple NavigationContainers**: list them, ask which one is the root and instrument that one (skip nested modal/stack containers — they don't need the global ref).
-5. Show the diff before writing.
+#### Step B.1 — Probe (only if Metro + simulator are up)
 
-### C. Zustand store exposure
+If `cdp_status` returned `ok: true` in Phase 1, run a one-shot probe:
+```
+cdp_evaluate("typeof __RN_AGENT?.findNavRef === 'function' ? (__RN_AGENT.findNavRef() ? 'ok' : 'miss') : 'no-helpers'")
+```
+- `'ok'` → fiber walk found the ref. **Skip the rest of Step B with a note**: *"Nav ref auto-discovered via fiber walk; no instrumentation needed."* This is the common case for any project using React Navigation 6+ with `<NavigationContainer ref={…}>`.
+- `'miss'` → helpers loaded but fiber walk found nothing. Continue to Step B.2.
+- `'no-helpers'` → CDP not connected / app not bundled yet. Continue to Step B.2 conservatively.
 
-`cdp_store_state` reads Zustand stores via `globalThis.__ZUSTAND_STORES__`. Without this, only Redux + React Query are auto-detected; Zustand is invisible.
+If Metro / simulator are down (Phase 1 marked them DEFERRED), skip the probe and continue to Step B.2.
+
+#### Step B.2 — Existing instrumentation? Skip (idempotent).
+
+Grep `App.tsx` and the project's app entry candidates for any of:
+- `globalThis.__NAV_REF__` (any assignment form)
+- `__RN_DEV_BRIDGE__` (registration via the dev-bridge)
+- The legacy `onReady` patch shape (`onReady={() => { if (__DEV__) globalThis.__NAV_REF__ = ...`)
+
+If any match exists, skip with a note: *"Nav ref instrumentation already present; leaving in place."* Don't auto-migrate to the bridge pattern (cross-file `navigationRef` exports break under module-scope → hook moves; tracked as a follow-up `/migrate-bridge` story).
+
+#### Step B.3 — Search for `<NavigationContainer>` and propose the bridge pattern.
+
+```bash
+grep -rln "NavigationContainer" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" . 2>/dev/null | grep -vE "node_modules|\.expo|build|dist"
+```
+
+- **Expo Router project** (no `<NavigationContainer>` found, but `app/_layout.tsx` exists with `Stack`/`Slot` from `expo-router`): skip with a note. The fiber walk handles this via React Navigation's internal hooks chain — Step B.1's probe should have returned `'ok'`. If it returned `'miss'`, the project may need the `useDevExpoRouter()` hook (see follow-up issue) — surface that gap rather than mutating `app/_layout.tsx`.
+- **No `NavigationContainer` and no Expo Router**: skip with a note. The plugin's nav tools won't work; user is on a non-React-Navigation router (rare).
+- **Exactly one `NavigationContainer`**: propose the bridge pattern. The user's source change is two lines:
+
+  ```typescript
+  import { getBridge } from './.rn-agent/dev-bridge';
+
+  // Inside the component (or at module scope, alongside the existing ref):
+  getBridge()?.registerNavRef(navigationRef);
+  ```
+
+  No `__DEV__` guard at the call site — `getBridge()` returns null in production and the optional chain is a no-op. The dev-bridge file (shipped by Step D, `.rn-agent/dev-bridge.ts`) handles the `globalThis.__NAV_REF__ = ref` assignment internally, gated by `__DEV__`.
+
+  Three sub-cases by where the existing `navigationRef` lives:
+  - **Module-scope ref** (React Navigation's blessed pattern, most common): add the `getBridge()?.registerNavRef(navigationRef)` line right after the `createNavigationContainerRef()` call. Single line, no JSX changes.
+  - **`useRef`-inside-component**: add `getBridge()?.registerNavRef(navigationRef.current)` inside `useEffect(() => { … }, [navigationRef])` so the ref is registered after `<NavigationContainer ref={…}>` populates `navigationRef.current`.
+  - **No ref at all (function-component root)**: propose adding both the `createNavigationContainerRef()` at module scope AND the bridge call. Bigger diff than the other two cases — this is the only case the prior `/setup` was the simpler option, but the bridge form is still 1 import + 1 line of registration.
+
+- **Multiple `NavigationContainer`s**: list them, ask which one is root, propose the bridge call only for that one.
+
+Show the diff before writing.
+
+### C. Zustand store exposure — single bridge call, no auto-managed file
+
+`cdp_store_state` reads Zustand stores via `globalThis.__ZUSTAND_STORES__`. Unlike navigation refs, Zustand stores have no fiber-walkable signal — there's no equivalent of "auto-discover via fiber tree." So this step always proposes some user code change when Zustand is present, but the change is now a single bridge call instead of a per-store global assignment.
 
 1. Search for Zustand-style store creation:
    ```bash
    grep -rlnE "from ['\"]zustand['\"]" --include="*.ts" --include="*.tsx" . 2>/dev/null | grep -vE "node_modules|\.expo|build|dist|\.next"
    ```
 2. **No Zustand found**: skip with a note.
-3. **Stores found**: collect the exported hook names (typically `useFooStore`, sometimes raw `fooStore`). Find the project's app entry point (`App.tsx`, `App.ts`, `index.ts`, `app/_layout.tsx` for Expo Router). Propose adding to that file:
+3. **Existing instrumentation? Skip (idempotent).** Grep the app entry for `globalThis.__ZUSTAND_STORES__` or `getBridge()?.registerStores`. If present, leave it alone.
+4. **Stores found, no instrumentation yet**: collect the exported hook names (typically `useFooStore`, sometimes raw `fooStore`). Propose adding to the app entry (`App.tsx`, `App.ts`, `index.ts`, `app/_layout.tsx` for Expo Router):
+
    ```typescript
+   import { getBridge } from './.rn-agent/dev-bridge';
    import { useFooStore } from './stores/foo';
    import { useBarStore } from './stores/bar';
-   // ... import every Zustand store
-   
-   if (__DEV__) {
-     globalThis.__ZUSTAND_STORES__ = {
-       foo: useFooStore,
-       bar: useBarStore,
-       // ... map each store to a short name
-     };
-   }
+
+   getBridge()?.registerStores({
+     foo: useFooStore,
+     bar: useBarStore,
+   });
    ```
-4. Show the diff before writing.
+
+   No `__DEV__` guard at the call site — the bridge handles it internally and `getBridge()` returns null in production (the optional chain is a no-op).
+
+   **Why a single call over an auto-generated `.rn-agent/stores.ts`:** an auto-managed file inside `.rn-agent/` would import from `../src/stores/...`, which is a dependency direction that violates D1208's spirit (the auto-generated artifact reaches outside its own folder) and breaks silently when the user moves a store file. Keeping the registration in the user's `App.tsx` puts the store imports next to the rest of their app entry and the IDE catches renames immediately.
+
+5. Show the diff before writing.
 
 ### D. `.rn-agent/` directory scaffold
 
 The plugin reads and writes only inside `<cwd>/.rn-agent/`. Without this directory, every plugin tool that persists state (action recordings, learned flows, nav-graph cache, sidecars) fails with `ENOENT` on first use. This step creates it from a versioned template.
 
-The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
+The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
+
+`dev-bridge.ts` and `globals.d.ts` are the user-facing surface for Steps B + C — `dev-bridge.ts` exposes `getBridge()?.registerNavRef(...)` / `registerStores(...)` (DEV-only via `__DEV__` guard) and `globals.d.ts` declares the global types so user code can call them without casts.
 
 1. **Detect existing scaffold.** Treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
    - `.rn-agent/.scaffold-version` exists (canonical marker)
@@ -134,6 +152,8 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 4. **Post-write assertion.** Confirm `<cwd>/.rn-agent/.gitignore` and `<cwd>/.rn-agent/.scaffold-version` both exist. If the copy silently dropped them (some `cp` invocations skip dotfiles), surface the failure.
 
 5. **Bootstrap nudge.** After successful scaffold, tell the user that `skeleton.yaml` ships with `appId: REPLACE_ME` and an empty `screens: {}` — they should set `appId` to their bundle ID (from `app.json` or `Info.plist`) and populate `screens:` by running `cdp_component_tree({ filter: '...' })` on each route while the app is running, then copying the testIDs into the file. (`/rn-dev-agent:nav-graph scan` populates `nav-graph.yaml`, not `skeleton.yaml` — the two artifacts are distinct.)
+
+6. **tsconfig.include touch-up.** `dev-bridge.ts` and `globals.d.ts` live outside the user's typical `src/` root. Read `<cwd>/tsconfig.json` (if present) and check the `include` array. If `.rn-agent/` is not covered (typical tsconfig has `"include": ["src", ...]`), propose adding `".rn-agent/dev-bridge.ts"` and `".rn-agent/globals.d.ts"` to the include array so TypeScript type-checks the bridge file and picks up the global type augmentation in `globals.d.ts`. Without this step, `getBridge()?.registerNavRef(...)` calls compile but the global types are lost and IDE autocomplete on `globalThis.__NAV_REF__` etc. doesn't work. Show the diff; ask before writing.
 
 ### E. Verification
 

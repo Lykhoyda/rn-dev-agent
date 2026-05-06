@@ -229,19 +229,31 @@ This is a known plugin issue — see [Lykhoyda/rn-dev-agent#60](https://github.c
 
 ### Required Dev Setup for Full Tool Coverage
 
+Most projects need **zero source mutation** — the plugin's CDP-injected helpers walk the React fiber tree to find `<NavigationContainer>`'s ref and the React Navigation hooks chain automatically. The table below lists what each tool needs to work; rows marked "auto-discovered" require no user code.
+
 | Tool | Requires |
 |------|----------|
-| `cdp_navigate` / `cdp_nav_graph go` | `globalThis.__NAV_REF__ = navigationRef.current` set in dev only (typically in `NavigationContainer.onReady`) |
-| `cdp_store_state` (Zustand) | `global.__ZUSTAND_STORES__ = { store1, store2 }` in `__DEV__` |
-| `cdp_store_state` (Jotai) | `global.__JOTAI_STORE__` + `global.__JOTAI_ATOMS__` in `__DEV__` |
+| `cdp_navigate` / `cdp_nav_graph go` | **Auto-discovered via fiber walk** for any project using `<NavigationContainer ref={…}>` (React Navigation 6+) or Expo Router's `Stack`/`Slot`. **Fallback**: if the fiber walk misses (rare; class-component roots, exotic patterns), call `getBridge()?.registerNavRef(navigationRef)` once after creating the ref. The bridge lives at `.rn-agent/dev-bridge.ts` (shipped by `/rn-dev-agent:setup`). |
+| `cdp_store_state` (Zustand) | One call from your app entry: `getBridge()?.registerStores({ name1: useStore1, name2: useStore2 })`. No fiber-walkable signal exists for Zustand stores, so explicit registration is required. |
+| `cdp_store_state` (Jotai) | `global.__JOTAI_STORE__` + `global.__JOTAI_ATOMS__` in `__DEV__` (manual; bridge support pending) |
 | `cdp_store_state` (Redux) | Auto-detected via Provider |
 | `cdp_store_state` (React Query) | Auto-detected via QueryClient |
 | `device_deeplink` (custom scheme) | App registers the URL scheme in `app.json` / native configs |
 | MMKV read/write via `cdp_evaluate` | `react-native-mmkv@^3` (Nitro-based) OR legacy shim exposed on global |
 
-If `cdp_navigate` fails with "Navigation ref not found," add the one-line assignment
-in your `NavigationContainer.onReady` handler. Do **not** commit this — it's
-dev-only instrumentation.
+**Bridge pattern (`.rn-agent/dev-bridge.ts`):** the file is committed in the user's repo at `<project>/.rn-agent/dev-bridge.ts` and exposes a tiny API gated by `__DEV__`:
+
+```ts
+import { getBridge } from './.rn-agent/dev-bridge';
+
+const navigationRef = createNavigationContainerRef<RootStackParams>();
+getBridge()?.registerNavRef(navigationRef);
+getBridge()?.registerStores({ auth: useAuthStore, cart: useCartStore });
+```
+
+`getBridge()` returns null in production, so the optional-chain is a no-op — every assignment is tree-shaken from the release bundle. No `__DEV__` guards needed at the call site.
+
+If `cdp_navigate` fails with "Navigation ref not found" despite the fiber walk, the most likely causes are: (a) the app isn't fully bundled yet — wait for `cdp_status.helpersInjected: true`; (b) class-component root that doesn't expose a ref — use the bridge `registerNavRef` fallback; (c) a non-React-Navigation router — out of scope for this plugin's current tools.
 
 ### Critical Timing Rules
 
