@@ -36,6 +36,12 @@ export interface GenerateOpts {
   tags?: string[];
   mutates?: boolean;
   status?: 'active' | 'deprecated' | 'experimental';
+  // D1209 — state postconditions this action establishes when it runs
+  // cleanly. Flat map of primitive values (string | number | boolean).
+  // Emitted as `# produces: { key: value, ... }` so single-line parsers
+  // can pick it up. Values containing commas or newlines are not
+  // supported in v1.
+  produces?: Record<string, string | number | boolean>;
 }
 
 type MetaPair = [string, string];
@@ -50,6 +56,16 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
   }
   if (typeof opts.mutates === 'boolean') out.push(['mutates', String(opts.mutates)]);
   if (opts.status) out.push(['status', stripNewlines(opts.status)]);
+  if (opts.produces && Object.keys(opts.produces).length > 0) {
+    const pairs = Object.keys(opts.produces)
+      .sort()
+      .map((k) => {
+        const v = opts.produces![k];
+        const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+        return `${k}: ${formatted}`;
+      });
+    out.push(['produces', `{ ${pairs.join(', ')} }`]);
+  }
   return out;
 }
 
