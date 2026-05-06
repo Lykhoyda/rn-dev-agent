@@ -85,7 +85,7 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | Command | Purpose |
 |---------|---------|
 | `/rn-dev-agent:setup` | Inject CLAUDE.md tool-routing rules + nav-ref + Zustand exposure |
-| `/rn-dev-agent:doctor` | 11-row diagnostic table — Node, CDP, agent-device, maestro-runner, simulators, Metro, helpers freshness |
+| `/rn-dev-agent:doctor` | 12-row diagnostic table — Node, CDP, agent-device, maestro-runner, simulators, Metro, helpers freshness, plugin version |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
