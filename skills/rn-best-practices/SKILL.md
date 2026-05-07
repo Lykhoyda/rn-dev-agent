@@ -1,183 +1,189 @@
 ---
 name: rn-best-practices
 user-invocable: false
+paths:
+  - "**/*.{ts,tsx,js,jsx}"
+  - "**/package.json"
 description: >
-  React Native and Expo best practices for building performant mobile apps. Use
-  when reviewing React Native code, designing component architecture, implementing
-  features, optimizing list performance, implementing animations, working with
-  native modules, checking for performance issues, auditing UI components,
-  reviewing state management, or checking production readiness. Triggers on
-  "review best practices", "check performance", "optimize renders", "review list
-  rendering", "check animation patterns", "review state management", "audit UI",
-  "check for crashes", "review for production readiness", "check React Native
-  conventions", "performance audit".
+  React Native and Expo best practices. Routes through rules.index.json (118
+  rules: 70 from vercel-labs/agent-skills react-best-practices + 36 from
+  react-native-skills + 8 from composition-patterns + 4 rn-dev-agent custom).
+  Use when reviewing React Native code, designing component architecture,
+  implementing features, optimizing list performance, implementing animations,
+  designing component APIs, working with navigation, auditing UI components,
+  reviewing state management, checking production readiness. Triggers on
+  "review best practices", "check performance", "optimize renders", "review
+  list rendering", "check animation patterns", "review state management",
+  "audit UI", "review composition", "review for production readiness", "check
+  React Native conventions", "performance audit".
 ---
 
-# React Native Best Practice Rules
+# React Native Best Practices — Procedural Adapter
 
-43 rules from [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (MIT License)
-plus 4 rn-dev-agent rules discovered through story testing.
-Each rule has full incorrect/correct code examples in `references/<rule-name>.md`.
+This skill is the **routing surface** between Claude and the vendored
+[vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)
+content under `third_party/vercel-labs/agent-skills/`. **Don't read the 118
+rule files upfront.** Use the procedures below to look up only the rules
+that apply to the code you're about to write or review.
 
----
+## Index
 
-## Rule Index
+The routing surface is `skills/rn-best-practices/rules.index.json`. Each entry:
+```json
+{ "id": "react-native-skills/list-performance-virtualize",
+  "title": "Use a list virtualizer for any list",
+  "category": "react-native-skills",
+  "platform": "RN",
+  "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
+  "triggers": ["FlatList", "FlashList", "ScrollView"],
+  "upstream_path": "third_party/vercel-labs/agent-skills/skills/.../list-performance-virtualize.md",
+  "checkable": true | false,
+  "checkerRule": "no-touchable-new-code" | null
+}
+```
 
-Scan this table first. Load the corresponding reference file for any rule
-category present in the code under review.
+Query with `jq` or read directly. Filter by `platform: "RN"` for React Native
+work; `platform: "both"` for composition rules; `platform: "web"` only for
+web React when applicable.
 
-| ID | Rule | Impact | Reference File |
-|----|------|--------|----------------|
-| 1.1 | Never use `&&` with potentially falsy values | CRITICAL | `references/rendering-no-falsy-and.md` |
-| 1.2 | Wrap strings in `<Text>` components | CRITICAL | `references/rendering-text-in-text.md` |
-| 2.1 | Avoid inline objects in renderItem | HIGH | `references/list-perf-inline-objects.md` |
-| 2.2 | Hoist callbacks to the root of lists | HIGH | `references/list-performance-callbacks.md` |
-| 2.3 | Keep list items lightweight | HIGH | `references/list-perf-expensive-item.md` |
-| 2.4 | Stable object references before lists | CRITICAL | `references/list-perf-fn-refs.md` |
-| 2.5 | Pass primitives to list items for memoization | HIGH | `references/list-performance-item-memo.md` |
-| 2.6 | Use a list virtualizer for any list | HIGH | `references/list-performance-virtualize.md` |
-| 2.7 | Use compressed images in lists | HIGH | `references/list-performance-images.md` |
-| 2.8 | Use item types for heterogeneous lists | HIGH | `references/list-performance-item-types.md` |
-| 3.1 | Animate transform and opacity only | HIGH | `references/animation-gpu-properties.md` |
-| 3.2 | Prefer useDerivedValue over useAnimatedReaction | MEDIUM | `references/animation-derived-value.md` |
-| 3.3 | Use GestureDetector for animated press states | MEDIUM | `references/anim-gesture-press.md` |
-| 4.1 | Never track scroll position in useState | HIGH | `references/scroll-position-no-state.md` |
-| 5.1 | Use native navigators (native-stack, native tabs) | HIGH | `references/navigation-native-navigators.md` |
-| 5.2 | Avoid `presentation: 'transparentModal'` on Bridgeless + rn-screens | HIGH | `references/navigation-transparent-modal.md` |
-| 6.1 | Minimize state variables; derive values | MEDIUM | `references/react-state-minimize.md` |
-| 6.2 | Use fallback state instead of initialState | MEDIUM | `references/react-state-fallback.md` |
-| 6.3 | Use dispatch updaters for state depending on current value | MEDIUM | `references/react-state-dispatcher.md` |
-| 7.1 | State must represent ground truth | HIGH | `references/state-ground-truth.md` |
-| 8.1 | Destructure functions early in render (React Compiler) | HIGH | `references/compiler-destructure-fns.md` |
-| 8.2 | Use .get()/.set() for Reanimated shared values | LOW | `references/compiler-reanimated-shared.md` |
-| 9.1 | Measure views with onLayout, not measure() | MEDIUM | `references/ui-measure-views.md` |
-| 9.2 | Modern styling: borderCurve, gap, boxShadow | MEDIUM | `references/ui-styling.md` |
-| 9.3 | Use contentInset for dynamic ScrollView spacing | LOW | `references/ui-scrollview-content-inset.md` |
-| 9.4 | Use contentInsetAdjustmentBehavior for safe areas | MEDIUM | `references/ui-safe-area-scroll.md` |
-| 9.5 | Use expo-image for all images | HIGH | `references/ui-expo-image.md` |
-| 9.6 | Use Galeria for image galleries and lightbox | MEDIUM | `references/ui-image-gallery.md` |
-| 9.7 | Use native menus (zeego) for dropdowns | HIGH | `references/ui-menus.md` |
-| 9.8 | Use native modals over JS bottom sheets | HIGH | `references/ui-native-modals.md` |
-| 9.9 | Use Pressable instead of TouchableOpacity | LOW | `references/ui-pressable.md` |
-| 10.1 | Use compound components over polymorphic children | MEDIUM | `references/design-compound-components.md` |
-| 11.1 | Install native dependencies in app directory | CRITICAL | `references/monorepo-native-deps-in-app.md` |
-| 11.2 | Use single dependency versions across monorepo | MEDIUM | `references/monorepo-single-deps.md` |
-| 12.1 | Import from design system folder | LOW | `references/imports-design-system-folder.md` |
-| 13.1 | Hoist Intl formatter creation | LOW | `references/js-hoist-intl.md` |
-| 14.1 | Load fonts natively at build time | LOW | `references/fonts-config-plugin.md` |
-| 15.1 | Use reactive query hooks, not imperative cache reads | HIGH | `references/query-cache-reactive.md` |
-| 15.2 | Avoid Reanimated layout animations in virtualized lists | HIGH | `references/reanimated-in-lists.md` |
-| 15.3 | Consume theme hooks inside list items, not in renderItem | HIGH | `references/theme-memoization-lists.md` |
-| 16.1 | Don't define components inside components | CRITICAL | `references/rerender-no-inline-components.md` |
-| 16.2 | Use lazy state initialization for expensive values | HIGH | `references/rerender-lazy-state-init.md` |
-| 16.3 | Use Promise.all() for independent async operations | CRITICAL | `references/async-parallel.md` |
-| 16.4 | Check cheap conditions before async work | HIGH | `references/async-cheap-condition-first.md` |
-| 16.5 | Initialize app once at module level, not per mount | HIGH | `references/init-once-module-level.md` |
-| 16.6 | Use Set/Map for O(1) lookups | MEDIUM | `references/js-set-map-lookups.md` |
-| 16.7 | Build index Maps for repeated .find() lookups | MEDIUM | `references/js-index-maps.md` |
+## Always check (inline, regardless of category)
+
+These cause **runtime crashes**. Check on every review pass. Do not delegate.
+
+### Falsy-`&&` rendering crash
+`{x && <Comp />}` where `x` could be `0`, `""`, or `NaN` renders the falsy
+value as a string in RN. **Bad:** `{count && <Badge />}` (renders "0").
+**Good:** `{count > 0 && <Badge />}` or ternary. Full rule:
+`third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md`
+
+### Bare strings outside `<Text>`
+A string as a direct child of `<View>` is a runtime crash on RN.
+**Bad:** `<View>Hello</View>`. **Good:** `<View><Text>Hello</Text></View>`.
+Full rule: `.../rules/rendering-text-in-text-component.md`
+
+### Components defined inside components
+Defining `const Child = () => …` inside `function Parent()` creates a new
+component type every render. RN remounts it, destroying state, native views,
+animations, scroll position, focus. **Bad:** inline function components inside
+parents. **Good:** define outside, pass data via props. Full rule (web/RN):
+`.../skills/react-best-practices/rules/rerender-no-inline-components.md`
 
 ---
 
-## CRITICAL Rules (inline — always check these)
+## Procedural lookup — query the index BEFORE writing each category
 
-These cause **runtime crashes**. Check regardless of review scope.
+Use these procedures whenever you're about to write or review code in the
+listed scope. The procedure tells you which `rules.index.json` entries to
+load; you then read only the matched `upstream_path` files.
 
-### 1.1 Never Use `&&` with Potentially Falsy Values
+### Before writing list rendering (FlatList, FlashList, SectionList, ScrollView+map)
 
-`{value && <Component />}` when `value` could be `0` or `""` crashes React Native.
-These are falsy but JSX-renderable — RN renders them as text outside `<Text>`.
+1. From `rules.index.json`, select entries where `id` starts with
+   `react-native-skills/list-performance-` (8 rules).
+2. Read every entry with `severity: CRITICAL` or `HIGH` (typically 5-6 rules).
+3. Apply rule recommendations to the code under design/review.
+4. Cite rule ID in code comments only when the choice is non-obvious
+   (e.g., why `keyExtractor` returns a non-id field).
 
-**Bad:** `{count && <Badge count={count} />}` — renders "0" when count is 0
-**Good:** `{count > 0 && <Badge count={count} />}` or `{count ? <Badge /> : null}`
+Most common applicable rules: `list-performance-virtualize`,
+`list-performance-inline-objects`, `list-performance-callbacks`,
+`list-performance-item-memo`.
 
-Lint rule: enable `react/jsx-no-leaked-render`.
-Full examples: `references/rendering-no-falsy-and.md`
+### Before writing animations (Reanimated, react-native-gesture-handler, Animated)
 
-### 1.2 Wrap All Strings in `<Text>` Components
+1. Select entries where `id` starts with `react-native-skills/animation-`
+   (3 rules) OR `react-native-skills/react-compiler-reanimated-`.
+2. Read every CRITICAL/HIGH rule.
+3. Common pitfalls: animating layout props (`width`, `height`, `top`) instead
+   of GPU-friendly `transform`/`opacity`; `useAnimatedReaction` for derived
+   values where `useDerivedValue` is faster.
 
-A string as a direct child of `<View>` causes a runtime crash.
+### Before writing data fetching / async flow (useEffect+fetch, React Query, SWR, parallel awaits)
 
-**Bad:** `<View>Hello, {name}!</View>`
-**Good:** `<View><Text>Hello, {name}!</Text></View>`
+1. Select entries where `id` starts with `react-best-practices/async-` OR
+   contains `query-cache` (custom rule).
+2. Read every CRITICAL/HIGH rule.
+3. Common pitfalls: sequential `await` on independent calls (use
+   `Promise.all`); imperative cache reads (use reactive query hooks).
 
-Full examples: `references/rendering-text-in-text.md`
+### Before designing component APIs (boolean props, compound vs polymorphic, ref forwarding)
 
-### 16.1 Don't Define Components Inside Components
+1. Select entries where `category: "composition-patterns"` (8 rules) OR
+   `id` ends with `compound-components` (1 RN rule).
+2. Read every CRITICAL/HIGH rule.
+3. Common pitfalls: 5+ boolean props on one component (use compound
+   components); `forwardRef` in React 19 code (just receive `ref` as a prop);
+   render-props where `children` composition would work.
 
-Defining a component inside another creates a new type every render — React remounts it,
-destroying state, native views, and animations.
+### Before writing navigation code (createStackNavigator, Tabs, modal presentation)
 
-**Bad:** `function Parent() { const Child = () => <Text>hi</Text>; return <Child /> }`
-**Good:** Define `Child` outside `Parent` and pass data via props.
+1. Select entries where `id` starts with `react-native-skills/navigation-` OR
+   matches `rn-dev-agent/navigation-*`.
+2. Read every CRITICAL/HIGH rule.
+3. Custom rule alert: on Bridgeless + react-native-screens, `presentation:
+   'transparentModal'` causes routing failures — see
+   `references/rn-dev-agent/navigation-transparent-modal.md`.
 
-Symptoms: TextInput loses focus, animations restart, scroll resets.
-Full examples: `references/rerender-no-inline-components.md`
+### Before writing image/media UI (Image, modals, gallery, safe areas, Pressable)
 
-### 16.3 Use Promise.all() for Independent Async Operations
-
-Sequential `await` on independent calls wastes 2-10x time.
-
-**Bad:** `const a = await fetchA(); const b = await fetchB();`
-**Good:** `const [a, b] = await Promise.all([fetchA(), fetchB()])`
-
-Full examples: `references/async-parallel.md`
-
----
-
-## How to Use This Skill
-
-### During Architecture (Phase 4)
-Scan the rule index. For CRITICAL and HIGH rules relevant to the feature being
-designed, read the full reference file and apply constraints to the blueprint.
-
-### During Review (Phase 6, Pass 4)
-1. Always check CRITICAL rules 1.1 and 1.2 (inline above)
-2. Scan code under review for patterns matching HIGH/MEDIUM/LOW categories
-3. For each match, read the corresponding `references/<rule>.md` file
-4. Report findings with citation: `[RN-2.1] Rule Name — IMPACT`
-
-### During Implementation (Phase 5)
-Consult relevant rules before writing code. E.g., when writing a FlatList,
-read `references/list-performance-virtualize.md` and `references/list-performance-item-memo.md`.
-
----
-
-## Categories by Priority
-
-| Priority | Category | Count | Key Patterns to Scan For |
-|----------|----------|-------|--------------------------|
-| 1 | Core Rendering | 2 | `&&` conditionals, bare strings in Views |
-| 2 | List Performance | 8 | FlatList, ScrollView+map, renderItem, inline objects |
-| 3 | Animation | 3 | Reanimated, useSharedValue, Animated, width/height animation |
-| 4 | Scroll | 1 | useState with scroll position, onScroll |
-| 5 | Navigation | 2 | createStackNavigator, JS-based tabs, `transparentModal` on Bridgeless |
-| 6 | React State | 3 | useState, derived state, initialState props |
-| 7 | State Architecture | 1 | shared values storing visuals instead of state |
-| 8 | React Compiler | 2 | .value on shared values, dotting into hook returns |
-| 9 | User Interface | 9 | Image, TouchableOpacity, Modal, SafeAreaView, measure() |
-| 10 | Design System | 1 | polymorphic children, string children on non-Text |
-| 11 | Monorepo | 2 | native deps, version conflicts |
-| 12 | Third-Party Deps | 1 | direct imports from node_modules |
-| 13 | JavaScript | 1 | Intl formatters in render |
-| 14 | Fonts | 1 | useFonts, Font.loadAsync |
+1. Select entries where `id` starts with `react-native-skills/ui-` (9 rules).
+2. Read every CRITICAL/HIGH rule, plus `ui-pressable` even when LOW (it's a
+   convention enforcement, not a perf issue).
+3. Common pitfalls: `Image` from react-native (use `expo-image`); JS-rendered
+   bottom sheets (use native modals); `Touchable*` in new code.
 
 ---
 
-## Common Rationalizations
+## rn-dev-agent custom rules
 
-During architecture design and code review, agents routinely dismiss best-practice rules as "premature."
+These four rules are NOT in the upstream Vercel set — they were discovered
+through rn-dev-agent story testing on Bridgeless RN 0.76.x. They survive
+every upstream sync at `references/rn-dev-agent/`:
+
+| File | Trigger context |
+|---|---|
+| `references/rn-dev-agent/navigation-transparent-modal.md` | Bridgeless + react-native-screens routing |
+| `references/rn-dev-agent/query-cache-reactive.md` | React Query — imperative reads |
+| `references/rn-dev-agent/reanimated-in-lists.md` | Reanimated layout animations inside virtualized lists |
+| `references/rn-dev-agent/theme-memoization-lists.md` | Theme hooks consumed inside `renderItem` |
+
+These also appear in `rules.index.json` under `category: "rn-dev-agent"`.
+
+---
+
+## Verification surface (where the deterministic checks live)
+
+A subset of rules has automated grep checking via `scripts/check-vercel-rules.mjs`
+running as a `PostToolUse` hook on every `Edit | MultiEdit | Write` against
+`.tsx`/`.jsx`/`.ts`/`.js` files. Currently 3 rules are `checkable: true` in
+the index:
+
+- `react-native-skills/ui-pressable` → `no-touchable-new-code`
+- `react-native-skills/list-performance-inline-objects` → `no-inline-renderitem-literals`
+- `react-native-skills/rendering-no-falsy-and` → `no-falsy-jsx-and`
+
+Violations surface as `additionalContext` injected after the edit — Claude
+sees them but they don't block the edit. Block-on-violation behavior lives
+in `--ci` mode (used by the pre-ship-checker integration), not the live
+edit loop.
+
+For manual full-project audits: `/check-vercel-rules` slash command.
+
+---
+
+## Common rationalizations (do not accept these from yourself)
 
 | Excuse | Reality |
 |--------|---------|
 | "It's just a 10-item list, I don't need FlashList" | Apps grow. Today's 10 items become tomorrow's 1000. Use FlashList from the start — cost is near-zero, upgrade later is painful. |
-| "Inline arrow functions in renderItem are fine for this case" | They cause every item to re-render on every parent render. Use `useCallback` — it's one extra line. |
-| "The && pattern is clear enough here" | `items.length && <Content/>` renders "0" when items is []. Always use ternary or `!!`: `items.length > 0 ? <Content/> : null`. This is a crash vector. |
-| "I'll handle SafeAreaView later" | Later never comes. Every screen needs safe-area handling from day one — it's not cosmetic, it affects hit targets. |
-| "The user asked for a simple feature — skip the rule review" | Simple features ship. Bad patterns become codebase conventions. Review against the rules at Phase 4 (Architecture) AND Phase 6 (Review). |
-| "I'll use `Touchable*` everywhere — it's familiar" | `Touchable*` is deprecated. Use `Pressable` — it has built-in pressed/hovered states and is the supported API. |
+| "Inline arrow functions in renderItem are fine for this case" | Every parent re-render produces a new function reference; every list item re-renders. Use `useCallback` — one extra line. |
+| "The `&&` pattern is clear enough here" | `items.length && <Content/>` renders "0" when items is `[]`. Always use `items.length > 0 ? … : null`. Crash vector. |
+| "I'll handle SafeAreaView later" | Later never comes. Every screen needs safe-area handling from day one — affects hit targets, not just visuals. |
+| "User asked for a simple feature — skip the rule review" | Simple features ship. Bad patterns become codebase conventions. Always review at Phase 4 (Architecture) and Phase 6 (Review). |
+| "I'll use `Touchable*` everywhere — it's familiar" | `Touchable*` is deprecated. Use `Pressable` — it's the supported API and has built-in pressed/hovered states. |
 | "I need to migrate the whole codebase to follow rule X" | Scope discipline. Apply rules to NEW code and code you're already touching. Don't refactor adjacent files. |
 
-## Red Flags — Stop and Reconsider
+## Red flags — stop and reconsider
 
 - About to approve code with `&&` falsy-value patterns
 - About to approve a list component that isn't `FlashList` or `FlatList` with proper memoization
@@ -185,3 +191,4 @@ During architecture design and code review, agents routinely dismiss best-practi
 - About to approve a screen without `SafeAreaView` or `edges` prop
 - About to approve `Touchable*` in new code (should be `Pressable`)
 - About to approve `Intl.DateTimeFormat` called inside render (hoist to module level)
+- About to approve a component with 5+ boolean props (use compound components)

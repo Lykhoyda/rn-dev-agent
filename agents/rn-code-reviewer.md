@@ -91,37 +91,82 @@ Rate each potential issue 0–100:
 - CLAUDE.md rules are respected
 - No duplicate code that could use an existing utility
 
-### Pass 4: Vercel RN Best Practices
+### Pass 4: Vercel RN Best Practices (index-driven)
 
-Apply the 36 rules from the `rn-best-practices` skill. Consult the rule index
-table in the skill, then **you MUST read** the full `references/<rule>.md` file
-for any rule whose category is detected in the code under review.
+Apply the 118-rule corpus from the `rn-best-practices` skill, routed via
+`skills/rn-best-practices/rules.index.json`. Do NOT read all 118 rule files;
+filter the index to what's applicable to the diff.
 
-**Keyword triggers — if you see these patterns, MUST read the corresponding rules:**
-- `FlatList`, `FlashList`, `LegendList`, `SectionList`, `renderItem` → read ALL `references/list-performance-*.md` + `references/reanimated-in-lists.md` + `references/theme-memoization-lists.md`
-- `Animated`, `Reanimated`, `useSharedValue`, `useAnimatedStyle`, `withTiming` → read `references/animation-*.md`
-- `entering`, `exiting`, `Layout.springify` inside a list → read `references/reanimated-in-lists.md`
-- `useThemeColors`, `useColorScheme`, `useWindowDimensions` passed as prop to list items → read `references/theme-memoization-lists.md`
-- `queryClient.getQueryData`, `useQueryClient` inside `useMemo`/render → read `references/query-cache-reactive.md`
-- `onScroll`, `scrollEventThrottle`, `useAnimatedScrollHandler` → read `references/scroll-position-no-state.md`
-- `createStackNavigator`, `createBottomTabNavigator` → read `references/navigation-native-navigators.md`
-- `useState`, `useReducer`, `useEffect` with setState → read `references/react-state-*.md`
-- `Image`, `TouchableOpacity`, `Modal`, `SafeAreaView`, `measure()` → read relevant `references/ui-*.md`
+**Step 1 — read the deterministic audit findings.** The
+`hooks/vercel-rules-audit.sh` PostToolUse hook ran on every file edit during
+implementation; its violation reports are already in your context as
+`additionalContext`. Surface those as line-level findings with their rule IDs
+verbatim — these are the highest-confidence findings (deterministic AST/grep
+match).
 
-**Scanning order:**
-1. **CRITICAL** (always check — inline in skill): `[RN-1.1]` falsy `&&`, `[RN-1.2]` bare strings
-2. **HIGH** (read reference files when keyword triggers match):
-   `[RN-2.x]` list performance, `[RN-3.1]` animation GPU, `[RN-4.1]` scroll, `[RN-5.1]` navigation
-3. **MEDIUM** (read reference files when keyword triggers match):
-   `[RN-6.x–10.x]` state, compiler, UI, design system
-4. **LOW** (report only if 3+ occurrences AND confidence >= 80):
-   `[RN-11.x–14.x]` monorepo, deps, JS, fonts
+**Step 2 — index-driven lookup for non-checkable rules.** For each changed
+file, scan its imports and JSX patterns to derive an applicable category
+set. Filter by `.id` prefix (file-name based, stable) or by `.triggers`
+(semantic tags from upstream frontmatter):
 
-**Citation format**: `[RN-2.1] Avoid Inline Objects in renderItem — HIGH (confidence 90)`
+```bash
+# By id-prefix — focused category review (e.g., list code under review)
+jq -r '.[] | select(
+    .platform != "web" and
+    (.severity == "CRITICAL" or .severity == "HIGH") and
+    (.id | startswith("react-native-skills/list-performance-"))
+  ) | "\(.id) [\(.severity)] \(.upstream_path)"
+' skills/rn-best-practices/rules.index.json
 
-Do NOT duplicate findings already reported in Pass 2. Pass 2 covers
-rn-dev-agent-specific conventions (testIDs, `__DEV__` guards, Zustand exposure).
-Pass 4 covers the Vercel best-practice rule set.
+# By trigger tags — cross-cutting concerns
+jq -r --argjson tags '["lists","performance","rerender"]' '
+  .[] | select(
+    .platform != "web" and
+    (.severity == "CRITICAL" or .severity == "HIGH") and
+    (.triggers | any(. as $t | $tags | index($t)))
+  ) | "\(.id) [\(.severity)] \(.upstream_path)"
+' skills/rn-best-practices/rules.index.json
+```
+
+Read each matched `upstream_path` and check the changed file against that
+rule. The `confidence` field caps how strongly to flag a finding (only flag
+if rule.confidence ≥ 80 unless violation is unambiguous).
+
+**Tag vocabulary** (top-20): `performance`, `optimization`, `javascript`,
+`rerender`, `state`, `rendering`, `hooks`, `server`, `composition`, `lists`,
+`reanimated`, `async`, `dependencies`, `bundle`, `useEffect`, `rsc`,
+`derived-state`, `arrays`, `architecture`, `animation`.
+
+**`.id` prefixes available** (use as `startswith` filter):
+- `react-native-skills/{list-performance,animation,ui,navigation,react-state,react-compiler,monorepo,scroll-position,fonts,imports,design-system,state}-*`
+- `react-best-practices/{async,bundle,rerender,server,client,rendering,js,advanced}-*`
+- `composition-patterns/{architecture,state,patterns,react19}-*`
+- `rn-dev-agent/*`
+
+**Step 3 — always-check CRITICAL rules.** Three rules have no triggers (they
+catch general patterns). Always scan the diff for:
+- `rendering-no-falsy-and` — `{x.length && <…>}`-style falsy renders
+- `rendering-text-in-text-component` — bare strings in `<View>`
+- `rerender-no-inline-components` — components defined inside components
+
+These are described inline in `skills/rn-best-practices/SKILL.md` for fast
+reference; the full upstream file is at
+`third_party/vercel-labs/agent-skills/skills/.../rules/<id>.md`.
+
+**Step 4 — rn-dev-agent custom rules.** Four rules at
+`references/rn-dev-agent/` (also in the index under `category: "rn-dev-agent"`).
+Treat as severity HIGH with confidence 95.
+
+**Citation format**: `[VERCEL/<rule-id>] <title> — <SEVERITY> (confidence <n>)
+— upstream: <upstream_path>`
+
+Examples:
+- `[VERCEL/react-native-skills/list-performance-virtualize] Use a list virtualizer for any list — HIGH (confidence 80) — upstream: third_party/.../rules/list-performance-virtualize.md`
+- `[VERCEL/rn-dev-agent/navigation-transparent-modal] Bridgeless `transparentModal` routing failure — HIGH (confidence 95) — upstream: skills/rn-best-practices/references/rn-dev-agent/navigation-transparent-modal.md`
+
+Do NOT duplicate findings already reported in Pass 2 (rn-dev-agent
+conventions: testIDs, `__DEV__` guards, Zustand exposure) or in the
+PostToolUse hook output (Step 1 above).
 
 ## Output Format
 
