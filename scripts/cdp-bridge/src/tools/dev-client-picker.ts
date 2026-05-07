@@ -172,13 +172,25 @@ export async function dismissPicker(): Promise<PickerResult> {
   };
 }
 
-async function waitForBundle(): Promise<void> {
-  // Wait for the JS bundle to load after tapping a server entry.
-  // Poll rather than fixed sleep — check every 2s for up to 20s.
-  for (let i = 0; i < 10; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+/**
+ * GH #136: fast-then-slow cadence. Single-server pickers auto-advance in a
+ * few hundred milliseconds; LAN-IP picker tap settles within ~1s. The
+ * previous fixed-2s polling burned wall-clock time we don't have to spend.
+ *
+ *   Phase 1 (0..1000ms):    poll every 100ms — catches auto-advance + fast taps.
+ *   Phase 2 (1000..10000ms): poll every 500ms — covers slower bundle loads.
+ *
+ * Total budget: 10s (was 20s). Empirically the picker is either gone in
+ * <2s or stuck in a way no extra polling will fix. Exported for unit tests.
+ */
+export async function waitForBundle(): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < 10_000) {
+    const elapsed = Date.now() - start;
+    const interval = elapsed < 1_000 ? 100 : 500;
+    await new Promise((r) => setTimeout(r, interval));
     const check = await runAgentDeviceFn(['find', 'Development servers']);
-    if (check.isError) return; // Picker gone — bundle loaded
+    if (check.isError) return; // Picker gone — bundle loaded.
   }
 }
 

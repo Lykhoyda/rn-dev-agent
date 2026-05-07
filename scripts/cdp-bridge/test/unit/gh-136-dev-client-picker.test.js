@@ -157,6 +157,42 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
 
 // ── handleDevClientPicker: auto-advance race detection ───────────────
 
+// ── waitForBundle: cadence — fast-then-slow polling ──────────────────
+
+test('waitForBundle: returns within 500ms when picker dismissed quickly', async () => {
+  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, waitForBundle } = await import(MOD_PATH);
+  let calls = 0;
+  _setRunAgentDeviceForTest(async (_args) => {
+    calls++;
+    // First call (~100ms in): still loading. Second call (~200ms in): bundle loaded.
+    if (calls < 2) return { content: [{ type: 'text', text: 'Development servers' }] };
+    return { isError: true, content: [{ type: 'text', text: 'gone' }] };
+  });
+  try {
+    const start = Date.now();
+    await waitForBundle();
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 500, `waitForBundle should complete fast in single-server case; took ${elapsed}ms`);
+    assert.ok(calls >= 2, `waitForBundle should poll at least twice; saw ${calls} calls`);
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
+});
+
+test('waitForBundle: bounded by ~10s wall-clock budget', async () => {
+  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, waitForBundle } = await import(MOD_PATH);
+  // Always-loading mock: picker text always present.
+  _setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: 'Development servers' }] }));
+  try {
+    const start = Date.now();
+    await waitForBundle();
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 12_000, `waitForBundle should give up within ~10s; took ${elapsed}ms`);
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
+});
+
 test('handleDevClientPicker: returns success without tap when picker auto-advances mid-flight', async () => {
   const {
     _setRunAgentDeviceForTest,
