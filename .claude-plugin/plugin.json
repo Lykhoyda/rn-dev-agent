@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent",
-  "version": "0.44.22",
+  "version": "0.44.26",
   "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
   "author": {
     "name": "Anton Lykhoyda",
@@ -9,7 +9,6 @@
   "homepage": "https://github.com/Lykhoyda/rn-dev-agent",
   "repository": "https://github.com/Lykhoyda/rn-dev-agent",
   "license": "MIT",
-  "category": "development",
   "keywords": [
     "react-native",
     "expo",
@@ -54,26 +53,6 @@
     "./commands/list-learned-actions.md",
     "./commands/run-action.md"
   ],
-  "userConfig": {
-    "RN_METRO_PORT": {
-      "title": "Metro Port",
-      "description": "Default Metro bundler port (leave empty for auto-detect: 8081, 8082, 19000, 19006)",
-      "type": "string",
-      "required": false
-    },
-    "RN_PREFERRED_PLATFORM": {
-      "title": "Preferred Platform",
-      "description": "Preferred target platform for CDP connection (auto, ios, or android)",
-      "type": "string",
-      "required": false
-    },
-    "RN_DEV_AGENT_LOG_LEVEL": {
-      "title": "Log Level",
-      "description": "MCP server log verbosity (warn, info, debug, or error)",
-      "type": "string",
-      "required": false
-    }
-  },
   "mcpServers": {
     "cdp": {
       "command": "node",
