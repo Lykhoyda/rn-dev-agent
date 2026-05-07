@@ -24,18 +24,35 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    feature by:
    - filename keyword overlap with `$ARGUMENTS`
    - first-comment-block intent overlap with `$ARGUMENTS`
-   If a match exists, **REPLAY IT FIRST** via:
+   - **`produces:` overlap with the goal state** (D1209) — an action whose
+     `produces` includes the state your task requires (e.g.
+     `authenticated: true` when the task needs an authenticated session)
+     is a useful **prologue** even if its intent doesn't match the full
+     task. See "Hybrid composition" in CLAUDE-MD-TEMPLATE for the loop.
+   If a **full match** exists, **REPLAY IT FIRST** via:
    ```bash
    maestro-runner --platform <ios|android> test -e KEY=VAL <flow-path>
    ```
    If the replay passes, you have your evidence — proceed to step 7
    (verification + generate-or-refresh artifact). If the replay fails with a
    concrete error (`Element not found`, `assertion failed`), fix the flow
-   rather than abandoning to manual primitives. Falling back to `device_*`
-   walks WITHOUT having tried the existing flow is a captured anti-pattern
-   (see `feedback_execute_artifacts_before_manual.md` in auto-memory). Run
+   rather than abandoning to manual primitives.
+
+   If only a **partial match** exists (an action whose `produces` covers
+   part of your task's required state — e.g. login → authenticated, but
+   the rest of the task is novel), use the action as a prologue: replay
+   it via `cdp_run_action({ id, params })`, re-verify state with
+   `cdp_navigation_state` + `cdp_store_state`, then continue with steps
+   1–7 below for the novel part. Save the *new* action covering the full
+   task at step 7. This is the hybrid-composition path — it's the
+   default, not an escape hatch.
+
+   Falling back to `device_*` walks WITHOUT having tried existing flows
+   (full or partial) is a captured anti-pattern (see
+   `feedback_execute_artifacts_before_manual.md` in auto-memory). Run
    `/rn-dev-agent:list-learned-actions` if you want to inspect the
-   inventory.
+   inventory — the `Produces` column shows what state each action
+   establishes.
 1. **Environment check** — call `cdp_status`. If it fails, stop and tell the
    user to run `/rn-dev-agent:setup`.
 2. **Understand the feature** — read implementation files, find testIDs, routes,

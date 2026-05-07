@@ -72,6 +72,16 @@ export interface SaveAsActionArgs {
    * header in the YAML. Falls back to `intent` when absent.
    */
   testName?: string;
+  /**
+   * D1209 — state postconditions this action establishes when it runs
+   * cleanly. Flat map of primitive values (string | number | boolean).
+   * The agent uses this for hybrid composition: when a downstream task
+   * needs a state the current app doesn't satisfy, it scans for an
+   * action whose `produces` covers the gap and replays it as a
+   * deterministic prologue. Optional. Example:
+   * `{ authenticated: true, route: 'home' }`.
+   */
+  produces?: Record<string, string | number | boolean>;
 }
 
 export function createSaveAsActionHandler() {
@@ -132,6 +142,7 @@ export function createSaveAsActionHandler() {
       tags: args.tags,
       mutates: args.mutates,
       status,
+      produces: args.produces,
     });
 
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter
@@ -160,6 +171,7 @@ export function createSaveAsActionHandler() {
         mutates: args.mutates,
         status,
         appId: args.bundleId,
+        produces: args.produces,
       },
       hint: `Action emitted as experimental. Run /run-action ${args.id} to validate; on first clean replay it auto-promotes to active.`,
     });

@@ -112,6 +112,24 @@ export interface M7Metadata {
   createdAt?: string;
 
   author?: ActionAuthor;
+
+  /**
+   * D1209 — state postconditions this action establishes when it runs
+   * cleanly. A flat map of primitive-valued state assertions (e.g.
+   * `{ authenticated: true, route: 'home' }`). Used by the agent for
+   * hybrid composition: when the user's task requires a state the
+   * current app doesn't satisfy, the agent scans for an action whose
+   * `produces` covers the gap and replays it as a deterministic
+   * prologue before continuing with interactive tools.
+   *
+   * Optional — actions without `produces` continue to work; the agent
+   * falls back to intent-string matching for them.
+   *
+   * v1 supports primitive values only (string | number | boolean).
+   * The inline YAML serialization rules out commas + newlines inside
+   * values.
+   */
+  produces?: Record<string, string | number | boolean>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,6 +445,8 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
         meta.mutates = /^true$/i.test(raw);
       } else if (key === 'params') {
         meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+      } else if (key === 'produces') {
+        meta.produces = parseProducesMap(raw);
       } else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
         meta[key] = raw;
       }
@@ -451,7 +471,37 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
     appId: meta.appId as string | undefined,
     createdAt: meta.createdAt as string | undefined,
     author: meta.author as ActionAuthor | undefined,
+    produces: meta.produces as Record<string, string | number | boolean> | undefined,
   };
+}
+
+/**
+ * D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
+ * Values are typed as boolean (`true`/`false`), number (digits + optional
+ * dot + optional sign), or string (everything else, with surrounding
+ * single/double quotes stripped). Returns undefined when the input is
+ * empty or unparseable so the caller can omit the field rather than
+ * carry a half-parsed object. Single-line only; commas + newlines
+ * inside values are not supported in v1.
+ */
+function parseProducesMap(raw: string): Record<string, string | number | boolean> | undefined {
+  const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+  if (!inner) return undefined;
+  const result: Record<string, string | number | boolean> = {};
+  for (const part of inner.split(',')) {
+    const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const valueRaw = kv[2].trim();
+    if (/^(true|false)$/i.test(valueRaw)) {
+      result[key] = /^true$/i.test(valueRaw);
+    } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
+      result[key] = Number(valueRaw);
+    } else {
+      result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
+    }
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 /**
@@ -476,5 +526,15 @@ export function serializeM7Header(metadata: M7Metadata): string {
   if (metadata.appId) lines.push(`# appId: ${stripNewlines(metadata.appId)}`);
   if (metadata.createdAt) lines.push(`# createdAt: ${stripNewlines(metadata.createdAt)}`);
   if (metadata.author) lines.push(`# author: ${stripNewlines(metadata.author)}`);
+  if (metadata.produces && Object.keys(metadata.produces).length > 0) {
+    const pairs = Object.keys(metadata.produces)
+      .sort()
+      .map((k) => {
+        const v = metadata.produces![k];
+        const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+        return `${k}: ${formatted}`;
+      });
+    lines.push(`# produces: { ${pairs.join(', ')} }`);
+  }
   return lines.join('\n');
 }

@@ -32,6 +32,16 @@ function metaPairs(opts) {
         out.push(['mutates', String(opts.mutates)]);
     if (opts.status)
         out.push(['status', stripNewlines(opts.status)]);
+    if (opts.produces && Object.keys(opts.produces).length > 0) {
+        const pairs = Object.keys(opts.produces)
+            .sort()
+            .map((k) => {
+            const v = opts.produces[k];
+            const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+            return `${k}: ${formatted}`;
+        });
+        out.push(['produces', `{ ${pairs.join(', ')} }`]);
+    }
     return out;
 }
 // B137: window (ms) after a tap in which a subsequent `navigate` event is
