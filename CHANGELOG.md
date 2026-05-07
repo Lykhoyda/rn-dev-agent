@@ -4,6 +4,44 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.28] — 2026-05-07
+
+### Fixed (GH #136 — PR-B: Dev-Client Picker Reliability)
+
+- **`cdp_status` no longer hangs 60s on the Expo Dev Client picker.** The
+  picker probe now runs **before** `autoConnect` instead of inside the
+  post-failure catch block. When the picker is up, the plugin dismisses it
+  first, then connects normally — no Metro discovery timeout to wait through.
+- **`dismissPicker` now matches LAN IPs and `.local` hostnames.** Replaces
+  the literal `localhost / 127.0.0.1 / 10.0.2.2` list with a three-pass
+  matcher: literal IPs (backward parity), `<host>:<port>` port-pattern
+  matching with port range validation, then first non-footer row below the
+  picker title. Catches the previously-missed real-world setups.
+- **Auto-advance race detection.** `dismissPicker` re-probes
+  `isDevClientPickerShowing()` before tapping; if the picker auto-dismissed
+  mid-flight (single-server case has ~3-5s grace), returns success without
+  tapping. Closes the ~30% race failure for Maestro flows wrapping
+  post-launch in `runFlow when: visible: "DEVELOPMENT SERVERS"`.
+- **Tighter `waitForBundle` cadence.** 100ms polling for the first second,
+  500ms thereafter, 10s overall budget (was 2s polling + 20s budget).
+  Single-server pickers settle in ~200ms.
+
+### Internal
+
+- New pure helpers `parsePortPatternEntry` and `parseFirstServerEntry` in
+  `scripts/cdp-bridge/src/tools/dev-client-picker.ts` — testable without
+  the agent-device CLI in the loop.
+- New `runAgentDeviceFn` and `hasActiveSessionFn` test seams (underscore-
+  prefixed exports) follow the codebase convention from
+  `gh-61-b1-deep-link-depth.test.js`.
+- 18 new unit tests covering helpers, dismissPicker integration,
+  auto-advance race, and the cdp_status flow inversion.
+
+### Versions
+
+- Plugin: 0.44.27 → **0.44.28**
+- MCP server (cdp-bridge): 0.38.22 → **0.38.23**
+
 ## [0.42.0] — 2026-04-22
 
 M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
