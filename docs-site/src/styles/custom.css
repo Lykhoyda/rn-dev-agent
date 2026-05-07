@@ -1,8 +1,8 @@
-/* rn-dev-agent docs — Precision Engineering theme */
+/* rn-dev-agent docs — Precision Engineering theme (dark-only) */
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ─── Dark mode (default) ─── */
+/* ─── Palette ─── */
 :root {
   --sl-font: 'DM Sans', system-ui, sans-serif;
   --sl-font-system-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -20,23 +20,6 @@
   --sl-color-gray-6: #1a2028;
   --sl-color-gray-7: #12171e;
   --sl-color-black: #0c1015;
-}
-
-/* ─── Light mode ─── */
-:root[data-theme='light'] {
-  --sl-color-accent-low: #e0f4fd;
-  --sl-color-accent: #0284c7;
-  --sl-color-accent-high: #0c4a6e;
-
-  --sl-color-white: #fafbfc;
-  --sl-color-gray-1: #f0f2f5;
-  --sl-color-gray-2: #d4dae0;
-  --sl-color-gray-3: #8b95a1;
-  --sl-color-gray-4: #5c6672;
-  --sl-color-gray-5: #3d4852;
-  --sl-color-gray-6: #272f38;
-  --sl-color-gray-7: #161b22;
-  --sl-color-black: #0d1117;
 }
 
 /* ─── Global refinements ─── */
@@ -94,10 +77,6 @@ starlight-content {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
-:root[data-theme='light'] .expressive-code .frame {
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
 /* Inline code */
 .sl-markdown-content :not(pre) > code {
   background: var(--sl-color-gray-6);
@@ -108,19 +87,10 @@ starlight-content {
   font-weight: 500;
 }
 
-:root[data-theme='light'] .sl-markdown-content :not(pre) > code {
-  background: var(--sl-color-gray-1);
-  border-color: var(--sl-color-gray-2);
-}
-
 /* ─── Sidebar: polished nav ─── */
 nav.sidebar .top-level > li + li {
   border-top: 1px solid var(--sl-color-gray-6);
   padding-top: 0.4rem;
-}
-
-:root[data-theme='light'] nav.sidebar .top-level > li + li {
-  border-color: var(--sl-color-gray-2);
 }
 
 nav.sidebar a {
@@ -132,14 +102,14 @@ nav.sidebar a:hover {
   background-color: var(--sl-color-gray-5);
 }
 
-:root[data-theme='light'] nav.sidebar a:hover {
-  background-color: var(--sl-color-gray-1);
-}
-
+/* Active link: bright sky-blue text on subtle teal wash, with a clear
+   left rail. Overrides Starlight's default white-on-accent so the
+   active item reads as "highlighted" instead of "inverted". */
 nav.sidebar a[aria-current='page'] {
-  font-weight: 600;
+  color: var(--sl-color-accent);
   background-color: var(--sl-color-accent-low);
-  border-left: 2px solid var(--sl-color-accent);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
 }
 
 /* Group labels */
@@ -162,10 +132,6 @@ nav.sidebar summary {
   overflow: hidden;
 }
 
-:root[data-theme='light'] .sl-markdown-content table {
-  border-color: var(--sl-color-gray-2);
-}
-
 .sl-markdown-content th {
   background: var(--sl-color-gray-6);
   font-weight: 600;
@@ -175,20 +141,10 @@ nav.sidebar summary {
   color: var(--sl-color-gray-2);
 }
 
-:root[data-theme='light'] .sl-markdown-content th {
-  background: var(--sl-color-gray-1);
-  color: var(--sl-color-gray-5);
-}
-
 .sl-markdown-content td,
 .sl-markdown-content th {
   padding: 0.55em 0.85em;
   border-bottom: 1px solid var(--sl-color-gray-5);
-}
-
-:root[data-theme='light'] .sl-markdown-content td,
-:root[data-theme='light'] .sl-markdown-content th {
-  border-color: var(--sl-color-gray-2);
 }
 
 .sl-markdown-content tr:last-child td {
@@ -197,10 +153,6 @@ nav.sidebar summary {
 
 .sl-markdown-content tr:hover td {
   background: var(--sl-color-gray-6);
-}
-
-:root[data-theme='light'] .sl-markdown-content tr:hover td {
-  background: var(--sl-color-gray-1);
 }
 
 /* ─── Hero page (splash) ─── */
@@ -227,10 +179,6 @@ nav.sidebar summary {
   box-shadow: 0 0 0 1px var(--sl-color-accent-low);
 }
 
-:root[data-theme='light'] .card {
-  border-color: var(--sl-color-gray-2);
-}
-
 /* ─── Badge (for best-practice rules) ─── */
 .sl-badge {
   font-size: 0.68rem;
@@ -239,7 +187,7 @@ nav.sidebar summary {
   border-radius: 3px;
 }
 
-/* ─── Scrollbar (dark mode) ─── */
+/* ─── Scrollbar ─── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
