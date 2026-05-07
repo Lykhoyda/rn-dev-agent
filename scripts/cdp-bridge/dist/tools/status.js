@@ -1,5 +1,5 @@
 import { okResult, failResult, warnResult } from '../utils.js';
-import { handleDevClientPicker } from './dev-client-picker.js';
+import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-picker.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
@@ -99,6 +99,18 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 setClient(client);
             }
             if (!client.isConnected) {
+                // GH #136: probe the dev-client picker BEFORE autoConnect. When the
+                // picker is up, the JS bundle hasn't loaded → no Metro target visible
+                // to CDP → discovery polls until its 60s timeout. Dismissing the
+                // picker first lets autoConnect see a real target on its first
+                // attempt. Best-effort: any failure here falls through to the
+                // existing catch-block picker check as a safety net.
+                try {
+                    if (await isDevClientPickerShowing()) {
+                        await handleDevClientPicker();
+                    }
+                }
+                catch { /* fall through to autoConnect */ }
                 await client.autoConnect(args.metroPort, args.platform);
             }
             else if (args.platform) {
