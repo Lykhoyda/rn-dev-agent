@@ -23,7 +23,7 @@
 //   --no-baseline           Disable baseline loading.
 //
 // Other:
-//   --max <n>               Max files to walk in --all/--ci mode (default 200).
+//   --max <n>               Max files to walk in --all/--ci mode (default 1000).
 //   --quiet                 Suppress informational stderr.
 //   --help, -h              Show usage.
 //
@@ -118,7 +118,7 @@ function parseArgs(argv) {
     baselinePath: '.rn-agent/vercel-rules-baseline.json',
     snapshot: false,
     useBaseline: true,
-    max: 200,
+    max: 1000,
     quiet: false,
   };
   let endOfFlags = false;
@@ -175,7 +175,7 @@ Baseline:
   --no-baseline            Disable baseline loading
 
 Other:
-  --max <n>                Max files in --all/--ci (default 200)
+  --max <n>                Max files in --all/--ci (default 1000)
   --quiet                  Less stderr output
 `
   );
