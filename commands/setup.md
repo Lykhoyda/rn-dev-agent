@@ -118,9 +118,11 @@ Show the diff before writing.
 
 The plugin reads and writes only inside `<cwd>/.rn-agent/`. Without this directory, every plugin tool that persists state (action recordings, learned flows, nav-graph cache, sidecars) fails with `ENOENT` on first use. This step creates it from a versioned template.
 
-The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
+The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
 
 `dev-bridge.ts` and `globals.d.ts` are the user-facing surface for Steps B + C — `dev-bridge.ts` exposes `getBridge()?.registerNavRef(...)` / `registerStores(...)` (DEV-only via `__DEV__` guard) and `globals.d.ts` declares the global types so user code can call them without casts.
+
+`vercel-rules.config.json` is the user-editable opt-in/opt-out surface for the Vercel rule audit hook (`/rn-dev-agent:check-vercel-rules`). It defines `enabledCategories`, `severityOverrides`, `baselinePath`, and `auditHook.enabled`. Default config enables all categories; severity is taken from upstream rule frontmatter.
 
 1. **Detect existing scaffold.** Treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
    - `.rn-agent/.scaffold-version` exists (canonical marker)
@@ -145,9 +147,9 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 
 3. **Two-prompt confirmation** (matches the per-step UX of A/B/C):
    - **Prompt 1 (low-risk meta files):** show file list — `README.md`, `.gitignore`, `.scaffold-version`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`. Ask "Apply this change? [y/n]". On `n`, skip the entire step.
-   - **Prompt 2 (skeleton.yaml):** show the file's full contents inline (it's ~40 lines). Ask "Apply this change? [y/n]". On `n`, skip skeleton.yaml only — the rest still gets written.
-   
-   The two prompts let the user say yes-to-meta but no-to-skeleton if they already have a different testID-mapping convention.
+   - **Prompt 2 (user-editable code/config):** show inline previews of `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, and `vercel-rules.config.json`. Ask "Apply this change? [y/n]". On `n`, skip the user-editable files only — the meta files still get written.
+
+   The two prompts let the user accept meta scaffolding while reviewing or declining each user-editable file individually if they already have an equivalent in their project.
 
 4. **Post-write assertion.** Confirm `<cwd>/.rn-agent/.gitignore` and `<cwd>/.rn-agent/.scaffold-version` both exist. If the copy silently dropped them (some `cp` invocations skip dotfiles), surface the failure.
 

@@ -119,14 +119,24 @@ and get explicit confirmation.
    - At least one edge case or secondary flow
    If the architect omitted or under-specified the proof flow, add it yourself
    before presenting to the user — you have the feature context now.
-4. Present to user:
+4. **Verify Vercel rule consultation** (added v0.45+ per docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
+   - The architect output MUST include a `Rules consulted` block listing rule
+     IDs from `skills/rn-best-practices/rules.index.json` derived from the
+     feature's keyword set.
+   - If the block is missing or empty for a feature that touches RN APIs
+     (FlatList, animations, navigation, lists, modals, etc.): query the
+     index yourself, list the applicable CRITICAL/HIGH rules, and add the
+     block before presenting to the user.
+   - Format: `[CRITICAL|HIGH] <rule-id>` one per line.
+5. Present to user:
    - What will be built (one paragraph)
    - Files to create/modify (list)
    - E2E Proof Flow table (from the blueprint)
+   - Rules consulted block (from step 4)
    - Whether a full reload or Fast Refresh is sufficient
    - Any trade-offs worth noting
-5. **Ask: "Proceed with implementation?"**
-6. **Do NOT start Phase 5 without explicit user approval**
+6. **Ask: "Proceed with implementation?"**
+7. **Do NOT start Phase 5 without explicit user approval**
 
 **Evaluator**: If `dev/evaluator.md` exists in the plugin root, log agent launches and blueprint completeness per `dev/evaluator.md` Phase 4.
 
@@ -378,13 +388,23 @@ a PASS.
      exposure, selector memoization. Scope: [list of files changed]"
    - "Review the implementation for project conventions: file naming, folder
      structure, import patterns, CLAUDE.md rules. Scope: [list of files changed]"
-2. Consolidate findings — only issues with confidence >= 80
-3. If no high-confidence issues found: confirm the code meets standards and
+2. **Run Vercel rule audit** (added v0.45+ per docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
+   ```bash
+   node scripts/check-vercel-rules.mjs --changed --format hook -- <changed file paths>
+   ```
+   - Surface any violations as line-level findings with rule IDs verbatim.
+   - The `rn-code-reviewer` Pass 4 also runs an index-driven lookup, but this
+     standalone check is faster (~50ms) and catches the 3 deterministic rules
+     even when the reviewer agent skips Pass 4.
+   - For full-project audit (CI mode): `node scripts/check-vercel-rules.mjs --ci`.
+3. Consolidate findings — only issues with confidence >= 80. Vercel-rule
+   violations from step 2 carry confidence 95 (deterministic match).
+4. If no high-confidence issues found: confirm the code meets standards and
    proceed directly to Phase 7
-4. If issues found: **present findings grouped by severity (Critical, then
+5. If issues found: **present findings grouped by severity (Critical, then
    Important)** and **ask: "Which findings should I fix?"**
-5. Apply approved fixes
-6. If fixes were applied, re-run Phase 5.5 verification to confirm nothing broke
+6. Apply approved fixes
+7. If fixes were applied, re-run Phase 5.5 verification to confirm nothing broke
 
 **Evaluator**: If `dev/evaluator.md` exists in the plugin root, log agent launches, findings, and re-verification per `dev/evaluator.md` Phase 6. If re-verification ran, log as Phase 5.5-retry.
 

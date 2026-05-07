@@ -69,21 +69,87 @@ Specify every file to create or modify with detailed change descriptions.
 - **Fast Refresh safety**: No side effects at module scope, no class components unless required
 - **`__DEV__` guards**: All dev-only code (store exposure, network mocks, debug logging) wrapped in `if (__DEV__)`
 
-### Vercel RN Best Practices (apply during design)
+### Vercel RN Best Practices (index-driven, apply during design)
 
 Apply CRITICAL and HIGH rules from the `rn-best-practices` skill when making
-architecture decisions. Key constraints:
+architecture decisions. The full corpus (118 rules: 70 react-best-practices +
+36 react-native-skills + 8 composition-patterns + 4 rn-dev-agent custom)
+lives in `skills/rn-best-practices/rules.index.json`. Do NOT scan all 118
+upfront — filter the index to what's relevant to the feature being designed.
 
-- **Rendering safety** [RN-1.1, RN-1.2] (CRITICAL): Never design conditional renders with `&&` and falsy values. All strings must be inside `<Text>`.
-- **List architecture** [RN-2.1–2.8] (HIGH): All scrollable data must use FlashList/LegendList. List items receive primitives, not objects. Callbacks hoisted to list root. No queries or heavy hooks inside items.
-- **Animation** [RN-3.1–3.3] (HIGH): Only animate `transform` and `opacity`. Use `useDerivedValue` for computed animations. GestureDetector for animated press states.
-- **Scroll** [RN-4.1] (HIGH): Never store scroll position in useState. Use Reanimated shared values or refs.
-- **Navigation** [RN-5.1] (HIGH): Only native navigators — `native-stack`, native bottom tabs. No JS-based stack or tab navigators.
-- **State** [RN-6.1, RN-7.1] (MEDIUM): Minimize state variables. Derive values at render time. State holds ground truth, visuals are derived.
-- **UI** [RN-9.x] (MEDIUM): Pressable over TouchableOpacity. expo-image over Image. Native modals over JS bottom sheets. Native menus via zeego.
+**Step 1 — derive feature keyword set from the architecture brief.** What
+APIs, libraries, and patterns will the implementation touch? E.g., a
+"shopping cart" feature might involve `[FlatList, useState, AsyncStorage,
+useEffect, Pressable]`.
 
-Consult the full `rn-best-practices` skill for detailed code examples and
-all 36 rules across 14 categories.
+**Step 2 — query the index for applicable rules.** Filter by `.id` prefix
+(stable, file-name based) for category-focused queries; filter by `.triggers`
+(semantic tags from upstream frontmatter) for cross-cutting concerns.
+
+```bash
+# By id-prefix — focus on a category (e.g., list performance)
+jq -r '.[] | select(
+    .platform != "web" and
+    (.severity == "CRITICAL" or .severity == "HIGH") and
+    (.id | startswith("react-native-skills/list-performance-"))
+  ) | "[\(.severity)] \(.id): \(.title)"
+' skills/rn-best-practices/rules.index.json
+
+# By trigger tags — cross-cutting concerns (e.g., perf rules across all categories)
+jq -r --argjson tags '["lists","performance","rerender","animation"]' '
+  .[] | select(
+    .platform != "web" and
+    (.severity == "CRITICAL" or .severity == "HIGH") and
+    (.triggers | any(. as $t | $tags | index($t)))
+  ) | "[\(.severity)] \(.id): \(.title)"
+' skills/rn-best-practices/rules.index.json
+```
+
+**Available trigger tags** (top-20 by frequency): `performance`, `optimization`,
+`javascript`, `rerender`, `state`, `rendering`, `hooks`, `server`, `composition`,
+`lists`, `reanimated`, `async`, `dependencies`, `bundle`, `useEffect`, `rsc`,
+`derived-state`, `arrays`, `architecture`, `animation`. See full tag set:
+`jq '[.[] | .triggers[]] | unique' skills/rn-best-practices/rules.index.json`.
+
+**Available `.id` prefixes** (3 upstream skills + custom):
+- `react-native-skills/list-performance-*` (8 rules)
+- `react-native-skills/animation-*` (3 rules)
+- `react-native-skills/ui-*` (9 rules)
+- `react-native-skills/navigation-*` (1 rule)
+- `react-native-skills/react-state-*` (3 rules)
+- `react-native-skills/react-compiler-*` (2 rules)
+- `react-best-practices/async-*` (5 rules)
+- `react-best-practices/rerender-*` (15 rules)
+- `react-best-practices/server-*` (10 rules — `web` platform; usually skip for RN)
+- `composition-patterns/architecture-*` / `state-*` / `patterns-*` / `react19-*`
+- `rn-dev-agent/*` (4 custom rules)
+
+**Step 3 — read each matched `upstream_path` BEFORE finalizing the design.**
+Bake the rule constraints into the blueprint:
+
+- List components → declare FlashList vs FlatList choice + `keyExtractor`
+  shape + memoized item component upfront
+- Animations → declare `transform`/`opacity` only; specify Reanimated worklets
+- Composition (5+ boolean props) → declare compound-component shape
+
+**Step 4 — list the consulted rule IDs in the architecture output.**
+Phase 4 reviewer expects a `Rules consulted` block. Format:
+
+```
+Rules consulted (from skills/rn-best-practices/rules.index.json):
+  - [CRITICAL] react-native-skills/list-performance-virtualize
+  - [HIGH]     react-native-skills/list-performance-callbacks
+  - [HIGH]     react-best-practices/rerender-no-inline-components
+  - [HIGH]     rn-dev-agent/theme-memoization-lists
+```
+
+**Always-check CRITICAL rules** (no triggers, scan diff/design directly):
+- `rendering-no-falsy-and` — falsy `&&` JSX renders
+- `rendering-text-in-text-component` — bare strings in `<View>`
+- `rerender-no-inline-components` — components defined inside components
+
+These are described inline in `skills/rn-best-practices/SKILL.md`. The full
+upstream files live under `third_party/vercel-labs/agent-skills/skills/.../rules/`.
 
 ## Output Format
 
