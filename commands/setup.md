@@ -194,7 +194,7 @@ Tell the user up-front when nothing needs to be injected.
 1. Modify any file without showing the diff first.
 2. Inject without checking for the existing marker — duplicating the template would bloat the user's CLAUDE.md.
 3. Skip the user-confirmation prompt — they may have customized their `NavigationContainer` setup in a way the auto-injection would clobber.
-4. Inject the nav-ref or store-exposure snippets without the `if (__DEV__)` guard — exposing nav refs / store hooks in production is a real footgun.
+4. Wrap the `getBridge()?.registerNavRef(...)` / `registerStores(...)` call sites in a `if (__DEV__)` block. The dev-bridge file (Step D scaffolds `.rn-agent/dev-bridge.ts`) handles the `__DEV__` gate internally and returns `null` in production — wrapping again at the call site makes the `getBridge()?.` optional chain a dead branch in dev and breaks the documented Steps B.3 / C.4 examples. Trust the bridge's internal guard.
 5. Use `xcrun simctl` / `adb` for diagnostics — Phase 1 delegates to the `rn-setup` skill, which uses the proper detection commands.
 6. Overwrite any file inside `<cwd>/.rn-agent/` during partial-add. The user may have hand-edited `skeleton.yaml`, `actions/*.yaml`, or `nav-graph.yaml` between scaffolds — only add files that don't already exist.
 7. Use `cp -r src/* dst/` for the scaffold copy. The glob skips dotfiles on some shells; `.gitignore` and `.scaffold-version` would silently disappear. Use `cp -RL src/. dst/` (note the trailing `/.`) or Node's `fs.cpSync(src, dst, { recursive: true })`.
