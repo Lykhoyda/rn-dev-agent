@@ -1,5 +1,19 @@
-import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
+import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession } from '../agent-device-wrapper.js';
 import type { ToolResult } from '../utils.js';
+
+// GH #136 test seam: production code calls `runAgentDevice` through this
+// indirection so unit tests can swap a mock without touching the real
+// agent-device CLI subprocess. Production behavior is identity-equivalent
+// to the imported function.
+let runAgentDeviceFn: typeof _runAgentDeviceImpl = _runAgentDeviceImpl;
+
+export function _setRunAgentDeviceForTest(fn: typeof _runAgentDeviceImpl): void {
+  runAgentDeviceFn = fn;
+}
+
+export function _resetRunAgentDeviceForTest(): void {
+  runAgentDeviceFn = _runAgentDeviceImpl;
+}
 
 /**
  * Detect and dismiss the Expo Dev Client server picker.
@@ -18,12 +32,6 @@ import type { ToolResult } from '../utils.js';
 const PICKER_INDICATORS = [
   'Development servers',
   'DEVELOPMENT SERVERS',
-];
-
-const SERVER_ENTRY_INDICATORS = [
-  'localhost',
-  '127.0.0.1',
-  '10.0.2.2',
 ];
 
 export interface PickerResult {
@@ -102,7 +110,7 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
   // Step 1: Detect if the picker is showing
   for (const indicator of PICKER_INDICATORS) {
     try {
-      const result = await runAgentDevice(['find', indicator]);
+      const result = await runAgentDeviceFn(['find', indicator]);
       if (!result.isError) {
         // Picker detected — try to tap a server entry
         return await dismissPicker();
@@ -115,28 +123,22 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
   return { dismissed: false, reason: 'Dev Client picker not detected' };
 }
 
-async function dismissPicker(): Promise<PickerResult> {
-  // Try known server entry patterns first
-  for (const entry of SERVER_ENTRY_INDICATORS) {
-    const result = await runAgentDevice(['find', entry, 'click']);
+/**
+ * GH #136: rewritten to use parseFirstServerEntry against an upfront snapshot.
+ * The previous "try literal IPs in turn, then regex-scan" approach missed
+ * every LAN-IP-only setup we hit in the field. Exporting for unit tests so
+ * the dispatch can be exercised through the runAgentDeviceFn test seam.
+ */
+export async function dismissPicker(): Promise<PickerResult> {
+  const snapshot = await runAgentDeviceFn(['snapshot', '-i']);
+  const snapshotText = snapshot.isError ? '' : (snapshot.content[0]?.text ?? '');
+  const target = parseFirstServerEntry(snapshotText);
+
+  if (target) {
+    const result = await runAgentDeviceFn(['find', target, 'click']);
     if (!result.isError) {
       await waitForBundle();
-      return { dismissed: true, reason: `Tapped server entry matching "${entry}"` };
-    }
-  }
-
-  // Fallback: take a snapshot and look for any IP-address-like element
-  const snapshot = await runAgentDevice(['snapshot', '-i']);
-  if (!snapshot.isError) {
-    const text = snapshot.content[0]?.text ?? '';
-    // Look for IP addresses (LAN, tunnel, etc.) in the snapshot text
-    const ipMatch = text.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
-    if (ipMatch) {
-      const result = await runAgentDevice(['find', ipMatch[1], 'click']);
-      if (!result.isError) {
-        await waitForBundle();
-        return { dismissed: true, reason: `Tapped server entry at ${ipMatch[1]}` };
-      }
+      return { dismissed: true, reason: `Tapped server entry "${target}"` };
     }
   }
 
@@ -151,8 +153,7 @@ async function waitForBundle(): Promise<void> {
   // Poll rather than fixed sleep — check every 2s for up to 20s.
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 2000));
-    // Check if the picker is gone (a heuristic: if "Development servers" is no longer visible)
-    const check = await runAgentDevice(['find', 'Development servers']);
+    const check = await runAgentDeviceFn(['find', 'Development servers']);
     if (check.isError) return; // Picker gone — bundle loaded
   }
 }
@@ -166,7 +167,7 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
 
   for (const indicator of PICKER_INDICATORS) {
     try {
-      const result = await runAgentDevice(['find', indicator]);
+      const result = await runAgentDeviceFn(['find', indicator]);
       if (!result.isError) return true;
     } catch {
       continue;

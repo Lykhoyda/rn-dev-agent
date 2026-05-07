@@ -87,3 +87,46 @@ test('parseFirstServerEntry: skips footer rows in fallback', async () => {
   const snapshot = 'Development servers\nServer-A\nEnter URL manually\nFetch development servers';
   assert.equal(parseFirstServerEntry(snapshot), 'Server-A');
 });
+
+// ── dismissPicker: integration with parseFirstServerEntry ────────────
+
+test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
+  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, dismissPicker } = await import(MOD_PATH);
+  _setRunAgentDeviceForTest(async (args) => {
+    if (args[0] === 'snapshot') {
+      return { content: [{ type: 'text', text: 'Development servers\n192.168.1.5:8081' }] };
+    }
+    if (args[0] === 'find' && args[1] === '192.168.1.5:8081' && args[2] === 'click') {
+      return { content: [{ type: 'text', text: 'tapped' }] };
+    }
+    if (args[0] === 'find' && args[1] === 'Development servers') {
+      // waitForBundle re-probe — picker is gone after tap.
+      return { isError: true, content: [{ type: 'text', text: 'not found' }] };
+    }
+    return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
+  });
+  try {
+    const result = await dismissPicker();
+    assert.equal(result.dismissed, true);
+    assert.match(result.reason, /192\.168\.1\.5:8081/);
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
+});
+
+test('dismissPicker: returns dismissed:false with helpful reason when nothing matches', async () => {
+  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, dismissPicker } = await import(MOD_PATH);
+  _setRunAgentDeviceForTest(async (args) => {
+    if (args[0] === 'snapshot') {
+      return { content: [{ type: 'text', text: 'No picker visible' }] };
+    }
+    return { isError: true, content: [{ type: 'text', text: 'no match' }] };
+  });
+  try {
+    const result = await dismissPicker();
+    assert.equal(result.dismissed, false);
+    assert.match(result.reason, /could not find a server entry/i);
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
+});
