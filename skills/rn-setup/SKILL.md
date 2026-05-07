@@ -135,6 +135,26 @@ need WiFi they can `adb connect <ip>` manually — the script then treats the
 device as physical and runs `adb reverse` over the TCP transport (works
 the same as USB).
 
+### 11. Vercel rules sync freshness
+
+Verify the vendored Vercel agent-skills content is present and not stale.
+Read-only check; does NOT auto-sync (user runs the resync command if BEHIND).
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --check 2>&1 | head -3
+```
+
+Expected outputs:
+- **OK**: `✓ N files in sync (sha=… fetchedAt=…)`. Compute days since
+  `fetchedAt`; if > 30 days, mark row as STALE in the table (still
+  functional, just a recommendation to refresh).
+- **MISSING**: `error: …/UPSTREAM.lock.json missing`. The vendored
+  content was never synced — `rules.index.json` is empty or absent. Surface:
+  "Run: `node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref <sha> --accept-missing-license-file`".
+- **DRIFT**: `✗ N file(s) out of sync`. The on-disk content was modified
+  out-of-band (or upstream LICENSE absence got fixed). Surface the resync
+  command; do not auto-run.
+
 ## Output format
 
 Present results as a table:
@@ -152,6 +172,7 @@ Present results as a table:
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
+| Vercel rules sync | OK (118 rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
 
 If any critical check fails (CDP bridge, agent-device, Metro, or simulator),
 provide step-by-step instructions to fix it. Do not proceed with feature
