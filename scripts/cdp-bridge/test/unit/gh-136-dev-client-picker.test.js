@@ -91,7 +91,15 @@ test('parseFirstServerEntry: skips footer rows in fallback', async () => {
 // ── dismissPicker: integration with parseFirstServerEntry ────────────
 
 test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
-  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, dismissPicker } = await import(MOD_PATH);
+  const {
+    _setRunAgentDeviceForTest,
+    _resetRunAgentDeviceForTest,
+    _setHasSessionForTest,
+    _resetHasSessionForTest,
+    dismissPicker,
+  } = await import(MOD_PATH);
+  _setHasSessionForTest(true);
+  let pickerCheckCalls = 0;
   _setRunAgentDeviceForTest(async (args) => {
     if (args[0] === 'snapshot') {
       return { content: [{ type: 'text', text: 'Development servers\n192.168.1.5:8081' }] };
@@ -100,7 +108,10 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
       return { content: [{ type: 'text', text: 'tapped' }] };
     }
     if (args[0] === 'find' && args[1] === 'Development servers') {
-      // waitForBundle re-probe — picker is gone after tap.
+      pickerCheckCalls++;
+      // First call: pre-tap auto-advance probe — picker still showing.
+      // Subsequent: waitForBundle — picker is gone after tap.
+      if (pickerCheckCalls === 1) return { content: [{ type: 'text', text: 'still showing' }] };
       return { isError: true, content: [{ type: 'text', text: 'not found' }] };
     }
     return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
@@ -111,12 +122,24 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
     assert.match(result.reason, /192\.168\.1\.5:8081/);
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetHasSessionForTest();
   }
 });
 
 test('dismissPicker: returns dismissed:false with helpful reason when nothing matches', async () => {
-  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, dismissPicker } = await import(MOD_PATH);
+  const {
+    _setRunAgentDeviceForTest,
+    _resetRunAgentDeviceForTest,
+    _setHasSessionForTest,
+    _resetHasSessionForTest,
+    dismissPicker,
+  } = await import(MOD_PATH);
+  _setHasSessionForTest(true);
   _setRunAgentDeviceForTest(async (args) => {
+    if (args[0] === 'find' && args[1] === 'Development servers') {
+      // Auto-advance probe — picker still showing so we proceed to snapshot.
+      return { content: [{ type: 'text', text: 'still showing' }] };
+    }
     if (args[0] === 'snapshot') {
       return { content: [{ type: 'text', text: 'No picker visible' }] };
     }
@@ -128,5 +151,42 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
     assert.match(result.reason, /could not find a server entry/i);
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// ── handleDevClientPicker: auto-advance race detection ───────────────
+
+test('handleDevClientPicker: returns success without tap when picker auto-advances mid-flight', async () => {
+  const {
+    _setRunAgentDeviceForTest,
+    _resetRunAgentDeviceForTest,
+    _setHasSessionForTest,
+    _resetHasSessionForTest,
+    handleDevClientPicker,
+  } = await import(MOD_PATH);
+  let detectCalls = 0;
+  _setHasSessionForTest(true);
+  _setRunAgentDeviceForTest(async (args) => {
+    if (args[0] === 'find' && args[1] === 'Development servers') {
+      detectCalls++;
+      // First call: picker visible (find succeeds, handleDevClientPicker proceeds).
+      // Second call (re-check inside dismissPicker): picker gone (find fails).
+      if (detectCalls === 1) return { content: [{ type: 'text', text: 'found' }] };
+      return { isError: true, content: [{ type: 'text', text: 'gone' }] };
+    }
+    if (args[0] === 'snapshot') {
+      // Should not be reached if auto-advance is detected before snapshot.
+      return { content: [{ type: 'text', text: 'No picker visible' }] };
+    }
+    return { isError: true, content: [{ type: 'text', text: 'unexpected call' }] };
+  });
+  try {
+    const result = await handleDevClientPicker();
+    assert.equal(result?.dismissed, true);
+    assert.match(result?.reason ?? '', /auto-advanced/i);
+  } finally {
+    _resetRunAgentDeviceForTest();
+    _resetHasSessionForTest();
   }
 });

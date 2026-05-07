@@ -15,6 +15,19 @@ export function _resetRunAgentDeviceForTest(): void {
   runAgentDeviceFn = _runAgentDeviceImpl;
 }
 
+// GH #136 test seam: same pattern as runAgentDeviceFn but for the
+// session-presence guard. Lets unit tests force the "session active"
+// branch without spinning up an agent-device session.
+let hasActiveSessionFn: typeof hasActiveSession = hasActiveSession;
+
+export function _setHasSessionForTest(value: boolean): void {
+  hasActiveSessionFn = () => value;
+}
+
+export function _resetHasSessionForTest(): void {
+  hasActiveSessionFn = hasActiveSession;
+}
+
 /**
  * Detect and dismiss the Expo Dev Client server picker.
  *
@@ -105,7 +118,7 @@ export function parseFirstServerEntry(snapshot: string | null | undefined): stri
 }
 
 export async function handleDevClientPicker(): Promise<PickerResult | null> {
-  if (!hasActiveSession()) return null;
+  if (!hasActiveSessionFn()) return null;
 
   // Step 1: Detect if the picker is showing
   for (const indicator of PICKER_INDICATORS) {
@@ -130,6 +143,17 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
  * the dispatch can be exercised through the runAgentDeviceFn test seam.
  */
 export async function dismissPicker(): Promise<PickerResult> {
+  // GH #136: re-probe the picker before attempting to tap. Single-server
+  // pickers auto-advance on a ~3-5s timer; if the auto-advance fired between
+  // detect and dispatch, we don't need to act — return success now. This
+  // closes the ~30% race failure documented in #136 issue 3 where Maestro
+  // flows hit "unable to find element" errors when the picker auto-advanced
+  // before tapOn could fire.
+  const stillShowing = await isDevClientPickerShowing();
+  if (!stillShowing) {
+    return { dismissed: true, reason: 'Dev Client picker auto-advanced before tap' };
+  }
+
   const snapshot = await runAgentDeviceFn(['snapshot', '-i']);
   const snapshotText = snapshot.isError ? '' : (snapshot.content[0]?.text ?? '');
   const target = parseFirstServerEntry(snapshotText);
@@ -163,7 +187,7 @@ async function waitForBundle(): Promise<void> {
  * Uses device_find without tapping — lighter than full handleDevClientPicker.
  */
 export async function isDevClientPickerShowing(): Promise<boolean> {
-  if (!hasActiveSession()) return false;
+  if (!hasActiveSessionFn()) return false;
 
   for (const indicator of PICKER_INDICATORS) {
     try {
