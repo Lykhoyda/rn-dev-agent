@@ -88,6 +88,49 @@ test('parseFirstServerEntry: skips footer rows in fallback', async () => {
   assert.equal(parseFirstServerEntry(snapshot), 'Server-A');
 });
 
+// ── parseFirstServerEntry: post-review hardening (Gemini + Codex review) ──
+
+test('parseFirstServerEntry: literal-IP match is whole-line, not substring', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  // Decorative row containing "localhost" as part of a longer string must
+  // NOT short-circuit to literal "localhost" — the smarter port-pattern
+  // path should win. (Codex P2 / Gemini P1.)
+  const snapshot = 'Development servers\nOpen localhost in browser\n192.168.1.5:8081';
+  assert.equal(parseFirstServerEntry(snapshot), '192.168.1.5:8081');
+});
+
+test('parseFirstServerEntry: literal-IP match accepts host:port whole line', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  // A row that's literally "localhost:8081" should still match — the head
+  // before the colon is a literal IP, so this is a real localhost entry.
+  const snapshot = 'Development servers\nlocalhost:8081';
+  assert.equal(parseFirstServerEntry(snapshot), 'localhost:8081');
+});
+
+test('parseFirstServerEntry: footer deny-list is case-insensitive', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  // Expo localization or casing change must not leak the footer through
+  // the first-non-header fallback. (Codex P2 / Gemini implicit.)
+  const snapshot = 'Development servers\nrn-dev-agent-test-app\nENTER URL MANUALLY';
+  assert.equal(parseFirstServerEntry(snapshot), 'rn-dev-agent-test-app');
+});
+
+test('parsePortPatternEntry: rejects version-shape pseudo-hosts', async () => {
+  const { parsePortPatternEntry } = await import(MOD_PATH);
+  // Build/version banners on the picker (e.g., "build v1.2.3:456") must
+  // not be returned as tap targets. (Gemini P2.)
+  assert.equal(parsePortPatternEntry('build v1.2.3:1234'), null);
+  assert.equal(parsePortPatternEntry('v123:456'), null);
+});
+
+test('parsePortPatternEntry: still accepts real hostnames alongside version-shapes', async () => {
+  const { parsePortPatternEntry } = await import(MOD_PATH);
+  // After the version-shape filter, a real `host:port` later in the same
+  // string is still picked up.
+  const text = 'build v1.2.3:1234 server 192.168.1.5:8081';
+  assert.equal(parsePortPatternEntry(text), '192.168.1.5:8081');
+});
+
 // ── dismissPicker: integration with parseFirstServerEntry ────────────
 
 test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {

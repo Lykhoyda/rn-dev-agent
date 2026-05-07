@@ -58,8 +58,20 @@ export interface PickerResult {
 // hostname. The Metro port (default 8081, configurable) is the most reliable
 // signal that we're looking at a server entry vs decorative text. Constraints:
 //   - port must be 80..65535 (rejects version-string fragments like `0.76`)
-//   - host must contain a letter or look like an IPv4 quad (rejects `:port`-only)
+//   - host must look like a real network address (IPv4 quad OR
+//     dotted-domain-style with at least one alphabetic label, OR a single
+//     bare alphabetic hostname). Rejects `v123:456`, `v1.2.3:1234`, and
+//     other version-shape pseudo-hosts that would otherwise leak through.
 const PORT_PATTERN = /\b([\w.-]+):(\d{2,5})\b/g;
+const IPV4_QUAD_RE = /^\d+\.\d+\.\d+\.\d+$/;
+const VERSION_SHAPE_RE = /^v?\d+(\.\d+)*$/i;
+const HOSTNAME_RE = /^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z][A-Za-z0-9-]*)*$/;
+
+function looksLikeNetworkHost(host: string): boolean {
+  if (IPV4_QUAD_RE.test(host)) return true;
+  if (VERSION_SHAPE_RE.test(host)) return false;
+  return HOSTNAME_RE.test(host);
+}
 
 export function parsePortPatternEntry(text: string | null | undefined): string | null {
   if (typeof text !== 'string' || text.length === 0) return null;
@@ -67,7 +79,7 @@ export function parsePortPatternEntry(text: string | null | undefined): string |
     const host = match[1];
     const portNum = Number.parseInt(match[2], 10);
     if (portNum < 80 || portNum > 65535) continue;
-    if (!/[A-Za-z]/.test(host) && !/\d+\.\d+\.\d+\.\d+/.test(host)) continue;
+    if (!looksLikeNetworkHost(host)) continue;
     return `${host}:${portNum}`;
   }
   return null;
@@ -76,20 +88,27 @@ export function parsePortPatternEntry(text: string | null | undefined): string |
 // Rows that appear in the dev-client picker but are NOT server entries.
 // Used as a deny-list for the first-non-header-row fallback when port-pattern
 // matching fails (e.g., picker shows only the manifest name without the URL).
+//
+// Stored as lowercase strings; lookups normalize input the same way so the
+// deny-list is robust against Expo casing/locale shifts (`ENTER URL MANUALLY`
+// vs `Enter URL Manually`). HEADER_PATTERNS already use case-insensitive
+// regex; this brings the footer check in line with that convention.
 const FOOTER_ROWS = new Set([
-  'Enter URL manually',
-  'Fetch development servers',
-  'Development servers',
-  'DEVELOPMENT SERVERS',
-  'Connect to a development build',
+  'enter url manually',
+  'fetch development servers',
+  'development servers',
+  'connect to a development build',
 ]);
 
-const HEADER_PATTERNS = [/Development servers/i, /DEVELOPMENT SERVERS/];
+const HEADER_PATTERNS = [/development servers/i];
 
 /**
  * GH #136: orchestrates the picker matcher fallbacks. Matching priority:
- *   1. Literal `localhost` / `127.0.0.1` / `10.0.2.2` (preserves backward
- *      parity for known-good cases — these were the original heuristic).
+ *   1. A whole-line literal IP match (`localhost`, `127.0.0.1`, `10.0.2.2`)
+ *      — preserves the original heuristic for known-good rows. The match
+ *      is anchored to a complete trimmed line so a decorative row like
+ *      `"Open localhost in browser"` cannot short-circuit the smarter
+ *      port-pattern path.
  *   2. Port-pattern via parsePortPatternEntry (catches LAN IPs, .local
  *      hostnames, and DNS names that show up on real-world dev setups).
  *   3. First non-header, non-footer row below the picker title — the row
@@ -101,18 +120,23 @@ const HEADER_PATTERNS = [/Development servers/i, /DEVELOPMENT SERVERS/];
 export function parseFirstServerEntry(snapshot: string | null | undefined): string | null {
   if (typeof snapshot !== 'string' || snapshot.length === 0) return null;
 
-  for (const ip of ['localhost', '127.0.0.1', '10.0.2.2']) {
-    if (snapshot.includes(ip)) return ip;
+  const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+  const literalIps = new Set(['localhost', '127.0.0.1', '10.0.2.2']);
+  for (const line of lines) {
+    if (literalIps.has(line)) return line;
+    if (line.includes(':')) {
+      const head = line.split(':', 1)[0];
+      if (literalIps.has(head)) return line;
+    }
   }
 
   const portMatch = parsePortPatternEntry(snapshot);
   if (portMatch) return portMatch;
 
-  const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
   const headerIdx = lines.findIndex((line) => HEADER_PATTERNS.some((re) => re.test(line)));
   if (headerIdx === -1) return null;
   for (let i = headerIdx + 1; i < lines.length; i++) {
-    if (!FOOTER_ROWS.has(lines[i])) return lines[i];
+    if (!FOOTER_ROWS.has(lines[i].toLowerCase())) return lines[i];
   }
   return null;
 }
