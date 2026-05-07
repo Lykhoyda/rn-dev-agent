@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
-**74 MCP tools** | **5 agents** | **17 commands** | **1180+ tests** | **46 best-practice rules** | [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**70+ MCP tools** · **5 agents** · **16 commands** · **1180+ tests** · **46 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -73,12 +73,20 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | `/rn-dev-agent:build-and-test <desc>` | Build app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + PR body |
 
-**Reusable actions (M7) + L3 self-healing corpus:**
+**Actions: replayable app flows**
 
-| Command | Purpose |
-|---------|---------|
-| `/rn-dev-agent:list-learned-actions` | Browse memories + Maestro flows + UI skeletons + commands available in this project |
-| `/rn-dev-agent:run-action <id>` | Replay a persisted Maestro flow with safety pre-flights (mutates flag, appId match, parameter coverage); auto-repairs SELECTOR_NOT_FOUND failures via `cdp_run_action` |
+A saved, replayable flow through your app — login, navigate to settings, reach a known state. The plugin records actions automatically when verification passes; you replay them in seconds.
+
+| | |
+|---|---|
+| **What** | A saved, replayable flow through your app (login, navigation, multi-step setup). |
+| **Where** | `.rn-agent/actions/<name>.yaml`. The plugin's home in your project is `.rn-agent/`. |
+| **Create one** | Run `/rn-dev-agent:test-feature <description>`. When verification passes, the plugin saves the verified walk as an action. |
+| **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state (e.g. logged-in home) before doing new work. |
+| **Self-repair** | If a `testID` changes, the plugin patches the action against the live UI and retries. Small UI drift is absorbed without re-recording; broken product logic is not auto-fixed. |
+| **Why** | Known flows replay in seconds instead of being rediscovered interactively. Repeated setup work like login becomes one fast step. |
+
+[Full actions guide](https://lykhoyda.github.io/rn-dev-agent/actions/)
 
 **Setup & diagnostics:**
 
@@ -122,23 +130,23 @@ if (__DEV__) {
 
 ## MCP Tools
 
-74 tools across three layers. [Full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)
+The plugin exposes a wide surface area of MCP tools across four families. See the [tools reference](https://lykhoyda.github.io/rn-dev-agent/tools/) for the full list.
 
-| Category | Count | Examples | Docs |
-|----------|-------|---------|------|
-| **CDP** (React internals) | 39 | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_set_shared_value`, `cdp_native_errors`, `cdp_record_test_*`, `cdp_repair_action` | [CDP tools](https://lykhoyda.github.io/rn-dev-agent/tools/#cdp-tools) |
-| **Device** (native interaction) | 22 | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_pick_value` | [Device tools](https://lykhoyda.github.io/rn-dev-agent/tools/#device-tools) |
-| **Testing** (E2E + proof) | 8 | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_generate`, `maestro_test_all`, `cdp_run_action` | [Testing tools](https://lykhoyda.github.io/rn-dev-agent/tools/#testing-tools) |
-| **Macro-Asserts** (L3 state checks) | 4 | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | [Macro-Asserts](https://lykhoyda.github.io/rn-dev-agent/tools/#macro-asserts) |
+| Family | What it's for | Examples |
+|---|---|---|
+| **CDP** | React internals via Chrome DevTools Protocol | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_native_errors`, `cdp_record_test_*`, `cdp_repair_action` |
+| **Device** | Native interaction with the simulator/emulator | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date` |
+| **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `cdp_run_action` |
+| **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
 ### What's new in v0.44.18 (2026-05-05)
 
-- **L3 self-healing corpus** — new `cdp_repair_action` patches a flow's stale testID via fuzzy match against the live snapshot when `/run-action` fails with `SELECTOR_NOT_FOUND`. Guardrails: refuses on human edits (mtime check), refuses past 3 repairs in 24h, refuses on snapshot infrastructure failure.
+- **Self-healing actions** — new `cdp_repair_action` patches a stale `testID` via fuzzy match against the live snapshot when `/run-action` fails with `SELECTOR_NOT_FOUND`. Guardrails: refuses on human edits (mtime check), refuses past 3 repairs in 24h, refuses on snapshot infrastructure failure.
 - **Auto-repair-aware action replay** — new `cdp_run_action` orchestrates `maestro_run` + parser + `cdp_repair_action` + retry, then persists a `RunRecord` with structured `autoRepair` telemetry (passed / failed / refused / skipped, plus phase-level timing for MTTR analysis).
-- **L2→L3 auto-emission** — new `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with full M7 metadata header + initialised sidecar. Auto-promotes to `status: active` on first clean replay.
+- **Auto-emission of recorded walks** — new `cdp_record_test_save_as_action` turns a recorded walk into a first-class `.rn-agent/actions/<id>.yaml` with a full metadata header and initialised sidecar. Auto-promotes to `status: active` on first clean replay.
 - **Macro-Asserts** — `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` for state-assertive replays. Maestro asserts pixels; these assert internal state. Differentiated capability over Maestro Cloud / KaneAI / BrowserStack.
 - **testID-keyed `device_batch`** — re-resolves via fresh fiber-tree snapshot per call, immune to stale-ref-across-step-transitions failures.
-- **Three-layer architecture** — D1206 codifies L1 Workflow / L2 Discovery / L3 Reproducible Actions as the canonical mental model.
+- **Three-layer architecture** — Workflow (rn-feature-dev) / Discovery (CDP + device tools) / Reproducible Actions is the canonical mental model. See [architecture](https://lykhoyda.github.io/rn-dev-agent/architecture/).
 - **Atomic YAML+sidecar pair-write** — sidecar-first ordering with future-mtime buffer guarantees no false-positive "external edit" alarms even on partial-write failures (D1101 / issue #101).
 - **CAS read-modify-write protection** — `saveActionWithCAS` detects concurrent writer races on the same actionId and retries, so RunRecord history doesn't lose entries under heavy parallel runs (issue #117).
 - **1180+ unit tests** in cdp-bridge (was 994 in v0.44.5, 249 in v0.23.0).

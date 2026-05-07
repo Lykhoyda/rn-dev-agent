@@ -1,9 +1,48 @@
 ---
 title: Architecture
-description: Three-layer architecture — device interaction, app introspection, and E2E testing.
+description: How the plugin is organized — three product layers (workflow, discovery, replayable actions) and the implementation underneath.
 ---
 
-## Three-layer model
+## Three layers — the product model
+
+The plugin is organized into three layers. Each one has a different job and gets used at a different point in the loop.
+
+| Layer | Job | Examples |
+|---|---|---|
+| **Workflow** | Decides what to do; gates quality | `/rn-feature-dev` 8-phase pipeline; the rn-tester / rn-debugger / rn-code-architect agent protocols |
+| **Discovery** | Looks at the running app to know what's there | CDP tools (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`, `cdp_evaluate`); device tools (`device_press`, `device_fill`, `device_snapshot`, `device_screenshot`) |
+| **Reproducible actions** | Replays known flows in seconds; self-repairs on UI drift | `.rn-agent/actions/<name>.yaml`; `cdp_run_action` orchestrator; `cdp_repair_action` selector patcher; [actions guide](actions/) |
+
+```
+        ┌──────────────────────────────────────┐
+        │   Workflow (rn-feature-dev, agents)   │
+        │   Decides WHAT, gates quality         │
+        └────────┬───────────────────┬─────────┘
+                 │ "verify this"     │ "produce/replay flow"
+                 ▼                   ▼
+   ┌─────────────────────┐  ┌──────────────────────┐
+   │      Discovery      │  │       Actions        │
+   │  Empirical reality  │  │  Replay in seconds   │
+   │  CDP + device tools │  │  Self-repair on drift│
+   │  Macro-Asserts      │◄─┤                      │
+   └─────────────────────┘  └──────────────────────┘
+                 ▲                   │
+                 │  Discovery emits  │
+                 └─── new actions ───┘
+                      Actions repair via Discovery
+```
+
+### Why this matters: replay vs. interactive walks
+
+On a known 3-step task-creation wizard, an interactive agent walk took **13 minutes 55 seconds**. The same wizard, replayed as a saved action, finished in **~4 seconds** — a ~210× speedup. That's the load-bearing data point behind the architecture: discovery tools are how the agent finds new ground; actions are how it replays known ground without paying that cost again.
+
+The agent doesn't choose all-or-nothing. If you're on the login screen and need to do something on home, the agent runs the saved login action as a prologue (4 seconds), then discovers the new work interactively. See [actions](actions/) for the full hybrid composition pattern.
+
+---
+
+## Implementation layers — how it's built
+
+The product layers above are organized; underneath, three implementation layers do the work.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -16,7 +55,7 @@ description: Three-layer architecture — device interaction, app introspection,
 │  ┌──────▼───▼────────────▼─────────────────▼──────┐ │
 │  │              MCP Server (CDP Bridge)            │ │
 │  │  WebSocket → Metro → Hermes CDP                 │ │
-│  │  38 tools: CDP + device + testing               │ │
+│  │  70+ tools: CDP + device + testing              │ │
 │  └─────────────────────┬───────────────────────────┘ │
 │                        │                             │
 │  ┌─────────────────────▼───────────────────────────┐ │
@@ -31,11 +70,11 @@ description: Three-layer architecture — device interaction, app introspection,
     └─────────┘                   └───────────┘
 ```
 
-| Layer | Tool | Role |
+| Implementation tier | Tool | Role |
 |-------|------|------|
 | **Device interaction** | agent-device CLI (auto-installed) | Cross-platform native device control: tap, swipe, fill, find, snapshot, screenshot |
 | **App introspection** | Custom MCP server → Hermes CDP via WebSocket | Persistent WebSocket — reads React fiber tree, store state, network, console, errors |
-| **E2E testing** | maestro-runner (preferred) / Maestro (fallback) | YAML-based persistent test files for CI |
+| **E2E testing** | maestro-runner (preferred) / Maestro (fallback) | YAML-based persistent test files; underlying format for actions in `.rn-agent/actions/` |
 
 Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent-device is unavailable.
 
@@ -43,10 +82,11 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 
 The MCP server is a Node.js process that maintains a persistent WebSocket connection to the React Native app's Hermes engine through Metro's CDP endpoint.
 
-**38 tools** in three categories:
-- **19 CDP tools** — React internals via Chrome DevTools Protocol
-- **14 device tools** — Native interaction via agent-device CLI
-- **5 testing/composite tools** — Maestro flows, proof capture, auto-login
+**70+ tools** across four families:
+- **CDP** — React internals via Chrome DevTools Protocol (component tree, store state, navigation, profiling, network)
+- **Device** — Native interaction via agent-device CLI (tap, swipe, fill, snapshot, screenshot)
+- **Testing** — Action replay, proof capture, auto-login, cross-platform verify
+- **Macro-Asserts** — State-assertive replays (`expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text`)
 
 All tools are registered through a single `trackedTool()` wrapper that adds telemetry via the Experience Engine.
 

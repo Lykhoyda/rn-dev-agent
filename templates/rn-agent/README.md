@@ -1,18 +1,19 @@
 # `.rn-agent/` — `rn-dev-agent` plugin home
 
-This directory is the home for everything the
-[`rn-dev-agent`](https://github.com/Lykhoyda/rn-dev-agent) Claude Code
-plugin reads or writes in your project. One folder, one doctrine.
+This directory is the **plugin's home in your project**. Files here are
+managed by the [`rn-dev-agent`](https://github.com/Lykhoyda/rn-dev-agent)
+Claude Code plugin. One folder, one doctrine — the plugin's entire
+footprint is `.rn-agent/` and it does not read or write anywhere else
+in your project.
 
-If your project has a `.maestro/` folder for hand-authored E2E tests,
-that's yours alone — the plugin treats it as out of scope. The single
-intentional carve-out is `cdp_auto_login`, which reads user-authored
-login subflows from `<project>/.maestro/subflows/login.yaml` (and
-`sign_in.yaml`, `auth.yaml`, `register_user.yaml`, `flow_start.yaml`)
-when the app is on a login screen — that's a *read* of user-managed
-content, not plugin territory. To migrate this carve-out into
-`.rn-agent/`, see issue tracker; until then, login subflows live in
-`.maestro/subflows/`.
+If your project also has a `.maestro/` folder for hand-authored E2E
+tests, that's yours alone. The plugin doesn't read it.
+
+> **One small exception:** if the agent lands on a login screen and
+> finds a `.maestro/subflows/login.yaml` (or `sign_in.yaml`,
+> `auth.yaml`, `register_user.yaml`, `flow_start.yaml`), it can use
+> that subflow to log in. This is a read of *your* content, not plugin
+> territory.
 
 ## Layout
 
@@ -23,8 +24,8 @@ content, not plugin territory. To migrate this carve-out into
 ├── .scaffold-version      ← plugin scaffold version (commit)
 ├── skeleton.yaml          ← semantic-name → testID map (commit)
 ├── nav-graph.yaml         ← cached navigation graph (commit, auto-managed)
-├── actions/               ← reusable Maestro flows (commit)
-│   └── *.yaml               each carries an M7 metadata header + sidecar
+├── actions/               ← saved replayable flows (commit)
+│   └── *.yaml               each has a metadata header + state sidecar
 ├── fixtures/              ← seed data for replay (commit)
 ├── proposals/             ← repair proposals queued for review (commit)
 ├── state/                 ← runtime state per action (gitignore)
@@ -66,12 +67,13 @@ other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
 
 The report is informational; deletion stays a deliberate human gesture.
 
-## Refs
+## Learn more
 
-- Workspace: `docs/DECISIONS.md` — D1208 (single-folder doctrine,
-  supersedes D1207), D1206 (three-layer architecture)
-- Plugin commands: `/rn-dev-agent:list-learned-actions`,
-  `/rn-dev-agent:run-action`, `/rn-dev-agent:rn-agent-compact`,
-  `/rn-dev-agent:rn-agent-export`, `/rn-dev-agent:rn-agent-import`
-- Plugin: `scripts/learned-actions.mjs`,
-  `scripts/cdp-bridge/src/domain/action-store.ts`
+- [Actions guide](https://lykhoyda.github.io/rn-dev-agent/actions/) —
+  what actions are and how the agent uses them
+- [`/rn-dev-agent:list-learned-actions`](https://lykhoyda.github.io/rn-dev-agent/commands/list-learned-actions/) —
+  see what's saved in this project
+- [`/rn-dev-agent:run-action`](https://lykhoyda.github.io/rn-dev-agent/commands/run-action/) —
+  replay a saved action
+- [`/rn-dev-agent:rn-agent-compact`](https://lykhoyda.github.io/rn-dev-agent/commands/rn-agent-compact/) —
+  surface stale or flaky actions for review

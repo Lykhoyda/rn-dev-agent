@@ -1,6 +1,6 @@
 ---
 title: setup
-description: Check and install all rn-dev-agent prerequisites with automatic retry and manual fallback instructions.
+description: Onboard the plugin into your project — diagnose, then inject the CLAUDE.md template, scaffold .rn-agent/, and add the dev-only bridge.
 ---
 
 ## Usage
@@ -11,28 +11,25 @@ description: Check and install all rn-dev-agent prerequisites with automatic ret
 
 ## What it does
 
-Runs a 9-point environment checklist. For each missing dependency, it attempts automatic installation. If that fails, it provides manual instructions.
+`/setup` does two things in sequence: diagnoses your environment, then proposes the project-side wiring the plugin needs. Each proposed change is shown as a diff and asks for confirmation before writing.
 
-## Checklist
+| Phase | Step | Action |
+|---|---|---|
+| 1. Diagnose | A | Run [`/doctor`](../doctor/) — check Node, CDP bridge, agent-device, maestro-runner, simulators, Metro, ffmpeg |
+| 2. Inject | B | Append the plugin's tool-routing rules to your project `CLAUDE.md` (or create one) |
+| 2. Inject | C | Add a small dev-only bridge call to your app entry — exposes the navigation ref + Zustand stores in `__DEV__` only |
+| 2. Inject | D | Scaffold `.rn-agent/` — the plugin's home in your project (README, `.gitignore`, `dev-bridge.ts`, `globals.d.ts`, starter folders) |
+| 2. Verify | E | Run `cdp_status` to confirm the bridge is reachable |
 
-| # | Check | Required | Auto-install |
-|---|-------|----------|-------------|
-| 1 | Node.js >= 22 LTS | Yes | No (user must install) |
-| 2 | CDP bridge dependencies | Yes | Yes (`npm install`) |
-| 3 | agent-device CLI | Yes | Yes (`npm install -g agent-device`) |
-| 4 | maestro-runner | Yes | Yes (curl installer) |
-| 5 | iOS Simulator booted | One platform | No |
-| 6 | Android Emulator running | One platform | No |
-| 7 | Metro dev server | Yes | No (user starts) |
-| 8 | CDP connection | Yes | Auto via `cdp_status` |
-| 9 | ffmpeg | Optional | No |
+Re-running `/setup` is idempotent. Already-applied blocks are detected and skipped — safe to run any time you want to confirm everything is wired.
 
 ## When to run
 
-- First time using the plugin
+- First time using the plugin in a project
 - After SessionStart shows WARNING messages
 - When `cdp_status` fails to connect
 - When `device_*` tools fail
+- After cloning a project that already had `/setup` run by someone else (will detect existing wiring and skip)
 
 ## Example output
 
@@ -48,4 +45,15 @@ Runs a 9-point environment checklist. For each missing dependency, it attempts a
 | Metro           | RUNNING (port 8081)   | —                                       |
 | CDP connection  | CONNECTED             | —                                       |
 | ffmpeg          | OK (v7.1)             | —                                       |
+
+CLAUDE.md           — append plugin tool-routing rules?    [diff shown] (y/n)
+App entry           — add getBridge()?.registerNavRef(...)? [diff shown] (y/n)
+App entry           — add getBridge()?.registerStores(...)? [diff shown] (y/n)
+.rn-agent/          — scaffold (8 files)?                    [list shown] (y/n)
 ```
+
+## See also
+
+- [`/doctor`](../doctor/) — read-only diagnostic sibling. `/doctor` reports; `/setup` fixes and instruments.
+- [Getting Started](../../getting-started/) — installation and first run
+- [Actions](../../actions/) — what `.rn-agent/` is for after `/setup` scaffolds it

@@ -9,7 +9,7 @@ hero:
       link: /rn-dev-agent/getting-started/
       icon: right-arrow
       variant: primary
-    - text: Browse 51 Tools
+    - text: Browse the tool reference
       link: /rn-dev-agent/tools/
       variant: minimal
 ---
@@ -22,8 +22,11 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   <Card title="Live Verification" icon="approve-check">
     After implementing a feature, Claude connects to your running app via CDP, navigates to the screen, checks the component tree, exercises interactions, and confirms store state — no "trust me it works."
   </Card>
-  <Card title="51 MCP Tools" icon="setting">
-    24 CDP tools for React internals (component tree, store state, navigation, profiling), 14 device tools for native interaction (tap, swipe, type, scroll), and 13 testing/composite tools (Maestro, proof capture, cross-platform verify).
+  <Card title="Live introspection MCP tools" icon="setting">
+    CDP tools for React internals (component tree, store state, navigation, profiling), device tools for native interaction (tap, swipe, type, scroll), testing tools for replay and proof capture, and Macro-Asserts for state-assertive checks.
+  </Card>
+  <Card title="Replayable actions" icon="rocket">
+    Saved app flows in `.rn-agent/actions/` that replay in seconds. The plugin records them automatically when verification passes; the agent uses them as prologues (e.g. login) before doing new work. [Learn more](/rn-dev-agent/actions/).
   </Card>
   <Card title="8-Phase Pipeline" icon="list-format">
     `/rn-feature-dev` runs discovery, exploration, questions, architecture, implementation, live verification, code review, and E2E proof — from description to verified code.

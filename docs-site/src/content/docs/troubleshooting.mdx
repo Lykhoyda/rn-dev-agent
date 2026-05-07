@@ -26,12 +26,17 @@ This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it f
 ## Store state issues
 
 <Aside type="tip" title="cdp_store_state error for Zustand">
-Add a one-line setup to your app entry:
+Run `/rn-dev-agent:setup` — it scaffolds the dev-bridge and proposes a `getBridge()?.registerStores({ ... })` line in your app entry. The bridge call replaces the older `globalThis.__ZUSTAND_STORES__` pattern.
+
+Manual fallback if you want to wire it yourself:
 
 ```typescript
-if (__DEV__) {
-  global.__ZUSTAND_STORES__ = { auth: useAuthStore, cart: useCartStore };
-}
+import { getBridge } from './.rn-agent/dev-bridge';
+
+getBridge()?.registerStores({
+  auth: useAuthStore,
+  cart: useCartStore,
+});
 ```
 
 Redux is auto-detected — no setup needed.
@@ -91,4 +96,22 @@ Ensure the emulator is booted and `adb devices` shows it. The plugin auto-select
 
 <Aside type="tip" title="Maestro gRPC error on Android">
 Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
+</Aside>
+
+## Actions and setup
+
+<Aside type="tip" title="Action replay fails with SELECTOR_NOT_FOUND">
+The plugin attempts to self-repair small UI drift: it looks at the live UI, finds the renamed `testID` via fuzzy match, patches the action YAML, and retries.
+
+Self-repair refuses if the file has been hand-edited (mtime check), or after 3 repairs in 24h. If repair is refused or fails, the plugin asks before forcing. If the underlying flow has changed structurally (extra step, removed screen), re-record with `/rn-dev-agent:test-feature`.
+
+See the [Actions guide](/rn-dev-agent/actions/) for full details.
+</Aside>
+
+<Aside type="tip" title="`/setup` skipped a step">
+Re-run `/rn-dev-agent:setup`. It's idempotent — already-injected blocks are detected and skipped, so only the missing pieces get applied.
+</Aside>
+
+<Aside type="tip" title=".rn-agent/state/ showing up in git status">
+That directory holds runtime state (run history, repair history) — not config. Check that `.rn-agent/.gitignore` exists and contains `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`. The `/setup` scaffold ships this file; if it's missing, regenerate via `/setup` (idempotent — only the missing pieces are added).
 </Aside>
