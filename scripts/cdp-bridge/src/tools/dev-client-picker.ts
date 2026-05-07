@@ -31,6 +31,27 @@ export interface PickerResult {
   reason: string;
 }
 
+// GH #136: structural matcher for dev-client picker rows. The picker shows
+// rows shaped like `<host>:<port>` — host may be a LAN IPv4 address, an
+// Android emulator alias (10.0.2.2), a `.local` mDNS name, or a bare DNS
+// hostname. The Metro port (default 8081, configurable) is the most reliable
+// signal that we're looking at a server entry vs decorative text. Constraints:
+//   - port must be 80..65535 (rejects version-string fragments like `0.76`)
+//   - host must contain a letter or look like an IPv4 quad (rejects `:port`-only)
+const PORT_PATTERN = /\b([\w.-]+):(\d{2,5})\b/g;
+
+export function parsePortPatternEntry(text: string | null | undefined): string | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  for (const match of text.matchAll(PORT_PATTERN)) {
+    const host = match[1];
+    const portNum = Number.parseInt(match[2], 10);
+    if (portNum < 80 || portNum > 65535) continue;
+    if (!/[A-Za-z]/.test(host) && !/\d+\.\d+\.\d+\.\d+/.test(host)) continue;
+    return `${host}:${portNum}`;
+  }
+  return null;
+}
+
 export async function handleDevClientPicker(): Promise<PickerResult | null> {
   if (!hasActiveSession()) return null;
 
