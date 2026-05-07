@@ -1,5 +1,5 @@
 {
-  "description": "RN project detection, post-edit health check, CWD re-detection, subagent CDP injection, and tool failure diagnostics",
+  "description": "RN project detection, post-edit health check, Vercel-rules audit, CWD re-detection, subagent CDP injection, and tool failure diagnostics",
   "hooks": {
     "SessionStart": [
       {
@@ -20,6 +20,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-edit-health-check.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/vercel-rules-audit.sh",
+            "timeout": 15
           }
         ]
       }
