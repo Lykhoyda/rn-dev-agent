@@ -1,0 +1,106 @@
+---
+title: Actions
+description: Saved, replayable flows through your app — what they are, where they live, and how the agent uses them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An **action** is a saved, replayable flow through your app — login, navigating to a screen, completing a multi-step form. The plugin records them automatically when verification passes; you replay them in seconds via `/run-action`, and the agent uses them as prologues when it needs to reach a known state.
+
+| | |
+|---|---|
+| **What** | A saved, replayable flow through your app (login, navigation, multi-step setup). |
+| **Where** | `.rn-agent/actions/<name>.yaml`. The plugin's home in your project is `.rn-agent/`. |
+| **Create one** | Run `/rn-dev-agent:test-feature <description>`. When verification passes, the plugin saves the verified walk as an action. |
+| **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state. |
+| **Self-repair** | If a `testID` changes, the plugin patches the action against the live UI and retries. Small UI drift is absorbed; broken product logic is not. |
+| **Why** | Known flows replay in seconds instead of being rediscovered interactively. Repeated setup work like login becomes one fast step. |
+
+## Where actions live
+
+The plugin's home in your project is `.rn-agent/`. Actions live in the `actions/` subdirectory; sibling folders hold supporting state.
+
+```
+.rn-agent/
+├── actions/                ← saved actions (commit)
+│   └── *.yaml
+├── state/                  ← run history, repair history (gitignore)
+├── recordings/             ← raw captures from cdp_record_test (gitignore)
+├── skeleton.yaml           ← UI semantic-name → testID map (commit)
+├── nav-graph.yaml          ← persisted navigation graph (commit, optional)
+├── fixtures/               ← seed data for replay (commit)
+├── proposals/              ← repair proposals queued for review (commit)
+└── README.md
+```
+
+`/rn-dev-agent:setup` scaffolds the entire directory on first onboarding; [`/doctor`](../commands/doctor/) reports on its health.
+
+The plugin's entire footprint is `.rn-agent/`. It does not read or write anywhere else in your project.
+
+## Creating an action
+
+Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the feature on the live simulator, verifies UI rendering and internal state, then saves the verified walk as `.rn-agent/actions/<feature-slug>.yaml`. Each action carries a small metadata header at the top — its intent, what it tags, whether it mutates data, its lifecycle status.
+
+```yaml
+# id: wizard-create-task
+# intent: Create a task via the 3-step wizard
+# tags: [task, wizard, create]
+# mutates: true
+# status: active
+appId: com.rndevagent.testapp
+---
+# Maestro YAML body...
+```
+
+You can hand-edit actions, but consider that self-repair refuses to touch hand-edited files (`mtime` check) — to keep the plugin's automatic upkeep working, prefer rerecording over hand-editing.
+
+## Listing and running
+
+[`/rn-dev-agent:list-learned-actions`](../commands/list-learned-actions/) shows what's saved in this project (with an optional keyword filter):
+
+```
+/rn-dev-agent:list-learned-actions task
+```
+
+[`/rn-dev-agent:run-action`](../commands/run-action/) replays one by name:
+
+```
+/rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high
+```
+
+`-e KEY=VALUE` fills `${KEY}` placeholders inside the action. `--platform ios|android` targets a specific device when multiple are booted. `--dry-run` prints the resolved replay command without executing it.
+
+## Self-repair, in plain words
+
+When a `testID` gets renamed in your app and the action references the old name, replay fails with `SELECTOR_NOT_FOUND`. The plugin doesn't give up: it looks at the live UI, finds the most likely new `testID` via fuzzy matching, patches the YAML, and retries. The repair gets logged to the action's sidecar file so you can see what changed.
+
+<Aside type="caution" title="Self-repair has limits">
+Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not broken product logic. It refuses to touch files you've hand-edited (`mtime` check). It refuses after 3 repairs on the same action in 24h to avoid runaway patching. Failures escalate to you.
+</Aside>
+
+## The agent picks actions automatically
+
+You don't have to type `/run-action` yourself. When you ask the agent to do something on screen X but the app is on screen Y, the agent will scan saved actions for one that gets you to X and run it as a prologue — then continue with the new work interactively.
+
+**Example.** You ask: "tap the cart badge."
+
+- The agent reads the navigation state. The app is on `LoginScreen`, but the cart badge lives on `HomeScreen`.
+- It finds a saved `user-login` action whose recorded outcome is "logged-in home."
+- It runs `user-login` (~4 seconds), arrives at `HomeScreen`.
+- Then it discovers the cart badge interactively and taps it.
+
+This is the **hybrid composition** pattern. Actions cover the predictable parts (login, onboarding, locale switching, subscription gates) so the agent only spends time on the part that's actually new.
+
+## What actions are NOT
+
+- **Not a magic auto-tester.** Self-repair handles small UI drift; it doesn't fix broken features.
+- **Not a replacement for hand-written E2E tests.** If you maintain a `.maestro/` suite for CI, the plugin doesn't touch it. Actions and your team's E2E suite live separately.
+- **Not isolated from your project.** Actions live in `.rn-agent/actions/`, alongside the skeleton and other plugin-managed files. Commit them — they're as much a part of your project as `__tests__/`.
+
+## See also
+
+- [`/rn-dev-agent:test-feature`](../commands/test-feature/) — the command that records actions
+- [`/rn-dev-agent:list-learned-actions`](../commands/list-learned-actions/) — list saved actions
+- [`/rn-dev-agent:run-action`](../commands/run-action/) — replay an action by name
+- [`/rn-dev-agent:setup`](../commands/setup/) — scaffolds `.rn-agent/` and the dev-bridge
+- [Architecture](../architecture/) — where actions sit in the three-layer model

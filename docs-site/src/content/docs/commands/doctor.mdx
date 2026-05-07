@@ -1,0 +1,70 @@
+---
+title: doctor
+description: Read-only environment diagnostic — checks 11 prerequisites and reports what's missing without modifying your project.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`/doctor` reports; [`/setup`](../setup/) fixes and instruments. Use `/doctor` when you want diagnostics without changing files.
+
+## Usage
+
+```
+/rn-dev-agent:doctor
+```
+
+## What it checks
+
+A dozen prerequisites, presented as a single table:
+
+| # | Check | Required | Auto-install possible (via `/setup`) |
+|---|-------|----------|---------------------------------------|
+| 1 | Node.js >= 22 LTS | Yes | No (user must install) |
+| 2 | CDP bridge dependencies | Yes | Yes |
+| 3 | agent-device CLI | Yes | Yes |
+| 4 | maestro-runner | Yes | Yes |
+| 5 | iOS Simulator booted | One platform | No |
+| 6 | Android Emulator running | One platform | No |
+| 7 | Metro dev server | Yes | No (you start it) |
+| 8 | CDP connection reachable | Yes | Auto via `cdp_status` |
+| 9 | Injected `__RN_AGENT` helpers fresh | Yes | Auto on connect |
+| 10 | ffmpeg | Optional | No |
+| 11 | Physical-device prerequisites | Optional | No |
+| 12 | Vercel rules sync freshness | Optional | Yes (re-sync on stale) |
+
+For every red row, `/doctor` prints the exact install command tailored to your environment (e.g., the right `nvm`/`brew` flag).
+
+<Aside type="note" title="`/doctor` is read-only">
+`/doctor` does not modify your project. It does not append to `CLAUDE.md`, scaffold `.rn-agent/`, or change source code. To do those things, run [`/setup`](../setup/) instead.
+</Aside>
+
+## When to run
+
+- After SessionStart shows WARNING messages
+- When `cdp_status` fails to connect
+- When `device_*` tools start failing
+- Before reporting a plugin bug — paste the table into the issue
+
+## Example output
+
+```
+| Check                  | Status                | Action Needed                          |
+|------------------------|-----------------------|----------------------------------------|
+| Node.js                | OK (v22.15.0)         | —                                      |
+| CDP bridge             | OK                    | —                                      |
+| agent-device           | MISSING               | Run /rn-dev-agent:setup to install     |
+| maestro-runner         | OK (v1.0.9)           | —                                      |
+| iOS Simulator          | BOOTED (iPhone 16)    | —                                      |
+| Android emulator       | NOT RUNNING           | Boot one if you need Android coverage  |
+| Metro                  | RUNNING (port 8081)   | —                                      |
+| CDP connection         | CONNECTED             | —                                      |
+| __RN_AGENT helpers     | FRESH (v16)           | —                                      |
+| ffmpeg                 | OK (v7.1)             | —                                      |
+| Physical device        | NONE CONNECTED        | Skip if testing on simulator only      |
+```
+
+## See also
+
+- [`/setup`](../setup/) — onboarding sibling that fixes what `/doctor` reports
+- [`/check-env`](../check-env/) — quicker, narrower readiness check
+- [Troubleshooting](../../troubleshooting/) — common issues and fixes

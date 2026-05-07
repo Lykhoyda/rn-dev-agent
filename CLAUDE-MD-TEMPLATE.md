@@ -38,6 +38,42 @@ Manual walks are a fallback, not a default. Codified in
 `/rn-dev-agent:test-feature` and Step 0a of the `rn-tester` / `rn-debugger`
 agent protocols.
 
+### 🧩 Hybrid composition — actions are skill primitives, not just full replays
+
+Use deterministic actions wherever they fit, and walk only the parts that
+don't have a saved action. The all-or-nothing "match → replay; else fully
+manual" rule is gone — most real tasks share *partial* overlap with existing
+actions (login, onboarding, locale, subscription gate). Compose action +
+manual when state mismatches; never re-walk a flow you already have.
+
+**Three rules:**
+
+1. **State-detection prologue.** Before any goal-state task, read current
+   state — `cdp_navigation_state` for the route, `cdp_store_state` for the
+   relevant slice. Note any mismatch with the expected starting state.
+2. **Compose action + manual.** If current state ≠ expected start, scan
+   `list-learned-actions` for an action whose `produces` covers the gap.
+   Replay via `cdp_run_action`. Re-verify state. Then continue
+   interactively for the novel part.
+3. **No fully-manual fallback when partial replay would cover half the work.**
+   Login is the cardinal example — if a saved login action exists, use it
+   as a prologue, never re-walk login interactively.
+
+**Worked example.** User: "tap the cart badge."
+
+- Agent: `cdp_navigation_state` → `LoginScreen` (mismatch with home)
+- Agent: `list-learned-actions` → finds `user-login` with
+  `produces: { authenticated: true, route: home }`
+- Agent: `cdp_run_action({ id: "user-login", params: { EMAIL, PASSWORD } })`
+- Agent: `cdp_navigation_state` → `HomeScreen` (state delta closed)
+- Agent: `cdp_component_tree({ filter: "cart" })` → finds `cart-badge` ref
+- Agent: `device_press({ ref: "cart-badge" })`
+
+**The `produces:` field is optional metadata in the M7 action header.** Existing
+actions without `produces` fall back to today's intent-string matching.
+Recorders are encouraged to populate it from observed end-of-flow state when
+saving via `cdp_record_test_save_as_action`.
+
 ---
 
 ### 🚨 Tool Routing — STRICT RULES (read this second)

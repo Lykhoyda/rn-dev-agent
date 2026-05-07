@@ -54,19 +54,23 @@ Manual update:
 
 The plugin connects to your running app via Metro's CDP endpoint and reads the React fiber tree directly.
 
-### Zustand stores (one line)
+### Zustand stores (one bridge call)
+
+`/rn-dev-agent:setup` scaffolds `.rn-agent/dev-bridge.ts` and `.rn-agent/globals.d.ts` into your project. Then add a single registration call alongside your store definitions:
 
 ```typescript
 // App.tsx or app/_layout.tsx
-if (__DEV__) {
-  global.__ZUSTAND_STORES__ = {
-    auth: useAuthStore,
-    cart: useCartStore,
-  };
-}
+import { getBridge } from './.rn-agent/dev-bridge';
+
+getBridge()?.registerStores({
+  auth: useAuthStore,
+  cart: useCartStore,
+});
 ```
 
-Zero production cost — stripped in release builds.
+No `__DEV__` guard at the call site — `getBridge()` returns `null` in production and the optional chain is a no-op. Zero production cost. The bridge handles the dev-only global assignment internally.
+
+`/rn-dev-agent:setup` proposes this edit automatically; you don't have to write it by hand.
 
 ### Redux
 
@@ -82,24 +86,19 @@ Add `testID` to interactive elements for reliable component queries:
 </Pressable>
 ```
 
-## Recommended: Add to your CLAUDE.md
+## Project instructions: let `/setup` do it
 
-Copy this into your project's `CLAUDE.md` to ensure Claude uses CDP tools:
+`/rn-dev-agent:setup` injects the plugin's tool-routing rules into your project's `CLAUDE.md` automatically. It also scaffolds the bridge files and the `.rn-agent/` directory in one pass.
 
-```markdown
-## React Native Development (rn-dev-agent)
+The injection is idempotent — re-running `/setup` skips already-applied blocks.
 
-### Tool Usage Rules
-- ALWAYS use CDP MCP tools instead of raw bash commands
-- ALWAYS call cdp_status first before any app interaction
-- NEVER use xcrun simctl openurl for navigation
-- For UI interaction, use device_find/device_press — not simctl or adb input
+If you want to inspect the rules first, see [the CLAUDE.md template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/CLAUDE-MD-TEMPLATE.md) — the body after the `---` separator is what gets appended to your project's `CLAUDE.md`.
 
-### Key Commands
-- /rn-dev-agent:rn-feature-dev <description> — Full 8-phase pipeline
-- /rn-dev-agent:check-env — Verify environment
-- /rn-dev-agent:debug-screen — Diagnose current screen
-```
+## Your agent's saved flows live in `.rn-agent/`
+
+The plugin's home in your project is `.rn-agent/`. Saved actions, the UI skeleton, navigation graph, and runtime state all live there. `/setup` scaffolds the directory; [`/doctor`](commands/doctor/) reports on its health.
+
+See the [Actions guide](actions/) for what an action is, how to record one, and how the agent uses them.
 
 ## First run
 
