@@ -107,20 +107,31 @@ How Claude finds the skill.
     - "**/*.{ts,tsx,js,jsx}"
     - "**/package.json"
   ```
-  This auto-activates on file context regardless of phrasing.
+  Intent: auto-activate on file context regardless of phrasing.
+- **Verification status**: `paths:` is documented for `.claude/rules/*.md` instruction files but NOT verified for plugin skills. Zero of 7 existing plugin skills use it. **Strategy: test-and-trust** — add the field; if Claude Code silently ignores it, hooks (Layers 2 + 4) still fire on every Edit/Write regardless of skill activation, so enforcement holds. Layer 1 effectively degrades to "Light" if `paths:` is a no-op, but no enforcement is lost.
 - Existing agent preload retained: `rn-code-architect.md` and `rn-code-reviewer.md` already declare `skills: rn-best-practices`. **Not** added to `rn-debugger`, `rn-code-explorer`, `rn-tester` — they don't write code, only burn tokens.
 
 ### Layer 2 — Selection (Tier: Heavy)
 
 Just-in-time per-file rule subset.
 
-- `hooks/vercel-rules-pre-edit.sh` registered as `PreToolUse` for `Edit | MultiEdit | Write`.
-- Hook clones the guard skeleton from `hooks/post-edit-health-check.sh` (RN-project detection, debounce, fail-soft).
-- Calls `scripts/vercel-rules-context.mjs --file <path> --tool <tool>` which:
+- `hooks/vercel-rules-pre-edit.sh` registered as `PreToolUse` for `Edit | MultiEdit | Write` with `"timeout": 8` (blocks the tool call; keep tight).
+- Hook clones the guard skeleton from `hooks/post-edit-health-check.sh` (file-extension filter, CDP active, RN-project detection, debounce, fail-soft).
+- **Hook stdin parsing**:
+  - Read `tool_input.file_path` from stdin (works for `Edit`, `Write`)
+  - For `MultiEdit`: read `tool_input.file_path` (top-level) AND scan `tool_input.edits[].new_string` for keyword matching
+- Calls `scripts/vercel-rules-context.mjs --file <path> --tool <tool> [--content <stdin>]` which:
   - Reads `skills/rn-best-practices/rules.index.json`
   - Filters by file glob match + keyword scan of the edit content
-  - Emits 5-10 matching rules as compact text (cap 1KB) for `additionalContext` injection
-- Output format:
+  - Emits 5-10 matching rules as compact text (cap 1KB)
+- **Hook output format** (PreToolUse JSON envelope — required by Claude Code; plain stdout goes to debug log only, NOT to context):
+  ```bash
+  printf '%s' "$(jq -n \
+    --arg ctx "$rules_text" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", additionalContext: $ctx}}')"
+  ```
+  On guard-skip paths (e.g., not a `.tsx` file, no matching rules): `exit 0` with no stdout.
+- Inner text format (the value of `additionalContext`):
   ```
   Rules applicable to <path>:
   - [list-virtualize] CRITICAL: Use a list virtualizer for any list. → third_party/.../rules/list-virtualize.md
@@ -144,25 +155,38 @@ Make Claude required to apply rules during work.
   ```
   Six procedure blocks total: list rendering, animations, data fetching, component API design, navigation, image/media.
 
-- **`commands/rn-feature-dev.md` Phase 4 (Architecture) gate:** architect must list rule IDs consulted before approving design.
-- **`commands/rn-feature-dev.md` Phase 6 (Quality Review) gate:** reviewer must run `check-vercel-rules.mjs --changed` and report findings.
+- **`skills/rn-feature-development/SKILL.md` Phase 4 (Architecture) gate:** architect must list rule IDs consulted before approving design. Insertion: between current lines 121–122 (after architect blueprint return, before "Present to user").
+- **`skills/rn-feature-development/SKILL.md` Phase 6 (Quality Review) gate:** reviewer must run `check-vercel-rules.mjs --changed` and report findings. Insertion: after current line 381 (after reviewer agent launch, before "consolidate findings").
+
+(Note: `commands/rn-feature-dev.md` is a 28-line dispatcher; the actual phase logic lives in `skills/rn-feature-development/SKILL.md`. Spec corrected from initial draft after Phase 2 codebase exploration.)
 
 ### Layer 4 — Verification (Tier: Heavy)
 
 Deterministic check that produced code complies.
 
 - **PostToolUse audit hook** `hooks/vercel-rules-audit.sh`:
-  - Registered for `Edit | MultiEdit | Write` matching `*.{ts,tsx,js,jsx}`
-  - Clones `hooks/post-edit-health-check.sh` skeleton (CDP active, RN project detected, simulator booted, debounce)
+  - Registered for `Edit | MultiEdit | Write` with `"timeout": 15` (async from Claude's perspective; can run longer)
+  - Clones `hooks/post-edit-health-check.sh` skeleton (file-extension filter, CDP active, RN project detected, simulator booted, debounce)
   - Runs `scripts/check-vercel-rules.mjs --changed --format hook`
-  - Output cap: 1.5KB to `additionalContext` (well under 10KB hook output limit)
+  - Output cap: 1.5KB (well under 10KB hook output character limit)
+  - **Output format**: PostToolUse JSON envelope on success path only:
+    ```bash
+    printf '%s' "$(jq -n \
+      --arg ctx "$audit_output" \
+      '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}')"
+    ```
+    Silent `exit 0` on guard-skip paths (not a `.tsx` file, no violations).
   - Default: warn-and-inject (not block — block in `--ci`/pre-commit only)
 
 - **`scripts/check-vercel-rules.mjs`** verification CLI:
   - Run modes: `--changed` (default for hook), `--all`, `--ci`
   - Output formats: `hook` (text for `additionalContext`), `json`, `sarif` (for GitHub code-scanning)
-  - Initially uses a small in-house AST checker; later wraps `eslint-plugin-rn-dev-agent` once that lands
   - Reads `.rn-agent/vercel-rules-baseline.json` if present and excludes baseline violations
+  - **v1.0 checker scope (locked to prevent scope creep)** — 3 grep-style pattern checks; full AST checking deferred to v1.1 ESLint plugin:
+    1. `no-touchable-new-code` — flag `import.*Touchable(Opacity|Highlight|WithoutFeedback)` in modified files (severity: warn)
+    2. `no-inline-renderitem-literals` — flag `renderItem={\([^)]*\)\s*=>` arrow-fn inline (severity: warn)
+    3. `no-falsy-jsx-and` — flag `\{[a-zA-Z_.]+\.length\s*&&` likely-falsy-length pattern (severity: warn)
+  - LLM-review path (via reviewer agent) handles the remaining ~44 rules in v1.0
 
 - **`agents/rn-code-reviewer.md` index-driven lookup:**
   - Replace keyword-trigger lookups with: read `rules.index.json`, filter by changed file's keyword set + `fileGlobs`, read only matched references.
@@ -256,11 +280,11 @@ P0 = ship-or-don't-bother. P1 = recall improvements. P2 = adoption hardening. P3
 | 12 | P1 | `hooks/hooks.json` (PreToolUse) | Wire PreToolUse selection | 30m |
 | 13 | P1 | `agents/rn-code-reviewer.md` | Index-driven lookup; consume hook findings; report rule IDs | 2h |
 | 14 | P1 | `agents/rn-code-architect.md` | Reference index for design-time rule consultation; Phase 4 gate | 1h |
-| 15 | P1 | `commands/rn-feature-dev.md` | Phase 4 + Phase 6 rule gates | 1h |
+| 15 | P1 | `skills/rn-feature-development/SKILL.md` | Phase 4 gate (after line 121) + Phase 6 gate (after line 381) — corrected target after Phase 2 codebase exploration; was `commands/rn-feature-dev.md` (a 28-line dispatcher) | 1h |
 | 16 | P2 | `commands/check-vercel-rules.md` | New slash command for manual full audits | 1h |
-| 17 | P2 | `templates/rn-agent/vercel-rules.config.json` | Default config template scaffolded by `/setup`. Schema: `{ enabledCategories: string[] \| "all", severityOverrides: { [ruleId]: "warn" \| "error" \| "off" }, baselinePath: string }` | 1h |
+| 17 | P2 | `templates/rn-agent/vercel-rules.config.json` | Default config template scaffolded by `/setup` in **Prompt 2** (user-editable section, alongside `skeleton.yaml` / `dev-bridge.ts`) so users see it at scaffold time. Schema: `{ enabledCategories: string[] \| "all", severityOverrides: { [ruleId]: "warn" \| "error" \| "off" }, baselinePath: string }` | 1h |
 | 18 | P2 | `commands/setup.md` | Scaffold `vercel-rules.config.json` + `vercel-rules-baseline.json` placeholder | 30m |
-| 19 | P2 | `commands/doctor.md` | Add row checking vendored content presence + sync freshness | 30m |
+| 19 | P2 | `skills/rn-setup/SKILL.md` (output table) + `commands/doctor.md` (prose count) | Append 13th row: Vercel sync freshness check (`node scripts/sync-vercel-skills.mjs --check`; pass if rules.index.json exists + UPSTREAM.lock.json fetchedAt < 30 days). Doctor.md prose says "11 prerequisite checks" but a 12th was already added in v0.44.24 (`a6f5b12`); new row is 13th. | 30m |
 | 20 | P2 | `pre-ship-checker` integration docs | How to call check-vercel-rules from pre-ship-checker; refuse on CRITICAL outside baseline | 1h |
 | 21 | P3 | `eslint-plugin-rn-dev-agent/` (new package) | 5-8 high-signal rules + RuleTester fixtures | 12-16h |
 | 22 | P3 | `scripts/check-vercel-rules.mjs` (update) | Wrap eslint-plugin-rn-dev-agent | 2h |
@@ -275,6 +299,43 @@ P0 = ship-or-don't-bother. P1 = recall improvements. P2 = adoption hardening. P3
 
 **Phasing:** ship P0+P1+P2 as a single PR for v1.0 (≈4 days). Stack P3 (ESLint plugin) as a separate follow-up PR for v1.1 — reduces blast radius and lets the core enforcement loop prove out before we commit to maintaining a custom ESLint plugin.
 
+## 8a. Build sequence (validated by Phase 4 architect agent)
+
+Items in §8 are listed by priority. Actual build order — corrected for dependency-ordering bugs caught in Phase 4 — is:
+
+**Phase A — Foundation** (no hooks active yet)
+1. **#9 (move-only)** — move 4 custom rules to `references/rn-dev-agent/`. **Do NOT delete the 43 vendored copies yet.**
+2. **#7** — `LICENSE-VENDORED.md` (pure authoring, no deps).
+3. **#3** — `sync-vercel-skills.mjs`.
+4. **#8** — run sync; populates `third_party/`, generates `UPSTREAM.lock.json`, **emits `rules.index.json` as output**.
+5. **#9 (delete phase)** — delete the 43 flat-vendored files now that sync resolution is verified.
+6. **#2** — validate the generated `rules.index.json` schema (does NOT author it from scratch — it's an output of #8).
+
+**Checkpoint A**: `npm run sync:vercel -- --ref <sha>` exits 0; `third_party/` populated; `references/rn-dev-agent/` has 4 files; flat `references/*.md` gone; `rules.index.json` lists 47+ rules.
+
+**Phase B — Verification (PostToolUse, the critical path)**
+7. **#4** — `check-vercel-rules.mjs` (3-rule grep checker per §5 Layer 4).
+8. **#5** — `vercel-rules-audit.sh`.
+9. **#6** — wire PostToolUse in `hooks.json` as a **second entry** in the existing `Edit|MultiEdit|Write` matcher's `hooks` array (not a separate matcher entry — verified existing schema supports this).
+
+**Checkpoint B**: edit any `.tsx` in test-app, confirm PostToolUse fires, audit hook runs without crashing.
+
+**Phase C — Application (procedural SKILL.md + agent gates)**
+10. **#1** — rewrite SKILL.md as procedure (now references real rule IDs from #2). **Critical: this comes AFTER #8 so cited IDs match upstream.**
+11. **#13, #14, #15** — agent + skill prompt updates (parallelizable; no inter-deps).
+
+**Checkpoint C**: run `/rn-feature-dev` on a trivial feature, confirm Phase 4 lists rule IDs and Phase 6 references `[VERCEL/...]` findings.
+
+**Phase D — Selection (PreToolUse)**
+12. **#10** — `vercel-rules-context.mjs`.
+13. **#11** — `vercel-rules-pre-edit.sh`.
+14. **#12** — wire PreToolUse in `hooks.json`.
+
+**Checkpoint D**: edit a `.tsx` containing `FlatList`, confirm PreToolUse injects `list-performance` rules (≤1KB) and PostToolUse audit fires after.
+
+**Phase E — Adoption hardening (P2; all parallelizable, no inter-deps)**
+15-19. **#16, #17, #18, #19, #20** — slash command, config template, setup scaffold, doctor row, pre-ship-checker docs.
+
 ## 9. Risk register
 
 | # | Risk | Likelihood | Impact | Mitigation |
@@ -288,6 +349,8 @@ P0 = ship-or-don't-bother. P1 = recall improvements. P2 = adoption hardening. P3
 | 7 | **ESLint plugin maintenance scope creep** | MEDIUM | LOW (v1.1+ only) | Hard-cap "checkable subset" in plugin README; reject PRs without RuleTester fixtures + ≥90% confidence evidence |
 | 8 | **Accidental vendor placement inside `skills/`** auto-registers vendored skills as Claude-discoverable | LOW | HIGH | CI assertion: registered skills in `plugin.json` matches a hand-curated allowlist; vendor paths must NOT be under `skills/` |
 | 9 | **Supply chain compromise of upstream** | LOW | HIGH | SHA-pin (no floating `main`); per-file SHA-256 in `UPSTREAM.lock.json`; PR-reviewable diffs |
+| 10 | **hooks.json multi-entry collision** with existing `post-edit-health-check.sh` | LOW (resolved in Phase 4) | MEDIUM | Add audit hook as second `{type, command, timeout}` in existing matcher's `hooks: []` array — schema supports parallel commands per matcher |
+| 11 | **AST checker scope creep** beyond v1.0's 3 grep-pattern rules | MEDIUM | MEDIUM (v1.0 only) | v1.0 scope locked in §5 Layer 4: `no-touchable-new-code`, `no-inline-renderitem-literals`, `no-falsy-jsx-and`. Anything beyond ships in v1.1 ESLint plugin |
 
 ## 10. Open questions for upstream
 
@@ -301,7 +364,11 @@ To file as issues with `vercel-labs/agent-skills`:
 
 Sequence:
 1. Run initial `sync-vercel-skills.mjs` to populate `third_party/vercel-labs/agent-skills/`.
-2. Identify the 4 rn-dev-agent custom rules: diff `skills/rn-best-practices/references/*.md` filenames against `third_party/vercel-labs/agent-skills/skills/*/rules/*.md` filenames. Files present in references/ but absent from upstream are the rn-dev-agent custom set.
+2. The 4 rn-dev-agent custom rules (verified by content audit during Phase 2 codebase exploration — these have NO `Source: vercel-labs/agent-skills (MIT License)` footer):
+   - `navigation-transparent-modal.md` (Bridgeless transparentModal bug; cites B109 + D613)
+   - `query-cache-reactive.md` (reactive query hooks)
+   - `reanimated-in-lists.md` (Reanimated layout animations in lists)
+   - `theme-memoization-lists.md` (theme hooks inside list items)
 3. Move those 4 files to `skills/rn-best-practices/references/rn-dev-agent/`.
 4. Delete the remaining 43 files from `skills/rn-best-practices/references/` — they now live in `third_party/`.
 5. Generate `rules.index.json` from upstream + 4 custom.
