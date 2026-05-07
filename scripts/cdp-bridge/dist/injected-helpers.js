@@ -1,15 +1,33 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 20;
+  var __HELPERS_VERSION__ = 21;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
+
+  // Issue #126 — renderer iteration cap. Was hard-coded 5; bumped to 20
+  // with an early-exit-after-3-empty heuristic so the common case (1-3
+  // renderers) still exits fast. Each getFiberRoots(N) call is a Map
+  // lookup so iteration cost is negligible. Kept as a single constant
+  // so all call sites stay in sync (multi-LLM review of issue #126
+  // identified 5 hard-coded sites that previously drifted).
+  var MAX_RENDERER_IDS = 20;
+  var EARLY_EXIT_EMPTY_STREAK = 3;
 
   function findActiveRenderer() {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    for (var i = 1; i <= 5; i++) {
-      var roots = hook.getFiberRoots(i);
-      if (roots && roots.size > 0) return { rendererId: i, roots: roots };
+    var emptyStreak = 0;
+    for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
+      try {
+        var roots = hook.getFiberRoots(i);
+        if (roots && roots.size > 0) {
+          return { rendererId: i, roots: roots };
+        }
+        emptyStreak++;
+        if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return null;
   }
@@ -23,10 +41,12 @@ export const INJECTED_HELPERS = `
   function forEachRootFiber(cb) {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    for (var ri = 1; ri <= 5; ri++) {
+    var emptyStreak = 0;
+    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size) {
+          emptyStreak = 0;
           var it = roots.values();
           var v;
           while (!(v = it.next()).done) {
@@ -35,8 +55,13 @@ export const INJECTED_HELPERS = `
               if (result) return result;
             }
           }
+        } else {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) { /* skip bad renderer, keep searching */ }
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return null;
   }
@@ -54,10 +79,12 @@ export const INJECTED_HELPERS = `
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return [];
     var out = [];
-    for (var ri = 1; ri <= 5; ri++) {
+    var emptyStreak = 0;
+    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
       try {
         var roots = hook.getFiberRoots(ri);
         if (roots && roots.size) {
+          emptyStreak = 0;
           var it = roots.values();
           var v;
           while (!(v = it.next()).done) {
@@ -65,8 +92,13 @@ export const INJECTED_HELPERS = `
               out.push({ rendererId: ri, fiber: v.value.current });
             }
           }
+        } else {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return out;
         }
-      } catch (_) { /* skip bad renderer, keep going */ }
+      } catch (_) {
+        emptyStreak++;
+      }
     }
     return out;
   }
@@ -1038,16 +1070,181 @@ export const INJECTED_HELPERS = `
 
       if (action === 'typeText') {
         var text = opts.text !== undefined ? opts.text : '';
-        if (typeof props.onChangeText === 'function') {
-          props.onChangeText(text);
+
+        // Issue #126 Fix A — typeText handler resolution.
+        //
+        // Path 1: matched fiber itself has onChangeText / onChange. SINGLE-
+        // fire — pick onChangeText if present, else onChange. Avoids the
+        // double-fire bug: when an RHF Controller wraps a TextInput via
+        // <TextInput {...field} />, both onChangeText and onChange are bound
+        // to field.onChange. Firing both ran field.onChange twice with
+        // different argument shapes (string then {nativeEvent}), corrupting
+        // the form state and double-triggering validators.
+        //
+        // Path 2: when matched fiber has no typeable handler, walk
+        // descendants for a typeable child. Common case: design-system
+        // TextField wraps TextInput in an outer Pressable/View; the wrapper
+        // testID resolves to the wrapper fiber whose props don't carry
+        // onChangeText. Walking down finds the inner TextInput. Bounds:
+        // depth ≤ 16, visit cap 200 across both passes. Two-pass: pass 1
+        // considers only onChangeText; pass 2 falls back to onChange (the
+        // overloaded RN handler) only if no onChangeText descendant
+        // exists. Within each pass: prefer fibers whose type matches a
+        // TextInput-family fingerprint, then dedupe candidates that share
+        // the same handler function reference (react-native-paper wraps
+        // TextInputOutlined → TextInput → InternalTextInput each forwarding
+        // the same onChangeText — pick the deepest leaf), and return
+        // Ambiguous only when truly distinct typed handlers compete.
+        if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
+          var p1Handler;
+          if (typeof props.onChangeText === 'function') {
+            p1Handler = 'onChangeText';
+            props.onChangeText(text);
+          } else {
+            p1Handler = 'onChange';
+            props.onChange({ nativeEvent: { text: text } });
+          }
+          return JSON.stringify({
+            success: true,
+            action: 'typeText',
+            component: typeName,
+            testID: selector,
+            text: text,
+            handlerCalled: p1Handler,
+            resolvedFrom: 'matched-fiber'
+          });
         }
-        if (typeof props.onChange === 'function') {
-          props.onChange({ nativeEvent: { text: text } });
+
+        // Anchored on TextInput-family names. Drops bare Input/Field
+        // substrings to avoid false-positives on RadioGroupField,
+        // InputAccessoryView, BottomSheetTextInput's wrapper, etc.
+        var TYPEABLE_TYPE_RE = /(TextInput|TextField|EditText)/;
+        var visited = 0;
+        var DESCENDANT_DEPTH_CAP = 16;
+        var DESCENDANT_VISIT_CAP = 200;
+
+        function findHandlerDescendants(handlerName) {
+          var matches = [];
+          function walk(node, depth) {
+            if (!node || depth > DESCENDANT_DEPTH_CAP || visited > DESCENDANT_VISIT_CAP) return;
+            visited++;
+            var nProps = node.memoizedProps || {};
+            if (typeof nProps[handlerName] === 'function') {
+              var nName = (node.type && (node.type.displayName || node.type.name)) || '';
+              matches.push({
+                fiber: node,
+                props: nProps,
+                name: nName,
+                depth: depth,
+                typeFingerprint: TYPEABLE_TYPE_RE.test(nName)
+              });
+            }
+            if (node.child) walk(node.child, depth + 1);
+            if (node.sibling) walk(node.sibling, depth);
+          }
+          if (found.child) walk(found.child, 1);
+          return matches;
         }
-        if (typeof props.onChangeText !== 'function' && typeof props.onChange !== 'function') {
-          return JSON.stringify({ error: 'Component has no onChangeText or onChange handler', component: typeName, testID: selector });
+
+        // Dedupe candidates that share the same handler function reference.
+        // react-native-paper's TextInputOutlined → TextInput → InternalTextInput
+        // chain each forwards the SAME onChangeText down — they're the same
+        // logical handler, not three independent typeable fields. Keep the
+        // deepest leaf so the call lands on the host-component fiber that
+        // actually owns the input. (Codex M4 / multi-LLM review of issue #126.)
+        function dedupeByHandlerIdentity(matches, handlerName) {
+          var byFn = [];
+          for (var i = 0; i < matches.length; i++) {
+            var m = matches[i];
+            var fn = m.props[handlerName];
+            var existingIdx = -1;
+            for (var j = 0; j < byFn.length; j++) {
+              if (byFn[j].props[handlerName] === fn) { existingIdx = j; break; }
+            }
+            if (existingIdx === -1) {
+              byFn.push(m);
+            } else if (m.depth > byFn[existingIdx].depth) {
+              // Same handler, deeper fiber — replace with the leaf.
+              byFn[existingIdx] = m;
+            }
+          }
+          return byFn;
         }
-        return JSON.stringify({ success: true, action: 'typeText', component: typeName, testID: selector, text: text });
+
+        function pickFromMatches(matches, handlerName) {
+          if (matches.length === 0) return { kind: 'none' };
+          var deduped = dedupeByHandlerIdentity(matches, handlerName);
+          var typed = [];
+          for (var i = 0; i < deduped.length; i++) if (deduped[i].typeFingerprint) typed.push(deduped[i]);
+          if (typed.length === 1) return { kind: 'one', match: typed[0], handler: handlerName };
+          if (typed.length > 1) return { kind: 'ambiguous', matches: typed, handler: handlerName };
+          if (deduped.length === 1) return { kind: 'one', match: deduped[0], handler: handlerName };
+          return { kind: 'ambiguous', matches: deduped, handler: handlerName };
+        }
+
+        var pass1 = pickFromMatches(findHandlerDescendants('onChangeText'), 'onChangeText');
+        var picked = null;
+        if (pass1.kind === 'one') {
+          picked = pass1;
+        } else if (pass1.kind === 'ambiguous') {
+          return JSON.stringify({
+            error: 'Ambiguous typeText resolution',
+            testID: selector,
+            handler: 'onChangeText',
+            count: pass1.matches.length,
+            candidates: pass1.matches.slice(0, 5).map(function(m) {
+              return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
+            }),
+            hint: 'Multiple onChangeText descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
+          });
+        } else {
+          // pass 2 — onChange fallback
+          var pass2 = pickFromMatches(findHandlerDescendants('onChange'), 'onChange');
+          if (pass2.kind === 'one') {
+            picked = pass2;
+          } else if (pass2.kind === 'ambiguous') {
+            return JSON.stringify({
+              error: 'Ambiguous typeText resolution',
+              testID: selector,
+              handler: 'onChange',
+              count: pass2.matches.length,
+              candidates: pass2.matches.slice(0, 5).map(function(m) {
+                return { component: m.name, testID: m.props.testID, typeFingerprint: m.typeFingerprint };
+              }),
+              hint: 'Multiple onChange descendants under testID "' + selector + '". Pass a more specific testID — ideally the inner TextInput itself.'
+            });
+          }
+        }
+
+        if (!picked) {
+          return JSON.stringify({
+            error: 'Component has no onChangeText or onChange handler',
+            component: typeName,
+            testID: selector,
+            hint: 'Walked up to ' + DESCENDANT_DEPTH_CAP + ' levels (' + visited + ' fibers) — no descendant has a typeable handler. The matched fiber may not contain a TextInput. Use cdp_component_tree to inspect, or pass the inner field testID directly.'
+          });
+        }
+
+        // Single-fire — call only the picked handler. Avoids the
+        // double-fire bug on RHF Controllers where field.onChange wired
+        // to onChangeText + RN HostComponent onChange would each run
+        // with different argument shapes.
+        if (picked.handler === 'onChangeText') {
+          picked.match.props.onChangeText(text);
+        } else {
+          picked.match.props.onChange({ nativeEvent: { text: text } });
+        }
+
+        return JSON.stringify({
+          success: true,
+          action: 'typeText',
+          component: typeName,
+          testID: selector,
+          text: text,
+          handlerCalled: picked.handler,
+          resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
+          visitedFibers: visited
+        });
       }
 
       if (action === 'scroll') {
@@ -1631,21 +1828,35 @@ export const REACT_READY_PROBE_JS = `(function() {
   }
   return false;
 })()`;
+export const MAX_RENDERER_IDS = 20;
+export const EARLY_EXIT_EMPTY_STREAK = 3;
 export function findAllRootFibersForTest(hook) {
     if (!hook || typeof hook.getFiberRoots !== 'function')
         return [];
     const out = [];
-    for (let ri = 1; ri <= 5; ri++) {
-        const roots = hook.getFiberRoots(ri);
-        if (roots && roots.size) {
-            const it = roots.values();
-            let step = it.next();
-            while (!step.done) {
-                const r = step.value;
-                if (r && r.current)
-                    out.push({ rendererId: ri, fiber: r.current });
-                step = it.next();
+    let emptyStreak = 0;
+    for (let ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+        try {
+            const roots = hook.getFiberRoots(ri);
+            if (roots && roots.size) {
+                emptyStreak = 0;
+                const it = roots.values();
+                let step = it.next();
+                while (!step.done) {
+                    const r = step.value;
+                    if (r && r.current)
+                        out.push({ rendererId: ri, fiber: r.current });
+                    step = it.next();
+                }
             }
+            else {
+                emptyStreak++;
+                if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5)
+                    return out;
+            }
+        }
+        catch {
+            emptyStreak++;
         }
     }
     return out;

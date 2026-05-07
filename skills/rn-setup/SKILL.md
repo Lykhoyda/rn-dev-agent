@@ -135,7 +135,50 @@ need WiFi they can `adb connect <ip>` manually — the script then treats the
 device as physical and runs `adb reverse` over the TCP transport (works
 the same as USB).
 
-### 11. Vercel rules sync freshness
+### 11. Plugin version freshness
+
+Compare the locally installed plugin version against the latest GitHub
+release. Read-only — never auto-updates. The user runs
+`/plugin update rn-dev-agent` themselves if the row reports BEHIND.
+
+```bash
+LOCAL=$(jq -r '.version' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null)
+LATEST=$(curl -fsSL --max-time 3 https://api.github.com/repos/Lykhoyda/rn-dev-agent/releases/latest 2>/dev/null | jq -r '.tag_name // empty' | sed 's/^v//')
+
+if [ -z "$LOCAL" ]; then
+  echo "[?] Plugin version: could not read \${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"
+elif [ -z "$LATEST" ]; then
+  echo "[OFFLINE] Plugin version: installed $LOCAL — couldn't reach GitHub for upstream check"
+else
+  NEWER=$(printf '%s\n%s\n' "$LOCAL" "$LATEST" | sort -V | tail -1)
+  if [ "$LOCAL" = "$LATEST" ]; then
+    echo "[OK] Plugin version: $LOCAL (latest)"
+  elif [ "$NEWER" = "$LATEST" ]; then
+    echo "[BEHIND] Plugin version: installed $LOCAL, latest $LATEST — run /plugin update rn-dev-agent"
+  else
+    echo "[AHEAD] Plugin version: installed $LOCAL is newer than latest release $LATEST (dev install — fine)"
+  fi
+fi
+```
+
+Expected outputs:
+- **OK**: installed version equals the latest release tag.
+- **BEHIND**: installed version is older than the latest release. Surface the
+  exact `/plugin update rn-dev-agent` command. Common when a user pinned
+  an older version or hasn't updated since their last `claude` install.
+- **AHEAD (dev install)**: local version is newer — typical for plugin
+  contributors running off `main` or a feature branch. Note the discrepancy
+  but don't treat as a failure.
+- **OFFLINE**: GitHub API was unreachable (no network, rate-limited,
+  authentication blocking). Skip without failing — plugin works fine
+  without the upstream check.
+
+GitHub's unauthenticated API allows 60 requests/hour per IP. The `/doctor`
+command is read-only and not expected to run that often per hour, so no
+caching is required for v1. If rate-limit complaints surface, add a 24h
+on-disk cache at `~/.cache/rn-dev-agent/upgrade-check.json`.
+
+### 12. Vercel rules sync freshness
 
 Verify the vendored Vercel agent-skills content is present and not stale.
 Read-only check; does NOT auto-sync (user runs the resync command if BEHIND).
@@ -172,7 +215,8 @@ Present results as a table:
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
-| Vercel rules sync | OK (118 rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
+| Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
+| Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
 
 If any critical check fails (CDP bridge, agent-device, Metro, or simulator),
 provide step-by-step instructions to fix it. Do not proceed with feature
@@ -195,7 +239,7 @@ Setup is boring — agents skip it and pay for it later.
 | "The SessionStart banner says 'WARNING: agent-device not installed' — it'll auto-install next time" | Auto-install already ran and FAILED. That's why there's a warning. Run the ensure script NOW and read the actual error. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
 | "The user can install agent-device themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact command with the flag they need (sudo? nvm? permission fix?). |
-| "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on all 10 checks passing (step 10 is optional — N/A when no physical device). Get the environment green first, then proceed. |
+| "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on critical checks passing (steps 10 + 11 are optional — N/A when no physical device, OFFLINE acceptable for the version check). Get the environment green first, then proceed. |
 
 ## Red Flags — Stop and Reconsider
 
@@ -203,7 +247,7 @@ Setup is boring — agents skip it and pay for it later.
 - Proceeding with feature dev when setup shows any RED row
 - Suggesting `sudo npm install -g` without first checking if nvm is available
 - Ignoring "WARNING: not installed" from the SessionStart banner
-- Claiming "setup passed" without showing the 10-row table with evidence (row 10 may be "N/A" when no physical device is connected — that's still evidence)
+- Claiming "setup passed" without showing the 11-row table with evidence (row 10 may be "N/A" when no physical device is connected and row 11 may be "OFFLINE" when GitHub is unreachable — both are still evidence)
 
 ## Verification — Setup Complete When
 
@@ -215,4 +259,5 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] `curl -s http://127.0.0.1:8081/status` returns `packager-status:running`
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` AND `capabilities.helpersInjected: true`
 - [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
-- [ ] Present the 10-row results table to the user — no hidden failures
+- [ ] Plugin-version row is `OK` (installed = latest) / `OFFLINE` (acceptable) / `AHEAD (dev install)` — if `BEHIND`, surface the `/plugin update rn-dev-agent` instruction; user decides whether to update before continuing
+- [ ] Present the 11-row results table to the user — no hidden failures

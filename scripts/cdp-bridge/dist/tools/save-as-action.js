@@ -65,6 +65,7 @@ export function createSaveAsActionHandler() {
             tags: args.tags,
             mutates: args.mutates,
             status,
+            produces: args.produces,
         });
         // Issue #101: sidecar-first atomic pair-write. The atomicWriter
         // owns `lastSeenMtimeMs` correctness (overrides whatever we seed in
@@ -91,6 +92,7 @@ export function createSaveAsActionHandler() {
                 mutates: args.mutates,
                 status,
                 appId: args.bundleId,
+                produces: args.produces,
             },
             hint: `Action emitted as experimental. Run /run-action ${args.id} to validate; on first clean replay it auto-promotes to active.`,
         });

@@ -24,6 +24,7 @@ import { createObjectInspectHandler } from './tools/object-inspect.js';
 import { createExceptionBreakpointHandler } from './tools/exception-breakpoint.js';
 import { createConsoleLogHandler } from './tools/console-log.js';
 import { createStoreStateHandler } from './tools/store-state.js';
+import { createDiagnosticRenderersHandler } from './tools/diagnostic-renderers.js';
 import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisibleByTestIDHandler, createExpectTextHandler, } from './tools/macro-asserts.js';
 import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
@@ -95,6 +96,9 @@ trackedTool('cdp_status', 'Get full environment status. Auto-connects if not con
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
 }, createStatusHandler(getClient, setClient, createClient));
+trackedTool('cdp_diagnostic_renderers', 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {
+    maxRendererId: z.number().int().min(1).max(100).optional().describe('How many renderer IDs to scan. Default 20 (matches IIFE MAX_RENDERER_IDS).'),
+}, createDiagnosticRenderersHandler(getClient));
 trackedTool('cdp_connect', 'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform, port, or bundle, or reconnect after a manual disconnect. When multiple Hermes targets exist (common after app restarts on Expo Dev Client — zombie `host.exp.Exponent` pages linger alongside fresh app pages), pass `targetId` (exact id from cdp_targets) or `bundleId` (e.g. "com.myapp") to disambiguate. Use force=true to always reconnect regardless of current state.', {
     metroPort: z.number().optional().describe('Metro port to connect to (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android"). If already connected to a different platform, forces reconnection to the correct target.'),
@@ -604,7 +608,7 @@ trackedTool('expect_text', 'Assert that visible text is (or is not) currently re
 // first-class L3 reusable action: emits Maestro YAML with full M7
 // metadata header at <project>/.rn-agent/actions/<id>.yaml AND
 // initialises the sidecar runtime state. Closes the L2→L3 loop.
-trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action.', {
+trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status, produces) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action. The optional `produces` field (D1209) records state postconditions — what state the action establishes when it runs cleanly — so downstream tasks can use it as a deterministic prologue.', {
     id: z.string().describe('Stable slug; becomes the filename and the M7 id field. Lower-case kebab-case (a-z, 0-9, hyphen).'),
     intent: z.string().describe('One-line goal — surfaced verbatim by /list-learned-actions. Required.'),
     tags: z.array(z.string()).optional().describe('Lower-case kebab-case keywords for filtering (e.g. ["tasks", "create", "regression"]).'),
@@ -614,6 +618,7 @@ trackedTool('cdp_record_test_save_as_action', 'Promote the in-memory recording (
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     overwrite: z.boolean().optional().describe('If an action with this id already exists, replace it. Default false (refuse with hint).'),
     testName: z.string().optional().describe('Optional one-line description shown as a comment above the M7 header. Falls back to intent.'),
+    produces: z.record(z.union([z.string(), z.number(), z.boolean()])).optional().describe('D1209 — state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. { authenticated: true, route: "home" }). Optional. Values containing commas or newlines are not supported; use multiple keys instead.'),
 }, createSaveAsActionHandler());
 // D1206 Tier 2 Sprint D / Phase 129 — L3→L2 self-repair. When a Maestro
 // flow fails with "element not found", this tool patches the YAML in place

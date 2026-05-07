@@ -76,6 +76,112 @@ saving via `cdp_record_test_save_as_action`.
 
 ---
 
+### Reusable Actions (the L3 corpus)
+
+An "action" is a Maestro YAML flow stored at `<project>/.rn-agent/actions/<id>.yaml`
+paired with a runtime sidecar at `<project>/.rn-agent/state/<id>.state.json`.
+The YAML is the executable test; the sidecar tracks `revision`, `status`
+(`experimental` / `active` / `deprecated`), `runHistory[]`, and `repairHistory[]`.
+The plugin records, replays, and self-heals these flows so an identical user
+flow that took ~13 minutes the first time costs ~4 seconds on every replay
+afterward — discovery is a one-time cost, replay is the steady state.
+
+**Lifecycle and tooling:**
+
+| Stage | Tool / command | What it does |
+|---|---|---|
+| **Discover** (record) | `cdp_record_test_start` → walk the app → `cdp_record_test_stop` | Buffers events to `.rn-agent/recordings/<id>.json` (pre-save) |
+| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, optional `produces`) |
+| **List** | `/rn-dev-agent:list-learned-actions [keyword]` | Browse the corpus by intent / tags / appId. Section B of the output shows actions, Section C shows the UI skeleton, Section A surfaces feedback memories |
+| **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
+| **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
+| **Assert state** | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | Macro-Asserts — embed internal-state assertions inside replays. Maestro asserts pixels; these assert what the app actually believes |
+| **Compact** | `/rn-dev-agent:rn-agent-compact` | Periodic corpus health report — flags cold (90+ day), flaky (>50% failure), or high-churn (5+ repairs/30d) actions. Deletion is human-in-the-loop |
+
+**Canonical loop.** Record a verified walk once → save as an action → in the
+next session, `list-learned-actions` surfaces it for the agent → `run-action`
+replays it in ~4 seconds → if a testID drifted, `cdp_run_action` auto-invokes
+`cdp_repair_action`, patches the YAML, retries once, and persists the result
+to the sidecar's `runHistory[]` with auto-repair telemetry.
+
+**Status maturity.** New actions ship as `experimental`. The first clean
+replay auto-promotes them to `active`. Self-repair demotes back to
+`experimental` until the next clean replay re-validates. `deprecated` is a
+manual gesture for actions you want to retain for history but no longer run.
+
+#### Hybrid composition (D1209)
+
+Treat actions as **composable skill primitives**, not just self-contained
+tests. Many tasks share *partial* overlap with existing actions — login is
+the cardinal example: every test that needs an authenticated session
+benefits from replaying a saved login action as a deterministic prologue
+(~4s) instead of re-walking it (~30s+ with LLM-in-the-loop).
+
+The artifact-first rule generalizes from "replay if exact match" to
+**"use deterministic actions wherever they fit, walk only the gaps"**.
+
+**Three rules for any goal-state task:**
+
+1. **Detect current state first.** Before navigating to the requested
+   feature, read `cdp_navigation_state` (current route) and
+   `cdp_store_state(path=…)` (relevant slices, e.g. `auth.user`). Note
+   any mismatch with the expected starting state — login screen vs home,
+   wrong tab, missing onboarding step, etc.
+
+2. **Match the gap, not just the intent.** When you scan
+   `/rn-dev-agent:list-learned-actions` output, check the `Produces`
+   column alongside `Purpose`. An action with
+   `produces: { authenticated: true, route: home }` is the right
+   prologue when current state is `LoginScreen` and the user wants
+   anything that requires auth — even if the user's task isn't "log in"
+   per se. Replay that action via `cdp_run_action`. Re-verify state.
+   Then continue with interactive `cdp_*` / `device_*` tools for the
+   novel part.
+
+3. **No false-binary fallbacks.** Never fall back to a fully-manual
+   walk when a partial replay (login prologue, onboarding skip, locale
+   set) covers half the work. The cost of one failed replay attempt is
+   `cdp_run_action`'s auto-repair budget (3/24h); the cost of a fully
+   manual walk is 30s+ of context-burning device interaction.
+
+**Example — user says "go to home and tap the cart badge":**
+
+```
+1. cdp_navigation_state             → returns "LoginScreen" (mismatch)
+2. /rn-dev-agent:list-learned-actions  (or read .rn-agent/actions/ directly)
+                                    → finds `user-login` with
+                                      produces: { authenticated: true, route: home }
+3. cdp_run_action({                 (deterministic prologue, ~4s)
+     id: "user-login",
+     params: { EMAIL, PASSWORD }
+   })
+4. cdp_navigation_state             → returns "HomeScreen" (state delta closed)
+5. cdp_component_tree({             (interactive discovery for the novel part)
+     filter: "cart"
+   })                               → finds `cart-badge` ref
+6. device_press({ ref: "cart-badge" })
+```
+
+**When persisting a new action**, populate `produces` if the flow
+establishes any reusable state — auth, route, feature flag, locale,
+seeded data. Schema: flat map of primitives.
+
+```
+cdp_record_test_save_as_action({
+  id: "user-login",
+  intent: "Log in via email + password",
+  tags: ["auth", "login"],
+  mutates: false,
+  produces: { authenticated: true, route: "home" }
+})
+```
+
+Optional — actions without `produces` keep working; the LLM falls back
+to intent-string matching for them. The field is purely additive
+metadata.
+
+---
+
 ### 🚨 Tool Routing — STRICT RULES (read this second)
 
 All app interaction MUST go through plugin MCP tools — never raw shell. The plugin's tools
