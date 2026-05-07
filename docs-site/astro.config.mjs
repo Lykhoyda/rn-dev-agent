@@ -36,6 +36,10 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/Lykhoyda/rn-dev-agent/edit/main/docs-site/',
       },
+      components: {
+        ThemeSelect: './src/components/ThemeSelect.astro',
+        ThemeProvider: './src/components/ThemeProvider.astro',
+      },
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         { label: 'Getting Started', slug: 'getting-started' },
