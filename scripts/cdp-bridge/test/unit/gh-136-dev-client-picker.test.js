@@ -55,3 +55,35 @@ test('parsePortPatternEntry: returns null on empty/null input', async () => {
   assert.equal(parsePortPatternEntry(null), null);
   assert.equal(parsePortPatternEntry(undefined), null);
 });
+
+// ── parseFirstServerEntry: orchestrates matcher fallbacks ────────────
+
+test('parseFirstServerEntry: prefers literal localhost when present', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  const snapshot = 'Development servers\nlocalhost\n192.168.1.5:8081';
+  assert.equal(parseFirstServerEntry(snapshot), 'localhost');
+});
+
+test('parseFirstServerEntry: falls through to port-pattern when no literal IP', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  const snapshot = 'Development servers\nrn-dev-agent-test-app\n192.168.1.5:8081';
+  assert.equal(parseFirstServerEntry(snapshot), '192.168.1.5:8081');
+});
+
+test('parseFirstServerEntry: first-non-header fallback when no port-pattern match', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  // Picker variant where the URL is hidden; only the manifest name is visible.
+  const snapshot = 'Development servers\nrn-dev-agent-test-app\nEnter URL manually';
+  assert.equal(parseFirstServerEntry(snapshot), 'rn-dev-agent-test-app');
+});
+
+test('parseFirstServerEntry: returns null when no header found', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  assert.equal(parseFirstServerEntry('Welcome screen\nGet started'), null);
+});
+
+test('parseFirstServerEntry: skips footer rows in fallback', async () => {
+  const { parseFirstServerEntry } = await import(MOD_PATH);
+  const snapshot = 'Development servers\nServer-A\nEnter URL manually\nFetch development servers';
+  assert.equal(parseFirstServerEntry(snapshot), 'Server-A');
+});

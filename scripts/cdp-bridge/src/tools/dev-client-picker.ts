@@ -52,6 +52,50 @@ export function parsePortPatternEntry(text: string | null | undefined): string |
   return null;
 }
 
+// Rows that appear in the dev-client picker but are NOT server entries.
+// Used as a deny-list for the first-non-header-row fallback when port-pattern
+// matching fails (e.g., picker shows only the manifest name without the URL).
+const FOOTER_ROWS = new Set([
+  'Enter URL manually',
+  'Fetch development servers',
+  'Development servers',
+  'DEVELOPMENT SERVERS',
+  'Connect to a development build',
+]);
+
+const HEADER_PATTERNS = [/Development servers/i, /DEVELOPMENT SERVERS/];
+
+/**
+ * GH #136: orchestrates the picker matcher fallbacks. Matching priority:
+ *   1. Literal `localhost` / `127.0.0.1` / `10.0.2.2` (preserves backward
+ *      parity for known-good cases — these were the original heuristic).
+ *   2. Port-pattern via parsePortPatternEntry (catches LAN IPs, .local
+ *      hostnames, and DNS names that show up on real-world dev setups).
+ *   3. First non-header, non-footer row below the picker title — the row
+ *      a user would tap with their finger when the URL is hidden.
+ *
+ * Returns the literal text to pass to `device_find <text>` for tapping, or
+ * null when the snapshot doesn't look like a dev-client picker at all.
+ */
+export function parseFirstServerEntry(snapshot: string | null | undefined): string | null {
+  if (typeof snapshot !== 'string' || snapshot.length === 0) return null;
+
+  for (const ip of ['localhost', '127.0.0.1', '10.0.2.2']) {
+    if (snapshot.includes(ip)) return ip;
+  }
+
+  const portMatch = parsePortPatternEntry(snapshot);
+  if (portMatch) return portMatch;
+
+  const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+  const headerIdx = lines.findIndex((line) => HEADER_PATTERNS.some((re) => re.test(line)));
+  if (headerIdx === -1) return null;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    if (!FOOTER_ROWS.has(lines[i])) return lines[i];
+  }
+  return null;
+}
+
 export async function handleDevClientPicker(): Promise<PickerResult | null> {
   if (!hasActiveSession()) return null;
 
