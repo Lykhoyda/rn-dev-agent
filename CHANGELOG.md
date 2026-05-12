@@ -32,10 +32,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - New `_setRunAgentDeviceForTest` / `_resetRunAgentDeviceForTest` seams on
   `device-list.ts` for integration tests, mirroring the GH #136 PR-B picker
   convention.
-- 12 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
-  pure parsers, orchestrator branches, raw-vs-fallback dispatch, and that
-  the resize pipeline + EPHEMERAL_PATH advisory still wrap the raw result
-  identically. Full unit suite at 1240 passing, 0 failing.
+- 14 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
+  pure parsers, orchestrator branches (both iOS and Android arms,
+  success + capturer-failure for each), raw-vs-fallback dispatch, and
+  that the resize pipeline + EPHEMERAL_PATH advisory still wrap the raw
+  result identically. Full unit suite at 1242 passing, 0 failing.
+- Multi-LLM review (Codex + Gemini, parallel) flagged an Android
+  `WriteStream` flush race in the default capturer: `out.end()` returns
+  before bytes drain, so the promise could resolve `ok: true` while
+  `resizeWithSips` reads a truncated PNG (>64KB pipe buffer = real risk
+  for high-res emulators). Fixed by waiting on the `'finish'` event and
+  destroying the stream on timeout / proc-error paths. The fix is to
+  `defaultAndroidCapturer` only — iOS uses `execFile`-completion
+  ordering which doesn't have this race.
 
 ## [0.44.28] — 2026-05-07
 

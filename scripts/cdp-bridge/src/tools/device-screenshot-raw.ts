@@ -106,29 +106,40 @@ const defaultIosCapturer: RawCapturer = async (udid, path) => {
 // Android needs the binary screen bytes piped to a file. execFile can't redirect
 // stdout, so spawn directly and pipe to a write stream — no shell, so the path
 // is safely passed as a literal filename, not interpolated into a command string.
+//
+// Settle ordering matters: `pipe()` auto-ends `out` when `proc.stdout` ends, but
+// `out.end()` is async — bytes can remain buffered after the child exits. We
+// resolve `true` only on the WriteStream's `'finish'` event (post-flush) so
+// `resizeWithSips` never reads a truncated PNG. Multi-LLM review caught this.
 const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
   new Promise<boolean>((resolve) => {
     let settled = false;
+    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = createWriteStream(path);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      proc.kill();
+      out.destroy();
+      settle(false);
+    }, 15_000);
     const settle = (ok: boolean): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolve(ok);
     };
-    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    const out = createWriteStream(path);
     proc.stdout.pipe(out);
+    out.on('finish', () => settle(true));
     out.on('error', () => settle(false));
-    proc.on('error', () => settle(false));
-    proc.on('close', (code) => {
-      out.end();
-      settle(code === 0);
+    proc.on('error', () => {
+      out.destroy();
+      settle(false);
     });
-    setTimeout(() => {
-      if (!settled) {
-        proc.kill();
-        settle(false);
-      }
-    }, 15_000);
+    proc.on('close', (code) => {
+      if (code === 0) return; // success path settles via `out.on('finish')`
+      out.destroy();
+      settle(false);
+    });
   });
 
 let iosResolver: RawResolver = defaultIosResolver;

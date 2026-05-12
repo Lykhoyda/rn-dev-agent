@@ -139,6 +139,21 @@ test('tryRawScreenshot(android): resolver returns emu-id, capturer succeeds → 
   }
 });
 
+test('tryRawScreenshot(android): capturer fails → returns null (mirrors iOS test for symmetry)', async () => {
+  const mod = await import(RAW_MOD);
+  const { tryRawScreenshot, _setForTest, _resetForTest } = mod;
+  _setForTest({
+    androidResolver: async () => 'emulator-5556',
+    androidCapturer: async () => false,
+  });
+  try {
+    const result = await tryRawScreenshot('android', '/tmp/shot.png');
+    assert.equal(result, null);
+  } finally {
+    _resetForTest();
+  }
+});
+
 // ── device-list integration ─────────────────────────────────────────
 
 test('captureAndResizeScreenshot: platformExplicit + ios resolved → raw path taken (no runAgentDevice)', async () => {
@@ -165,6 +180,42 @@ test('captureAndResizeScreenshot: platformExplicit + ios resolved → raw path t
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, true);
     assert.equal(envelope.data.path, '/tmp/raw-ios.jpg');
+  } finally {
+    _resetRunAgentDeviceForTest();
+    raw._resetForTest();
+  }
+});
+
+test('captureAndResizeScreenshot: platformExplicit + android resolved → raw path taken (no runAgentDevice)', async () => {
+  // Mirrors the iOS-explicit test — covers the other arm of the
+  // `platform === 'ios' ? iosResolver : androidResolver` dispatch in
+  // tryRawScreenshot. Without this, a branch inversion in device-list.ts
+  // (e.g., calling iosResolver for android) would land green.
+  const raw = await import(RAW_MOD);
+  const dl = await import(DEVICE_LIST_MOD);
+  const { captureAndResizeScreenshot, _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest } = dl;
+  let runAgentDeviceCalled = false;
+  const captures = [];
+  _setRunAgentDeviceForTest(async () => {
+    runAgentDeviceCalled = true;
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: false }) }], isError: true };
+  });
+  raw._setForTest({
+    androidResolver: async () => 'emulator-5556',
+    androidCapturer: async (id, p) => { captures.push({ id, p }); return true; },
+  });
+  try {
+    const result = await captureAndResizeScreenshot({
+      platform: 'android',
+      platformExplicit: true,
+      path: '/tmp/raw-android.png',
+      maxWidth: 0,
+    });
+    assert.equal(runAgentDeviceCalled, false, 'runAgentDevice should NOT have been called for android explicit path');
+    assert.deepEqual(captures, [{ id: 'emulator-5556', p: '/tmp/raw-android.png' }]);
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.data.path, '/tmp/raw-android.png');
   } finally {
     _resetRunAgentDeviceForTest();
     raw._resetForTest();
