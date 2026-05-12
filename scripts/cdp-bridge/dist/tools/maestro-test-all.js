@@ -1,11 +1,13 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
     if (!existsSync(dir))
@@ -49,8 +51,38 @@ export function createMaestroTestAllHandler() {
         for (const flow of flows) {
             const name = flow.replace(flowDir + '/', '');
             const start = Date.now();
+            // Phase 134.1 (deepsec CRITICAL #5): read + validate every
+            // discovered flow before execution. Auto-discovery is the highest-
+            // trust gap in the codebase: a malicious project file (or a
+            // prompt-injected save earlier in the session) lands here for
+            // replay otherwise. Write the canonical re-serialization to a temp
+            // file and execute that — never the on-disk YAML directly, so
+            // any inert metadata or duplicated headers can't sneak through.
+            let safeFlowFile;
             try {
-                const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(platform, flow), { timeout, encoding: 'utf8' });
+                const yamlText = readFileSync(flow, 'utf-8');
+                const parsed = parseAndValidateFlow(yamlText);
+                const canonical = buildMaestroFlow(parsed.appId !== undefined ? { appId: parsed.appId } : {}, parsed.commands);
+                safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+                writeFileSync(safeFlowFile, canonical, 'utf-8');
+            }
+            catch (err) {
+                const reason = err instanceof MaestroValidationError
+                    ? `Refused by validator: ${err.message}`
+                    : `Read/parse error: ${err.message}`;
+                results.push({
+                    name,
+                    passed: false,
+                    durationMs: Date.now() - start,
+                    error: reason.slice(0, 300),
+                });
+                failed++;
+                if (args.stopOnFailure)
+                    break;
+                continue;
+            }
+            try {
+                const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile), { timeout, encoding: 'utf8' });
                 const output = (stdout + '\n' + stderr).trim();
                 const ok = !output.includes('FAILED') && !output.includes('Error:');
                 results.push({

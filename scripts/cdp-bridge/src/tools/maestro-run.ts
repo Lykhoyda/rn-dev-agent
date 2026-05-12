@@ -1,11 +1,19 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import {
+  buildMaestroFlow,
+  parseAndValidateFlow,
+  isValidBundleId,
+  MaestroValidationError,
+} from '../domain/maestro-validator.js';
 
 const execFile = promisify(execFileCb);
 
@@ -45,21 +53,51 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       return failResult(dispatch.error);
     }
 
+    // Phase 134.1 (deepsec CRITICAL #4): both inlineYaml and flowPath
+    // are caller-controlled. Parse, validate against the command allowlist
+    // (rejecting runScript and other host-executing directives by default),
+    // and re-serialize through buildMaestroFlow before writing the temp
+    // file we actually execute. flowPath additionally must exist and is
+    // read + validated identically — no longer trusted as "vetted because
+    // it's on disk" (deepsec CRITICAL #5 covers the same disk-trust gap
+    // in maestro_test_all).
     let flowFile: string;
+    let rawYaml: string;
 
     if (args.inlineYaml) {
-      const appId = resolveAppId(args.appId, platform);
-      const header = appId ? `appId: ${appId}\n---\n` : '---\n';
-      const content = header + args.inlineYaml;
-      flowFile = '/tmp/rn-maestro-inline.yaml';
-      writeFileSync(flowFile, content, 'utf-8');
+      rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
       if (!existsSync(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
-      flowFile = args.flowPath;
+      try {
+        rawYaml = readFileSync(args.flowPath, 'utf-8');
+      } catch (err) {
+        return failResult(`Failed to read flow file: ${(err as Error).message}`);
+      }
     } else {
       return failResult('Provide either flowPath or inlineYaml.');
+    }
+
+    try {
+      const parsed = parseAndValidateFlow(rawYaml);
+      const rawAppId = resolveAppId(args.appId, platform);
+      const headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
+      if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
+        return failResult(`Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`);
+      }
+      const validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+      // Unique per-call path — multi-LLM review caught the fixed
+      // `/tmp/rn-maestro-inline.yaml` racing on concurrent maestro_run
+      // calls (parallel test invocations could overwrite each other's
+      // validated content between writeFileSync and execFile).
+      flowFile = join(tmpdir(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      writeFileSync(flowFile, validatedContent, 'utf-8');
+    } catch (err) {
+      if (err instanceof MaestroValidationError) {
+        return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
+      }
+      throw err;
     }
 
     const timeout = args.timeoutMs ?? 120_000;

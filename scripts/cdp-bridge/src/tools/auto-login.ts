@@ -7,6 +7,12 @@ import type { CDPClient } from '../cdp-client.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { readAppId } from '../project-config.js';
+import {
+  buildMaestroFlow,
+  parseAndValidateFlow,
+  isValidBundleId,
+  MaestroValidationError,
+} from '../domain/maestro-validator.js';
 
 const execFile = promisify(execFileCb);
 
@@ -141,24 +147,67 @@ export async function handleAutoLogin(
     };
   }
 
-  const appId = opts.appId ?? readAppId(projectRoot, platform) ?? '';
+  const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? '';
 
+  // Phase 134.1 (deepsec CRITICAL #2): the project-supplied login flow is
+  // attacker-controlled in the prompt-injection threat model. Previously
+  // only `clearState: true` was stripped — `runScript`, `evalScript`,
+  // `startRecording`, and any non-allowlist command sailed through. The
+  // new flow:
+  //   1. Read the project flow + parse it through the central validator,
+  //      which rejects denied commands and unsafe scalars by default.
+  //   2. Validate the appId against the strict bundle-ID regex before
+  //      stamping it into the wrapper header.
+  //   3. Inline the validated commands directly into the wrapper (no
+  //      `runFlow: file: ...` indirection that would re-load the
+  //      unvalidated file from disk at runtime).
   const originalContent = readFileSync(flowPath, 'utf-8');
   const flowContent = stripClearState(originalContent);
-  const needsStripping = flowContent !== originalContent;
 
-  const wrapperPath = '/tmp/rn-auto-login-wrapper.yaml';
-  let runFlowTarget = flowPath;
-
-  if (needsStripping) {
-    const strippedPath = '/tmp/rn-auto-login-stripped.yaml';
-    writeFileSync(strippedPath, flowContent, 'utf-8');
-    runFlowTarget = strippedPath;
+  let validatedCommands: unknown[];
+  try {
+    const parsed = parseAndValidateFlow(flowContent);
+    validatedCommands = parsed.commands;
+  } catch (err) {
+    const reason = err instanceof MaestroValidationError
+      ? `Project login flow rejected by validator: ${err.message}`
+      : `Project login flow could not be parsed: ${(err as Error).message}`;
+    return { loggedIn: false, reason: `${reason} (Phase 134.1)` };
   }
 
-  const wrapperContent = appId
-    ? `appId: ${appId}\n---\n- launchApp\n- runFlow:\n    file: ${runFlowTarget}\n`
-    : `---\n- runFlow:\n    file: ${runFlowTarget}\n`;
+  let wrapperContent: string;
+  try {
+    const appIdOpts: { appId?: string } = {};
+    if (rawAppId) {
+      if (!isValidBundleId(rawAppId)) {
+        return {
+          loggedIn: false,
+          reason: `Refusing to run auto-login: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`,
+        };
+      }
+      appIdOpts.appId = rawAppId;
+    }
+    // Only prepend `launchApp` if the project flow doesn't already start
+    // with one — multi-LLM review caught that hand-authored login.yaml
+    // files conventionally lead with `- launchApp`, and unconditional
+    // prepending caused a double-launch (slowing auto-login and possibly
+    // clearing in-memory state set by the first launch).
+    const first = validatedCommands[0];
+    const startsWithLaunchApp =
+      first === 'launchApp' ||
+      (typeof first === 'object' && first !== null && 'launchApp' in first);
+    const wrapperCommands = startsWithLaunchApp
+      ? validatedCommands
+      : [{ launchApp: null }, ...validatedCommands];
+    wrapperContent = buildMaestroFlow(appIdOpts, wrapperCommands);
+  } catch (err) {
+    if (err instanceof MaestroValidationError) {
+      return { loggedIn: false, reason: `Auto-login wrapper refused: ${err.message} (Phase 134.1)` };
+    }
+    throw err;
+  }
+
+  const wrapperPath = '/tmp/rn-auto-login-wrapper.yaml';
   writeFileSync(wrapperPath, wrapperContent, 'utf-8');
 
   const runnerPath = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');

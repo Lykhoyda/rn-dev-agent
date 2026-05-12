@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
+import { buildMaestroFlow, isValidBundleId, MaestroValidationError } from '../domain/maestro-validator.js';
 
 interface MaestroStep {
   action: 'tap' | 'fill' | 'assert' | 'scroll' | 'navigate' | 'back' | 'wait' | 'swipe' | 'launch';
@@ -21,50 +22,69 @@ interface MaestroGenerateArgs {
   outputDir?: string;
 }
 
-function stepToYaml(step: MaestroStep): string {
+/**
+ * Phase 134.1 (deepsec CRITICAL #3): every step is now produced as a
+ * structured object that flows through `buildMaestroFlow` for serialization,
+ * so testID / text / input / url / direction scalars never reach a
+ * string-concat path. The validator rejects scalars that contain CR/LF,
+ * YAML document separators, unicode line breaks, or control characters
+ * before the file is written.
+ *
+ * Swipe directions are constrained to the 4 enum values at this layer too
+ * — the deepsec finding noted that saved recordings could land non-enum
+ * directions if loaded from JSON without runtime validation.
+ */
+function stepToMaestroCommands(step: MaestroStep): unknown[] {
+  const ALLOWED_DIRECTIONS = new Set(['up', 'down', 'left', 'right']);
   switch (step.action) {
     case 'launch':
-      return '- launchApp';
+      return [{ launchApp: null }];
 
     case 'tap':
-      if (step.testID) return `- tapOn:\n    id: "${step.testID}"`;
-      if (step.text) return `- tapOn: "${step.text}"`;
-      return '# tap: missing testID or text';
+      if (step.testID) return [{ tapOn: { id: step.testID } }];
+      if (step.text) return [{ tapOn: step.text }];
+      return [];
 
     case 'fill':
       if (step.testID && step.input !== undefined) {
-        return `- tapOn:\n    id: "${step.testID}"\n- inputText: "${step.input}"`;
+        return [{ tapOn: { id: step.testID } }, { inputText: step.input }];
       }
       if (step.text && step.input !== undefined) {
-        return `- tapOn: "${step.text}"\n- inputText: "${step.input}"`;
+        return [{ tapOn: step.text }, { inputText: step.input }];
       }
-      return '# fill: missing testID/text or input';
+      return [];
 
     case 'assert':
-      if (step.testID) return `- assertVisible:\n    id: "${step.testID}"`;
-      if (step.text) return `- assertVisible: "${step.text}"`;
-      return '# assert: missing testID or text';
+      if (step.testID) return [{ assertVisible: { id: step.testID } }];
+      if (step.text) return [{ assertVisible: step.text }];
+      return [];
 
     case 'scroll':
-      return `- scroll`;
+      return [{ scroll: null }];
 
-    case 'swipe':
-      if (step.direction) return `- swipe:\n    direction: "${step.direction.toUpperCase()}"`;
-      return '- swipe:\n    direction: "UP"';
+    case 'swipe': {
+      const dir = step.direction;
+      if (dir && ALLOWED_DIRECTIONS.has(dir)) {
+        return [{ swipe: { direction: dir.toUpperCase() } }];
+      }
+      return [{ swipe: { direction: 'UP' } }];
+    }
 
     case 'navigate':
-      if (step.url) return `- openLink: "${step.url}"`;
-      return '# navigate: missing url';
+      if (step.url) return [{ openLink: step.url }];
+      return [];
 
     case 'back':
-      return '- pressKey: back';
+      return [{ pressKey: 'back' }];
 
     case 'wait':
-      if (step.waitMs) return `- extendedWaitUntil:\n    visible: ".*"\n    timeout: ${step.waitMs}`;
-      return '# wait: use waitMs parameter';
+      if (step.waitMs && step.waitMs > 0) {
+        return [{ extendedWaitUntil: { visible: '.*', timeout: step.waitMs } }];
+      }
+      return [];
 
     default:
-      return `# unknown action: ${step.action}`;
+      return [];
   }
 }
 
@@ -88,18 +108,27 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     const fileName = `${sanitizedName}.yaml`;
     const filePath = join(outputDir, fileName);
 
-    const lines: string[] = [];
-
-    if (args.appId) {
-      lines.push(`appId: ${args.appId}`);
-      lines.push('---');
+    if (args.appId !== undefined && !isValidBundleId(args.appId)) {
+      return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
 
+    const commands: unknown[] = [];
     for (const step of args.steps) {
-      lines.push(stepToYaml(step));
+      for (const cmd of stepToMaestroCommands(step)) {
+        commands.push(cmd);
+      }
     }
 
-    const content = lines.join('\n') + '\n';
+    let content: string;
+    try {
+      content = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
+    } catch (err) {
+      if (err instanceof MaestroValidationError) {
+        return failResult(`Refusing to write Maestro flow: ${err.message} (Phase 134.1)`);
+      }
+      throw err;
+    }
+
     writeFileSync(filePath, content, 'utf-8');
 
     return okResult({
