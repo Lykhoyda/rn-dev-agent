@@ -215,7 +215,64 @@ test('Phase 134.2: device_snapshot action=open rejects shell-metachar appId', as
   assert.equal(r.isError, true);
 });
 
-test('Phase 134.2: device_deeplink without packageName works (optional arg unchanged)', async () => {
+// ── Phase 134.2-followup: device_deeplink URL injection ─────────────
+// The original 134.2 fix validated packageName but missed `url`.
+// Deepsec revalidation 20260512193352 flagged `url` as a separate
+// injection vector: a URL like 'myapp://path;reboot' would break out
+// of the adb shell command after `am start` completes. Fix: validate
+// + POSIX single-quote the url.
+
+test('Phase 134.2-followup: device_deeplink rejects url with newline-injection', async () => {
+  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const handler = createDeviceDeeplinkHandler();
+  const r = await handler({
+    url: 'myapp://path\nreboot',
+    platform: 'android',
+  });
+  assert.equal(r.isError, true);
+  const env = parseEnvelope(r);
+  assert.match(env.error, /control characters|newlines/i);
+});
+
+test('Phase 134.2-followup: device_deeplink rejects url with control characters', async () => {
+  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const handler = createDeviceDeeplinkHandler();
+  const r = await handler({
+    url: 'myapp://pathevil',
+    platform: 'android',
+  });
+  assert.equal(r.isError, true);
+});
+
+test('Phase 134.2-followup: device_deeplink rejects oversized url', async () => {
+  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const handler = createDeviceDeeplinkHandler();
+  const r = await handler({
+    url: 'myapp://' + 'a'.repeat(5000),
+    platform: 'android',
+  });
+  assert.equal(r.isError, true);
+  const env = parseEnvelope(r);
+  assert.match(env.error, /too long/i);
+});
+
+test('Phase 134.2-followup: device_deeplink accepts urls with legitimate special chars (& ? = #)', async () => {
+  // URL query params with & and = are legitimate; POSIX-quoting keeps them inert.
+  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const handler = createDeviceDeeplinkHandler();
+  const r = await handler({
+    url: 'myapp://path?key=value&other=thing#fragment',
+    platform: 'android',
+  });
+  // May error from adb-not-installed but NOT from input validation.
+  if (r.isError) {
+    const env = parseEnvelope(r);
+    assert.doesNotMatch(env.error ?? '', /control characters|newlines|too long/i,
+      'Legitimate URL with query/fragment must pass input validation');
+  }
+});
+
+test('Phase 134.2-followup: device_deeplink without packageName works (optional arg unchanged)', async () => {
   // packageName is optional — when omitted, no validation is needed.
   const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
   const handler = createDeviceDeeplinkHandler();
