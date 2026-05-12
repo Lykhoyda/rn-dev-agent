@@ -4,6 +4,36 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.30] — 2026-05-12
+
+### Fixed (Phase 134.0 — Android capturer exit-code race, deepsec follow-up)
+
+- **`defaultAndroidCapturer` no longer reports success on adb non-zero exit
+  when the stream finished first.** The prior implementation settled on
+  whichever of `out.on('finish')` or `proc.on('close', code)` fired first.
+  Node doesn't order these events, so a truncated/corrupt screenshot
+  could be reported as `ok: true` when adb exited non-zero AFTER the
+  WriteStream drained. The new two-track settle requires BOTH
+  `streamFinished === true` AND `procCode === 0` before reporting
+  success; on any failure path the partial file is unlinked so
+  `resizeWithSips` never reads a corrupt artifact.
+- The decision logic is extracted as a pure
+  `resolveCaptureOutcome(streamFinished, procCode)` helper exported for
+  unit testing; the event-wiring stays small enough to read at a glance.
+- Caught by the first deepsec full-repo scan (run
+  `20260512130956-afb409ef9132fae2`) — a class of race that neither the
+  PR-A multi-LLM review (Codex + Gemini) flagged because their attention
+  was on the stream-flush race, not the exit-code race. Phase 134 of the
+  workspace ROADMAP sequences the remaining 7 CRITICAL + 11 HIGH
+  findings from the same scan.
+
+### Internal
+
+- 3 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
+  `resolveCaptureOutcome` truth table (pending / success / failure
+  including the exact deepsec scenario: `streamFinished=true,
+  procCode=non-zero`). Full unit suite: 1245 passing, 0 failing.
+
 ## [0.44.29] — 2026-05-12
 
 ### Fixed (GH #136 — PR-A: Multi-Device Screenshot Routing)

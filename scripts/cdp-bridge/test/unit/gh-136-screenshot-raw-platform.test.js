@@ -14,6 +14,38 @@ import assert from 'node:assert/strict';
 const RAW_MOD = '../../dist/tools/device-screenshot-raw.js';
 const DEVICE_LIST_MOD = '../../dist/tools/device-list.js';
 
+// ── resolveCaptureOutcome (deepsec 2026-05-12 follow-up) ────────────
+// The Android capturer waits for BOTH the WriteStream's 'finish' event AND
+// adb's exit code before settling. Node doesn't order these two events, so
+// the decision helper must report 'pending' until both have arrived, and
+// only return 'success' when both happened cleanly. The earlier version
+// resolved on whichever fired first — adb exiting non-zero after the
+// stream finished was silently swallowed (deepsec finding "Android
+// screenshot can report success before adb exit status is known").
+
+test('resolveCaptureOutcome: pending until both signals arrive', async () => {
+  const { resolveCaptureOutcome } = await import(RAW_MOD);
+  assert.equal(resolveCaptureOutcome(false, null), 'pending');
+  assert.equal(resolveCaptureOutcome(true, null), 'pending');
+  assert.equal(resolveCaptureOutcome(false, 0), 'pending');
+});
+
+test('resolveCaptureOutcome: success only when stream finished AND exit code 0', async () => {
+  const { resolveCaptureOutcome } = await import(RAW_MOD);
+  assert.equal(resolveCaptureOutcome(true, 0), 'success');
+});
+
+test('resolveCaptureOutcome: stream finished + non-zero exit → failure (the deepsec race)', async () => {
+  const { resolveCaptureOutcome } = await import(RAW_MOD);
+  // This is the exact scenario the deepsec scan caught: WriteStream drained
+  // cleanly, then adb exited with non-zero status. Prior code reported
+  // success on the 'finish' event; the new code must report failure once
+  // both signals are in.
+  assert.equal(resolveCaptureOutcome(true, 1), 'failure');
+  assert.equal(resolveCaptureOutcome(true, 127), 'failure');
+  assert.equal(resolveCaptureOutcome(true, -1), 'failure');
+});
+
 // ── Pure parsers ────────────────────────────────────────────────────
 
 test('parseSimctlBootedUDID: returns first Booted device UDID, skips Shutdown', async () => {
