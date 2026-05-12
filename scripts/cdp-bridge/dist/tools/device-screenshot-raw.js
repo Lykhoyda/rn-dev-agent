@@ -17,7 +17,7 @@
  * spawning real `xcrun`/`adb` subprocesses.
  */
 import { execFile, spawn } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, unlinkSync } from 'node:fs';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 export function parseSimctlBootedUDID(jsonText) {
@@ -93,23 +93,42 @@ const defaultIosCapturer = async (udid, path) => {
         return false;
     }
 };
+export function resolveCaptureOutcome(streamFinished, procCode) {
+    if (!streamFinished)
+        return 'pending';
+    if (procCode === null)
+        return 'pending';
+    return procCode === 0 ? 'success' : 'failure';
+}
 // Android needs the binary screen bytes piped to a file. execFile can't redirect
 // stdout, so spawn directly and pipe to a write stream — no shell, so the path
 // is safely passed as a literal filename, not interpolated into a command string.
 //
-// Settle ordering matters: `pipe()` auto-ends `out` when `proc.stdout` ends, but
-// `out.end()` is async — bytes can remain buffered after the child exits. We
-// resolve `true` only on the WriteStream's `'finish'` event (post-flush) so
-// `resizeWithSips` never reads a truncated PNG. Multi-LLM review caught this.
+// Two-track settle: success requires BOTH the WriteStream 'finish' event (all
+// bytes drained to disk) AND adb's 'close' event with exit code 0. Either
+// alone is insufficient: 'finish' before non-zero close = truncated/partial
+// file reported as success (deepsec 2026-05-12 finding); 'close' before
+// 'finish' = success reported before bytes hit disk (earlier multi-LLM
+// review finding). On any failure path, the partial file is unlinked so
+// `resizeWithSips` never sees a corrupt artifact.
 const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
     let settled = false;
+    let streamFinished = false;
+    let procCode = null;
     const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
     const out = createWriteStream(path);
+    const cleanupPartial = () => {
+        try {
+            unlinkSync(path);
+        }
+        catch { /* file may not exist yet — ignore */ }
+    };
     const timer = setTimeout(() => {
         if (settled)
             return;
         proc.kill();
         out.destroy();
+        cleanupPartial();
         settle(false);
     }, 15_000);
     const settle = (ok) => {
@@ -119,19 +138,28 @@ const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
         clearTimeout(timer);
         resolve(ok);
     };
+    const maybeSettle = () => {
+        const outcome = resolveCaptureOutcome(streamFinished, procCode);
+        if (outcome === 'pending')
+            return;
+        if (outcome === 'failure') {
+            out.destroy();
+            cleanupPartial();
+        }
+        settle(outcome === 'success');
+    };
     proc.stdout.pipe(out);
-    out.on('finish', () => settle(true));
-    out.on('error', () => settle(false));
+    out.on('finish', () => { streamFinished = true; maybeSettle(); });
+    out.on('error', () => {
+        cleanupPartial();
+        settle(false);
+    });
     proc.on('error', () => {
         out.destroy();
+        cleanupPartial();
         settle(false);
     });
-    proc.on('close', (code) => {
-        if (code === 0)
-            return; // success path settles via `out.on('finish')`
-        out.destroy();
-        settle(false);
-    });
+    proc.on('close', (code) => { procCode = code; maybeSettle(); });
 });
 let iosResolver = defaultIosResolver;
 let androidResolver = defaultAndroidResolver;
