@@ -57,12 +57,17 @@ function metaPairs(opts: GenerateOpts): MetaPair[] {
   if (typeof opts.mutates === 'boolean') out.push(['mutates', String(opts.mutates)]);
   if (opts.status) out.push(['status', stripNewlines(opts.status)]);
   if (opts.produces && Object.keys(opts.produces).length > 0) {
+    // Phase 134.1 (deepsec CRITICAL #6): keys MUST also pass through
+    // stripNewlines, or a crafted key like `user.id\n- runScript: ...`
+    // escapes the `# produces:` comment and becomes an active Maestro
+    // directive when the saved action is later replayed. The previous
+    // version sanitized values but not keys.
     const pairs = Object.keys(opts.produces)
       .sort()
       .map((k) => {
         const v = opts.produces![k];
         const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
-        return `${k}: ${formatted}`;
+        return `${stripNewlines(k)}: ${formatted}`;
       });
     out.push(['produces', `{ ${pairs.join(', ')} }`]);
   }
@@ -215,7 +220,15 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         lines.push('- pressKey: Enter');
         break;
       case 'swipe': {
-        const dir = ev.direction.charAt(0).toUpperCase() + ev.direction.slice(1);
+        // Phase 134.1 (deepsec CRITICAL #7): saved recordings are loaded
+        // from JSON without runtime schema validation, so `ev.direction`
+        // can be any string — including `Up\n- runScript: ...` which
+        // would otherwise emit `- swipeUp\n- runScript: ...` into the
+        // generated YAML. Constrain to the 4 enum values; anything else
+        // falls back to 'Up'.
+        const allowed: Record<string, string> = { up: 'Up', down: 'Down', left: 'Left', right: 'Right' };
+        const raw = typeof ev.direction === 'string' ? ev.direction.toLowerCase() : '';
+        const dir = allowed[raw] ?? 'Up';
         lines.push(`- swipe${dir}`);
         break;
       }

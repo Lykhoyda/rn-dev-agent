@@ -14,6 +14,7 @@ import {
   shouldDemoteAfterRepair,
 } from './reusable-action.js';
 import { withBody, withMetadata } from './action-store.js';
+import { isSafeMaestroScalar } from './maestro-validator.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Levenshtein-based fuzzy matching
@@ -148,6 +149,15 @@ function walkTree(node: SnapshotNodeTree, acc: Set<string>): void {
  * Pure function — exported for unit tests.
  */
 export function replaceIdSelector(body: string, oldId: string, newId: string): { body: string; replacements: number } {
+  // Phase 134.1 (deepsec HIGH: repair writes unescaped testIDs).
+  // testIDs come from the running app's snapshot, attacker-controlled in
+  // the prompt-injection threat model. Reject any newId that could break
+  // out of the YAML scalar context (newlines, --- separators, control
+  // chars, unicode line breaks). replacements: 0 makes the caller treat
+  // it as "no match found" — repair refuses gracefully.
+  if (!isSafeMaestroScalar(newId)) {
+    return { body, replacements: 0 };
+  }
   const lines = body.split('\n');
   const out: string[] = [];
   let replacements = 0;

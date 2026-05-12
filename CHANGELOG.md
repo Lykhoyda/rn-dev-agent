@@ -4,6 +4,74 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.31] — 2026-05-12
+
+### Fixed (Phase 134.1 — Maestro/YAML hardening, closes 7 CRITICAL + 2 HIGH)
+
+- **`runScript` and other host-executing Maestro directives are now rejected
+  by default.** New central validator at
+  `scripts/cdp-bridge/src/domain/maestro-validator.ts` enforces a strict
+  command allowlist on every Maestro-emitting AND Maestro-executing path.
+  In the prompt-injection threat model — where a malicious project file
+  can reach the agent — this closes the highest-impact RCE class: 7 CRITICAL
+  deepsec findings from the 2026-05-12 baseline scan.
+- **`appId` / bundle IDs are validated against a strict reverse-DNS regex.**
+  No string concatenation into the Maestro YAML header anywhere; all flow
+  construction goes through `buildMaestroFlow()` which serializes via the
+  `yaml` library. Newline / `---` / unicode-line-break injection in
+  `app.json` slugs no longer becomes Maestro directive injection.
+- **Project-supplied login flows (`auto-login.ts`) are now parse-and-inline,
+  not blind-replay.** Previously `.maestro/subflows/login.yaml` was loaded
+  with only a `clearState: true` strip and wrapped in `runFlow: file: ...`.
+  The new flow parses + validates the project file, then inlines the
+  validated commands directly into the wrapper — `runFlow` is no longer in
+  the allowlist, so the indirection can't smuggle a malicious flow back in.
+- **`maestro_test_all` no longer trusts disk content.** Every discovered
+  `.yaml` is read + parse-and-validated + re-serialized to a canonical temp
+  file before execution. Auto-discovery was the highest-trust gap in the
+  codebase: a single prompt-injected save earlier in a session would have
+  let attacker steps replay on every subsequent test_all invocation.
+- **Test-recorder fixes** (`test-recorder-generators.ts`): `produces` keys
+  now pass through `stripNewlines` (closes the comment-escape CRITICAL);
+  swipe directions are enum-constrained (closes the recording-replay CRITICAL).
+- **`replaceIdSelector` refuses unsafe testIDs** — the running app's
+  snapshot is attacker-controlled in the threat model; testIDs containing
+  newlines or document separators no longer become Maestro injection
+  vectors during auto-repair.
+
+### Multi-LLM review fixes (caught before merge)
+
+- Allowlist extended with `swipeUp`/`swipeDown`/`swipeLeft`/`swipeRight` —
+  test-recorder emits the shorthand form, without these every recorded
+  action with a swipe would have failed at replay (both Codex 92% and
+  Gemini 98% confidence — a real regression the test-recorder round-trip
+  test now guards against).
+- Bundle-ID regex allows hyphens — Apple's CFBundleIdentifier docs permit
+  them, Expo apps commonly use them (`com.my-app.testapp`). Earlier
+  hyphen-less regex would have refused legitimate apps.
+- `auto-login` no longer double-prepends `launchApp` when the project's
+  flow already begins with one.
+- `maestro-run` uses unique-per-call temp filenames so parallel calls
+  can't race on a shared `/tmp/rn-maestro-inline.yaml`.
+- Dropped over-strict `---` substring rejection — `\n` rejection already
+  catches the actual document-separator attack; mid-scalar `---` (in
+  legitimate text like "section --- title") is harmless when emitted
+  through `yaml.stringify`.
+
+### Internal
+
+- 26 new validator unit tests (`phase-134-1-maestro-validator.test.js`)
+  cover the exact deepsec attack vectors plus the multi-LLM-caught
+  regressions (hyphenated bundle IDs, swipe shorthand round-trip).
+- Files migrated through the validator: `maestro-invoke.ts`,
+  `maestro-run.ts`, `maestro-generate.ts`, `maestro-test-all.ts`,
+  `auto-login.ts`, `test-recorder-generators.ts`, `repair-engine.ts`.
+- Full unit suite: 1271 passing, 0 failing. TypeScript compiles clean.
+- Proposed decisions logged in workspace ROADMAP Phase 134.1:
+  - **D1212**: Reject `runScript` by default in plugin-emitted and
+    plugin-replayed Maestro flows.
+  - **D1213**: Strict bundle-ID regex at every `appId` boundary.
+
 ## [0.44.30] — 2026-05-12
 
 ### Fixed (Phase 134.0 — Android capturer exit-code race, deepsec follow-up)

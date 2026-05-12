@@ -4,6 +4,12 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
+import {
+  buildMaestroFlow,
+  parseAndValidateFlow,
+  isValidBundleId,
+  MaestroValidationError,
+} from './domain/maestro-validator.js';
 
 const execFile = promisify(execFileCb);
 
@@ -53,10 +59,43 @@ export async function runMaestroInline(
     };
   }
 
-  const appId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? '';
-  const header = appId ? `appId: ${appId}\n---\n` : '---\n';
-  const content = header + yaml;
+  // Phase 134.1 (deepsec CRITICAL #1): the appId came from opts.appId,
+  // resolveBundleId() reading native config, or readExpoSlug() reading
+  // app.json/app.config.json. All three are project-controlled in the
+  // prompt-injection threat model. Validate it against the strict bundle-ID
+  // regex BEFORE it ever touches the header; reject malicious slugs entirely
+  // rather than escaping into a fallback path. The full Maestro flow is then
+  // built via buildMaestroFlow which serializes through the `yaml` lib —
+  // no string concatenation, no newline/--- escape possible.
+  const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? '';
   const flowFile = join(tmpdir(), `rn-maestro-invoke-${opts.slug ?? 'flow'}-${Date.now()}.yaml`);
+
+  let content: string;
+  try {
+    const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
+    const appIdOpts: { appId?: string } = {};
+    if (rawAppId && isValidBundleId(rawAppId)) {
+      appIdOpts.appId = rawAppId;
+    } else if (rawAppId) {
+      return {
+        passed: false,
+        output: '',
+        flowFile,
+        error: `Refusing to run Maestro: invalid bundle ID '${rawAppId.slice(0, 80)}' from project config (Phase 134.1)`,
+      };
+    }
+    content = buildMaestroFlow(appIdOpts, parsed.commands);
+  } catch (err) {
+    if (err instanceof MaestroValidationError) {
+      return {
+        passed: false,
+        output: '',
+        flowFile,
+        error: `Refusing to run Maestro: ${err.message} (Phase 134.1)`,
+      };
+    }
+    throw err;
+  }
 
   try {
     writeFileSync(flowFile, content, 'utf-8');
