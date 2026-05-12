@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { detectPlatform } from './platform-utils.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 
 const execFileAsync = promisify(execFile);
 const EXEC_TIMEOUT = 10_000;
@@ -184,6 +185,19 @@ export function createDevicePermissionHandler(): (args: PermissionArgs) => Promi
       return failResult(
         `Invalid platform "${platform}". Supported values: "ios", "android".`,
         'INVALID_PLATFORM',
+      );
+    }
+
+    // Phase 134.2 (deepsec HIGH): appId reaches `adb shell pm/dumpsys ...`
+    // on Android, where the remote shell re-interprets argv. Reject any
+    // appId that doesn't match the strict bundle-ID regex BEFORE it
+    // touches adb. Validate for iOS too — simctl is less injection-prone
+    // (no shell), but accepting nonsense bundle IDs there would just fail
+    // downstream with a worse error message.
+    if (!isValidBundleId(args.appId)) {
+      return failResult(
+        `Invalid appId "${String(args.appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`,
+        'INVALID_APPID',
       );
     }
 

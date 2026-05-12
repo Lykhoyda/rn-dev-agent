@@ -4,6 +4,7 @@ import { okResult, failResult } from '../utils.js';
 import { detectPlatform } from './platform-utils.js';
 import { getAdbSerial } from '../agent-device-wrapper.js';
 import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
 async function openIosDeeplink(url) {
@@ -60,6 +61,13 @@ export function createDeviceDeeplinkHandler() {
     return async (args) => {
         if (!args.url || args.url.length === 0) {
             return failResult('url is required', { code: 'INVALID_ARGS' });
+        }
+        // Phase 134.2 (deepsec HIGH): `packageName` reaches `adb shell am start
+        // -n <packageName>`, where the remote Android shell re-interprets argv.
+        // Validate against the strict bundle-ID regex. packageName remains
+        // optional — when omitted, no validation is needed.
+        if (args.packageName !== undefined && !isValidBundleId(args.packageName)) {
+            return failResult(`Invalid packageName "${String(args.packageName).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`, { code: 'INVALID_PACKAGE_NAME' });
         }
         const platform = args.platform ?? (await detectPlatform());
         if (!platform) {
