@@ -4,6 +4,7 @@ import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession,
 import { stopFastRunner } from '../fast-runner-session.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak, } from './runner-leak-recovery.js';
 const execFile = promisify(execFileCb);
 /**
@@ -55,6 +56,15 @@ export function createDeviceSnapshotHandler() {
                         'Could not auto-detect from app.json — provide appId explicitly.');
                 }
                 autoDetected = true;
+            }
+            // Phase 134.2 (deepsec HIGH): when attachOnly=true on Android,
+            // `appId` reaches `adb shell pidof <appId>`, where the remote shell
+            // re-interprets argv. Validate against the strict bundle-ID regex
+            // before any adb invocation. Expo Go bundles (`host.exp.Exponent`)
+            // satisfy the regex so the EXPO_GO_BUNDLES check below still fires
+            // correctly.
+            if (!isValidBundleId(appId)) {
+                return failResult(`Invalid appId "${String(appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`, 'INVALID_APPID');
             }
             // Warn when targeting Expo Go — agent-device steals focus from Expo Go (B71)
             const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];

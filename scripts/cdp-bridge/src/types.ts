@@ -189,7 +189,11 @@ export type ToolErrorCode =
   | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
   | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
   | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
-  | 'STORE_TRUNCATED';          // expect_redux when store payload exceeded safeStringify cap
+  | 'STORE_TRUNCATED'           // expect_redux when store payload exceeded safeStringify cap
+  // Phase 134.2: appId / packageName validation at adb shell boundary.
+  | 'INVALID_APPID'             // device_permission
+  | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
+  | 'INVALID_PACKAGE_NAME';     // device_deeplink
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

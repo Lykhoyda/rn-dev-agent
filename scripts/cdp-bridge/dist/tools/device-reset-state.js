@@ -1,6 +1,7 @@
 import { okResult, failResult, warnResult } from '../utils.js';
 import { detectPlatform } from './platform-utils.js';
 import { createDevicePermissionHandler } from './device-permission.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { buildMmkvExpression } from './mmkv.js';
 import { terminateApp, launchApp } from './app-lifecycle.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
@@ -208,6 +209,13 @@ export function createDeviceResetStateHandler(getClient) {
     return async (args) => {
         if (!args.appId || typeof args.appId !== 'string') {
             return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
+        }
+        // Phase 134.2 (deepsec HIGH): appId flows into permission/terminate/
+        // launch helpers, which on Android reach `adb shell pm/am`. Validate
+        // at the entry boundary so a metachar-laden appId never reaches any
+        // downstream call.
+        if (!isValidBundleId(args.appId)) {
+            return failResult(`Invalid appId "${String(args.appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`, 'DEVICE_RESET_INVALID_APPID');
         }
         const platform = args.platform ?? (await detectPlatform());
         if (platform !== 'ios' && platform !== 'android') {

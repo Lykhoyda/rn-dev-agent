@@ -4,6 +4,45 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.32] — 2026-05-12
+
+### Fixed (Phase 134.2 — adb shell-arg hardening, closes 5 HIGH)
+
+- **`appId` / `packageName` are validated against the bundle-ID regex
+  before any `adb shell` invocation.** In the prompt-injection threat
+  model, `adb shell <cmd> <appId>` re-interprets argv under the device
+  shell — a metachar-laden `appId` becomes command injection on the
+  connected Android device/emulator. Each tool now rejects malformed
+  bundle IDs at its handler boundary with `INVALID_APPID` /
+  `DEVICE_RESET_INVALID_APPID` / `INVALID_PACKAGE_NAME`. Closes 5
+  deepsec HIGH findings.
+
+### Sites hardened
+
+- `device_permission` (`tools/device-permission.ts`) — both
+  grant/revoke/reset and query actions
+- `device_reset_state` (`tools/device-reset-state.ts`) — at the entry
+  point, before any of permission / terminate / launch helpers run
+- `device_deeplink` (`tools/device-deeplink.ts`) — `packageName` arg
+  passed to `adb shell am start -n <packageName>` is now validated;
+  `packageName` remains optional
+- `device_snapshot` action=open with attachOnly=true
+  (`tools/device-session.ts`) — `appId` reaching `adb shell pidof
+  <appId>` is validated
+
+### Internal
+
+- All 5 sites reuse `isValidBundleId` from `domain/maestro-validator.ts`
+  (introduced in Phase 134.1). Single regex chokepoint — no per-call-
+  site validation logic to drift. Implements proposed D1213 (workspace
+  ROADMAP Phase 134.1).
+- 13 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`
+  cover newline injection, shell metachars (`;`, `|`, backtick, `$()`),
+  and the backward-parity path (valid + hyphenated bundle IDs).
+- Full unit suite: 1284 passing, 0 failing.
+- New error codes added to `types.ts`: `INVALID_APPID`,
+  `DEVICE_RESET_INVALID_APPID`, `INVALID_PACKAGE_NAME`.
+
 ## [0.44.31] — 2026-05-12
 
 ### Fixed (Phase 134.1 — Maestro/YAML hardening, closes 7 CRITICAL + 2 HIGH)
