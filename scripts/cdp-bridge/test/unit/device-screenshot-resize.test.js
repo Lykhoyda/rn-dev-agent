@@ -75,11 +75,17 @@ test('deriveScreenshotPath returns explicit path when provided', () => {
 });
 
 test('deriveScreenshotPath defaults to .jpg when no path/format', () => {
-  assert.equal(deriveScreenshotPath({}, () => 12345), '/tmp/rn-screenshot-12345.jpg');
+  // Phase 134.3: a random suffix is appended to defeat parallel-call
+  // clobbering on the same millisecond. Pass a deterministic `rand`
+  // so the test asserts the exact filename shape.
+  const rand = () => 0.5; // 0.5.toString(36).slice(2,8) → 'i' (1 char, pad below)
+  const out = deriveScreenshotPath({}, () => 12345, rand);
+  assert.match(out, /^\/tmp\/rn-screenshot-12345-[a-z0-9]+\.jpg$/);
 });
 
 test('deriveScreenshotPath honors format=png when no path', () => {
-  assert.equal(deriveScreenshotPath({ format: 'png' }, () => 99), '/tmp/rn-screenshot-99.png');
+  const out = deriveScreenshotPath({ format: 'png' }, () => 99, () => 0.5);
+  assert.match(out, /^\/tmp\/rn-screenshot-99-[a-z0-9]+\.png$/);
 });
 
 // ── resolveScreenshotPath ─────────────────────────────────────────────

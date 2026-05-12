@@ -9,6 +9,7 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
+import { isValidActionId } from '../domain/path-safety.js';
 import {
   loadAction,
   saveAction,
@@ -56,6 +57,16 @@ export function createRepairActionHandler() {
   return withSession(async (args: RepairActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_repair_action requires actionId', 'BAD_FILENAME');
+    }
+    // Phase 134.3 (deepsec HIGH path-traversal): actionId flows into
+    // <projectRoot>/.rn-agent/actions/<id>.yaml. Reject any ID that
+    // could escape that directory (e.g. `../../etc/passwd`) before any
+    // file read happens.
+    if (!isValidActionId(args.actionId)) {
+      return failResult(
+        `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/ and be <= 64 chars`,
+        'BAD_FILENAME',
+      );
     }
     if (!args.failedSelector || typeof args.failedSelector !== 'string') {
       // Future enhancement: scan all selectors and find all stale ones.

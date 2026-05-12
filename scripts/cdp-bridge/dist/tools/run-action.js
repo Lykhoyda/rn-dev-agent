@@ -33,6 +33,7 @@ import { appendRunRecord, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
+import { isValidActionId } from '../domain/path-safety.js';
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -112,6 +113,12 @@ export function createRunActionHandler(deps = {}) {
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
+        }
+        // Phase 134.3 (deepsec HIGH path-traversal): same chokepoint as
+        // cdp_repair_action — actionId flows into the .rn-agent/actions/
+        // path segment. Reject malicious slugs at the boundary.
+        if (!isValidActionId(args.actionId)) {
+            return failResult(`Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/ and be <= 64 chars`, 'BAD_FILENAME');
         }
         const projectRoot = args.projectRoot ?? process.cwd();
         const action = loadAction(projectRoot, args.actionId);
