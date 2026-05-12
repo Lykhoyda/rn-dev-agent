@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-cdp",
-  "version": "0.38.23",
+  "version": "0.38.24",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

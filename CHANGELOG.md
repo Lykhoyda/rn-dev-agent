@@ -4,6 +4,48 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.29] — 2026-05-12
+
+### Fixed (GH #136 — PR-A: Multi-Device Screenshot Routing)
+
+- **`device_screenshot platform: "ios" | "android"` now disambiguates reliably
+  when both an iOS sim and an Android emu are booted.** Previously the call
+  routed through `agent-device --platform`, which silently fell back to the
+  active session and returned a wrong-platform image (iPhone-resolution JPEG
+  when `platform: "android"` was requested). The explicit-platform path now
+  resolves the booted device directly via `xcrun simctl list -j devices
+  booted` (iOS) or `adb devices` (Android), then captures via
+  `xcrun simctl io <UDID> screenshot --type=jpeg <path>` or
+  `adb -s <emu-id> exec-out screencap -p` — bypassing agent-device entirely.
+- **Backward-safe by design.** The raw path fires only when the caller passes
+  `platform` explicitly. Calls that omit the field (the common single-device
+  case) keep the existing `runAgentDevice` flow exactly. Any failure in the
+  raw path (resolver miss, command error, missing `xcrun`/`adb`) gracefully
+  degrades to `runAgentDevice` — no new error surface for users.
+
+### Internal
+
+- New module `scripts/cdp-bridge/src/tools/device-screenshot-raw.ts` —
+  pure parsers (`parseSimctlBootedUDID`, `parseAdbDevicesEmu`) plus the
+  `tryRawScreenshot` orchestrator, with test seams (`_setForTest`,
+  `_resetForTest`) for resolver/capturer injection.
+- New `_setRunAgentDeviceForTest` / `_resetRunAgentDeviceForTest` seams on
+  `device-list.ts` for integration tests, mirroring the GH #136 PR-B picker
+  convention.
+- 14 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
+  pure parsers, orchestrator branches (both iOS and Android arms,
+  success + capturer-failure for each), raw-vs-fallback dispatch, and
+  that the resize pipeline + EPHEMERAL_PATH advisory still wrap the raw
+  result identically. Full unit suite at 1242 passing, 0 failing.
+- Multi-LLM review (Codex + Gemini, parallel) flagged an Android
+  `WriteStream` flush race in the default capturer: `out.end()` returns
+  before bytes drain, so the promise could resolve `ok: true` while
+  `resizeWithSips` reads a truncated PNG (>64KB pipe buffer = real risk
+  for high-res emulators). Fixed by waiting on the `'finish'` event and
+  destroying the stream on timeout / proc-error paths. The fix is to
+  `defaultAndroidCapturer` only — iOS uses `execFile`-completion
+  ordering which doesn't have this race.
+
 ## [0.44.28] — 2026-05-07
 
 ### Fixed (GH #136 — PR-B: Dev-Client Picker Reliability)

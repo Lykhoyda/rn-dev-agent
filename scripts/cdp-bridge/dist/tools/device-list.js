@@ -1,7 +1,15 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
+import { tryRawScreenshot } from './device-screenshot-raw.js';
+let runAgentDeviceFn = runAgentDevice;
+export function _setRunAgentDeviceForTest(fn) {
+    runAgentDeviceFn = fn;
+}
+export function _resetRunAgentDeviceForTest() {
+    runAgentDeviceFn = runAgentDevice;
+}
 export function createDeviceListHandler() {
-    return async () => runAgentDevice(['devices'], { skipSession: true });
+    return async () => runAgentDeviceFn(['devices'], { skipSession: true });
 }
 /**
  * Pure derivation of the output path for a screenshot call. Extracted so the
@@ -120,7 +128,22 @@ export async function captureAndResizeScreenshot(args) {
     // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
     const argsWithPath = { ...args, path: requestedPath };
     const advisories = computeScreenshotAdvisories(args, requestedPath);
-    const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+    // GH #136 PR-A: explicit-platform raw path bypasses agent-device's --platform
+    // routing when both iOS sim and Android emu are booted. Falls through to
+    // runAgentDevice on any failure (resolution miss, command error) — graceful
+    // degradation preserves single-device behavior identically.
+    let result;
+    if (args.platformExplicit && (args.platform === 'ios' || args.platform === 'android')) {
+        const raw = await tryRawScreenshot(args.platform, requestedPath);
+        if (raw) {
+            result = {
+                content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: raw.path } }) }],
+            };
+        }
+    }
+    if (!result) {
+        result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+    }
     if (result.isError)
         return result;
     const actualPath = resolveScreenshotPath(result, requestedPath);
@@ -148,7 +171,8 @@ export async function captureAndResizeScreenshot(args) {
  */
 export function createDeviceScreenshotHandler(getClient) {
     return async (args) => {
+        const platformExplicit = args.platform === 'ios' || args.platform === 'android';
         const platform = args.platform ?? getClient?.()?.connectedTarget?.platform ?? null;
-        return captureAndResizeScreenshot({ ...args, platform });
+        return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
     };
 }
