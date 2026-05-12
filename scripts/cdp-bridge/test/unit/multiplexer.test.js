@@ -59,9 +59,13 @@ test('supportsNativeMultiDebugger: unknown shapes fall back to false (conservati
 // ── CDPMultiplexer: full integration tests with real WS ──
 // (makeMockHermes lives in ../helpers/mock-hermes.js — shared across proxy tests.)
 
-function connectConsumer(port) {
+function connectConsumer(port, token) {
+  // Phase 134.4: WebSocket upgrade requires the per-instance capability
+  // token in the URL path. Callers pass `mux.token` from the
+  // CDPMultiplexer instance under test.
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const url = token ? `ws://127.0.0.1:${port}/${token}` : `ws://127.0.0.1:${port}`;
+    const ws = new WebSocket(url);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -100,7 +104,7 @@ test('CDPMultiplexer: forwards a request and routes the response back with origi
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url });
   try {
     const port = await proxy.start();
-    const consumer = await connectConsumer(port);
+    const consumer = await connectConsumer(port, proxy.token);
 
     const waitForResponse = waitForMessage(consumer, (m) => m.id === 42);
     consumer.send(JSON.stringify({ id: 42, method: 'Runtime.evaluate', params: { expression: '1+1' } }));
@@ -127,8 +131,8 @@ test('CDPMultiplexer: two consumers with same id do not collide — responses ro
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url });
   try {
     const port = await proxy.start();
-    const c1 = await connectConsumer(port);
-    const c2 = await connectConsumer(port);
+    const c1 = await connectConsumer(port, proxy.token);
+    const c2 = await connectConsumer(port, proxy.token);
 
     const w1 = waitForMessage(c1, (m) => m.id === 7);
     const w2 = waitForMessage(c2, (m) => m.id === 7);
@@ -156,8 +160,8 @@ test('CDPMultiplexer: events (no id) broadcast to all consumers', async () => {
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url });
   try {
     const port = await proxy.start();
-    const c1 = await connectConsumer(port);
-    const c2 = await connectConsumer(port);
+    const c1 = await connectConsumer(port, proxy.token);
+    const c2 = await connectConsumer(port, proxy.token);
 
     // Give the proxy a beat to register both consumers
     await new Promise((r) => setTimeout(r, 50));
@@ -187,11 +191,11 @@ test('CDPMultiplexer: consumer count increments on connect, decrements on discon
     const port = await proxy.start();
     assert.equal(proxy.consumerCount, 0);
 
-    const c1 = await connectConsumer(port);
+    const c1 = await connectConsumer(port, proxy.token);
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(proxy.consumerCount, 1);
 
-    const c2 = await connectConsumer(port);
+    const c2 = await connectConsumer(port, proxy.token);
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(proxy.consumerCount, 2);
 
@@ -243,7 +247,7 @@ test('CDPMultiplexer: drops messages with non-numeric ids without crashing', asy
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url });
   try {
     const port = await proxy.start();
-    const consumer = await connectConsumer(port);
+    const consumer = await connectConsumer(port, proxy.token);
 
     consumer.send('this is not json');
     consumer.send(JSON.stringify({ method: 'Runtime.somePing' })); // no id — forwarded as-is
@@ -298,8 +302,10 @@ test('cdp_open_devtools: mode=proxy-active when RN < 0.85 (M1b — proxy auto-st
   assert.equal(data.mode, 'proxy-active', 'proxy started automatically on RN < 0.85');
   assert.equal(data.supportsMultipleDebuggers, false);
   assert.ok(data.devtoolsUrl, 'devtoolsUrl populated (points at proxy port)');
-  assert.match(data.devtoolsUrl, /ws=127\.0\.0\.1:\d+$/, 'devtoolsUrl ws= targets the proxy (no /inspector path)');
-  assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:\d+$/, 'inspectorWsUrl is the proxy URL');
+  // Phase 134.4: devtoolsUrl now includes the capability token in the
+  // WebSocket path. `?ws=127.0.0.1:PORT/TOKEN` form.
+  assert.match(data.devtoolsUrl, /ws=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'devtoolsUrl ws= targets the proxy with token');
+  assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'inspectorWsUrl includes the capability token');
   assert.match(data.hermesWsUrl, /\/inspector\/debug\?device=/, 'hermesWsUrl is still the direct Hermes URL');
   assert.equal(typeof data.proxyPort, 'number', 'proxyPort is a bound port');
   assert.match(data.guidance, /proxy has been started|coexist/i, 'guidance reflects active-proxy state');
@@ -412,7 +418,7 @@ test('CDPMultiplexer: M1b prereq — hermesBuffer drops oldest when cap exceeded
     }
     assert.ok(port, 'consumer server should bind before Hermes upgrade delay expires');
 
-    const consumer = await connectConsumer(port);
+    const consumer = await connectConsumer(port, proxy.token);
 
     // Flood 5 messages while hermesWs is still CONNECTING.
     for (let i = 1; i <= 5; i++) {
@@ -445,7 +451,7 @@ test('CDPMultiplexer: M1b prereq — routing sweeper evicts entries past routing
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url, routingTimeoutMs: 150 });
   try {
     const port = await proxy.start();
-    const consumer = await connectConsumer(port);
+    const consumer = await connectConsumer(port, proxy.token);
     await new Promise((r) => setTimeout(r, 30));
 
     // Send 3 requests; Hermes swallows, so all 3 routes persist.
@@ -485,8 +491,8 @@ test('CDPMultiplexer: consumer disconnect clears its pending routes (no response
   const proxy = new CDPMultiplexer({ hermesUrl: hermes.url });
   try {
     const port = await proxy.start();
-    const c1 = await connectConsumer(port);
-    const c2 = await connectConsumer(port);
+    const c1 = await connectConsumer(port, proxy.token);
+    const c2 = await connectConsumer(port, proxy.token);
     await new Promise((r) => setTimeout(r, 30));
 
     // c1 sends a request, then immediately disconnects.

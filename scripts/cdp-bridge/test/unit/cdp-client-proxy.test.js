@@ -139,7 +139,7 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
   let reconnects = 0;
   client._softReconnectDirect = async () => { reconnects++; };
   const url = await client.startProxy();
-  assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+$/, 'fresh startProxy succeeds after rollback');
+  assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'fresh startProxy succeeds after rollback');
   assert.equal(reconnects, 1);
 
   await client.disconnect();
@@ -165,7 +165,7 @@ test('CDPClient.startProxy is concurrency-safe — parallel callers share one mu
 
   assert.equal(u1, u2, 'first and second callers get identical URL');
   assert.equal(u2, u3, 'third caller also joins the same in-flight');
-  assert.match(u1, /^ws:\/\/127\.0\.0\.1:\d+$/);
+  assert.match(u1, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/);
   assert.ok(client.proxyMultiplexer, 'exactly one multiplexer stored');
   assert.equal(client.proxyUrl, u1);
 
@@ -193,7 +193,7 @@ test('CDPClient.startProxy: after failed start, in-flight guard clears so next c
 
   // Second call must create a NEW multiplexer (previous one was torn down).
   const url = await client.startProxy();
-  assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+$/);
+  assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/);
   assert.equal(attempts, 2, 'second attempt ran (in-flight cache did not poison retry)');
 
   await client.disconnect();

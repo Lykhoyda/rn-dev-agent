@@ -4,6 +4,44 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.34] — 2026-05-12
+
+### Fixed (Phase 134.4 — CDP multiplexer trust boundary, closes 1 HIGH)
+
+- **CDP multiplexer now requires a per-instance capability token** in
+  the WebSocket upgrade path. Previously any process that could
+  discover the ephemeral loopback port could connect and send
+  arbitrary CDP commands (`Runtime.evaluate`, `Page.navigate`, etc.)
+  to the running Hermes runtime, **bypassing Claude Code's
+  tool-permission prompts entirely**. This included a browser tab
+  scanning local ports, a sibling shell, or any malicious process
+  with loopback access.
+- The token is 32 bytes of `crypto.randomBytes` (43 char base64url),
+  unique per multiplexer instance, included in the WebSocket URL
+  path as `ws://127.0.0.1:<port>/<token>`. The `verifyClient`
+  handler uses `timingSafeEqual` on equal-length buffers to compare
+  — no timing side channel leaks the token.
+- The exposed `proxyUrl` (from `client.startProxy()`) and the
+  DevTools URL (from `cdp_open_devtools`) automatically include the
+  token. Without the token in the path, the multiplexer returns
+  `401 Unauthorized` at upgrade time.
+- **Token never appears in logs** — log lines reference
+  `ws://127.0.0.1:<port>/<token>` literally, not the actual value.
+
+### Internal
+
+- New exports from `cdp/multiplexer.ts`: `generateCapabilityToken()`
+  and `verifyConsumerPath(reqUrl, expectedToken)`. Both pure
+  functions for unit testing. `CDPMultiplexer.token` getter for
+  callers building DevTools URLs.
+- 9 new unit tests cover the token verification truth table:
+  legitimate token accepted; wrong token / missing token / empty
+  token / length mismatch / query-style appendage / non-string
+  inputs all rejected. Plus uniqueness across instances.
+- Implements the deepsec recommendation: per-proxy high-entropy
+  capability token required during WebSocket upgrade, rejection
+  before consumer registration.
+
 ## [0.44.33] — 2026-05-12
 
 ### Fixed (Phase 134.3 — path containment, closes 2 HIGH + 3 MEDIUM)
