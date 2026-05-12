@@ -1,8 +1,39 @@
 import { createServer, type Server } from 'node:http';
 import { type AddressInfo } from 'node:net';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { logger } from '../logger.js';
+
+/**
+ * Phase 134.4 (deepsec HIGH): generate a per-multiplexer capability
+ * token that consumers must include in the WebSocket upgrade path.
+ * 32 bytes of crypto.randomBytes → 43 char base64url string. Never
+ * logged, never exposed in error messages.
+ */
+export function generateCapabilityToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/**
+ * Pure verification helper. Returns true iff the request path is
+ * exactly `/<expectedToken>`. Uses timingSafeEqual on equal-length
+ * buffers to avoid leaking the token via response-timing side
+ * channels. Fails closed on missing/empty/non-string inputs and on
+ * empty expectedToken (never accept an unauthenticated multiplexer).
+ */
+export function verifyConsumerPath(reqUrl: unknown, expectedToken: string): boolean {
+  if (typeof expectedToken !== 'string' || expectedToken.length === 0) return false;
+  if (typeof reqUrl !== 'string' || reqUrl.length === 0) return false;
+  if (!reqUrl.startsWith('/')) return false;
+  const submitted = reqUrl.slice(1);
+  if (submitted.length !== expectedToken.length) return false;
+  const a = Buffer.from(submitted);
+  const b = Buffer.from(expectedToken);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 /**
  * CDP Multiplexer proxy (M1 / Phase 90 Tier 1).
@@ -53,6 +84,15 @@ export class CDPMultiplexer {
   private hermesBuffer: string[] = [];
   private state: 'stopped' | 'starting' | 'running' | 'stopping' = 'stopped';
   private boundPort: number | null = null;
+  /**
+   * Phase 134.4: per-instance capability token. Required in the
+   * WebSocket upgrade path. Never logged. Exposed via `token` getter
+   * so the caller can include it in the URL it hands to DevTools.
+   */
+  private readonly capabilityToken: string = generateCapabilityToken();
+
+  /** Phase 134.4: the capability token for this multiplexer instance. */
+  get token(): string { return this.capabilityToken; }
   private routingSweeper: NodeJS.Timeout | null = null;
 
   constructor(opts: MultiplexerOptions) {
@@ -120,7 +160,24 @@ export class CDPMultiplexer {
   private startConsumerServer(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.httpServer = createServer();
-      this.wss = new WebSocketServer({ server: this.httpServer });
+      this.wss = new WebSocketServer({
+        server: this.httpServer,
+        // Phase 134.4 (deepsec HIGH): reject any upgrade that doesn't
+        // include the capability token in the path. Any sibling
+        // process that learned the loopback port (or a browser tab
+        // scanning local ports) is refused before reaching
+        // onConsumerConnect / onConsumerMessage. Token comparison
+        // uses timingSafeEqual to avoid leaking the secret via
+        // timing side channels.
+        verifyClient: (info, callback) => {
+          if (verifyConsumerPath(info.req.url, this.capabilityToken)) {
+            callback(true);
+            return;
+          }
+          logger.warn(this.opts.logTag, 'rejected upgrade: missing or invalid capability token');
+          callback(false, 401, 'Unauthorized');
+        },
+      });
 
       this.wss.on('connection', (ws) => this.onConsumerConnect(ws));
       this.wss.on('error', (err) => {

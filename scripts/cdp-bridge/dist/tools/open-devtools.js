@@ -70,9 +70,17 @@ export function createOpenDevToolsHandler(getClient) {
             // internal state drift — fail loudly rather than return a half-working URL.
             return failResult('cdp_open_devtools: multiplexer started but has no bound port');
         }
+        const proxyToken = client.proxyMultiplexer?.token ?? null;
+        if (proxyToken === null) {
+            return failResult('cdp_open_devtools: multiplexer started but capability token is missing');
+        }
         // DevTools frontend still lives on Metro (it's static HTML + JS served over HTTP).
         // Only the WS destination changes: DevTools → proxy (loopback); proxy → Hermes.
-        const devtoolsUrl = `http://127.0.0.1:${metroPort}/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:${proxyPort}`;
+        // Phase 134.4: the proxy now requires a per-instance capability token in
+        // the WebSocket path. DevTools includes it via the `ws=` query value;
+        // any browser tab that learns the loopback port without the token gets
+        // a 401 upgrade rejection from verifyClient.
+        const devtoolsUrl = `http://127.0.0.1:${metroPort}/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:${proxyPort}/${proxyToken}`;
         return okResult({
             devtoolsUrl,
             inspectorWsUrl: proxyUrl,

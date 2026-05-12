@@ -237,8 +237,13 @@ export class CDPClient {
     const multiplexer = new CDPMultiplexer({ hermesUrl, ...opts });
     const port = await multiplexer.start();
     this._multiplexer = multiplexer;
-    this._proxyUrl = `ws://127.0.0.1:${port}`;
-    logger.info('CDP', `Proxy started on ${this._proxyUrl}, soft-reconnecting current session`);
+    // Phase 134.4: include the per-instance capability token in the
+    // exposed URL. DevTools (or any other consumer the user authorizes)
+    // connects to `ws://127.0.0.1:<port>/<token>`. Without the token
+    // in the path, the multiplexer rejects the WebSocket upgrade.
+    // The token itself never appears in logs.
+    this._proxyUrl = `ws://127.0.0.1:${port}/${multiplexer.token}`;
+    logger.info('CDP', `Proxy started on ws://127.0.0.1:${port}/<token>, soft-reconnecting current session`);
     try {
       // B132: call `_softReconnectDirect` instead of `this.softReconnect()`. The
       // wrapper would observe _proxyUrl just set above and try to suspend the

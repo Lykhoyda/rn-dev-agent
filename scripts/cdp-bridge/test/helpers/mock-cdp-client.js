@@ -107,10 +107,13 @@ export function createMockClient(overrides = {}) {
 
     async startProxy() {
       // Mock mirrors real behavior: idempotent, sets URL + multiplexer-like stub,
-      // returns URL. Tests that want failure override this.
+      // returns URL. Tests that want failure override this. Phase 134.4: the
+      // mock multiplexer now exposes a `token` field so open-devtools.ts can
+      // build the token-bearing DevTools URL.
       if (client._proxyUrl) return client._proxyUrl;
-      client._proxyUrl = 'ws://127.0.0.1:45678';
-      client._proxyMultiplexer = { port: 45678, isRunning: true, consumerCount: 0 };
+      const mockToken = 'mock-test-token-AbCdEf1234567890_dashOk';
+      client._proxyUrl = `ws://127.0.0.1:45678/${mockToken}`;
+      client._proxyMultiplexer = { port: 45678, token: mockToken, isRunning: true, consumerCount: 0 };
       return client._proxyUrl;
     },
 
