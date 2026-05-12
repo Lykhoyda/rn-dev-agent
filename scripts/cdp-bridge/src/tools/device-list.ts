@@ -2,9 +2,21 @@ import type { CDPClient } from '../cdp-client.js';
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import type { ToolResult } from '../utils.js';
 import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
+import { tryRawScreenshot } from './device-screenshot-raw.js';
+
+type RunAgentDeviceFn = typeof runAgentDevice;
+let runAgentDeviceFn: RunAgentDeviceFn = runAgentDevice;
+
+export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn): void {
+  runAgentDeviceFn = fn;
+}
+
+export function _resetRunAgentDeviceForTest(): void {
+  runAgentDeviceFn = runAgentDevice;
+}
 
 export function createDeviceListHandler(): (args: Record<string, never>) => Promise<ToolResult> {
-  return async () => runAgentDevice(['devices'], { skipSession: true });
+  return async () => runAgentDeviceFn(['devices'], { skipSession: true });
 }
 
 /**
@@ -141,6 +153,13 @@ export interface ScreenshotArgs {
   path?: string;
   format?: string;
   platform?: 'ios' | 'android' | null;
+  /**
+   * GH #136 PR-A internal signal: did the caller pass `platform` explicitly,
+   * or was it inferred from the connected CDP target? Only explicit calls
+   * take the raw `xcrun simctl` / `adb` path; inferred ones use the existing
+   * `runAgentDevice` flow so behavior is unchanged for single-device users.
+   */
+  platformExplicit?: boolean;
   maxWidth?: number;
   quality?: number;
 }
@@ -162,7 +181,22 @@ export async function captureAndResizeScreenshot(
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
   const argsWithPath = { ...args, path: requestedPath };
   const advisories = computeScreenshotAdvisories(args, requestedPath);
-  const result = await runAgentDevice(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+  // GH #136 PR-A: explicit-platform raw path bypasses agent-device's --platform
+  // routing when both iOS sim and Android emu are booted. Falls through to
+  // runAgentDevice on any failure (resolution miss, command error) — graceful
+  // degradation preserves single-device behavior identically.
+  let result: ToolResult | undefined;
+  if (args.platformExplicit && (args.platform === 'ios' || args.platform === 'android')) {
+    const raw = await tryRawScreenshot(args.platform, requestedPath);
+    if (raw) {
+      result = {
+        content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: { path: raw.path } }) }],
+      };
+    }
+  }
+  if (!result) {
+    result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+  }
   if (result.isError) return result;
 
   const actualPath = resolveScreenshotPath(result, requestedPath);
@@ -191,8 +225,9 @@ export function createDeviceScreenshotHandler(
   getClient?: () => CDPClient,
 ): (args: ScreenshotArgs) => Promise<ToolResult> {
   return async (args) => {
+    const platformExplicit = args.platform === 'ios' || args.platform === 'android';
     const platform: 'ios' | 'android' | null =
       args.platform ?? (getClient?.()?.connectedTarget?.platform as 'ios' | 'android' | undefined) ?? null;
-    return captureAndResizeScreenshot({ ...args, platform });
+    return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
   };
 }

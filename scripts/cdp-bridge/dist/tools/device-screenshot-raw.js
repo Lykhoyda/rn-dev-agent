@@ -1,0 +1,151 @@
+/**
+ * GH #136 PR-A: raw-command screenshot path for explicit-platform disambiguation.
+ *
+ * When `device_screenshot` is called with explicit `platform: 'ios' | 'android'`
+ * (i.e., the caller actually passed the field, not inferred from CDP target),
+ * we bypass agent-device entirely and shell out to `xcrun simctl io` or
+ * `adb -s <emu> exec-out screencap -p`. This sidesteps the agent-device CLI's
+ * `--platform` routing issue when both an iOS sim and an Android emu are
+ * booted simultaneously (the field-reported bug from issue #136 #1).
+ *
+ * On any failure (resolution fails, command errors), the caller falls through
+ * to the existing `runAgentDevice` path — no behavior change for users who
+ * don't pass `platform` or who run a single device.
+ *
+ * Test seams (`_setForTest`, `_resetForTest`) follow the GH #136 picker
+ * precedent — allow unit tests to inject resolver/capturer fakes without
+ * spawning real `xcrun`/`adb` subprocesses.
+ */
+import { execFile, spawn } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
+export function parseSimctlBootedUDID(jsonText) {
+    let data;
+    try {
+        data = JSON.parse(jsonText);
+    }
+    catch {
+        return null;
+    }
+    const runtimes = data?.devices;
+    if (!runtimes || typeof runtimes !== 'object')
+        return null;
+    for (const list of Object.values(runtimes)) {
+        if (!Array.isArray(list))
+            continue;
+        for (const device of list) {
+            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+                return device.udid;
+            }
+        }
+    }
+    return null;
+}
+const EMU_LINE = /^(emulator-\d+)\s+device\b/;
+export function parseAdbDevicesEmu(stdout) {
+    const lines = stdout.split('\n');
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        if (trimmed.startsWith('List of devices'))
+            continue;
+        const match = trimmed.match(EMU_LINE);
+        if (match)
+            return match[1];
+    }
+    return null;
+}
+const defaultIosResolver = async () => {
+    try {
+        const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
+            timeout: 5000,
+            maxBuffer: 1024 * 1024,
+        });
+        return parseSimctlBootedUDID(stdout);
+    }
+    catch {
+        return null;
+    }
+};
+const defaultAndroidResolver = async () => {
+    try {
+        const { stdout } = await execFileAsync('adb', ['devices'], {
+            timeout: 5000,
+            maxBuffer: 1024 * 1024,
+        });
+        return parseAdbDevicesEmu(stdout);
+    }
+    catch {
+        return null;
+    }
+};
+const defaultIosCapturer = async (udid, path) => {
+    try {
+        await execFileAsync('xcrun', ['simctl', 'io', udid, 'screenshot', '--type=jpeg', path], {
+            timeout: 15_000,
+            maxBuffer: 1024 * 1024,
+        });
+        return true;
+    }
+    catch {
+        return false;
+    }
+};
+// Android needs the binary screen bytes piped to a file. execFile can't redirect
+// stdout, so spawn directly and pipe to a write stream — no shell, so the path
+// is safely passed as a literal filename, not interpolated into a command string.
+const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
+    let settled = false;
+    const settle = (ok) => {
+        if (settled)
+            return;
+        settled = true;
+        resolve(ok);
+    };
+    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = createWriteStream(path);
+    proc.stdout.pipe(out);
+    out.on('error', () => settle(false));
+    proc.on('error', () => settle(false));
+    proc.on('close', (code) => {
+        out.end();
+        settle(code === 0);
+    });
+    setTimeout(() => {
+        if (!settled) {
+            proc.kill();
+            settle(false);
+        }
+    }, 15_000);
+});
+let iosResolver = defaultIosResolver;
+let androidResolver = defaultAndroidResolver;
+let iosCapturer = defaultIosCapturer;
+let androidCapturer = defaultAndroidCapturer;
+export function _setForTest(overrides) {
+    if (overrides.iosResolver)
+        iosResolver = overrides.iosResolver;
+    if (overrides.androidResolver)
+        androidResolver = overrides.androidResolver;
+    if (overrides.iosCapturer)
+        iosCapturer = overrides.iosCapturer;
+    if (overrides.androidCapturer)
+        androidCapturer = overrides.androidCapturer;
+}
+export function _resetForTest() {
+    iosResolver = defaultIosResolver;
+    androidResolver = defaultAndroidResolver;
+    iosCapturer = defaultIosCapturer;
+    androidCapturer = defaultAndroidCapturer;
+}
+export async function tryRawScreenshot(platform, path) {
+    const resolver = platform === 'ios' ? iosResolver : androidResolver;
+    const capturer = platform === 'ios' ? iosCapturer : androidCapturer;
+    const id = await resolver();
+    if (!id)
+        return null;
+    const ok = await capturer(id, path);
+    return ok ? { ok: true, path } : null;
+}
