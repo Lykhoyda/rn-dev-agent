@@ -30,15 +30,17 @@ test('buildScreenshotArgs uses --out for the path, not positional', () => {
 });
 
 test('buildScreenshotArgs defaults to .jpg when no path and no format given', () => {
-  const now = () => 12345;
-  const out = buildScreenshotArgs({}, now);
-  assert.deepEqual(out, ['screenshot', '--out', '/tmp/rn-screenshot-12345.jpg']);
+  // Phase 134.3: default filename includes a random suffix to prevent
+  // parallel-call clobbering. Inject `rand` for deterministic test.
+  const out = buildScreenshotArgs({}, () => 12345, () => 0.5);
+  assert.equal(out[0], 'screenshot');
+  assert.equal(out[1], '--out');
+  assert.match(out[2], /^\/tmp\/rn-screenshot-12345-[a-z0-9]+\.jpg$/);
 });
 
 test('buildScreenshotArgs honors explicit format when no path given', () => {
-  const now = () => 99;
-  const out = buildScreenshotArgs({ format: 'png' }, now);
-  assert.deepEqual(out, ['screenshot', '--out', '/tmp/rn-screenshot-99.png']);
+  const out = buildScreenshotArgs({ format: 'png' }, () => 99, () => 0.5);
+  assert.match(out[2], /^\/tmp\/rn-screenshot-99-[a-z0-9]+\.png$/);
 });
 
 test('buildScreenshotArgs: explicit path wins over format-derived default', () => {

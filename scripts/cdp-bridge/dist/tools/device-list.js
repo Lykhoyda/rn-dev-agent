@@ -1,6 +1,7 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
+import { pathHasTraversal } from '../domain/path-safety.js';
 let runAgentDeviceFn = runAgentDevice;
 export function _setRunAgentDeviceForTest(fn) {
     runAgentDeviceFn = fn;
@@ -16,11 +17,28 @@ export function createDeviceListHandler() {
  * handler can know the path independently from `buildScreenshotArgs` (used to
  * pass it to the post-resize step) and to keep `buildScreenshotArgs` tests stable.
  */
-export function deriveScreenshotPath(args, now = Date.now) {
+export function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
+    // Phase 134.3 (deepsec MEDIUM path-traversal): caller-supplied `path`
+    // could contain `..` segments that escape the intended directory.
+    // Absolute paths to legitimate locations (e.g. ~/Desktop) are still
+    // allowed — only `..` traversal is refused.
+    if (args.path && pathHasTraversal(args.path)) {
+        throw new PathTraversalScreenshotError(`Screenshot path "${args.path}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`);
+    }
     if (args.path)
         return args.path;
     const ext = args.format === 'jpeg' ? 'jpg' : args.format === 'png' ? 'png' : 'jpg';
-    return `/tmp/rn-screenshot-${now()}.${ext}`;
+    // Add a short random suffix so two parallel calls in the same ms can't
+    // clobber each other's output. deepsec MEDIUM: predictable /tmp files
+    // allow cross-run races. `rand` is injectable for tests.
+    const suffix = rand().toString(36).slice(2, 8);
+    return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
+}
+class PathTraversalScreenshotError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'PathTraversalScreenshotError';
+    }
 }
 /**
  * B113 fix (D636): agent-device >= 0.8.0 exposes only `[path]` and `--out <path>`
@@ -30,8 +48,8 @@ export function deriveScreenshotPath(args, now = Date.now) {
  *
  * Exported for unit tests — pure function, no I/O.
  */
-export function buildScreenshotArgs(args, now = Date.now) {
-    return ['screenshot', '--out', deriveScreenshotPath(args, now)];
+export function buildScreenshotArgs(args, now = Date.now, rand = Math.random) {
+    return ['screenshot', '--out', deriveScreenshotPath(args, now, rand)];
 }
 /**
  * B120 / GH #36: extract the path agent-device actually wrote to. Daemon and

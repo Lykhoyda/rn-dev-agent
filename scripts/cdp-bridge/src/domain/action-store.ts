@@ -20,14 +20,26 @@ import {
   yamlEditedSinceLastSeen,
 } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
+import { assertValidActionId, assertWithinDir } from './path-safety.js';
 
 /**
  * Resolve the canonical YAML path for an action id under a project root.
  * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
  * supersedes D1207).
+ *
+ * Phase 134.3 (deepsec HIGH path-traversal): the regex check is the
+ * primary defense — `actionId` flows from caller args (MCP tool params,
+ * project YAML file names) and a `../etc/passwd` slug would otherwise
+ * escape `.rn-agent/actions/`. The assertWithinDir check is a
+ * defense-in-depth chokepoint that catches any future bypass of the
+ * regex (e.g. a new caller that forgets to validate).
  */
 export function actionPathFor(projectRoot: string, actionId: string): string {
-  return join(projectRoot, '.rn-agent', 'actions', `${actionId}.yaml`);
+  assertValidActionId(actionId, 'actionPathFor');
+  const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+  const fileName = `${actionId}.yaml`;
+  assertWithinDir(fileName, actionsDir);
+  return join(actionsDir, fileName);
 }
 
 /**

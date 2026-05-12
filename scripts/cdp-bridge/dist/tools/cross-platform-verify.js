@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { getCachedSnapshot } from '../agent-device-wrapper.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { pathHasTraversal } from '../domain/path-safety.js';
 export function findElement(nodes, query, matchBy) {
     const q = query.toLowerCase();
     return nodes.some((n) => {
@@ -56,6 +57,13 @@ export function createCrossPlatformVerifyHandler() {
         let elements = args.elements;
         let discoveredCount = 0;
         if (args.scanDir) {
+            // Phase 134.3 (deepsec MEDIUM path-traversal): refuse scanDir
+            // containing `..` segments. A malicious agent could otherwise
+            // pass `../../../etc` to enumerate the filesystem looking for
+            // `testID=` patterns in unrelated source files.
+            if (pathHasTraversal(args.scanDir)) {
+                return failResult(`scanDir "${args.scanDir}" contains '..' traversal segments — refuse to scan outside the calling directory`);
+            }
             const discovered = discoverTestIDs(args.scanDir);
             if (discovered.length === 0) {
                 return failResult(`No testIDs found in ${args.scanDir}. Ensure components use testID="..." props.`);

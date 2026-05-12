@@ -4,6 +4,43 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.33] — 2026-05-12
+
+### Fixed (Phase 134.3 — path containment, closes 2 HIGH + 3 MEDIUM)
+
+- **Action IDs are validated against a strict regex** at every MCP tool
+  boundary that uses them as a path segment under `.rn-agent/actions/`.
+  `cdp_run_action` and `cdp_repair_action` reject IDs like `../etc/passwd`
+  with `BAD_FILENAME` before any file read. Closes 2 deepsec HIGH
+  path-traversal findings.
+- **`actionPathFor` enforces both regex + assertWithinDir** as
+  defense-in-depth. Even if a future caller bypasses the boundary
+  regex, the path resolution refuses to land outside the actions dir.
+- **`device_screenshot` rejects paths containing `..` segments.** A
+  malicious agent could otherwise pass `path: '../../../etc/passwd'`
+  and overwrite arbitrary files. Absolute paths to legitimate
+  locations (e.g. `~/Desktop`) remain allowed.
+- **Default screenshot filename gets a random suffix** so parallel
+  same-millisecond calls can't clobber each other's output. Was
+  `/tmp/rn-screenshot-<ts>.jpg`; now `/tmp/rn-screenshot-<ts>-<rand>.jpg`.
+- **`cross_platform_verify scanDir` rejects `..` traversal.** Refuses
+  to enumerate the filesystem outside the caller's directory.
+
+### Internal
+
+- New module `scripts/cdp-bridge/src/domain/path-safety.ts` —
+  `isValidActionId`, `assertValidActionId`, `assertWithinDir`,
+  `isWithinDir`, `pathHasTraversal`, plus `PathTraversalError`. Reused
+  across action-store, repair-action, run-action, device-list,
+  cross-platform-verify. Same chokepoint discipline as Phase 134.1
+  (Maestro validator) and 134.2 (bundle-ID validation).
+- 12 new unit tests cover path-traversal payloads, absolute paths,
+  control chars, sibling-dir prefix collision, and the backward-parity
+  path. Total test count: 1284 → 1296 passing, 0 failing.
+- Implements proposed D1214 from workspace ROADMAP Phase 134.1
+  ("Tool-supplied paths must pass `assertWithinDir(p, projectActionsDir)`
+  before any `fs.write*` / `createWriteStream` call").
+
 ## [0.44.32] — 2026-05-12
 
 ### Fixed (Phase 134.2 — adb shell-arg hardening, closes 5 HIGH)
