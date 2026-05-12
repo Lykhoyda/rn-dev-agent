@@ -35,9 +35,28 @@ async function openIosDeeplink(url: string): Promise<ToolResult> {
   }
 }
 
+/**
+ * Phase 134.2-followup (deepsec HIGH revalidation 20260512193352): the
+ * Phase 134.2 fix validated `packageName` but missed `url`. `adb shell
+ * <argv...>` joins argv with spaces and sends the result to the Android
+ * remote shell as a raw command line — it does NOT per-argument escape.
+ * Without quoting, `url='myapp://path;reboot'` produces a shell command
+ * `am start ... -d myapp://path;reboot` where `;reboot` runs after
+ * `am start` completes.
+ *
+ * Two-layer defense: validate URL shape first (reject newlines / control
+ * chars), then POSIX single-quote the resolved URL so any remaining shell
+ * metacharacters are inert. Same quoting pattern as
+ * device-interact.ts:524 (`buildAdbInputTextArgv`).
+ */
+function posixSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 async function openAndroidDeeplink(url: string, packageName?: string): Promise<ToolResult> {
   const serial = getAdbSerial();
-  const args = [...serial, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url];
+  const quotedUrl = posixSingleQuote(url);
+  const args = [...serial, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', quotedUrl];
   if (packageName) args.push('-n', packageName);
   try {
     const { stdout, stderr } = await execFile('adb', args, { timeout: EXEC_TIMEOUT_MS });
@@ -73,6 +92,20 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
   return async (args) => {
     if (!args.url || args.url.length === 0) {
       return failResult('url is required', { code: 'INVALID_ARGS' });
+    }
+    // Phase 134.2-followup (deepsec HIGH revalidation 20260512193352):
+    // `url` flows into the adb shell command line. POSIX-quoting in
+    // openAndroidDeeplink covers the shell-metachar layer, but a URL
+    // containing a newline or control char would break out of the
+    // quoted string entirely. Reject those at the boundary.
+    if (typeof args.url !== 'string' || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
+      return failResult(
+        `url contains control characters or newlines — refuse to pass to adb shell (Phase 134.2-followup)`,
+        { code: 'INVALID_ARGS' },
+      );
+    }
+    if (args.url.length > 4096) {
+      return failResult('url too long (max 4096 chars)', { code: 'INVALID_ARGS' });
     }
     // Phase 134.2 (deepsec HIGH): `packageName` reaches `adb shell am start
     // -n <packageName>`, where the remote Android shell re-interprets argv.

@@ -4,6 +4,41 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.36] — 2026-05-12
+
+### Fixed (Phase 134.2-followup — device_deeplink url injection)
+
+- **`device_deeplink` now POSIX-quotes the caller-supplied `url`** before
+  passing it through `adb shell am start -d <url>`. The Phase 134.2 fix
+  validated `packageName` but missed `url`. Deepsec revalidation
+  (run `20260512193352`) re-flagged the deeplink as HIGH because the
+  `url` arg still flowed unescaped into the Android remote shell, where
+  argv is joined with spaces and re-interpreted as a raw command line.
+  A URL like `myapp://path;reboot` would have executed `reboot` after
+  the `am start` completed.
+- Two-layer defense:
+  1. **Validation at the handler boundary**: reject any `url` that
+     contains control characters or newlines (which would break out of
+     the POSIX-quoted string itself), or exceeds 4096 chars.
+  2. **POSIX single-quote wrap**: every shell metacharacter inside the
+     URL (`;`, `|`, `$`, `` ` ``, `&`) becomes inert. Same pattern as
+     `device-interact.ts:524` (`buildAdbInputTextArgv`).
+- Legitimate URLs with `&`, `?`, `=`, `#` continue to work — the quote
+  wrap makes those literal arguments to `am start -d`, not shell
+  expansion targets.
+
+### Internal
+
+- 4 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`:
+  - newline-injected URL rejected
+  - control-char-bearing URL rejected
+  - oversized URL (>4096 chars) rejected
+  - legitimate URL with query+fragment passes validation
+- Full unit suite: 1308 → 1312 passing, 0 failing.
+- Closes the **last HIGH-severity** finding from the original deepsec
+  scan. Post-merge: **CRITICAL = 0, HIGH = 0** (100% security-class
+  findings closed).
+
 ## [0.44.35] — 2026-05-12
 
 ### Fixed (Phase 134.5 — workflow + correctness sweep, closes 3 MEDIUM + 2 BUG)
