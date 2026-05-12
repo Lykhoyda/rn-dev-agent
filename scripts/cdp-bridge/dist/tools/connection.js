@@ -11,8 +11,18 @@ export function createConnectHandler(getClient, setClient, createClient) {
             const haystack = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase();
             const portMismatch = typeof args.metroPort === 'number' && args.metroPort !== client.metroPort;
             const targetIdMismatch = typeof args.targetId === 'string' && args.targetId.length > 0 && args.targetId !== target?.id;
-            const bundleMismatch = typeof args.bundleId === 'string' && args.bundleId.length > 0
-                && !haystack.includes(args.bundleId.toLowerCase());
+            // Phase 134.5 (deepsec BUG: other-logic-bug): the prior substring
+            // check would treat `com.example.app` as "already connected" when
+            // the actual target is `com.example.app-test` or `com.example.app2`
+            // — anything that contained the bundleId as a substring. Use a
+            // word-boundary check anchored on non-bundle-id characters so
+            // `com.example.app` matches `... com.example.app ...` but not
+            // `... com.example.app-test ...`. Bundle IDs use `[A-Za-z0-9._-]`,
+            // so the boundary must be anything outside that set.
+            const bundleIdLower = typeof args.bundleId === 'string' ? args.bundleId.toLowerCase() : '';
+            const bundleMatched = bundleIdLower.length > 0
+                && new RegExp(`(^|[^A-Za-z0-9._-])${bundleIdLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9._-]|$)`).test(haystack);
+            const bundleMismatch = typeof args.bundleId === 'string' && args.bundleId.length > 0 && !bundleMatched;
             let platformMismatch = false;
             if (typeof args.platform === 'string' && args.platform.length > 0) {
                 const requestedPlatform = args.platform.toLowerCase();

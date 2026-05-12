@@ -18,7 +18,21 @@ function discoverFlows(dir, pattern) {
         .map((f) => join(dir, f))
         .sort();
     if (pattern) {
-        const re = new RegExp(pattern, 'i');
+        // Phase 134.5 (deepsec BUG: regex-dos): a malicious or malformed
+        // `pattern` arg could throw on invalid regex syntax or hang on
+        // catastrophic backtracking (e.g. `(a+)+$` against a long input).
+        // Cap the pattern length and wrap construction; on any error,
+        // skip filtering rather than crash discovery.
+        if (pattern.length > 256) {
+            return yamls;
+        }
+        let re;
+        try {
+            re = new RegExp(pattern, 'i');
+        }
+        catch {
+            return yamls;
+        }
         return yamls.filter((f) => re.test(f));
     }
     return yamls;

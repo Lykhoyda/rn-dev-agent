@@ -4,6 +4,44 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.35] — 2026-05-12
+
+### Fixed (Phase 134.5 — workflow + correctness sweep, closes 3 MEDIUM + 2 BUG)
+
+- **GitHub Actions pinned to immutable commit SHAs.** Both `ci.yml`
+  and `deploy-docs.yml` previously used mutable `@v4` tags — a moved
+  tag (or compromised maintainer account) would silently substitute
+  different code on the next run. Now pinned to:
+  - `actions/checkout@de0fac2e…` (v6.0.2)
+  - `actions/setup-node@48b55a01…` (v6.4.0)
+  - `actions/upload-pages-artifact@fc324d35…` (v5.0.0)
+  - `actions/deploy-pages@cd2ce8fc…` (v5.0.0)
+
+  Per [GitHub's official security-hardening guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions):
+  "Pinning an action to a full-length commit SHA is currently the only
+  way to use an action as an immutable release."
+- **`deploy-docs.yml` per-job least-privilege permissions.** Previously
+  `pages: write` + `id-token: write` were granted at the workflow level,
+  so the `build` job (which only needs `contents: read`) had Pages-write
+  and OIDC capability it didn't use. Those permissions are now scoped
+  to the `deploy` job only.
+- **`maestro_test_all`'s `pattern` arg now guards against regex DoS.**
+  Caller-supplied `pattern` is length-capped (256 chars) and
+  RegExp construction is try/catch wrapped; on any error, discovery
+  proceeds without filtering rather than crashing.
+- **`cdp_connect`'s already-connected `bundleId` check uses
+  word-boundary matching** instead of `includes()`. Prevents
+  false-positive "already connected" when the live target is e.g.
+  `com.example.app-test` and the caller asked for `com.example.app`.
+
+### Internal
+
+- Workflows: SHA-pin comments include the resolved version name
+  (`# v6.0.2`) so Dependabot can read both and bump them together.
+- `tools/connection.ts` bundleId match uses a regex with non-bundle-id
+  boundary characters (`[^A-Za-z0-9._-]`) — bundle IDs share `.` and
+  `-` with their surrounding context, so `\b` alone wouldn't work.
+
 ## [0.44.34] — 2026-05-12
 
 ### Fixed (Phase 134.4 — CDP multiplexer trust boundary, closes 1 HIGH)
