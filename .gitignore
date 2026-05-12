@@ -15,3 +15,6 @@ scripts/fast-runner/build/
 
 # Local worktrees for isolated feature work
 .worktrees/
+
+# deepsec scanner workspace (local-only — config, data/<id>/INFO.md, scan output)
+.deepsec/
