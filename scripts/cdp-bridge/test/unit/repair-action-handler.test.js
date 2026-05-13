@@ -371,7 +371,8 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
 
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
   const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
-    if (path.endsWith('.yaml.tmp')) {
+    // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
+    if (/\.yaml\.tmp\./.test(path)) {
       throw new Error('SIMULATED_DISK_FULL: yaml write failed');
     }
     return realWriteFile(path, content);
