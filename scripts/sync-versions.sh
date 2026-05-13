@@ -7,23 +7,41 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="$REPO_ROOT/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
+SYNTHETIC_PKG_JSON="$REPO_ROOT/.claude-plugin/package.json"
 MCP_PACKAGE_JSON="$REPO_ROOT/scripts/cdp-bridge/package.json"
 MCP_SRC_DIR="$REPO_ROOT/scripts/cdp-bridge/src"
 
 plugin_version=$(grep '"version"' "$PLUGIN_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 marketplace_version=$(grep '"version"' "$MARKETPLACE_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+synth_version=$(grep '"version"' "$SYNTHETIC_PKG_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 
-if [ "$plugin_version" != "$marketplace_version" ]; then
+# Three-way sync: .claude-plugin/package.json (the changesets-managed
+# source of truth) → plugin.json → marketplace.json. The post-version
+# script in npm run version-packages does the bumping; this script is the
+# guard that catches drift if anyone edits a version by hand.
+mismatch=""
+if [ "$plugin_version" != "$synth_version" ]; then
+  mismatch="plugin.json=$plugin_version synthetic-pkg=$synth_version"
+fi
+if [ "$marketplace_version" != "$synth_version" ]; then
+  if [ -n "$mismatch" ]; then mismatch="$mismatch "; fi
+  mismatch="${mismatch}marketplace.json=$marketplace_version synthetic-pkg=$synth_version"
+fi
+
+if [ -n "$mismatch" ]; then
   if [ "${1:-}" = "--fix" ]; then
-    sed -i '' "s/\"version\": \"$marketplace_version\"/\"version\": \"$plugin_version\"/" "$MARKETPLACE_JSON"
-    echo "synced marketplace.json version: $marketplace_version → $plugin_version"
+    # synthetic-pkg is the source of truth; rewrite the other two.
+    sed -i '' "s/\"version\": \"$plugin_version\"/\"version\": \"$synth_version\"/" "$PLUGIN_JSON"
+    sed -i '' "s/\"version\": \"$marketplace_version\"/\"version\": \"$synth_version\"/" "$MARKETPLACE_JSON"
+    echo "synced plugin.json + marketplace.json → $synth_version"
   else
-    echo "ERROR: version mismatch — plugin.json=$plugin_version marketplace.json=$marketplace_version"
+    echo "ERROR: version mismatch — $mismatch"
     echo "Run: ./scripts/sync-versions.sh --fix"
+    echo "(or use \`npm run version-packages\` from repo root to bump via changesets)"
     exit 1
   fi
 else
-  echo "versions in sync: $plugin_version"
+  echo "versions in sync: $synth_version"
 fi
 
 # B110 guard — detect hardcoded `version: '...'` literals in TypeScript source.

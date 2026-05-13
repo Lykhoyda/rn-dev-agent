@@ -1,0 +1,18 @@
+{
+  "name": "rn-dev-agent-workspace",
+  "private": true,
+  "description": "Root manifest for changesets-driven version management. Contains no runtime code — actual packages live in scripts/cdp-bridge/ (the MCP server) and .claude-plugin/ (synthetic, mirrors the Claude Code plugin manifest version).",
+  "workspaces": [
+    "scripts/cdp-bridge",
+    ".claude-plugin"
+  ],
+  "scripts": {
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
+    "release-cdp-bridge": "cd scripts/cdp-bridge && npm publish",
+    "test": "cd scripts/cdp-bridge && npm test"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.10"
+  }
+}
