@@ -4,6 +4,22 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.37] — 2026-05-13
+
+### Fixed (GH #112 — sidecar-io Windows path bug)
+
+- **`sidecarPathFor` now extracts the basename via `split(/[\\/]/).pop()`**
+  instead of `split('/').pop()`. The old form returned the entire
+  backslash-containing path as a single segment on Windows, producing
+  absurd deeply-nested directory trees through subsequent
+  `join(parent, 'state', base)`. PR #109's atomic-writer trusted this
+  output and `ensureDir`-ed it, making the pre-existing latent bug more
+  impactful. Gemini flagged at conf 88 in the PR #109 multi-LLM review.
+- 4 new regression tests cover POSIX-style paths, `.yml` extension,
+  Windows-style backslash input, and mixed-separator input. The fix
+  works on both POSIX and Windows runtimes since the separator split
+  is explicit rather than platform-native. Suite: 1312 → 1316 passing.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)
