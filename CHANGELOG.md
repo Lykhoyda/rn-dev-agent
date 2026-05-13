@@ -4,6 +4,25 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.37] — 2026-05-13
+
+### Hardened (GH #113 — saveAction precondition becomes a runtime soft-assertion)
+
+- **`saveAction` now throws `SaveActionPreconditionError`** when the
+  on-disk YAML has been edited externally since the in-memory action was
+  loaded. Previously the "caller already gated actionWasEditedExternally"
+  contract was implicit, surfaced only in a comment block. A future caller
+  (e.g. the planned #104 auto-repair-on-failure wiring) could silently
+  clobber a real human edit if it missed the contract.
+- **Bypassed on first write** (file doesn't exist yet) since there's no
+  prior state to protect.
+- Both current callers (`cdp_repair_action`, `cdp_record_test_save_as_action`)
+  gate correctly, so the new guard fires only for misbehaving new callers.
+- Error message references `GH #113`, the offending YAML path, and points
+  the developer at `actionWasEditedExternally` / `saveActionWithCAS`.
+- 3 new regression tests; suite: 1312 → 1315 passing.
+- One `stat()` per save on the happy path — negligible cost.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)

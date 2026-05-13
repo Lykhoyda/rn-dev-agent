@@ -170,7 +170,29 @@ export function loadAction(projectRoot, actionId) {
  * `cdp_repair_action`, which checks `actionWasEditedExternally` before
  * patching).
  */
+export class SaveActionPreconditionError extends Error {
+    constructor(filePath) {
+        super(`saveAction precondition violated: yaml at ${filePath} has been ` +
+            `edited externally since the in-memory action was loaded. The caller ` +
+            `must invoke actionWasEditedExternally() first and abort on true ` +
+            `(or use saveActionWithCAS for atomic detection). GH #113 contract ` +
+            `enforcement.`);
+        this.name = 'SaveActionPreconditionError';
+    }
+}
 export function saveAction(action) {
+    // GH #113: soft-assertion contract enforcement. Both current callers
+    // (cdp_repair_action, cdp_record_test_save_as_action) gate this check
+    // correctly, but a future caller (e.g. the planned issue-#104
+    // auto-repair-on-failure wiring) could silently clobber a real human
+    // edit if it forgot. One stat() per save is cheap defense.
+    //
+    // Skip the guard when the file doesn't exist yet (first write — there's
+    // no external edit to detect, and actionWasEditedExternally returns
+    // false in that case anyway via its statSync catch).
+    if (existsSync(action.filePath) && actionWasEditedExternally(action)) {
+        throw new SaveActionPreconditionError(action.filePath);
+    }
     // Read existing top section so we don't lose the `appId:` line.
     let topSection = '';
     if (existsSync(action.filePath)) {
