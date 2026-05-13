@@ -28,6 +28,21 @@ function resolveAppId(override, platform) {
 }
 export function createMaestroRunHandler() {
     return async (args) => {
+        // GH #116: validate params shape FIRST so a malformed payload is rejected
+        // regardless of platform / dispatch-tier availability. CI envs without
+        // maestro-runner or Maestro CLI would otherwise short-circuit at
+        // chooseMaestroDispatch before reaching the validator.
+        if (args.params) {
+            for (const [key, value] of Object.entries(args.params)) {
+                if (!PARAM_KEY_RE.test(key)) {
+                    return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
+                        `— must match ${PARAM_KEY_RE.source} (GH #116).`);
+                }
+                if (typeof value !== 'string') {
+                    return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
+                }
+            }
+        }
         const platform = resolvePlatform(args.platform);
         if (!platform) {
             return failResult('Cannot determine platform. Pass platform or open a device session first.');
@@ -89,19 +104,13 @@ export function createMaestroRunHandler() {
         const timeout = args.timeoutMs ?? 120_000;
         // GH #116: build the final argv. Start with the dispatch tier's
         // base args, then append `-e KEY=VALUE` pairs for any supplied
-        // params. Validation rejects malformed keys before exec so we
-        // never spawn the subprocess with a hostile argv.
+        // params. Validation already ran at the top of the handler so by
+        // this point every key matches PARAM_KEY_RE and every value is a
+        // string — no need to re-check.
         const baseArgs = dispatch.buildArgs(platform, flowFile);
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
-                if (!PARAM_KEY_RE.test(key)) {
-                    return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
-                        `— must match ${PARAM_KEY_RE.source} (GH #116).`);
-                }
-                if (typeof value !== 'string') {
-                    return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
-                }
                 paramArgs.push('-e', `${key}=${value}`);
             }
         }
