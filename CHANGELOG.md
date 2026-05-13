@@ -4,6 +4,20 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.37] — 2026-05-13
+
+### Fixed (GH #119 — AutoRepairOutcome cascading-selector clarification)
+
+- **`AutoRepairOutcome.nextFailedSelector`**: new optional field, populated
+  when auto-repair succeeded but the post-repair retry failed on a DIFFERENT
+  selector. Lets MTTR analysis distinguish "patch didn't work" from
+  "cascading failure — patch worked, next selector broke." Without this,
+  the telemetry made every cascading failure look like a failed patch.
+- Absent when retry passed (happy path) OR when retry failed on the
+  SAME selector as the patch (= patch didn't actually fix it). Codex
+  flagged the misclassification at conf 85 in the PR #115 review.
+- 3 new regression tests cover the three cases. Suite 1312 → 1315 passing.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)

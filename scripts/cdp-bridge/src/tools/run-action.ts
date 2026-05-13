@@ -382,6 +382,26 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp
         : undefined;
 
+      // GH #119: when the retry fails on a DIFFERENT selector than the
+      // one just patched, capture it as `nextFailedSelector` so MTTR
+      // analysis can distinguish "patch didn't work" from "cascading
+      // failure — patch worked, next selector broke." Only meaningful
+      // when retry failed; same-selector failures (= patch didn't work)
+      // are implicit in the existing diff.
+      let nextFailedSelector: string | undefined;
+      if (!retryPassed) {
+        try {
+          const retryFailure = parseMaestroFailure(retryOutput);
+          if (
+            retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
+            retryFailure.selector &&
+            retryFailure.selector !== repairData.newSelector
+          ) {
+            nextFailedSelector = retryFailure.selector;
+          }
+        } catch { /* best-effort — don't fail the run because the parser hiccuped */ }
+      }
+
       const autoRepair: AutoRepairOutcome = {
         attempted: true,
         outcome: retryPassed ? 'passed' : 'failed',
@@ -394,6 +414,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         },
         phases: { firstAttemptMs, repairMs, retryMs },
         repairTimestamp,
+        ...(nextFailedSelector ? { nextFailedSelector } : {}),
       };
 
       await persistRun(args.actionId, projectRoot, {
