@@ -4,6 +4,52 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.38] — 2026-05-13
+
+### Added (GH #106 — flow + skeleton bundling in experience export/import)
+
+- **`exportExperience()` now bundles `.rn-agent/actions/*.yaml` flows and
+  `.rn-agent/skeleton.yaml`** alongside heuristics + failure stats —
+  matching what the `rn-agent-export` / `rn-agent-import` command docs
+  have advertised since D1204. Until now the underlying script handled
+  only heuristics, so a teammate exporting + importing got the muscle
+  memory metadata but not the actual reusable actions that ARE the L3
+  corpus.
+- New `src/experience/flow-bundle.ts` exposes pure anonymize/restore
+  helpers: rewrites `appId:` between `com.example.<slug>` (export) and
+  the local project's bundleId (import), truncates author-prose comment
+  lines longer than 200 chars while preserving M7 fields verbatim, and
+  extracts `${VAR}` placeholders so the importer can surface them.
+- **Placeholder manifest comments** (Codex review A, HIGH conf): on
+  import, if a flow contains `${UPPER_CASE_VARS}`, prepend a
+  `# placeholders: VAR1, VAR2 — supply via -e KEY=VALUE on replay` line
+  above the M7 header. Codex's call: don't suffix every placeholder flow
+  with `.needs-review.yaml` (that punishes correctly-authored flows);
+  don't go silent (violates spirit of acceptance criterion); use a
+  grep-able comment instead.
+- **`appId:` rewrite is line-wise** (Codex review B, HIGH conf), so
+  legitimate multi-line top sections (a `# shared across envs` comment
+  above `appId:`) round-trip cleanly. Hard-fails only when zero `appId:`
+  lines exist.
+- **Conflict semantics**: an imported flow whose `id` already exists
+  locally lands at `<id>.imported.yaml` so the user can diff and merge
+  manually. Same pattern for skeleton (`skeleton.imported.yaml`).
+- **Status forced to `experimental`** on import — keeps imported flows
+  from claiming `active` before a local replay proves they work.
+- **Sidecars are not bundled.** Per-developer runtime state (`runHistory`,
+  `repairHistory`, `stats`) is exactly what shouldn't travel; on import
+  the local `loadOrInitSidecar` seeds a fresh sidecar on first replay.
+- **`--no-flows` / `--no-skeleton` opt-outs** on both `ExportOptions`
+  and `ImportOptions` (default both true).
+- **Defense in depth**: import-side flow `id` is re-validated against
+  `^[A-Za-z0-9_-]+$` so a hand-crafted bundle with a path-traversal id
+  can't escape `.rn-agent/actions/`. Malformed flows are skipped with a
+  one-line stderr log.
+- 29 new tests — 18 pure-helper tests on `flow-bundle.ts` + 11
+  integration tests with real temp dirs covering export, import,
+  opt-outs, conflict-rename, malformed-bundle defense in depth, and
+  no-app.json fallback. Suite: 1312 → 1341 passing.
+
 ## [0.44.37] — 2026-05-12
 
 ### Added (GH #91 acceptance #3 closeout — per-project verification config)
