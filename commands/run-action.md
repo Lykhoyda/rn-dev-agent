@@ -1,8 +1,8 @@
 ---
 command: run-action
-description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via scripts/learned-actions.mjs (same inventory as /rn-dev-agent:list-learned-actions), then replays it with maestro-runner. Counterpart to /list-learned-actions — list discovers, run executes.
-argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--dry-run]
-allowed-tools: Bash, Read, Glob
+description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via scripts/learned-actions.mjs (same inventory as /rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
+argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--no-auto-repair] [--dry-run]
+allowed-tools: Bash, Read, Glob, mcp__plugin_rn-dev-agent_cdp__cdp_run_action
 ---
 
 Execute the learned action: $ARGUMENTS
@@ -23,9 +23,10 @@ without `.yaml`). Substring + case-insensitive — `task-create` will match
 The first positional arg is the action name (required). Subsequent args are
 passed through to `maestro-runner` verbatim:
 
-- `-e KEY=VALUE` — environment variable for `${KEY}` placeholders in the flow
+- `-e KEY=VALUE` — environment variable for `${KEY}` placeholders in the flow. Keys must match `[A-Z_][A-Z0-9_]*` (Maestro convention) — anything else is rejected by `cdp_run_action` / `maestro_run` (GH #116).
 - `--platform <ios|android>` — target device (auto-detected from booted device if omitted)
-- `--dry-run` — print the resolved replay command without executing it
+- `--no-auto-repair` — opt out of `cdp_repair_action` retry on `SELECTOR_NOT_FOUND` (default: auto-repair on)
+- `--dry-run` — print the resolved replay command without executing it (bash-only path; bypasses `cdp_run_action`)
 
 Example calls:
 
@@ -33,13 +34,17 @@ Example calls:
 /rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high -e TAG=feature -e DESC="Test"
 /rn-dev-agent:run-action mark-all-done --platform android
 /rn-dev-agent:run-action wizard-create-task --dry-run -e TITLE=foo -e PRIORITY=low -e TAG=bug -e DESC=test
+/rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw failure without patching
 ```
 
 ## Protocol
 
 1. **Parse arguments.** First word of `$ARGUMENTS` is the action name. Detect
-   `--platform`, `--dry-run`, and collect every `-e KEY=VALUE` pair. Treat
-   anything else as a passthrough flag.
+   `--platform`, `--dry-run`, `--no-auto-repair`, and collect every
+   `-e KEY=VALUE` pair into a `params` object (key must match
+   `[A-Z_][A-Z0-9_]*`; reject malformed early — `cdp_run_action` will
+   refuse them anyway, but catching at parse time gives a clearer
+   error). Treat anything else as a passthrough flag.
 
 2. **Resolve the action via the script** (single source of truth — never glob
    `.rn-agent/actions/` directly):
@@ -84,25 +89,78 @@ Example calls:
    - If both are booted, stop and ask the user to pass `--platform`.
    - If neither, stop and tell the user to boot a device.
 
-5. **Build the replay command**:
-   ```bash
-   FLOW_PATH=$(echo "$RESULT" | jq -r '.sections.flows.items[0].path')
-   CMD=(maestro-runner --platform "$PLATFORM" test)
-   for KV in "${E_FLAGS[@]}"; do CMD+=(-e "$KV"); done
-   CMD+=("$FLOW_PATH")
+5. **Build the call** to `cdp_run_action` from the parsed args. The action
+   id is the inventory match's `flow` field (filename without `.yaml`).
+   Convert the `-e KEY=VALUE` array into a `params` object:
+   ```js
+   {
+     actionId: "<flow-name>",
+     platform: "<ios|android>",          // omit to auto-detect
+     params: { TITLE: "Buy milk", PRIORITY: "high", ... },
+     autoRepair: !noAutoRepair,          // default true; --no-auto-repair flips to false
+     trigger: "agent"                    // or "human" / "ci" based on context
+   }
    ```
-   If `--dry-run`, print `${CMD[*]}` and stop. Otherwise execute it.
+   If `--dry-run`, do NOT call `cdp_run_action`. Print the resolved call
+   shape (the JSON args object as above) plus the would-be Maestro CLI
+   `maestro-runner --platform <PLATFORM> test -e K=V ... <FLOW_PATH>` and
+   stop. The `cdp_run_action` tool always executes, so a separate
+   bash-print path is necessary for dry-run.
 
-6. **Execute and report**:
-   - Stream the output (don't swallow); capture exit code.
-   - On success: report `passed/total` commands and `duration_ms` from the
-     report JSON (`reports/<timestamp>/report.json`), plus the full path so
-     the user can inspect screenshots and the hierarchy XML.
-   - On failure: extract the failing command from the report JSON and the
-     associated `assets/flow-000/cmd-NNN-after.png` screenshot path. Diagnose
-     in three lines max — point at the most likely cause (stale testID,
-     iOS keyboard digraph drop per `feedback_maestro_patterns.md` item 9,
-     auth state lost, etc.) — DO NOT auto-edit the flow.
+6. **Execute via MCP**:
+   ```
+   cdp_run_action({ actionId, platform, params, autoRepair, trigger })
+   ```
+   Read the returned envelope's `data` field. Shape (matches
+   `scripts/cdp-bridge/src/tools/run-action.ts`):
+   ```
+   {
+     ok: true | false,
+     data: {
+       actionId,
+       passed: boolean,                 // happy path: true
+       autoRepair: {
+         attempted: boolean,
+         outcome: 'skipped' | 'passed' | 'failed' | 'refused',
+         refusedReason?: 'USER_DISABLED' | 'NOT_REPAIRABLE_KIND' | 'EDITED_SINCE_LOAD'
+                       | 'BUDGET_EXHAUSTED' | 'NO_CANDIDATE',
+         phases?: { firstAttemptMs, repairMs?, retryMs? },
+         diff?: string                  // patch summary when outcome === 'passed'
+       },
+       durationMs,
+       flowFile,
+       firstAttemptOutput?: string,     // first 500 chars of maestro stdout/stderr
+       retryOutput?: string,            // present iff retriedAfterRepair === true
+       retriedAfterRepair?: boolean
+     }
+   }
+   ```
+   The persisted RunRecord lands in the sidecar at
+   `<project>/.rn-agent/state/<actionId>.state.json` — read it via
+   `cdp_run_action`'s side-effect, not from `data.runRecord` (which is
+   not present in the response).
+
+   Branch on `data.autoRepair.outcome`:
+   - **`outcome === 'skipped'`** with `attempted: false`: happy path —
+     report `✅ <flow-name> passed in <durationMs>ms` and stop.
+   - **`outcome === 'passed'`** with `attempted: true,
+     retriedAfterRepair: true`: repaired-and-passed — report `🩹
+     <flow-name> failed, repaired, then passed` and (if `data.autoRepair.diff`
+     is present) print the one-line patch summary. Suggest the user `git
+     diff .rn-agent/actions/<id>.yaml` to inspect.
+   - **`outcome === 'failed'`**: post-repair retry still failed —
+     `data.retryOutput` carries the trailing maestro output for
+     diagnosis.
+   - **`outcome === 'refused'`** with `refusedReason`: auto-repair declined
+     (user disabled, file edited since load, repair budget exhausted, or
+     no candidate). Surface the refused reason verbatim — DO NOT edit
+     the flow yourself; suggest re-running with `--no-auto-repair` to
+     see the raw failure or running `cdp_repair_action` manually.
+
+   In all cases, diagnose in three lines max — point at the most likely
+   cause (stale testID, iOS keyboard digraph drop per
+   `feedback_maestro_patterns.md` item 9, auth state lost, etc.) — DO
+   NOT auto-edit the flow.
 
 ## Output
 

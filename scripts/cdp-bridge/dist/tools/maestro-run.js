@@ -9,6 +9,10 @@ import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 const execFile = promisify(execFileCb);
+/** GH #116: Maestro env-style key pattern. Refuses anything that could
+ *  syntactically be confused with a flag (`--`, `-e`) or break the
+ *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
+const PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
 function resolvePlatform(override) {
     if (override === 'ios' || override === 'android')
         return override;
@@ -83,8 +87,27 @@ export function createMaestroRunHandler() {
             throw err;
         }
         const timeout = args.timeoutMs ?? 120_000;
+        // GH #116: build the final argv. Start with the dispatch tier's
+        // base args, then append `-e KEY=VALUE` pairs for any supplied
+        // params. Validation rejects malformed keys before exec so we
+        // never spawn the subprocess with a hostile argv.
+        const baseArgs = dispatch.buildArgs(platform, flowFile);
+        const paramArgs = [];
+        if (args.params) {
+            for (const [key, value] of Object.entries(args.params)) {
+                if (!PARAM_KEY_RE.test(key)) {
+                    return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
+                        `— must match ${PARAM_KEY_RE.source} (GH #116).`);
+                }
+                if (typeof value !== 'string') {
+                    return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
+                }
+                paramArgs.push('-e', `${key}=${value}`);
+            }
+        }
+        const finalArgs = [...baseArgs, ...paramArgs];
         try {
-            const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(platform, flowFile), { timeout, encoding: 'utf8' });
+            const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, { timeout, encoding: 'utf8' });
             const output = (stdout + '\n' + stderr).trim();
             const passed = !output.includes('FAILED') && !output.includes('Error:');
             const meta = {

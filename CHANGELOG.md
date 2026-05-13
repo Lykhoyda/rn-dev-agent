@@ -4,6 +4,43 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.37] — 2026-05-13
+
+### Added (GH #116 — wire cdp_run_action into /run-action slash command)
+
+- **`maestro_run` now accepts `params: Record<string, string>`** that get
+  forwarded to maestro-runner as `-e KEY=VALUE` argv pairs. Keys must
+  match `[A-Z_][A-Z0-9_]*` (Maestro env-style convention) — anything
+  else is refused at the handler boundary so a hostile payload can't
+  become a shell-injectable flag. Values must be strings. Since the
+  invocation uses `execFile` (not `exec`), values are passed as
+  separate argv entries — shell metacharacters are inert by construction.
+- **`cdp_run_action` forwards `params`** through to both the first
+  `maestro_run` call AND the post-repair retry, so a parameterised flow
+  replays identically after auto-repair.
+- **`/rn-dev-agent:run-action` slash command** is rewritten to call
+  `cdp_run_action` via MCP rather than shelling out to maestro-runner
+  directly. User invocations of `run-action wizard-create-task -e
+  TITLE=...` now benefit from auto-repair, structured RunRecords, and
+  the GH #120 per-phase timing. The slash command still parses args
+  locally (positional + `-e` + `--platform` + `--dry-run` + new
+  `--no-auto-repair`) but delegates execution to the MCP tool.
+- `--dry-run` keeps the bash-only path since `cdp_run_action` always
+  executes.
+- 6 new handler tests cover: malformed-key refusal (5 shell-injection
+  shapes), non-string-value refusal, well-formed key acceptance,
+  cdp_run_action's params forwarding to the first maestro_run call,
+  end-to-end params threading via a real temp project fixture, and
+  params persistence into the post-repair retry path.
+  Suite: 1312 → 1318 passing.
+
+### Note
+
+Step #4 of issue #116 ("Live smoke: replay wizard-create-task with
+-e TITLE=foo end-to-end on a booted simulator") is left for a
+maintainer-driven verification — it requires a live simulator with the
+test app and is outside the scope of this code-only PR.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)
