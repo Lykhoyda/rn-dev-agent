@@ -4,6 +4,34 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.39] — 2026-05-13
+
+### Hardened (GH #110 — agent-device test seam fuse)
+
+- **`_setRunAgentDeviceForTest` is now one-way fused.** Once any production
+  `runAgentDevice` call has dispatched in this process, attempting to install
+  a new override throws with `blown fuse — a production runAgentDevice call
+  (cliArgs[0]="...") already dispatched in this process. ... (GH #110
+  hardening)`. The fuse fires BEFORE any tier selection (Codex review
+  conf 90), so a production call that throws downstream still seals the
+  seam.
+- **No reset escape hatch.** A reset seam would be functionally equivalent
+  to no fuse — any code that could call reset is the same code that could
+  leak the override (Codex review conf 90). Tests that genuinely need both
+  production and override paths should use Node 22's
+  `node --test --test-isolation=process` to get a fresh worker per file.
+- **Throw, not no-op** (Codex review conf 95). Silent no-op would let a
+  forgotten `afterEach(() => _setRunAgentDeviceForTest(null))` route a
+  test through the real `agent-device` CLI, producing `ENOENT` errors that
+  look nothing like a test-seam bug. The fuse error message includes the
+  `cliArgs[0]` that blew it, so post-mortem debugging can identify which
+  production call leaked first — that's the test missing its cleanup.
+- 5 new subprocess-isolated regression tests cover: override is honored
+  pre-fuse; setting null pre-fuse re-arms cleanly; production dispatch
+  blows the fuse before tier completion; error message carries GH #110 +
+  remediation hint; standard afterEach `null` cleanup remains legal.
+  Suite: 1312 → 1317 passing.
+
 ## [0.44.38] — 2026-05-13
 
 ### Added (GH #106 — flow + skeleton bundling in experience export/import)
