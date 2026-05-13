@@ -34,6 +34,11 @@ const MAX_PENDING_AGE_MS = 2_000;
 // (/orders/[id]/confirmation) and React Navigation (OrderConfirmation) work.
 const SUCCESS_SHAPE_REGEX = /(success|done|added|complete|completed|confirmation)$/i;
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+// Codex review conf 90: cap regex input length to bound evaluation cost on the
+// cdp_navigate / cdp_navigation_state / proof_step hot path. The success-shape
+// match only cares about the END of the string, so slicing the tail keeps the
+// information that matters. Pair with the per-pattern source cap in config.ts.
+const MAX_NAME_LENGTH = 256;
 const stateByDevice = new Map();
 /**
  * Pure helper: normalize an arbitrary route name string for success-shape
@@ -48,13 +53,20 @@ export function normalizeRouteName(raw) {
     if (!trimmed)
         return null;
     const segments = trimmed.split('/').filter(Boolean);
-    return (segments.length > 0 ? segments[segments.length - 1] : trimmed).toLowerCase();
+    const candidate = segments.length > 0 ? segments[segments.length - 1] : trimmed;
+    // Slice the tail rather than the head — success-shape matching cares about
+    // the end of the string, so any input over MAX_NAME_LENGTH still has its
+    // signal-bearing suffix preserved.
+    const bounded = candidate.length > MAX_NAME_LENGTH
+        ? candidate.slice(candidate.length - MAX_NAME_LENGTH)
+        : candidate;
+    return bounded.toLowerCase();
 }
-export function isSuccessShape(rawName) {
+export function isSuccessShape(rawName, regex = SUCCESS_SHAPE_REGEX) {
     const normalized = normalizeRouteName(rawName);
     if (!normalized)
         return false;
-    return SUCCESS_SHAPE_REGEX.test(normalized);
+    return regex.test(normalized);
 }
 /**
  * Pure: check the current device's mutation buffer against the window. Returns
@@ -62,14 +74,14 @@ export function isSuccessShape(rawName) {
  * regardless of window — useful diagnostic so callers can tell "I missed by
  * 0.5s" from "I never had a mutation in this session at all".
  */
-export function countWindowedMutations(client, windowMs, now) {
+export function countWindowedMutations(client, windowMs, now, methods = MUTATION_METHODS) {
     const deviceKey = client.activeDeviceKey;
     const sinceISO = new Date(now - windowMs).toISOString();
     // Filter by the broader "is mutation" predicate first so we can also
     // compute last_mutation_age_ms from the same scan.
     const allMutations = client.networkBufferManager.filter(deviceKey, (entry) => {
         const method = (entry.method ?? '').toUpperCase();
-        if (!MUTATION_METHODS.has(method))
+        if (!methods.has(method))
             return false;
         // Skip failed mutations (>= 400). For pending entries (status === undefined),
         // only count if recently-fired — older pendings are suspect (likely hung
@@ -120,11 +132,13 @@ export function annotateMutationAbsence(result, ctx) {
     if (prev.lastSignature === signature)
         return result;
     prev.lastSignature = signature;
-    if (!isSuccessShape(ctx.screenName))
+    const successRegex = ctx.successShapes ?? SUCCESS_SHAPE_REGEX;
+    if (!isSuccessShape(ctx.screenName, successRegex))
         return result;
     const windowMs = ctx.windowMs ?? DEFAULT_WINDOW_MS;
     const now = (ctx.now ?? Date.now)();
-    const { inWindow, lastMutationAgeMs } = countWindowedMutations(ctx.client, windowMs, now);
+    const methods = ctx.mutationMethods ?? MUTATION_METHODS;
+    const { inWindow, lastMutationAgeMs } = countWindowedMutations(ctx.client, windowMs, now, methods);
     if (inWindow > 0)
         return result;
     const hint = lastMutationAgeMs !== null && lastMutationAgeMs < windowMs * 3
