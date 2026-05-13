@@ -41,6 +41,136 @@ Step #4 of issue #116 ("Live smoke: replay wizard-create-task with
 maintainer-driven verification — it requires a live simulator with the
 test app and is outside the scope of this code-only PR.
 
+## [0.44.42] — 2026-05-13
+
+### Hardened (GH #113 — saveAction precondition becomes a runtime soft-assertion)
+
+- **`saveAction` now throws `SaveActionPreconditionError`** when the
+  on-disk YAML has been edited externally since the in-memory action was
+  loaded. Previously the "caller already gated actionWasEditedExternally"
+  contract was implicit, surfaced only in a comment block. A future caller
+  (e.g. the planned #104 auto-repair-on-failure wiring) could silently
+  clobber a real human edit if it missed the contract.
+- **Bypassed on first write** (file doesn't exist yet) since there's no
+  prior state to protect.
+- Both current callers (`cdp_repair_action`, `cdp_record_test_save_as_action`)
+  gate correctly, so the new guard fires only for misbehaving new callers.
+- Error message references `GH #113`, the offending YAML path, and points
+  the developer at `actionWasEditedExternally` / `saveActionWithCAS`.
+- 3 new regression tests; suite: 1312 → 1315 passing.
+- One `stat()` per save on the happy path — negligible cost.
+
+## [0.44.41] — 2026-05-13
+
+### Fixed (GH #112 — sidecar-io Windows path bug)
+
+- **`sidecarPathFor` now extracts the basename via `split(/[\\/]/).pop()`**
+  instead of `split('/').pop()`. The old form returned the entire
+  backslash-containing path as a single segment on Windows, producing
+  absurd deeply-nested directory trees through subsequent
+  `join(parent, 'state', base)`. PR #109's atomic-writer trusted this
+  output and `ensureDir`-ed it, making the pre-existing latent bug more
+  impactful. Gemini flagged at conf 88 in the PR #109 multi-LLM review.
+- 4 new regression tests cover POSIX-style paths, `.yml` extension,
+  Windows-style backslash input, and mixed-separator input. The fix
+  works on both POSIX and Windows runtimes since the separator split
+  is explicit rather than platform-native. Suite: 1312 → 1316 passing.
+
+## [0.44.40] — 2026-05-13
+
+### Hardened (GH #111 — atomic-writer concurrent pairWrite races)
+
+- **`pairWrite` now uses unique `.tmp.<pid>.<time36>.<rand36>` suffixes** so
+  two concurrent writers against the same action don't share a tmp namespace.
+  Without this, `cleanupOrphans` could `unlinkSync` writer A's in-flight tmp
+  file mid-rename, producing an opaque ENOENT for the user. Gemini flagged
+  the failure mode at conf 82 in the PR #109 multi-LLM review.
+- **`cleanupOrphans` is age-bounded**: scans the target directory for files
+  matching the path prefix and only unlinks orphans older than
+  `ORPHAN_MAX_AGE_MS = 5 minutes`. Concurrent writer's fresh tmp file
+  preserved; crashed process's stale tmp file becomes eligible for sweep
+  after 5 minutes.
+- **New `_readdir` test seam** for deterministic cleanup mocking.
+- 7 new regression tests cover unique-stamp generation, stale-orphan sweep,
+  fresh-orphan preservation, prefix anchoring, missing-dir tolerance, the
+  exported constant value, and round-trip orphan-free state across 5
+  repeated `pairWrite` calls. Three existing tests updated to match the
+  new `.tmp.<stamp>` filename shape. Suite: 1312 → 1319 passing.
+
+## [0.44.39] — 2026-05-13
+
+### Hardened (GH #110 — agent-device test seam fuse)
+
+- **`_setRunAgentDeviceForTest` is now one-way fused.** Once any production
+  `runAgentDevice` call has dispatched in this process, attempting to install
+  a new override throws with `blown fuse — a production runAgentDevice call
+  (cliArgs[0]="...") already dispatched in this process. ... (GH #110
+  hardening)`. The fuse fires BEFORE any tier selection (Codex review
+  conf 90), so a production call that throws downstream still seals the
+  seam.
+- **No reset escape hatch.** A reset seam would be functionally equivalent
+  to no fuse — any code that could call reset is the same code that could
+  leak the override (Codex review conf 90). Tests that genuinely need both
+  production and override paths should use Node 22's
+  `node --test --test-isolation=process` to get a fresh worker per file.
+- **Throw, not no-op** (Codex review conf 95). Silent no-op would let a
+  forgotten `afterEach(() => _setRunAgentDeviceForTest(null))` route a
+  test through the real `agent-device` CLI, producing `ENOENT` errors that
+  look nothing like a test-seam bug. The fuse error message includes the
+  `cliArgs[0]` that blew it, so post-mortem debugging can identify which
+  production call leaked first — that's the test missing its cleanup.
+- 5 new subprocess-isolated regression tests cover: override is honored
+  pre-fuse; setting null pre-fuse re-arms cleanly; production dispatch
+  blows the fuse before tier completion; error message carries GH #110 +
+  remediation hint; standard afterEach `null` cleanup remains legal.
+  Suite: 1312 → 1317 passing.
+
+## [0.44.38] — 2026-05-13
+
+### Added (GH #106 — flow + skeleton bundling in experience export/import)
+
+- **`exportExperience()` now bundles `.rn-agent/actions/*.yaml` flows and
+  `.rn-agent/skeleton.yaml`** alongside heuristics + failure stats —
+  matching what the `rn-agent-export` / `rn-agent-import` command docs
+  have advertised since D1204. Until now the underlying script handled
+  only heuristics, so a teammate exporting + importing got the muscle
+  memory metadata but not the actual reusable actions that ARE the L3
+  corpus.
+- New `src/experience/flow-bundle.ts` exposes pure anonymize/restore
+  helpers: rewrites `appId:` between `com.example.<slug>` (export) and
+  the local project's bundleId (import), truncates author-prose comment
+  lines longer than 200 chars while preserving M7 fields verbatim, and
+  extracts `${VAR}` placeholders so the importer can surface them.
+- **Placeholder manifest comments** (Codex review A, HIGH conf): on
+  import, if a flow contains `${UPPER_CASE_VARS}`, prepend a
+  `# placeholders: VAR1, VAR2 — supply via -e KEY=VALUE on replay` line
+  above the M7 header. Codex's call: don't suffix every placeholder flow
+  with `.needs-review.yaml` (that punishes correctly-authored flows);
+  don't go silent (violates spirit of acceptance criterion); use a
+  grep-able comment instead.
+- **`appId:` rewrite is line-wise** (Codex review B, HIGH conf), so
+  legitimate multi-line top sections (a `# shared across envs` comment
+  above `appId:`) round-trip cleanly. Hard-fails only when zero `appId:`
+  lines exist.
+- **Conflict semantics**: an imported flow whose `id` already exists
+  locally lands at `<id>.imported.yaml` so the user can diff and merge
+  manually. Same pattern for skeleton (`skeleton.imported.yaml`).
+- **Status forced to `experimental`** on import — keeps imported flows
+  from claiming `active` before a local replay proves they work.
+- **Sidecars are not bundled.** Per-developer runtime state (`runHistory`,
+  `repairHistory`, `stats`) is exactly what shouldn't travel; on import
+  the local `loadOrInitSidecar` seeds a fresh sidecar on first replay.
+- **`--no-flows` / `--no-skeleton` opt-outs** on both `ExportOptions`
+  and `ImportOptions` (default both true).
+- **Defense in depth**: import-side flow `id` is re-validated against
+  `^[A-Za-z0-9_-]+$` so a hand-crafted bundle with a path-traversal id
+  can't escape `.rn-agent/actions/`. Malformed flows are skipped with a
+  one-line stderr log.
+- 29 new tests — 18 pure-helper tests on `flow-bundle.ts` + 11
+  integration tests with real temp dirs covering export, import,
+  opt-outs, conflict-rename, malformed-bundle defense in depth, and
+  no-app.json fallback. Suite: 1312 → 1341 passing.
+
 ## [0.44.37] — 2026-05-12
 
 ### Added (GH #91 acceptance #3 closeout — per-project verification config)
