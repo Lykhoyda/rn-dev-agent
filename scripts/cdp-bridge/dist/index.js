@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { CDPClient } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
+import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
 import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
@@ -213,10 +214,13 @@ trackedTool('cdp_navigate', 'Navigate to any screen by name, including nested st
     // the success-shape regex AND the 5s rolling window has no qualifying
     // mutation. Uses args.screen as the signal — the user asked to navigate
     // there, so even if the actual landing route differs we capture intent.
+    const cfg = loadVerificationConfig(getCachedProjectRoot());
     return annotateMutationAbsence(okResult(parsed), {
         client,
         screenName: args.screen,
         source: 'cdp_navigate',
+        successShapes: cfg.successShapes,
+        mutationMethods: cfg.mutationMethods,
     });
 }));
 trackedTool('cdp_component_state', 'Inspect a specific component\'s full hook state by testID. Returns props, all hook values (useState, useRef, useForm, etc.), and auto-detects react-hook-form control objects. Use when cdp_store_state misses non-Redux state (forms, local state, atoms).', {
