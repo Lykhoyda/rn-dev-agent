@@ -236,7 +236,8 @@ test('save-as-action: when YAML write fails after sidecar succeeds, no false-pos
   // call returns false.
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
   const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
-    if (path.endsWith('.yaml.tmp')) {
+    // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
+    if (/\.yaml\.tmp\./.test(path)) {
       throw new Error('SIMULATED_DISK_FULL: yaml write failed');
     }
     return realWriteFile(path, content);
@@ -311,7 +312,8 @@ test('save-as-action: when sidecar write fails first, nothing is persisted and a
   let failedOnce = false;
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
   const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
-    if (!failedOnce && path.endsWith('.state.json.tmp')) {
+    // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
+    if (!failedOnce && /\.state\.json\.tmp\./.test(path)) {
       failedOnce = true;
       throw new Error('SIMULATED_DISK_FULL: sidecar write failed');
     }

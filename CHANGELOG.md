@@ -4,6 +4,27 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.37] — 2026-05-13
+
+### Hardened (GH #111 — atomic-writer concurrent pairWrite races)
+
+- **`pairWrite` now uses unique `.tmp.<pid>.<time36>.<rand36>` suffixes** so
+  two concurrent writers against the same action don't share a tmp namespace.
+  Without this, `cleanupOrphans` could `unlinkSync` writer A's in-flight tmp
+  file mid-rename, producing an opaque ENOENT for the user. Gemini flagged
+  the failure mode at conf 82 in the PR #109 multi-LLM review.
+- **`cleanupOrphans` is age-bounded**: scans the target directory for files
+  matching the path prefix and only unlinks orphans older than
+  `ORPHAN_MAX_AGE_MS = 5 minutes`. Concurrent writer's fresh tmp file
+  preserved; crashed process's stale tmp file becomes eligible for sweep
+  after 5 minutes.
+- **New `_readdir` test seam** for deterministic cleanup mocking.
+- 7 new regression tests cover unique-stamp generation, stale-orphan sweep,
+  fresh-orphan preservation, prefix anchoring, missing-dir tolerance, the
+  exported constant value, and round-trip orphan-free state across 5
+  repeated `pairWrite` calls. Three existing tests updated to match the
+  new `.tmp.<stamp>` filename shape. Suite: 1312 → 1319 passing.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)

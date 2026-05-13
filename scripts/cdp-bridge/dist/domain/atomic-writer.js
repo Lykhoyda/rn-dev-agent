@@ -34,8 +34,8 @@
 //
 // Test seam: the public API is on a single exported object so tests can
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
-import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, } from 'node:fs';
-import { dirname } from 'node:path';
+import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, } from 'node:fs';
+import { dirname, basename } from 'node:path';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
 // the actual YAML mtime exceeds `projectedMtimeMs` and step 5 happens
@@ -57,6 +57,23 @@ import { dirname } from 'node:path';
  */
 export const FUTURE_MTIME_BUFFER_MS = 1_000;
 /**
+ * GH #111: orphan .tmp files older than this threshold are eligible for
+ * cleanup. Any process that's been alive for 5 minutes hasn't crashed
+ * mid-pairWrite — the orphan must be from a prior crashed run. Concurrent
+ * pairWrite calls don't collide because each call uses a unique stamp,
+ * but a stale orphan from a crashed process would otherwise stick around
+ * forever. 5 minutes is conservative (allows long fsync queues / CI
+ * antivirus stalls).
+ */
+export const ORPHAN_MAX_AGE_MS = 5 * 60 * 1_000;
+/** Generate a unique tmp-file stamp per pairWrite call. Crash-resistant
+ *  and concurrent-safe — two pairWrites for the same action path won't
+ *  collide because each owns its own tmp namespace. */
+function generateTmpStamp() {
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+/**
  * Atomic write of a (YAML, sidecar) pair using sidecar-first ordering.
  * Returns the resolved paths plus the final on-disk mtime. Throws if any
  * intermediate step fails — caller decides whether to surface the error
@@ -76,8 +93,13 @@ export const FUTURE_MTIME_BUFFER_MS = 1_000;
 function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
     ensureDir(yamlPath);
     ensureDir(sidecarPath);
-    const yamlTmp = `${yamlPath}.tmp`;
-    const sidecarTmp = `${sidecarPath}.tmp`;
+    // GH #111: unique stamp per call so two concurrent pairWrites against
+    // the same action id never share a tmp namespace. Without this, B's
+    // cleanupOrphans could unlink A's in-flight .tmp file and produce an
+    // opaque ENOENT during A's rename.
+    const stamp = generateTmpStamp();
+    const yamlTmp = `${yamlPath}.tmp.${stamp}`;
+    const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
     // Step 1+2: sidecar with projected future mtime, atomic rename.
     const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
     const projectedState = {
@@ -123,21 +145,41 @@ function ensureDir(filePath) {
         atomicWriter._mkdir(dir);
 }
 /**
- * Best-effort cleanup of orphaned `.tmp` files left by a crashed previous
- * call. Called by `pairWrite` before each operation. Idempotent.
+ * Best-effort cleanup of orphaned `.tmp.<stamp>` files left by a crashed
+ * previous call (GH #111). Called by `pairWrite` before each operation.
+ * Idempotent.
  *
- * Routes through `atomicWriter._unlink` / `_exists` so PR #109 review
- * finding (E) — "tests can't simulate mkdir/unlink failures" — is
- * resolved: the seam is now complete across all fs operations the
- * writer performs.
+ * Only removes `.tmp.<stamp>` files matching the target path's prefix
+ * AND older than ORPHAN_MAX_AGE_MS — concurrent writers' fresh tmp files
+ * are untouched. A crashed process's stale tmp file becomes eligible
+ * after 5 minutes, well past any plausible pairWrite duration.
+ *
+ * Routes through `atomicWriter._readdir` / `_statMtimeMs` / `_unlink`
+ * so tests can mock cleanup behavior deterministically.
  */
 function cleanupOrphans(yamlPath, sidecarPath) {
-    for (const orphan of [`${yamlPath}.tmp`, `${sidecarPath}.tmp`]) {
-        if (atomicWriter._exists(orphan)) {
+    const now = Date.now();
+    for (const targetPath of [yamlPath, sidecarPath]) {
+        const dir = dirname(targetPath);
+        const prefix = `${basename(targetPath)}.tmp.`;
+        let entries;
+        try {
+            entries = atomicWriter._readdir(dir);
+        }
+        catch {
+            continue; // dir doesn't exist yet — no orphans possible
+        }
+        for (const entry of entries) {
+            if (!entry.startsWith(prefix))
+                continue;
+            const orphanPath = `${dir}/${entry}`;
             try {
-                atomicWriter._unlink(orphan);
+                const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
+                if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
+                    continue; // fresh — likely a concurrent writer's
+                atomicWriter._unlink(orphanPath);
             }
-            catch { /* ignore */ }
+            catch { /* best-effort */ }
         }
     }
 }
@@ -171,6 +213,10 @@ export const atomicWriter = {
     /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
     _unlink(path) {
         unlinkSync(path);
+    },
+    /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
+    _readdir(path) {
+        return readdirSync(path);
     },
     /**
      * Atomic pair-write. Cleans up any orphaned `.tmp` files before
