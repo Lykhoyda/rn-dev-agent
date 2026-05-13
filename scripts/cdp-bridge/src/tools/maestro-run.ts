@@ -23,7 +23,22 @@ interface MaestroRunArgs {
   platform?: 'ios' | 'android';
   appId?: string;
   timeoutMs?: number;
+  /**
+   * GH #116: per-flow parameter bindings forwarded as `-e KEY=VALUE`
+   * pairs to the maestro-runner subprocess. Keys must match
+   * /^[A-Z_][A-Z0-9_]*$/ (Maestro's documented env-style convention) —
+   * any other key shape is refused so a malformed/hostile payload can't
+   * become a shell-injectable flag. Values are NOT quoted; they're
+   * passed as separate argv entries so shell metacharacters are inert
+   * by construction (execFile, not exec).
+   */
+  params?: Record<string, string>;
 }
+
+/** GH #116: Maestro env-style key pattern. Refuses anything that could
+ *  syntactically be confused with a flag (`--`, `-e`) or break the
+ *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
+const PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 function resolvePlatform(override?: string): 'ios' | 'android' | null {
   if (override === 'ios' || override === 'android') return override;
@@ -39,6 +54,26 @@ function resolveAppId(override?: string, platform?: string): string {
 
 export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<ToolResult> {
   return async (args) => {
+    // GH #116: validate params shape FIRST so a malformed payload is rejected
+    // regardless of platform / dispatch-tier availability. CI envs without
+    // maestro-runner or Maestro CLI would otherwise short-circuit at
+    // chooseMaestroDispatch before reaching the validator.
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        if (!PARAM_KEY_RE.test(key)) {
+          return failResult(
+            `Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
+            `— must match ${PARAM_KEY_RE.source} (GH #116).`,
+          );
+        }
+        if (typeof value !== 'string') {
+          return failResult(
+            `Refusing to run Maestro: param '${key}' has non-string value (GH #116).`,
+          );
+        }
+      }
+    }
+
     const platform = resolvePlatform(args.platform);
     if (!platform) {
       return failResult(
@@ -102,10 +137,24 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
 
     const timeout = args.timeoutMs ?? 120_000;
 
+    // GH #116: build the final argv. Start with the dispatch tier's
+    // base args, then append `-e KEY=VALUE` pairs for any supplied
+    // params. Validation already ran at the top of the handler so by
+    // this point every key matches PARAM_KEY_RE and every value is a
+    // string — no need to re-check.
+    const baseArgs = dispatch.buildArgs(platform, flowFile);
+    const paramArgs: string[] = [];
+    if (args.params) {
+      for (const [key, value] of Object.entries(args.params)) {
+        paramArgs.push('-e', `${key}=${value}`);
+      }
+    }
+    const finalArgs = [...baseArgs, ...paramArgs];
+
     try {
       const { stdout, stderr } = await execFile(
         dispatch.binPath,
-        dispatch.buildArgs(platform, flowFile),
+        finalArgs,
         { timeout, encoding: 'utf8' },
       );
 
