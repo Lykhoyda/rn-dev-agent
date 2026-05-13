@@ -42,6 +42,12 @@ const SUCCESS_SHAPE_REGEX = /(success|done|added|complete|completed|confirmation
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+// Codex review conf 90: cap regex input length to bound evaluation cost on the
+// cdp_navigate / cdp_navigation_state / proof_step hot path. The success-shape
+// match only cares about the END of the string, so slicing the tail keeps the
+// information that matters. Pair with the per-pattern source cap in config.ts.
+const MAX_NAME_LENGTH = 256;
+
 interface DetectorState {
   lastSignature: string | null;
 }
@@ -68,6 +74,10 @@ export interface AnnotateContext {
   windowMs?: number;
   /** Inject a clock for deterministic tests. */
   now?: () => number;
+  /** GH #91 acceptance #3: per-project successShapes override; null/undefined → built-in. */
+  successShapes?: RegExp | null;
+  /** GH #91 acceptance #3: per-project mutationMethods override; null/undefined → built-in. */
+  mutationMethods?: Set<string> | null;
 }
 
 /**
@@ -81,13 +91,23 @@ export function normalizeRouteName(raw: string | null | undefined): string | nul
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const segments = trimmed.split('/').filter(Boolean);
-  return (segments.length > 0 ? segments[segments.length - 1] : trimmed).toLowerCase();
+  const candidate = segments.length > 0 ? segments[segments.length - 1] : trimmed;
+  // Slice the tail rather than the head — success-shape matching cares about
+  // the end of the string, so any input over MAX_NAME_LENGTH still has its
+  // signal-bearing suffix preserved.
+  const bounded = candidate.length > MAX_NAME_LENGTH
+    ? candidate.slice(candidate.length - MAX_NAME_LENGTH)
+    : candidate;
+  return bounded.toLowerCase();
 }
 
-export function isSuccessShape(rawName: string | null | undefined): boolean {
+export function isSuccessShape(
+  rawName: string | null | undefined,
+  regex: RegExp = SUCCESS_SHAPE_REGEX,
+): boolean {
   const normalized = normalizeRouteName(rawName);
   if (!normalized) return false;
-  return SUCCESS_SHAPE_REGEX.test(normalized);
+  return regex.test(normalized);
 }
 
 /**
@@ -100,6 +120,7 @@ export function countWindowedMutations(
   client: CDPClient,
   windowMs: number,
   now: number,
+  methods: Set<string> = MUTATION_METHODS,
 ): { inWindow: number; lastMutationAgeMs: number | null } {
   const deviceKey = client.activeDeviceKey;
   const sinceISO = new Date(now - windowMs).toISOString();
@@ -107,7 +128,7 @@ export function countWindowedMutations(
   // compute last_mutation_age_ms from the same scan.
   const allMutations = client.networkBufferManager.filter(deviceKey, (entry) => {
     const method = (entry.method ?? '').toUpperCase();
-    if (!MUTATION_METHODS.has(method)) return false;
+    if (!methods.has(method)) return false;
     // Skip failed mutations (>= 400). For pending entries (status === undefined),
     // only count if recently-fired — older pendings are suspect (likely hung
     // or silently failed) and shouldn't be treated as in-flight success.
@@ -157,11 +178,13 @@ export function annotateMutationAbsence(result: ToolResult, ctx: AnnotateContext
   if (prev.lastSignature === signature) return result;
   prev.lastSignature = signature;
 
-  if (!isSuccessShape(ctx.screenName)) return result;
+  const successRegex = ctx.successShapes ?? SUCCESS_SHAPE_REGEX;
+  if (!isSuccessShape(ctx.screenName, successRegex)) return result;
 
   const windowMs = ctx.windowMs ?? DEFAULT_WINDOW_MS;
   const now = (ctx.now ?? Date.now)();
-  const { inWindow, lastMutationAgeMs } = countWindowedMutations(ctx.client, windowMs, now);
+  const methods = ctx.mutationMethods ?? MUTATION_METHODS;
+  const { inWindow, lastMutationAgeMs } = countWindowedMutations(ctx.client, windowMs, now, methods);
   if (inWindow > 0) return result;
 
   const hint =

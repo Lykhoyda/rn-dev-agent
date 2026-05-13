@@ -1,6 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection } from '../utils.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
+import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
 
 /**
  * GH #91: extract the topmost active route name from a getNavState() payload.
@@ -41,10 +42,13 @@ export function createNavigationStateHandler(getClient: () => CDPClient) {
       return failResult(`Navigation state error: ${parsed.error}`);
     }
 
+    const cfg = loadVerificationConfig(getCachedProjectRoot());
     return annotateMutationAbsence(okResult(parsed), {
       client,
       screenName: extractActiveScreen(parsed),
       source: 'cdp_navigation_state',
+      successShapes: cfg.successShapes,
+      mutationMethods: cfg.mutationMethods,
     });
   });
 }

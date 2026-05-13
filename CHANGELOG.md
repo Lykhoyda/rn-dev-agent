@@ -50,6 +50,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   opt-outs, conflict-rename, malformed-bundle defense in depth, and
   no-app.json fallback. Suite: 1312 → 1341 passing.
 
+## [0.44.37] — 2026-05-12
+
+### Added (GH #91 acceptance #3 closeout — per-project verification config)
+
+- **`verification.successShapes` and `verification.mutationMethods` per-project
+  overrides** in `.rn-agent/config.json` for the mutation-absence detector.
+  Closes the last open acceptance criterion on GH #91. Detector itself shipped
+  in `fed0dd0` (Apr 28).
+- New `loadVerificationConfig(projectRoot)` reads the config once per project
+  root and caches the result. Defaults are preserved (no behavior change) on
+  missing file, parse error, missing `verification` block, empty arrays, or
+  all-invalid regex strings — apps that don't opt in see zero change.
+- **ReDoS-via-typo guard** (Codex review conf 90): patterns longer than 200
+  chars are dropped before compilation, and matched-input length is capped
+  at 256 chars in `isSuccessShape`. Bounds regex evaluation cost on the
+  `cdp_navigate` / `cdp_navigation_state` / `proof_step` hot path so a
+  developer typo can't stall the MCP event loop.
+- **Empty-array means defaults**, not "disable detection" (Codex review conf
+  92). Silent loss of a safety net is the worse failure mode; explicit disable
+  is reserved for a future `verification.disable: true` flag.
+- **Observability**: one stderr log line on first config load per project root
+  (`[verification] loaded config from .../.rn-agent/config.json (patterns: N,
+  methods: M)`). Makes "is my config picked up?" a one-line check, without
+  needing SIGHUP/watcher reload machinery.
+- 18 new tests cover the loader, overrides, ReDoS guards, cache behavior, and
+  the observability log. Suite: 1312 → 1330 tests, all passing.
+
+### Notes
+
+- `device_press` / `cdp_interact` wirings remain **intentionally deferred** as
+  documented in the original `fed0dd0` commit message: these tools don't carry
+  nav-state intent, and the success-shape signal is captured downstream by the
+  next `cdp_navigation_state` call. Adding nav-state fetches per tap would
+  bloat the hot path for noise this PR considers low-value.
+
 ## [0.44.36] — 2026-05-12
 
 ### Fixed (Phase 134.2-followup — device_deeplink url injection)

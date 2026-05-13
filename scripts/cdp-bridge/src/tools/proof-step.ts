@@ -4,6 +4,7 @@ import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
+import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
 
 interface ProofStepArgs {
   screen?: string;
@@ -142,7 +143,14 @@ export function createProofStepHandler(getClient: () => CDPClient) {
     // testID (success-shape testIDs like "AddPolicySuccessSheet" trigger too),
     // then the verified text. null allowed — annotateMutationAbsence handles it.
     const screenName = args.screen ?? args.verifyTestID ?? args.verifyText ?? null;
-    const ctx = { client, screenName, source: 'proof_step' as const };
+    const cfg = loadVerificationConfig(getCachedProjectRoot());
+    const ctx = {
+      client,
+      screenName,
+      source: 'proof_step' as const,
+      successShapes: cfg.successShapes,
+      mutationMethods: cfg.mutationMethods,
+    };
     if (hasFailure) {
       return annotateMutationAbsence(warnResult(result, errors.join('; ') || 'proof_step verification failed'), ctx);
     }
