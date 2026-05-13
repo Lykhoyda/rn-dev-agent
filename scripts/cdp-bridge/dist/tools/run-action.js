@@ -145,6 +145,7 @@ export function createRunActionHandler(deps = {}) {
                 flowPath: action.filePath,
                 platform: args.platform,
                 timeoutMs,
+                params: args.params,
             });
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -277,6 +278,7 @@ export function createRunActionHandler(deps = {}) {
                 flowPath: reloadedAction.filePath,
                 platform: args.platform,
                 timeoutMs,
+                params: args.params,
             });
             const retryMs = Date.now() - tBeforeRetry;
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');

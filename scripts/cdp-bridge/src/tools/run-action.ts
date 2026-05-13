@@ -95,6 +95,14 @@ export interface RunActionArgs {
    * 'ci'; human-driven invocations 'human'.
    */
   trigger?: 'agent' | 'ci' | 'human';
+  /**
+   * GH #116: per-flow parameter bindings forwarded to maestro_run as
+   * `-e KEY=VALUE` pairs. Keys must match Maestro's env-style convention
+   * `/^[A-Z_][A-Z0-9_]*$/`; validation enforced in maestro_run itself.
+   * Pass through unchanged on both first attempt AND post-repair retry
+   * so a parameterised flow can be replayed identically after repair.
+   */
+  params?: Record<string, string>;
 }
 
 interface MaestroEnvelope {
@@ -213,6 +221,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         flowPath: action.filePath,
         platform: args.platform,
         timeoutMs,
+        params: args.params,
       });
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -367,6 +376,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         flowPath: reloadedAction.filePath,
         platform: args.platform,
         timeoutMs,
+        params: args.params,
       });
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');

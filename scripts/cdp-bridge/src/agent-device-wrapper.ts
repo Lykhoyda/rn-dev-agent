@@ -475,7 +475,30 @@ type RunAgentDeviceFn = (
 ) => Promise<ToolResult>;
 let _runAgentDeviceOverrideForTest: RunAgentDeviceFn | null = null;
 
+// GH #110: test-seam fuse. Once any production runAgentDevice call has
+// dispatched in this process, refuse to install a new override —
+// makes test-pollution-into-prod impossible by construction. The fuse
+// is intentionally one-way: tests that need both production and override
+// paths in the same suite should use `node --test --test-isolation=process`
+// (Node 22 LTS supports this) to get a fresh worker per file. A reset
+// seam here would defeat the entire guarantee — any code that could call
+// the reset is the same code that could leak the override (Codex review
+// conf 90).
+let _testSeamFused = false;
+let _testSeamFuseBlownBy: string | null = null;
+
 export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
+  if (_testSeamFused) {
+    throw new Error(
+      `_setRunAgentDeviceForTest: blown fuse — a production runAgentDevice ` +
+      `call (cliArgs[0]=${JSON.stringify(_testSeamFuseBlownBy)}) already ` +
+      `dispatched in this process. The test seam cannot be re-armed at runtime ` +
+      `(GH #110 hardening). The most likely cause is a prior test forgot to ` +
+      `clear its override in afterEach. Spawn a fresh Node process — e.g. ` +
+      `\`node --test --test-isolation=process\` — if you genuinely need to ` +
+      `mix production and override paths.`,
+    );
+  }
   _runAgentDeviceOverrideForTest = fn;
 }
 
@@ -485,6 +508,13 @@ export async function runAgentDevice(
 ): Promise<ToolResult> {
   if (_runAgentDeviceOverrideForTest) {
     return _runAgentDeviceOverrideForTest(cliArgs, opts);
+  }
+  // GH #110: production dispatch reached. Lock the fuse BEFORE any tier
+  // selection so a production call that throws downstream still seals
+  // the seam (Codex review conf 90).
+  if (!_testSeamFused) {
+    _testSeamFused = true;
+    _testSeamFuseBlownBy = cliArgs[0] ?? '<empty>';
   }
   // GH #60: when an explicit platform is requested AND it doesn't match the
   // active session's platform (e.g. user asks for android while an iOS
