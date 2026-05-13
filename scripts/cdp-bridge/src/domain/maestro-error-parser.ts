@@ -6,13 +6,14 @@
 // raw output text, no I/O, fully unit-testable.
 //
 // Maestro emits failures in a few canonical shapes (verified against
-// Maestro 1.40+ output and maestro-runner 0.x):
+// Maestro 1.40+ output, maestro-runner 0.x, and maestro-runner 1.0.9):
 //
 //   - "Element with id 'X' not found"
 //   - "Element with text 'X' not found"
 //   - 'Assertion failed: "X" not visible'
 //   - "Timed out waiting for element 'X'"
 //   - "Element 'X' is not visible"  (assertion variant)
+//   - "Element not found: id='X'"   (maestro-runner 1.0.x shape — issue #105)
 //
 // The parser tries each known shape in order and returns the first
 // match. If none match, returns `{ kind: 'UNKNOWN', raw }` so the caller
@@ -50,6 +51,16 @@ const PATTERNS: Pattern[] = [
   },
   {
     re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
+    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
+  },
+  // maestro-runner 1.0.x shape — issue #105.
+  // "Element not found: id='X'" or "Element not found: text='X'".
+  {
+    re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
+    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
+  },
+  {
+    re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
     build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
   },
   {
