@@ -209,6 +209,14 @@ export interface AutoRepairOutcome {
    * and emitted a RepairRecord).
    */
   repairTimestamp?: string;
+  /**
+   * GH #119: when outcome === 'failed' AND the post-repair retry failed
+   * on a DIFFERENT selector than the one just patched, record it here
+   * so MTTR analysis can distinguish "patch didn't work" from
+   * "cascading failure — patch worked, next selector broke." Absent
+   * when the retry failed on the same selector or didn't run.
+   */
+  nextFailedSelector?: string;
 }
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
