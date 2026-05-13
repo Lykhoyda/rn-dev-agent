@@ -17,9 +17,19 @@ export function sidecarPathFor(yamlFilePath: string): string {
   // <project>/.rn-agent/actions/<id>.yaml → <project>/.rn-agent/state/<id>.state.json
   // We don't assume the input is under .rn-agent/actions/ — instead derive
   // the sidecar by replacing the YAML's parent dir with sibling `state/`.
+  //
+  // GH #112: split on BOTH POSIX and Windows separators. The original
+  // `split('/').pop()` returned the entire backslash-containing path as a
+  // single segment on Windows, leading `join(parent, 'state', base)` to
+  // produce a deeply-nested broken directory tree. Using `path.basename`
+  // alone isn't enough because on a POSIX runtime `path.basename` doesn't
+  // recognize `\` as a separator, so a Windows-style input passed through
+  // unrelated code (e.g. cross-platform test fixtures) would still
+  // misbehave. Explicit `[/\\]` split is platform-agnostic at the source.
   const dir = dirname(yamlFilePath);
   const parent = dirname(dir);
-  const base = yamlFilePath.replace(/\.ya?ml$/i, '.state.json').split('/').pop()!;
+  const filename = yamlFilePath.replace(/\.ya?ml$/i, '.state.json');
+  const base = filename.split(/[\\/]/).pop()!;
   return join(parent, 'state', base);
 }
 
