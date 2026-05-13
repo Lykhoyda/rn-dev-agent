@@ -383,3 +383,119 @@ test('source guard: proof_step handler invokes annotateMutationAbsence', async (
   assert.match(src, /annotateMutationAbsence/);
   assert.match(src, /source:\s*['"]proof_step['"]/);
 });
+
+// ── per-project config override (GH #91 acceptance #3) ──────────────────────
+
+test('override: successShapes regex enables warning on a custom shape name', async () => {
+  const { annotateMutationAbsence, _resetForTests } = await import(MOD_PATH);
+  _resetForTests();
+  const client = makeMockClient({ entries: [] });
+  // Prime so the next observation is a transition.
+  annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
+  // 'OrderReceipt' is NOT in the built-in regex; the override should match it.
+  const customRegex = /(receipt|thanks)$/i;
+  const result = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderReceipt',
+    source: 'cdp_navigate',
+    successShapes: customRegex,
+  });
+  const env = parse(result);
+  assert.equal(env.meta?.verification_warning?.code, 'MUTATION_ABSENCE');
+  assert.equal(env.meta?.verification_warning?.screen, 'OrderReceipt');
+});
+
+test('override: successShapes regex disables warning when built-in suffix is removed', async () => {
+  const { annotateMutationAbsence, _resetForTests } = await import(MOD_PATH);
+  _resetForTests();
+  const client = makeMockClient({ entries: [] });
+  annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
+  // Custom regex only matches "receipt" — "OrderConfirmation" should now be ignored.
+  const customRegex = /receipt$/i;
+  const result = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderConfirmation',
+    source: 'cdp_navigate',
+    successShapes: customRegex,
+  });
+  const env = parse(result);
+  assert.equal(env.meta?.verification_warning, undefined);
+});
+
+test('override: mutationMethods extends recognized methods (QUERY silences warning)', async () => {
+  const { annotateMutationAbsence, _resetForTests } = await import(MOD_PATH);
+  _resetForTests();
+  const now = 1_700_000_000_000;
+  const client = makeMockClient({
+    entries: [
+      { method: 'QUERY', status: 200, timestamp: new Date(now - 1_000).toISOString() },
+    ],
+  });
+  annotateMutationAbsence(envelope({}), {
+    client, screenName: 'Home', source: 'cdp_navigate', now: () => now,
+  });
+  const result = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderConfirmation',
+    source: 'cdp_navigate',
+    mutationMethods: new Set(['POST', 'PUT', 'PATCH', 'DELETE', 'QUERY']),
+    now: () => now,
+  });
+  // QUERY is now a recognized mutation method AND in-window → no warning
+  const env = parse(result);
+  assert.equal(env.meta?.verification_warning, undefined);
+});
+
+test('override: mutationMethods narrowed set still fires warning when nothing matches', async () => {
+  const { annotateMutationAbsence, _resetForTests } = await import(MOD_PATH);
+  _resetForTests();
+  const now = 1_700_000_000_000;
+  const client = makeMockClient({
+    entries: [
+      { method: 'POST', status: 200, timestamp: new Date(now - 1_000).toISOString() },
+    ],
+  });
+  annotateMutationAbsence(envelope({}), {
+    client, screenName: 'Home', source: 'cdp_navigate', now: () => now,
+  });
+  // Override drops POST from the mutation set → POST is no longer a "real" mutation
+  const result = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderConfirmation',
+    source: 'cdp_navigate',
+    mutationMethods: new Set(['DELETE']),
+    now: () => now,
+  });
+  const env = parse(result);
+  assert.equal(env.meta?.verification_warning?.code, 'MUTATION_ABSENCE');
+});
+
+test('override: defaults preserved when both overrides are null/undefined', async () => {
+  const { annotateMutationAbsence, _resetForTests } = await import(MOD_PATH);
+  _resetForTests();
+  const client = makeMockClient({ entries: [] });
+  annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
+  const result = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderConfirmation',
+    source: 'cdp_navigate',
+    successShapes: null,
+    mutationMethods: null,
+  });
+  const env = parse(result);
+  assert.equal(env.meta?.verification_warning?.code, 'MUTATION_ABSENCE');
+});
+
+test('input cap: isSuccessShape bounds input length (ReDoS hot-path guard)', async () => {
+  // Codex review conf 90: cap matched-input length at 256 chars so a
+  // pathological pattern can't combine with a long route name to stall
+  // the event loop. Slice happens before regex .test().
+  const { isSuccessShape } = await import(MOD_PATH);
+  // 512-char route name ending in "Confirmation" should still match the
+  // default regex via the suffix — slice keeps the END of the string.
+  const padded = 'X'.repeat(512) + 'Confirmation';
+  assert.equal(isSuccessShape(padded), true);
+  // 512-char route name with no success suffix should NOT match.
+  const paddedNonSuccess = 'X'.repeat(512) + 'Home';
+  assert.equal(isSuccessShape(paddedNonSuccess), false);
+});
