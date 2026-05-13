@@ -10,9 +10,6 @@ jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: scripts/cdp-bridge
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
@@ -21,18 +18,26 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: scripts/cdp-bridge/package-lock.json
+          # Cache against the root lockfile now that scripts/cdp-bridge is
+          # an npm workspace member (PR #158 — changesets adoption).
+          cache-dependency-path: package-lock.json
 
+      # Install from repo root so the npm workspaces config resolves
+      # correctly. `npm ci` inside scripts/cdp-bridge would fight the
+      # root lockfile.
       - run: npm ci
 
       - name: TypeScript build
         run: npm run build
+        working-directory: scripts/cdp-bridge
 
       - name: Unit tests
         run: node --test 'test/unit/*.test.js'
+        working-directory: scripts/cdp-bridge
 
       - name: Integration tests
         run: node --test 'test/integration/*.test.js'
+        working-directory: scripts/cdp-bridge
 
   version-sync:
     name: Version sync check
