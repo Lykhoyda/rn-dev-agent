@@ -147,3 +147,4 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 - Always filter component tree queries — never dump the full tree
 - Use explicit type imports (`import type { ... }`)
 - No unnecessary comments in code
+- **When developing tools, instrument them with per-step timing in `meta.timings_ms`** so we can see where they're slow. The 3-tier dispatch (fast-runner → daemon → CLI), agent-device handshake, fiber-tree snapshot, and Maestro flow execution all have variable cost; the dispatcher is the only one that already returns per-step ms. Add `meta.timings_ms: { stepA: ms, stepB: ms, ... }` to tool results so users can run a tool a few times, eyeball the breakdown, and know which path to optimize. Without this we're guessing — the MTTR experiment surfaced two perf-related bugs (B153/B154) that took hours to root-cause precisely because the snapshot path was opaque-timed.
