@@ -193,7 +193,9 @@ export type ToolErrorCode =
   // Phase 134.2: appId / packageName validation at adb shell boundary.
   | 'INVALID_APPID'             // device_permission
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
-  | 'INVALID_PACKAGE_NAME';     // device_deeplink
+  | 'INVALID_PACKAGE_NAME'      // device_deeplink
+  // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
+  | 'RUNNER_LEAK';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

@@ -5,6 +5,8 @@
 // fuzzy-match the stale selector against current testIDs, patch the
 // YAML in place, persist the repair record. Pure repair logic lives in
 // domain/repair-engine.ts; this file is the I/O orchestration.
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { runAgentDevice } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
@@ -12,6 +14,48 @@ import { loadAction, saveAction, actionWasEditedExternally, } from '../domain/ac
 import { extractAllTestIDs, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
 import { repairBudgetAvailable } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
+import { resolveBundleId } from '../project-config.js';
+import { isAgentDeviceRunnerSentinel } from './runner-leak-recovery.js';
+const execFile = promisify(execFileCb);
+/**
+ * GH #105 / B153: bring the target app to foreground BEFORE taking the
+ * snapshot. Without this, the agent-device snapshot reads whichever app is
+ * frontmost — typically the Agent Device Runner (XCTest test rig) which has
+ * no testIDs of its own. That yields the misleading "snapshot returned 0
+ * testIDs" failure on a perfectly healthy app.
+ *
+ * Best-effort: silent failure means we still fall through to the snapshot,
+ * which can still detect the runner-leak sentinel and surface a useful
+ * error. iOS uses `simctl launch booted <bundleId>`; Android uses `am start`
+ * via adb.
+ */
+async function bringTargetAppToForeground(platform, bundleId) {
+    try {
+        if (platform === 'android') {
+            await execFile('adb', ['shell', 'monkey', '-p', bundleId, '-c', 'android.intent.category.LAUNCHER', '1'], { timeout: 5000, encoding: 'utf8' });
+        }
+        else {
+            await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], { timeout: 5000, encoding: 'utf8' });
+        }
+    }
+    catch { /* best-effort — sentinel detection covers the failure case */ }
+}
+/**
+ * Parse agent-device snapshot envelope into the small node shape that
+ * isAgentDeviceRunnerSentinel cares about. Mirrors the parser in
+ * device-session.ts but kept local to keep the dependency surface tight.
+ */
+function parseSnapshotNodes(envelope) {
+    try {
+        const obj = JSON.parse(envelope);
+        if (!obj.ok || !obj.data?.nodes)
+            return null;
+        return obj.data.nodes;
+    }
+    catch {
+        return null;
+    }
+}
 export function createRepairActionHandler() {
     return withSession(async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
@@ -55,6 +99,16 @@ export function createRepairActionHandler() {
                 hint: 'Investigate why this action keeps drifting — usually means the underlying screen is being heavily refactored. Either redesign the action or wait for the screen to stabilise.',
             });
         }
+        // GH #105 / B153: bring the target app to foreground before snapshot.
+        // Without this, the snapshot lands on whichever app is frontmost — often
+        // the Agent Device Runner (XCTest test rig) which has zero app testIDs.
+        // Resolve bundle id from app.json via project-config; fall back to ios
+        // platform if the connected target hasn't told us yet.
+        const targetPlatform = 'ios'; // TODO(gh-105 follow-up): plumb platform from CDP target
+        const targetBundleId = resolveBundleId(targetPlatform);
+        if (targetBundleId) {
+            await bringTargetAppToForeground(targetPlatform, targetBundleId);
+        }
         // Take a fresh device snapshot to see what testIDs are currently rendered.
         const snapResult = await runAgentDevice(['snapshot', '-i']);
         const snapEnvelope = snapResult.content?.[0]?.text ?? '';
@@ -63,6 +117,21 @@ export function createRepairActionHandler() {
                 actionId: args.actionId,
                 envelope: snapEnvelope.slice(0, 500),
                 hint: 'Run cdp_status / device_list to verify the device + agent-device session are healthy. Repair cannot proceed without a snapshot.',
+            });
+        }
+        // GH #105 / B153: detect the agent-device-runner-leak sentinel BEFORE
+        // returning the misleading TESTID_NOT_FOUND. A foregrounded test-app
+        // with rendered components but with the runner stealing focus produces
+        // a small (~6 node) tree of the runner's splash — exactly what
+        // isAgentDeviceRunnerSentinel matches. The runner-leak error is far
+        // more actionable than "snapshot returned 0 testIDs".
+        const snapshotNodes = parseSnapshotNodes(snapEnvelope);
+        if (snapshotNodes && isAgentDeviceRunnerSentinel(snapshotNodes)) {
+            return failResult(`cdp_repair_action: snapshot returned the Agent Device Runner's own UI instead of the target app — repair cannot proceed`, 'RUNNER_LEAK', {
+                actionId: args.actionId,
+                bundleId: targetBundleId,
+                hint: `Bring the target app to foreground and retry (xcrun simctl launch booted ${targetBundleId ?? '<bundleId>'}). ` +
+                    'If this persists, the agent-device daemon dropped appBundleId on dispatch — see B119/GH#35 + B153.',
             });
         }
         const candidates = extractAllTestIDs(snapEnvelope);
