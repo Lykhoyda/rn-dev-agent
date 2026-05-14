@@ -291,6 +291,49 @@ test('repair-action: snapshot returns 0 testIDs → TESTID_NOT_FOUND', async () 
   assert.equal(env.code, 'TESTID_NOT_FOUND');
 });
 
+// GH #105 / B153: when agent-device's snapshot lands on the Agent Device
+// Runner's own UI (~6 node splash tree), the repair tool MUST surface
+// RUNNER_LEAK rather than the misleading TESTID_NOT_FOUND. The previous
+// "snapshot returned 0 testIDs" message told users to "navigate to the
+// target screen" — but they WERE on the target screen; the runner had
+// stolen focus.
+test('repair-action: snapshot is Agent Device Runner sentinel → RUNNER_LEAK (B153)', async () => {
+  project.seedAction(
+    'runner-leak',
+    fixtureYaml({ id: 'runner-leak', selectors: ['fab-create-task'] }),
+  );
+
+  // Shape the runner's own UI tree — a small (<=12 node) tree containing
+  // the AgentDeviceRunner Application label. Matches the sentinel check
+  // in runner-leak-recovery.ts.
+  const runnerEnvelope = JSON.stringify({
+    ok: true,
+    data: {
+      nodes: [
+        { ref: 'e0', label: 'AgentDeviceRunner', type: 'Application' },
+        { ref: 'e1', label: 'Agent Device Runner', type: 'StaticText' },
+        { ref: 'e2', identifier: 'Logo', type: 'Image' },
+        { ref: 'e3', identifier: 'PoweredBy', type: 'StaticText' },
+      ],
+    },
+  });
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: runnerEnvelope }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'runner-leak',
+    failedSelector: 'fab-create-task',
+    projectRoot: project.root,
+  });
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'RUNNER_LEAK', `expected RUNNER_LEAK, got ${env.code}: ${env.error}`);
+  assert.match(env.error, /Agent Device Runner/);
+  assert.match(JSON.stringify(env), /simctl launch booted/);
+});
+
 test('repair-action: no candidate clears threshold → TESTID_NOT_FOUND', async () => {
   project.seedAction(
     'no-match',

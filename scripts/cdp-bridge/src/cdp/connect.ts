@@ -177,16 +177,55 @@ export function stickyPlatformFilters(
   return { ...current, platform: resolvedPlatform };
 }
 
+/**
+ * GH #105 / B154: pure helper. Decide which final error string to surface
+ * after `retries` failed connection attempts. The previous unconditional
+ * "Failed to connect after 5 attempts." was misleading when every attempt
+ * actually connected at the WebSocket layer and only the Runtime.evaluate
+ * pre-flight probe timed out — that means the JS thread is paused (almost
+ * always because the app is backgrounded by the Agent Device Runner
+ * foregrounding itself), not that Metro is unreachable.
+ *
+ * Pure & exported so unit tests can pin the message shape without spinning
+ * a real WebSocket.
+ */
+export function formatConnectFailureMessage(
+  retries: number,
+  attempts: { handshakeOk: boolean; probeTimedOut: boolean }[],
+  bundleHint: string | null,
+  lastErrorMessage: string | null,
+): string {
+  const allHandshakesSucceeded = attempts.length > 0 && attempts.every((a) => a.handshakeOk);
+  const anyProbeTimeout = attempts.some((a) => a.probeTimedOut);
+  if (allHandshakesSucceeded && anyProbeTimeout) {
+    const bid = bundleHint ?? '<bundleId>';
+    return (
+      `CDP probe timeout after ${retries} attempts: WebSocket handshake succeeded but Runtime.evaluate('1+1') consistently timed out — JS thread paused. ` +
+      `The target app is most likely backgrounded. ` +
+      `Recovery: xcrun simctl terminate booted ${bid} && xcrun simctl launch booted ${bid} (iOS), or restart the app from the launcher (Android).`
+    );
+  }
+  const hint = lastErrorMessage?.includes('1006')
+    ? ' Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools.'
+    : '';
+  return `Failed to connect after ${retries} attempts.${hint}`;
+}
+
 async function connectToTarget(
   ctx: ConnectContext,
   target: HermesTarget,
   retries = 5,
 ): Promise<void> {
   let lastError: Error | null = null;
+  // GH #105 / B154: track per-attempt outcome (handshake ok vs probe timeout).
+  // Fed into formatConnectFailureMessage at the end.
+  const attempts: { handshakeOk: boolean; probeTimedOut: boolean }[] = [];
   for (let i = 0; i < retries; i++) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) {
       throw new Error('Client disposed or preempted during connection');
     }
+    let handshakeOk = false;
+    let probeTimedOut = false;
     try {
       // M1b: ride the multiplexer when _proxyUrl is set (from CDPClient.startProxy).
       // Falls back to the target's direct webSocketDebuggerUrl when no proxy is active.
@@ -196,6 +235,7 @@ async function connectToTarget(
         logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
       }
       await connectWs(ctx, url);
+      handshakeOk = true;
       // D594: Early stale-target detection — quick probe before full setup
       try {
         await ctx.sendWithTimeout('Runtime.evaluate', {
@@ -203,6 +243,7 @@ async function connectToTarget(
           returnByValue: true,
         }, CDP_TIMEOUT_FAST);
       } catch {
+        probeTimedOut = true;
         throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
       }
       ctx.setConnectedTarget(target);
@@ -213,6 +254,7 @@ async function connectToTarget(
       return;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
+      attempts.push({ handshakeOk, probeTimedOut });
       closeAndResetWs(ctx);
       if (lastError.message.includes('refused')) {
         ctx.setState('disconnected');
@@ -222,10 +264,9 @@ async function connectToTarget(
     }
   }
   ctx.setState('disconnected');
-  const hint = lastError?.message.includes('1006')
-    ? ' Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools.'
-    : '';
-  throw new Error(`Failed to connect after ${retries} attempts.${hint}`);
+  throw new Error(
+    formatConnectFailureMessage(retries, attempts, target.description ?? null, lastError?.message ?? null),
+  );
 }
 
 function connectWs(ctx: ConnectContext, url: string): Promise<void> {
