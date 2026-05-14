@@ -141,7 +141,8 @@ export function formatConnectFailureMessage(retries, attempts, bundleHint, lastE
         const bid = bundleHint ?? '<bundleId>';
         return (`CDP probe timeout after ${retries} attempts: WebSocket handshake succeeded but Runtime.evaluate('1+1') consistently timed out — JS thread paused. ` +
             `The target app is most likely backgrounded. ` +
-            `Recovery: xcrun simctl terminate booted ${bid} && xcrun simctl launch booted ${bid} (iOS), or restart the app from the launcher (Android).`);
+            `Recovery: call cdp_restart with hardReset=true (kills the fast-runner, terminates+relaunches ${bid}, reconnects — no /reload-plugins required). ` +
+            `Or manually: xcrun simctl terminate booted ${bid} && xcrun simctl launch booted ${bid} (iOS), or restart the app from the launcher (Android).`);
     }
     const hint = lastErrorMessage?.includes('1006')
         ? ' Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools.'
