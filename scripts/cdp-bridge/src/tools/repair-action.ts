@@ -27,6 +27,7 @@ import { repairBudgetAvailable } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
+import { stopFastRunner } from '../fast-runner-session.js';
 
 const execFile = promisify(execFileCb);
 
@@ -37,6 +38,16 @@ const execFile = promisify(execFileCb);
  * no testIDs of its own. That yields the misleading "snapshot returned 0
  * testIDs" failure on a perfectly healthy app.
  *
+ * **Live-smoke-test discovery (GH #105 follow-up):** `simctl launch` alone
+ * loses the focus race when the agent-device fast-runner (spawned by the
+ * prior `maestro_run`) is still alive — `XCUIApplication.activate()` inside
+ * the runner re-foregrounds the runner before the snapshot lands. The fix
+ * is to `stopFastRunner()` FIRST so there's nothing competing for focus,
+ * THEN `simctl launch` the test-app. The next `runAgentDevice(snapshot)`
+ * will lazily re-spawn the fast-runner, which is fine because by then
+ * agent-device knows which bundle to attach to (it inherits the foreground
+ * app's XCUIApplication).
+ *
  * Best-effort: silent failure means we still fall through to the snapshot,
  * which can still detect the runner-leak sentinel and surface a useful
  * error. iOS uses `simctl launch booted <bundleId>`; Android uses `am start`
@@ -46,6 +57,14 @@ async function bringTargetAppToForeground(
   platform: string,
   bundleId: string,
 ): Promise<void> {
+  // Kill the fast-runner FIRST so it can't re-grab focus the moment we
+  // simctl-launch the test-app. Equivalent step exists in cdp_restart
+  // hardReset (PR #161); this is its single-tool counterpart inside the
+  // repair path so users don't have to call cdp_restart manually after
+  // a SELECTOR_NOT_FOUND.
+  try {
+    stopFastRunner();
+  } catch { /* best-effort — fast-runner may already be dead */ }
   try {
     if (platform === 'android') {
       await execFile(
