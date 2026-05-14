@@ -208,3 +208,77 @@ exit code 1
   assert.equal(out.selectorKind, 'id');
   assert.equal(out.selector, 'fab-create-task');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GH #105 / B152: maestro-runner 1.0.9 stderr shape
+// ─────────────────────────────────────────────────────────────────────────────
+// The shape `Element not found: id='X'` (with colon + equals) is emitted by
+// maestro-runner 1.0.9+. Before PR #159 the parser only recognized the
+// classic `Element with id 'X' not found` shape and returned UNKNOWN for
+// the modern form — silently disabling the L3 self-healing loop. These
+// tests pin the new patterns so a regression would be immediately visible.
+
+test('parser: 1.0.9 shape — id=\'X\' single-quoted', () => {
+  const out = parseMaestroFailure("    ✗ tapOn: id=\"task-mark-all-done\" (12.7s)\n      ╰─ Element not found: id='task-mark-all-done'\n");
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'task-mark-all-done');
+});
+
+test('parser: 1.0.9 shape — id="X" double-quoted', () => {
+  const out = parseMaestroFailure('Element not found: id="btn-submit"');
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'btn-submit');
+});
+
+test('parser: 1.0.9 shape — text=\'X\' single-quoted', () => {
+  const out = parseMaestroFailure("Element not found: text='All done'");
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'text');
+  assert.equal(out.selector, 'All done');
+});
+
+test('parser: 1.0.9 shape — extra whitespace between : and id= tolerated', () => {
+  // maestro-runner formatting could insert any amount of whitespace; the
+  // pattern uses \s* so this must match.
+  const out = parseMaestroFailure("Element not found:   id='spinner'");
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selector, 'spinner');
+});
+
+test('parser: 1.0.9 shape — embedded opposite quote in id (e.g. user\\\'s-tasks)', () => {
+  // Matched-quote backreference pattern allows the opposite quote inside
+  // the value. Same invariant we test for the classic shape (line 176-189).
+  const out = parseMaestroFailure(`Element not found: id="say-'hi'-btn"`);
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selector, "say-'hi'-btn");
+});
+
+test('parser: 1.0.9 shape — full realistic maestro-runner 1.0.9 stderr', () => {
+  // Captured verbatim from the #105 MTTR experiment session. The earlier
+  // classic patterns must NOT match (no "Element with id 'X' not found"
+  // string), but the new 1.0.9 patterns must classify correctly.
+  const realistic = `maestro-runner 1.0.9 - by DeviceLab.dev
+  ✓ launchApp (2.3s)
+  ✓ tapOn: id="tab-tasks" (2.8s)
+  ✓ assertVisible: text="Tasks" (1.3s)
+  ✗ tapOn: id="task-mark-all-done" (12.7s)
+    ╰─ Element not found: id='task-mark-all-done'
+  3 steps passing
+  1 steps failing
+✗ rn-maestro-run 23.8s`;
+  const out = parseMaestroFailure(realistic);
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND', `expected SELECTOR_NOT_FOUND, got ${out.kind} — the 1.0.9 pattern MUST match this verbatim stderr`);
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'task-mark-all-done');
+});
+
+test('parser: 1.0.9 id= shape has priority over the generic fallback', () => {
+  // The 1.0.9 id= pattern is more specific than the catch-all "Element 'X' not found".
+  // Pattern order in maestro-error-parser.ts MUST keep id-shape ahead of the fallback.
+  // If a regression reorders patterns, this test catches it.
+  const out = parseMaestroFailure("Element not found: id='specific-id'\nAlso seen: Element 'fallback-id' not found");
+  assert.equal(out.selectorKind, 'id', 'id= shape must win over fallback when both present');
+  assert.equal(out.selector, 'specific-id');
+});
