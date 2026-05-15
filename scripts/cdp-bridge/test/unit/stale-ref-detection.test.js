@@ -121,3 +121,23 @@ test('findNewRefByMetadata: returns null when cached identifier no longer in tre
   // Unknown source ref → null (we have no cached metadata for it)
   assert.equal(findNewRefByMetadata('@e99', withoutButton), null);
 });
+
+test('Android flat nodes reuse generic stale-ref detection', () => {
+  clearRefMap();
+
+  updateRefMapFromFlat([
+    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 1800, width: 200, height: 100 } },
+  ]);
+
+  assert.equal(isRefStale('@e1', [
+    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 1800, width: 200, height: 100 } },
+  ]), false);
+
+  assert.equal(isRefStale('@e1', [
+    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-settings', label: 'Settings', rect: { x: 0, y: 1800, width: 200, height: 100 } },
+  ]), true);
+
+  assert.equal(findNewRefByMetadata('@e1', [
+    { ref: '@e8', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 400, y: 1800, width: 200, height: 100 } },
+  ]), '@e8');
+});

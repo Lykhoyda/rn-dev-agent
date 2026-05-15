@@ -193,3 +193,16 @@ export function findNewRefByMetadata(oldRef: string, newNodes: FlatNode[]): stri
   }
   return null;
 }
+
+export function flattenAndroidAccessibilityTree(nodes: FlatNode[]): {
+  nodes: FlatNode[];
+  refMap: Map<string, { x: number; y: number; width: number; height: number }>;
+} {
+  const localRefMap = new Map<string, { x: number; y: number; width: number; height: number }>();
+  for (const node of nodes) {
+    if (!node.ref || !node.rect) continue;
+    const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+    localRefMap.set(key, node.rect);
+  }
+  return { nodes, refMap: localRefMap };
+}
