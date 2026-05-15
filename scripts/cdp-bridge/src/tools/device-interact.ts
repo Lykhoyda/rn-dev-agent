@@ -8,6 +8,7 @@ import { okResult, failResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
+import type { FlatNode } from '../fast-runner-ref-map.js';
 
 const execFile = promisify(execFileCb);
 
@@ -958,4 +959,63 @@ export function createDeviceFocusNextHandler(): (args: Record<string, never>) =>
       },
     );
   });
+}
+
+// --- TS-side orchestrators for `find` and `scrollintoview` (GH #105 / rn-device iOS-MVP) ---
+//
+// These pure helpers replace what the external CLI tier used to do on iOS.
+// The runner (rn-fast-runner) exposes raw `tap` / `swipe` / `snapshot` but not
+// `find` or `scrollintoview` — we own that orchestration here. See spec §3.4.
+
+/**
+ * GH #105 / rn-device iOS-MVP: TypeScript implementation of `find`.
+ * Used by device_find. Replaces external CLI's `find` command.
+ *
+ * Matches against (in priority order): exact label, exact identifier,
+ * substring label, substring identifier. Returns the first match by
+ * traversal order from the snapshot (depth-first).
+ */
+export function findInLatestSnapshot(
+  nodes: FlatNode[],
+  query: string,
+  opts: { exact?: boolean } = {},
+): FlatNode | null {
+  const exact = opts.exact ?? false;
+  for (const n of nodes) {
+    if (n.label === query || n.identifier === query) return n;
+  }
+  if (exact) return null;
+  for (const n of nodes) {
+    if (n.label?.includes(query) || n.identifier?.includes(query)) return n;
+  }
+  return null;
+}
+
+interface ViewportRect { x: number; y: number; width: number; height: number }
+
+/** Element fully or partially intersects the screen rect. */
+export function isInViewport(element: ViewportRect, screen: ViewportRect): boolean {
+  const elRight = element.x + element.width;
+  const elBottom = element.y + element.height;
+  const screenRight = screen.x + screen.width;
+  const screenBottom = screen.y + screen.height;
+  return (
+    element.x < screenRight &&
+    elRight > screen.x &&
+    element.y < screenBottom &&
+    elBottom > screen.y
+  );
+}
+
+/** Choose a swipe direction that should bring `element` into the screen. Returns null when already visible. */
+export function decideScrollDirection(
+  element: ViewportRect,
+  screen: ViewportRect,
+): 'up' | 'down' | 'left' | 'right' | null {
+  if (isInViewport(element, screen)) return null;
+  if (element.y >= screen.y + screen.height) return 'up';
+  if (element.y + element.height <= screen.y) return 'down';
+  if (element.x >= screen.x + screen.width) return 'left';
+  if (element.x + element.width <= screen.x) return 'right';
+  return null;
 }
