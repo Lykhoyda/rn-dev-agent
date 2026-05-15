@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectLegacyAgentDevice } from '../../../dist/runners/external-runner-detect.js';
+import {
+  detectLegacyAgentDevice,
+  detectAndroidExternalRunner,
+} from '../../../dist/runners/external-runner-detect.js';
 
 test('detectLegacyAgentDevice: returns null when no daemon file', async () => {
   const result = await detectLegacyAgentDevice({ readDaemonFile: async () => null });
@@ -22,4 +25,21 @@ test('detectLegacyAgentDevice: returns null on file read error', async () => {
     readDaemonFile: async () => { throw new Error('ENOENT'); },
   });
   assert.equal(result, null);
+});
+
+test('detectAndroidExternalRunner warns on competing uiautomator process', async () => {
+  const fakeExec = async (_bin, _args, _opts) => ({
+    stdout: 'shell        1234  1  uiautomator runtest upstream\n',
+  });
+  const warning = await detectAndroidExternalRunner(fakeExec, ['-s', 'emulator-5554']);
+  assert.equal(warning.code, 'ANDROID_UIAUTOMATOR_COMPETITOR');
+  assert.equal(warning.processLines.length, 1);
+});
+
+test('detectAndroidExternalRunner ignores our own runner package', async () => {
+  const fakeExec = async () => ({
+    stdout: 'u0_a123      2222  1  dev.lykhoyda.rndevagent.androidrunner\n',
+  });
+  const warning = await detectAndroidExternalRunner(fakeExec, ['-s', 'emulator-5554']);
+  assert.equal(warning, null);
 });
