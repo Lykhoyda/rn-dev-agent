@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../logger.js';
 import { okResult, failResult } from '../utils.js';
-import { stopFastRunner as defaultStopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * Module-scoped last-known bundle id (Codex review finding #1, conf 92).

@@ -27,7 +27,7 @@ import { repairBudgetAvailable } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 
 const execFile = promisify(execFileCb);
 

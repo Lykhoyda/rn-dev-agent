@@ -89,7 +89,7 @@ import {
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { stopFastRunner } from './fast-runner-session.js';
+import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');

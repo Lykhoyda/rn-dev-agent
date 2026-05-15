@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, } from '../agent-device-wrapper.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';

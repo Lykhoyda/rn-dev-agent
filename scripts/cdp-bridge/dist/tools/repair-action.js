@@ -16,7 +16,7 @@ import { repairBudgetAvailable } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel } from './runner-leak-recovery.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 const execFile = promisify(execFileCb);
 /**
  * GH #105 / B153: bring the target app to foreground BEFORE taking the

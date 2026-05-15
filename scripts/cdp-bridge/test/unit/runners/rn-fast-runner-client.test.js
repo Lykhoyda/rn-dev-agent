@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runIOS, _setFetchForTest } from '../../../dist/runners/rn-fast-runner-client.js';
-import { _setRunnerStateForTest } from '../../../dist/fast-runner-session.js';
+import { runIOS, _setFetchForTest, _setRunnerStateForTest } from '../../../dist/runners/rn-fast-runner-client.js';
 
 // Pin a fake state so the client can resolve a port without spawning xcodebuild.
 _setRunnerStateForTest({

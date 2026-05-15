@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseReadySignal,
   createReadySignalParser,
-} from '../../dist/fast-runner-session.js';
+} from '../../dist/runners/rn-fast-runner-client.js';
 
 // The imported rn-fast-runner XCTest replaced the legacy single-line
 // `FASTXCT_READY {"port":N}` JSON signal with a two-line NSLog handshake:

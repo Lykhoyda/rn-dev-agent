@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { logger } from '../logger.js';
 import { okResult, failResult } from '../utils.js';
-import { stopFastRunner as defaultStopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import type { ToolResult } from '../utils.js';
 
 const defaultExecFile = promisify(execFileCb);

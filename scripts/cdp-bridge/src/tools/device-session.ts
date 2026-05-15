@@ -8,7 +8,7 @@ import {
   ensureFastRunner,
   cacheSnapshot,
 } from '../agent-device-wrapper.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';

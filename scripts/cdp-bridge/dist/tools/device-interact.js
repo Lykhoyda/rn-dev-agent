@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
-import { isFastRunnerAvailable, fastSwipe } from '../fast-runner-session.js';
+import { isFastRunnerAvailable, fastSwipe } from '../runners/rn-fast-runner-client.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';

@@ -195,7 +195,11 @@ export type ToolErrorCode =
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
   | 'INVALID_PACKAGE_NAME'      // device_deeplink
   // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
-  | 'RUNNER_LEAK';
+  | 'RUNNER_LEAK'
+  // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
+  // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
+  // to refresh refs, then retry.
+  | 'STALE_REF';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
