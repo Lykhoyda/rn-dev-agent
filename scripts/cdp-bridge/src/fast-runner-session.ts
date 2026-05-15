@@ -10,6 +10,81 @@ const HTTP_TIMEOUT_MS = 10_000;
 const STATE_FILE = '/tmp/rn-fast-runner-state.json';
 const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', 'rn-fast-runner');
 
+// --- READY-signal parser (pure, testable without xcodebuild) ---
+//
+// The imported rn-fast-runner XCTest emits its handshake via two NSLog lines:
+//   RN_FAST_RUNNER_LISTENER_READY
+//   RN_FAST_RUNNER_PORT=<port>
+//
+// (Replacing the legacy single-line `FASTXCT_READY {"port":N}` JSON shape.)
+//
+// Failure markers we must surface:
+//   RN_FAST_RUNNER_LISTENER_FAILED — listener crashed during startup
+//   RN_FAST_RUNNER_PORT_NOT_SET    — listener ready but env port read failed
+//
+// xcodebuild streams stdout in arbitrary-sized chunks, so the parser
+// holds a small buffer + a `seenReady` flag and walks complete lines.
+
+export type ReadySignalResult =
+  | { ready: true; port: number }
+  | { error: string };
+
+export interface ReadySignalParser {
+  /**
+   * Feed the next stdout chunk. Returns a resolved/rejected result when
+   * the two-line handshake (or a failure marker) is observed, otherwise
+   * `null` if more input is needed.
+   */
+  feed(chunk: string): ReadySignalResult | null;
+}
+
+/**
+ * Pure function variant: parse an entire stdout buffer in one shot.
+ * Exists so unit tests can exercise the parser without juggling
+ * stateful chunk feeds. Mirrors what `createReadySignalParser` would
+ * produce after one synthetic feed of `buf`.
+ */
+export function parseReadySignal(buf: string): ReadySignalResult | null {
+  const parser = createReadySignalParser();
+  return parser.feed(buf);
+}
+
+export function createReadySignalParser(): ReadySignalParser {
+  let pending = '';
+  let seenReady = false;
+  return {
+    feed(chunk: string): ReadySignalResult | null {
+      pending += chunk;
+      // Process complete lines only; keep the trailing partial line buffered.
+      let nl: number;
+      while ((nl = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, nl).replace(/\r$/, '');
+        pending = pending.slice(nl + 1);
+        // Failure markers may appear anywhere — check first.
+        if (line.includes('RN_FAST_RUNNER_LISTENER_FAILED')) {
+          return { error: 'RN_FAST_RUNNER_LISTENER_FAILED' };
+        }
+        if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
+          return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
+        }
+        if (!seenReady) {
+          if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
+            seenReady = true;
+          }
+          continue;
+        }
+        // After READY, scan for the port. NSLog wraps the marker in a
+        // timestamp + process prefix, so match anywhere in the line.
+        const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
+        if (portMatch) {
+          return { ready: true, port: Number(portMatch[1]) };
+        }
+      }
+      return null;
+    },
+  };
+}
+
 // --- Singleton state ---
 
 let runnerProcess: ChildProcess | null = null;
@@ -74,39 +149,37 @@ export function startFastRunner(deviceId: string, bundleId: string, port = DEFAU
     });
 
     runnerProcess = child;
-    let stdoutBuf = '';
+    const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
 
-    child.stdout!.setEncoding('utf-8');
-    child.stdout!.on('data', (chunk: string) => {
+    const handleChunk = (chunk: string): void => {
       if (resolved) return;
-      stdoutBuf += chunk;
-      const match = stdoutBuf.match(/FASTXCT_READY (\{.*\})/);
-      if (match) {
-        resolved = true;
-        stdoutBuf = '';
-        clearTimeout(timer);
-        try {
-          const info = JSON.parse(match[1]) as { port: number };
-          const state: FastRunnerState = {
-            port: info.port,
-            pid: child.pid!,
-            deviceId,
-            bundleId,
-            startedAt: new Date().toISOString(),
-          };
-          runnerState = state;
-          try { writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8'); } catch { /* ignore */ }
-          resolve(state);
-        } catch (err) {
-          reject(new Error(`Failed to parse FASTXCT_READY: ${err}`));
-        }
+      const result = parser.feed(chunk);
+      if (!result) return;
+      resolved = true;
+      clearTimeout(timer);
+      if ('error' in result) {
+        reject(new Error(`Fast runner failed to start: ${result.error}`));
+        return;
       }
-    });
+      const state: FastRunnerState = {
+        port: result.port,
+        pid: child.pid!,
+        deviceId,
+        bundleId,
+        startedAt: new Date().toISOString(),
+      };
+      runnerState = state;
+      try { writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8'); } catch { /* ignore */ }
+      resolve(state);
+    };
+
+    child.stdout!.setEncoding('utf-8');
+    child.stdout!.on('data', handleChunk);
 
     child.stderr!.setEncoding('utf-8');
     child.stderr!.on('data', () => { /* xcodebuild is noisy — ignore stderr */ });
