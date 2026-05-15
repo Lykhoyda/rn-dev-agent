@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { isInViewport, decideScrollDirection } from '../../../dist/tools/device-interact.js';
 
 // Task 7 (GH #105 / rn-device iOS-MVP): TS implementation of `scrollintoview`
@@ -44,4 +45,21 @@ test('decideScrollDirection: element above viewport → swipe down to reveal', (
   // bottom) drags content back down into view.
   const aboveTop = { x: 16, y: -200, width: 361, height: 44 };
   assert.equal(decideScrollDirection(aboveTop, screen), 'down');
+});
+
+test('scrollintoview: Android runner env uses snapshot/swipe orchestrator', async () => {
+  const previous = process.env.RN_ANDROID_RUNNER;
+  process.env.RN_ANDROID_RUNNER = '1';
+  try {
+    const source = readFileSync(
+      '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/tools/device-interact.ts',
+      'utf8',
+    );
+    assert.match(source, /session\?\.platform === 'android'/);
+    assert.match(source, /RN_ANDROID_RUNNER === '1'/);
+    assert.doesNotMatch(source, /runAgentDevice\(\['scrollintoview'/);
+  } finally {
+    if (previous === undefined) delete process.env.RN_ANDROID_RUNNER;
+    else process.env.RN_ANDROID_RUNNER = previous;
+  }
 });

@@ -275,20 +275,24 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
       );
     }
 
-    // GH #105 iOS-MVP follow-up: on iOS, the legacy `agent-device find` CLI
-    // path respawns the upstream AgentDeviceRunner via the daemon, which then
-    // fights our RnFastRunner for focus. Use the snapshot-based orchestrator
-    // instead — same result without the daemon round-trip. Android still
-    // uses the CLI fuzzy matcher (its daemon doesn't have the same focus race).
+    // GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: route
+    // non-exact text finds through the snapshot-based orchestrator on iOS
+    // always and on Android when RN_ANDROID_RUNNER=1. The legacy CLI path
+    // would respawn the upstream agent-device daemon, which fights our
+    // in-tree runner for focus / UIAutomator. Using runAgentDevice +
+    // fetchFindCandidates keeps us on the platform-aware short-circuit.
     const activeSession = getActiveSession();
-    if (activeSession?.platform === 'ios') {
+    const usesInTreeRunner =
+      activeSession?.platform === 'ios' ||
+      (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER === '1');
+    if (usesInTreeRunner) {
       const find = await fetchFindCandidates(args.text, false);
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
         }
         return failResult(
-          `Snapshot unavailable — cannot resolve "${args.text}" on iOS`,
+          `Snapshot unavailable — cannot resolve "${args.text}"`,
           { code: 'SNAPSHOT_UNAVAILABLE', query: args.text },
         );
       }
@@ -912,25 +916,37 @@ export function createDeviceScrollIntoViewHandler(): (args: ScrollIntoViewArgs) 
     }
     // GH #105 iOS-MVP follow-up: the Swift runner has no `scrollintoview`
     // command; this is TS-orchestrated on iOS (snapshot → find → swipe loop).
-    // Android keeps the legacy CLI delegate (agent-device handles it natively).
+    // Task 8 of the Android MVP plan extends the same orchestrator to
+    // Android behind RN_ANDROID_RUNNER=1 — the snapshot + swipe verbs route
+    // through the platform-aware short-circuit in runAgentDevice so this
+    // function is platform-neutral. The in-tree runners are the only
+    // execution targets for scrollintoview now; the upstream agent-device
+    // CLI never owned a stable scrollintoview verb and routing through it
+    // re-spawns the legacy runner that fights us for focus / UIAutomator.
     const session = getActiveSession();
-    if (session?.platform === 'ios') {
-      return scrollIntoViewIOS(args);
+    const usesInTreeRunner =
+      session?.platform === 'ios' ||
+      (session?.platform === 'android' && process.env.RN_ANDROID_RUNNER === '1');
+
+    if (usesInTreeRunner) {
+      return scrollIntoViewWithRunner(args);
     }
-    if (args.ref) {
-      const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-      return runAgentDevice(['scrollintoview', ref]);
-    }
-    return runAgentDevice(['scrollintoview', args.text!]);
+    return failResult(
+      `device_scrollintoview requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER=1 (rn-android-runner). Active session: ${session?.platform ?? 'none'}.`,
+      { code: 'IN_TREE_RUNNER_REQUIRED', platform: session?.platform ?? null },
+    );
   });
 }
 
 /**
- * GH #105 iOS-MVP follow-up: TS orchestrator for device_scrollintoview on iOS.
- * Loops snapshot → find → check viewport → swipe up to MAX_ITERATIONS times.
- * Uses the runner's `/command` snapshot + drag verbs exclusively — no daemon.
+ * GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: platform-neutral
+ * TS orchestrator for device_scrollintoview. Loops snapshot → find → check
+ * viewport → swipe up to MAX_ITERATIONS times. Uses runAgentDevice for both
+ * the `snapshot` and `swipe` verbs so the in-tree iOS short-circuit
+ * (rn-fast-runner) and the Android short-circuit (rn-android-runner, env-gated)
+ * both apply transparently — no daemon, no upstream agent-device runner.
  */
-async function scrollIntoViewIOS(args: ScrollIntoViewArgs): Promise<ToolResult> {
+async function scrollIntoViewWithRunner(args: ScrollIntoViewArgs): Promise<ToolResult> {
   const MAX_ITERATIONS = 12;
   const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
   const screenRect: ViewportRect = { x: 0, y: 0, width: screen.width, height: screen.height };
@@ -959,7 +975,14 @@ async function scrollIntoViewIOS(args: ScrollIntoViewArgs): Promise<ToolResult> 
       if (i === 0) {
         const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect);
         const coords = computeSwipeFromDirection(fallbackDir ?? 'down', screen);
-        await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, DEFAULT_SWIPE_DURATION_MS);
+        await runAgentDevice([
+          'swipe',
+          String(coords.x1),
+          String(coords.y1),
+          String(coords.x2),
+          String(coords.y2),
+          String(DEFAULT_SWIPE_DURATION_MS),
+        ]);
         continue;
       }
       return failResult(
@@ -976,14 +999,21 @@ async function scrollIntoViewIOS(args: ScrollIntoViewArgs): Promise<ToolResult> 
         ref: target.ref,
         rect: target.rect,
         iterations: i,
-        method: 'fast-runner',
+        method: 'runner-orchestrator',
       });
     }
     const coords = computeSwipeFromDirection(direction, screen);
-    const swipeResp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, DEFAULT_SWIPE_DURATION_MS);
-    if (!swipeResp.ok) {
+    const swipeResp = await runAgentDevice([
+      'swipe',
+      String(coords.x1),
+      String(coords.y1),
+      String(coords.x2),
+      String(coords.y2),
+      String(DEFAULT_SWIPE_DURATION_MS),
+    ]);
+    if (swipeResp.isError) {
       return failResult(
-        `scrollintoview: swipe failed at iteration ${i}: ${swipeResp.error ?? 'unknown'}`,
+        `scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? 'unknown'}`,
       );
     }
   }
