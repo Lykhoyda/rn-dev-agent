@@ -22,22 +22,6 @@ func runnerCGImage(from image: RunnerImage) -> CGImage? {
 }
 
 extension RnFastRunnerTests {
-  // MARK: - Recording
-
-  func captureRunnerFrame() -> RunnerImage? {
-    var image: RunnerImage?
-    let capture = {
-      let screenshot = XCUIScreen.main.screenshot()
-      image = screenshot.image
-    }
-    if Thread.isMainThread {
-      capture()
-    } else {
-      DispatchQueue.main.sync(execute: capture)
-    }
-    return image
-  }
-
   func screenshotRoot(app: XCUIApplication) -> XCUIElement {
 #if os(macOS)
     let windows = app.windows.allElementsBoundByIndex
@@ -46,28 +30,6 @@ extension RnFastRunnerTests {
     }
 #endif
     return app
-  }
-
-  func stopRecordingIfNeeded() {
-    guard let recorder = activeRecording else { return }
-    do {
-      try recorder.stop()
-    } catch {
-      NSLog("AGENT_DEVICE_RUNNER_RECORD_STOP_FAILED=%@", String(describing: error))
-    }
-    activeRecording = nil
-  }
-
-  func resolveRecordingOutPath(_ requestedOutPath: String) -> String {
-#if os(macOS)
-    if requestedOutPath.hasPrefix("/") {
-      return requestedOutPath
-    }
-#endif
-    let fileName = URL(fileURLWithPath: requestedOutPath).lastPathComponent
-    let fallbackName = "rn-fast-runner-recording-\(Int(Date().timeIntervalSince1970 * 1000)).mp4"
-    let safeFileName = fileName.isEmpty ? fallbackName : fileName
-    return (NSTemporaryDirectory() as NSString).appendingPathComponent(safeFileName)
   }
 
   // MARK: - Target Activation
@@ -91,7 +53,7 @@ extension RnFastRunnerTests {
   func activateTarget(bundleId: String, reason: String) -> XCUIApplication {
     let target = XCUIApplication(bundleIdentifier: bundleId)
     NSLog(
-      "AGENT_DEVICE_RUNNER_ACTIVATE bundle=%@ state=%d reason=%@",
+      "RN_FAST_RUNNER_ACTIVATE bundle=%@ state=%d reason=%@",
       bundleId,
       target.state.rawValue,
       reason
@@ -172,7 +134,7 @@ extension RnFastRunnerTests {
   }
 
   func shouldRetryCommand(_ command: Command) -> Bool {
-    if RunnerEnv.isTruthy("AGENT_DEVICE_RUNNER_DISABLE_READONLY_RETRY") {
+    if RunnerEnv.isTruthy("RN_FAST_RUNNER_DISABLE_READONLY_RETRY") {
       return false
     }
     return isReadOnlyCommand(command)
@@ -237,7 +199,7 @@ extension RnFastRunnerTests {
 
   func isRunnerLifecycleCommand(_ command: CommandType) -> Bool {
     switch command {
-    case .shutdown, .recordStop, .screenshot:
+    case .shutdown, .screenshot:
       return true
     default:
       return false

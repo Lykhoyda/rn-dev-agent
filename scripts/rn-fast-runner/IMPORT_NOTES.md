@@ -35,6 +35,17 @@ namespace as a single import-time sweep. Final names:
 - `RunnerTests+ScreenRecorder.swift` — our `device_record` uses `xcrun simctl io recordVideo` directly
 - `RunnerTests+TvRemote.swift` — no Apple TV support in this plugin
 - `RecordingScripts/` — supports ScreenRecorder, coupled
+- Plus the dependency files under `XCTest/` that supported the dropped modules: `XCTest/EventRecord.swift`, `XCTest/PointerEventPath.swift`, `XCTest/RunnerDaemonProxy.swift`
+
+The remaining call sites for the dropped modules were repaired post-import
+(see commit history): `recordStart`/`recordStop` cases were removed from the
+wire protocol, and the tvOS helpers (`pressTvRemote`, `tvRemoteButton`,
+`selectFocusedTvElement`, `longSelectFocusedTvElement`,
+`resolveTvRemoteDoublePressDelay`, the `TvRemoteButton` enum, and the
+`RunnerInteractionOutcome` enum) live as stubs at the top of
+`RnFastRunnerTests+Interaction.swift`, always returning the "unsupported"
+answer so iOS code paths remain functional without touching the imported
+logic.
 
 ## License
 

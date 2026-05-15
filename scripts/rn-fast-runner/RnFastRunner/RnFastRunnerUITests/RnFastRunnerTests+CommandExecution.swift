@@ -82,7 +82,7 @@ extension RnFastRunnerTests {
         currentBundleId = nil
         if !hasRetried, shouldRetryException(command, message: exceptionMessage) {
           NSLog(
-            "AGENT_DEVICE_RUNNER_RETRY command=%@ reason=objc_exception",
+            "RN_FAST_RUNNER_RETRY command=%@ reason=objc_exception",
             command.command.rawValue
           )
           hasRetried = true
@@ -107,7 +107,7 @@ extension RnFastRunnerTests {
       }
       if !hasRetried, shouldRetryCommand(command), shouldRetryResponse(response) {
         NSLog(
-          "AGENT_DEVICE_RUNNER_RETRY command=%@ reason=response_unavailable",
+          "RN_FAST_RUNNER_RETRY command=%@ reason=response_unavailable",
           command.command.rawValue
         )
         hasRetried = true
@@ -174,67 +174,7 @@ extension RnFastRunnerTests {
 
     switch command.command {
     case .shutdown:
-      stopRecordingIfNeeded()
       return Response(ok: true, data: DataPayload(message: "shutdown"))
-    case .recordStart:
-      guard
-        let requestedOutPath = command.outPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-        !requestedOutPath.isEmpty
-      else {
-        return Response(ok: false, error: ErrorPayload(message: "recordStart requires outPath"))
-      }
-      let hasAppBundleId = !(command.appBundleId?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .isEmpty ?? true)
-      guard hasAppBundleId else {
-        return Response(ok: false, error: ErrorPayload(message: "recordStart requires appBundleId"))
-      }
-      if activeRecording != nil {
-        return Response(ok: false, error: ErrorPayload(message: "recording already in progress"))
-      }
-      if let requestedFps = command.fps, (requestedFps < minRecordingFps || requestedFps > maxRecordingFps) {
-        return Response(ok: false, error: ErrorPayload(message: "recordStart fps must be between \(minRecordingFps) and \(maxRecordingFps)"))
-      }
-      if let requestedQuality = command.quality, (requestedQuality < minRecordingQuality || requestedQuality > maxRecordingQuality) {
-        return Response(ok: false, error: ErrorPayload(message: "recordStart quality must be between \(minRecordingQuality) and \(maxRecordingQuality)"))
-      }
-      do {
-        let resolvedOutPath = resolveRecordingOutPath(requestedOutPath)
-        let fpsLabel = command.fps.map(String.init) ?? String(RnFastRunnerTests.defaultRecordingFps)
-        let qualityLabel = command.quality.map(String.init) ?? "native"
-        NSLog(
-          "AGENT_DEVICE_RUNNER_RECORD_START requestedOutPath=%@ resolvedOutPath=%@ fps=%@ quality=%@",
-          requestedOutPath,
-          resolvedOutPath,
-          fpsLabel,
-          qualityLabel
-        )
-        let recorder = ScreenRecorder(
-          outputPath: resolvedOutPath,
-          fps: command.fps.map { Int32($0) },
-          quality: command.quality
-        )
-        try recorder.start { [weak self] in
-          return self?.captureRunnerFrame()
-        }
-        activeRecording = recorder
-        return Response(ok: true, data: DataPayload(message: "recording started"))
-      } catch {
-        activeRecording = nil
-        return Response(ok: false, error: ErrorPayload(message: "failed to start recording: \(error.localizedDescription)"))
-      }
-    case .recordStop:
-      guard let recorder = activeRecording else {
-        return Response(ok: false, error: ErrorPayload(message: "no active recording"))
-      }
-      do {
-        try recorder.stop()
-        activeRecording = nil
-        return Response(ok: true, data: DataPayload(message: "recording stopped"))
-      } catch {
-        activeRecording = nil
-        return Response(ok: false, error: ErrorPayload(message: "failed to stop recording: \(error.localizedDescription)"))
-      }
     case .uptime:
       return Response(
         ok: true,

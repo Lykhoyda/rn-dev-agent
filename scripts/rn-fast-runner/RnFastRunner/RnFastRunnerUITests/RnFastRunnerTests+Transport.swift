@@ -47,7 +47,7 @@ extension RnFastRunnerTests {
   ) {
     connection.send(content: response, isComplete: true, completion: .contentProcessed { error in
       if let error {
-        NSLog("AGENT_DEVICE_RUNNER_SEND_FAILED=%@", String(describing: error))
+        NSLog("RN_FAST_RUNNER_SEND_FAILED=%@", String(describing: error))
       }
       connection.cancel()
       afterSend()

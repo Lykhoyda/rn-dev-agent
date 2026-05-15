@@ -47,7 +47,7 @@ extension RnFastRunnerTests {
   }
 
   private func firstBlockingSystemModal(in springboard: XCUIApplication) -> XCUIElement? {
-    let disableSafeProbe = RunnerEnv.isTruthy("AGENT_DEVICE_RUNNER_DISABLE_SAFE_MODAL_PROBE")
+    let disableSafeProbe = RunnerEnv.isTruthy("RN_FAST_RUNNER_DISABLE_SAFE_MODAL_PROBE")
     let queryElements: (() -> [XCUIElement]) -> [XCUIElement] = { fetch in
       if disableSafeProbe {
         return fetch()
@@ -83,7 +83,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_MODAL_QUERY_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_MODAL_QUERY_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return []
@@ -98,7 +98,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_MODAL_CHECK_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_MODAL_CHECK_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return false
@@ -147,7 +147,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_MODAL_ACTION_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_MODAL_ACTION_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return false
@@ -218,7 +218,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_MODAL_NODE_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_MODAL_NODE_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return nil

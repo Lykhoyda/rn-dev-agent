@@ -1,5 +1,85 @@
 import XCTest
 
+// MARK: - Interaction Outcome
+
+enum RunnerInteractionOutcome {
+  case performed
+  case unsupported(String)
+}
+
+// MARK: - tvOS Remote Stubs
+//
+// The TvRemote module was intentionally dropped at import time (see
+// IMPORT_NOTES.md). This plugin targets iOS Simulator and does not exercise
+// tvOS code paths. The stubs below preserve the call sites in the rest of the
+// imported code while always returning the "unsupported" answer; the iOS
+// branches in #if !os(tvOS) blocks remain fully functional.
+
+enum TvRemoteButton {
+  case menu
+  case home
+  case select
+  case up
+  case down
+  case left
+  case right
+}
+
+extension RnFastRunnerTests {
+  @discardableResult
+  func pressTvRemote(_ button: TvRemoteButton, duration: TimeInterval = 0) -> Bool {
+    return false
+  }
+
+  func tvRemoteButton(from name: String?) -> TvRemoteButton? {
+    return nil
+  }
+
+  func selectFocusedTvElement(
+    app: XCUIApplication,
+    point: CGPoint,
+    action: String
+  ) -> RunnerInteractionOutcome? {
+    return nil
+  }
+
+  func longSelectFocusedTvElement(
+    app: XCUIApplication,
+    point: CGPoint,
+    duration: TimeInterval
+  ) -> RunnerInteractionOutcome? {
+    return nil
+  }
+
+  func resolveTvRemoteDoublePressDelay() -> TimeInterval {
+    return 0
+  }
+
+  func elementHasFocus(_ element: XCUIElement) -> Bool {
+    return false
+  }
+
+  func activateElement(
+    app: XCUIApplication,
+    element: XCUIElement,
+    action: String
+  ) -> RunnerInteractionOutcome {
+#if os(tvOS)
+    return .unsupported("\(action) is not supported on tvOS; move focus with swipe or scroll, then select the focused element")
+#else
+    if element.isHittable {
+      element.tap()
+      return .performed
+    }
+    let frame = element.frame
+    if !frame.isEmpty {
+      return tapAt(app: app, x: frame.midX, y: frame.midY)
+    }
+    return .unsupported("\(action) failed: element has no hittable frame")
+#endif
+  }
+}
+
 extension RnFastRunnerTests {
   struct TouchVisualizationFrame {
     let x: Double
@@ -200,7 +280,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_TEXT_INPUT_AT_POINT_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_TEXT_INPUT_AT_POINT_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return nil
@@ -226,7 +306,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_FOCUSED_INPUT_QUERY_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_FOCUSED_INPUT_QUERY_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return nil

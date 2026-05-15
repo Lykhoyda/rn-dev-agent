@@ -589,7 +589,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_SNAPSHOT_TAB_FALLBACK_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_SNAPSHOT_TAB_FALLBACK_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return nil
@@ -645,7 +645,7 @@ extension RnFastRunnerTests {
     })
     if let exceptionMessage {
       NSLog(
-        "AGENT_DEVICE_RUNNER_SNAPSHOT_QUERY_IGNORED_EXCEPTION=%@",
+        "RN_FAST_RUNNER_SNAPSHOT_QUERY_IGNORED_EXCEPTION=%@",
         exceptionMessage
       )
       return []
