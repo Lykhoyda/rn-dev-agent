@@ -9,10 +9,12 @@ import {
   cacheSnapshot,
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { detectLegacyAgentDevice } from '../runners/external-runner-detect.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { logger } from '../logger.js';
 import {
   isAgentDeviceRunnerSentinel,
   recoverFromRunnerLeak,
@@ -174,6 +176,30 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           openedAt: new Date().toISOString(),
           appId,
         });
+
+        // GH #105 / rn-device iOS-MVP §3.7: warn if a globally-installed
+        // external runner daemon is also running — race-prone shared
+        // automation channel. Opt-in kill via RN_DEVICE_KILL_LEGACY=1.
+        detectLegacyAgentDevice()
+          .then((warning) => {
+            if (!warning) return;
+            logger.warn('rn-device', warning.message);
+            if (process.env.RN_DEVICE_KILL_LEGACY === '1') {
+              try {
+                process.kill(warning.pid, 'SIGTERM');
+                logger.info(
+                  'rn-device',
+                  `Terminated legacy runner daemon (PID ${warning.pid}) per RN_DEVICE_KILL_LEGACY=1`,
+                );
+              } catch (err) {
+                logger.warn(
+                  'rn-device',
+                  `Failed to terminate legacy daemon: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+          })
+          .catch(() => { /* non-fatal */ });
 
         if (args.platform === 'ios' && deviceId) {
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
