@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   probeFastRunnerLiveness,
   reapStaleFastRunner,
-} from '../../dist/fast-runner-session.js';
+} from '../../dist/runners/rn-fast-runner-client.js';
 
 // M7 / D666 — hermetic tests for the tri-state fast-runner liveness probe.
 // Mirrors the injectable-deps pattern from test/unit/lockfile.test.js so we

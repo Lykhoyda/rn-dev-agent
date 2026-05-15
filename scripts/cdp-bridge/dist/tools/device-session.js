@@ -1,10 +1,12 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, } from '../agent-device-wrapper.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { detectLegacyAgentDevice } from '../runners/external-runner-detect.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { logger } from '../logger.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak, } from './runner-leak-recovery.js';
 const execFile = promisify(execFileCb);
 /**
@@ -116,6 +118,25 @@ export function createDeviceSnapshotHandler() {
                     openedAt: new Date().toISOString(),
                     appId,
                 });
+                // GH #105 / rn-device iOS-MVP §3.7: warn if a globally-installed
+                // external runner daemon is also running — race-prone shared
+                // automation channel. Opt-in kill via RN_DEVICE_KILL_LEGACY=1.
+                detectLegacyAgentDevice()
+                    .then((warning) => {
+                    if (!warning)
+                        return;
+                    logger.warn('rn-device', warning.message);
+                    if (process.env.RN_DEVICE_KILL_LEGACY === '1') {
+                        try {
+                            process.kill(warning.pid, 'SIGTERM');
+                            logger.info('rn-device', `Terminated legacy runner daemon (PID ${warning.pid}) per RN_DEVICE_KILL_LEGACY=1`);
+                        }
+                        catch (err) {
+                            logger.warn('rn-device', `Failed to terminate legacy daemon: ${err instanceof Error ? err.message : String(err)}`);
+                        }
+                    }
+                })
+                    .catch(() => { });
                 if (args.platform === 'ios' && deviceId) {
                     ensureFastRunner(deviceId, appId).catch(() => { });
                 }

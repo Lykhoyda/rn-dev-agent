@@ -10,18 +10,9 @@ import type { SessionState } from './types.js';
 import { okResult, failResult } from './utils.js';
 import {
   isFastRunnerAvailable,
-  getFastRunnerState,
-  fastTap,
-  fastType,
-  fastSwipe,
-  fastSnapshot,
-  fastScreenshot,
-  fastDismissKeyboard,
   startFastRunner,
-  probeFastRunnerLiveness,
-  reapStaleFastRunner,
-} from './fast-runner-session.js';
-import { updateRefMap, refCenter, getScreenRect, hasRefMap, clearRefMap } from './fast-runner-ref-map.js';
+} from './runners/rn-fast-runner-client.js';
+import { refCenter, getScreenRect, clearRefMap } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 
 const execFile = promisify(execFileCb);
@@ -290,148 +281,149 @@ export function getAdbSerial(): string[] {
   return [];
 }
 
-// --- Fast-runner dispatch (highest-priority tier for iOS) ---
+// --- iOS short-circuit: route every supported command through rn-fast-runner ---
+//
+// GH #105 / rn-device iOS-MVP §3.1: iOS commands no longer touch agent-device
+// (neither the daemon nor the CLI). They go through our own HTTP runner via
+// runIOS(). The buildRunIOSArgs() helper translates the legacy CLI argv shape
+// (e.g. `['press', '@e3', '--hold-ms', '500']`) into the structured RunIOSArgs
+// the new client expects. The legacy daemon + CLI tiers below remain — they
+// now serve Android exclusively.
+//
+// GH #105 iOS-MVP follow-up (post-validation): the original short-circuit
+// list left `swipe` / `scroll` / `longpress` / `pinch` / `find` on the
+// legacy daemon/CLI path. Live validation showed the daemon respawns the
+// upstream AgentDeviceRunner on every such call, which then fights our
+// RnFastRunner for focus. Each of these now routes through the runner's
+// `/command` endpoint (the Swift `.drag` / `.longPress` / `.pinch` / `.findText`
+// handlers). Coordinate-based gestures: the Swift `.swipe` case is tvOS-only;
+// iOS coordinate-form swipes/scrolls use `.drag`.
 
-const SWIPE_DURATION_MS = 300;
-const SCROLL_FRACTION = 0.4;
-const FOCUS_DELAY_MS = 100;
+const RN_FAST_RUNNER_COMMANDS = new Set<string>([
+  'snapshot',
+  'tap',
+  'press',
+  'fill',
+  'type',
+  'back',
+  'screenshot',
+  'keyboard',
+  'swipe',
+  'scroll',
+  'longpress',
+  'pinch',
+]);
 
 export function getCachedScreenRect(): { width: number; height: number } | null {
   return getScreenRect();
 }
 
-function computeSwipeCoords(direction: string, screen: { width: number; height: number }): { x1: number; y1: number; x2: number; y2: number } | null {
-  const cx = Math.round(screen.width / 2);
-  const cy = Math.round(screen.height / 2);
-  const dy = Math.round(screen.height * SCROLL_FRACTION);
-  const dx = Math.round(screen.width * SCROLL_FRACTION);
-  switch (direction) {
-    case 'down': return { x1: cx, y1: cy + dy, x2: cx, y2: cy - dy };
-    case 'up': return { x1: cx, y1: cy - dy, x2: cx, y2: cy + dy };
-    case 'left': return { x1: cx + dx, y1: cy, x2: cx - dx, y2: cy };
-    case 'right': return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
-    default: return null;
-  }
-}
-
-async function tryFastRunner(command: string, positionals: string[]): Promise<ToolResult | null> {
-  // M7 / Phase 109 (D666): tri-state liveness — distinguishes a hung HTTP
-  // server (stale) from a dead process. Before M7, any PID-alive-but-HTTP-hung
-  // state caused every press to wait out the 10s fetch timeout.
-  const liveness = await probeFastRunnerLiveness();
-  if (liveness === 'stale') {
-    // Runner process is alive but its HTTP server is wedged. Reap it now;
-    // fall through to the daemon for this call. Next call probes 'dead'
-    // and will cold-launch a fresh runner if iOS.
-    await reapStaleFastRunner();
-    return null;
-  }
-  if (liveness === 'dead') {
-    const session = getActiveSession();
-    if (session?.platform === 'ios' && session.deviceId) {
-      // CDP-012: prefer the active session's appId over project-wide
-      // resolveBundleId(). Previously a session opened for a non-default
-      // bundle would be restarted against the project default app, leaving
-      // subsequent taps and snapshots targeting the wrong process.
-      const restartAppId = session.appId ?? resolveBundleId('ios') ?? 'unknown';
-      try { await startFastRunner(session.deviceId, restartAppId); } catch { /* auto-restart failed */ }
-      // startFastRunner only resolves after FASTXCT_READY, so a sync PID
-      // check here is sufficient — avoids a second HTTP round-trip.
-      if (!isFastRunnerAvailable()) return null;
-    } else {
-      return null;
-    }
-  }
-  const state = getFastRunnerState()!;
-
-  try {
-    switch (command) {
-      case 'screenshot': {
-        const pngBuffer = await fastScreenshot();
-        const tmpPath = `/tmp/rn-fast-screenshot-${Date.now()}.png`;
-        writeFileSync(tmpPath, pngBuffer);
-        const requestedPath = positionals.find(p => !p.startsWith('-'));
-        if (requestedPath && requestedPath !== tmpPath) {
-          try {
-            mkdirSync(dirname(requestedPath), { recursive: true });
-            copyFileSync(tmpPath, requestedPath);
-            return okResult({ path: requestedPath, method: 'fast-runner' });
-          } catch { /* fall through to tmpPath */ }
-        }
-        return okResult({ path: tmpPath, method: 'fast-runner' });
-      }
-      case 'snapshot': {
-        const resp = await fastSnapshot(state.bundleId);
-        if (!resp.ok) return null;
-        return okResult({ ...resp, method: 'fast-runner' });
-      }
-      case 'keyboard': {
-        if (positionals[0] === 'dismiss') {
-          const resp = await fastDismissKeyboard();
-          if (!resp.ok) return null;
-          return okResult({ ...resp, method: 'fast-runner' });
-        }
-        return null;
-      }
-      case 'press': {
-        if (!hasRefMap()) return null;
-        const ref = positionals[0];
-        if (!ref) return null;
+function buildRunIOSArgs(
+  cliArgs: string[],
+  bundleId?: string,
+): import('./runners/rn-fast-runner-client.js').RunIOSArgs {
+  const cmd = cliArgs[0];
+  const positionals = cliArgs.slice(1).filter((a) => !a.startsWith('--'));
+  switch (cmd) {
+    case 'press':
+    case 'tap': {
+      const ref = positionals[0];
+      if (ref && ref.startsWith('@')) {
         const center = refCenter(ref);
-        if (!center) return null;
-        const holdMs = positionals.includes('--hold-ms')
-          ? Number(positionals[positionals.indexOf('--hold-ms') + 1]) / 1000
-          : undefined;
-        const resp = await fastTap(center.x, center.y, holdMs);
-        if (!resp.ok) return null;
-        return okResult({ ...resp, ref, method: 'fast-runner' });
+        if (!center) {
+          return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
+        }
+        return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
       }
-      case 'fill': {
-        if (!hasRefMap()) return null;
-        const ref = positionals[0];
-        const text = positionals[1];
-        if (!ref || !text) return null;
-        const center = refCenter(ref);
-        if (!center) return null;
-        const tapResp = await fastTap(center.x, center.y);
-        if (!tapResp.ok) return null;
-        await new Promise(r => setTimeout(r, FOCUS_DELAY_MS));
-        const typeResp = await fastType(text);
-        if (!typeResp.ok) return null;
-        return okResult({ filled: true, ref, length: text.length, method: 'fast-runner' });
-      }
-      case 'scroll': {
-        const screen = getScreenRect();
-        if (!screen) return null;
-        const direction = positionals[0];
-        if (!direction) return null;
-        const coords = computeSwipeCoords(direction, screen);
-        if (!coords) return null;
-        const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, SWIPE_DURATION_MS);
-        if (!resp.ok) return null;
-        return okResult({ direction, method: 'fast-runner' });
-      }
-      case 'swipe': {
-        const [x1, y1, x2, y2, durationStr] = positionals;
-        if (x1 == null || y1 == null || x2 == null || y2 == null) return null;
-        const duration = durationStr ? Number(durationStr) : SWIPE_DURATION_MS;
-        const resp = await fastSwipe(Number(x1), Number(y1), Number(x2), Number(y2), duration);
-        if (!resp.ok) return null;
-        return okResult({ method: 'fast-runner' });
-      }
-      case 'longpress': {
-        const [xStr, yStr, durationStr] = positionals;
-        if (xStr == null || yStr == null) return null;
-        const duration = durationStr ? Number(durationStr) / 1000 : 1.0;
-        const resp = await fastTap(Number(xStr), Number(yStr), duration);
-        if (!resp.ok) return null;
-        return okResult({ method: 'fast-runner' });
-      }
-      default:
-        return null;
+      const [xS, yS] = positionals;
+      return { command: 'tap', x: Number(xS), y: Number(yS), ...(bundleId ? { bundleId } : {}) };
     }
-  } catch {
-    return null;
+    case 'fill':
+    case 'type': {
+      // The Swift runner's `.type` command focuses an input at x/y AND types
+      // in one call (see RnFastRunnerTests+CommandExecution.swift:429-468 —
+      // `textInputAt(app:, x:, y:)` falls back to `focusedTextInput`). So no
+      // separate tap is needed: pass coords + text together.
+      const ref = positionals[0];
+      const text = positionals.slice(1).join(' ');
+      if (ref && ref.startsWith('@')) {
+        const center = refCenter(ref);
+        if (!center) {
+          return { command: 'type', _staleRef: ref, text, ...(bundleId ? { bundleId } : {}) };
+        }
+        return { command: 'type', x: center.x, y: center.y, text, ...(bundleId ? { bundleId } : {}) };
+      }
+      return { command: 'type', text, ...(bundleId ? { bundleId } : {}) };
+    }
+    case 'snapshot':
+      return { command: 'snapshot', interactiveOnly: true, ...(bundleId ? { bundleId } : {}) };
+    case 'back':
+      return { command: 'back', ...(bundleId ? { bundleId } : {}) };
+    case 'screenshot':
+      return { command: 'screenshot', ...(bundleId ? { bundleId } : {}) };
+    case 'keyboard':
+      return { command: 'dismissKeyboard', ...(bundleId ? { bundleId } : {}) };
+    case 'swipe':
+    case 'scroll': {
+      // Coordinate-based gesture. The Swift `.swipe` is tvOS-only; iOS
+      // coord-form gestures use `.drag`. CLI shapes seen:
+      //   ['swipe',  x1, y1, x2, y2, durationMs?]
+      //   ['scroll', x1, y1, x2, y2, durationMs?]
+      // Direction-form (`['scroll', 'down', amount?]`) cannot reach this
+      // path: device-interact converts direction→coords up-front and
+      // dispatches the coord shape.
+      const [x1S, y1S, x2S, y2S, durationS] = positionals;
+      const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
+      if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
+        throw new Error(`buildRunIOSArgs: ${cmd} requires four numeric coordinates`);
+      }
+      const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
+        command: 'drag', x: x1, y: y1, x2, y2,
+        ...(bundleId ? { bundleId } : {}),
+      };
+      if (durationS !== undefined) {
+        const n = Number(durationS);
+        if (!Number.isNaN(n)) args.durationMs = n;
+      }
+      return args;
+    }
+    case 'longpress': {
+      // CLI shape: ['longpress', x, y, durationMs?]
+      const [xS, yS, durationS] = positionals;
+      const x = Number(xS), y = Number(yS);
+      if (Number.isNaN(x) || Number.isNaN(y)) {
+        throw new Error(`buildRunIOSArgs: longpress requires numeric x, y`);
+      }
+      const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
+        command: 'longPress', x, y,
+        ...(bundleId ? { bundleId } : {}),
+      };
+      if (durationS !== undefined) {
+        const n = Number(durationS);
+        if (!Number.isNaN(n)) args.durationMs = n;
+      }
+      return args;
+    }
+    case 'pinch': {
+      // CLI shape: ['pinch', scale, x?, y?]
+      const [scaleS, xS, yS] = positionals;
+      const scale = Number(scaleS);
+      if (Number.isNaN(scale)) {
+        throw new Error(`buildRunIOSArgs: pinch requires numeric scale`);
+      }
+      const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
+        command: 'pinch', scale,
+        ...(bundleId ? { bundleId } : {}),
+      };
+      if (xS !== undefined && yS !== undefined) {
+        const x = Number(xS), y = Number(yS);
+        if (!Number.isNaN(x)) args.x = x;
+        if (!Number.isNaN(y)) args.y = y;
+      }
+      return args;
+    }
+    default:
+      throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? '<empty>'}"`);
   }
 }
 
@@ -455,15 +447,6 @@ interface AgentDeviceJsonError {
 }
 
 type AgentDeviceJson = AgentDeviceJsonSuccess | AgentDeviceJsonError;
-
-function cacheRefMapFromResult(result: ToolResult): void {
-  try {
-    const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: { nodes?: Array<{ ref: string; rect: { x: number; y: number; width: number; height: number } }> } };
-    if (envelope.ok && envelope.data?.nodes && Array.isArray(envelope.data.nodes)) {
-      updateRefMap(envelope.data.nodes);
-    }
-  } catch { /* not a snapshot response — ignore */ }
-}
 
 // Issue #103 — test-only override hook. Tests that exercise handlers
 // orchestrating agent-device snapshots (e.g. cdp_repair_action) can
@@ -516,37 +499,37 @@ export async function runAgentDevice(
     _testSeamFused = true;
     _testSeamFuseBlownBy = cliArgs[0] ?? '<empty>';
   }
+
+  // GH #105 iOS-MVP §3.1: iOS short-circuit. Every supported command goes
+  // through our rn-fast-runner HTTP client (no daemon, no CLI). The runner
+  // is started lazily — if no session has cold-launched it yet, we surface
+  // a clear failure so the agent can call device_snapshot action=open.
+  const targetPlatform = opts.platform ?? activeSession?.platform;
+  if (
+    targetPlatform === 'ios' &&
+    !opts.skipSession &&
+    RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])
+  ) {
+    const { runIOS } = await import('./runners/rn-fast-runner-client.js');
+    const ios = buildRunIOSArgs(cliArgs, activeSession?.appId ?? resolveBundleId('ios') ?? undefined);
+    return runIOS(ios);
+  }
+
   // GH #60: when an explicit platform is requested AND it doesn't match the
   // active session's platform (e.g. user asks for android while an iOS
   // session is active from prior work), skip the session-bound dispatch
-  // tiers (fast-runner, daemon) — they would otherwise route to the wrong
-  // device. Forcing CLI with `--platform` is correct in this case.
+  // tier — it would otherwise route to the wrong device. Forcing CLI with
+  // `--platform` is correct in this case.
   const platformMismatch =
     !!opts.platform && !!activeSession?.platform && opts.platform !== activeSession.platform;
   const sessionName = (!opts.skipSession && !platformMismatch && activeSession) ? activeSession.name : '';
-  const isSnapshotCmd = cliArgs[0] === 'snapshot';
 
-  // Fastest path: XCTest fast-runner HTTP (iOS only, ~5-30ms/op)
-  // Note: fast-runner snapshots return { tree: ... } (nested XCUIElement dict), not { nodes: [...] }
-  // (flat array with @refs). The ref map can only be populated from daemon/CLI snapshots.
-  // So we skip fast-runner for snapshot commands when ref map is empty — force daemon/CLI to populate it.
-  if (sessionName && activeSession?.platform === 'ios') {
-    if (isSnapshotCmd && !hasRefMap()) {
-      // Fall through to daemon/CLI to get a nodes-format snapshot that populates the ref map
-    } else {
-      const fastResult = await tryFastRunner(cliArgs[0], cliArgs.slice(1));
-      if (fastResult) return fastResult;
-    }
-  }
-
-  // Fast path: direct daemon socket (eliminates ~300ms CLI spawn)
+  // Fast path: direct daemon socket (Android only — iOS short-circuited above)
   if (sessionName && loadDaemonInfo()) {
     const command = cliArgs[0];
     const positionals = cliArgs.slice(1);
     try {
-      const daemonResult = await runViaDaemon(command, positionals, sessionName);
-      if (isSnapshotCmd && !daemonResult.isError) cacheRefMapFromResult(daemonResult);
-      return daemonResult;
+      return await runViaDaemon(command, positionals, sessionName);
     } catch {
       // Daemon unavailable — fall through to CLI
     }
@@ -584,9 +567,7 @@ export async function runAgentDevice(
       );
     }
 
-    const cliResult = okResult(parsed.data ?? {});
-    if (isSnapshotCmd) cacheRefMapFromResult(cliResult);
-    return cliResult;
+    return okResult(parsed.data ?? {});
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
 

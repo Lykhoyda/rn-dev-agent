@@ -7,7 +7,7 @@
 // domain/repair-engine.ts; this file is the I/O orchestration.
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice } from '../agent-device-wrapper.js';
+import { ensureFastRunner, getActiveSession, runAgentDevice } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { loadAction, saveAction, actionWasEditedExternally, } from '../domain/action-store.js';
@@ -16,7 +16,7 @@ import { repairBudgetAvailable } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel } from './runner-leak-recovery.js';
-import { stopFastRunner } from '../fast-runner-session.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 const execFile = promisify(execFileCb);
 /**
  * GH #105 / B153: bring the target app to foreground BEFORE taking the
@@ -40,6 +40,30 @@ const execFile = promisify(execFileCb);
  * error. iOS uses `simctl launch booted <bundleId>`; Android uses `am start`
  * via adb.
  */
+/**
+ * GH #105 iOS-MVP §3.7: discover the booted iOS simulator UDID when no active
+ * device session is present (the smoke-test path: cdp_run_action → auto-repair
+ * runs without anyone having called device_snapshot action=open). Uses simctl
+ * to enumerate booted devices and returns the first UDID — single-simulator
+ * setups, which is the supported configuration.
+ */
+async function resolveIOSDeviceIdForRepair() {
+    const session = getActiveSession();
+    if (session?.deviceId)
+        return session.deviceId;
+    try {
+        const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], { timeout: 5000, encoding: 'utf8' });
+        const data = JSON.parse(stdout);
+        for (const list of Object.values(data.devices ?? {})) {
+            for (const dev of list) {
+                if (dev.state === 'Booted' && dev.udid)
+                    return dev.udid;
+            }
+        }
+    }
+    catch { /* best-effort */ }
+    return undefined;
+}
 async function bringTargetAppToForeground(platform, bundleId) {
     // Kill the fast-runner FIRST so it can't re-grab focus the moment we
     // simctl-launch the test-app. Equivalent step exists in cdp_restart
@@ -129,8 +153,21 @@ export function createRepairActionHandler() {
         if (targetBundleId) {
             await bringTargetAppToForeground(targetPlatform, targetBundleId);
         }
+        // GH #105 iOS-MVP §3.7: bringTargetAppToForeground stopped any prior
+        // fast-runner. The next snapshot needs OUR runner up — start it lazily
+        // using the active session's deviceId, or fall back to simctl-discovery
+        // when the auto-repair path was reached without a device session open.
+        if (targetPlatform === 'ios' && targetBundleId) {
+            const deviceId = await resolveIOSDeviceIdForRepair();
+            if (deviceId) {
+                await ensureFastRunner(deviceId, targetBundleId);
+            }
+        }
         // Take a fresh device snapshot to see what testIDs are currently rendered.
-        const snapResult = await runAgentDevice(['snapshot', '-i']);
+        // GH #105 iOS-MVP: pass platform so runAgentDevice's iOS short-circuit fires
+        // and routes through rn-fast-runner — otherwise dispatch falls through to
+        // the legacy agent-device CLI path which hits the upstream AgentDeviceRunner.
+        const snapResult = await runAgentDevice(['snapshot', '-i'], { platform: targetPlatform });
         const snapEnvelope = snapResult.content?.[0]?.text ?? '';
         if (snapshotEnvelopeFailed(snapEnvelope)) {
             return failResult(`cdp_repair_action: snapshot failed while gathering candidate testIDs for "${args.actionId}" — agent-device unreachable`, 'SNAPSHOT_FAILED', {

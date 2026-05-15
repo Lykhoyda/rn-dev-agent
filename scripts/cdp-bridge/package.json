@@ -6,9 +6,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test 'test/unit/*.test.js'",
+    "test": "npm run build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js'",
     "test:integration": "npm run build && node --test 'test/integration/*.test.js'",
-    "test:all": "npm run build && node --test 'test/unit/*.test.js' 'test/integration/*.test.js'"
+    "test:all": "npm run build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/integration/*.test.js'"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -10,8 +10,10 @@ reports
 # Vendored native drivers (installed by agent-device)
 drivers/
 
-# Workspace symlinks (local dev only)
-scripts/fast-runner/build/
+# Xcode build artifacts for the imported iOS runner
+scripts/rn-fast-runner/build/
+scripts/rn-fast-runner/**/xcuserdata/
+scripts/rn-fast-runner/**/DerivedData/
 
 # Local worktrees for isolated feature work
 .worktrees/
