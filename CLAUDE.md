@@ -37,9 +37,10 @@ Development scaffolding lives in the **sibling workspace repo**:
 - **Node.js >= 22 LTS** (even-numbered release — NOT v25)
 - **iOS Simulator** booted with your app OR **Android Emulator** running
 - **Metro dev server** running (`npx expo start` or `npx react-native start`)
-- The following are auto-installed by the plugin but may need manual install if they fail:
-  - `agent-device` — `npm install -g agent-device`
-  - `maestro-runner` — auto-installed to `~/.maestro-runner/`
+- Platform-specific device-control runtime (one of):
+  - **iOS** — in-tree `rn-fast-runner` XCTest project ships with the plugin (`scripts/rn-fast-runner/`). Pre-build it once with a booted simulator: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData`. After that, the runner spawns lazily on the first `device_snapshot action=open`. iOS no longer requires `agent-device` (PR #164 / D1219).
+  - **Android** — `agent-device` CLI: `npm install -g agent-device` (auto-installed by the plugin; may need manual install if the auto-install fails).
+- `maestro-runner` — auto-installed to `~/.maestro-runner/`
 
 ### Essential commands
 ```
@@ -65,7 +66,9 @@ Development scaffolding lives in the **sibling workspace repo**:
 
 ### Troubleshooting
 - **"CDP connection failed"** → Is Metro running? Is the app loaded on the simulator?
-- **"agent-device not installed"** → Run `npm install -g agent-device`
+- **"agent-device not installed"** → Only required for Android. If targeting Android, run `npm install -g agent-device`. iOS uses the in-tree `rn-fast-runner` and does not need it.
+- **"rn-fast-runner did not become ready" / no `.xctestrun` at the expected path** → Pre-build the runner once with `xcodebuild build-for-testing` (see Prerequisites). The build artifacts live at `scripts/rn-fast-runner/build/DerivedData/`.
+- **Legacy `AgentDeviceRunner` re-appears on the simulator** → A stale `~/.agent-device/daemon.json` is respawning the upstream runner. Either run with `RN_DEVICE_KILL_LEGACY=1` (the plugin terminates the daemon at session-open) or `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.json ~/.agent-device/daemon.lock` one-time.
 - **"No booted simulator"** → Open Simulator.app or boot one via Xcode
 - **iOS 26.x beta issues** → Use iOS 18 stable runtime (Xcode > Settings > Platforms)
 - **Node.js odd version (v25)** → Switch to Node 22 LTS: `nvm install 22 && nvm use 22`
@@ -89,11 +92,16 @@ Three layers working together:
 
 | Layer | Tool | Role |
 |-------|------|------|
-| Device interaction | agent-device CLI (auto-installed) | Cross-platform native device control: tap, swipe, fill, find, snapshot, screenshot |
+| Device interaction (iOS) | In-tree `rn-fast-runner` XCTest rig (`scripts/rn-fast-runner/`) — single `POST /command` HTTP endpoint | Native iOS device control via XCTest. Always calls `XCUIApplication.activate()` per request so the target app is foregrounded (B155 / D1219). |
+| Device interaction (Android) | `agent-device` CLI (auto-installed) | Native Android device control: tap, swipe, fill, find, snapshot, screenshot |
 | App introspection | Custom MCP server → Hermes CDP via WebSocket | Persistent WebSocket — reads React fiber tree, store state, network, console, errors |
 | E2E testing | maestro-runner (preferred) / Maestro (fallback) | YAML-based persistent test files for CI |
 
-Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent-device is unavailable.
+iOS dispatch: every iOS `device_*` call short-circuits through `runIOS()` (TS client at `scripts/cdp-bridge/src/runners/rn-fast-runner-client.ts`) to the in-tree runner's `/command` endpoint. Coordinate-based gestures map to `.drag`; direction-based swipes/scrolls are pre-computed to coords by `device-interact.ts` before dispatch. `device_find` non-exact + `device_scrollintoview` are TS-side orchestrators over `runIOS('snapshot')` (no Swift `.findText` round-trip for fuzzy match — too coarse, returns bool only).
+
+Android dispatch unchanged: 3-tier `agent-device` (daemon socket → fast-runner → CLI). The legacy daemon is detected at session-open on iOS too and warned about (`RN_DEVICE_KILL_LEGACY=1` opts into termination) — a stale daemon respawns the upstream `AgentDeviceRunner` and fights our `RnFastRunner` for focus.
+
+Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / install / launch / terminate) — the runner doesn't manage device state, only interaction.
 
 ### MCP Server (cdp-bridge)
 
@@ -118,11 +126,15 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 - `cdp_set_shared_value` — set Reanimated SharedValue by testID for proof captures
 - `collect_logs` — parallel multi-source log collection
 
-**Device tools** (14 — native interaction via agent-device CLI):
+**Device tools** (14 — iOS: in-tree `rn-fast-runner` `/command` endpoint; Android: `agent-device` CLI):
 - `device_list` / `device_screenshot` / `device_snapshot`
 - `device_find` / `device_press` / `device_fill` / `device_swipe` / `device_scroll`
 - `device_scrollintoview` / `device_back` / `device_longpress` / `device_pinch`
 - `device_permission` / `device_batch`
+
+iOS-only quirks worth knowing:
+- `device_fill` may surface a Swift-internal `XCUIElement.typeText` quiescence-timeout from XCTest's main-thread sync. The TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`) because the side-effect (text appended to the field) demonstrably succeeds — observed across the iOS-MVP smoke-tests.
+- `device_find` non-exact + `device_scrollintoview` ALWAYS route through the TS orchestrators on iOS (never the legacy `agent-device find/scrollintoview` CLI), so they don't respawn the upstream `AgentDeviceRunner`.
 
 **Testing & composite tools** (13):
 - `proof_step` / `cross_platform_verify` / `maestro_run` / `maestro_generate` / `maestro_test_all`
@@ -136,7 +148,8 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle when agent
 - 3-tier interaction model: cdp_interact (JS) > device_press (XCTest) > Maestro (E2E) — D497
 - Hook-mode fallbacks for network body + CPU profile on RN < 0.83 — D597
 - Proactive __RN_AGENT freshness check before every tool call — D502
-- agent-device CLI wrapped via `agent-device-wrapper.ts` — 3-tier dispatch: fast-runner → daemon → CLI
+- iOS device verbs route through `rn-fast-runner-client.ts` (`runIOS()` → `/command`); Android keeps 3-tier `agent-device` dispatch (fast-runner → daemon → CLI) via `agent-device-wrapper.ts` — D1219, PR #164
+- `cdp_repair_action` self-bootstraps the iOS fast-runner on auto-repair (no pre-opened device session required) — D1220
 
 ## Conventions
 
