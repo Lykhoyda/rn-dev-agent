@@ -8,7 +8,7 @@ const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 const HTTP_TIMEOUT_MS = 10_000;
 const STATE_FILE = '/tmp/rn-fast-runner-state.json';
-const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', 'fast-runner');
+const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', 'rn-fast-runner');
 
 // --- Singleton state ---
 
@@ -26,6 +26,14 @@ export function getFastRunnerState(): FastRunnerState | null {
   return runnerState;
 }
 
+/**
+ * Test-only seam: inject a fake runner state so callers (e.g. rn-fast-runner-client)
+ * can be unit-tested without spawning xcodebuild. Production code must never call this.
+ */
+export function _setRunnerStateForTest(state: FastRunnerState | null): void {
+  runnerState = state;
+}
+
 export function isFastRunnerAvailable(): boolean {
   if (!runnerState) return false;
   try { process.kill(runnerState.pid, 0); return true; } catch { /* process dead */ }
@@ -40,10 +48,10 @@ export function startFastRunner(deviceId: string, bundleId: string, port = DEFAU
   if (runnerState) return Promise.resolve(runnerState);
 
   return new Promise((resolve, reject) => {
-    const projectPath = join(FAST_RUNNER_PROJECT, 'build', 'FastRunner.xcodeproj');
+    const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
 
     if (!existsSync(projectPath)) {
-      reject(new Error(`FastRunner.xcodeproj not found at ${projectPath}. Run xcodegen first.`));
+      reject(new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`));
       return;
     }
 
@@ -51,17 +59,16 @@ export function startFastRunner(deviceId: string, bundleId: string, port = DEFAU
     const args = [
       'test-without-building',
       '-project', projectPath,
-      '-scheme', 'FastRunnerApp',
+      '-scheme', 'RnFastRunner',
       '-destination', `platform=iOS Simulator,id=${deviceId}`,
       '-derivedDataPath', derivedDataPath,
-      '-only-testing:FastRunnerUITests/FastRunnerTests/testRunServer',
+      '-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand',
     ];
 
     const child = spawn('xcodebuild', args, {
       env: {
         ...process.env,
-        FAST_RUNNER_PORT: String(port),
-        TARGET_BUNDLE_ID: bundleId,
+        RN_FAST_RUNNER_PORT: String(port),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
