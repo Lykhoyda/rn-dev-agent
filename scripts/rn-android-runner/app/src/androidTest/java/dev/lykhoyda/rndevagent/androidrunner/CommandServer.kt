@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Anton Lykhoyda
+ * SPDX-License-Identifier: MIT
+ */
 package dev.lykhoyda.rndevagent.androidrunner
 
 import fi.iki.elonen.NanoHTTPD
@@ -28,6 +32,20 @@ class CommandServer(port: Int) : NanoHTTPD(port) {
             val raw = files["postData"] ?: "{}"
             val command = JSONObject(raw)
             json(Response.Status.OK, RunnerRuntime.dispatcher.dispatch(command))
+        } catch (e: NoFocusedInputException) {
+            json(
+                Response.Status.OK,
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", JSONObject().put("code", "NO_FOCUSED_INPUT").put("message", e.message ?: "no focused input"))
+            )
+        } catch (e: SnapshotParseException) {
+            json(
+                Response.Status.OK,
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", JSONObject().put("code", "SNAPSHOT_PARSE_FAILED").put("message", e.message ?: "snapshot parse failed"))
+            )
         } catch (t: Throwable) {
             json(
                 Response.Status.INTERNAL_ERROR,

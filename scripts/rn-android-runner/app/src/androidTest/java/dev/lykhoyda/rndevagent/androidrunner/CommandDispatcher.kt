@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Anton Lykhoyda
+ * SPDX-License-Identifier: MIT
+ */
 package dev.lykhoyda.rndevagent.androidrunner
 
 import android.app.Instrumentation
@@ -6,12 +10,14 @@ import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Base64
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.json.JSONArray
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -19,6 +25,10 @@ import java.util.regex.Pattern
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+
+class NoFocusedInputException(message: String) : IllegalStateException(message)
+
+class SnapshotParseException(message: String) : IllegalStateException(message)
 
 class CommandDispatcher(private val instrumentation: Instrumentation) {
     private val device: UiDevice = UiDevice.getInstance(instrumentation)
@@ -73,32 +83,39 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         parser.setInput(xml.reader())
 
-        var index = 0
-        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-            if (parser.eventType == XmlPullParser.START_TAG && parser.name == "node") {
-                val bounds = parseBounds(parser.getAttributeValue(null, "bounds"))
-                if (bounds != null) {
-                    val resourceId = parser.getAttributeValue(null, "resource-id").orEmpty()
-                    val text = parser.getAttributeValue(null, "text").orEmpty()
-                    val desc = parser.getAttributeValue(null, "content-desc").orEmpty()
-                    val className = parser.getAttributeValue(null, "class").orEmpty()
-                    val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
-                    val identifier = normalizeIdentifier(resourceId).ifBlank { desc }
+        try {
+            var index = 0
+            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == XmlPullParser.START_TAG && parser.name == "node") {
+                    val bounds = parseBounds(parser.getAttributeValue(null, "bounds"))
+                    if (bounds != null) {
+                        val resourceId = parser.getAttributeValue(null, "resource-id").orEmpty()
+                        val text = parser.getAttributeValue(null, "text").orEmpty()
+                        val desc = parser.getAttributeValue(null, "content-desc").orEmpty()
+                        val className = parser.getAttributeValue(null, "class").orEmpty()
+                        val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
+                        val identifier = normalizeIdentifier(resourceId).ifBlank { desc }
 
-                    nodes.put(
-                        JSONObject()
-                            .put("index", index)
-                            .put("type", className)
-                            .put("label", text.ifBlank { desc })
-                            .put("identifier", identifier)
-                            .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
-                            .put("hittable", visible)
-                            .put("enabled", parser.getAttributeValue(null, "enabled") != "false")
-                    )
-                    index += 1
+                        nodes.put(
+                            JSONObject()
+                                .put("index", index)
+                                .put("type", className)
+                                .put("label", text.ifBlank { desc })
+                                .put("identifier", identifier)
+                                .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
+                                .put("hittable", visible)
+                                .put("enabled", parser.getAttributeValue(null, "enabled") != "false")
+                        )
+                        index += 1
+                    }
                 }
+                parser.next()
             }
-            parser.next()
+        } catch (e: XmlPullParserException) {
+            val head = xml.take(512)
+            throw SnapshotParseException(
+                "UIAutomator window-hierarchy XML failed to parse: ${e.message ?: e.javaClass.simpleName}. Head: $head"
+            )
         }
 
         return JSONObject().put("nodes", nodes)
@@ -118,11 +135,10 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         }
 
         val focused = device.findObject(By.focused(true))
-        if (focused != null) {
-            focused.text = text
-        } else {
-            device.executeShellCommand("input text ${shellEscapeForInputText(text)}")
-        }
+            ?: throw NoFocusedInputException(
+                "No focused text input on screen. The TS device_fill handler should re-tap the target ref before calling type."
+            )
+        focused.text = text
 
         return JSONObject().put("typed", true).put("text", text)
     }
@@ -164,10 +180,14 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val obj = findByTextOrId(text, exact)
             ?: return JSONObject().put("found", false).put("text", text)
 
-        return JSONObject()
-            .put("found", true)
-            .put("text", text)
-            .put("node", uiObjectToJson(obj))
+        return try {
+            JSONObject()
+                .put("found", true)
+                .put("text", text)
+                .put("node", uiObjectToJson(obj))
+        } catch (e: StaleObjectException) {
+            JSONObject().put("found", false).put("text", text).put("stale", true)
+        }
     }
 
     private fun screenshot(): JSONObject {
@@ -181,7 +201,9 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
 
     private fun findByTextOrId(query: String, exact: Boolean): UiObject2? {
         val safe = Pattern.quote(query)
-        val idPattern = Pattern.compile(".*(:id/)?$safe$")
+        // Anchor at start; require explicit `:id/` separator; match query as the
+        // complete id-name (no suffix bleed-through like `cancel_submit` matching `submit`).
+        val idPattern = Pattern.compile("^[^:]+:id/$safe$")
         return device.findObject(By.res(idPattern))
             ?: device.findObject(By.desc(query))
             ?: device.findObject(By.text(query))
@@ -211,10 +233,6 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
 
     private fun durationToSteps(durationMs: Int): Int {
         return (durationMs / 5).coerceIn(1, 200)
-    }
-
-    private fun shellEscapeForInputText(text: String): String {
-        return text.replace(" ", "%s").replace("'", "\\'")
     }
 
     private fun error(code: String, message: String): JSONObject {

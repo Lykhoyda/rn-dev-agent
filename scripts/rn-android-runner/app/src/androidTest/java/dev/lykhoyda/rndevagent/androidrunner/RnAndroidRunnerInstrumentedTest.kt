@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Anton Lykhoyda
+ * SPDX-License-Identifier: MIT
+ */
 package dev.lykhoyda.rndevagent.androidrunner
 
 import android.util.Log
@@ -6,6 +10,7 @@ import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.Configurator
 import fi.iki.elonen.NanoHTTPD
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,7 +50,19 @@ class RnAndroidRunnerInstrumentedTest {
     @Test
     fun mainLoop() {
         while (!Thread.currentThread().isInterrupted) {
-            Thread.sleep(1_000)
+            try {
+                Thread.sleep(1_000)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
+    }
+
+    @After
+    fun stopServer() {
+        if (::server.isInitialized) {
+            server.stop()
         }
     }
 }
