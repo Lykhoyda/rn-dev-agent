@@ -220,45 +220,16 @@ export function stopFastRunner(): void {
   try { unlinkSync(STATE_FILE); } catch { /* ignore */ }
 }
 
-// --- HTTP client (legacy /tap, /snapshot routes — kept for device-interact.ts swipe + other callers) ---
-
-async function postJSON<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  if (!runnerState) throw new Error('Fast runner not started');
-  const url = `http://[::1]:${runnerState.port}${path}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`HTTP ${res.status}: ${text}`);
-    }
-    return await res.json() as T;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function postBinary(path: string): Promise<Buffer> {
-  if (!runnerState) throw new Error('Fast runner not started');
-  const url = `http://[::1]:${runnerState.port}${path}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { method: 'POST', signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// --- Legacy route methods (kept for device-interact.ts swipe path + restart hooks) ---
+// --- Legacy helper kept for device-interact.ts swipe path ---
+//
+// GH #105 iOS-MVP follow-up: the upstream agent-device runner exposed
+// per-verb HTTP endpoints (/tap, /swipe, /snapshot, /screenshot, /dismissKeyboard).
+// Our in-tree RnFastRunner only exposes a single POST /command with
+// {command: '...', ...payload}. The unused fastTap/fastType/fastSnapshot/
+// fastScreenshot/fastDismissKeyboard helpers were dead code post-Task 8 —
+// dropped. fastSwipe still has callers in device-interact.ts so it stays,
+// but now composes the right /command shape: a coordinate-based gesture
+// uses the runner's `.drag` case (`.swipe` is tvOS-only per the Swift handler).
 
 interface FastRunnerResponse {
   ok: boolean;
@@ -267,28 +238,11 @@ interface FastRunnerResponse {
   [key: string]: unknown;
 }
 
-export async function fastTap(x: number, y: number, duration?: number): Promise<FastRunnerResponse> {
-  return postJSON('/tap', { x, y, ...(duration != null ? { duration } : {}) });
-}
-
-export async function fastType(text: string): Promise<FastRunnerResponse> {
-  return postJSON('/type', { text });
-}
-
 export async function fastSwipe(x1: number, y1: number, x2: number, y2: number, durationMs?: number): Promise<FastRunnerResponse> {
-  return postJSON('/swipe', { x1, y1, x2, y2, ...(durationMs != null ? { durationMs } : {}) });
-}
-
-export async function fastSnapshot(bundleId?: string): Promise<FastRunnerResponse> {
-  return postJSON('/snapshot', bundleId ? { bundleId } : {});
-}
-
-export async function fastScreenshot(): Promise<Buffer> {
-  return postBinary('/screenshot');
-}
-
-export async function fastDismissKeyboard(): Promise<FastRunnerResponse> {
-  return postJSON('/dismissKeyboard');
+  const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
+  if (durationMs != null) body.durationMs = durationMs;
+  const resp = await postCommand(body);
+  return resp as unknown as FastRunnerResponse;
 }
 
 // --- Health check ---
@@ -453,6 +407,10 @@ export interface RunIOSArgs {
     | 'snapshot'
     | 'tap'
     | 'swipe'
+    | 'drag'
+    | 'longPress'
+    | 'pinch'
+    | 'findText'
     | 'type'
     | 'dismissKeyboard'
     | 'screenshot'
@@ -472,6 +430,7 @@ export interface RunIOSArgs {
   text?: string;
   durationMs?: number;
   direction?: 'up' | 'down' | 'left' | 'right';
+  scale?: number;
   interactiveOnly?: boolean;
   compact?: boolean;
   depth?: number;
@@ -572,6 +531,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.text !== undefined) body.text = args.text;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
   if (args.direction !== undefined) body.direction = args.direction;
+  if (args.scale !== undefined) body.scale = args.scale;
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
   if (args.compact !== undefined) body.compact = args.compact;
   if (args.depth !== undefined) body.depth = args.depth;

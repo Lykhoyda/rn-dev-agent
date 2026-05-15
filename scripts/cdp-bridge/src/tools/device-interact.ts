@@ -275,6 +275,41 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
       );
     }
 
+    // GH #105 iOS-MVP follow-up: on iOS, the legacy `agent-device find` CLI
+    // path respawns the upstream AgentDeviceRunner via the daemon, which then
+    // fights our RnFastRunner for focus. Use the snapshot-based orchestrator
+    // instead — same result without the daemon round-trip. Android still
+    // uses the CLI fuzzy matcher (its daemon doesn't have the same focus race).
+    const activeSession = getActiveSession();
+    if (activeSession?.platform === 'ios') {
+      const find = await fetchFindCandidates(args.text, false);
+      if (!find.ok) {
+        if (find.reason === 'runner-leak-unrecovered') {
+          return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        return failResult(
+          `Snapshot unavailable — cannot resolve "${args.text}" on iOS`,
+          { code: 'SNAPSHOT_UNAVAILABLE', query: args.text },
+        );
+      }
+      const { candidates, recoveredTier } = find;
+      if (candidates.length === 0) {
+        return failResult(`No element matches "${args.text}"`, { code: 'NOT_FOUND', query: args.text });
+      }
+      if (candidates.length === 1) {
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+      }
+      return failResult(
+        `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`,
+        {
+          code: 'AMBIGUOUS_MATCH',
+          query: args.text,
+          candidates,
+          hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
+        },
+      );
+    }
+
     const cliArgs = ['find', args.text];
     if (args.action) cliArgs.push(args.action);
     const result = await runAgentDevice(cliArgs);
@@ -871,16 +906,91 @@ interface ScrollIntoViewArgs {
 }
 
 export function createDeviceScrollIntoViewHandler(): (args: ScrollIntoViewArgs) => Promise<ToolResult> {
-  return withSession((args) => {
+  return withSession(async (args) => {
+    if (!args.ref && !args.text) {
+      return failResult('Provide either text or ref to scroll into view');
+    }
+    // GH #105 iOS-MVP follow-up: the Swift runner has no `scrollintoview`
+    // command; this is TS-orchestrated on iOS (snapshot → find → swipe loop).
+    // Android keeps the legacy CLI delegate (agent-device handles it natively).
+    const session = getActiveSession();
+    if (session?.platform === 'ios') {
+      return scrollIntoViewIOS(args);
+    }
     if (args.ref) {
       const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
       return runAgentDevice(['scrollintoview', ref]);
     }
-    if (args.text) {
-      return runAgentDevice(['scrollintoview', args.text]);
-    }
-    return Promise.resolve(failResult('Provide either text or ref to scroll into view'));
+    return runAgentDevice(['scrollintoview', args.text!]);
   });
+}
+
+/**
+ * GH #105 iOS-MVP follow-up: TS orchestrator for device_scrollintoview on iOS.
+ * Loops snapshot → find → check viewport → swipe up to MAX_ITERATIONS times.
+ * Uses the runner's `/command` snapshot + drag verbs exclusively — no daemon.
+ */
+async function scrollIntoViewIOS(args: ScrollIntoViewArgs): Promise<ToolResult> {
+  const MAX_ITERATIONS = 12;
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const screenRect: ViewportRect = { x: 0, y: 0, width: screen.width, height: screen.height };
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
+    const snapRes = await runAgentDevice(['snapshot', '-i']);
+    if (snapRes.isError) {
+      return failResult(
+        `scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? 'unknown'}`,
+        { code: 'SNAPSHOT_UNAVAILABLE' },
+      );
+    }
+    let nodes: FlatNode[] = [];
+    try {
+      const envelope = JSON.parse(snapRes.content?.[0]?.text ?? '{}') as { data?: { nodes?: FlatNode[] } };
+      nodes = envelope.data?.nodes ?? [];
+    } catch {
+      return failResult(`scrollintoview: failed to parse snapshot envelope at iteration ${i}`);
+    }
+    const target = args.ref
+      ? nodes.find((n) => n.ref === (args.ref!.startsWith('@') ? args.ref : `@${args.ref!}`)) ?? null
+      : findInLatestSnapshot(nodes, args.text!);
+    if (!target) {
+      // Element not in snapshot at all; can't decide direction. Probably needs
+      // initial scroll. Default to swiping up (down-direction-of-content) once
+      // and retry — common case is reaching a below-fold element.
+      if (i === 0) {
+        const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect);
+        const coords = computeSwipeFromDirection(fallbackDir ?? 'down', screen);
+        await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, DEFAULT_SWIPE_DURATION_MS);
+        continue;
+      }
+      return failResult(
+        `scrollintoview: element "${args.ref ?? args.text}" not found after ${i} swipe iteration(s)`,
+        { code: 'NOT_FOUND', iterations: i },
+      );
+    }
+    if (!target.rect) {
+      return failResult(`scrollintoview: target has no rect — cannot decide direction`);
+    }
+    const direction = decideScrollDirection(target.rect, screenRect);
+    if (direction === null) {
+      return okResult({
+        ref: target.ref,
+        rect: target.rect,
+        iterations: i,
+        method: 'fast-runner',
+      });
+    }
+    const coords = computeSwipeFromDirection(direction, screen);
+    const swipeResp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, DEFAULT_SWIPE_DURATION_MS);
+    if (!swipeResp.ok) {
+      return failResult(
+        `scrollintoview: swipe failed at iteration ${i}: ${swipeResp.error ?? 'unknown'}`,
+      );
+    }
+  }
+  return failResult(
+    `scrollintoview: target "${args.ref ?? args.text}" did not enter viewport after ${MAX_ITERATIONS} swipe iterations`,
+    { code: 'SCROLL_EXHAUSTED', iterations: MAX_ITERATIONS },
+  );
 }
 
 // --- Pinch ---

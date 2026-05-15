@@ -259,11 +259,14 @@ export function getAdbSerial() {
 // the new client expects. The legacy daemon + CLI tiers below remain — they
 // now serve Android exclusively.
 //
-// Commands intentionally NOT in this set:
-//   - longpress (Swift runner has no longPress-by-ref code path; if needed,
-//     callers can compose tap with durationMs)
-//   - swipe / scroll already route through fast-runner directly inside
-//     device-interact.ts via fastSwipe(), bypassing runAgentDevice entirely.
+// GH #105 iOS-MVP follow-up (post-validation): the original short-circuit
+// list left `swipe` / `scroll` / `longpress` / `pinch` / `find` on the
+// legacy daemon/CLI path. Live validation showed the daemon respawns the
+// upstream AgentDeviceRunner on every such call, which then fights our
+// RnFastRunner for focus. Each of these now routes through the runner's
+// `/command` endpoint (the Swift `.drag` / `.longPress` / `.pinch` / `.findText`
+// handlers). Coordinate-based gestures: the Swift `.swipe` case is tvOS-only;
+// iOS coordinate-form swipes/scrolls use `.drag`.
 const RN_FAST_RUNNER_COMMANDS = new Set([
     'snapshot',
     'tap',
@@ -273,6 +276,10 @@ const RN_FAST_RUNNER_COMMANDS = new Set([
     'back',
     'screenshot',
     'keyboard',
+    'swipe',
+    'scroll',
+    'longpress',
+    'pinch',
 ]);
 export function getCachedScreenRect() {
     return getScreenRect();
@@ -319,6 +326,69 @@ function buildRunIOSArgs(cliArgs, bundleId) {
             return { command: 'screenshot', ...(bundleId ? { bundleId } : {}) };
         case 'keyboard':
             return { command: 'dismissKeyboard', ...(bundleId ? { bundleId } : {}) };
+        case 'swipe':
+        case 'scroll': {
+            // Coordinate-based gesture. The Swift `.swipe` is tvOS-only; iOS
+            // coord-form gestures use `.drag`. CLI shapes seen:
+            //   ['swipe',  x1, y1, x2, y2, durationMs?]
+            //   ['scroll', x1, y1, x2, y2, durationMs?]
+            // Direction-form (`['scroll', 'down', amount?]`) cannot reach this
+            // path: device-interact converts direction→coords up-front and
+            // dispatches the coord shape.
+            const [x1S, y1S, x2S, y2S, durationS] = positionals;
+            const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
+            if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
+                throw new Error(`buildRunIOSArgs: ${cmd} requires four numeric coordinates`);
+            }
+            const args = {
+                command: 'drag', x: x1, y: y1, x2, y2,
+                ...(bundleId ? { bundleId } : {}),
+            };
+            if (durationS !== undefined) {
+                const n = Number(durationS);
+                if (!Number.isNaN(n))
+                    args.durationMs = n;
+            }
+            return args;
+        }
+        case 'longpress': {
+            // CLI shape: ['longpress', x, y, durationMs?]
+            const [xS, yS, durationS] = positionals;
+            const x = Number(xS), y = Number(yS);
+            if (Number.isNaN(x) || Number.isNaN(y)) {
+                throw new Error(`buildRunIOSArgs: longpress requires numeric x, y`);
+            }
+            const args = {
+                command: 'longPress', x, y,
+                ...(bundleId ? { bundleId } : {}),
+            };
+            if (durationS !== undefined) {
+                const n = Number(durationS);
+                if (!Number.isNaN(n))
+                    args.durationMs = n;
+            }
+            return args;
+        }
+        case 'pinch': {
+            // CLI shape: ['pinch', scale, x?, y?]
+            const [scaleS, xS, yS] = positionals;
+            const scale = Number(scaleS);
+            if (Number.isNaN(scale)) {
+                throw new Error(`buildRunIOSArgs: pinch requires numeric scale`);
+            }
+            const args = {
+                command: 'pinch', scale,
+                ...(bundleId ? { bundleId } : {}),
+            };
+            if (xS !== undefined && yS !== undefined) {
+                const x = Number(xS), y = Number(yS);
+                if (!Number.isNaN(x))
+                    args.x = x;
+                if (!Number.isNaN(y))
+                    args.y = y;
+            }
+            return args;
+        }
         default:
             throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }

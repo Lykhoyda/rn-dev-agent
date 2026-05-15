@@ -2,29 +2,26 @@
 //  ContentView.swift
 //  RnFastRunner
 //
-//  Created by Michał Pierzchała on 30/01/2026.
-//
 
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        Spacer(minLength: 16)
         VStack {
-            Image("Logo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            Text("rn-dev-agent fast runner")
-                .padding(.top, 16)
+            Spacer()
+            Text("rn-dev-agent")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("fast runner")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+            Spacer()
+            Text("XCUITest bridge")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 24)
         }
-        Spacer(minLength: 16)
-        Image("PoweredBy")
-            .resizable()
-            .scaledToFit()
-            .frame(width: 180, height: 44)
-            .opacity(0.8)
         .padding()
     }
 }

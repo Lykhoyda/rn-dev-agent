@@ -197,63 +197,12 @@ export function stopFastRunner() {
     }
     catch { /* ignore */ }
 }
-// --- HTTP client (legacy /tap, /snapshot routes — kept for device-interact.ts swipe + other callers) ---
-async function postJSON(path, body) {
-    if (!runnerState)
-        throw new Error('Fast runner not started');
-    const url = `http://[::1]:${runnerState.port}${path}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-    try {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: body ? { 'Content-Type': 'application/json' } : undefined,
-            body: body ? JSON.stringify(body) : undefined,
-            signal: controller.signal,
-        });
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`HTTP ${res.status}: ${text}`);
-        }
-        return await res.json();
-    }
-    finally {
-        clearTimeout(timer);
-    }
-}
-async function postBinary(path) {
-    if (!runnerState)
-        throw new Error('Fast runner not started');
-    const url = `http://[::1]:${runnerState.port}${path}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-    try {
-        const res = await fetch(url, { method: 'POST', signal: controller.signal });
-        if (!res.ok)
-            throw new Error(`HTTP ${res.status}`);
-        return Buffer.from(await res.arrayBuffer());
-    }
-    finally {
-        clearTimeout(timer);
-    }
-}
-export async function fastTap(x, y, duration) {
-    return postJSON('/tap', { x, y, ...(duration != null ? { duration } : {}) });
-}
-export async function fastType(text) {
-    return postJSON('/type', { text });
-}
 export async function fastSwipe(x1, y1, x2, y2, durationMs) {
-    return postJSON('/swipe', { x1, y1, x2, y2, ...(durationMs != null ? { durationMs } : {}) });
-}
-export async function fastSnapshot(bundleId) {
-    return postJSON('/snapshot', bundleId ? { bundleId } : {});
-}
-export async function fastScreenshot() {
-    return postBinary('/screenshot');
-}
-export async function fastDismissKeyboard() {
-    return postJSON('/dismissKeyboard');
+    const body = { command: 'drag', x: x1, y: y1, x2, y2 };
+    if (durationMs != null)
+        body.durationMs = durationMs;
+    const resp = await postCommand(body);
+    return resp;
 }
 // --- Health check ---
 export async function fastHealthCheck() {
@@ -434,6 +383,8 @@ export async function runIOS(args) {
         body.durationMs = args.durationMs;
     if (args.direction !== undefined)
         body.direction = args.direction;
+    if (args.scale !== undefined)
+        body.scale = args.scale;
     if (args.interactiveOnly !== undefined)
         body.interactiveOnly = args.interactiveOnly;
     if (args.compact !== undefined)
