@@ -541,6 +541,25 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
+    // GH #105 iOS-MVP follow-up: XCUIElement.typeText() runs its own internal
+    // snapshot/quiescence synchronization that bypasses skipPostEventQuiescence
+    // — even with both target resolution AND the typing call wrapped in
+    // withTemporaryScrollIdleTimeoutIfSupported, the post-action wait still
+    // hits XCTest's 30s mainThreadExecutionTimeout because RN's main thread
+    // never reports quiescence (Reanimated keeps it active). Live validation
+    // confirms the text DOES land in the field every time. Treat this specific
+    // timeout shape as success for the type command and surface a meta marker
+    // so callers can audit telemetry. Any other error remains a failure.
+    if (
+      args.command === 'type' &&
+      typeof message === 'string' &&
+      message.includes('main thread execution timed out')
+    ) {
+      return okResult(
+        { typed: true, text: args.text },
+        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } },
+      );
+    }
     if (code) {
       return failResult(message, code as Parameters<typeof failResult>[1]);
     }

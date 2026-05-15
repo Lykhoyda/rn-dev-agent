@@ -431,39 +431,52 @@ extension RnFastRunnerTests {
         return Response(ok: false, error: ErrorPayload(message: "type requires text"))
       }
       let delaySeconds = Double(max(command.delayMs ?? 0, 0)) / 1000.0
-      let target: XCUIElement?
-      if let x = command.x, let y = command.y {
-        target = textInputAt(app: activeApp, x: x, y: y) ?? focusedTextInput(app: activeApp)
-      } else {
-        target = focusedTextInput(app: activeApp)
+      // GH #105 iOS-MVP follow-up: every step that touches XCTest's element
+      // resolver (textInputAt / focusedTextInput walk `descendants(...).allElementsBoundByIndex`)
+      // OR triggers `typeText()` must run under withTemporaryScrollIdleTimeoutIfSupported.
+      // Without it, RN's never-quiescing main thread (Reanimated keeps the
+      // loop active) causes XCTest's default waitForIdle to throw "main thread
+      // execution timed out" — even though the underlying typing succeeded.
+      var target: XCUIElement?
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        if let x = command.x, let y = command.y {
+          target = textInputAt(app: activeApp, x: x, y: y) ?? focusedTextInput(app: activeApp)
+        } else {
+          target = focusedTextInput(app: activeApp)
+        }
       }
+      let resolvedTarget = target
       func typeIntoTarget(_ value: String) {
-        if let focused = target {
+        if let focused = resolvedTarget {
           focused.typeText(value)
         } else {
           activeApp.typeText(value)
         }
       }
       if command.clearFirst == true {
-        guard let focused = target else {
+        guard let focused = resolvedTarget else {
           let message =
             (command.x != nil && command.y != nil)
             ? "no text input found at the provided coordinates to clear"
             : "no focused text input to clear"
           return Response(ok: false, error: ErrorPayload(message: message))
         }
-        clearTextInput(focused)
-      }
-      if delaySeconds > 0 && text.count > 1 {
-        let chunks = Array(text)
-        for (index, character) in chunks.enumerated() {
-          typeIntoTarget(String(character))
-          if index + 1 < chunks.count {
-            Thread.sleep(forTimeInterval: delaySeconds)
-          }
+        withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+          clearTextInput(focused)
         }
-      } else {
-        typeIntoTarget(text)
+      }
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        if delaySeconds > 0 && text.count > 1 {
+          let chunks = Array(text)
+          for (index, character) in chunks.enumerated() {
+            typeIntoTarget(String(character))
+            if index + 1 < chunks.count {
+              Thread.sleep(forTimeInterval: delaySeconds)
+            }
+          }
+        } else {
+          typeIntoTarget(text)
+        }
       }
       return Response(ok: true, data: DataPayload(message: "typed"))
     case .interactionFrame:
