@@ -15,7 +15,7 @@ import AppKit
 typealias RunnerImage = NSImage
 #endif
 
-final class RnFastRunnerTests: XCTestCase {
+class RnFastRunnerTests: XCTestCase {
   enum RunnerErrorDomain {
     static let general = "RnFastRunner"
     static let exception = "RnFastRunner.NSException"
