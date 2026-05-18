@@ -23,7 +23,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -56,12 +56,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Xcode (Swift)
-        if: matrix.language == 'swift'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -73,18 +67,26 @@ jobs:
         working-directory: scripts/rn-android-runner
         run: ./gradlew :app:assembleDebugAndroidTest --no-daemon
 
+      # Use the macos-15 runner's preinstalled Xcode (16.x); skip the slow
+      # `maxim-lobanov/setup-xcode` action. Build for the iphonesimulator SDK
+      # without requiring a specific device — CodeQL only needs the compile
+      # commands traced, not a runnable test bundle.
       - name: Build rn-fast-runner
         if: matrix.language == 'swift'
         working-directory: scripts/rn-fast-runner/RnFastRunner
         run: |
-          xcodebuild build-for-testing \
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild build \
             -project RnFastRunner.xcodeproj \
             -scheme RnFastRunner \
-            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphonesimulator \
+            -configuration Debug \
             -derivedDataPath ../build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=YES
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
