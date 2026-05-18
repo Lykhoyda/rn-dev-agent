@@ -8,6 +8,14 @@ import { isValidBundleId } from '../domain/maestro-validator.js';
 const execFileAsync = promisify(execFile);
 const EXEC_TIMEOUT = 10_000;
 
+// CodeQL js/incomplete-sanitization (alerts #1 #2): the prior pattern
+// `androidKey.replace(/\./g, '\\.')` only escaped dots. Production
+// ANDROID_PERMISSIONS values are always `android.permission.X` so dot-only
+// escaping was safe in practice — but defense in depth is cheap.
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const IOS_PERMISSIONS: Record<string, string> = {
   notifications: 'notifications',
   camera: 'camera',
@@ -107,7 +115,7 @@ async function androidQueryPermission(permission: string, appId: string): Promis
       const deniedPerms: string[] = [];
 
       for (const [key, androidKey] of Object.entries(ANDROID_PERMISSIONS)) {
-        const re = new RegExp(`${androidKey.replace(/\./g, '\\.')}:.*granted=(true|false)`, 'i');
+        const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, 'i');
         const match = stdout.match(re);
         if (match) {
           (match[1] === 'true' ? grantedPerms : deniedPerms).push(key);

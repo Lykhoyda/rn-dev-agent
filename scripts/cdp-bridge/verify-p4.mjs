@@ -27,7 +27,9 @@ function parseSnapshotNodes(xml) {
   for (const m of xml.matchAll(nodeRe)) {
     const n = m[0];
     const ref = n.match(/ resource-id="([^"]*)"/)?.[1] ?? '';
-    const label = n.match(/ text="([^"]*)"/)?.[1]?.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') ?? undefined;
+    // CodeQL js/double-escaping (alert #19): decode `&amp;` LAST. Decoding it
+    // first would incorrectly turn `&amp;lt;` (literal text `&lt;`) into `<`.
+    const label = n.match(/ text="([^"]*)"/)?.[1]?.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') ?? undefined;
     const type = n.match(/ class="([^"]*)"/)?.[1]?.split('.').pop() ?? undefined;
     const identifier = n.match(/ content-desc="([^"]*)"/)?.[1] || ref || undefined;
     if (label || identifier) {

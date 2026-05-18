@@ -37,8 +37,11 @@ for (const file of files) {
     tags = '';
   }
 
+  // CodeQL js/incomplete-sanitization (alert #14): escape backslashes BEFORE
+  // double-quotes so we don't double-escape a pre-existing `\"` into `\\"`.
+  const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const mdx = `---
-title: "${title.replace(/"/g, '\\"')}"
+title: "${escapedTitle}"
 description: "${impact} impact — ${tags}"
 ---
 ${body}`;

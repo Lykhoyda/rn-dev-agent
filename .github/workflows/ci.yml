@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# CodeQL actions/missing-workflow-permissions (alerts #27 #28):
+# declare minimal permissions at the workflow level. Both jobs only
+# read source and run tests — they never push, comment, or release.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Build & Test

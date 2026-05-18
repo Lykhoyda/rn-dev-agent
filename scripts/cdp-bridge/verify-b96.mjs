@@ -53,13 +53,15 @@ function readFocusedField() {
   return null;
 }
 
+// CodeQL js/double-escaping (alert #18): decode `&amp;` LAST. Decoding it
+// first would incorrectly turn `&amp;lt;` (literal text `&lt;`) into `<`.
 function decodeXml(s) {
   return s
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 function runOne(input) {

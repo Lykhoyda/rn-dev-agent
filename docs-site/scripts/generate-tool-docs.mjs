@@ -202,8 +202,18 @@ function escapeYaml(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+// CodeQL js/incomplete-sanitization (alerts #15 #16): the prior shape
+// escaped {, }, and < but not > or &. For a function named `escapeMdx`
+// the defensive expectation is full MDX-safe HTML entity escaping.
+// `&` MUST be escaped FIRST so we don't double-escape entities we just
+// emitted (e.g. converting `&lt;` to `&amp;lt;`).
 function escapeMdx(str) {
-  return str.replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/</g, '&lt;');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}');
 }
 
 function generateMdx(tool) {
