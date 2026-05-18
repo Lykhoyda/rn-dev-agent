@@ -49,14 +49,14 @@ test('decideScrollDirection: element above viewport → swipe down to reveal', (
 
 test('scrollintoview: Android runner env uses snapshot/swipe orchestrator', async () => {
   const previous = process.env.RN_ANDROID_RUNNER;
-  process.env.RN_ANDROID_RUNNER = '1';
+  delete process.env.RN_ANDROID_RUNNER;
   try {
     const source = readFileSync(
       '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/tools/device-interact.ts',
       'utf8',
     );
     assert.match(source, /session\?\.platform === 'android'/);
-    assert.match(source, /RN_ANDROID_RUNNER === '1'/);
+    assert.match(source, /RN_ANDROID_RUNNER !== '0'/);
     assert.doesNotMatch(source, /runAgentDevice\(\['scrollintoview'/);
   } finally {
     if (previous === undefined) delete process.env.RN_ANDROID_RUNNER;

@@ -139,9 +139,9 @@ export function createDeviceSnapshotHandler() {
                     .catch(() => { });
                 // Task 9 of Android-MVP: warn on competing Android UIAutomator /
                 // agent-device processes that would contend for input + focus with
-                // our rn-android-runner. Only fires when RN_ANDROID_RUNNER=1 is set
-                // (the flag the runner is gated on).
-                if (args.platform === 'android' && process.env.RN_ANDROID_RUNNER === '1') {
+                // our rn-android-runner. Fires by default (Task 11 flipped the
+                // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
+                if (args.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
                     detectAndroidExternalRunner(undefined, getAdbSerial())
                         .then((warning) => {
                         if (!warning)

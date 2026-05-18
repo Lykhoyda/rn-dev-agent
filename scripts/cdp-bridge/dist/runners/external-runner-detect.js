@@ -65,7 +65,7 @@ export async function detectAndroidExternalRunner(execFileImpl = execFile, seria
         return {
             platform: 'android',
             code: 'ANDROID_UIAUTOMATOR_COMPETITOR',
-            message: 'A competing Android UIAutomator or agent-device process is running. Stop it before enabling RN_ANDROID_RUNNER=1 to avoid focus and input contention.',
+            message: 'A competing Android UIAutomator or agent-device process is running. Stop it (or opt out of the in-tree runner with RN_ANDROID_RUNNER=0) to avoid focus and input contention.',
             processLines: lines,
         };
     }

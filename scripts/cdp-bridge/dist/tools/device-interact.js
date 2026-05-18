@@ -208,13 +208,14 @@ export function createDeviceFindHandler() {
         }
         // GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: route
         // non-exact text finds through the snapshot-based orchestrator on iOS
-        // always and on Android when RN_ANDROID_RUNNER=1. The legacy CLI path
-        // would respawn the upstream agent-device daemon, which fights our
-        // in-tree runner for focus / UIAutomator. Using runAgentDevice +
-        // fetchFindCandidates keeps us on the platform-aware short-circuit.
+        // always and on Android (default-on; opt-out via RN_ANDROID_RUNNER=0).
+        // The legacy CLI path would respawn the upstream agent-device daemon,
+        // which fights our in-tree runner for focus / UIAutomator. Using
+        // runAgentDevice + fetchFindCandidates keeps us on the platform-aware
+        // short-circuit.
         const activeSession = getActiveSession();
         const usesInTreeRunner = activeSession?.platform === 'ios' ||
-            (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER === '1');
+            (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
         if (usesInTreeRunner) {
             const find = await fetchFindCandidates(args.text, false);
             if (!find.ok) {
@@ -739,19 +740,20 @@ export function createDeviceScrollIntoViewHandler() {
         // GH #105 iOS-MVP follow-up: the Swift runner has no `scrollintoview`
         // command; this is TS-orchestrated on iOS (snapshot → find → swipe loop).
         // Task 8 of the Android MVP plan extends the same orchestrator to
-        // Android behind RN_ANDROID_RUNNER=1 — the snapshot + swipe verbs route
-        // through the platform-aware short-circuit in runAgentDevice so this
-        // function is platform-neutral. The in-tree runners are the only
-        // execution targets for scrollintoview now; the upstream agent-device
-        // CLI never owned a stable scrollintoview verb and routing through it
-        // re-spawns the legacy runner that fights us for focus / UIAutomator.
+        // Android (default-on; opt-out via RN_ANDROID_RUNNER=0) — the snapshot
+        // + swipe verbs route through the platform-aware short-circuit in
+        // runAgentDevice so this function is platform-neutral. The in-tree
+        // runners are the only execution targets for scrollintoview now; the
+        // upstream agent-device CLI never owned a stable scrollintoview verb
+        // and routing through it re-spawns the legacy runner that fights us
+        // for focus / UIAutomator.
         const session = getActiveSession();
         const usesInTreeRunner = session?.platform === 'ios' ||
-            (session?.platform === 'android' && process.env.RN_ANDROID_RUNNER === '1');
+            (session?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
         if (usesInTreeRunner) {
             return scrollIntoViewWithRunner(args);
         }
-        return failResult(`device_scrollintoview requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER=1 (rn-android-runner). Active session: ${session?.platform ?? 'none'}.`, { code: 'IN_TREE_RUNNER_REQUIRED', platform: session?.platform ?? null });
+        return failResult(`device_scrollintoview requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${session?.platform ?? 'none'}.`, { code: 'IN_TREE_RUNNER_REQUIRED', platform: session?.platform ?? null });
     });
 }
 /**

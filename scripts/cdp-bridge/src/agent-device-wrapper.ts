@@ -654,7 +654,7 @@ export async function runAgentDevice(
   // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
   const RN_ANDROID_RUNNER_COMMANDS = new Set<string>(['snapshot', 'tap', 'press', 'fill', 'type', 'back', 'screenshot', 'keyboard', 'swipe', 'scroll', 'drag', 'longpress', 'pinch']);
   if (
-    targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER === '1' && !opts.skipSession &&
+    targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
     RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
   ) {
     const { runAndroid } = await import('./runners/rn-android-runner-client.js');
