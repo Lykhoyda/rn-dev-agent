@@ -52,3 +52,12 @@ test('findInLatestSnapshot: exact:true rejects substring match and returns null'
   assert.ok(exact);
   assert.equal(exact.ref, '@e1');
 });
+
+test('findInLatestSnapshot: Android testID identifier wins over text fallback', () => {
+  const nodes = [
+    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 0, width: 100, height: 50 } },
+    { ref: '@e2', type: 'android.widget.TextView', identifier: 'tab-settings', label: 'Home', rect: { x: 100, y: 0, width: 100, height: 50 } },
+  ];
+  const found = findInLatestSnapshot(nodes, 'tab-home', { exact: true });
+  assert.equal(found.ref, '@e1');
+});

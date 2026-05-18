@@ -140,3 +140,13 @@ export function findNewRefByMetadata(oldRef, newNodes) {
     }
     return null;
 }
+export function flattenAndroidAccessibilityTree(nodes) {
+    const localRefMap = new Map();
+    for (const node of nodes) {
+        if (!node.ref || !node.rect)
+            continue;
+        const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+        localRefMap.set(key, node.rect);
+    }
+    return { nodes, refMap: localRefMap };
+}

@@ -26,13 +26,14 @@ cd /path/to/your-rn-app
 /rn-dev-agent:setup
 ```
 
-This checks **9 prerequisites** and fixes what it can automatically:
+This checks **10 prerequisites** and fixes what it can automatically:
 
 | Check | Required | Auto-install |
 |-------|----------|-------------|
 | Node.js >= 22 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
-| [agent-device](https://github.com/nicklama/agent-device) | Yes | Yes |
+| rn-fast-runner (iOS) | iOS targets only — ships in-tree; one-time `xcodebuild build-for-testing` | No |
+| [agent-device](https://github.com/nicklama/agent-device) | Android targets only — iOS no longer needs it (PR #164) | Yes |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes |
 | iOS Simulator / Android Emulator | One platform | No |
 | Metro dev server | Yes | No |
@@ -93,7 +94,7 @@ A saved, replayable flow through your app — login, navigate to settings, reach
 | Command | Purpose |
 |---------|---------|
 | `/rn-dev-agent:setup` | Inject CLAUDE.md tool-routing rules + nav-ref + Zustand exposure |
-| `/rn-dev-agent:doctor` | 12-row diagnostic table — Node, CDP, agent-device, maestro-runner, simulators, Metro, helpers freshness, plugin version |
+| `/rn-dev-agent:doctor` | 14-row diagnostic table — Node, CDP, rn-fast-runner (iOS), agent-device (Android), maestro-runner, simulators, Metro, helpers freshness, plugin version |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
@@ -160,10 +161,14 @@ Claude Code
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
   │   74 tools: component tree, store state, profiling, network, interaction, recording, self-healing
   │
-  └── Bash (device lifecycle)
-      xcrun simctl / adb / maestro-runner / agent-device
+  └── Device interaction
+      ├── iOS    → in-tree rn-fast-runner (XCTest /command HTTP)  ← D1219, PR #164
+      └── Android → agent-device CLI (daemon socket → fast-runner → CLI)
           │                         │
      iOS Simulator           Android Emulator
+
+      Device lifecycle (boot / install / launch): xcrun simctl + adb
+      E2E test execution: maestro-runner (preferred) / Maestro (fallback)
 ```
 
 [Architecture details](https://lykhoyda.github.io/rn-dev-agent/architecture/)
@@ -194,6 +199,9 @@ Claude Code
 | Spawned subagent says "MCP tools unavailable" | Never spawn `rn-tester` / `rn-debugger` via Task tool — MCP stdio doesn't propagate to subprocesses (GH #31). Use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead; protocols run inline in the parent session. |
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles. Kill Metro, restart it, relaunch the app. `cdp_status` warns when reload count is high. |
 | `device_scroll` times out on Reanimated screens | agent-device daemon `waitForIdle` deadlocks with Reanimated worklets. Fixed in v0.22.0 — scroll routes through fast-runner HID synthesis. Ensure fast-runner is healthy via device session. |
+| Legacy `AgentDeviceRunner` re-appears on iOS sim | Stale `~/.agent-device/daemon.json` respawns the upstream runner alongside our in-tree `rn-fast-runner`. Run with `RN_DEVICE_KILL_LEGACY=1` (plugin terminates the daemon at session-open) or one-time: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}`. |
+| iOS `device_*` calls fail with "rn-fast-runner did not become ready" | Build artifacts missing. Pre-build once: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData`. After that, the runner spawns lazily on `device_snapshot action=open`. |
+| iOS `device_fill` returns "main thread execution timed out" but text appears in the field | Known XCTest-internal quiescence behavior; the TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`). The side-effect succeeded — proceed. |
 
 [Full troubleshooting guide](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)
 

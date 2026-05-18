@@ -1,8 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, } from '../agent-device-wrapper.js';
+import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { detectLegacyAgentDevice } from '../runners/external-runner-detect.js';
+import { detectLegacyAgentDevice, detectAndroidExternalRunner, } from '../runners/external-runner-detect.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
@@ -137,6 +137,22 @@ export function createDeviceSnapshotHandler() {
                     }
                 })
                     .catch(() => { });
+                // Task 9 of Android-MVP: warn on competing Android UIAutomator /
+                // agent-device processes that would contend for input + focus with
+                // our rn-android-runner. Fires by default (Task 11 flipped the
+                // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
+                if (args.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
+                    detectAndroidExternalRunner(undefined, getAdbSerial())
+                        .then((warning) => {
+                        if (!warning)
+                            return;
+                        logger.warn('rn-device', warning.message);
+                        for (const line of warning.processLines) {
+                            logger.warn('rn-device', `  ${line.trim()}`);
+                        }
+                    })
+                        .catch(() => { });
+                }
                 if (args.platform === 'ios' && deviceId) {
                     ensureFastRunner(deviceId, appId).catch(() => { });
                 }

@@ -369,6 +369,29 @@ If `device_list` shows more than one booted device (e.g., both an iOS simulator 
 
 This is a known plugin issue — see [Lykhoyda/rn-dev-agent#60](https://github.com/Lykhoyda/rn-dev-agent/issues/60) for tracking and escape-hatch patterns.
 
+### iOS Device Runtime — In-tree `rn-fast-runner`
+
+After PR #164 (D1219), iOS device automation is owned by the **in-tree `rn-fast-runner`** XCTest project that ships with the plugin. iOS no longer requires `agent-device` to be globally installed. The user-facing tool surface (`device_press`, `device_fill`, `device_swipe`, …) is unchanged — only the underlying transport.
+
+What this means in practice:
+
+- **iOS-only projects** can ignore any "agent-device not installed" warning from the SessionStart banner — it's informational. Only flag the warning as actionable if you're targeting Android.
+- **First-time iOS setup** needs a one-time pre-build of the runner so `xcodebuild test-without-building` has artifacts to launch:
+  ```bash
+  cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && \
+    xcodebuild build-for-testing \
+      -project RnFastRunner.xcodeproj \
+      -scheme RnFastRunner \
+      -destination "platform=iOS Simulator,id=<UDID>" \
+      -derivedDataPath ../build/DerivedData
+  ```
+  After that, the runner spawns lazily on the first `device_snapshot action=open`.
+- **Stale upstream `AgentDeviceRunner`** may still be alive on the simulator from a previous install — it will fight `rn-fast-runner` for foreground focus and cause "main thread execution timed out" or RUNNER_LEAK shapes. Set `RN_DEVICE_KILL_LEGACY=1` (plugin terminates the daemon at session-open) or one-time-clean: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}`.
+- **`device_fill` may report "main thread execution timed out" on iOS even though the text lands in the field.** This is a known XCTest-internal quiescence behavior (`XCUIElement.typeText()` bypasses the runner's skip-quiescence shim). The TS client treats this specific error shape as success on `.type` and surfaces `meta.runnerTimeoutShim: true`. If you see this, the side-effect succeeded — proceed; do not retry, because a retry would double-type.
+- **`device_find` non-exact + `device_scrollintoview`** are TS-side orchestrators on iOS (snapshot → fuzzy-match / viewport-check → fastSwipe loop). They never touch the legacy `agent-device find/scrollintoview` CLI, so they don't respawn the upstream runner.
+
+Android dispatch is unchanged — still 3-tier `agent-device` (daemon socket → fast-runner → CLI). Multi-device routing rules in the section above still apply.
+
 ### Required Dev Setup for Full Tool Coverage
 
 Most projects need **zero source mutation** — the plugin's CDP-injected helpers walk the React fiber tree to find `<NavigationContainer>`'s ref and the React Navigation hooks chain automatically. The table below lists what each tool needs to work; rows marked "auto-discovered" require no user code.

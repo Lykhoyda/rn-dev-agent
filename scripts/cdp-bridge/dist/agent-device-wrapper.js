@@ -393,6 +393,130 @@ function buildRunIOSArgs(cliArgs, bundleId) {
             throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
 }
+function optionValue(cliArgs, flag) {
+    const i = cliArgs.indexOf(flag);
+    if (i === -1)
+        return undefined;
+    const value = cliArgs[i + 1];
+    return value && !value.startsWith('-') ? value : undefined;
+}
+function androidPositionals(cliArgs) {
+    const out = [];
+    for (let i = 1; i < cliArgs.length; i++) {
+        const a = cliArgs[i];
+        if (a.startsWith('-')) {
+            const value = cliArgs[i + 1];
+            if (value && !value.startsWith('-'))
+                i++;
+            continue;
+        }
+        out.push(a);
+    }
+    return out;
+}
+function buildRunAndroidArgs(cliArgs, bundleId) {
+    const cmd = cliArgs[0];
+    const positionals = androidPositionals(cliArgs);
+    const withBundle = bundleId ? { bundleId } : {};
+    switch (cmd) {
+        case 'press':
+        case 'tap': {
+            const ref = positionals[0];
+            if (ref && ref.startsWith('@')) {
+                const center = refCenter(ref);
+                if (!center)
+                    return { command: 'tap', _staleRef: ref, ...withBundle };
+                return { command: 'tap', x: center.x, y: center.y, ...withBundle };
+            }
+            const [xS, yS] = positionals;
+            return { command: 'tap', x: Number(xS), y: Number(yS), ...withBundle };
+        }
+        case 'fill':
+        case 'type': {
+            const ref = positionals[0];
+            const text = positionals.slice(1).join(' ');
+            if (ref && ref.startsWith('@')) {
+                const center = refCenter(ref);
+                if (!center)
+                    return { command: 'type', _staleRef: ref, text, ...withBundle };
+                return { command: 'type', x: center.x, y: center.y, text, ...withBundle };
+            }
+            return { command: 'type', text: positionals.join(' '), ...withBundle };
+        }
+        case 'snapshot':
+            return { command: 'snapshot', interactiveOnly: true, ...withBundle };
+        case 'back':
+            return { command: 'back', ...withBundle };
+        case 'screenshot':
+            return { command: 'screenshot', outPath: optionValue(cliArgs, '--out'), ...withBundle };
+        case 'keyboard':
+        case 'dismissKeyboard':
+            return { command: 'dismissKeyboard', ...withBundle };
+        // `find` is intentionally NOT handled here — `device_find` is a TS orchestrator
+        // on Android (mirrors iOS), built on top of runAndroid('snapshot') + findInLatestSnapshot.
+        case 'swipe':
+        case 'scroll':
+        case 'drag': {
+            const [x1S, y1S, x2S, y2S, durationS] = positionals;
+            const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
+            if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
+                throw new Error(`buildRunAndroidArgs: ${cmd} requires four numeric coordinates`);
+            }
+            const args = { command: 'drag', x1, y1, x2, y2, ...withBundle };
+            if (durationS !== undefined) {
+                const n = Number(durationS);
+                if (!Number.isNaN(n))
+                    args.durationMs = n;
+            }
+            return args;
+        }
+        case 'longpress': {
+            const [target, yOrDuration, durationMaybe] = positionals;
+            if (target?.startsWith('@')) {
+                const center = refCenter(target);
+                if (!center)
+                    return { command: 'longPress', _staleRef: target, ...withBundle };
+                const duration = Number(yOrDuration);
+                return {
+                    command: 'longPress',
+                    x: center.x,
+                    y: center.y,
+                    ...(Number.isNaN(duration) ? {} : { durationMs: duration }),
+                    ...withBundle,
+                };
+            }
+            const x = Number(target), y = Number(yOrDuration);
+            if (Number.isNaN(x) || Number.isNaN(y)) {
+                throw new Error('buildRunAndroidArgs: longpress requires numeric x, y or a @ref');
+            }
+            const args = { command: 'longPress', x, y, ...withBundle };
+            if (durationMaybe !== undefined) {
+                const n = Number(durationMaybe);
+                if (!Number.isNaN(n))
+                    args.durationMs = n;
+            }
+            return args;
+        }
+        case 'pinch': {
+            const [scaleS, xS, yS] = positionals;
+            const scale = Number(scaleS);
+            if (Number.isNaN(scale)) {
+                throw new Error('buildRunAndroidArgs: pinch requires numeric scale');
+            }
+            const args = { command: 'pinch', scale, ...withBundle };
+            if (xS !== undefined && yS !== undefined) {
+                const x = Number(xS), y = Number(yS);
+                if (!Number.isNaN(x))
+                    args.x = x;
+                if (!Number.isNaN(y))
+                    args.y = y;
+            }
+            return args;
+        }
+        default:
+            throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
+    }
+}
 export async function ensureFastRunner(deviceId, bundleId) {
     if (isFastRunnerAvailable())
         return;
@@ -449,6 +573,17 @@ export async function runAgentDevice(cliArgs, opts = {}) {
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, activeSession?.appId ?? resolveBundleId('ios') ?? undefined);
         return runIOS(ios);
+    }
+    // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
+    // as a pure-TS orchestrator (snapshot → match → tap) for cross-platform symmetry.
+    // UIAutomator's `By.text()` returns regex-match semantics while findInLatestSnapshot
+    // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
+    const RN_ANDROID_RUNNER_COMMANDS = new Set(['snapshot', 'tap', 'press', 'fill', 'type', 'back', 'screenshot', 'keyboard', 'swipe', 'scroll', 'drag', 'longpress', 'pinch']);
+    if (targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
+        RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
+        const { runAndroid } = await import('./runners/rn-android-runner-client.js');
+        const android = buildRunAndroidArgs(cliArgs, activeSession?.appId ?? resolveBundleId('android') ?? undefined);
+        return runAndroid({ ...android, deviceId: activeSession?.deviceId });
     }
     // GH #60: when an explicit platform is requested AND it doesn't match the
     // active session's platform (e.g. user asks for android while an iOS
