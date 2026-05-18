@@ -25,6 +25,7 @@
     "node": ">=22"
   },
   "overrides": {
-    "@hono/node-server": ">=1.19.13"
+    "@hono/node-server": ">=1.19.13",
+    "fast-uri": ">=3.1.2"
   }
 }
