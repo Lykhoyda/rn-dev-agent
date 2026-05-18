@@ -376,7 +376,7 @@ if (want('a')) {
     parts.push('| Name | Description | File |');
     parts.push('|---|---|---|');
     for (const m of memories.items) {
-      parts.push(`| ${esc(m.name)} | ${esc(m.description)} | \`${m.file}\` |`);
+      parts.push(`| ${escapeMarkdownTableCell(m.name)} | ${escapeMarkdownTableCell(m.description)} | \`${m.file}\` |`);
     }
   }
   parts.push('');
@@ -398,7 +398,7 @@ if (want('b')) {
       const status = f.status || '?';
       const tags = (f.tags && f.tags.length) ? f.tags.join(', ') : '?';
       const produces = formatProducesCell(f.produces);
-      parts.push(`| \`${f.flow}\` | ${esc(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${esc(tags)} | ${esc(produces)} | \`${f.replay}\` |`);
+      parts.push(`| \`${f.flow}\` | ${escapeMarkdownTableCell(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${escapeMarkdownTableCell(tags)} | ${escapeMarkdownTableCell(produces)} | \`${f.replay}\` |`);
     }
   }
   parts.push('');
@@ -424,7 +424,7 @@ if (want('d')) {
     parts.push('_Not running inside the plugin repo._');
   } else {
     for (const c of commands.items) {
-      parts.push(`- \`${c.command}\` — ${esc(c.description)}`);
+      parts.push(`- \`${c.command}\` — ${escapeMarkdownTableCell(c.description)}`);
     }
   }
   parts.push('');
@@ -435,7 +435,12 @@ parts.push('**Reminder:** For any UI flow, replay a matching flow from section B
 process.stdout.write(parts.join('\n') + '\n');
 process.exit(total === 0 ? 3 : 0);
 
-function esc(s) {
+// Markdown-table cell escaping. We deliberately only escape the column
+// separator `|` and flatten newlines; everything else (including HTML and
+// regex metacharacters) is valid inside a GitHub-flavored Markdown table
+// cell. CodeQL js/incomplete-sanitization (alert #26) was raised on the
+// previous name `esc()` which read like a general-purpose escaper.
+function escapeMarkdownTableCell(s) {
   return (s || '').toString().replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 

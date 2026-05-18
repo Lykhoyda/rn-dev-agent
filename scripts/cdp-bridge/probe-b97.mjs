@@ -43,7 +43,9 @@ function readField() {
     if (!n.includes('android.widget.EditText')) continue;
     if (!/focused="true"/.test(n)) continue;
     const t = n.match(/ text="([^"]*)"/);
-    return t ? t[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'") : '';
+    // CodeQL js/double-escaping (alert #17): decode `&amp;` LAST. Decoding it
+    // first would incorrectly turn `&amp;lt;` (literal text `&lt;`) into `<`.
+    return t ? t[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&') : '';
   }
   return null;
 }
