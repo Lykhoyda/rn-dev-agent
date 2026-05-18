@@ -1,39 +1,43 @@
 ---
 title: MCP Tools
-description: 38 tools for React Native development — CDP introspection, device interaction, and testing.
+description: 74 tools for React Native development — CDP introspection, device interaction, actions, testing, and macro-asserts.
 ---
 
-The MCP server exposes **38 tools** organized in three categories. All tools are available through Claude Code's tool-calling interface.
+The MCP server exposes **74 tools** organized into five conceptual families. All tools are available through Claude Code's tool-calling interface.
 
-## When to use which category
+## When to use which family
 
 | Need | Use | Example |
 |------|-----|---------|
-| Read React component tree, store state, navigation | **CDP tools** | `cdp_component_tree`, `cdp_store_state` |
-| Tap, swipe, type, scroll on the device | **Device tools** | `device_press`, `device_fill`, `device_swipe` |
-| Run E2E test flows, capture proof | **Testing tools** | `maestro_run`, `proof_step` |
-| Check environment health | **CDP tools** | `cdp_status` (always call first) |
-| Debug crashes spanning JS + native | **CDP tools** | `collect_logs` with multiple sources |
+| Read React component tree, store state, navigation | **CDP** | `cdp_component_tree`, `cdp_store_state` |
+| Tap, swipe, type, scroll on the device | **Device** | `device_press`, `device_fill`, `device_swipe` |
+| Replay or self-repair a known flow | **[Actions](../actions/)** | `cdp_run_action`, `cdp_repair_action` |
+| Run E2E flows, capture proof | **Testing** | `maestro_run`, `proof_step` |
+| Assert internal state instead of pixels | **Macro-Asserts** | `expect_redux`, `expect_route` |
+| Check environment health | **CDP** | `cdp_status` (always call first) |
+| Debug crashes spanning JS + native | **CDP** | `collect_logs` with multiple sources |
 
-## CDP Tools (19)
+## CDP Tools
 
 Read React internals via Chrome DevTools Protocol over a WebSocket connection to Hermes.
 
-**Connection lifecycle:** `cdp_status` (auto-connect) → `cdp_connect` (explicit) → `cdp_disconnect` (teardown) → `cdp_targets` (list without connecting)
+**Connection lifecycle:** `cdp_status` (auto-connect) → `cdp_connect` (explicit) → `cdp_disconnect` (teardown) → `cdp_targets` (list without connecting) → `cdp_restart` (full process restart) → `cdp_open_devtools` (attach DevTools)
 
-**Component inspection:** `cdp_component_tree` (filtered fiber tree) → `cdp_component_state` (hook state by testID)
+**Component inspection:** `cdp_component_tree` (filtered fiber tree) → `cdp_component_state` (hook state by testID) → `cdp_diagnostic_renderers` (fiber-root invisibility diagnosis)
 
 **Navigation:** `cdp_navigation_state` (current route) → `cdp_nav_graph` (full graph with go-to-screen) → `cdp_navigate` (by screen name)
 
-**State management:** `cdp_store_state` (Redux/Zustand/React Query) → `cdp_dispatch` (Redux action + read-back)
+**State management:** `cdp_store_state` (Redux/Zustand/React Query) → `cdp_dispatch` (Redux action + read-back) → `cdp_mmkv` (MMKV read/write)
 
-**Logs:** `cdp_console_log`, `cdp_network_log`, `cdp_error_log`, `collect_logs` (multi-source)
+**Logs & events:** `cdp_console_log`, `cdp_network_log`, `cdp_network_body`, `cdp_wait_for_network`, `cdp_error_log`, `cdp_native_errors`, `cdp_metro_events`, `collect_logs` (multi-source)
 
-**Utilities:** `cdp_evaluate` (raw JS), `cdp_reload` (full reload), `cdp_dev_settings` (dev menu), `cdp_interact` (deprecated)
+**Profiling & inspection:** `cdp_heap_usage`, `cdp_cpu_profile`, `cdp_object_inspect`, `cdp_exception_breakpoint`, `cdp_set_shared_value`
+
+**Interaction & utilities:** `cdp_interact` (press/type/scroll by testID via fiber tree — preferred for JS-level interaction), `cdp_evaluate` (raw JS), `cdp_reload` (full reload), `cdp_dev_settings` (dev menu)
 
 ## Device Tools (14)
 
-Native interaction via the agent-device CLI. Requires an open session (`device_snapshot action=open`).
+Native interaction. iOS routes through the in-tree `rn-fast-runner` `/command` endpoint; Android routes through the `agent-device` CLI (3-tier daemon → fast-runner → CLI dispatch). Requires an open session (`device_snapshot action=open`).
 
 **Session:** `device_list` → `device_snapshot` (open/snapshot/close) → `device_screenshot`
 
@@ -41,8 +45,24 @@ Native interaction via the agent-device CLI. Requires an open session (`device_s
 
 **Utilities:** `device_permission` (grant/revoke) → `device_batch` (multi-step sequence)
 
+**Helpers** (filed alongside CDP in code): `device_deeplink`, `device_accept_system_dialog`, `device_dismiss_system_dialog`, `device_focus_next`, `device_pick_date`, `device_pick_value`, `device_record`, `device_reset_state`.
+
+## Actions
+
+Record / replay / self-repair persistent flows. See the [**Actions concept guide**](../actions/) for why the LLM/pragmatic hybrid matters.
+
+**Replay & repair:** `cdp_run_action` (orchestrates `maestro_run` + auto-repair + retry; persists `RunRecord` with phase timings) → `cdp_repair_action` (fuzzy-patches stale `testID` against live snapshot; refuses on human edits, >3 repairs/24h)
+
+**Recording → action promotion:** `cdp_record_test_start` → `cdp_record_test_annotate` (mid-recording state checks) → `cdp_record_test_stop` → `cdp_record_test_generate` (raw Maestro YAML) → `cdp_record_test_save` / `cdp_record_test_save_as_action` (promote to first-class action) → `cdp_record_test_list` / `cdp_record_test_load`
+
 ## Testing Tools (5)
 
 E2E testing and proof capture — work even when the app is crashed or on native screens.
 
-`cdp_auto_login` → `maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step`
+`cdp_auto_login` → `maestro_run` / `maestro_generate` → `maestro_test_all` → `proof_step` → `cross_platform_verify`
+
+## Macro-Asserts
+
+State-assertive replays — assert internal app state instead of pixels. The differentiator vs Maestro Cloud / BrowserStack / KaneAI: those compare screenshots; these read Redux / route / fiber state directly.
+
+`expect_redux` (state.path equals value) · `expect_route` (active route name) · `expect_visible_by_testid` (testID present in tree) · `expect_text` (component text content)

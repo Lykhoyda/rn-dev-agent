@@ -7,7 +7,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'rn-dev-agent',
-      description: 'Claude Code plugin for React Native development — 51 MCP tools, 5 agents, 13 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
+      description: 'Claude Code plugin for React Native development — 74 MCP tools, 5 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/Lykhoyda/rn-dev-agent' },
       ],
@@ -24,7 +24,7 @@ export default defineConfig({
             '@context': 'https://schema.org',
             '@type': 'SoftwareApplication',
             name: 'rn-dev-agent',
-            description: 'Claude Code plugin for React Native development with 51 MCP tools for live app verification via Chrome DevTools Protocol.',
+            description: 'Claude Code plugin for React Native development with 74 MCP tools for live app verification via Chrome DevTools Protocol.',
             applicationCategory: 'DeveloperApplication',
             operatingSystem: 'macOS, Linux',
             url: 'https://lykhoyda.github.io/rn-dev-agent/',
@@ -44,6 +44,7 @@ export default defineConfig({
       sidebar: [
         { label: 'Getting Started', slug: 'getting-started' },
         { label: 'Architecture', slug: 'architecture' },
+        { label: 'Actions', slug: 'actions' },
         {
           label: 'Commands',
           items: [
@@ -57,6 +58,14 @@ export default defineConfig({
                 { label: 'debug-screen', slug: 'commands/debug-screen' },
                 { label: 'check-env', slug: 'commands/check-env' },
                 { label: 'setup', slug: 'commands/setup' },
+                { label: 'doctor', slug: 'commands/doctor' },
+              ],
+            },
+            {
+              label: 'Actions',
+              items: [
+                { label: 'list-learned-actions', slug: 'commands/list-learned-actions' },
+                { label: 'run-action', slug: 'commands/run-action' },
               ],
             },
             {
@@ -83,7 +92,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'tools' },
             {
-              label: 'CDP Tools (24)',
+              label: 'CDP Tools',
               collapsed: false,
               autogenerate: { directory: 'tools/cdp' },
             },
@@ -93,7 +102,7 @@ export default defineConfig({
               autogenerate: { directory: 'tools/device' },
             },
             {
-              label: 'Testing Tools (13)',
+              label: 'Testing Tools (5)',
               collapsed: true,
               autogenerate: { directory: 'tools/testing' },
             },

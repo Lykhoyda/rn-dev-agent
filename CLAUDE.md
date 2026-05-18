@@ -43,15 +43,33 @@ Development scaffolding lives in the **sibling workspace repo**:
 - `maestro-runner` — auto-installed to `~/.maestro-runner/`
 
 ### Essential commands
+
+Authoring & lifecycle:
 ```
-/rn-dev-agent:setup                    — Check & install all prerequisites
+/rn-dev-agent:setup                    — Check & install all prerequisites; scaffolds .rn-agent/
+/rn-dev-agent:doctor                   — 14-row diagnostic table for the whole environment
+/rn-dev-agent:check-env                — Quick environment-readiness check
 /rn-dev-agent:rn-feature-dev <desc>    — Full 8-phase feature development pipeline
-/rn-dev-agent:test-feature <desc>      — Test a feature end-to-end on device
+/rn-dev-agent:test-feature <desc>      — Test a feature end-to-end; auto-records an action on pass
 /rn-dev-agent:debug-screen             — Diagnose and fix the current screen
-/rn-dev-agent:check-env                — Verify environment readiness
 /rn-dev-agent:build-and-test <desc>    — Build app, then test feature
-/rn-dev-agent:proof-capture <desc>     — Record proof video + screenshots
-/rn-dev-agent:send-feedback            — Report a bug
+/rn-dev-agent:proof-capture <desc>     — Rehearsal-gated video + screenshots + PR body
+/rn-dev-agent:nav-graph                — Extract / inspect the app navigation graph
+/rn-dev-agent:send-feedback            — Report a bug with sanitised environment context
+```
+
+Actions (replayable flows — see "Actions" section below):
+```
+/rn-dev-agent:list-learned-actions [q] — Inventory of saved flows + feedback memories
+/rn-dev-agent:run-action <name> -e K=V — Replay a saved action; auto-repair-aware
+```
+
+Experience Engine (cross-session learning):
+```
+/rn-dev-agent:rn-agent-health          — Health check the local experience store
+/rn-dev-agent:rn-agent-compact         — Compact telemetry on disk
+/rn-dev-agent:rn-agent-export          — Export the experience store
+/rn-dev-agent:rn-agent-import          — Import an experience snapshot
 ```
 
 ### How it works
@@ -105,40 +123,83 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / in
 
 ### MCP Server (cdp-bridge)
 
-64 tools exposed via MCP (count last audited 2026-04-28; per-category breakdown below predates several additions and is approximate):
+**74 tools** exposed via MCP (re-audited 2026-05-18; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
 
-**CDP tools** (React internals via Chrome DevTools Protocol over WebSocket):
+**CDP tools** — React internals via Chrome DevTools Protocol over WebSocket:
 - `cdp_status` — health check with domain capabilities + reconnect state
 - `cdp_connect` / `cdp_disconnect` / `cdp_targets` — connection management
 - `cdp_evaluate` — arbitrary JS execution in Hermes
-- `cdp_reload` — full reload with auto-reconnect
-- `cdp_dev_settings` — programmatic dev menu actions
-- `cdp_component_tree` / `cdp_component_state` — React fiber introspection
+- `cdp_reload` / `cdp_restart` — full reload / restart with auto-reconnect
+- `cdp_dev_settings` / `cdp_open_devtools` — dev menu + DevTools attach
+- `cdp_component_tree` / `cdp_component_state` / `cdp_diagnostic_renderers` — React fiber introspection
 - `cdp_navigation_state` / `cdp_nav_graph` / `cdp_navigate` — navigation
 - `cdp_store_state` / `cdp_dispatch` — Redux/Zustand/React Query state
-- `cdp_network_log` / `cdp_network_body` / `cdp_console_log` / `cdp_error_log` — buffered events
-- `cdp_wait_for_network` — block until a network request matching url_pattern + method completes (D682, GH #65 P3) — collapses "tap → check → tap" into a single deterministic call
-- `cdp_interact` — press/type/scroll by testID via fiber tree
-- `cdp_heap_usage` — JS memory usage
-- `cdp_cpu_profile` — CPU profiling with hot function ranking
-- `cdp_object_inspect` — handle-based lazy object inspection
-- `cdp_exception_breakpoint` — catch exceptions with timed capture
+- `cdp_network_log` / `cdp_network_body` / `cdp_wait_for_network` — network buffer + sync (D682)
+- `cdp_console_log` / `cdp_error_log` / `cdp_native_errors` / `cdp_metro_events` — log/error/metro streams
+- `cdp_interact` — press/type/scroll by testID via fiber tree (JS-level; not deprecated — preferred over device_* when a testID is reliable)
+- `cdp_heap_usage` / `cdp_cpu_profile` / `cdp_object_inspect` / `cdp_exception_breakpoint` — profiling + inspection
+- `cdp_mmkv` — read/write MMKV storage
 - `cdp_set_shared_value` — set Reanimated SharedValue by testID for proof captures
 - `collect_logs` — parallel multi-source log collection
 
-**Device tools** (14 — iOS: in-tree `rn-fast-runner` `/command` endpoint; Android: `agent-device` CLI):
+**Device tools** (14, native interaction — iOS: in-tree `rn-fast-runner` `/command`; Android: `agent-device` CLI):
 - `device_list` / `device_screenshot` / `device_snapshot`
 - `device_find` / `device_press` / `device_fill` / `device_swipe` / `device_scroll`
 - `device_scrollintoview` / `device_back` / `device_longpress` / `device_pinch`
 - `device_permission` / `device_batch`
 
+Plus device helpers filed alongside CDP in code: `device_deeplink`, `device_accept_system_dialog`, `device_dismiss_system_dialog`, `device_focus_next`, `device_pick_date`, `device_pick_value`, `device_record`, `device_reset_state`.
+
 iOS-only quirks worth knowing:
 - `device_fill` may surface a Swift-internal `XCUIElement.typeText` quiescence-timeout from XCTest's main-thread sync. The TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`) because the side-effect (text appended to the field) demonstrably succeeds — observed across the iOS-MVP smoke-tests.
 - `device_find` non-exact + `device_scrollintoview` ALWAYS route through the TS orchestrators on iOS (never the legacy `agent-device find/scrollintoview` CLI), so they don't respawn the upstream `AgentDeviceRunner`.
 
-**Testing & composite tools** (13):
-- `proof_step` / `cross_platform_verify` / `maestro_run` / `maestro_generate` / `maestro_test_all`
-- `cdp_auto_login` + device helpers (deeplink, accept/dismiss dialog, focus_next, pick_date, pick_value)
+**Actions** (the LLM/pragmatic hybrid — see the Actions section below):
+- `cdp_run_action` — replay an action by id with `params`; orchestrates `maestro_run` + `cdp_repair_action` + retry; persists a `RunRecord` with `autoRepair` telemetry
+- `cdp_repair_action` — fuzzy-match a stale `testID` against the live snapshot, patch the YAML, retry; refuses on human edits (mtime), >3 repairs/24h, or snapshot infra failure
+- `cdp_record_test_save_as_action` — promote a recorded walk to `.rn-agent/actions/<id>.yaml` with metadata header + sidecar; auto-promotes to `status: active` on first clean replay
+- `cdp_record_test_*` — start / stop / generate / annotate / save / load / list (recorder upstream of actions)
+
+**Testing & composite tools**:
+- `proof_step` / `cross_platform_verify` — verification primitives
+- `maestro_run` / `maestro_generate` / `maestro_test_all` — Maestro orchestration
+- `cdp_auto_login` — credentials-or-deeplink login wrapper
+
+**Macro-Asserts** (state-assertive replays — internal state, not pixels):
+- `expect_redux` / `expect_route` / `expect_visible_by_testid` / `expect_text`
+
+### Actions — the LLM/pragmatic hybrid
+
+An **action** is a parameterised Maestro flow under `.rn-agent/actions/<id>.yaml` with a metadata header (id / intent / tags / mutates / status / appId). Actions are **emitted by the agent** when `/test-feature` verification passes — they are not human-authored. They get replayed via `/run-action` (or directly by `cdp_run_action`) as **prologues** before the agent does new interactive work.
+
+**Why we have them.** LLM agents are good at improvising on novel screens, slow and stochastic at re-deriving things they've already seen. Pure-script approaches (Detox, Maestro, Appium) are the opposite — fast but brittle to UI drift. Actions sit in the middle: every successful verification adds one, every drift gets quietly absorbed by `cdp_repair_action`, every truly broken flow escalates. Measured: a 3-step wizard that takes ~14 min as an interactive walk runs in ~4 s replayed (~210× speedup); across 35 stories the average dropped from ~12 min to ~4 min once the corresponding actions existed.
+
+**Composition rule.** The agent never replays an entire job from a script. Each task is two regimes:
+1. **Pragmatic reusable actions** for the predictable parts (login, navigation, multi-step setup, locale switching, dismissing gates).
+2. **LLM-driven discovery** for the part that is actually new (verifying a specific UI state, exercising a new edge case, debugging a regression).
+
+**Artifact-first protocol.** `rn-tester` and `rn-debugger` agents are instructed (via `feedback_execute_artifacts_before_manual.md`) to scan saved actions before composing any new `device_*` primitives. Manual primitives are a **fallback**, not the default. Single source of truth for the inventory is `scripts/learned-actions.mjs` — shared by `/list-learned-actions`, `/run-action`, and both agents' Step 0 artifact scans.
+
+**Tool surface for actions** (one conceptual family — see "Actions" in the MCP server list above):
+
+| Tool / Command | Role |
+|---|---|
+| `cdp_record_test_save_as_action` | Promote a recorded walk → first-class action with metadata header + sidecar |
+| `cdp_run_action` | Replay with params; orchestrates `maestro_run` + `cdp_repair_action` + retry; persists `RunRecord` with `autoRepair` telemetry (passed/failed/refused/skipped + phase timings) |
+| `cdp_repair_action` | Fuzzy-match stale `testID` against live snapshot, patch YAML, retry; refuses on human edits (mtime), >3 repairs/24h, or snapshot infra failure |
+| `/list-learned-actions` | Read-only inventory (single source of truth: `scripts/learned-actions.mjs`) |
+| `/run-action <name> -e K=V` | Side-effecting execution; gates safety checks (mutates flag, appId match, `${VAR}` coverage), then calls `cdp_run_action` |
+
+**Why hybrid beats either extreme**:
+
+| Failure mode | Pure script | Pure LLM | This plugin |
+|---|---|---|---|
+| `testID` renamed | Breaks; human re-records | Re-discovers each run | `cdp_repair_action` patches + retries + logs diff |
+| Product logic changed | Passes anyway, masks bug | Probabilistically catches | Refuses to auto-patch logic break; surfaces failure |
+| Net-new behaviour | Can't author | Re-derives every session | Discovers interactively, **auto-saves verified walk as new action** |
+| Cost over time | Linear (drift = human) | Quadratic (full walk each session) | Sub-linear (drift absorbed, library compounds) |
+
+Full user-facing doc: [docs-site/actions](docs-site/src/content/docs/actions/index.mdx) (published at `lykhoyda.github.io/rn-dev-agent/actions/`).
 
 ### Key Technical Decisions
 
