@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { isInViewport, decideScrollDirection } from '../../../dist/tools/device-interact.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEVICE_INTERACT_PATH = resolve(__dirname, '../../../src/tools/device-interact.ts');
 
 // Task 7 (GH #105 / rn-device iOS-MVP): TS implementation of `scrollintoview`
 // orchestration. Pure rect-intersection helpers used by device_scrollintoview
@@ -51,10 +56,7 @@ test('scrollintoview: Android runner env uses snapshot/swipe orchestrator', asyn
   const previous = process.env.RN_ANDROID_RUNNER;
   delete process.env.RN_ANDROID_RUNNER;
   try {
-    const source = readFileSync(
-      '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/tools/device-interact.ts',
-      'utf8',
-    );
+    const source = readFileSync(DEVICE_INTERACT_PATH, 'utf8');
     assert.match(source, /session\?\.platform === 'android'/);
     assert.match(source, /RN_ANDROID_RUNNER !== '0'/);
     assert.doesNotMatch(source, /runAgentDevice\(\['scrollintoview'/);

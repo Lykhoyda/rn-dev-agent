@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
-const source = readFileSync(
-  '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/agent-device-wrapper.ts',
-  'utf8',
-);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WRAPPER_PATH = resolve(__dirname, '../../src/agent-device-wrapper.ts');
+const source = readFileSync(WRAPPER_PATH, 'utf8');
 
 test('buildRunAndroidArgs maps Android MVP verbs', () => {
   for (const fragment of [

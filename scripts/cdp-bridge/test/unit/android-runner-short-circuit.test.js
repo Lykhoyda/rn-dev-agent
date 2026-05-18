@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
-const source = readFileSync(
-  '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/agent-device-wrapper.ts',
-  'utf8',
-);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WRAPPER_PATH = resolve(__dirname, '../../src/agent-device-wrapper.ts');
+const source = readFileSync(WRAPPER_PATH, 'utf8');
 
 test('Android runner short-circuit is env-gated and platform-scoped', () => {
   assert.match(source, /targetPlatform === 'android'/);
@@ -21,9 +22,5 @@ test('Android runner command set covers all MVP verbs', () => {
 });
 
 test('Android runner can be disabled with RN_ANDROID_RUNNER=0', () => {
-  const source = readFileSync(
-    '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/src/agent-device-wrapper.ts',
-    'utf8',
-  );
   assert.match(source, /process\.env\.RN_ANDROID_RUNNER !== '0'/);
 });
