@@ -1,0 +1,94 @@
+name: CodeQL
+
+# Advanced CodeQL setup. Replaces the repo's previous "default setup" because
+# autobuild can't locate our nested Swift Xcode project at
+# scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj or our nested
+# Android Gradle project at scripts/rn-android-runner/. This workflow runs
+# each language's correct build command and lets CodeQL trace the resulting
+# artifacts.
+#
+# All ${{ }} interpolations here read from matrix.* (workflow-defined values)
+# and do not consume untrusted github.event.* input — safe per
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '20 12 * * 4'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            os: ubuntu-latest
+            build-mode: none
+          - language: actions
+            os: ubuntu-latest
+            build-mode: none
+          - language: java-kotlin
+            os: ubuntu-latest
+            build-mode: manual
+          - language: swift
+            os: macos-15
+            build-mode: manual
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java (Android Gradle)
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build rn-android-runner
+        if: matrix.language == 'java-kotlin'
+        working-directory: scripts/rn-android-runner
+        run: ./gradlew :app:assembleDebugAndroidTest --no-daemon
+
+      # Use the macos-15 runner's preinstalled Xcode (16.x); skip the slow
+      # `maxim-lobanov/setup-xcode` action. Build for the iphonesimulator SDK
+      # without requiring a specific device — CodeQL only needs the compile
+      # commands traced, not a runnable test bundle.
+      - name: Build rn-fast-runner
+        if: matrix.language == 'swift'
+        working-directory: scripts/rn-fast-runner/RnFastRunner
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild build \
+            -project RnFastRunner.xcodeproj \
+            -scheme RnFastRunner \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath ../build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=YES
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
