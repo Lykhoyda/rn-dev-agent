@@ -441,7 +441,8 @@ process.exit(total === 0 ? 3 : 0);
 // cell. CodeQL js/incomplete-sanitization (alert #26) was raised on the
 // previous name `esc()` which read like a general-purpose escaper.
 function escapeMarkdownTableCell(s) {
-  return (s || '').toString().replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  // Escape `\` FIRST so a pre-existing `\|` doesn't become `\\\|`.
+  return (s || '').toString().replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
 // D1209 — render the parsed produces map as a compact table cell.

@@ -208,7 +208,11 @@ function escapeYaml(str) {
 // `&` MUST be escaped FIRST so we don't double-escape entities we just
 // emitted (e.g. converting `&lt;` to `&amp;lt;`).
 function escapeMdx(str) {
+  // Order matters:
+  // - `\` MUST be FIRST so a pre-existing `\{` doesn't become `\\{` after the brace escape.
+  // - `&` MUST come BEFORE `<` `>` so emitted entities don't get double-encoded.
   return str
+    .replace(/\\/g, '\\\\')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

@@ -140,7 +140,7 @@ async function androidQueryPermission(permission: string, appId: string): Promis
     if (stdout.includes('Unable to find package')) {
       return failResult(`Package "${appId}" not installed on device`);
     }
-    const re = new RegExp(`${androidKey.replace(/\./g, '\\.')}:.*granted=(true|false)`, 'i');
+    const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, 'i');
     const match = stdout.match(re);
 
     if (match) {
