@@ -22,7 +22,7 @@ under `am instrument`).
 | 6+7 | 658fe2d | flattenAndroidAccessibilityTree helper + Android stale-ref test coverage. |
 | 8 | 6227536 | device_find/device_scrollintoview Android branches reuse the iOS orchestrators (D1217 symmetry). |
 | 9 | ccd82e8 | detectAndroidExternalRunner warns about competing UIAutomator/agent-device processes at session-open. |
-| 10 | (deferred) | Live Android emulator smoke-test — deferred on host disk space. See BUGS.md. |
+| 10 | `d0367da` (+ `f5d4e0a` plan-defect fix) | Live Android emulator smoke-test PASSED on Pixel_9_Pro AVD. Acceptance criteria green: handshake, /health, /command snapshot returning tab-* identifiers, zero upstream agent-device processes. Surfaced + fixed one real plan defect — target-app manifest was missing INTERNET permission (am instrument runs test code under target UID). |
 | 11 | (this commit) | Flip env default ON. `RN_ANDROID_RUNNER=0` is the new escape hatch. Docs. |
 
 **Acceptance criteria met:**
