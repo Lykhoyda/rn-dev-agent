@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
-**70+ MCP tools** · **5 agents** · **16 commands** · **1180+ tests** · **46 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**74 MCP tools** · **5 agents** · **17 commands** · **1180+ tests** · **46 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -74,20 +74,20 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | `/rn-dev-agent:build-and-test <desc>` | Build app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + PR body |
 
-**Actions: replayable app flows**
+**Actions: replayable app flows + the LLM/pragmatic hybrid**
 
-A saved, replayable flow through your app — login, navigate to settings, reach a known state. The plugin records actions automatically when verification passes; you replay them in seconds.
+An **action** is a saved Maestro flow the agent **emits** when `/test-feature` verification passes — not something you author. Each task is then composed of two regimes: **pragmatic reusable actions** for predictable parts (login, navigation, multi-step setup) and **LLM-driven discovery** for the part that's actually new. The agent uses actions as prologues to reach a known state before doing fresh interactive work. Measured: a 3-step wizard that took **13 min 55 s** as an interactive walk runs in **~4 s** when replayed — ~210× faster.
 
 | | |
 |---|---|
-| **What** | A saved, replayable flow through your app (login, navigation, multi-step setup). |
+| **What** | A saved, parameterised flow with a metadata header and `${KEY}` placeholders. |
 | **Where** | `.rn-agent/actions/<name>.yaml`. The plugin's home in your project is `.rn-agent/`. |
-| **Create one** | Run `/rn-dev-agent:test-feature <description>`. When verification passes, the plugin saves the verified walk as an action. |
-| **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state (e.g. logged-in home) before doing new work. |
-| **Self-repair** | If a `testID` changes, the plugin patches the action against the live UI and retries. Small UI drift is absorbed without re-recording; broken product logic is not auto-fixed. |
-| **Why** | Known flows replay in seconds instead of being rediscovered interactively. Repeated setup work like login becomes one fast step. |
+| **Create one** | Run `/rn-dev-agent:test-feature <description>`. The verified walk is saved as an action. |
+| **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state. |
+| **Self-repair** | If a `testID` changes, `cdp_repair_action` fuzzy-matches against the live snapshot, patches the YAML, and retries. Small UI drift absorbed; broken product logic surfaced, not auto-fixed. |
+| **Why hybrid** | Pure scripts don't adapt; pure LLM re-derives everything every session. Actions are the memory of the LLM loop — every successful verification adds one, every drift gets quietly absorbed, every truly broken flow escalates. |
 
-[Full actions guide](https://lykhoyda.github.io/rn-dev-agent/actions/)
+[Full actions guide — why the hybrid matters, tool surface, comparison vs Detox/Maestro/pure-LLM](https://lykhoyda.github.io/rn-dev-agent/actions/)
 
 **Setup & diagnostics:**
 
@@ -131,13 +131,14 @@ if (__DEV__) {
 
 ## MCP Tools
 
-The plugin exposes a wide surface area of MCP tools across four families. See the [tools reference](https://lykhoyda.github.io/rn-dev-agent/tools/) for the full list.
+The plugin exposes **74 MCP tools** across five families. See the [tools reference](https://lykhoyda.github.io/rn-dev-agent/tools/) for the full list.
 
 | Family | What it's for | Examples |
 |---|---|---|
-| **CDP** | React internals via Chrome DevTools Protocol | `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_native_errors`, `cdp_record_test_*`, `cdp_repair_action` |
-| **Device** | Native interaction with the simulator/emulator | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date` |
-| **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `cdp_run_action` |
+| **CDP** | React internals via Chrome DevTools Protocol | `cdp_status`, `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_native_errors`, `cdp_navigate`, `collect_logs` |
+| **Device** | Native interaction with the simulator/emulator | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_batch` |
+| **Actions** | Record / replay / self-repair persistent flows ([guide](https://lykhoyda.github.io/rn-dev-agent/actions/)) | `cdp_run_action`, `cdp_repair_action`, `cdp_record_test_save_as_action`, `cdp_record_test_*` |
+| **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all`, `cdp_auto_login` |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
 ### What's new in v0.44.18 (2026-05-05)

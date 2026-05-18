@@ -1,20 +1,80 @@
 ---
 title: Actions
-description: Saved, replayable flows through your app — what they are, where they live, and how the agent uses them.
+description: Saved, replayable flows through your app — what they are, why they exist, and how the agent mixes them with open-ended LLM work.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-An **action** is a saved, replayable flow through your app — login, navigating to a screen, completing a multi-step form. The plugin records them automatically when verification passes; you replay them in seconds via `/run-action`, and the agent uses them as prologues when it needs to reach a known state.
+An **action** is a saved, parameterised flow through your app — login, navigating to a screen, completing a multi-step form. The plugin records them automatically when `/test-feature` verification passes; you replay them in seconds via `/run-action`, and the agent uses them as **prologues** when it needs to reach a known state before doing new work.
 
 | | |
 |---|---|
-| **What** | A saved, replayable flow through your app (login, navigation, multi-step setup). |
+| **What** | A saved, replayable Maestro flow with a metadata header and `${KEY}` placeholders. |
 | **Where** | `.rn-agent/actions/<name>.yaml`. The plugin's home in your project is `.rn-agent/`. |
-| **Create one** | Run `/rn-dev-agent:test-feature <description>`. When verification passes, the plugin saves the verified walk as an action. |
+| **Create one** | Run `/rn-dev-agent:test-feature <description>`. On clean verification, the verified walk is saved as an action. |
 | **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state. |
 | **Self-repair** | If a `testID` changes, the plugin patches the action against the live UI and retries. Small UI drift is absorbed; broken product logic is not. |
 | **Why** | Known flows replay in seconds instead of being rediscovered interactively. Repeated setup work like login becomes one fast step. |
+
+## Why we have actions — the LLM/pragmatic hybrid
+
+LLM agents are great at **understanding intent and improvising on novel screens**. They are slow and stochastic at **re-deriving things they've already seen**. A login flow that took fourteen minutes to walk interactively the first time will take fourteen minutes again the next time, every time, if we don't record it.
+
+Pure-script approaches (Maestro, Detox, Appium) are the opposite: fast and deterministic on the happy path, but they don't adapt. A renamed `testID` breaks the script; a human re-records.
+
+Actions sit deliberately in the middle. They are **emitted by the agent, not authored by humans** — the verification walk that proves the feature works is the same artefact that gets replayed next time. The agent is in charge of when to *use* an action versus when to discover something new.
+
+### The composition pattern
+
+The agent never replays an entire job from a script — that would defeat the point of having an LLM in the loop. Each task is composed of two regimes:
+
+1. **Pragmatic reusable actions** for the predictable parts — login, "navigate to settings → security", "create a draft task with X title", switching locale, dismissing the subscription gate, getting back to logged-in home.
+2. **LLM-driven discovery** for the part that is actually new — verifying a specific UI state, exercising a new edge case, debugging a regression, walking a freshly built feature.
+
+A worked example. You ask: "tap the cart badge."
+
+- The agent reads the navigation state. The app is on `LoginScreen`, but the cart badge lives on `HomeScreen`.
+- It scans saved actions and finds `user-login`, whose recorded outcome is "logged-in home."
+- It runs `user-login` (~4 seconds), arrives at `HomeScreen`.
+- Then it discovers the cart badge interactively and taps it.
+
+### Measured impact
+
+A 3-step task-creation wizard took **13 min 55 s** as an interactive agent walk on first run; the same wizard replayed as an action runs in **~4 seconds** — a ~210× speed-up. Across 35 stories in the test app, average end-to-end time dropped from ~12 min to ~4 min once the corresponding actions existed. The latency win is most of the point, but the deeper one is **determinism**: replayed prologues take a fixed number of turns, so the LLM doesn't waste context re-orienting before getting to the actually-novel work.
+
+### How this compares with the alternatives
+
+| Failure mode | Pure script (Detox, Maestro) | Pure LLM (no actions) | This plugin |
+|---|---|---|---|
+| `testID` renamed in app | Breaks; human re-records | Re-discovers slowly each run | `cdp_repair_action` patches the YAML via fuzzy match against the live snapshot, retries, logs the diff |
+| Button moved / restyled | Breaks | Adapts but spends turns | Repair handles it; if structure changed, escalates |
+| Product logic changed | Passes anyway, masking the bug | Probabilistically catches it | Refuses to auto-patch a logical break; surfaces the failure to you |
+| Net-new behaviour to verify | n/a — can't author for unknown flows | Re-derives every session | Discovers interactively, then **the verified walk auto-saves as a new action** |
+| Cost over time | Linear (every drift needs a human) | Quadratic-ish (every session re-pays full walk) | Sub-linear (drift auto-absorbed, new flows compound the library) |
+
+Said another way: actions are the **memory** of the LLM loop. Every successful verification adds one. Every drift gets quietly absorbed. Every truly broken flow escalates.
+
+## Tool surface
+
+The hybrid is implemented across **four MCP tools** (one conceptual family, "Actions") and **two slash commands**.
+
+| Tool | Role |
+|---|---|
+| `cdp_record_test_save_as_action` | Convert a recorded interactive walk into a first-class `.rn-agent/actions/<id>.yaml` with metadata header and sidecar state file. Auto-promotes to `status: active` after the first clean replay. |
+| `cdp_run_action` | Replay an action by id with `params`. Orchestrates `maestro_run` + optional `cdp_repair_action` retry. Persists a `RunRecord` with `autoRepair` telemetry (passed / failed / refused / skipped, phase timings) so the experience engine can learn which flows are stable. |
+| `cdp_repair_action` | When a run fails with `SELECTOR_NOT_FOUND`, fuzzy-match the stale selector against the live snapshot, patch the YAML, retry. Refuses on human-edited files (`mtime` check), >3 repairs/24h, or snapshot infrastructure failure. |
+| `cdp_record_test_*` (start / stop / generate / annotate / save / load / list) | The recorder upstream of actions — captures device taps + CDP state assertions during interactive walks, before they get promoted to actions. |
+
+| Command | Role |
+|---|---|
+| [`/rn-dev-agent:list-learned-actions`](../commands/list-learned-actions/) | Read-only inventory — feedback memories + flows + skeletons + plugin commands. Shared script (`scripts/learned-actions.mjs`) is the single source of truth, also called by `rn-tester` / `rn-debugger` agents before they walk anything manually. |
+| [`/rn-dev-agent:run-action`](../commands/run-action/) | Side-effecting execution — looks up the action via the same script, gates safety checks (`mutates` flag, `appId` match, `${VAR}` coverage), then calls `cdp_run_action`. |
+
+## The artifact-first protocol
+
+Both the `rn-tester` and `rn-debugger` agents are instructed (via `feedback_execute_artifacts_before_manual.md`) to scan saved actions **before** composing any new `device_*` primitives. Manual primitives are the **fallback**, not the default — that's the lever that keeps the LLM from paying full-walk latency on flows it has already verified once.
+
+In practice this means a session opens with `/list-learned-actions` (or its programmatic equivalent), routes through `/run-action` when a match exists, and only drops to interactive `device_press` / `device_fill` / `cdp_interact` when no action covers the intent.
 
 ## Where actions live
 
@@ -77,19 +137,6 @@ When a `testID` gets renamed in your app and the action references the old name,
 <Aside type="caution" title="Self-repair has limits">
 Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not broken product logic. It refuses to touch files you've hand-edited (`mtime` check). It refuses after 3 repairs on the same action in 24h to avoid runaway patching. Failures escalate to you.
 </Aside>
-
-## The agent picks actions automatically
-
-You don't have to type `/run-action` yourself. When you ask the agent to do something on screen X but the app is on screen Y, the agent will scan saved actions for one that gets you to X and run it as a prologue — then continue with the new work interactively.
-
-**Example.** You ask: "tap the cart badge."
-
-- The agent reads the navigation state. The app is on `LoginScreen`, but the cart badge lives on `HomeScreen`.
-- It finds a saved `user-login` action whose recorded outcome is "logged-in home."
-- It runs `user-login` (~4 seconds), arrives at `HomeScreen`.
-- Then it discovers the cart badge interactively and taps it.
-
-This is the **hybrid composition** pattern. Actions cover the predictable parts (login, onboarding, locale switching, subscription gates) so the agent only spends time on the part that's actually new.
 
 ## What actions are NOT
 
