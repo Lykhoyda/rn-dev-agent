@@ -119,16 +119,51 @@ test('parser: case-insensitive — works on upper-case ELEMENT', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// First-match semantics: when output contains MULTIPLE failure-shaped lines,
-// the first one wins.
+// Terminal-match semantics (GH #118): when output contains MULTIPLE failure-
+// shaped lines, the LAST one wins — within a single pattern. Pattern
+// specificity outranks line position (covered by the 1.0.9 `id=` priority
+// test further down). Earlier in-line matches are typically transient
+// retries that maestro-runner reports as [INFO] before the auto-retry
+// succeeds; only the terminal failure should drive auto-repair.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('parser: returns first match when output contains multiple errors', () => {
+// GH #118: when output contains multiple failure lines, return the LAST
+// (terminal) one — not the first. Earlier matches are typically transient
+// retries that maestro-runner reports as [INFO] before the auto-retry
+// succeeds; the real failure is the last one before the run exits.
+test('parser: returns LAST match when output contains multiple errors (GH #118)', () => {
   const out = parseMaestroFailure([
     "Element with id 'first-failure' not found",
     "Element with id 'second-failure' not found",
   ].join('\n'));
-  assert.equal(out.selector, 'first-failure');
+  assert.equal(out.selector, 'second-failure');
+});
+
+test('parser: GH #118 transient-retry-then-real-failure shape — picks the terminal ERROR not the INFO retry', () => {
+  // Exact shape from the issue: an INFO-prefixed transient retry line
+  // earlier in the buffer matches the SELECTOR_NOT_FOUND pattern, but
+  // the run continues and ultimately fails on a different selector.
+  // Pre-fix behavior would auto-repair the transient (already-resolved)
+  // selector — wasting a budget slot and missing the real failure.
+  const out = parseMaestroFailure([
+    '[INFO] Tapping on element with id "transient-foo"',
+    '[INFO] Element with id "transient-foo" not found in current screen — retrying',
+    '[INFO] Tapping on element with id "transient-foo"',
+    '[ERROR] Element with id "real-failure" not found',
+    'Test FAILED',
+  ].join('\n'));
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'real-failure');
+});
+
+test('parser: single-line output still parses (whole-buffer fallback works when no newlines)', () => {
+  // The line-by-line scan returns nothing for a single-line input
+  // (the line equals the whole buffer; same path), but verifying the
+  // fallback whole-buffer scan still works for malformed-newline cases.
+  const out = parseMaestroFailure("Element with id 'lonely-failure' not found");
+  assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(out.selector, 'lonely-failure');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
