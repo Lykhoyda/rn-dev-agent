@@ -201,19 +201,20 @@ export function _resetForTest(): void {
   androidCapturer = defaultAndroidCapturer;
 }
 
-export interface RawScreenshotResult {
-  ok: true;
-  path: string;
-}
+export type RawScreenshotFailureReason = 'no-device' | 'capture-failed';
+
+export type RawScreenshotResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: RawScreenshotFailureReason };
 
 export async function tryRawScreenshot(
   platform: 'ios' | 'android',
   path: string,
-): Promise<RawScreenshotResult | null> {
+): Promise<RawScreenshotResult> {
   const resolver = platform === 'ios' ? iosResolver : androidResolver;
   const capturer = platform === 'ios' ? iosCapturer : androidCapturer;
   const id = await resolver();
-  if (!id) return null;
+  if (!id) return { ok: false, reason: 'no-device' };
   const ok = await capturer(id, path);
-  return ok ? { ok: true, path } : null;
+  return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
 }
