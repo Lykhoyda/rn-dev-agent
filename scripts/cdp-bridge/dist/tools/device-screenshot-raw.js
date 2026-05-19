@@ -186,7 +186,7 @@ export async function tryRawScreenshot(platform, path) {
     const capturer = platform === 'ios' ? iosCapturer : androidCapturer;
     const id = await resolver();
     if (!id)
-        return null;
+        return { ok: false, reason: 'no-device' };
     const ok = await capturer(id, path);
-    return ok ? { ok: true, path } : null;
+    return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
 }

@@ -4,10 +4,14 @@
 // directly to disambiguate when both an iOS sim and an Android emu are booted.
 //
 // Tests cover (1) pure parsers for `xcrun simctl list -j devices booted` JSON
-// and `adb devices` stdout, (2) the `tryRawScreenshot` orchestrator branches,
+// and `adb devices` stdout, (2) the `tryRawScreenshot` orchestrator branches
+// (now returning a discriminated union `{ok:true,path}` | `{ok:false,reason}`),
 // and (3) the device-list `captureAndResizeScreenshot` plumbing — that the
-// raw path is taken iff `platformExplicit` is true, and falls through to
-// `runAgentDevice` on any failure (graceful degradation per spec).
+// raw path is taken iff `platformExplicit` is true, and **hard-fails with an
+// actionable SCREENSHOT_FAILED envelope** when raw fails (per PR-B; the
+// original PR-A graceful-fallback was the regression vector for #136).
+// Implicit-platform calls (platformExplicit=false) still route through
+// runAgentDevice — backward parity preserved.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -122,7 +126,7 @@ test('tryRawScreenshot(ios): resolver returns UDID, capturer succeeds → envelo
   }
 });
 
-test('tryRawScreenshot(ios): resolver returns null → returns null (no capture attempt)', async () => {
+test('tryRawScreenshot(ios): resolver returns null → ok:false with reason no-device (no capture attempt)', async () => {
   const mod = await import(RAW_MOD);
   const { tryRawScreenshot, _setForTest, _resetForTest } = mod;
   let capturerCalled = false;
@@ -132,14 +136,14 @@ test('tryRawScreenshot(ios): resolver returns null → returns null (no capture 
   });
   try {
     const result = await tryRawScreenshot('ios', '/tmp/shot.jpg');
-    assert.equal(result, null);
+    assert.deepEqual(result, { ok: false, reason: 'no-device' });
     assert.equal(capturerCalled, false);
   } finally {
     _resetForTest();
   }
 });
 
-test('tryRawScreenshot(ios): capturer fails → returns null', async () => {
+test('tryRawScreenshot(ios): capturer fails → ok:false with reason capture-failed', async () => {
   const mod = await import(RAW_MOD);
   const { tryRawScreenshot, _setForTest, _resetForTest } = mod;
   _setForTest({
@@ -148,7 +152,7 @@ test('tryRawScreenshot(ios): capturer fails → returns null', async () => {
   });
   try {
     const result = await tryRawScreenshot('ios', '/tmp/shot.jpg');
-    assert.equal(result, null);
+    assert.deepEqual(result, { ok: false, reason: 'capture-failed' });
   } finally {
     _resetForTest();
   }
@@ -171,7 +175,7 @@ test('tryRawScreenshot(android): resolver returns emu-id, capturer succeeds → 
   }
 });
 
-test('tryRawScreenshot(android): capturer fails → returns null (mirrors iOS test for symmetry)', async () => {
+test('tryRawScreenshot(android): capturer fails → ok:false capture-failed (mirrors iOS for symmetry)', async () => {
   const mod = await import(RAW_MOD);
   const { tryRawScreenshot, _setForTest, _resetForTest } = mod;
   _setForTest({
@@ -180,7 +184,7 @@ test('tryRawScreenshot(android): capturer fails → returns null (mirrors iOS te
   });
   try {
     const result = await tryRawScreenshot('android', '/tmp/shot.png');
-    assert.equal(result, null);
+    assert.deepEqual(result, { ok: false, reason: 'capture-failed' });
   } finally {
     _resetForTest();
   }
@@ -254,31 +258,75 @@ test('captureAndResizeScreenshot: platformExplicit + android resolved → raw pa
   }
 });
 
-test('captureAndResizeScreenshot: platformExplicit + resolver fails → falls through to runAgentDevice', async () => {
+test('captureAndResizeScreenshot: platformExplicit + resolver miss → hard-fails (does NOT fall through to runAgentDevice)', async () => {
+  // GH #136 PR-B: the original PR-A behavior was to fall through to
+  // runAgentDevice on resolver miss. That was the regression vector — the
+  // fallback re-introduced the broken `--platform` routing. With an explicit
+  // platform, we must hard-fail with an actionable message instead.
   const raw = await import(RAW_MOD);
   const dl = await import(DEVICE_LIST_MOD);
   const { captureAndResizeScreenshot, _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest } = dl;
   let runAgentDeviceCalled = false;
-  _setRunAgentDeviceForTest(async (args, opts) => {
+  _setRunAgentDeviceForTest(async () => {
     runAgentDeviceCalled = true;
-    // Mimic agent-device success envelope shape.
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/fallback.jpg' } }) }],
-    };
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) }] };
   });
   raw._setForTest({
-    iosResolver: async () => null, // resolver fails — should fall through
+    androidResolver: async () => null, // no booted Android emulator
+  });
+  try {
+    const result = await captureAndResizeScreenshot({
+      platform: 'android',
+      platformExplicit: true,
+      path: '/tmp/shot.png',
+      maxWidth: 0,
+    });
+    assert.equal(runAgentDeviceCalled, false, 'runAgentDevice MUST NOT be the fallback when platform is explicit');
+    assert.equal(result.isError, true);
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'SCREENSHOT_FAILED');
+    assert.equal(envelope.meta.platform, 'android');
+    assert.equal(envelope.meta.reason, 'no-device');
+    // Error message names the platform and the underlying CLI so users know what to fix.
+    assert.match(envelope.error, /platform=android/);
+    assert.match(envelope.error, /adb/);
+  } finally {
+    _resetRunAgentDeviceForTest();
+    raw._resetForTest();
+  }
+});
+
+test('captureAndResizeScreenshot: platformExplicit + capture fails → hard-fails with capture-failed reason', async () => {
+  // Distinct from the resolver-miss case: device IS detected but the
+  // capture command itself failed (transient adb error, simctl crash,
+  // disk full, etc.). User-facing hint differs from "no device booted".
+  const raw = await import(RAW_MOD);
+  const dl = await import(DEVICE_LIST_MOD);
+  const { captureAndResizeScreenshot, _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest } = dl;
+  let runAgentDeviceCalled = false;
+  _setRunAgentDeviceForTest(async () => {
+    runAgentDeviceCalled = true;
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) }] };
+  });
+  raw._setForTest({
+    iosResolver: async () => 'UDID-IOS',
+    iosCapturer: async () => false,
   });
   try {
     const result = await captureAndResizeScreenshot({
       platform: 'ios',
       platformExplicit: true,
-      path: '/tmp/fallback.jpg',
+      path: '/tmp/shot.jpg',
       maxWidth: 0,
     });
-    assert.equal(runAgentDeviceCalled, true, 'runAgentDevice should be the fallback');
+    assert.equal(runAgentDeviceCalled, false);
+    assert.equal(result.isError, true);
     const envelope = JSON.parse(result.content[0].text);
-    assert.equal(envelope.ok, true);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'SCREENSHOT_FAILED');
+    assert.equal(envelope.meta.reason, 'capture-failed');
+    assert.match(envelope.error, /xcrun simctl/);
   } finally {
     _resetRunAgentDeviceForTest();
     raw._resetForTest();

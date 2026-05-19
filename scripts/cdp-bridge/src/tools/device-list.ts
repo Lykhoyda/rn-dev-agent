@@ -1,5 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import { runAgentDevice } from '../agent-device-wrapper.js';
+import { failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
@@ -210,17 +211,31 @@ export async function captureAndResizeScreenshot(
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
   const argsWithPath = { ...args, path: requestedPath };
   const advisories = computeScreenshotAdvisories(args, requestedPath);
-  // GH #136 PR-A: explicit-platform raw path bypasses agent-device's --platform
-  // routing when both iOS sim and Android emu are booted. Falls through to
-  // runAgentDevice on any failure (resolution miss, command error) — graceful
-  // degradation preserves single-device behavior identically.
+  // GH #136 PR-B: when `platform:` is explicit, hard-fail instead of falling
+  // through to runAgentDevice. The original PR-A "graceful degradation" was
+  // backwards — if the caller explicitly asked for iOS or Android, silently
+  // capturing the other platform via agent-device's broken `--platform`
+  // routing defeats the entire purpose of passing the arg. Re-evidence on
+  // the user-reported regression: an OOM-unstable emulator leaves
+  // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmu
+  // skips it, the fallback fires, iOS screen is returned.
   let result: ToolResult | undefined;
   if (args.platformExplicit && (args.platform === 'ios' || args.platform === 'android')) {
     const raw = await tryRawScreenshot(args.platform, requestedPath);
-    if (raw) {
+    if (raw.ok) {
       result = {
         content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: { path: raw.path } }) }],
       };
+    } else {
+      const cli = args.platform === 'ios' ? 'xcrun simctl' : 'adb';
+      const hint = raw.reason === 'no-device'
+        ? `No booted ${args.platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
+        : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
+      return failResult(
+        `device_screenshot platform=${args.platform} failed: ${hint}`,
+        'SCREENSHOT_FAILED',
+        { platform: args.platform, reason: raw.reason },
+      );
     }
   }
   if (!result) {
