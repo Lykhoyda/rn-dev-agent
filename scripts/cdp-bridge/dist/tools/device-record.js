@@ -11,6 +11,97 @@ const START_TIMEOUT_MS = 10_000;
 const STOP_TIMEOUT_MS = 60_000;
 const STATUS_TIMEOUT_MS = 5_000;
 const GIF_TIMEOUT_MS = 60_000;
+export function parseAllBootedIosDevices(jsonText) {
+    let data;
+    try {
+        data = JSON.parse(jsonText);
+    }
+    catch {
+        return [];
+    }
+    const runtimes = data?.devices;
+    if (!runtimes || typeof runtimes !== 'object')
+        return [];
+    const out = [];
+    for (const list of Object.values(runtimes)) {
+        if (!Array.isArray(list))
+            continue;
+        for (const device of list) {
+            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+                out.push({ udid: device.udid, state: device.state, name: device.name });
+            }
+        }
+    }
+    return out;
+}
+export function parseAllAdbDevices(stdout) {
+    const out = [];
+    for (const raw of stdout.split('\n')) {
+        const line = raw.trim();
+        if (!line || line.startsWith('List of devices'))
+            continue;
+        // Match any serial — not just `emulator-NNNN` — so physical devices count
+        // toward multi-device ambiguity detection.
+        const m = line.match(/^(\S+)\s+(device|offline|unauthorized)\b/);
+        if (!m)
+            continue;
+        out.push({ serial: m[1], state: m[2] });
+    }
+    return out;
+}
+async function listBootedIosUdids() {
+    try {
+        const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
+            timeout: 5000,
+            maxBuffer: 1024 * 1024,
+        });
+        return parseAllBootedIosDevices(stdout);
+    }
+    catch {
+        return [];
+    }
+}
+async function listConnectedAndroidDevices() {
+    try {
+        const { stdout } = await execFileAsync('adb', ['devices'], {
+            timeout: 5000,
+            maxBuffer: 1024 * 1024,
+        });
+        return parseAllAdbDevices(stdout).filter((d) => d.state === 'device');
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Pre-flight target resolution for `device_record start`. Returns the
+ * device id to use, or a structured ambiguity error listing the
+ * candidates the caller must pick from. Pure: takes the candidate list
+ * as input so the unit tests don't need to spawn xcrun/adb.
+ *
+ * Rules:
+ *   - 0 candidates → caller's NO_DEVICE path handles it (we don't fire here)
+ *   - 1 candidate  → auto-select, mark autoSelected: true
+ *   - >1 + explicit deviceId matches a candidate → use it
+ *   - >1 + explicit deviceId does NOT match → AMBIGUOUS with the full list
+ *     (so caller sees the exact valid ids — typos surface fast)
+ *   - >1 + no deviceId → AMBIGUOUS (the GH #173 bug fix surface)
+ */
+export function resolveTargetDevice(candidates, deviceId) {
+    // An explicit deviceId is authoritative regardless of candidate count.
+    // If the user said "record on X", we must record on X or refuse — silently
+    // picking a different device is the exact bug GH #173 reports.
+    if (deviceId) {
+        if (candidates.some((c) => c.id === deviceId)) {
+            return { ok: true, deviceId, autoSelected: false, totalAvailable: candidates.length };
+        }
+        return { ok: false, reason: 'AMBIGUOUS', candidates };
+    }
+    if (candidates.length === 1) {
+        return { ok: true, deviceId: candidates[0].id, autoSelected: true, totalAvailable: 1 };
+    }
+    return { ok: false, reason: 'AMBIGUOUS', candidates };
+}
 function getPluginRoot() {
     if (process.env.CLAUDE_PLUGIN_ROOT)
         return process.env.CLAUDE_PLUGIN_ROOT;
@@ -66,8 +157,37 @@ async function runStart(args) {
         return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
     }
     const outputPath = args.outputPath ?? defaultOutputPath(platform);
+    // GH #173 sub-issue 1: pre-flight multi-device disambiguation. The shell
+    // script's `simctl io booted` / `adb devices` resolution picks
+    // non-deterministically when more than one device is booted/connected,
+    // and silently captures the wrong one. Refuse to start until the
+    // caller pins a target with `deviceId`.
+    const candidates = platform === 'ios'
+        ? (await listBootedIosUdids()).map((d) => ({ id: d.udid, label: d.name }))
+        : (await listConnectedAndroidDevices()).map((d) => ({ id: d.serial }));
+    if (candidates.length === 0) {
+        return failResult(platform === 'ios' ? 'No iOS simulator booted.' : 'No Android device connected.', { code: 'NO_DEVICE' });
+    }
+    const resolution = resolveTargetDevice(candidates, args.deviceId);
+    if (!resolution.ok) {
+        const list = resolution.candidates
+            .map((c) => `  - ${c.id}${c.label ? ` (${c.label})` : ''}`)
+            .join('\n');
+        const argName = platform === 'ios' ? 'UDID' : 'serial';
+        return failResult(`device_record: ${resolution.candidates.length} ${platform} ${argName === 'UDID' ? 'simulators booted' : 'devices connected'} — refusing to auto-pick to avoid recording the wrong device. ` +
+            `Pass deviceId=<${argName}> to disambiguate:\n${list}`, { code: 'DEVICE_AMBIGUOUS', platform, candidates: resolution.candidates });
+    }
+    const scriptArgs = ['start', platform, outputPath];
+    // Only forward an explicit id when we're picking from >1 candidate; the
+    // single-device case keeps the script's existing `booted`/auto path so
+    // we don't regress any environment where simctl's `booted` shorthand
+    // works differently than passing the literal UDID (defensive — both
+    // should be equivalent on Apple's side).
+    if (!resolution.autoSelected) {
+        scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
+    }
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), ['start', platform, outputPath], { timeout: START_TIMEOUT_MS });
+        const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, { timeout: START_TIMEOUT_MS });
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
             return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
@@ -75,6 +195,8 @@ async function runStart(args) {
         return okResult({
             action: 'start',
             platform,
+            deviceId: resolution.deviceId,
+            autoSelected: resolution.autoSelected,
             output: parsed.output,
             pid: parsed.pid,
             note: 'Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures.',
