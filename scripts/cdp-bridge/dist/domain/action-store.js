@@ -5,10 +5,10 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseM7Header, serializeM7Header, } from './reusable-action.js';
-import { loadOrInitSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
+import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 /**
@@ -228,6 +228,37 @@ export function saveAction(action) {
  */
 export function actionWasEditedExternally(action) {
     return yamlEditedSinceLastSeen(action.filePath, action.state);
+}
+/**
+ * GH #173 (sub-issue 3): treat the YAML's current on-disk mtime as the
+ * new baseline. Stats the YAML, persists `markSeen(state, currentMtime)`
+ * to the sidecar, and returns a new ReusableAction with the refreshed
+ * lastSeenMtimeMs. Subsequent `actionWasEditedExternally()` checks
+ * return false until something edits the YAML again.
+ *
+ * Use case: `cdp_run_action` is called while the human is actively
+ * composing the YAML. The human's edit IS the intent; the Phase 129
+ * guardrail (which exists to protect offline human edits from
+ * auto-repair clobber) is over-protective in this loop. The orchestrator
+ * acknowledges the edit before running so any downstream repair
+ * proceeds without `STALE_TARGET`.
+ *
+ * No-op when the YAML mtime equals the sidecar's lastSeenMtimeMs (the
+ * common case where no external write happened).
+ */
+export function acknowledgeExternalEdit(action) {
+    let currentMtimeMs;
+    try {
+        currentMtimeMs = statSync(action.filePath).mtimeMs;
+    }
+    catch {
+        return action;
+    }
+    if (currentMtimeMs <= action.state.lastSeenMtimeMs)
+        return action;
+    const nextState = markSeen(action.state, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
 }
 /**
  * Issue #117: CAS variant of `saveAction`. Compares the on-disk

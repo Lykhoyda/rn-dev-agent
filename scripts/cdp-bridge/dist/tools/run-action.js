@@ -28,7 +28,7 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 import { okResult, failResult } from '../utils.js';
-import { loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
 import { appendRunRecord, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
@@ -121,10 +121,16 @@ export function createRunActionHandler(deps = {}) {
             return failResult(`Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/ and be <= 64 chars`, 'BAD_FILENAME');
         }
         const projectRoot = args.projectRoot ?? process.cwd();
-        const action = loadAction(projectRoot, args.actionId);
-        if (!action) {
+        const loaded = loadAction(projectRoot, args.actionId);
+        if (!loaded) {
             return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', { hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.' });
         }
+        // GH #173 (sub-issue 3): default-true forceReload acknowledges any
+        // human edit to the YAML as the new baseline so downstream auto-repair
+        // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
+        // get the strict Phase 129 "respect external edits" behavior back.
+        const forceReload = args.forceReload !== false;
+        const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const autoRepairEnabled = args.autoRepair !== false;
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;

@@ -31,7 +31,7 @@
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
-import { loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
 import {
   type RunRecord,
   type AutoRepairOutcome,
@@ -103,6 +103,18 @@ export interface RunActionArgs {
    * so a parameterised flow can be replayed identically after repair.
    */
   params?: Record<string, string>;
+  /**
+   * GH #173 (sub-issue 3): when true (default), treat the YAML's current
+   * on-disk state as the new baseline before running. Bumps the sidecar's
+   * lastSeenMtimeMs so a downstream cdp_repair_action call doesn't abort
+   * with STALE_TARGET during active human composition.
+   *
+   * Pass `false` to opt back into the Phase 129 "respect external edits"
+   * behavior: any human edit since the agent's last write makes repair
+   * refuse to run. Use this when you don't want auto-repair to clobber
+   * offline human edits (e.g. CI replays of fixed baselines).
+   */
+  forceReload?: boolean;
 }
 
 interface MaestroEnvelope {
@@ -191,14 +203,20 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     }
 
     const projectRoot = args.projectRoot ?? process.cwd();
-    const action = loadAction(projectRoot, args.actionId);
-    if (!action) {
+    const loaded = loadAction(projectRoot, args.actionId);
+    if (!loaded) {
       return failResult(
         `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`,
         'NO_PROJECT_ROOT',
         { hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.' },
       );
     }
+    // GH #173 (sub-issue 3): default-true forceReload acknowledges any
+    // human edit to the YAML as the new baseline so downstream auto-repair
+    // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
+    // get the strict Phase 129 "respect external edits" behavior back.
+    const forceReload = args.forceReload !== false;
+    const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
     const autoRepairEnabled = args.autoRepair !== false;
     const trigger: 'agent' | 'ci' | 'human' = args.trigger ?? 'agent';
