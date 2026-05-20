@@ -35,9 +35,31 @@ is_alive() {
 cmd_start() {
   local platform="${1:-}"
   local output_path="${2:-}"
+  shift 2 2>/dev/null || true
 
   [[ -z "$platform" || -z "$output_path" ]] && { echo "Error: start requires <platform> <output-path>" >&2; exit 1; }
   [[ "$platform" != "ios" && "$platform" != "android" ]] && { echo "Error: platform must be ios or android" >&2; exit 1; }
+
+  # GH #173 sub-issue 1: optional explicit target identifier for multi-device
+  # scenarios. `--udid <UDID>` for iOS (passed verbatim to `simctl io`),
+  # `--serial <SERIAL>` for Android (passed to `adb -s`). The TS handler at
+  # device-record.ts:resolveTargetDevice does pre-flight ambiguity detection
+  # and only forwards an identifier when there are 2+ candidates; the
+  # single-device case still uses the implicit `booted`/auto resolver below.
+  local target_id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --udid|--serial)
+        target_id="${2:-}"
+        [[ -z "$target_id" ]] && { echo "Error: $1 requires a value" >&2; exit 1; }
+        shift 2
+        ;;
+      *)
+        echo "Error: unknown flag '$1' for start" >&2
+        exit 1
+        ;;
+    esac
+  done
 
   local pf
   pf="$(pid_file "$platform")"
@@ -57,7 +79,8 @@ cmd_start() {
       echo "Error: No iOS simulator booted" >&2
       exit 1
     fi
-    xcrun simctl io booted recordVideo --force "$raw_file" &
+    local ios_target="${target_id:-booted}"
+    xcrun simctl io "$ios_target" recordVideo --force "$raw_file" &
     local rec_pid=$!
   else
     raw_file="${RAW_PREFIX}-${platform}-$$.mp4"
@@ -66,7 +89,11 @@ cmd_start() {
       exit 1
     fi
     local device_path="/sdcard/rn-dev-agent-proof-$$.mp4"
-    adb shell screenrecord "$device_path" &
+    if [[ -n "$target_id" ]]; then
+      adb -s "$target_id" shell screenrecord "$device_path" &
+    else
+      adb shell screenrecord "$device_path" &
+    fi
     local rec_pid=$!
   fi
 
@@ -81,6 +108,17 @@ cmd_start() {
   echo "$output_path" > "$(path_file "$platform")"
   echo "$raw_file" > "${PID_PREFIX}-${platform}.raw-path"
   [[ "$platform" == "android" ]] && echo "$device_path" > "${PID_PREFIX}-${platform}.device-path"
+  # Persist the Android serial so the stop path scopes pkill/pull/rm to
+  # the same device. Unconditionally write or clear — leaving a stale
+  # sidecar from a prior recording would misroute this stop to a now-
+  # disconnected device.
+  if [[ "$platform" == "android" ]]; then
+    if [[ -n "$target_id" ]]; then
+      echo "$target_id" > "${PID_PREFIX}-${platform}.serial"
+    else
+      rm -f "${PID_PREFIX}-${platform}.serial"
+    fi
+  fi
   echo "Recording started: platform=$platform pid=$rec_pid output=$output_path"
 }
 
@@ -128,17 +166,28 @@ cmd_stop() {
 
     # --- Pull Android recording from device ---
     if [[ "$platform" == "android" ]]; then
+      # GH #173 sub-issue 1: scope every adb call to the serial that
+      # cmd_start recorded against, so multi-device stop doesn't hit
+      # "ambiguous device" or operate on the wrong target. Falls back to
+      # implicit selection when no serial sidecar exists (single-device
+      # case, or recording started before this change).
+      local -a adb_args=()
+      local serialf="${PID_PREFIX}-${platform}.serial"
+      if [[ -f "$serialf" ]]; then
+        adb_args+=(-s "$(cat "$serialf")")
+      fi
       # Ensure remote screenrecord is stopped (local SIGINT may not propagate)
-      adb shell pkill -2 screenrecord 2>/dev/null || true
+      adb "${adb_args[@]}" shell pkill -2 screenrecord 2>/dev/null || true
       local device_pathf="${PID_PREFIX}-${platform}.device-path"
       if [[ -f "$device_pathf" ]]; then
         local device_path
         device_path="$(cat "$device_pathf")"
         sleep 2
-        adb pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
-        adb shell rm -f "$device_path" 2>/dev/null || true
+        adb "${adb_args[@]}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+        adb "${adb_args[@]}" shell rm -f "$device_path" 2>/dev/null || true
         rm -f "$device_pathf"
       fi
+      rm -f "$serialf"
     fi
 
     # --- Convert to MP4 with faststart + validate ---
