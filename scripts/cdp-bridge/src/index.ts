@@ -507,15 +507,19 @@ trackedTool(
 
 trackedTool(
   'cdp_interact',
-  'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead.',
+  'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler".',
   {
-    action: z.enum(['press', 'longPress', 'typeText', 'scroll']).describe('press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll.'),
-    testID: z.string().optional().describe('testID prop of the target component (strict match — preferred)'),
+    action: z.enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue']).describe('press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).'),
+    testID: z.string().optional().describe('testID prop of the target component (strict match — preferred). For setFieldValue, this is the testID anchor inside the form\'s subtree from which to walk up.'),
     accessibilityLabel: z.string().optional().describe('accessibilityLabel prop (used if testID not provided). Tiered match: exact → normalized (trim+lowercase) → substring. Returns Ambiguous error if >1 component matches.'),
     text: z.string().optional().describe('Required for typeText: the text to enter'),
     scrollX: z.number().optional().describe('For scroll: horizontal offset in pixels (default 0)'),
     scrollY: z.number().optional().describe('For scroll: vertical offset in pixels (default 300)'),
     animated: z.boolean().default(true).describe('For scroll: whether to animate'),
+    name: z.string().optional().describe('Required for setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">).'),
+    value: z.union([z.string(), z.number(), z.boolean()]).optional().describe('Required for setFieldValue: the value to set. Passed verbatim to setValue; no coercion.'),
+    shouldValidate: z.boolean().optional().describe('For setFieldValue: pass-through to setValue\'s options.shouldValidate (default true). Set false to suppress synchronous validation.'),
+    shouldDirty: z.boolean().optional().describe('For setFieldValue: pass-through to setValue\'s options.shouldDirty (default true). Set false to keep the field marked pristine.'),
   },
   createInteractHandler(getClient),
 );
