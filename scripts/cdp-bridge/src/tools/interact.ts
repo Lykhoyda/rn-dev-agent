@@ -1,7 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 
-type InteractAction = 'press' | 'typeText' | 'scroll';
+type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
 interface InteractArgs {
   action: InteractAction;
@@ -11,6 +11,11 @@ interface InteractArgs {
   scrollX?: number;
   scrollY?: number;
   animated: boolean;
+  // setFieldValue — see injected-helpers.ts setFieldValue handler.
+  name?: string;
+  value?: string | number | boolean;
+  shouldValidate?: boolean;
+  shouldDirty?: boolean;
 }
 
 export function createInteractHandler(getClient: () => CDPClient) {
@@ -21,6 +26,14 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.action === 'typeText' && args.text === undefined) {
       return failResult('text parameter is required for typeText action');
     }
+    if (args.action === 'setFieldValue') {
+      if (args.name === undefined || args.name.length === 0) {
+        return failResult('name parameter is required for setFieldValue action — the React Hook Form field name');
+      }
+      if (args.value === undefined) {
+        return failResult('value parameter is required for setFieldValue action');
+      }
+    }
 
     const opts: Record<string, unknown> = { action: args.action };
     if (args.testID !== undefined) opts.testID = args.testID;
@@ -29,6 +42,10 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.scrollX !== undefined) opts.scrollX = args.scrollX;
     if (args.scrollY !== undefined) opts.scrollY = args.scrollY;
     opts.animated = args.animated;
+    if (args.name !== undefined) opts.name = args.name;
+    if (args.value !== undefined) opts.value = args.value;
+    if (args.shouldValidate !== undefined) opts.shouldValidate = args.shouldValidate;
+    if (args.shouldDirty !== undefined) opts.shouldDirty = args.shouldDirty;
 
     const result = await client.evaluate(
       `__RN_AGENT.interact(${JSON.stringify(opts)})`

@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 21;
+  var __HELPERS_VERSION__ = 22;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -1244,6 +1244,87 @@ export const INJECTED_HELPERS = `
           handlerCalled: picked.handler,
           resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
           visitedFibers: visited
+        });
+      }
+
+      if (action === 'setFieldValue') {
+        // Issue #126 Gap A — explicit React Hook Form fallback. typeText's
+        // handler chain walks DOWN looking for a TextInput descendant with
+        // onChangeText/onChange. That works for wrapper-Pressable patterns
+        // where the inner TextInput is reachable, but fails when the field's
+        // value flows through field.onChange → FormProvider context →
+        // setValue. There's no inner TextInput-shaped fiber to find, because
+        // the design-system field calls field.onChange directly via a
+        // Controller render prop.
+        //
+        // Resolution: walk UP from the matched fiber (the testID anchor)
+        // looking for a Provider fiber whose memoizedProps.value duck-types
+        // as a React Hook Form UseFormReturn. Then call value.setValue(
+        // name, value, options). The closest ancestor wins (natural React
+        // context resolution), so nested forms behave intuitively.
+        var fieldName = opts.name;
+        var fieldValue = opts.value;
+        if (typeof fieldName !== 'string' || fieldName.length === 0) {
+          return JSON.stringify({
+            error: 'setFieldValue requires opts.name (the RHF field name)',
+            testID: selector,
+            hint: 'Pass the same \`name\` string you used in \`useController({ name })\` or \`<Controller name="..." />\`.'
+          });
+        }
+        var shouldValidate = opts.shouldValidate !== false;
+        var shouldDirty = opts.shouldDirty !== false;
+
+        var ANCESTOR_DEPTH_CAP = 32;
+        var ANCESTOR_VISIT_CAP = 100;
+        function looksLikeUseFormReturn(v) {
+          return (
+            v && typeof v === 'object'
+            && typeof v.setValue === 'function'
+            && typeof v.getValues === 'function'
+            && v.control && typeof v.control === 'object'
+          );
+        }
+        var ancestor = found.return;
+        var ancestorDepth = 0;
+        var ancestorVisits = 0;
+        var formReturn = null;
+        while (ancestor && ancestorDepth < ANCESTOR_DEPTH_CAP && ancestorVisits < ANCESTOR_VISIT_CAP) {
+          ancestorVisits++;
+          var aProps = ancestor.memoizedProps;
+          if (aProps && looksLikeUseFormReturn(aProps.value)) {
+            formReturn = aProps.value;
+            break;
+          }
+          ancestor = ancestor.return;
+          ancestorDepth++;
+        }
+        if (!formReturn) {
+          return JSON.stringify({
+            error: 'setFieldValue: no FormProvider ancestor found',
+            testID: selector,
+            ancestorVisits: ancestorVisits,
+            hint: 'No React Hook Form FormProvider ancestor with setValue+getValues+control was reachable within ' + ANCESTOR_DEPTH_CAP + ' levels. Either the form is not wrapped in <FormProvider {...methods}>, or the testID anchor sits outside the form subtree. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
+          });
+        }
+        try {
+          formReturn.setValue(fieldName, fieldValue, { shouldValidate: shouldValidate, shouldDirty: shouldDirty });
+        } catch (e) {
+          return JSON.stringify({
+            error: 'setFieldValue: setValue threw: ' + (e && e.message ? e.message : String(e)),
+            testID: selector,
+            name: fieldName,
+            hint: 'The form was found but its setValue rejected the call. Common causes: name does not exist on the form, value type mismatch, or the form is in a transitioning state.'
+          });
+        }
+        return JSON.stringify({
+          success: true,
+          action: 'setFieldValue',
+          testID: selector,
+          name: fieldName,
+          value: fieldValue,
+          shouldValidate: shouldValidate,
+          shouldDirty: shouldDirty,
+          ancestorVisits: ancestorVisits
         });
       }
 

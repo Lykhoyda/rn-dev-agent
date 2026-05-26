@@ -7,6 +7,14 @@ export function createInteractHandler(getClient) {
         if (args.action === 'typeText' && args.text === undefined) {
             return failResult('text parameter is required for typeText action');
         }
+        if (args.action === 'setFieldValue') {
+            if (args.name === undefined || args.name.length === 0) {
+                return failResult('name parameter is required for setFieldValue action — the React Hook Form field name');
+            }
+            if (args.value === undefined) {
+                return failResult('value parameter is required for setFieldValue action');
+            }
+        }
         const opts = { action: args.action };
         if (args.testID !== undefined)
             opts.testID = args.testID;
@@ -19,6 +27,14 @@ export function createInteractHandler(getClient) {
         if (args.scrollY !== undefined)
             opts.scrollY = args.scrollY;
         opts.animated = args.animated;
+        if (args.name !== undefined)
+            opts.name = args.name;
+        if (args.value !== undefined)
+            opts.value = args.value;
+        if (args.shouldValidate !== undefined)
+            opts.shouldValidate = args.shouldValidate;
+        if (args.shouldDirty !== undefined)
+            opts.shouldDirty = args.shouldDirty;
         const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
         if (result.error) {
             return failResult(`Interact error: ${result.error}`);
