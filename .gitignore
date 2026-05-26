@@ -21,8 +21,8 @@ scripts/rn-fast-runner/**/DerivedData/
 # deepsec scanner workspace (local-only — config, data/<id>/INFO.md, scan output)
 .deepsec/
 
-# codex-pair (per-developer opt-in; marker presence enables the hook)
-.codex-pair-context.md
-.codex-pair-log.jsonl
-.codex-pair-cache/
-.codex-pair-state/
+# codex-pair (per-developer opt-in; marker presence enables the hook).
+# Per ADR-092, every state artifact (marker, log, cache, ignore globs,
+# pause sentinel, inflight locks) nests under a single directory so one
+# line covers everything including future additions.
+.codex-pair/
