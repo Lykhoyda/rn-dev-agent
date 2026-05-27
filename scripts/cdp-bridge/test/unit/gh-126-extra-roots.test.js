@@ -252,3 +252,38 @@ test('iterateAllRoots: non-function resolver (e.g., array assigned directly) —
   assert.equal(all[0].rendererId, 1);
   assert.equal(all[0].fiber, rendererRoot);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End-to-end: cdp_interact press testID flows through the real interact()
+// entry point in injected-helpers, which uses forEachRootFiber → iterateAllRoots
+// → extra-roots step → extractFiberFromInstance. If the entire chain works,
+// onPress fires on a component that lives ONLY in an extra-root subtree —
+// proving the user-visible bug from GH #126 Gap B is actually fixed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('end-to-end: cdp_interact press testID resolves to component inside extra-root subtree, onPress fires', () => {
+  let onPressFired = false;
+  const buttonFiber = fiber({
+    displayName: 'Pressable',
+    memoizedProps: { testID: 'modal-confirm-btn', onPress: () => { onPressFired = true; } },
+  });
+  // Modal root → Pressable child. The Pressable carries the testID.
+  const modalRoot = fiber({ displayName: 'SheetProvider' });
+  linkFiber(modalRoot, buttonFiber);
+
+  // No renderer roots — the modal-rooted Pressable is ONLY reachable via
+  // the extra-roots channel, mimicking the GH #126 reporter's setup.
+  const sandbox = makeSandbox({
+    extraRoots: () => [{ _reactInternals: modalRoot }],
+  });
+
+  const result = JSON.parse(vm.runInContext(
+    "__RN_AGENT.interact({ action: 'press', testID: 'modal-confirm-btn' })",
+    sandbox,
+  ));
+
+  assert.equal(result.success, true, `expected success, got: ${JSON.stringify(result)}`);
+  assert.equal(result.action, 'press');
+  assert.equal(result.testID, 'modal-confirm-btn');
+  assert.equal(onPressFired, true, 'onPress must fire on the matched component');
+});
