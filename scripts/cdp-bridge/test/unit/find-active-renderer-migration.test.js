@@ -12,15 +12,27 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 test('B145 + Issue #126: forEachRootFiber helper is defined in the IIFE', () => {
   assert.match(INJECTED_HELPERS, /function forEachRootFiber\(cb\)/, 'forEachRootFiber helper missing');
-  // Issue #126: cap bumped from 5 → 20 with early-exit-after-3-empty.
+  // GH #126 Gap B Task 3 refactor: forEachRootFiber now delegates to the
+  // private iterateAllRoots primitive (shared with findAllRootFibers).
+  // The actual loop / try-catch / short-circuit invariants are asserted on
+  // iterateAllRoots below; here we just confirm the wrapper passes cb through.
   const slice = INJECTED_HELPERS.split('function forEachRootFiber')[1]?.split('function ')[0] ?? '';
-  assert.match(slice, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'forEachRootFiber missing renderer loop');
-  assert.match(slice, /try \{/, 'forEachRootFiber missing try guard');
-  assert.match(slice, /catch \(_\)/, 'forEachRootFiber missing per-renderer catch');
-  // Short-circuits on truthy callback return
-  assert.match(slice, /if \(result\) return result;/, 'forEachRootFiber short-circuit missing');
+  assert.match(slice, /return iterateAllRoots\(cb\);/, 'forEachRootFiber should delegate to iterateAllRoots');
   // Cap is 20
   assert.match(INJECTED_HELPERS, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
+});
+
+test('GH #126 Gap B: iterateAllRoots primitive owns the renderer-loop invariants', () => {
+  // Both forEachRootFiber and findAllRootFibers delegate here. This is the
+  // single source of truth for renderer iteration semantics.
+  assert.match(INJECTED_HELPERS, /function iterateAllRoots\(cb\)/, 'iterateAllRoots primitive missing');
+  const slice = INJECTED_HELPERS.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
+  // Issue #126: cap bumped from 5 → 20 with early-exit-after-3-empty.
+  assert.match(slice, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'iterateAllRoots missing renderer loop');
+  assert.match(slice, /try \{/, 'iterateAllRoots missing try guard');
+  assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
+  // Short-circuits on truthy callback return
+  assert.match(slice, /if \(result\) return result;/, 'iterateAllRoots short-circuit missing');
 });
 
 test('B145: getStoreState redux fiber walk uses forEachRootFiber (not single-renderer)', () => {

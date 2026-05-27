@@ -1,6 +1,6 @@
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 22;
+  var __HELPERS_VERSION__ = 23;
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
@@ -32,75 +32,113 @@ export const INJECTED_HELPERS = `
     return null;
   }
 
-  // B145: iterate root.current fibers across ALL renderers. Callback
-  // returns truthy to short-circuit. Used by tools that want "find first
-  // match across renderers" semantics — Redux Provider, NavigationContainer,
-  // target testID. Returns the first truthy callback result, or null if no
-  // match in any renderer. Per-renderer try/catch so one bad renderer
-  // doesn't poison the search.
-  function forEachRootFiber(cb) {
+  // GH #126 Gap B — private primitive consolidating renderer-roots
+  // iteration. Both forEachRootFiber and findAllRootFibers delegate
+  // here. A truthy return from cb short-circuits iteration (matches
+  // existing forEachRootFiber semantics — 0/false/'' continue).
+  // Returns whatever cb returned, or null if cb never short-circuited.
+  //
+  // Per-renderer try/catch protects against one renderer's getFiberRoots
+  // throwing during teardown/HMR/worklet init (Gemini A3, 2026-04-23,
+  // conf 80) — a single bad renderer must not poison the union.
+  //
+  // Task 4 will add an extra-roots step here that consults
+  // globalThis.__RN_AGENT_EXTRA_ROOTS__ AFTER the native renderer loop
+  // so user-registered portals stay lower priority than React's own
+  // registry. Not in this commit — refactor isolated from new behavior
+  // for cleaner bisects.
+  function iterateAllRoots(cb) {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    var emptyStreak = 0;
-    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-      try {
-        var roots = hook.getFiberRoots(ri);
-        if (roots && roots.size) {
-          emptyStreak = 0;
-          var it = roots.values();
-          var v;
-          while (!(v = it.next()).done) {
-            if (v.value && v.value.current) {
-              var result = cb(v.value.current, ri);
-              if (result) return result;
+    if (hook && typeof hook.getFiberRoots === 'function') {
+      var emptyStreak = 0;
+      for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+        try {
+          var roots = hook.getFiberRoots(ri);
+          if (roots && roots.size) {
+            emptyStreak = 0;
+            var it = roots.values();
+            var v;
+            while (!(v = it.next()).done) {
+              if (v.value && v.value.current) {
+                var result = cb(v.value.current, ri);
+                if (result) return result;
+              }
             }
+          } else {
+            emptyStreak++;
+            if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) break;
           }
-        } else {
+        } catch (_) {
           emptyStreak++;
-          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) {
-        emptyStreak++;
       }
     }
+    // GH #126 Gap B — extra-roots step. Runs AFTER the native renderer
+    // loop (above) so user-registered portals are lower priority than
+    // React's own registry. Independent try/catch from the per-renderer
+    // try/catch above — one bad resolver should not poison results we
+    // already collected from React's renderers. Negative rendererId
+    // (-1) marks extra-roots so consumers can distinguish them by
+    // metadata if needed; the cb still gets the same (rootFiber,
+    // rendererId) signature.
+    try {
+      var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+      if (typeof extraResolver === 'function') {
+        var instances = extraResolver();
+        if (Array.isArray(instances)) {
+          for (var i = 0; i < instances.length; i++) {
+            var extraFiber = extractFiberFromInstance(instances[i]);
+            if (extraFiber) {
+              var extraResult = cb(extraFiber, -1);
+              if (extraResult) return extraResult;
+            }
+          }
+        }
+      }
+    } catch (_) { /* swallow — resolver bug must not break iteration */ }
     return null;
   }
 
-  // B143: collect root.current fibers from EVERY registered React renderer.
-  // findActiveRenderer returns only the first non-empty renderer, which is
-  // typically LogBox (a tiny shell). The main app tree often lives on a
-  // later rendererID (common with Bridgeless + Reanimated, which register
-  // their own secondary renderer). For query tools that must reach all
-  // user components, use this helper instead.
-  // Gemini A3 (2026-04-23, conf 80): per-renderer try/catch protects against
-  // one renderer's getFiberRoots throwing during teardown/HMR/worklet init —
-  // a single bad renderer shouldn't poison the union.
+  // Public generator-style iterator. Calls cb for each renderer-root
+  // and extra-root; returns first truthy result, else null. See
+  // iterateAllRoots() for the consolidated iteration logic.
+  function forEachRootFiber(cb) {
+    return iterateAllRoots(cb);
+  }
+
+  // B143: public collector returning Array<{rendererId, fiber}> across
+  // EVERY registered React renderer. findActiveRenderer returns only the
+  // first non-empty renderer — typically LogBox (a tiny shell). The main
+  // app tree often lives on a later rendererID (common with Bridgeless +
+  // Reanimated, which register their own secondary renderer). Query tools
+  // that must reach all user components use this helper, not
+  // findActiveRenderer. Delegates the iteration to iterateAllRoots; the
+  // collector cb explicitly returns null to never short-circuit.
   function findAllRootFibers() {
-    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || typeof hook.getFiberRoots !== 'function') return [];
     var out = [];
-    var emptyStreak = 0;
-    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-      try {
-        var roots = hook.getFiberRoots(ri);
-        if (roots && roots.size) {
-          emptyStreak = 0;
-          var it = roots.values();
-          var v;
-          while (!(v = it.next()).done) {
-            if (v.value && v.value.current) {
-              out.push({ rendererId: ri, fiber: v.value.current });
-            }
-          }
-        } else {
-          emptyStreak++;
-          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return out;
-        }
-      } catch (_) {
-        emptyStreak++;
-      }
-    }
+    iterateAllRoots(function(rootFiber, rendererId) {
+      out.push({ rendererId: rendererId, fiber: rootFiber });
+      return null; // explicit — keep collecting, never short-circuit
+    });
     return out;
+  }
+
+  // GH #126 Gap B — convert a user-provided React component instance into
+  // a fiber for iterateAllRoots() to walk. Three accepted shapes, tried
+  // in order: (1) instance._reactInternals (modern React 16.8+ class
+  // components and useImperativeHandle-exposed values), (2) instance.
+  // _reactInternalFiber (legacy React), (3) already-a-fiber escape hatch
+  // for advanced users — duck-typed by REQUIRING both 'return' and 'child'
+  // as own/inherited keys (the dual requirement rejects generator-like
+  // objects that only have .return). Returns null on any other input —
+  // the caller treats null as "skip this entry," which is the silent
+  // partial-failure isolation per spec §6.
+  function extractFiberFromInstance(inst) {
+    if (!inst || typeof inst !== 'object') return null;
+    if (inst._reactInternals) return inst._reactInternals;
+    if (inst._reactInternalFiber) return inst._reactInternalFiber;
+    if ('return' in inst && 'child' in inst) return inst;
+    return null;
   }
 
   // Sanitize an object by enumerating properties safely — getters that throw
@@ -1728,6 +1766,9 @@ export const INJECTED_HELPERS = `
     getConsole: getConsole,
     clearConsole: clearConsole,
     interact: interact,
+    __extractFiberFromInstance: extractFiberFromInstance,
+    __findAllRootFibers: findAllRootFibers,
+    __forEachRootFiber: forEachRootFiber,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
