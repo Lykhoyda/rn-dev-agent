@@ -420,6 +420,24 @@ getBridge()?.registerStores({ auth: useAuthStore, cart: useCartStore });
 
 If `cdp_navigate` fails with "Navigation ref not found" despite the fiber walk, the most likely causes are: (a) the app isn't fully bundled yet — wait for `cdp_status.helpersInjected: true`; (b) class-component root that doesn't expose a ref — use the bridge `registerNavRef` fallback; (c) a non-React-Navigation router — out of scope for this plugin's current tools.
 
+### Portal modal coverage (react-native-actions-sheet, @gorhom/bottom-sheet, custom Modals)
+
+If your app uses `react-native-actions-sheet`, `@gorhom/bottom-sheet`, or any other library that mounts modal content via React Native's `Modal` (which on iOS spawns a separate UIWindow with its own fiber root that React DevTools doesn't enumerate), `cdp_interact press testID="..."` will return "Component not found" for fields inside the modal even though they're visibly mounted.
+
+Fix: expose those portal roots to the plugin in your app entry's `__DEV__` block:
+
+```typescript
+if (__DEV__) {
+  globalThis.__RN_AGENT_EXTRA_ROOTS__ = () =>
+    [
+      sheetProviderRef.current,        // react-native-actions-sheet
+      bottomSheetRef.current,          // @gorhom/bottom-sheet
+    ].filter(Boolean);
+}
+```
+
+The function is called fresh on every fiber-root scan, so refs that mount and unmount are picked up dynamically. `.filter(Boolean)` handles the case where a ref hasn't been attached yet.
+
 ### Critical Timing Rules
 
 Tool calls must follow this sequence to avoid race conditions:
