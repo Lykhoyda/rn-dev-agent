@@ -317,6 +317,6 @@ test('M10: getAppInfo returns architecture=unknown when nativeFabricUIManager is
   assert.equal(info.architecture, 'unknown');
 });
 
-test('Issue #126 Gap A: helpers bundle version is 22 (bumped for setFieldValue action)', () => {
-  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*22/);
+test('Issue #126 Gap B: helpers bundle version is 23 (bumped for extra-roots + iterateAllRoots primitive)', () => {
+  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*23/);
 });
