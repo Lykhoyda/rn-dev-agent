@@ -73,6 +73,29 @@ export const INJECTED_HELPERS = `
         }
       }
     }
+    // GH #126 Gap B — extra-roots step. Runs AFTER the native renderer
+    // loop (above) so user-registered portals are lower priority than
+    // React's own registry. Independent try/catch from the per-renderer
+    // try/catch above — one bad resolver should not poison results we
+    // already collected from React's renderers. Negative rendererId
+    // (-1) marks extra-roots so consumers can distinguish them by
+    // metadata if needed; the cb still gets the same (rootFiber,
+    // rendererId) signature.
+    try {
+      var extraResolver = globalThis.__RN_AGENT_EXTRA_ROOTS__;
+      if (typeof extraResolver === 'function') {
+        var instances = extraResolver();
+        if (Array.isArray(instances)) {
+          for (var i = 0; i < instances.length; i++) {
+            var extraFiber = extractFiberFromInstance(instances[i]);
+            if (extraFiber) {
+              var extraResult = cb(extraFiber, -1);
+              if (extraResult) return extraResult;
+            }
+          }
+        }
+      }
+    } catch (_) { /* swallow — resolver bug must not break iteration */ }
     return null;
   }
 
@@ -1744,6 +1767,7 @@ export const INJECTED_HELPERS = `
     clearConsole: clearConsole,
     interact: interact,
     __extractFiberFromInstance: extractFiberFromInstance,
+    __findAllRootFibers: findAllRootFibers,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return

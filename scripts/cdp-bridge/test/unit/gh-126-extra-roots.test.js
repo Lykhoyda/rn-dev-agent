@@ -116,3 +116,73 @@ test('extractFiberFromInstance: already-a-fiber input passes through; generator-
   assert.equal(extract(undefined), null, 'undefined returns null');
   assert.equal(extract('not-an-object'), null, 'non-object returns null');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// iterateAllRoots extra-roots integration — exercised via findAllRootFibers.
+// Each test seeds a tiny synthetic renderer root + an extra-roots resolver,
+// then calls __RN_AGENT.__findAllRootFibers() to read them. iterateAllRoots
+// itself is private; we test through its closest public wrapper.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function callFindAllRootFibers(sandbox) {
+  return vm.runInContext('__RN_AGENT.__findAllRootFibers()', sandbox);
+}
+
+test('iterateAllRoots: instance with neither _reactInternals nor _reactInternalFiber → that entry skipped, others succeed', () => {
+  const goodFiber = fiber({ displayName: 'GoodPortal' });
+  const sandbox = makeSandbox({
+    extraRoots: () => [
+      { notAFiber: true },           // skipped — no extraction path
+      { _reactInternals: goodFiber }, // included
+    ],
+  });
+  const all = callFindAllRootFibers(sandbox);
+  const extras = all.filter(r => r.rendererId === -1);
+  assert.equal(extras.length, 1, 'only the well-formed instance should be added');
+  assert.equal(extras[0].fiber, goodFiber);
+});
+
+test('iterateAllRoots: mixed array with null items → nulls skipped, valid ones added', () => {
+  const goodFiber = fiber({ displayName: 'GoodPortal' });
+  const sandbox = makeSandbox({
+    extraRoots: () => [null, { _reactInternals: goodFiber }, undefined, null].filter(Boolean),
+  });
+  const extras = callFindAllRootFibers(sandbox).filter(r => r.rendererId === -1);
+  assert.equal(extras.length, 1, 'filter(Boolean) idiom should work cleanly');
+  assert.equal(extras[0].fiber, goodFiber);
+});
+
+test('iterateAllRoots: resolver throws → renderer roots remain in output, extra-roots step skipped', () => {
+  const rendererRoot = fiber({ displayName: 'MainApp' });
+  const sandbox = makeSandbox({
+    rootFiber: rendererRoot,
+    extraRoots: () => { throw new Error('user bug in resolver'); },
+  });
+  const all = callFindAllRootFibers(sandbox);
+  const renderers = all.filter(r => r.rendererId === 1);
+  const extras = all.filter(r => r.rendererId === -1);
+  assert.equal(renderers.length, 1, 'renderer roots survive a thrown resolver');
+  assert.equal(renderers[0].fiber, rendererRoot);
+  assert.equal(extras.length, 0, 'no extras when resolver throws');
+});
+
+test('iterateAllRoots: resolver returns non-array → skipped silently, renderer roots still in output', () => {
+  const rendererRoot = fiber({ displayName: 'MainApp' });
+  const sandbox = makeSandbox({
+    rootFiber: rendererRoot,
+    extraRoots: () => ({ not: 'an-array' }),
+  });
+  const all = callFindAllRootFibers(sandbox);
+  assert.equal(all.filter(r => r.rendererId === -1).length, 0);
+  assert.equal(all.filter(r => r.rendererId === 1).length, 1);
+});
+
+test('iterateAllRoots: __RN_AGENT_EXTRA_ROOTS__ undefined → output equals pre-PR baseline (backward compat)', () => {
+  const rendererRoot = fiber({ displayName: 'MainApp' });
+  const sandbox = makeSandbox({ rootFiber: rendererRoot });
+  // Note: extraRoots NOT passed — __RN_AGENT_EXTRA_ROOTS__ is undefined.
+  const all = callFindAllRootFibers(sandbox);
+  assert.equal(all.length, 1, 'only the renderer root, no synthetic extras');
+  assert.equal(all[0].rendererId, 1);
+  assert.equal(all[0].fiber, rendererRoot);
+});
