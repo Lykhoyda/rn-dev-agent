@@ -32,74 +32,63 @@ export const INJECTED_HELPERS = `
     return null;
   }
 
-  // B145: iterate root.current fibers across ALL renderers. Callback
-  // returns truthy to short-circuit. Used by tools that want "find first
-  // match across renderers" semantics — Redux Provider, NavigationContainer,
-  // target testID. Returns the first truthy callback result, or null if no
-  // match in any renderer. Per-renderer try/catch so one bad renderer
-  // doesn't poison the search.
-  function forEachRootFiber(cb) {
+  // GH #126 Gap B — private primitive consolidating renderer-roots
+  // iteration + extra-roots step. Both forEachRootFiber and
+  // findAllRootFibers delegate here. Calling cb returning truthy
+  // short-circuits iteration (matches existing forEachRootFiber
+  // semantics — 0/false/'' continue). Returns whatever cb returned,
+  // or null if cb never short-circuited.
+  //
+  // Extra-roots step intentionally runs AFTER the native renderer loop
+  // so user-registered portals are lower priority than React's own
+  // registry. Independent try/catch so one bad resolver does not
+  // poison results already collected.
+  function iterateAllRoots(cb) {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || typeof hook.getFiberRoots !== 'function') return null;
-    var emptyStreak = 0;
-    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-      try {
-        var roots = hook.getFiberRoots(ri);
-        if (roots && roots.size) {
-          emptyStreak = 0;
-          var it = roots.values();
-          var v;
-          while (!(v = it.next()).done) {
-            if (v.value && v.value.current) {
-              var result = cb(v.value.current, ri);
-              if (result) return result;
+    if (hook && typeof hook.getFiberRoots === 'function') {
+      var emptyStreak = 0;
+      for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+        try {
+          var roots = hook.getFiberRoots(ri);
+          if (roots && roots.size) {
+            emptyStreak = 0;
+            var it = roots.values();
+            var v;
+            while (!(v = it.next()).done) {
+              if (v.value && v.value.current) {
+                var result = cb(v.value.current, ri);
+                if (result) return result;
+              }
             }
+          } else {
+            emptyStreak++;
+            if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) break;
           }
-        } else {
+        } catch (_) {
           emptyStreak++;
-          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) {
-        emptyStreak++;
       }
     }
     return null;
   }
 
-  // B143: collect root.current fibers from EVERY registered React renderer.
-  // findActiveRenderer returns only the first non-empty renderer, which is
-  // typically LogBox (a tiny shell). The main app tree often lives on a
-  // later rendererID (common with Bridgeless + Reanimated, which register
-  // their own secondary renderer). For query tools that must reach all
-  // user components, use this helper instead.
-  // Gemini A3 (2026-04-23, conf 80): per-renderer try/catch protects against
-  // one renderer's getFiberRoots throwing during teardown/HMR/worklet init —
-  // a single bad renderer shouldn't poison the union.
+  // Public generator-style iterator. Calls cb for each renderer-root
+  // and extra-root; returns first truthy result, else null. See
+  // iterateAllRoots() for the consolidated iteration logic.
+  function forEachRootFiber(cb) {
+    return iterateAllRoots(cb);
+  }
+
+  // Public collector iterator. Walks every renderer-root and extra-root,
+  // returning Array<{rendererId, fiber}>. Negative rendererId marks
+  // extra-roots; consumers iterate normally — the ID is metadata only.
+  // See iterateAllRoots() for the consolidated iteration logic.
   function findAllRootFibers() {
-    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || typeof hook.getFiberRoots !== 'function') return [];
     var out = [];
-    var emptyStreak = 0;
-    for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-      try {
-        var roots = hook.getFiberRoots(ri);
-        if (roots && roots.size) {
-          emptyStreak = 0;
-          var it = roots.values();
-          var v;
-          while (!(v = it.next()).done) {
-            if (v.value && v.value.current) {
-              out.push({ rendererId: ri, fiber: v.value.current });
-            }
-          }
-        } else {
-          emptyStreak++;
-          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return out;
-        }
-      } catch (_) {
-        emptyStreak++;
-      }
-    }
+    iterateAllRoots(function(rootFiber, rendererId) {
+      out.push({ rendererId: rendererId, fiber: rootFiber });
+      return null; // explicit — keep collecting, never short-circuit
+    });
     return out;
   }
 

@@ -196,11 +196,17 @@ test('B143 A3 (Gemini 80) + Issue #126: per-renderer throw does NOT poison the u
 test('B143 + Issue #126: injected helpers contain findAllRootFibers with MAX_RENDERER_IDS loop', () => {
   const src = INJECTED_HELPERS;
   assert.match(src, /function findAllRootFibers\(\)/, 'findAllRootFibers function missing from injected helpers');
-  // Issue #126: cap bumped from 5 → 20. Loop condition uses the constant.
+  // GH #126 Gap B Task 3 refactor: findAllRootFibers now delegates to
+  // iterateAllRoots — the renderer-loop invariants live there. The shared
+  // primitive still walks 1..MAX_RENDERER_IDS, uses hook.getFiberRoots(ri),
+  // and the wrapper still emits the {rendererId, fiber} shape via cb args.
+  assert.match(src, /function iterateAllRoots\(cb\)/, 'iterateAllRoots primitive missing — findAllRootFibers depends on it');
   assert.match(src, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'renderer loop missing or no longer uses MAX_RENDERER_IDS constant');
   assert.match(src, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
   assert.match(src, /hook\.getFiberRoots\(ri\)/, 'hook.getFiberRoots(ri) iteration missing');
-  assert.match(src, /out\.push\(\{ rendererId: ri, fiber: v\.value\.current \}\)/, 'out.push signature drifted from TS mirror');
+  // findAllRootFibers cb pushes {rendererId, fiber} into the output array.
+  const findAllSlice = src.split('function findAllRootFibers')[1]?.split('function ')[0] ?? '';
+  assert.match(findAllSlice, /out\.push\(\{ rendererId: rendererId, fiber: rootFiber \}\)/, 'findAllRootFibers collector cb drifted from {rendererId, fiber} shape');
 });
 
 test('B143: filter path in getTree uses findAllRootFibers (no single-root short-circuit)', () => {
@@ -224,11 +230,12 @@ test('B143 A1 (Gemini 85): hasErrorOverlay check runs across all renderers', () 
 test('B143 A3 (Gemini 80): IIFE wraps per-renderer getFiberRoots in try/catch', () => {
   // Guards against teardown / HMR / worklet-init races on a single renderer
   // throwing and poisoning the whole union.
+  // GH #126 Gap B Task 3 refactor: the try/catch now lives in iterateAllRoots,
+  // the shared primitive that findAllRootFibers delegates to.
   const src = INJECTED_HELPERS;
-  // The guard lives inside the findAllRootFibers function body specifically.
-  const slice = src.split('function findAllRootFibers')[1]?.split('function ')[0] ?? '';
-  assert.match(slice, /try \{/, 'findAllRootFibers missing try guard around getFiberRoots');
-  assert.match(slice, /catch \(_\)/, 'findAllRootFibers missing per-renderer catch');
+  const slice = src.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
+  assert.match(slice, /try \{/, 'iterateAllRoots missing try guard around getFiberRoots');
+  assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
 });
 
 test('B143 Codex #1 (conf 82): scan budget scales with rootsSeeded count', () => {
