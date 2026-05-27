@@ -19,8 +19,7 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
  * sets `globalThis.__RN_AGENT_EXTRA_ROOTS__` to the given function.
  * Returns the populated sandbox so tests can call __RN_AGENT methods.
  */
-function makeSandbox(opts) {
-  opts = opts || {};
+function makeSandbox(opts = {}) {
   const sandbox = {
     Array, Object, JSON, Map, WeakSet, Set, Error, Date, RegExp, Symbol,
     parseInt, parseFloat, String, Number, Boolean, Promise,
@@ -60,7 +59,11 @@ function linkFiber(parent, child) {
   return child;
 }
 
-/** Minimal fiber stub — has all the keys real fibers carry. */
+/**
+ * Minimal fiber stub. Tests extend `memoizedProps` as needed; the stub
+ * does NOT include stateNode/tag/flags/lanes — add per-test if a downstream
+ * consumer (e.g. interact()) probes them.
+ */
 function fiber(props) {
   return {
     type: { displayName: props && props.displayName || 'View' },
