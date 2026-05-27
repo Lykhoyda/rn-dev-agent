@@ -73,3 +73,46 @@ function fiber(props) {
     return: null,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractFiberFromInstance — exposed via __RN_AGENT.__extractFiberFromInstance
+// for testing (otherwise it's an inner closure, unreachable from VM tests).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('extractFiberFromInstance: instance with _reactInternals returns the fiber', () => {
+  const sandbox = makeSandbox({});
+  const f = fiber({ displayName: 'MySheet' });
+  const instance = { _reactInternals: f };
+  // Pass the instance through a function call so the sandbox can use it.
+  const got = vm.runInContext(
+    '(function(inst) { return __RN_AGENT.__extractFiberFromInstance(inst); })',
+    sandbox,
+  )(instance);
+  assert.equal(got, f, 'should extract the fiber via _reactInternals');
+});
+
+test('extractFiberFromInstance: instance with _reactInternalFiber returns the fiber (legacy React)', () => {
+  const sandbox = makeSandbox({});
+  const f = fiber({ displayName: 'LegacyModal' });
+  const instance = { _reactInternalFiber: f };
+  const got = vm.runInContext(
+    '(function(inst) { return __RN_AGENT.__extractFiberFromInstance(inst); })',
+    sandbox,
+  )(instance);
+  assert.equal(got, f);
+});
+
+test('extractFiberFromInstance: already-a-fiber input passes through; generator-like with only .return is rejected', () => {
+  const sandbox = makeSandbox({});
+  const realFiber = fiber({ displayName: 'PortalRoot' });
+  const generatorLike = { return: function() {} }; // has .return but no .child
+  const extract = vm.runInContext(
+    '(function(inst) { return __RN_AGENT.__extractFiberFromInstance(inst); })',
+    sandbox,
+  );
+  assert.equal(extract(realFiber), realFiber, 'fiber-shaped input returned as-is');
+  assert.equal(extract(generatorLike), null, 'partial key (return only) is rejected');
+  assert.equal(extract(null), null, 'null returns null');
+  assert.equal(extract(undefined), null, 'undefined returns null');
+  assert.equal(extract('not-an-object'), null, 'non-object returns null');
+});

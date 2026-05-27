@@ -103,6 +103,24 @@ export const INJECTED_HELPERS = `
     return out;
   }
 
+  // GH #126 Gap B — convert a user-provided React component instance into
+  // a fiber for iterateAllRoots() to walk. Three accepted shapes, tried
+  // in order: (1) instance._reactInternals (modern React 16.8+ class
+  // components and useImperativeHandle-exposed values), (2) instance.
+  // _reactInternalFiber (legacy React), (3) already-a-fiber escape hatch
+  // for advanced users — duck-typed by REQUIRING both 'return' and 'child'
+  // as own/inherited keys (the dual requirement rejects generator-like
+  // objects that only have .return). Returns null on any other input —
+  // the caller treats null as "skip this entry," which is the silent
+  // partial-failure isolation per spec §6.
+  function extractFiberFromInstance(inst) {
+    if (!inst || typeof inst !== 'object') return null;
+    if (inst._reactInternals) return inst._reactInternals;
+    if (inst._reactInternalFiber) return inst._reactInternalFiber;
+    if ('return' in inst && 'child' in inst) return inst;
+    return null;
+  }
+
   // Sanitize an object by enumerating properties safely — getters that throw
   // (e.g. useNavigation context access outside NavigationContainer) would
   // normally crash JSON.stringify before the replacer runs.
@@ -1728,6 +1746,7 @@ export const INJECTED_HELPERS = `
     getConsole: getConsole,
     clearConsole: clearConsole,
     interact: interact,
+    __extractFiberFromInstance: extractFiberFromInstance,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
