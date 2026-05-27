@@ -33,16 +33,20 @@ export const INJECTED_HELPERS = `
   }
 
   // GH #126 Gap B — private primitive consolidating renderer-roots
-  // iteration + extra-roots step. Both forEachRootFiber and
-  // findAllRootFibers delegate here. Calling cb returning truthy
-  // short-circuits iteration (matches existing forEachRootFiber
-  // semantics — 0/false/'' continue). Returns whatever cb returned,
-  // or null if cb never short-circuited.
+  // iteration. Both forEachRootFiber and findAllRootFibers delegate
+  // here. A truthy return from cb short-circuits iteration (matches
+  // existing forEachRootFiber semantics — 0/false/'' continue).
+  // Returns whatever cb returned, or null if cb never short-circuited.
   //
-  // Extra-roots step intentionally runs AFTER the native renderer loop
-  // so user-registered portals are lower priority than React's own
-  // registry. Independent try/catch so one bad resolver does not
-  // poison results already collected.
+  // Per-renderer try/catch protects against one renderer's getFiberRoots
+  // throwing during teardown/HMR/worklet init (Gemini A3, 2026-04-23,
+  // conf 80) — a single bad renderer must not poison the union.
+  //
+  // Task 4 will add an extra-roots step here that consults
+  // globalThis.__RN_AGENT_EXTRA_ROOTS__ AFTER the native renderer loop
+  // so user-registered portals stay lower priority than React's own
+  // registry. Not in this commit — refactor isolated from new behavior
+  // for cleaner bisects.
   function iterateAllRoots(cb) {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
@@ -79,10 +83,14 @@ export const INJECTED_HELPERS = `
     return iterateAllRoots(cb);
   }
 
-  // Public collector iterator. Walks every renderer-root and extra-root,
-  // returning Array<{rendererId, fiber}>. Negative rendererId marks
-  // extra-roots; consumers iterate normally — the ID is metadata only.
-  // See iterateAllRoots() for the consolidated iteration logic.
+  // B143: public collector returning Array<{rendererId, fiber}> across
+  // EVERY registered React renderer. findActiveRenderer returns only the
+  // first non-empty renderer — typically LogBox (a tiny shell). The main
+  // app tree often lives on a later rendererID (common with Bridgeless +
+  // Reanimated, which register their own secondary renderer). Query tools
+  // that must reach all user components use this helper, not
+  // findActiveRenderer. Delegates the iteration to iterateAllRoots; the
+  // collector cb explicitly returns null to never short-circuit.
   function findAllRootFibers() {
     var out = [];
     iterateAllRoots(function(rootFiber, rendererId) {
