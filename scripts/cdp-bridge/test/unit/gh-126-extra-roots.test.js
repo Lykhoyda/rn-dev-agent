@@ -186,3 +186,69 @@ test('iterateAllRoots: __RN_AGENT_EXTRA_ROOTS__ undefined → output equals pre-
   assert.equal(all[0].rendererId, 1);
   assert.equal(all[0].fiber, rendererRoot);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// forEachRootFiber wrapper — must preserve truthy short-circuit through
+// to extra-roots. A future refactor that breaks delegation (e.g., always
+// returns null after the renderer loop) would silently lose the ability
+// to find a target in an extra-root subtree. This test pins it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('forEachRootFiber: cb returning truthy on an extra-root short-circuits iteration', () => {
+  const rendererRoot = fiber({ displayName: 'MainApp' });
+  const extraRoot = fiber({ displayName: 'PortalRoot' });
+  let cbCalls = 0;
+  const sandbox = makeSandbox({
+    rootFiber: rendererRoot,
+    extraRoots: () => [{ _reactInternals: extraRoot }],
+  });
+  const result = vm.runInContext(
+    '(function(cb) { return __RN_AGENT.__forEachRootFiber(cb); })',
+    sandbox,
+  )((rootFiber, rendererId) => {
+    cbCalls++;
+    // Match only the extra-root (rendererId === -1). Returning truthy
+    // must immediately short-circuit iteration.
+    return rendererId === -1 ? rootFiber : null;
+  });
+  assert.equal(result, extraRoot, 'extra-root fiber returned via short-circuit');
+  assert.equal(cbCalls, 2, 'cb called for renderer root (no match), then extra root (match) — no further calls');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two additional regression-coverage tests folded in from Task 4's code
+// review — they pin behavior the original 5 tests didn't discriminate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('iterateAllRoots: sparse array (holes) — holes treated as undefined and skipped', () => {
+  // A resolver returning `Array(N)` produces an array with `length === N`
+  // but no own indices. instances[i] reads undefined for each hole. The
+  // for-loop must skip them via extractFiberFromInstance's null-return,
+  // not iterate forever or throw.
+  const goodFiber = fiber({ displayName: 'GoodPortal' });
+  const sandbox = makeSandbox({
+    extraRoots: () => {
+      const arr = new Array(5);
+      arr[2] = { _reactInternals: goodFiber };
+      return arr;
+    },
+  });
+  const extras = callFindAllRootFibers(sandbox).filter(r => r.rendererId === -1);
+  assert.equal(extras.length, 1, 'only the populated index should yield a fiber');
+  assert.equal(extras[0].fiber, goodFiber);
+});
+
+test('iterateAllRoots: non-function resolver (e.g., array assigned directly) — typeof guard skips silently', () => {
+  // Users will plausibly try `__RN_AGENT_EXTRA_ROOTS__ = [ref.current]`
+  // (an array) instead of `() => [ref.current]` (a function). The
+  // `typeof extraResolver === 'function'` guard MUST treat non-functions
+  // as no-op rather than throwing or partially executing.
+  const rendererRoot = fiber({ displayName: 'MainApp' });
+  // Manually set a non-function value, bypassing makeSandbox's auto-cast.
+  const sandbox = makeSandbox({ rootFiber: rendererRoot });
+  vm.runInContext('__RN_AGENT_EXTRA_ROOTS__ = [{ _reactInternals: {} }];', sandbox);
+  const all = callFindAllRootFibers(sandbox);
+  assert.equal(all.length, 1, 'only the renderer root — non-function resolver must be ignored');
+  assert.equal(all[0].rendererId, 1);
+  assert.equal(all[0].fiber, rendererRoot);
+});

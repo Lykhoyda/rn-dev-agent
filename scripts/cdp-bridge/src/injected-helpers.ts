@@ -1768,6 +1768,7 @@ export const INJECTED_HELPERS = `
     interact: interact,
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
+    __forEachRootFiber: forEachRootFiber,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
