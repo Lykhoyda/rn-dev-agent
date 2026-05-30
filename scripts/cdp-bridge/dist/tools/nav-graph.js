@@ -290,11 +290,14 @@ export function createNavGraphHandler(getClient) {
         };
         const bundleId = client.connectedTarget?.description ?? null;
         const projectRoot = findProjectRoot(bundleId ? { bundleId } : undefined);
-        // 1. Staleness check + auto-rescan
+        // 1. Staleness check + auto-rescan. Read the graph ONCE and reuse it; only
+        // re-read after a write actually persists a fresh graph (was up to 4 full
+        // disk re-parses per call).
+        let graph = projectRoot ? readGraph(projectRoot) : null;
         if (projectRoot) {
             const staleness = checkStaleness(projectRoot);
             result.staleness = staleness;
-            if (staleness.recommendation === 'rescan_required' || staleness.recommendation === 'rescan_recommended' || !readGraph(projectRoot)) {
+            if (staleness.recommendation === 'rescan_required' || staleness.recommendation === 'rescan_recommended' || !graph) {
                 try {
                     const expr = client.bridgeDetected
                         ? '__RN_DEV_BRIDGE__.getNavGraph ? __RN_DEV_BRIDGE__.getNavGraph() : __RN_AGENT.getNavGraph()'
@@ -303,7 +306,7 @@ export function createNavGraphHandler(getClient) {
                     if (scanResult.value && typeof scanResult.value === 'string') {
                         const raw = JSON.parse(scanResult.value);
                         if (!raw.error && raw.navigators?.length > 0) {
-                            const existing = readGraph(projectRoot);
+                            const existing = graph;
                             const commitHash = getHeadCommit(projectRoot) ?? undefined;
                             if (existing) {
                                 const merged = mergeGraph(existing, raw, projectRoot);
@@ -315,6 +318,7 @@ export function createNavGraphHandler(getClient) {
                                 writeGraph(projectRoot, buildGraph(raw, projectRoot, commitHash));
                             }
                             result.graph_scanned = true;
+                            graph = readGraph(projectRoot); // refresh after persisting the scan
                         }
                     }
                 }
@@ -348,12 +352,9 @@ export function createNavGraphHandler(getClient) {
             }
             catch { /* fall back to cached graph */ }
         }
-        if (projectRoot) {
-            const graph = readGraph(projectRoot);
-            if (graph) {
-                result.plan = buildNavigationPlan(graph, args.screen, liveFromScreen) ?? undefined;
-                result.from = result.plan?.from ?? liveFromScreen ?? null;
-            }
+        if (graph) {
+            result.plan = buildNavigationPlan(graph, args.screen, liveFromScreen) ?? undefined;
+            result.from = result.plan?.from ?? liveFromScreen ?? null;
         }
         // 4. Execute navigation — single CDP evaluate call
         // If the plan has a tab switch step, use direct tab+screen navigation (avoids the

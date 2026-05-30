@@ -56,6 +56,10 @@ async function inspectObject(client, objectId, depth, maxProps) {
         .filter(p => p.isOwn !== false)
         .slice(0, maxProps);
     const results = [];
+    // Fetch sibling children concurrently instead of one serial CDP round-trip at
+    // a time. Entries are pushed synchronously so order is preserved; only the
+    // recursive getProperties calls are parallelized.
+    const childFetches = [];
     for (const p of props) {
         const v = p.value;
         if (!v) {
@@ -71,7 +75,8 @@ async function inspectObject(client, objectId, depth, maxProps) {
             entry.hasChildren = true;
             entry.description = v.className ?? v.description ?? '[object]';
             if (depth > 0) {
-                entry.children = await inspectObject(client, v.objectId, depth - 1, maxProps);
+                const objectId = v.objectId;
+                childFetches.push(inspectObject(client, objectId, depth - 1, maxProps).then((c) => { entry.children = c; }));
             }
         }
         else {
@@ -79,5 +84,6 @@ async function inspectObject(client, objectId, depth, maxProps) {
         }
         results.push(entry);
     }
+    await Promise.all(childFetches);
     return results;
 }

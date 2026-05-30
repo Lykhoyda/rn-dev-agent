@@ -27,6 +27,14 @@ extension RnFastRunnerTests {
         return
       }
       let combined = buffer + data
+      // GET /health carries no body / Content-Length, so parseRequest (which
+      // requires one) would loop forever and the liveness probe would always
+      // time out to "stale". Answer it directly with 200 {ok:true}.
+      if self.isHealthRequest(combined) {
+        let response = self.jsonResponse(status: 200, response: Response(ok: true))
+        self.sendResponse(response, over: connection)
+        return
+      }
       if let body = self.parseRequest(data: combined) {
         let result = self.handleRequestBody(body)
         self.sendResponse(result.data, over: connection) { [weak self] in
@@ -52,6 +60,13 @@ extension RnFastRunnerTests {
       connection.cancel()
       afterSend()
     })
+  }
+
+  private func isHealthRequest(_ data: Data) -> Bool {
+    guard data.range(of: Data("\r\n\r\n".utf8)) != nil else { return false }
+    let head = String(decoding: data.prefix(200), as: UTF8.self)
+    let firstLine = head.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? head
+    return firstLine.hasPrefix("GET /health")
   }
 
   private func parseRequest(data: Data) -> Data? {

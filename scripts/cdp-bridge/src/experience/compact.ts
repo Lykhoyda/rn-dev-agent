@@ -92,10 +92,11 @@ export function groupFailures(events: TelemetryEvent[]): FailureStats[] {
 
     if (isGhostRecovery) {
       stats.ghost_recovered++;
-    } else if (event.result === 'FAIL' || event.result === 'ERROR') {
-      stats.failed++;
     } else {
-      stats.passed++;
+      // The filter above only admits fails/ghost-recoveries, so a non-ghost
+      // event here is always FAIL/ERROR — the prior `else { passed++ }` branch
+      // was unreachable (stats.passed stayed 0 forever).
+      stats.failed++;
     }
 
     if (event.family_id && !stats.family_id) {
@@ -110,6 +111,19 @@ export function groupFailures(events: TelemetryEvent[]): FailureStats[] {
  * Generate candidate heuristics from failure stats.
  * Only generates for patterns with >= MIN_OCCURRENCES and >= MIN_SUCCESS_RATE.
  */
+// Files are written as `candidate-<id>.md` where id is RS-C<n>/FP-C<n>
+// (writeCandidateFile lowercases it → `candidate-rs-c1.md`). The prior
+// `/candidate-(\d+)/` never matched (a letter always follows the dash), so the
+// counter stayed 1 and each compaction cycle clobbered earlier candidate files.
+export function nextCandidateId(existingFilenames: string[]): number {
+  let nextId = 1;
+  for (const f of existingFilenames) {
+    const match = f.match(/candidate-(?:rs|fp)-c(\d+)/i);
+    if (match) nextId = Math.max(nextId, parseInt(match[1], 10) + 1);
+  }
+  return nextId;
+}
+
 export function generateCandidates(
   stats: FailureStats[],
   events: TelemetryEvent[],
@@ -121,11 +135,7 @@ export function generateCandidates(
   const candidatesDir = join(AGENT_DIR, 'candidates');
   if (existsSync(candidatesDir)) {
     try {
-      const existing = readdirSync(candidatesDir).filter(f => f.startsWith('candidate-'));
-      for (const f of existing) {
-        const match = f.match(/candidate-(\d+)/);
-        if (match) nextId = Math.max(nextId, parseInt(match[1], 10) + 1);
-      }
+      nextId = nextCandidateId(readdirSync(candidatesDir).filter(f => f.startsWith('candidate-')));
     } catch { /* best-effort */ }
   }
 

@@ -228,7 +228,10 @@ function defaultProcessAlive(pid) {
     }
 }
 async function defaultHttpProbe(port, timeoutMs) {
-    const url = `http://[::1]:${port}/health`;
+    // Use the same IPv4 loopback as the /command client (postCommand). The prior
+    // [::1] here meant the health probe and the command channel could resolve to
+    // different stacks, so a healthy IPv4 listener looked dead over IPv6.
+    const url = `http://127.0.0.1:${port}/health`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -311,17 +314,49 @@ let fetchImpl = globalThis.fetch;
 export function _setFetchForTest(fn) {
     fetchImpl = fn;
 }
+// Test seam: override the per-command timeout so the abort path can be
+// exercised without waiting the full production window.
+let httpTimeoutOverrideMs = null;
+export function _setHttpTimeoutForTest(ms) {
+    httpTimeoutOverrideMs = ms;
+}
+// `type` and `snapshot` legitimately run long (the runner's typeText
+// quiescence shim can sit up to its own 30s main-thread timeout before
+// returning the success-shaped message we depend on, and large trees take a
+// while to serialize), so they get a window wider than that internal cap.
+// Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
+function commandTimeoutMs(command) {
+    if (httpTimeoutOverrideMs !== null)
+        return httpTimeoutOverrideMs;
+    return SLOW_RUNNER_COMMANDS.has(command) ? 35_000 : HTTP_TIMEOUT_MS;
+}
 async function postCommand(body) {
     const state = runnerState;
     if (!state) {
         throw new Error('rn-fast-runner not started — open a device session first');
     }
-    const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    return resp.json();
+    const controller = new AbortController();
+    const timeoutMs = commandTimeoutMs(body.command);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+        return resp.json();
+    }
+    catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`);
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+    }
 }
 /**
  * Convert a runner SnapshotNode array (flat, already indexed) → FlatNode[]
@@ -369,10 +404,6 @@ export async function runIOS(args) {
         body.x = args.x;
     if (args.y !== undefined)
         body.y = args.y;
-    if (args.x1 !== undefined)
-        body.x1 = args.x1;
-    if (args.y1 !== undefined)
-        body.y1 = args.y1;
     if (args.x2 !== undefined)
         body.x2 = args.x2;
     if (args.y2 !== undefined)

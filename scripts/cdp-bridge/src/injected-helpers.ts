@@ -211,7 +211,6 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots — app may still be loading' });
     }
 
-    var root = renderer.roots.values().next().value;
     var visited = new WeakSet();
     var totalNodes = 0;
 
@@ -411,9 +410,20 @@ export const INJECTED_HELPERS = `
       return output;
     }
 
-    // Unfiltered: standard walk with depth limit
-    var tree = walkSubtree(root.current, 0, maxDepth, visited);
-    var output = safeStringify({ tree: tree, totalNodes: totalNodes }, 999999);
+    // Unfiltered: walk EVERY renderer's root, not just the first renderer's
+    // first root. findActiveRenderer() typically returns the LogBox shell on
+    // Bridgeless + Reanimated apps, so the prior single-root walk returned the
+    // shell instead of the app tree. Mirror the filtered branch's
+    // findAllRootFibers() seeding (B143/B145); empty roots (e.g. LogBox) walk to
+    // null and drop out, so the usual result is just the app tree.
+    var allRootsU = findAllRootFibers();
+    var trees = [];
+    for (var ri = 0; ri < allRootsU.length; ri++) {
+      var sub = walkSubtree(allRootsU[ri].fiber, 0, maxDepth, visited);
+      if (sub) trees.push(sub);
+    }
+    var tree = trees.length === 1 ? trees[0] : (trees.length === 0 ? null : { _wrapper: true, children: trees });
+    var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRootsU.length }, 999999);
     if (output.length > 50000) {
       return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
     }
@@ -1598,7 +1608,8 @@ export const INJECTED_HELPERS = `
           ref.navigate(tabNames[t], { screen: screen, params: params });
           var afterState = ref.getRootState();
           var activeRoute = afterState;
-          while (activeRoute.routes && activeRoute.index !== undefined) {
+          var navDepth = 0;
+          while (activeRoute.routes && activeRoute.index !== undefined && navDepth++ < 50) {
             activeRoute = activeRoute.routes[activeRoute.index].state || activeRoute.routes[activeRoute.index];
           }
           var activeName = activeRoute.name || (activeRoute.routes && activeRoute.routes[activeRoute.index] && activeRoute.routes[activeRoute.index].name);
@@ -1946,7 +1957,10 @@ export const NETWORK_HOOK_SCRIPT = `
 export const REACT_READY_PROBE_JS = `(function() {
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || typeof h.getFiberRoots !== 'function') return false;
-  for (var i = 1; i <= 5; i++) {
+  // Scan the same 1..20 rendererID range as findActiveRenderer/findAllRootFibers
+  // so the readiness gate can't miss a late-registered renderer (Bridgeless +
+  // Reanimated register secondary renderers above id 5).
+  for (var i = 1; i <= 20; i++) {
     var r = h.getFiberRoots(i);
     if (r && r.size > 0) return true;
   }

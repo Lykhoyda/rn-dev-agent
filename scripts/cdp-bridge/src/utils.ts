@@ -33,6 +33,25 @@ export type ToolResult = {
   isError?: true;
 };
 
+// Per-step timing collector for the `meta.timings_ms` convention (CLAUDE.md):
+// instrument variable-cost paths (dispatch, snapshot, repair, reconnect) so the
+// breakdown is visible. `mark(label)` records elapsed-since-last-mark under
+// `label`; `timings()` returns the accumulated map for meta.timings_ms.
+export function createStepTimer(): { mark: (label: string) => void; timings: () => Record<string, number> } {
+  let last = Date.now();
+  const acc: Record<string, number> = {};
+  return {
+    mark(label: string): void {
+      const now = Date.now();
+      acc[label] = (acc[label] ?? 0) + (now - last);
+      last = now;
+    },
+    timings(): Record<string, number> {
+      return acc;
+    },
+  };
+}
+
 export function okResult<T>(data: T, opts?: { truncated?: boolean; meta?: Record<string, unknown> }): ToolResult {
   const envelope: ResultEnvelope<T> = { ok: true, data };
   if (opts?.truncated) envelope.truncated = true;

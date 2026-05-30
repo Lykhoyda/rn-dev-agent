@@ -205,6 +205,17 @@ function writeImportedSkeleton(projectRoot, skeleton, localAppId) {
     writeFileSync(targetPath, restored, 'utf-8');
     return true;
 }
+// Highest existing `-I<n>` imported-heuristic id per prefix, so import counters
+// can start past them and never collide across repeat/multi-bundle imports.
+export function highestImportedIds(content) {
+    const counters = { RS: 0, FP: 0, PC: 0 };
+    const idRe = /^###\s+(FP|RS|PC)-I(\d+):/gm;
+    let m;
+    while ((m = idRe.exec(content)) !== null) {
+        counters[m[1]] = Math.max(counters[m[1]] ?? 0, parseInt(m[2], 10));
+    }
+    return counters;
+}
 export function importExperience(filePath, opts = {}) {
     if (!existsSync(filePath)) {
         throw new Error(`File not found: ${filePath}`);
@@ -232,6 +243,11 @@ export function importExperience(filePath, opts = {}) {
     while ((match = re.exec(content)) !== null) {
         existingSummaries.add(match[1].trim().toLowerCase().slice(0, 60));
     }
+    // Start each imported-id counter past the highest existing `-I<n>` so a
+    // repeat or multi-bundle import never re-assigns an id that already exists
+    // (a duplicate RS-I1 shadows the first in loadExperience's byId Map and makes
+    // applyDecay's non-global regex rewrite the wrong section).
+    const importedCounters = highestImportedIds(content);
     const result = { imported: 0, skipped: 0, contradictions: [] };
     for (const h of bundle.heuristics) {
         const summaryKey = h.summary.toLowerCase().slice(0, 60);
@@ -245,7 +261,7 @@ export function importExperience(filePath, opts = {}) {
             continue;
         }
         const prefix = h.type === 'recovery_shortcut' ? 'RS' : h.type === 'failure_pattern' ? 'FP' : 'PC';
-        const id = `${prefix}-I${result.imported + 1}`;
+        const id = `${prefix}-I${++importedCounters[prefix]}`;
         const section = `### ${id}: ${h.summary.slice(0, 100)}
 - **Confidence:** ${confidence}% (imported at 70% of original ${h.confidence}%)
 - **Source:** imported from ${bundle.exported_at.split('T')[0]}

@@ -84,7 +84,15 @@ export function captureFingerprint(): EnvironmentFingerprint {
   fp.expo_sdk = extractVersion(allDeps, 'expo');
   fp.key_deps = extractKeyDeps(allDeps);
 
-  fp.engine = allDeps['hermes-engine'] ? 'hermes' : (allDeps['jsc-android'] ? 'jsc' : 'hermes');
+  // jsc-android means the project opted out of Hermes. Otherwise Hermes is the
+  // modern RN default (bundled inside react-native since 0.70, so there is no
+  // standalone hermes-engine dep to key on). With no RN signal at all, leave it
+  // null rather than blindly claiming 'hermes'.
+  fp.engine = allDeps['jsc-android']
+    ? 'jsc'
+    : (allDeps['hermes-engine'] || allDeps['react-native'])
+      ? 'hermes'
+      : null;
 
   const appJson = readJson(join(root, 'app.json'));
   if (appJson) {

@@ -46,8 +46,14 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
         })
       : client.networkBufferManager.getLast(scope, limit);
 
-    const totalMatches = matches.length;
-    const sliced = hasFilters && matches.length > limit ? matches.slice(-limit) : matches;
+    // True candidate count before the limit slice. The filtered path already
+    // holds every match in `matches`; the unfiltered getLast() caps at `limit`,
+    // so consult the buffer size to know whether older entries were dropped —
+    // otherwise truncated could never be true on the unfiltered path.
+    const totalMatches = hasFilters
+      ? matches.length
+      : (scope === 'all' ? client.networkBufferManager.totalSize : client.networkBufferManager.size(scope));
+    const sliced = matches.length > limit ? matches.slice(-limit) : matches;
     const truncated = totalMatches > sliced.length;
 
     const lastEventAt = scope === 'all' ? null : client.networkBufferManager.getLastPush(scope);

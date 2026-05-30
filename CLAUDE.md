@@ -123,7 +123,7 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / in
 
 ### MCP Server (cdp-bridge)
 
-**74 tools** exposed via MCP (re-audited 2026-05-18; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
+**75 tools** exposed via MCP (re-audited 2026-05-29; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
 
 **CDP tools** — React internals via Chrome DevTools Protocol over WebSocket:
 - `cdp_status` — health check with domain capabilities + reconnect state

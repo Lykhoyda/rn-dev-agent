@@ -34,6 +34,15 @@ export function getScreenRect() {
 export function getRefMapAge() {
     return lastUpdated ? Date.now() - lastUpdated : Infinity;
 }
+// A @ref resolves to fixed coordinates captured at snapshot time. If the
+// snapshot is old, the UI may have scrolled/re-rendered and those coordinates
+// now point at a different element — a wrong-element tap that STALE_REF (which
+// only fires on absent refs) would not catch. Callers gate coordinate
+// resolution on this so an over-age map is treated like a stale ref.
+export const MAX_REF_MAP_AGE_MS = 60_000;
+export function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
+    return getRefMapAge() <= maxAgeMs;
+}
 export function clearRefMap() {
     refMap.clear();
     metadataMap.clear();

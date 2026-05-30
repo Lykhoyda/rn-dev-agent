@@ -23,6 +23,24 @@ function rememberFreshness(client) {
 function forgetFreshness(client) {
     freshnessCache.delete(client);
 }
+// Per-step timing collector for the `meta.timings_ms` convention (CLAUDE.md):
+// instrument variable-cost paths (dispatch, snapshot, repair, reconnect) so the
+// breakdown is visible. `mark(label)` records elapsed-since-last-mark under
+// `label`; `timings()` returns the accumulated map for meta.timings_ms.
+export function createStepTimer() {
+    let last = Date.now();
+    const acc = {};
+    return {
+        mark(label) {
+            const now = Date.now();
+            acc[label] = (acc[label] ?? 0) + (now - last);
+            last = now;
+        },
+        timings() {
+            return acc;
+        },
+    };
+}
 export function okResult(data, opts) {
     const envelope = { ok: true, data };
     if (opts?.truncated)

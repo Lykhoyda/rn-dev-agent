@@ -216,15 +216,36 @@ export async function stopAndroidRunner(deviceId?: string): Promise<void> {
   try { await execFileAsync('adb', [...serial, 'forward', '--remove', `tcp:${DEFAULT_PORT}`]); } catch { /* non-fatal */ }
 }
 
-async function postCommand(body: object): Promise<RunnerResponse> {
+async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
   const state = runnerState;
   if (!state) throw new Error('rn-android-runner not started');
-  const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return resp.json() as Promise<RunnerResponse>;
+  // Bound every command so a wedged UIAutomator instrument can't hang the tool
+  // indefinitely. type/snapshot/screenshot run long; everything else is fast.
+  const slow = body.command === 'type' || body.command === 'snapshot' || body.command === 'screenshot';
+  const timeoutMs = slow ? 35_000 : 10_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let resp: Response;
+  try {
+    resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as { name?: string } | undefined)?.name === 'AbortError') {
+      throw new Error(`RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  try {
+    return await resp.json() as RunnerResponse;
+  } catch {
+    throw new Error('rn-android-runner returned a non-JSON response body');
+  }
 }
 
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {

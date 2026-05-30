@@ -67,7 +67,9 @@ discoverFn = discover) {
         throw new Error(selectionWarning ?? 'No matching CDP targets found.');
     }
     let connectedTarget = null;
-    for (const candidate of sorted) {
+    for (let idx = 0; idx < sorted.length; idx++) {
+        const candidate = sorted[idx];
+        const isLast = idx === sorted.length - 1;
         try {
             await connectToTarget(ctx, candidate);
             const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
@@ -76,7 +78,7 @@ discoverFn = discover) {
                 break;
             }
             console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
-            if (sorted.indexOf(candidate) < sorted.length - 1) {
+            if (!isLast) {
                 closeAndResetWs(ctx);
                 ctx.setState('disconnected');
                 ctx.setHelpersInjected(false);
@@ -87,7 +89,7 @@ discoverFn = discover) {
             connectedTarget = candidate;
         }
         catch (err) {
-            if (sorted.indexOf(candidate) < sorted.length - 1)
+            if (!isLast)
                 continue;
             throw err;
         }
@@ -210,8 +212,22 @@ function connectWs(ctx, url) {
             maxPayload: 100 * 1024 * 1024,
         });
         let settled = false;
+        // Backstop: handshakeTimeout should emit 'error', but if the socket ever
+        // wedges without firing open/error/close it would leak with its listeners.
+        // Terminate it after a grace window so it can't linger.
+        const guard = setTimeout(() => {
+            if (settled)
+                return;
+            settled = true;
+            try {
+                ws.terminate();
+            }
+            catch { /* already gone */ }
+            reject(new Error('WebSocket connect timed out'));
+        }, 7000);
         ws.on('open', () => {
             settled = true;
+            clearTimeout(guard);
             ctx.setWs(ws);
             ctx.setState('connected');
             resolve();
@@ -219,6 +235,11 @@ function connectWs(ctx, url) {
         ws.on('error', (err) => {
             if (!settled) {
                 settled = true;
+                clearTimeout(guard);
+                try {
+                    ws.terminate();
+                }
+                catch { /* already closing */ }
                 reject(err);
             }
             else {
@@ -231,6 +252,7 @@ function connectWs(ctx, url) {
         ws.on('close', (code) => {
             if (!settled) {
                 settled = true;
+                clearTimeout(guard);
                 reject(new Error(`WebSocket closed before connecting: ${code}`));
                 return;
             }

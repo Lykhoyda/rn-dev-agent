@@ -46,6 +46,18 @@ export function loadOrInitSidecar(yamlFilePath, now = () => new Date()) {
                 Array.isArray(parsed.runHistory) &&
                 Array.isArray(parsed.repairHistory) &&
                 typeof parsed.stats === 'object') {
+                // A sidecar missing lastSeenMtimeMs (e.g. written before the field
+                // existed) would silently disable the human-edit guard, since
+                // yamlEditedSinceLastSeen compares against undefined. Re-seed just that
+                // field from the YAML's mtime — preserves run/repair history.
+                if (typeof parsed.lastSeenMtimeMs !== 'number') {
+                    try {
+                        parsed.lastSeenMtimeMs = statSync(yamlFilePath).mtimeMs;
+                    }
+                    catch {
+                        parsed.lastSeenMtimeMs = 0;
+                    }
+                }
                 return parsed;
             }
             // Fall through — corrupted; return fresh.

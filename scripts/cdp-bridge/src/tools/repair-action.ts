@@ -23,7 +23,7 @@ import {
   applyRepair,
   DEFAULT_REPAIR_THRESHOLD,
 } from '../domain/repair-engine.js';
-import { repairBudgetAvailable } from '../domain/reusable-action.js';
+import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
@@ -212,7 +212,7 @@ export function createRepairActionHandler() {
         'STALE_TARGET',
         {
           actionId: args.actionId,
-          recentRepairs: action.state.repairHistory.length,
+          recentRepairs: recentRepairCount(action.state),
           hint: 'Investigate why this action keeps drifting — usually means the underlying screen is being heavily refactored. Either redesign the action or wait for the screen to stabilise.',
         },
       );

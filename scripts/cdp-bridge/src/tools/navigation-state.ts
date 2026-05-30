@@ -36,7 +36,12 @@ export function createNavigationStateHandler(getClient: () => CDPClient) {
       return failResult('Unexpected response from getNavState — expected JSON string');
     }
 
-    const parsed = JSON.parse(result.value) as Record<string, unknown>;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(result.value) as Record<string, unknown>;
+    } catch {
+      return failResult(`getNavState returned non-JSON output: ${result.value.slice(0, 200)}`);
+    }
 
     if (parsed.error) {
       return failResult(`Navigation state error: ${parsed.error}`);

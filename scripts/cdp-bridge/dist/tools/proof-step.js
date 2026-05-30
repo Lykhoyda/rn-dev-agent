@@ -51,6 +51,14 @@ export function createProofStepHandler(getClient) {
                 result.verifyDetail = `Found "${args.verifyText}"`;
             }
         }
+        else if (args.verifyText && !hasActiveSession()) {
+            // Requested a text verification but no device session is open — surface it
+            // as a failure rather than leaving result.verified undefined (which reads
+            // as "not failed" to callers).
+            result.verified = false;
+            result.verifyDetail = `Cannot verify text "${args.verifyText}" — no active device session`;
+            errors.push(result.verifyDetail);
+        }
         else if (args.verifyTestID) {
             const treeExpr = `__RN_AGENT.getTree({ testID: ${JSON.stringify(args.verifyTestID)}, maxDepth: 3 })`;
             const treeResult = await client.evaluate(treeExpr);

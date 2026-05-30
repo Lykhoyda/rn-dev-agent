@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
+import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
 // Handles backslash, double quote, and control characters that would break the scalar.
@@ -23,14 +24,14 @@ export function getMaestroRunnerPath() {
     return existsSync(path) ? path : null;
 }
 export async function runMaestroInline(yaml, opts) {
-    const runnerPath = getMaestroRunnerPath();
-    if (!runnerPath) {
-        return {
-            passed: false,
-            output: '',
-            flowFile: '',
-            error: 'maestro-runner not found. Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
-        };
+    // B59 tiered dispatch (same decision tree as maestro_run / maestro_test_all):
+    // maestro-runner when viable, else the Maestro CLI fallback for the
+    // iOS-only / adb-missing setup. Previously this path hardcoded
+    // getMaestroRunnerPath() and hard-failed where maestro_run would fall back,
+    // breaking the device_fill / picker / dialog fallbacks on iOS-only machines.
+    const dispatch = chooseMaestroDispatch({ platform: opts.platform });
+    if ('error' in dispatch) {
+        return { passed: false, output: '', flowFile: '', error: dispatch.error };
     }
     // Phase 134.1 (deepsec CRITICAL #1): the appId came from opts.appId,
     // resolveBundleId() reading native config, or readExpoSlug() reading
@@ -83,7 +84,7 @@ export async function runMaestroInline(yaml, opts) {
     }
     const timeout = opts.timeoutMs ?? 30_000;
     try {
-        const { stdout, stderr } = await execFile(runnerPath, ['--platform', opts.platform, 'test', flowFile], { timeout, encoding: 'utf8' });
+        const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(opts.platform, flowFile), { timeout, encoding: 'utf8' });
         const output = (stdout + '\n' + stderr).trim();
         const passed = !output.includes('FAILED') && !output.includes('Error:');
         return { passed, output, flowFile };

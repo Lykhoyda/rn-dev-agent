@@ -33,7 +33,13 @@ export function createNavigationStateHandler(getClient) {
         if (typeof result.value !== 'string') {
             return failResult('Unexpected response from getNavState — expected JSON string');
         }
-        const parsed = JSON.parse(result.value);
+        let parsed;
+        try {
+            parsed = JSON.parse(result.value);
+        }
+        catch {
+            return failResult(`getNavState returned non-JSON output: ${result.value.slice(0, 200)}`);
+        }
         if (parsed.error) {
             return failResult(`Navigation state error: ${parsed.error}`);
         }

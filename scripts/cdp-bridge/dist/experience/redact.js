@@ -11,18 +11,29 @@ const SECRET_PATTERNS = [
     /\bAIza[0-9A-Za-z\-_]{35}\b/g,
     /-----BEGIN (?:RSA |OPENSSH |PRIVATE )?KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |PRIVATE )?KEY-----/g,
 ];
+// Value-side secret capture: redacts the VALUE when a secret-ish key is glued
+// to it via `:` or `=` (quoted JSON / kv-pairs in error strings), preserving
+// the key prefix. Catches `"password":"hunter2longvalue"` and `api_key=abc...`
+// that SECRET_PATTERNS (which requires the keyword glued directly to the value)
+// misses because the quote/colon separates them.
+const KEYED_SECRET_RE = /((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?)([^"'\s,;}]{6,})/gi;
 const PII_PATTERNS = [
     /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-    /\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g,
-    /\b\d{3}[-]?\d{2}[-]?\d{4}\b/g,
+    // Require separators so bare digit runs (timestamps, latencies, ids) are not
+    // mistaken for phone/SSN numbers (previously `[-.]?`/`[-]?` made them
+    // optional, redacting any 9-10 digit number).
+    /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
+    /\b\d{3}-\d{2}-\d{4}\b/g,
 ];
-const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credential|password|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
 const MAX_STRING_LENGTH = 2000;
 function redactString(value) {
     let result = value.length > MAX_STRING_LENGTH
         ? value.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${value.length}]`
         : value;
     result = result.replace(HOME_RE, '~');
+    KEYED_SECRET_RE.lastIndex = 0;
+    result = result.replace(KEYED_SECRET_RE, '$1[REDACTED_SECRET]');
     for (const pattern of SECRET_PATTERNS) {
         pattern.lastIndex = 0;
         result = result.replace(pattern, '[REDACTED_SECRET]');
@@ -46,8 +57,11 @@ function redactValue(value, path) {
         const result = {};
         for (const [key, val] of Object.entries(obj)) {
             const fullPath = path ? `${path}.${key}` : key;
-            if (AUTH_PATHS.test(key) && typeof val !== 'object') {
-                result[key] = `[REDACTED:${typeof val}]`;
+            if (AUTH_PATHS.test(key)) {
+                // Redact regardless of value type — an object/array value under an
+                // auth-named key (e.g. credentials: { user, pass }) must not be
+                // recursed into, or inner secrets leak when they match no pattern.
+                result[key] = Array.isArray(val) ? '[REDACTED:array]' : `[REDACTED:${typeof val}]`;
             }
             else {
                 result[key] = redactValue(val, fullPath);

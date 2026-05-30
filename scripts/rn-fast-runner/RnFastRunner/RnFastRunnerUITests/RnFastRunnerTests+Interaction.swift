@@ -251,16 +251,22 @@ extension RnFastRunnerTests {
     var matched: XCUIElement?
     let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
       // Prefer the smallest matching field so nested editable controls win over large containers.
-      let candidates = app.descendants(matching: .any).allElementsBoundByIndex
+      // Restrict the query to text-input types so XCTest materializes only those
+      // elements instead of the entire accessibility tree. The post-filter already
+      // kept exactly these four types, so semantics are unchanged — this just
+      // avoids resolving every live element on the hot `.type` path.
+      let inputTypeRawValues = [
+        XCUIElement.ElementType.textField,
+        .secureTextField,
+        .searchField,
+        .textView,
+      ].map { $0.rawValue }
+      let inputPredicate = NSPredicate(format: "elementType IN %@", inputTypeRawValues)
+      let candidates = app.descendants(matching: .any).matching(inputPredicate).allElementsBoundByIndex
         .filter { element in
           guard element.exists else { return false }
-          switch element.elementType {
-          case .textField, .secureTextField, .searchField, .textView:
-            let frame = element.frame
-            return !frame.isEmpty && frame.contains(point)
-          default:
-            return false
-          }
+          let frame = element.frame
+          return !frame.isEmpty && frame.contains(point)
         }
         .sorted { left, right in
           let leftArea = max(1, left.frame.width * left.frame.height)

@@ -397,10 +397,13 @@ export function appendRepairRecord(state: ActionRuntimeState, record: RepairReco
  * Check whether a self-repair attempt is within the rolling-24h budget.
  * Pure function — `now` is injectable for tests.
  */
-export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date = () => new Date()): boolean {
+export function recentRepairCount(state: ActionRuntimeState, now: () => Date = () => new Date()): number {
   const cutoff = now().getTime() - 24 * 60 * 60 * 1000;
-  const recent = state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
-  return recent.length < REPAIR_BUDGET.ATTEMPTS_PER_24H;
+  return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
+}
+
+export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date = () => new Date()): boolean {
+  return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
 }
 
 /**

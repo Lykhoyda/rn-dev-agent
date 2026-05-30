@@ -238,6 +238,25 @@ function classifyResult(result: unknown): 'PASS' | 'FAIL' {
   return 'PASS';
 }
 
+// Ghost recovery re-invokes the original handler. That is only safe for
+// read-only / idempotent tools — re-running a mutating device_*/cdp_dispatch
+// handler on a transient-looking error would apply its side effect twice
+// (e.g. a press re-pressed, a field re-typed). Gate retry on this allow-list
+// rather than on the error family alone.
+const GHOST_RETRYABLE_TOOLS = new Set<string>([
+  'cdp_status', 'cdp_targets', 'cdp_component_tree', 'cdp_component_state',
+  'cdp_store_state', 'cdp_navigation_state', 'cdp_nav_graph', 'cdp_network_log',
+  'cdp_network_body', 'cdp_console_log', 'cdp_error_log', 'cdp_native_errors',
+  'cdp_metro_events', 'cdp_heap_usage', 'cdp_diagnostic_renderers', 'cdp_object_inspect',
+  'cdp_wait_for_network', 'collect_logs',
+  'device_list', 'device_snapshot', 'device_screenshot', 'device_find',
+  'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
+]);
+
+export function isGhostRetryable(toolName: string): boolean {
+  return GHOST_RETRYABLE_TOOLS.has(toolName);
+}
+
 export function instrumentTool(toolName: string, handler: ToolHandler): ToolHandler {
   return async (...fnArgs: unknown[]) => {
     const start = Date.now();
@@ -248,8 +267,9 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
       const latency = Date.now() - start;
       const status = classifyResult(result);
 
-      // On FAIL, attempt ghost recovery (state lock: classify AFTER ghost)
-      if (status === 'FAIL') {
+      // On FAIL, attempt ghost recovery (state lock: classify AFTER ghost) —
+      // only for tools whose handler is safe to re-run (see GHOST_RETRYABLE_TOOLS).
+      if (status === 'FAIL' && isGhostRetryable(toolName)) {
         const errorText = extractErrorFromResult(result);
         if (errorText) {
           try {
@@ -287,8 +307,9 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
       const latency = Date.now() - start;
       const msg = err instanceof Error ? err.message : String(err);
 
-      // Attempt ghost recovery on thrown errors too
-      try {
+      // Attempt ghost recovery on thrown errors too — idempotent tools only.
+      if (isGhostRetryable(toolName)) {
+        try {
         const ghostResult = await attemptGhostRecovery({
           toolName,
           error: msg,
@@ -308,8 +329,9 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
           });
           return appendGhostNote(ghostResult.recovered_result, ghostResult);
         }
-      } catch {
-        // Ghost failed — throw original error
+        } catch {
+          // Ghost failed — throw original error
+        }
       }
 
       logToolCall(toolName, params, 'ERROR', latency, msg);

@@ -27,7 +27,7 @@ export class PathTraversalError extends Error {
 }
 // ── Action ID validation ────────────────────────────────────────────
 // Action IDs flow into `.rn-agent/actions/<id>.yaml` and the matching
-// sidecar `<id>.action.json`. They must start with an alphanumeric
+// sidecar `.rn-agent/state/<id>.state.json`. They must start with an alphanumeric
 // character, then accept hyphen/underscore/dot/alphanumeric. We
 // deliberately exclude `..`, `/`, `\`, and control characters so the
 // ID can never escape its parent directory.
