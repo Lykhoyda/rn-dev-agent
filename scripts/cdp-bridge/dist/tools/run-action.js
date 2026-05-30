@@ -34,6 +34,7 @@ import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-
 import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
+import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -110,6 +111,7 @@ function mapRefusedReason(repairCode, repairError) {
 export function createRunActionHandler(deps = {}) {
     const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
     const repairAction = deps.repairAction ?? createRepairActionHandler();
+    const getLiveRoute = deps.getLiveRoute ?? (async () => null);
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -182,6 +184,35 @@ export function createRunActionHandler(deps = {}) {
             }
             // ─── First attempt failed — classify ─────────────────────────────
             const failure = parseMaestroFailure(firstOutput);
+            // GH #186: structural route-drift takes precedence over selector repair.
+            // If the action recorded an expected route sequence and the LIVE route is
+            // off it, an unexpected screen appeared (e.g. an inserted CouponCode) — a
+            // fuzzy selector repair would be wrong, so reclassify as ROUTE_DRIFT and
+            // skip repair. Live route is fetched within a bounded budget (best-effort;
+            // the default fetcher is a no-op until index.ts wires a CDP-backed one).
+            const expectedSeq = action.metadata.expectedRouteSequence;
+            if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
+                const liveRoute = await getLiveRoute().catch(() => null);
+                const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
+                if (drift.isDrift) {
+                    const autoRepair = {
+                        attempted: false,
+                        outcome: 'refused',
+                        refusedReason: 'ROUTE_DRIFT',
+                        phases: { firstAttemptMs },
+                    };
+                    await persistRun(args.actionId, projectRoot, {
+                        timestamp: new Date().toISOString(),
+                        durationMs: Date.now() - t0,
+                        status: 'fail',
+                        failureCode: 'ROUTE_DRIFT',
+                        failureDetail: drift.reason ?? 'route drift',
+                        trigger,
+                        autoRepair,
+                    });
+                    return failResult(`cdp_run_action: ${args.actionId} hit structural route-drift — ${drift.reason}. The flow changed shape; re-record the action. Auto-repair skipped (it only fixes stale selectors, not inserted/changed screens).`, 'ROUTE_DRIFT', { actionId: args.actionId, failureKind: 'ROUTE_DRIFT', liveRoute: drift.liveRoute, expectedRouteSequence: expectedSeq, autoRepair });
+                }
+            }
             // Skip repair if disabled or if the failure isn't a repair shape.
             if (!autoRepairEnabled || !isAutoRepairable(failure)) {
                 // PR #115 review (both providers conf 88): distinguish opt-out
