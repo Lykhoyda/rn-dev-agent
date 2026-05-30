@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-plugin",
-  "version": "0.44.44",
+  "version": "0.44.45",
   "private": true,
   "description": "Synthetic package — changesets uses this as the version source of truth for the Claude Code plugin manifest. Bumps here are mirrored into plugin.json + marketplace.json by scripts/sync-plugin-manifest.mjs (run automatically by `npm run version-packages`).",
   "license": "MIT"
