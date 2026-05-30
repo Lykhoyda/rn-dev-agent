@@ -10,6 +10,7 @@ import {
   getAdbSerial,
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { markCdpStale } from '../cdp/recovery.js';
 import {
   detectLegacyAgentDevice,
   detectAndroidExternalRunner,
@@ -284,11 +285,24 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
             reopenSessionForRecovery(appId, platform, attachOnly),
           resnapshot: () => rawSnapshot(),
           parseNodes: parseSnapshotNodes,
+          // GH #186: non-destructive reacquire tried before the destructive
+          // close/relaunch tiers. Only when we have the full iOS context
+          // (appId + deviceId) needed to re-foreground the app and restart the
+          // fast-runner; otherwise omitted so recovery falls back to the
+          // existing tiers.
+          reacquire: (session?.platform === 'ios' && session?.appId && session?.deviceId)
+            ? () => reacquireIosTargetApp(session.appId!, session.deviceId!)
+            : undefined,
         },
       );
 
       if (recovery.recovered) {
         cacheSnapshotIfPossible(recovery.result);
+        // GH #186: the recovery re-foregrounded/relaunched the app, which can
+        // leave the CDP target pinned to a now-stale context. Flag it so the
+        // next cdp_* call re-pins proactively (fast) instead of hitting the
+        // ~47s STALE_TARGET timeout that prompted this issue.
+        markCdpStale();
         return wrapWithMeta(recovery.result, {
           recovered: 'agent-device-runner-leak',
           recoveryTier: recovery.tier,
@@ -325,6 +339,29 @@ export function runnerLeakFailureHint(
     return 'Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.';
   }
   return 'Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.';
+}
+
+/**
+ * GH #186: non-destructive reacquire of the iOS target app after a runner-leak
+ * sentinel. Both the daemon-leak and a maestro-eviction (a foreign XCUITest
+ * session stealing focus) surface as the same sentinel, so rather than closing
+ * the session + relaunching (~44s, drops JS/CDP state) we: stop the
+ * (possibly evicted) fast-runner so it can't compete for focus, re-foreground
+ * the TARGET app via simctl (displacing the foreign session), then restart the
+ * fast-runner bound to the app. The caller (recoverFromRunnerLeak) re-snapshots
+ * and only falls through to the destructive tiers if the sentinel persists.
+ * Mirrors repair-action.ts:bringTargetAppToForeground, kept local here to keep
+ * the dependency surface tight (same rationale as that copy).
+ */
+async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<ToolResult> {
+  try { stopFastRunner(); } catch { /* best-effort — may already be dead */ }
+  try {
+    await execFile('xcrun', ['simctl', 'launch', 'booted', appId], { timeout: 5000, encoding: 'utf8' });
+  } catch { /* best-effort — the sentinel re-check covers a failed foreground */ }
+  try {
+    await ensureFastRunner(deviceId, appId);
+  } catch { /* non-fatal — re-snapshot will surface a still-broken runner */ }
+  return okResult({ reacquired: true, appId });
 }
 
 async function rawSnapshot(): Promise<ToolResult> {

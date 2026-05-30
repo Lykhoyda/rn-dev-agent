@@ -5,6 +5,22 @@ const FRESHNESS_PROBE_MS = 2000;
 const STALE_RETRY_DELAY_MS = 500;
 const STALE_RETRY_PROBE_MS = 3000;
 
+// GH #186: cross-tool "the CDP target may be stale" signal. A device-session
+// runner-leak recovery can re-foreground/relaunch the app out from under CDP,
+// after which the next cdp_* call would hit a ~47s STALE_TARGET timeout in the
+// handler. The recovery sets this flag; withConnection consumes it before the
+// next handler and proactively re-pins via recoverFromStaleTarget, turning that
+// 47s catch-path recovery into a fast pre-handler one. Process-scoped boolean —
+// a single MCP serves one device at a time, so no per-client keying is needed.
+let cdpStale = false;
+export function markCdpStale(): void { cdpStale = true; }
+/** Read-and-clear: returns whether the stale flag was set, resetting it. */
+export function consumeCdpStale(): boolean {
+  const was = cdpStale;
+  cdpStale = false;
+  return was;
+}
+
 export interface FreshnessResult {
   fresh: boolean;
   version: number | null;

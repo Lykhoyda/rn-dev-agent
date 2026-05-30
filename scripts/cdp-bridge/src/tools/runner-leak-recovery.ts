@@ -63,13 +63,23 @@ export interface RecoveryDeps {
   resnapshot: () => Promise<ToolResult>;
   parseNodes: (result: ToolResult) => RunnerLeakNode[] | null;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * GH #186: non-destructive reacquire — re-foreground the TARGET app via the
+   * fast-runner (stopFastRunner → ensureFastRunner → activate) WITHOUT closing
+   * the session or relaunching the app. When supplied, it's tried first: both
+   * the daemon-leak and the maestro-eviction case surface as the same sentinel,
+   * so rather than distinguishing them we attempt a cheap state-preserving
+   * reacquire and only fall through to the destructive tiers if it doesn't
+   * clear the sentinel. Optional so non-iOS / older callers are unaffected.
+   */
+  reacquire?: () => Promise<ToolResult>;
 }
 
 const DAEMON_SETTLE_MS = 600;
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export type RecoveryTier = 'attach-only' | 'full-relaunch';
+export type RecoveryTier = 'reacquire' | 'attach-only' | 'full-relaunch';
 
 export interface RecoveryOutcome {
   recovered: boolean;
@@ -114,6 +124,17 @@ export async function recoverFromRunnerLeak(
 
   const sleep = deps.sleep ?? defaultSleep;
 
+  // Tier 0 (GH #186): non-destructive reacquire — re-foreground the target app
+  // via the fast-runner WITHOUT closing the session or relaunching. Most
+  // state-preserving and fastest; strictly additive (falls through to the
+  // existing tiers if it doesn't clear the sentinel).
+  if (deps.reacquire) {
+    const tier0 = await attemptReacquireCycle(deps, sleep);
+    if (tier0.phase === 'success') {
+      return { recovered: true, result: tier0.result, tier: 'reacquire' };
+    }
+  }
+
   // Tier 1: attachOnly reopen — preserves app state when it works.
   const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep);
   if (tier1.phase === 'success') {
@@ -135,6 +156,25 @@ export async function recoverFromRunnerLeak(
 interface RecoveryCycleResult {
   phase: 'reopen-failed' | 'snapshot-failed' | 'sentinel' | 'success';
   result: ToolResult;
+}
+
+async function attemptReacquireCycle(
+  deps: RecoveryDeps,
+  sleep: (ms: number) => Promise<void>,
+): Promise<RecoveryCycleResult> {
+  const reacqResult = await deps.reacquire!();
+  if (reacqResult.isError) {
+    return { phase: 'reopen-failed', result: reacqResult };
+  }
+  await sleep(DAEMON_SETTLE_MS);
+  const retryResult = await deps.resnapshot();
+  if (retryResult.isError) {
+    return { phase: 'snapshot-failed', result: retryResult };
+  }
+  if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
+    return { phase: 'sentinel', result: retryResult };
+  }
+  return { phase: 'success', result: retryResult };
 }
 
 async function attemptRecoveryCycle(
