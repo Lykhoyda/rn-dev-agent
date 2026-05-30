@@ -16,6 +16,8 @@
  * default-deny rationale.
  */
 import yaml from 'yaml';
+import { join, dirname, isAbsolute, sep } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
 // ── Errors ──────────────────────────────────────────────────────────
 export class MaestroValidationError extends Error {
     constructor(message) {
@@ -105,6 +107,12 @@ const ALLOWED_COMMANDS = new Set([
     'killApp',
     'stopApp',
     'tap',
+    // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
+    // dev-client picker). Validated specially (validateRunFlowValue) so nested
+    // `commands` get full command-level allowlist checks, and {file} refs are
+    // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
+    // through generic validateValue, which would miss nested denied commands.
+    'runFlow',
 ]);
 const DENIED_COMMANDS = new Set([
     'runScript',
@@ -153,7 +161,51 @@ function validateCommand(cmd) {
     if (!ALLOWED_COMMANDS.has(key)) {
         throw new MaestroValidationError(`Command not in allowlist: ${key}`);
     }
+    if (key === 'runFlow') {
+        validateRunFlowValue(cmd[key]);
+        return;
+    }
     validateValue(cmd[key]);
+}
+/**
+ * GH #186: validate a runFlow value. The string/`{file}` form is a sub-flow
+ * file ref (a safe scalar here; secure resolution happens in expandRunFlows).
+ * Inline `commands` are validated as COMMANDS (recursive allowlist check) — the
+ * critical difference from generic validateValue, which would let a nested
+ * `runScript` slip through as a plain scalar key/value.
+ */
+function validateRunFlowValue(v) {
+    if (typeof v === 'string') {
+        if (!isSafeMaestroScalar(v)) {
+            throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+        }
+        return;
+    }
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) {
+        throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? 'array' : typeof v}`);
+    }
+    const obj = v;
+    if ('file' in obj && (typeof obj.file !== 'string' || !isSafeMaestroScalar(obj.file))) {
+        throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+    }
+    if ('when' in obj)
+        validateValue(obj.when);
+    if ('commands' in obj) {
+        if (!Array.isArray(obj.commands)) {
+            throw new MaestroValidationError(`runFlow.commands must be an array`);
+        }
+        for (const c of obj.commands)
+            validateCommand(c);
+    }
+    // Any other keys (env/label/config) are validated as generic safe values.
+    for (const [k, val] of Object.entries(obj)) {
+        if (k === 'file' || k === 'when' || k === 'commands')
+            continue;
+        if (!isSafeMaestroScalar(k)) {
+            throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
+        }
+        validateValue(val);
+    }
 }
 function validateValue(v) {
     if (v === null || v === undefined)
@@ -181,6 +233,117 @@ function validateValue(v) {
         return;
     }
     throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
+}
+// GH #186: recognize a single-key `runFlow` command and extract its shape.
+// Returns null for non-runFlow OR malformed runFlow (which validateCommand then
+// rejects), so expandRunFlows passes those through untouched.
+function asRunFlow(cmd) {
+    if (!cmd || typeof cmd !== 'object' || Array.isArray(cmd))
+        return null;
+    const keys = Object.keys(cmd);
+    if (keys.length !== 1 || keys[0] !== 'runFlow')
+        return null;
+    const v = cmd.runFlow;
+    if (typeof v === 'string')
+        return { file: v };
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const o = v;
+        return {
+            file: typeof o.file === 'string' ? o.file : undefined,
+            when: o.when,
+            commands: Array.isArray(o.commands) ? o.commands : undefined,
+        };
+    }
+    return null;
+}
+// GH #186: resolve a runFlow file ref to a canonical path, enforcing: relative
+// only, no `..`, .yaml/.yml only, and containment within flowRoot after realpath
+// (defeats symlink escape). Throws on any violation or missing root context.
+function resolveRunFlowTarget(file, opts) {
+    if (!opts.flowDir || !opts.flowRoot) {
+        throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
+    }
+    if (isAbsolute(file)) {
+        throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
+    }
+    if (file.split(/[\\/]/).includes('..')) {
+        throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
+    }
+    if (!/\.ya?ml$/i.test(file)) {
+        throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
+    }
+    const realpath = opts.realpathFn ?? realpathSync;
+    let resolved;
+    let rootReal;
+    try {
+        resolved = realpath(join(opts.flowDir, file));
+        rootReal = realpath(opts.flowRoot);
+    }
+    catch (err) {
+        throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
+    }
+    if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
+        throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
+    }
+    return resolved;
+}
+// GH #186: expand runFlow file refs inline so the serialized flow (written to
+// /tmp) has no remaining file references. A `{file}` with a `when` becomes an
+// inline conditional `{when, commands}` (semantics preserved); without `when`
+// the sub-flow's commands are spliced flat. Inline runFlow is recursed into.
+export function expandRunFlows(commands, opts) {
+    const out = [];
+    for (const cmd of commands) {
+        const rf = asRunFlow(cmd);
+        if (!rf) {
+            out.push(cmd);
+            continue;
+        }
+        if (rf.file !== undefined) {
+            const depth = opts._depth ?? 0;
+            const max = opts.maxRunFlowDepth ?? 5;
+            if (depth >= max) {
+                throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+            }
+            const resolved = resolveRunFlowTarget(rf.file, opts);
+            const visited = opts._visited ?? new Set();
+            if (visited.has(resolved)) {
+                throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+            }
+            const readFile = opts.readFileFn ?? ((p) => readFileSync(p, 'utf8'));
+            let subText;
+            try {
+                subText = readFile(resolved);
+            }
+            catch (err) {
+                throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+            }
+            const sub = parseAndValidateFlow(subText, {
+                ...opts,
+                rejectHeader: true,
+                flowDir: dirname(resolved),
+                _depth: depth + 1,
+                _visited: new Set([...visited, resolved]),
+            });
+            if (rf.when !== undefined) {
+                out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+            }
+            else {
+                out.push(...sub.commands);
+            }
+        }
+        else {
+            // Inline runFlow (no file) — recurse into nested commands, keep the wrapper.
+            const inner = rf.commands
+                ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 })
+                : [];
+            const wrapped = { commands: inner };
+            if (rf.when !== undefined)
+                wrapped.when = rf.when;
+            out.push({ runFlow: wrapped });
+        }
+    }
+    return out;
 }
 export function parseAndValidateFlow(yamlText, opts = {}) {
     let docs;
@@ -216,9 +379,12 @@ export function parseAndValidateFlow(yamlText, opts = {}) {
     if (!Array.isArray(body)) {
         throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
     }
-    for (const cmd of body) {
+    // GH #186: resolve + inline runFlow file refs FIRST, then validate the
+    // expanded (file-ref-free) body so what we serialize is self-contained.
+    const expanded = expandRunFlows(body, opts);
+    for (const cmd of expanded) {
         validateCommand(cmd);
     }
-    const raw = buildMaestroFlow(appId !== undefined ? { appId } : {}, body);
-    return { appId, commands: body, raw };
+    const raw = buildMaestroFlow(appId !== undefined ? { appId } : {}, expanded);
+    return { appId, commands: expanded, raw };
 }

@@ -2,7 +2,7 @@ import type { CDPClient } from './cdp-client.js';
 import type { ResultEnvelope, ToolErrorCode } from './types.js';
 import { hasActiveSession } from './agent-device-wrapper.js';
 import { handleDevClientPicker } from './tools/dev-client-picker.js';
-import { probeFreshness, recoverFromStaleTarget } from './cdp/recovery.js';
+import { probeFreshness, recoverFromStaleTarget, consumeCdpStale } from './cdp/recovery.js';
 
 // S1 (D631): cache the freshness probe for up to 2s per (client, generation).
 // Eliminates a CDP round-trip on back-to-back tool calls while still invalidating
@@ -164,6 +164,18 @@ export function withConnection<T>(
             );
           }
         }
+      }
+      // GH #186: a device-session runner-leak recovery may have re-foregrounded
+      // or relaunched the app out from under CDP. If it flagged the target as
+      // stale, re-pin proactively NOW (recoverFromStaleTarget is a no-op when
+      // the target is actually fresh) so the handler doesn't hit a ~47s
+      // STALE_TARGET timeout. Best-effort — the catch-path recovery still covers
+      // any failure here.
+      if (client.isConnected && consumeCdpStale()) {
+        try {
+          await recoverFromStaleTarget(client);
+          forgetFreshness(client);
+        } catch { /* fall through — handler + catch-path recovery still apply */ }
       }
       // D502: Proactive freshness check (D631/S1 caches result for 2s per generation).
       // D633: delegated to cdp/recovery.probeFreshness.

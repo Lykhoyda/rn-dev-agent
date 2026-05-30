@@ -7,6 +7,7 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
+import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 
@@ -123,7 +124,7 @@ function parseSnapshotEnvelope(result: ToolResult): SnapshotNode[] | null {
 }
 
 export type SnapshotFetchResult =
-  | { ok: true; nodes: SnapshotNode[]; recoveredTier?: 'attach-only' | 'full-relaunch' }
+  | { ok: true; nodes: SnapshotNode[]; recoveredTier?: RecoveryTier }
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
@@ -163,7 +164,7 @@ async function fetchSnapshotNodes(): Promise<SnapshotFetchResult> {
 }
 
 export type FindCandidatesResult =
-  | { ok: true; candidates: FindCandidate[]; recoveredTier?: 'attach-only' | 'full-relaunch' }
+  | { ok: true; candidates: FindCandidate[]; recoveredTier?: RecoveryTier }
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
@@ -210,7 +211,7 @@ async function pressCandidate(candidate: FindCandidate, action?: string): Promis
 // B119: when an underlying snapshot triggered runner-leak recovery, surface
 // that side-effect on the wrapping result so callers (LLM agents) know the
 // app may have been relaunched and CDP/state may have been invalidated.
-function tagPressIfRecovered(result: ToolResult, tier?: 'attach-only' | 'full-relaunch'): ToolResult {
+function tagPressIfRecovered(result: ToolResult, tier?: RecoveryTier): ToolResult {
   if (!tier || result.isError) return result;
   try {
     const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: unknown; meta?: Record<string, unknown> };

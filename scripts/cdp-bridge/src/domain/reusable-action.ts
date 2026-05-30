@@ -38,6 +38,10 @@ export type ActionLifecycle = 'experimental' | 'active' | 'deprecated';
  */
 export type ActionFailureCode =
   | 'SELECTOR_NOT_FOUND'
+  // GH #186: the live route diverged from the action's expectedRouteSequence
+  // (a screen was inserted/changed) — structural drift, distinct from selector
+  // churn, so it must NOT trigger fuzzy selector repair.
+  | 'ROUTE_DRIFT'
   | 'STATE_MISMATCH'
   | 'MUTATE_PRECONDITION_FAILED'
   | 'ENV_UNREACHABLE'
@@ -130,6 +134,17 @@ export interface M7Metadata {
    * values.
    */
   produces?: Record<string, string | number | boolean>;
+
+  /**
+   * GH #186 — ordered list of screen/route names this action walked when it was
+   * recorded (captured from nav events at save_as_action time). run-action uses
+   * it for structural drift detection: a pre-flight check against the live nav
+   * graph (definite-mismatch fail-fast) and a post-failure check that
+   * reclassifies a SELECTOR_NOT_FOUND as ROUTE_DRIFT when the live route is off
+   * this sequence (a screen was inserted). Optional — actions without it skip
+   * the drift checks.
+   */
+  expectedRouteSequence?: string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +158,9 @@ export type AutoRepairRefusedReason =
   | 'NO_MATCH'
   | 'SNAPSHOT_FAILED'
   | 'NOT_REPAIRABLE_KIND'
+  // GH #186: refused because the failure was structural route-drift, not a
+  // stale selector — fuzzy repair would be wrong here.
+  | 'ROUTE_DRIFT'
   // PR #115 multi-LLM review: distinguish user-driven opt-outs from
   // genuine refusals so MTTR analysis (#105) can see "user disabled
   // repair" as operationally healthy vs. budget/edit/match refusals.
@@ -458,6 +476,8 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
         meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
       } else if (key === 'produces') {
         meta.produces = parseProducesMap(raw);
+      } else if (key === 'expectedRouteSequence') {
+        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
       } else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
         meta[key] = raw;
       }
@@ -483,6 +503,7 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
     createdAt: meta.createdAt as string | undefined,
     author: meta.author as ActionAuthor | undefined,
     produces: meta.produces as Record<string, string | number | boolean> | undefined,
+    expectedRouteSequence: meta.expectedRouteSequence as string[] | undefined,
   };
 }
 
@@ -546,6 +567,9 @@ export function serializeM7Header(metadata: M7Metadata): string {
         return `${k}: ${formatted}`;
       });
     lines.push(`# produces: { ${pairs.join(', ')} }`);
+  }
+  if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
+    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`);
   }
   return lines.join('\n');
 }

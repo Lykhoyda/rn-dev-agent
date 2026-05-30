@@ -206,7 +206,10 @@ export type ToolErrorCode =
   | 'CROSS_PLATFORM_MISMATCH'
   // GH #184: cdp_status aborted fast because the Dev Client picker was blocking
   // the bundle (React unreachable on a non-Hermes target within the budget).
-  | 'PICKER_BLOCKING';
+  | 'PICKER_BLOCKING'
+  // GH #186: cdp_run_action replay hit structural route-drift (live route off
+  // the action's expectedRouteSequence) — distinct from a stale selector.
+  | 'ROUTE_DRIFT';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

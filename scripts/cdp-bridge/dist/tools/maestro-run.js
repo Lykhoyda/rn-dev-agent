@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -81,7 +81,13 @@ export function createMaestroRunHandler() {
             return failResult('Provide either flowPath or inlineYaml.');
         }
         try {
-            const parsed = parseAndValidateFlow(rawYaml);
+            // GH #186: when running a saved flow FILE, resolve+inline any runFlow file
+            // refs relative to that file's directory, contained within it. Inline YAML
+            // has no on-disk root, so runFlow file refs stay rejected there.
+            const runFlowOpts = args.flowPath
+                ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
+                : {};
+            const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
             const rawAppId = resolveAppId(args.appId, platform);
             const headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
             if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {

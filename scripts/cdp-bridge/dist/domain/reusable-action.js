@@ -164,6 +164,9 @@ export function parseM7Header(yamlText, fallbackId) {
             else if (key === 'produces') {
                 meta.produces = parseProducesMap(raw);
             }
+            else if (key === 'expectedRouteSequence') {
+                meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+            }
             else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
                 meta[key] = raw;
             }
@@ -193,6 +196,7 @@ export function parseM7Header(yamlText, fallbackId) {
         createdAt: meta.createdAt,
         author: meta.author,
         produces: meta.produces,
+        expectedRouteSequence: meta.expectedRouteSequence,
     };
 }
 /**
@@ -261,6 +265,9 @@ export function serializeM7Header(metadata) {
             return `${k}: ${formatted}`;
         });
         lines.push(`# produces: { ${pairs.join(', ')} }`);
+    }
+    if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
+        lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`);
     }
     return lines.join('\n');
 }
