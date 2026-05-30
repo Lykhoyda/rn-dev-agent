@@ -4,7 +4,41 @@ import { resolveBundleId } from '../project-config.js';
 import { discover } from './discovery.js';
 import { sleep } from './state.js';
 import { CDP_TIMEOUT_FAST } from './timeout-config.js';
-export async function autoConnect(ctx, portHint, filters) {
+import { probeReactReachable } from './setup.js';
+// Budget for the status-scoped React-reachability probe. Generous enough to
+// clear a normal Bridgeless reload (React ready in <~2s) but far below setup()'s
+// 30s waitForReact, so cdp_status fails fast instead of hanging when the Dev
+// Client picker blocks the bundle. Env-overridable for tuning/tests.
+const PICKER_PROBE_BUDGET_MS = (() => {
+    const n = parseInt(process.env.RN_PICKER_PROBE_BUDGET_MS ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 5000;
+})();
+/**
+ * GH #184: thrown when a status-scoped connect can't reach React within the
+ * bounded budget on a non-Hermes target — the signature of the Expo Dev Client
+ * "Development servers" picker leaving stale C++ targets advertised while the
+ * bundle never loads. status.ts maps it to a fast, actionable failResult
+ * instead of letting setup() burn the full 30s waitForReact.
+ */
+export class PickerBlockingBundleError extends Error {
+    target;
+    constructor(target) {
+        super(`Dev Client picker appears to be blocking the bundle: React was not reachable on target ` +
+            `"${target.title}" (vm=${target.vm}). If the Expo "Development servers" picker is showing on ` +
+            `the simulator, select your Metro server, then retry cdp_status. (If the bundle is still building, just retry.)`);
+        this.name = 'PickerBlockingBundleError';
+        this.target = target;
+    }
+}
+/**
+ * GH #184: run the bounded picker probe only for a status-intent connect against
+ * a non-Hermes target. Hermes targets are skipped so a genuinely slow Hermes
+ * first-build keeps the full waitForReact budget rather than being aborted.
+ */
+export function shouldRunPickerProbe(intent, target) {
+    return intent === 'status' && target.vm !== 'Hermes';
+}
+export async function autoConnect(ctx, portHint, filters, intent = 'default') {
     if (ctx.getState() === 'connecting' || ctx.isReconnecting()) {
         throw new Error('Already connecting to Metro...');
     }
@@ -25,12 +59,15 @@ export async function autoConnect(ctx, portHint, filters) {
         if (resolved)
             effective.preferredBundleId = resolved;
     }
-    return discoverAndConnect(ctx, portHint, effective);
+    return discoverAndConnect(ctx, portHint, effective, discover, intent);
 }
 export async function discoverAndConnect(ctx, portHint, filters, 
 // B111 (D643): injectable for unit tests — defaults to real discover. Production
 // call sites pass nothing, so behavior is unchanged. Tests pass a stub.
-discoverFn = discover) {
+discoverFn = discover, 
+// GH #184: connect intent threaded to connectToTarget. Kept last so existing
+// callers (and tests passing discoverFn as the 4th arg) are unaffected.
+intent = 'default') {
     if (ctx.isDisposed()) {
         throw new Error('Client is disposed. Create a new CDPClient instance.');
     }
@@ -71,7 +108,7 @@ discoverFn = discover) {
         const candidate = sorted[idx];
         const isLast = idx === sorted.length - 1;
         try {
-            await connectToTarget(ctx, candidate);
+            await connectToTarget(ctx, candidate, 5, intent);
             const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
             if (devCheck.value === true) {
                 connectedTarget = candidate;
@@ -89,6 +126,12 @@ discoverFn = discover) {
             connectedTarget = candidate;
         }
         catch (err) {
+            // GH #184: picker-blocking affects the whole bundle — every other
+            // candidate is the same stale C++ target, so don't waste a probe on each.
+            if (err instanceof PickerBlockingBundleError) {
+                ctx.setState('disconnected');
+                throw err;
+            }
             if (!isLast)
                 continue;
             throw err;
@@ -151,7 +194,7 @@ export function formatConnectFailureMessage(retries, attempts, bundleHint, lastE
         : '';
     return `Failed to connect after ${retries} attempts.${hint}`;
 }
-async function connectToTarget(ctx, target, retries = 5) {
+async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
     let lastError = null;
     // GH #105 / B154: track per-attempt outcome (handshake ok vs probe timeout).
     // Fed into formatConnectFailureMessage at the end.
@@ -187,10 +230,28 @@ async function connectToTarget(ctx, target, retries = 5) {
             // M11: stamp connection time so cdp_console_log / cdp_network_log can reason
             // about "how long have we been connected with nothing happening?"
             ctx.setConnectedAt(ctx.now());
+            // GH #184: for a status-scoped connect, bounded-probe React reachability
+            // BEFORE the up-to-30s waitForReact inside setup(). A non-Hermes target
+            // that can't reach React within the budget is a stale C++ connection the
+            // Dev Client picker leaves advertised — abort fast with a typed error
+            // instead of hanging. Hermes targets are skipped (legit slow builds).
+            if (shouldRunPickerProbe(intent, target)) {
+                const reachable = await probeReactReachable((expr) => ctx.evaluate(expr), PICKER_PROBE_BUDGET_MS);
+                if (!reachable)
+                    throw new PickerBlockingBundleError(target);
+            }
             await ctx.setup();
             return;
         }
         catch (err) {
+            // GH #184: the picker-blocking abort is deterministic, not transient —
+            // don't burn the retry budget on it; clean up and surface it immediately.
+            if (err instanceof PickerBlockingBundleError) {
+                closeAndResetWs(ctx);
+                ctx.setConnectedTarget(null);
+                ctx.setState('disconnected');
+                throw err;
+            }
             lastError = err instanceof Error ? err : new Error(String(err));
             attempts.push({ handshakeOk, probeTimedOut });
             closeAndResetWs(ctx);
