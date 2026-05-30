@@ -321,7 +321,10 @@ function defaultProcessAlive(pid: number): boolean {
 }
 
 async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpProbeResult> {
-  const url = `http://[::1]:${port}/health`;
+  // Use the same IPv4 loopback as the /command client (postCommand). The prior
+  // [::1] here meant the health probe and the command channel could resolve to
+  // different stacks, so a healthy IPv4 listener looked dead over IPv6.
+  const url = `http://127.0.0.1:${port}/health`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -467,17 +470,50 @@ export function _setFetchForTest(fn: typeof fetch): void {
   fetchImpl = fn;
 }
 
-async function postCommand(body: object): Promise<RunnerResponse> {
+// Test seam: override the per-command timeout so the abort path can be
+// exercised without waiting the full production window.
+let httpTimeoutOverrideMs: number | null = null;
+export function _setHttpTimeoutForTest(ms: number | null): void {
+  httpTimeoutOverrideMs = ms;
+}
+
+// `type` and `snapshot` legitimately run long (the runner's typeText
+// quiescence shim can sit up to its own 30s main-thread timeout before
+// returning the success-shaped message we depend on, and large trees take a
+// while to serialize), so they get a window wider than that internal cap.
+// Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
+function commandTimeoutMs(command: unknown): number {
+  if (httpTimeoutOverrideMs !== null) return httpTimeoutOverrideMs;
+  return SLOW_RUNNER_COMMANDS.has(command as string) ? 35_000 : HTTP_TIMEOUT_MS;
+}
+
+async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
   const state = runnerState;
   if (!state) {
     throw new Error('rn-fast-runner not started — open a device session first');
   }
-  const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return resp.json() as Promise<RunnerResponse>;
+  const controller = new AbortController();
+  const timeoutMs = commandTimeoutMs(body.command);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    return resp.json() as Promise<RunnerResponse>;
+  } catch (err) {
+    if ((err as { name?: string } | undefined)?.name === 'AbortError') {
+      throw new Error(
+        `RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

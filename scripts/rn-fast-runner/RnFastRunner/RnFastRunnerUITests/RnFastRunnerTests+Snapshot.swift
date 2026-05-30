@@ -600,7 +600,9 @@ extension RnFastRunnerTests {
   private func snapshotHasFocus(_ snapshot: XCUIElementSnapshot) -> Bool {
     var focused = false
     _ = RunnerObjCExceptionCatcher.catchException({
-      if let value = (snapshot as! NSObject).value(forKey: "hasFocus") as? Bool {
+      // `as?` not `as!` — a force-cast failure is a fatal Swift trap that the
+      // Obj-C exception catcher cannot intercept.
+      if let obj = snapshot as? NSObject, let value = obj.value(forKey: "hasFocus") as? Bool {
         focused = value
       }
     })

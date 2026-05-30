@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { okResult, failResult } from './utils.js';
 import { isFastRunnerAvailable, startFastRunner, } from './runners/rn-fast-runner-client.js';
-import { refCenter, getScreenRect, clearRefMap } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 const execFile = promisify(execFileCb);
 /**
@@ -284,7 +284,7 @@ const RN_FAST_RUNNER_COMMANDS = new Set([
 export function getCachedScreenRect() {
     return getScreenRect();
 }
-function buildRunIOSArgs(cliArgs, bundleId) {
+export function buildRunIOSArgs(cliArgs, bundleId) {
     const cmd = cliArgs[0];
     const positionals = cliArgs.slice(1).filter((a) => !a.startsWith('--'));
     switch (cmd) {
@@ -292,14 +292,18 @@ function buildRunIOSArgs(cliArgs, bundleId) {
         case 'tap': {
             const ref = positionals[0];
             if (ref && ref.startsWith('@')) {
-                const center = refCenter(ref);
+                const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
                     return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
                 }
                 return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
             }
             const [xS, yS] = positionals;
-            return { command: 'tap', x: Number(xS), y: Number(yS), ...(bundleId ? { bundleId } : {}) };
+            const x = Number(xS), y = Number(yS);
+            if (Number.isNaN(x) || Number.isNaN(y)) {
+                throw new Error(`buildRunIOSArgs: tap requires a @ref or numeric x, y`);
+            }
+            return { command: 'tap', x, y, ...(bundleId ? { bundleId } : {}) };
         }
         case 'fill':
         case 'type': {
@@ -310,7 +314,7 @@ function buildRunIOSArgs(cliArgs, bundleId) {
             const ref = positionals[0];
             const text = positionals.slice(1).join(' ');
             if (ref && ref.startsWith('@')) {
-                const center = refCenter(ref);
+                const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
                     return { command: 'type', _staleRef: ref, text, ...(bundleId ? { bundleId } : {}) };
                 }
@@ -414,7 +418,7 @@ function androidPositionals(cliArgs) {
     }
     return out;
 }
-function buildRunAndroidArgs(cliArgs, bundleId) {
+export function buildRunAndroidArgs(cliArgs, bundleId) {
     const cmd = cliArgs[0];
     const positionals = androidPositionals(cliArgs);
     const withBundle = bundleId ? { bundleId } : {};
@@ -423,20 +427,24 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'tap': {
             const ref = positionals[0];
             if (ref && ref.startsWith('@')) {
-                const center = refCenter(ref);
+                const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)
                     return { command: 'tap', _staleRef: ref, ...withBundle };
                 return { command: 'tap', x: center.x, y: center.y, ...withBundle };
             }
             const [xS, yS] = positionals;
-            return { command: 'tap', x: Number(xS), y: Number(yS), ...withBundle };
+            const x = Number(xS), y = Number(yS);
+            if (Number.isNaN(x) || Number.isNaN(y)) {
+                throw new Error(`buildRunAndroidArgs: tap requires a @ref or numeric x, y`);
+            }
+            return { command: 'tap', x, y, ...withBundle };
         }
         case 'fill':
         case 'type': {
             const ref = positionals[0];
             const text = positionals.slice(1).join(' ');
             if (ref && ref.startsWith('@')) {
-                const center = refCenter(ref);
+                const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)
                     return { command: 'type', _staleRef: ref, text, ...withBundle };
                 return { command: 'type', x: center.x, y: center.y, text, ...withBundle };

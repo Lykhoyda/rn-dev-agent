@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { detectPlatform } from './platform-utils.js';
+import { pathHasTraversal } from '../domain/path-safety.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
 // Mirrors the pattern in device-permission.ts and other shell-wrapping tools.
 const execFileAsync = promisify(execFile);
@@ -155,6 +156,9 @@ async function runStart(args) {
     }
     if (platform !== 'ios' && platform !== 'android') {
         return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
+    }
+    if (args.outputPath && pathHasTraversal(args.outputPath)) {
+        return failResult(`device_record: outputPath "${args.outputPath}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`, { code: 'INVALID_PATH' });
     }
     const outputPath = args.outputPath ?? defaultOutputPath(platform);
     // GH #173 sub-issue 1: pre-flight multi-device disambiguation. The shell

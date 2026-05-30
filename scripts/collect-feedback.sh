@@ -13,25 +13,26 @@ TELEMETRY_DIR="$AGENT_DIR/telemetry"
 
 redact() {
   local input="$1"
-  # Replace home directory
+  # Replace home directory (pure bash, cannot fail)
   input="${input//$HOME/\~}"
-  # Strip API keys, tokens, secrets (common patterns)
-  input=$(echo "$input" | sed -E \
-    -e 's/(sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_\-]{20,}/[REDACTED_SECRET]/gi' \
-    -e 's/Bearer [A-Za-z0-9_\-./+=]{20,}/Bearer [REDACTED]/g' \
+  # All regex redactions run as ONE sed program so a partial failure cannot ship
+  # partially-redacted output, and fail CLOSED (placeholder, never the original).
+  # Dash is placed last inside every bracket expression to avoid BSD/macOS sed
+  # "invalid character range" errors that previously made this stage fail open.
+  local redacted
+  redacted=$(printf '%s\n' "$input" | sed -E \
+    -e 's/(sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/[REDACTED_SECRET]/gi' \
+    -e 's/Bearer [A-Za-z0-9_./+=-]{20,}/Bearer [REDACTED]/g' \
     -e 's/ghp_[A-Za-z0-9_]{36}/[REDACTED_GH_TOKEN]/g' \
     -e 's/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/[REDACTED_JWT]/g' \
     -e 's/AKIA[0-9A-Z]{16}/[REDACTED_AWS]/g' \
-    -e 's/xox[baprs]-[A-Za-z0-9\-]+/[REDACTED_SLACK]/g' \
-    2>/dev/null || echo "$input")
-  # Strip emails
-  input=$(echo "$input" | sed -E 's/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[EMAIL_REDACTED]/g' 2>/dev/null || echo "$input")
-  # Strip IP addresses (POSIX-compatible, preserve 127.0.0.1 and localhost)
-  input=$(echo "$input" | sed -E 's/(^|[^0-9])(192|10|172|169)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9]|$)/\1[IP_REDACTED]\3/g' 2>/dev/null || echo "$input")
-  # Strip absolute paths that aren't home (already handled) — catches stack traces
-  input=$(echo "$input" | sed -E 's#/(Users|home|opt|var|tmp)/[A-Za-z0-9_./-]{10,}#[PATH_REDACTED]#g' 2>/dev/null || echo "$input")
-  # Strip bundle IDs (com.company.app, org.company.app) — contain company names
-  input=$(echo "$input" | sed -E 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g' 2>/dev/null || echo "$input")
+    -e 's/xox[baprs]-[A-Za-z0-9-]+/[REDACTED_SLACK]/g' \
+    -e 's/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[EMAIL_REDACTED]/g' \
+    -e 's/(^|[^0-9])(192|10|172|169)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9]|$)/\1[IP_REDACTED]\3/g' \
+    -e 's#/(Users|home|opt|var|tmp)/[A-Za-z0-9_./-]{10,}#[PATH_REDACTED]#g' \
+    -e 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g') \
+    || { printf '%s' '[REDACTION_FAILED]'; return 0; }
+  input="$redacted"
   # Strip app display names and project names from app.json if present
   local project_root="${RN_PROJECT_ROOT:-${CLAUDE_USER_CWD:-$PWD}}"
   if [ -f "$project_root/app.json" ]; then
@@ -44,7 +45,7 @@ redact() {
       input="${input//$app_slug/[APP_SLUG_REDACTED]}"
     fi
   fi
-  echo "$input"
+  printf '%s\n' "$input"
 }
 
 # --- Collect plugin version ---
@@ -68,8 +69,8 @@ npm_version=$(npm --version 2>/dev/null || echo "unknown")
 
 ios_sim="none"
 if command -v xcrun &>/dev/null; then
-  ios_sim=$(xcrun simctl list devices booted 2>/dev/null | grep -c "Booted" || echo "0")
-  ios_sim="${ios_sim} booted"
+  ios_sim=$(xcrun simctl list devices booted 2>/dev/null | grep -c "Booted" || true)
+  ios_sim="${ios_sim:-0} booted"
 fi
 
 android_emu="none"

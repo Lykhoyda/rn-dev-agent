@@ -47,7 +47,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--memory-cwd') flags.memoryCwd = argv[++i] || process.cwd();
   else if (a === '--workspace-root') flags.workspaceRoot = argv[++i] || process.cwd();
   else if (a === '--section') flags.section = (argv[++i] || 'all').toLowerCase();
-  else if (a === '--max') flags.max = parseInt(argv[++i] || '50', 10);
+  else if (a === '--max') { const m = parseInt(argv[++i] || '50', 10); flags.max = Number.isNaN(m) ? 50 : m; }
   else if (a === '--help' || a === '-h') {
     console.log(`Usage: learned-actions.mjs [--json] [--filter KW] [--appId ID]
                                 [--memory-cwd PATH] [--workspace-root PATH]

@@ -81,13 +81,18 @@ async function inspectObject(
     .filter(p => p.isOwn !== false)
     .slice(0, maxProps);
 
-  const results: Array<{ name: string; type: string; value?: unknown; description?: string; hasChildren?: boolean; children?: unknown }> = [];
+  type Entry = { name: string; type: string; value?: unknown; description?: string; hasChildren?: boolean; children?: unknown };
+  const results: Entry[] = [];
+  // Fetch sibling children concurrently instead of one serial CDP round-trip at
+  // a time. Entries are pushed synchronously so order is preserved; only the
+  // recursive getProperties calls are parallelized.
+  const childFetches: Array<Promise<void>> = [];
 
   for (const p of props) {
     const v = p.value;
     if (!v) { results.push({ name: p.name, type: 'accessor', description: '[getter/setter]' }); continue; }
 
-    const entry: { name: string; type: string; value?: unknown; description?: string; hasChildren?: boolean; children?: unknown } = {
+    const entry: Entry = {
       name: p.name,
       type: v.type,
       description: v.description ?? (v.value !== undefined ? String(v.value) : undefined),
@@ -97,7 +102,10 @@ async function inspectObject(
       entry.hasChildren = true;
       entry.description = v.className ?? v.description ?? '[object]';
       if (depth > 0) {
-        entry.children = await inspectObject(client, v.objectId, depth - 1, maxProps);
+        const objectId = v.objectId;
+        childFetches.push(
+          inspectObject(client, objectId, depth - 1, maxProps).then((c) => { entry.children = c; }),
+        );
       }
     } else {
       entry.value = v.value;
@@ -106,5 +114,6 @@ async function inspectObject(
     results.push(entry);
   }
 
+  await Promise.all(childFetches);
   return results;
 }

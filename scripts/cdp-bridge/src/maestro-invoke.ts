@@ -10,6 +10,7 @@ import {
   isValidBundleId,
   MaestroValidationError,
 } from './domain/maestro-validator.js';
+import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 
 const execFile = promisify(execFileCb);
 
@@ -49,14 +50,14 @@ export async function runMaestroInline(
   yaml: string,
   opts: MaestroInvokeOptions,
 ): Promise<MaestroInvokeResult> {
-  const runnerPath = getMaestroRunnerPath();
-  if (!runnerPath) {
-    return {
-      passed: false,
-      output: '',
-      flowFile: '',
-      error: 'maestro-runner not found. Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
-    };
+  // B59 tiered dispatch (same decision tree as maestro_run / maestro_test_all):
+  // maestro-runner when viable, else the Maestro CLI fallback for the
+  // iOS-only / adb-missing setup. Previously this path hardcoded
+  // getMaestroRunnerPath() and hard-failed where maestro_run would fall back,
+  // breaking the device_fill / picker / dialog fallbacks on iOS-only machines.
+  const dispatch = chooseMaestroDispatch({ platform: opts.platform });
+  if ('error' in dispatch) {
+    return { passed: false, output: '', flowFile: '', error: dispatch.error };
   }
 
   // Phase 134.1 (deepsec CRITICAL #1): the appId came from opts.appId,
@@ -112,8 +113,8 @@ export async function runMaestroInline(
 
   try {
     const { stdout, stderr } = await execFile(
-      runnerPath,
-      ['--platform', opts.platform, 'test', flowFile],
+      dispatch.binPath,
+      dispatch.buildArgs(opts.platform, flowFile),
       { timeout, encoding: 'utf8' },
     );
     const output = (stdout + '\n' + stderr).trim();

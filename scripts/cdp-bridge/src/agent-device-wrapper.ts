@@ -12,7 +12,7 @@ import {
   isFastRunnerAvailable,
   startFastRunner,
 } from './runners/rn-fast-runner-client.js';
-import { refCenter, getScreenRect, clearRefMap } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 
 const execFile = promisify(execFileCb);
@@ -318,7 +318,7 @@ export function getCachedScreenRect(): { width: number; height: number } | null 
   return getScreenRect();
 }
 
-function buildRunIOSArgs(
+export function buildRunIOSArgs(
   cliArgs: string[],
   bundleId?: string,
 ): import('./runners/rn-fast-runner-client.js').RunIOSArgs {
@@ -329,14 +329,18 @@ function buildRunIOSArgs(
     case 'tap': {
       const ref = positionals[0];
       if (ref && ref.startsWith('@')) {
-        const center = refCenter(ref);
+        const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
           return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
         }
         return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
       }
       const [xS, yS] = positionals;
-      return { command: 'tap', x: Number(xS), y: Number(yS), ...(bundleId ? { bundleId } : {}) };
+      const x = Number(xS), y = Number(yS);
+      if (Number.isNaN(x) || Number.isNaN(y)) {
+        throw new Error(`buildRunIOSArgs: tap requires a @ref or numeric x, y`);
+      }
+      return { command: 'tap', x, y, ...(bundleId ? { bundleId } : {}) };
     }
     case 'fill':
     case 'type': {
@@ -347,7 +351,7 @@ function buildRunIOSArgs(
       const ref = positionals[0];
       const text = positionals.slice(1).join(' ');
       if (ref && ref.startsWith('@')) {
-        const center = refCenter(ref);
+        const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
           return { command: 'type', _staleRef: ref, text, ...(bundleId ? { bundleId } : {}) };
         }
@@ -448,7 +452,7 @@ function androidPositionals(cliArgs: string[]): string[] {
   return out;
 }
 
-function buildRunAndroidArgs(
+export function buildRunAndroidArgs(
   cliArgs: string[],
   bundleId?: string,
 ): import('./runners/rn-android-runner-client.js').RunAndroidArgs {
@@ -462,12 +466,16 @@ function buildRunAndroidArgs(
     case 'tap': {
       const ref = positionals[0];
       if (ref && ref.startsWith('@')) {
-        const center = refCenter(ref);
+        const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) return { command: 'tap', _staleRef: ref, ...withBundle };
         return { command: 'tap', x: center.x, y: center.y, ...withBundle };
       }
       const [xS, yS] = positionals;
-      return { command: 'tap', x: Number(xS), y: Number(yS), ...withBundle };
+      const x = Number(xS), y = Number(yS);
+      if (Number.isNaN(x) || Number.isNaN(y)) {
+        throw new Error(`buildRunAndroidArgs: tap requires a @ref or numeric x, y`);
+      }
+      return { command: 'tap', x, y, ...withBundle };
     }
 
     case 'fill':
@@ -475,7 +483,7 @@ function buildRunAndroidArgs(
       const ref = positionals[0];
       const text = positionals.slice(1).join(' ');
       if (ref && ref.startsWith('@')) {
-        const center = refCenter(ref);
+        const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) return { command: 'type', _staleRef: ref, text, ...withBundle };
         return { command: 'type', x: center.x, y: center.y, text, ...withBundle };
       }

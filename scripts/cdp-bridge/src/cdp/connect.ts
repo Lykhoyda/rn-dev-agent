@@ -119,7 +119,9 @@ export async function discoverAndConnect(
   }
 
   let connectedTarget: HermesTarget | null = null;
-  for (const candidate of sorted) {
+  for (let idx = 0; idx < sorted.length; idx++) {
+    const candidate = sorted[idx];
+    const isLast = idx === sorted.length - 1;
     try {
       await connectToTarget(ctx, candidate);
       const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
@@ -128,7 +130,7 @@ export async function discoverAndConnect(
         break;
       }
       console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
-      if (sorted.indexOf(candidate) < sorted.length - 1) {
+      if (!isLast) {
         closeAndResetWs(ctx);
         ctx.setState('disconnected');
         ctx.setHelpersInjected(false);
@@ -138,7 +140,7 @@ export async function discoverAndConnect(
       console.error('CDP: no target with __DEV__=true found, using last available target');
       connectedTarget = candidate;
     } catch (err) {
-      if (sorted.indexOf(candidate) < sorted.length - 1) continue;
+      if (!isLast) continue;
       throw err;
     }
   }

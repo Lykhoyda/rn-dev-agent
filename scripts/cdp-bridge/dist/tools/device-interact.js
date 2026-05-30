@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe } from '../runners/rn-fast-runner-client.js';
 import { withSession } from '../utils.js';
-import { okResult, failResult } from '../utils.js';
+import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
@@ -225,8 +225,12 @@ export function createDeviceFindHandler() {
                 return failResult(`Snapshot unavailable — cannot resolve "${args.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: args.text });
             }
             const { candidates, recoveredTier } = find;
+            // Surface recoveredTier on every outcome (not just the single-match press)
+            // so callers can tell the app was relaunched mid-find even on NOT_FOUND /
+            // AMBIGUOUS.
+            const recoveredMeta = recoveredTier ? { recoveredTier } : {};
             if (candidates.length === 0) {
-                return failResult(`No element matches "${args.text}"`, { code: 'NOT_FOUND', query: args.text });
+                return failResult(`No element matches "${args.text}"`, { code: 'NOT_FOUND', query: args.text, ...recoveredMeta });
             }
             if (candidates.length === 1) {
                 return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
@@ -235,6 +239,7 @@ export function createDeviceFindHandler() {
                 code: 'AMBIGUOUS_MATCH',
                 query: args.text,
                 candidates,
+                ...recoveredMeta,
                 hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
             });
         }
@@ -597,6 +602,14 @@ function computeSwipeFromDirection(direction, screen) {
         case 'right': return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
     }
 }
+// Shared by the standalone swipe handler and device_batch so a batched
+// "swipe" performs a real swipe gesture (not a scroll) and honors duration.
+export function buildDirectionalSwipeCliArgs(direction, durationMs) {
+    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+    const coords = computeSwipeFromDirection(direction, screen);
+    const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+    return ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
+}
 export function exactModeRejectionMessage(reason) {
     if (reason === 'count-pattern-incompatible') {
         return 'exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.';
@@ -766,10 +779,12 @@ export function createDeviceScrollIntoViewHandler() {
  */
 async function scrollIntoViewWithRunner(args) {
     const MAX_ITERATIONS = 12;
+    const timer = createStepTimer();
     const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const screenRect = { x: 0, y: 0, width: screen.width, height: screen.height };
     for (let i = 0; i < MAX_ITERATIONS; i++) {
         const snapRes = await runAgentDevice(['snapshot', '-i']);
+        timer.mark('snapshot');
         if (snapRes.isError) {
             return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? 'unknown'}`, { code: 'SNAPSHOT_UNAVAILABLE' });
         }
@@ -813,7 +828,7 @@ async function scrollIntoViewWithRunner(args) {
                 rect: target.rect,
                 iterations: i,
                 method: 'runner-orchestrator',
-            });
+            }, { meta: { timings_ms: timer.timings() } });
         }
         const coords = computeSwipeFromDirection(direction, screen);
         const swipeResp = await runAgentDevice([
@@ -824,6 +839,7 @@ async function scrollIntoViewWithRunner(args) {
             String(coords.y2),
             String(DEFAULT_SWIPE_DURATION_MS),
         ]);
+        timer.mark('swipe');
         if (swipeResp.isError) {
             return failResult(`scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? 'unknown'}`);
         }

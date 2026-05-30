@@ -81,9 +81,16 @@ const defaultAndroidResolver = async () => {
         return null;
     }
 };
+// Honor the requested format via the path extension, matching how the
+// agent-device path infers format. Writing JPEG bytes into a `.png` file
+// (the prior hardcoded `--type=jpeg`) produced a mislabeled image because
+// the downstream sips resize only re-encodes `.jpe?g` paths.
+export function simctlScreenshotType(path) {
+    return /\.png$/i.test(path) ? 'png' : 'jpeg';
+}
 const defaultIosCapturer = async (udid, path) => {
     try {
-        await execFileAsync('xcrun', ['simctl', 'io', udid, 'screenshot', '--type=jpeg', path], {
+        await execFileAsync('xcrun', ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path], {
             timeout: 15_000,
             maxBuffer: 1024 * 1024,
         });

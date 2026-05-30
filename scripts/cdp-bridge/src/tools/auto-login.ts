@@ -232,9 +232,14 @@ export async function handleAutoLogin(
     };
   }
 
-  await new Promise(r => setTimeout(r, 3000));
-
-  const stillOnAuth = await isOnAuthScreen(client);
+  // Poll for the auth screen to disappear instead of a blind 3s wait — returns
+  // as soon as login lands, and tolerates a slower transition.
+  let stillOnAuth = true;
+  const authDeadline = Date.now() + 5000;
+  do {
+    await new Promise(r => setTimeout(r, 300));
+    stillOnAuth = await isOnAuthScreen(client);
+  } while (stillOnAuth && Date.now() < authDeadline);
   if (stillOnAuth) {
     return {
       loggedIn: false,

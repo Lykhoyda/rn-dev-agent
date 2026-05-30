@@ -236,7 +236,7 @@ export function readGraph(projectRoot) {
         const raw = yamlParse(readFileSync(filePath, 'utf-8'));
         if (!raw || !raw.nav_graph)
             return null;
-        hydrateStrikesFromGraph(raw.nav_graph);
+        hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
         return raw.nav_graph;
     }
     catch {
@@ -370,14 +370,28 @@ const STRIKE_THRESHOLD = 2;
 const RELIABILITY_SUCCESS_DELTA = 5;
 const RELIABILITY_FAILURE_DELTA = -15;
 const strikeMap = new Map();
-let strikesHydrated = false;
+// Identity of the project whose strikes currently populate strikeMap. The MCP
+// server is long-lived and resolves multiple projects (findProjectRoot by
+// bundleId), so a permanent boolean latch left a second project unhydrated and
+// let one project's screen+method strikes poison another's cooldowns. Track the
+// hydrated project and clear+rehydrate when it changes.
+let hydratedProjectKey = null;
 function strikeKey(screen, method) {
     return `${screen}::${method}`;
 }
-export function hydrateStrikesFromGraph(graph) {
-    if (strikesHydrated)
+// Test seam: forget hydrated strike state so suites can hydrate fresh graphs.
+export function _resetStrikesForTest() {
+    strikeMap.clear();
+    hydratedProjectKey = null;
+}
+export function hydrateStrikesFromGraph(graph, projectKey) {
+    const key = projectKey ?? graph.meta?.project_slug ?? '';
+    if (hydratedProjectKey === key)
         return;
-    strikesHydrated = true;
+    // Switched projects (or first hydrate): drop the previous project's strikes so
+    // colliding screen+method keys across apps don't cross-contaminate.
+    strikeMap.clear();
+    hydratedProjectKey = key;
     for (const nav of graph.navigators) {
         for (const screen of nav.screens) {
             if (!screen.action_records || screen.action_records.length === 0)

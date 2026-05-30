@@ -118,8 +118,12 @@ export function createCrossPlatformVerifyHandler() {
             return warnResult(summary, `No snapshot cached for ${missingPlatform}. Run device_snapshot on ${missingPlatform} first for a complete comparison.`);
         }
         if (!allMatch) {
+            // A genuine verdict:FAIL must signal ok:false — returning warnResult here
+            // (ok:true) made any caller gating on the canonical envelope flag read a
+            // failed cross-platform check as a pass. The missing-snapshot branch above
+            // stays a warning (partial coverage); this differ-branch is a real failure.
             const missingLines = missing.map(m => `  ${m.element}: iOS=${m.ios}, Android=${m.android}`).join('\n');
-            return warnResult(summary, `Cross-platform verification FAILED — ${missing.length}/${total} elements differ:\n${missingLines}`);
+            return failResult(`Cross-platform verification FAILED — ${missing.length}/${total} elements differ:\n${missingLines}`, 'CROSS_PLATFORM_MISMATCH', { summary });
         }
         return okResult(summary);
     };

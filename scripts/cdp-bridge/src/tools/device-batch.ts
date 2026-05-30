@@ -1,4 +1,5 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
+import { buildDirectionalSwipeCliArgs } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -221,7 +222,7 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
     }
     case 'swipe': {
       if (!step.direction) return failResult('swipe requires direction');
-      return runAgentDevice(['scroll', step.direction]);
+      return runAgentDevice(buildDirectionalSwipeCliArgs(step.direction, step.ms));
     }
     case 'scroll': {
       if (!step.direction) return failResult('scroll requires direction');

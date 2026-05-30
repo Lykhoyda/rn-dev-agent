@@ -136,24 +136,35 @@ export function replaceIdSelector(body, oldId, newId) {
     const lines = body.split('\n');
     const out = [];
     let replacements = 0;
-    // Match the line-trimmed `id: <quoted-or-bare><oldId><quoted-or-bare>`.
-    // Capture leading whitespace + quote style so we can preserve them.
-    // Allowed quotes: `"X"`, `'X'`, or bare `X` if it has no spaces.
+    // Match the line-trimmed `id: <quoted-or-bare><oldId>`, preserving leading
+    // whitespace, quote style, and any trailing `# comment`. Three explicit
+    // shapes (double / single / bare) keep this in lockstep with
+    // extractIdSelectors and the maestro-error-parser matched-quote grammar:
+    // a double-quoted value may contain `'` and vice-versa.
     const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`^(\\s*)id:\\s*("?)${escapedOld}("?)\\s*$`);
-    const reSingle = new RegExp(`^(\\s*)id:\\s*(')${escapedOld}(')\\s*$`);
+    const dq = new RegExp(`^(\\s*)id:\\s*"${escapedOld}"(\\s*(?:#.*)?)$`);
+    const sq = new RegExp(`^(\\s*)id:\\s*'${escapedOld}'(\\s*(?:#.*)?)$`);
+    const bare = new RegExp(`^(\\s*)id:\\s*${escapedOld}(\\s*(?:#.*)?)$`);
     for (const line of lines) {
-        const m = line.match(re) ?? line.match(reSingle);
+        let m = line.match(dq);
         if (m) {
-            const indent = m[1];
-            const quoteOpen = m[2] ?? '';
-            const quoteClose = m[3] ?? '';
-            out.push(`${indent}id: ${quoteOpen}${newId}${quoteClose}`);
+            out.push(`${m[1]}id: "${newId}"${m[2]}`);
             replacements++;
+            continue;
         }
-        else {
-            out.push(line);
+        m = line.match(sq);
+        if (m) {
+            out.push(`${m[1]}id: '${newId}'${m[2]}`);
+            replacements++;
+            continue;
         }
+        m = line.match(bare);
+        if (m) {
+            out.push(`${m[1]}id: ${newId}${m[2]}`);
+            replacements++;
+            continue;
+        }
+        out.push(line);
     }
     return { body: out.join('\n'), replacements };
 }
@@ -168,22 +179,27 @@ export function replaceIdSelector(body, oldId, newId) {
 export function extractIdSelectors(body) {
     const out = [];
     const lines = body.split('\n');
-    // Issue #102 A2: previous regex `[^"'\\n]*?` greedily included
-    // trailing inline comments — `id: foo-bar  # human note` captured
-    // `foo-bar  # human note` as the testID. Hand-authored YAML
-    // sometimes has these comments; the bug fails safely (no fuzzy
-    // match) but produces a UX issue. Fix: strip trailing
-    // `\s+#.*` from the captured group before pushing. Also tighten
-    // the bare-form regex to reject `#` directly so quoted forms are
-    // unaffected.
-    const re = /^\s*id:\s*"?'?([^"'\s][^"'\n]*?)"?'?\s*$/;
+    // Mirror the maestro-error-parser matched-quote grammar (PR #115) so the
+    // failure parser and this extractor agree on what a testID is. Previously
+    // the char class `[^"'\s]` rejected any testID containing a quote (e.g.
+    // `user's-task`), so attemptRepair's gate short-circuited to
+    // 'no-stale-selector' and auto-repair silently no-op'd for ids the parser
+    // had correctly extracted. Three explicit shapes:
+    //   id: "value"   — value may contain '
+    //   id: 'value'   — value may contain "
+    //   id: value     — bare; strip a trailing ` # comment` (Issue #102 A2)
+    const dq = /^\s*id:\s*"([^"\n]*)"\s*(?:#.*)?$/;
+    const sq = /^\s*id:\s*'([^'\n]*)'\s*(?:#.*)?$/;
+    const bare = /^\s*id:\s*([^"'#\s][^#\n]*?)\s*(?:#.*)?$/;
     for (const line of lines) {
-        const m = line.match(re);
+        const m = line.match(dq) ?? line.match(sq);
         if (m) {
-            // Trim any trailing `<space>#<rest-of-line>` that the lazy
-            // capture could not exclude.
-            const cleaned = m[1].replace(/\s+#.*$/, '');
-            out.push(cleaned);
+            out.push(m[1]);
+            continue;
+        }
+        const b = line.match(bare);
+        if (b) {
+            out.push(b[1].trimEnd());
         }
     }
     return out;

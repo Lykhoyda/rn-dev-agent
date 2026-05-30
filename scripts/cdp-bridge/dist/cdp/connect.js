@@ -67,7 +67,9 @@ discoverFn = discover) {
         throw new Error(selectionWarning ?? 'No matching CDP targets found.');
     }
     let connectedTarget = null;
-    for (const candidate of sorted) {
+    for (let idx = 0; idx < sorted.length; idx++) {
+        const candidate = sorted[idx];
+        const isLast = idx === sorted.length - 1;
         try {
             await connectToTarget(ctx, candidate);
             const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
@@ -76,7 +78,7 @@ discoverFn = discover) {
                 break;
             }
             console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
-            if (sorted.indexOf(candidate) < sorted.length - 1) {
+            if (!isLast) {
                 closeAndResetWs(ctx);
                 ctx.setState('disconnected');
                 ctx.setHelpersInjected(false);
@@ -87,7 +89,7 @@ discoverFn = discover) {
             connectedTarget = candidate;
         }
         catch (err) {
-            if (sorted.indexOf(candidate) < sorted.length - 1)
+            if (!isLast)
                 continue;
             throw err;
         }

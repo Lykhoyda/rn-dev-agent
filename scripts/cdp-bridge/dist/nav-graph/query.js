@@ -131,7 +131,10 @@ function detectPrerequisites(graph, targetScreen) {
         }
     }
     const screen = location.screen;
-    if (screen.params_template && screen.params_template.includes('permission')) {
+    // Match `permission(s)` as a whole word so unrelated params that merely
+    // contain the substring (e.g. `permissionlessMode`) don't raise a false
+    // permission prerequisite.
+    if (screen.params_template && /\bpermissions?\b/i.test(screen.params_template)) {
         prereqs.push({
             type: 'permission',
             description: `Screen "${targetScreen}" may require permissions (params: ${screen.params_template})`,

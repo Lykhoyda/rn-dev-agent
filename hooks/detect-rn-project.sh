@@ -91,7 +91,7 @@ if [ "$has_rn_config" = true ]; then
   fi
 
   cat <<'EOF'
-React Native project detected. The rn-dev-agent plugin is active with 51 MCP tools.
+React Native project detected. The rn-dev-agent plugin is active with 75 MCP tools.
 
 ## How to interact with the running app
 

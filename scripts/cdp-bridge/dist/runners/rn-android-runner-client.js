@@ -162,12 +162,36 @@ async function postCommand(body) {
     const state = runnerState;
     if (!state)
         throw new Error('rn-android-runner not started');
-    const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    return resp.json();
+    // Bound every command so a wedged UIAutomator instrument can't hang the tool
+    // indefinitely. type/snapshot/screenshot run long; everything else is fast.
+    const slow = body.command === 'type' || body.command === 'snapshot' || body.command === 'screenshot';
+    const timeoutMs = slow ? 35_000 : 10_000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let resp;
+    try {
+        resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+    }
+    catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`);
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    try {
+        return await resp.json();
+    }
+    catch {
+        throw new Error('rn-android-runner returned a non-JSON response body');
+    }
 }
 function mapRunnerNodesToFlat(nodes) {
     const out = [];

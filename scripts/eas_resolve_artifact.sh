@@ -145,9 +145,15 @@ check_cache() {
   local ext
   if [ "$PLATFORM" = "ios" ]; then ext="tar.gz"; else ext="apk"; fi
 
-  # Check output dir for cached artifacts matching profile
+  # Check output dir for cached artifacts matching profile. Pick the newest by
+  # mtime using the OS-appropriate stat (BSD `stat -f` on macOS vs GNU `stat -c`
+  # on Linux) — the prior `stat -f "%m %N"` silently failed on Linux Android
+  # hosts (GNU treats -f as --file-system), always missing the cache.
   local cached
-  cached=$(find "$OUTPUT_DIR" -name "*${PROFILE}*.${ext}" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -exec stat -f "%m %N" {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)
+  if [ "$(uname)" = "Darwin" ]; then stat_mtime() { stat -f '%m' "$1"; }; else stat_mtime() { stat -c '%Y' "$1"; }; fi
+  cached=$(find "$OUTPUT_DIR" -name "*${PROFILE}*.${ext}" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print0 2>/dev/null \
+    | while IFS= read -r -d '' f; do printf '%s %s\n' "$(stat_mtime "$f")" "$f"; done \
+    | sort -rn | head -1 | cut -d' ' -f2- || true)
 
   if [ -n "$cached" ]; then
     echo "$cached"

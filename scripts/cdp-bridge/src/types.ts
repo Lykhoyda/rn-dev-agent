@@ -200,7 +200,10 @@ export type ToolErrorCode =
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
-  | 'STALE_REF';
+  | 'STALE_REF'
+  // Audit B5: cross_platform_verify verdict FAIL (elements differ across
+  // platforms) — distinct from the partial-coverage missing-snapshot warning.
+  | 'CROSS_PLATFORM_MISMATCH';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
