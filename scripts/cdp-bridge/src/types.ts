@@ -203,7 +203,10 @@ export type ToolErrorCode =
   | 'STALE_REF'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
-  | 'CROSS_PLATFORM_MISMATCH';
+  | 'CROSS_PLATFORM_MISMATCH'
+  // GH #184: cdp_status aborted fast because the Dev Client picker was blocking
+  // the bundle (React unreachable on a non-Hermes target within the budget).
+  | 'PICKER_BLOCKING';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

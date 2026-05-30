@@ -171,6 +171,31 @@ export async function reinjectHelpers(
   return true;
 }
 
+/**
+ * GH #184: bounded variant of waitForReact that RETURNS whether React became
+ * reachable within `budgetMs` (vs waitForReact which always resolves void after
+ * logging). Used by the status-scoped picker-blocking probe to decide fast,
+ * before the full REACT_READY_TIMEOUT_MS wait in setup(), whether a non-Hermes
+ * target is a stale (picker-blocked) connection.
+ */
+export async function probeReactReachable(
+  evaluate: (expr: string) => Promise<EvaluateResult>,
+  budgetMs: number,
+  pollMs: number = REACT_READY_POLL_MS,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < budgetMs) {
+    try {
+      const result = await evaluate(REACT_READY_PROBE_JS);
+      if (result.value === true) return true;
+    } catch {
+      // not ready yet
+    }
+    await sleep(pollMs);
+  }
+  return false;
+}
+
 export async function waitForReact(
   evaluate: (expr: string) => Promise<EvaluateResult>,
   timeout?: number,

@@ -1,5 +1,6 @@
 import { okResult, failResult, warnResult } from '../utils.js';
 import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-picker.js';
+import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
@@ -111,7 +112,7 @@ export function createStatusHandler(getClient, setClient, createClient) {
                     }
                 }
                 catch { /* fall through to autoConnect */ }
-                await client.autoConnect(args.metroPort, args.platform);
+                await client.autoConnect(args.metroPort, args.platform, 'status');
             }
             else if (args.platform) {
                 // GH #21: Already connected — check if the current target matches the requested platform
@@ -123,7 +124,7 @@ export function createStatusHandler(getClient, setClient, createClient) {
                     await client.disconnect();
                     client = createClient(client.metroPort);
                     setClient(client);
-                    await client.autoConnect(args.metroPort, args.platform);
+                    await client.autoConnect(args.metroPort, args.platform, 'status');
                 }
             }
             const status = await buildStatusResult(client);
@@ -203,6 +204,12 @@ export function createStatusHandler(getClient, setClient, createClient) {
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            // GH #184: the status-scoped connect aborted fast because React was
+            // unreachable on a non-Hermes target (picker blocking the bundle, or it's
+            // still building). The message is already actionable; still attempt the
+            // best-effort auto-dismiss below (helps when a device session is open),
+            // then surface it with a typed code instead of a generic failure.
+            const pickerBlocking = err instanceof PickerBlockingBundleError;
             // If connection failed, check if the Dev Client picker is blocking
             try {
                 const pickerResult = await handleDevClientPicker();
@@ -227,7 +234,7 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 }
             }
             catch { /* picker check failed, return original error */ }
-            return failResult(message);
+            return pickerBlocking ? failResult(message, 'PICKER_BLOCKING') : failResult(message);
         }
     };
 }

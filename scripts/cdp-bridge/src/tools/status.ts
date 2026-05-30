@@ -2,6 +2,7 @@ import type { CDPClient } from '../cdp-client.js';
 import type { StatusResult } from '../types.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-picker.js';
+import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 
@@ -130,7 +131,7 @@ export function createStatusHandler(
             await handleDevClientPicker();
           }
         } catch { /* fall through to autoConnect */ }
-        await client.autoConnect(args.metroPort, args.platform);
+        await client.autoConnect(args.metroPort, args.platform, 'status');
       } else if (args.platform) {
         // GH #21: Already connected — check if the current target matches the requested platform
         const currentTarget = client.connectedTarget;
@@ -141,7 +142,7 @@ export function createStatusHandler(
           await client.disconnect();
           client = createClient(client.metroPort);
           setClient(client);
-          await client.autoConnect(args.metroPort, args.platform);
+          await client.autoConnect(args.metroPort, args.platform, 'status');
         }
       }
 
@@ -234,6 +235,12 @@ export function createStatusHandler(
       return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // GH #184: the status-scoped connect aborted fast because React was
+      // unreachable on a non-Hermes target (picker blocking the bundle, or it's
+      // still building). The message is already actionable; still attempt the
+      // best-effort auto-dismiss below (helps when a device session is open),
+      // then surface it with a typed code instead of a generic failure.
+      const pickerBlocking = err instanceof PickerBlockingBundleError;
 
       // If connection failed, check if the Dev Client picker is blocking
       try {
@@ -261,7 +268,7 @@ export function createStatusHandler(
         }
       } catch { /* picker check failed, return original error */ }
 
-      return failResult(message);
+      return pickerBlocking ? failResult(message, 'PICKER_BLOCKING') : failResult(message);
     }
   };
 }

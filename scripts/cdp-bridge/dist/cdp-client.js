@@ -132,11 +132,11 @@ export class CDPClient {
         }
         return ok;
     }
-    async autoConnect(portHint, filtersOrPlatform) {
+    async autoConnect(portHint, filtersOrPlatform, intent = 'default') {
         const filters = typeof filtersOrPlatform === 'string'
             ? { platform: filtersOrPlatform }
             : (filtersOrPlatform ?? {});
-        return autoConnectFn(this.buildConnectCtx(), portHint, filters);
+        return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
     }
     async listTargets(portHint) {
         return discoverForList(this._port, portHint);

@@ -19,7 +19,7 @@ import {
   autoConnect as autoConnectFn,
   discoverAndConnect as discoverAndConnectFn,
 } from './cdp/connect.js';
-import type { ConnectContext, ConnectFilters } from './cdp/connect.js';
+import type { ConnectContext, ConnectFilters, ConnectIntent } from './cdp/connect.js';
 import {
   handleClose as handleCloseFn,
   reconnect as reconnectFn,
@@ -167,11 +167,11 @@ export class CDPClient {
     return ok;
   }
 
-  async autoConnect(portHint?: number, filtersOrPlatform?: string | ConnectFilters): Promise<string> {
+  async autoConnect(portHint?: number, filtersOrPlatform?: string | ConnectFilters, intent: ConnectIntent = 'default'): Promise<string> {
     const filters: ConnectFilters = typeof filtersOrPlatform === 'string'
       ? { platform: filtersOrPlatform }
       : (filtersOrPlatform ?? {});
-    return autoConnectFn(this.buildConnectCtx(), portHint, filters);
+    return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
   }
 
   async listTargets(portHint?: number): Promise<{ port: number; targets: HermesTarget[] }> {
