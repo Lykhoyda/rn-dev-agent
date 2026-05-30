@@ -14,8 +14,10 @@ if command -v agent-device &>/dev/null; then
   exit 0
 fi
 
-# Check common global npm location
-NPM_GLOBAL_BIN="$(npm bin -g 2>/dev/null || echo "")"
+# Check common global npm location. `npm bin -g` was removed in npm 9+, so
+# derive the global bin from the prefix instead (works on npm 9/10+).
+NPM_PREFIX="$(npm prefix -g 2>/dev/null || echo "")"
+NPM_GLOBAL_BIN="${NPM_PREFIX:+$NPM_PREFIX/bin}"
 if [ -n "$NPM_GLOBAL_BIN" ] && [ -x "$NPM_GLOBAL_BIN/agent-device" ]; then
   echo "agent-device found at $NPM_GLOBAL_BIN but not in PATH."
   echo "Add to PATH or run: npm install -g agent-device"

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { createWriteStream, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 const LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -25,6 +25,25 @@ function resolveLogPath() {
     return join(tmpdir(), 'rn-dev-agent-cdp-bridge.log');
 }
 const logFilePath = resolveLogPath();
+// Append via a buffered WriteStream rather than appendFileSync so logging never
+// blocks the event loop on the hot path (writeLog runs per tool call at
+// debug/info). A single stream preserves write order; errors are swallowed
+// (best-effort logging). File-backed streams don't keep the process alive.
+let logStream = null;
+function getLogStream() {
+    if (!logFilePath)
+        return null;
+    if (!logStream) {
+        try {
+            logStream = createWriteStream(logFilePath, { flags: 'a' });
+            logStream.on('error', () => { });
+        }
+        catch {
+            return null;
+        }
+    }
+    return logStream;
+}
 function shouldLog(level) {
     return LEVEL_ORDER[level] >= LEVEL_ORDER[configuredLevel];
 }
@@ -42,9 +61,10 @@ function writeLog(level, tag, msg) {
     else if (configuredLevel === 'debug' || configuredLevel === 'info') {
         console.error(formatted);
     }
-    if (logFilePath) {
+    const stream = getLogStream();
+    if (stream) {
         try {
-            appendFileSync(logFilePath, formatted + '\n');
+            stream.write(formatted + '\n');
         }
         catch { /* best-effort */ }
     }

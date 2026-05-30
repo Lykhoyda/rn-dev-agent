@@ -404,10 +404,6 @@ export async function runIOS(args) {
         body.x = args.x;
     if (args.y !== undefined)
         body.y = args.y;
-    if (args.x1 !== undefined)
-        body.x1 = args.x1;
-    if (args.y1 !== undefined)
-        body.y1 = args.y1;
     if (args.x2 !== undefined)
         body.x2 = args.x2;
     if (args.y2 !== undefined)

@@ -80,11 +80,11 @@ export function groupFailures(events) {
         if (isGhostRecovery) {
             stats.ghost_recovered++;
         }
-        else if (event.result === 'FAIL' || event.result === 'ERROR') {
-            stats.failed++;
-        }
         else {
-            stats.passed++;
+            // The filter above only admits fails/ghost-recoveries, so a non-ghost
+            // event here is always FAIL/ERROR — the prior `else { passed++ }` branch
+            // was unreachable (stats.passed stayed 0 forever).
+            stats.failed++;
         }
         if (event.family_id && !stats.family_id) {
             stats.family_id = event.family_id;

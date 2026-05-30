@@ -236,8 +236,12 @@ export class CDPMultiplexer {
             return;
         }
         const route = this.routingTable.get(upstreamId);
-        if (!route)
+        if (!route) {
+            // No routing entry for this upstream id — a late reply after the entry was
+            // swept, or an id-space collision. Log it (debug) so it isn't silent.
+            logger.debug(this.opts.logTag, `dropping Hermes reply with unrouted id=${upstreamId}`);
             return;
+        }
         this.routingTable.delete(upstreamId);
         m.id = route.consumerOriginalId;
         const rewritten = JSON.stringify(m);

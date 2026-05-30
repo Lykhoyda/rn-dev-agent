@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { createWriteStream, mkdirSync, existsSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
@@ -32,6 +32,24 @@ function resolveLogPath(): string | null {
 
 const logFilePath = resolveLogPath();
 
+// Append via a buffered WriteStream rather than appendFileSync so logging never
+// blocks the event loop on the hot path (writeLog runs per tool call at
+// debug/info). A single stream preserves write order; errors are swallowed
+// (best-effort logging). File-backed streams don't keep the process alive.
+let logStream: WriteStream | null = null;
+function getLogStream(): WriteStream | null {
+  if (!logFilePath) return null;
+  if (!logStream) {
+    try {
+      logStream = createWriteStream(logFilePath, { flags: 'a' });
+      logStream.on('error', () => { /* disk error — drop best-effort logs */ });
+    } catch {
+      return null;
+    }
+  }
+  return logStream;
+}
+
 function shouldLog(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[configuredLevel];
 }
@@ -51,8 +69,9 @@ function writeLog(level: LogLevel, tag: string, msg: string): void {
     console.error(formatted);
   }
 
-  if (logFilePath) {
-    try { appendFileSync(logFilePath, formatted + '\n'); } catch { /* best-effort */ }
+  const stream = getLogStream();
+  if (stream) {
+    try { stream.write(formatted + '\n'); } catch { /* best-effort */ }
   }
 }
 

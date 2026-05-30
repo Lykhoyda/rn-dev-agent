@@ -426,8 +426,6 @@ export interface RunIOSArgs {
   bundleId?: string;
   x?: number;
   y?: number;
-  x1?: number;
-  y1?: number;
   x2?: number;
   y2?: number;
   text?: string;
@@ -560,8 +558,6 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.bundleId) body.appBundleId = args.bundleId;
   if (args.x !== undefined) body.x = args.x;
   if (args.y !== undefined) body.y = args.y;
-  if (args.x1 !== undefined) body.x1 = args.x1;
-  if (args.y1 !== undefined) body.y1 = args.y1;
   if (args.x2 !== undefined) body.x2 = args.x2;
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;

@@ -279,9 +279,19 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
       maxPayload: 100 * 1024 * 1024,
     });
     let settled = false;
+    // Backstop: handshakeTimeout should emit 'error', but if the socket ever
+    // wedges without firing open/error/close it would leak with its listeners.
+    // Terminate it after a grace window so it can't linger.
+    const guard = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.terminate(); } catch { /* already gone */ }
+      reject(new Error('WebSocket connect timed out'));
+    }, 7000);
 
     ws.on('open', () => {
       settled = true;
+      clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState('connected');
       resolve();
@@ -290,6 +300,8 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
     ws.on('error', (err) => {
       if (!settled) {
         settled = true;
+        clearTimeout(guard);
+        try { ws.terminate(); } catch { /* already closing */ }
         reject(err);
       } else {
         console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
@@ -303,6 +315,7 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
     ws.on('close', (code) => {
       if (!settled) {
         settled = true;
+        clearTimeout(guard);
         reject(new Error(`WebSocket closed before connecting: ${code}`));
         return;
       }

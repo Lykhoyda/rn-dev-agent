@@ -159,7 +159,13 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       );
 
       const output = (stdout + '\n' + stderr).trim();
-      const passed = !output.includes('FAILED') && !output.includes('Error:');
+      // Reaching here means the runner exited 0 — that exit code is the
+      // authoritative pass signal (a real flow failure exits non-zero and is
+      // handled in the catch below). The output scan is only a secondary guard;
+      // it keys on maestro's own `FAILED` status token rather than the previous
+      // broad `Error:` match, which false-flagged passing runs whose app/console
+      // logs merely contained "Error:".
+      const passed = !output.includes('FAILED');
       const meta = {
         passed,
         flowFile,

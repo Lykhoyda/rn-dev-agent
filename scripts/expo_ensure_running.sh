@@ -36,7 +36,18 @@ METRO_PORTS=(8081 8082 19000 19006)
 METRO_TIMEOUT_S=30
 METRO_POLL_INTERVAL_S=2
 TMP_DIR=$(mktemp -d /tmp/rn-dev-agent.XXXXXX)
-trap 'rm -rf "$TMP_DIR"' EXIT
+# Keep the logs on failure — error messages point the user at
+# "$TMP_DIR/metro.log" etc., so deleting them unconditionally on exit removed
+# exactly what the user was told to read. Only clean up on success.
+cleanup() {
+  local code=$?
+  if [ "$code" -eq 0 ]; then
+    rm -rf "$TMP_DIR"
+  else
+    echo "Logs preserved for diagnosis at: $TMP_DIR" >&2
+  fi
+}
+trap cleanup EXIT
 
 json_escape() {
   local s="$1"
