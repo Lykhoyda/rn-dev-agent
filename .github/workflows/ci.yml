@@ -45,9 +45,30 @@ jobs:
         run: node --test 'test/integration/*.test.js'
         working-directory: scripts/cdp-bridge
 
+      # Runs at repo root (no working-directory) — guards the changeset CI gate.
+      - name: Changeset-guard unit test
+        run: bash scripts/test/require-changeset.test.sh
+
   version-sync:
     name: Version sync check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
       - run: bash scripts/sync-versions.sh
+
+  require-changeset:
+    name: Require changeset
+    runs-on: ubuntu-latest
+    # PR-only: needs a base branch to diff against. Pushes to main are post-merge.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
+        with:
+          fetch-depth: 0
+      # base_ref is passed via env (never interpolate ${{ }} directly into run:).
+      - name: Require a changeset when shippable src changes
+        env:
+          BASE_REF_NAME: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF_NAME"
+          BASE_REF="origin/$BASE_REF_NAME" bash scripts/require-changeset.sh
