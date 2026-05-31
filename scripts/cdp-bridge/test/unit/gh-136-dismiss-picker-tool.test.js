@@ -132,3 +132,26 @@ test('handler: Android detected but no entry → warn dismissed:false', async ()
     assert.match(p.meta.warning, /could not find|manually/i);
   } finally { _resetRunAgentDeviceForTest(); _resetHasSessionForTest(); }
 });
+
+import { annotatePicker } from '../../dist/tools/device-deeplink.js';
+
+const okEnvelope = (data) => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }] });
+
+test('annotatePicker: null outcome → pickerChecked:false', () => {
+  const r = annotatePicker(okEnvelope({ opened: true }), null);
+  const p = JSON.parse(r.content[0].text);
+  assert.equal(p.meta.pickerChecked, false);
+});
+
+test('annotatePicker: dismissed outcome → pickerDismissed:true', () => {
+  const r = annotatePicker(okEnvelope({ opened: true }), { dismissed: true, reason: 'tapped', platform: 'android' });
+  const p = JSON.parse(r.content[0].text);
+  assert.equal(p.meta.pickerChecked, true);
+  assert.equal(p.meta.pickerDismissed, true);
+});
+
+test('annotatePicker: error result passes through untouched', () => {
+  const err = { content: [{ type: 'text', text: '{"ok":false,"error":"x"}' }], isError: true };
+  const r = annotatePicker(err, { dismissed: true, reason: 't' });
+  assert.equal(r, err);
+});

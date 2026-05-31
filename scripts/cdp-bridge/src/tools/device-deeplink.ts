@@ -6,6 +6,7 @@ import { detectPlatform } from './platform-utils.js';
 import { getAdbSerial } from '../agent-device-wrapper.js';
 import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { clearDevClientPickerIfPresent, type PickerOutcome } from './dev-client-picker.js';
 
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
@@ -88,6 +89,27 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
   }
 }
 
+/**
+ * GH #136 sub-3: annotate a deeplink result envelope with best-effort picker
+ * outcome. `null` outcome means no session was open, so the picker was not
+ * checked. Never mutates an error result.
+ */
+export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null): ToolResult {
+  if (result.isError) return result;
+  let envelope: Record<string, unknown>;
+  try {
+    envelope = JSON.parse(result.content[0].text) as Record<string, unknown>;
+  } catch {
+    return result;
+  }
+  const existingMeta = (envelope.meta && typeof envelope.meta === 'object') ? envelope.meta as Record<string, unknown> : {};
+  envelope.meta = outcome === null
+    ? { ...existingMeta, pickerChecked: false }
+    : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+  result.content[0].text = JSON.stringify(envelope);
+  return result;
+}
+
 export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<ToolResult> {
   return async (args) => {
     if (!args.url || args.url.length === 0) {
@@ -129,6 +151,13 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
       : await openAndroidDeeplink(args.url, args.packageName);
     // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
     // success-state suffix). Stateless heuristic; no overhead on short URLs.
-    return annotateDeepLinkDepth(result, { url: args.url });
+    const annotated = annotateDeepLinkDepth(result, { url: args.url });
+    // GH #136 sub-3: the picker can appear after a deep link. Best-effort
+    // dismiss on Android (no-op when no session is open); never fail the deeplink.
+    if (platform === 'android' && !annotated.isError) {
+      const outcome = await clearDevClientPickerIfPresent('android').catch(() => null);
+      return annotatePicker(annotated, outcome);
+    }
+    return annotated;
   };
 }
