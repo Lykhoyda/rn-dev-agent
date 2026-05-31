@@ -57,6 +57,7 @@ import {
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
+import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
 import {
   createDeviceAcceptSystemDialogHandler,
@@ -733,6 +734,15 @@ trackedTool(
     packageName: z.string().optional().describe('(Android only) Explicit package/activity, e.g. "com.example/.MainActivity". Usually not needed — intent resolution picks the right app.'),
   },
   createDeviceDeeplinkHandler(),
+);
+
+trackedTool(
+  'cdp_dismiss_dev_client_picker',
+  'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the configured Metro server entry so CDP/the bundle can proceed. Android only today (requires an open device session — call device_snapshot action="open" first). iOS returns an actionable manual-select message (cross-platform support tracked as a follow-up). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.',
+  {
+    platform: z.enum(['ios', 'android']).optional().describe('Force platform. Otherwise resolved from the active session or the booted device.'),
+  },
+  createDismissDevClientPickerHandler(),
 );
 
 trackedTool(
