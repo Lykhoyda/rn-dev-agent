@@ -1,5 +1,19 @@
 # rn-dev-agent-cdp
 
+## 0.39.0
+
+### Minor Changes
+
+- 5c4ca04: Add the read-only observability UI (D1226 "watch the agent live"): an in-process recorder + opt-in SSE server serving a React SPA (timeline | device | state). New `observe` MCP tool + `/rn-dev-agent:observe` slash command. Deep-redacted (args + payload, fail-closed), localhost-only with Host-header + Sec-Fetch-Site guards.
+
+### Patch Changes
+
+- c4804dc: Add `cdp_dismiss_dev_client_picker` MCP tool (Android) and best-effort Dev
+  Client picker dismissal after Android deep links (#136 sub-3). Routed through a
+  single guarded `clearDevClientPickerIfPresent()` helper; iOS returns an
+  actionable manual-select message instead of touching the legacy agent-device
+  path. Cross-platform iOS support tracked as a follow-up.
+
 ## 0.38.40
 
 ### Patch Changes
