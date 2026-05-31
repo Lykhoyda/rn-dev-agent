@@ -1,6 +1,7 @@
 node_modules/
 
-.claude
+.claude/*
+!.claude/commands/
 .agents
 .idea
 skills-lock.json
