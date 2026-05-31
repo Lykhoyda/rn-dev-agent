@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Recorder } from '../../dist/observability/recorder.js';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -46,5 +46,52 @@ test('captureScreenshot reads bytes at record time and serves by seq', () => {
 test('captureScreenshot ignores a missing/non-image file (fail-safe)', () => {
   const r = new Recorder(5);
   r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 5, result: { ok: true, data: { message: '/nonexistent/x.png' } } });
+  assert.equal(r.getScreenshot(1), undefined);
+});
+test('captureScreenshot bytes survive deletion of the source file (captured at record time)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const png = join(dir, 'shot.png');
+  writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const r = new Recorder(5);
+  r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 5, result: { ok: true, data: { path: png } } });
+  rmSync(png);
+  const shot = r.getScreenshot(1);
+  assert.ok(shot, 'bytes survive deletion');
+  assert.equal(shot.contentType, 'image/png');
+});
+test('captureScreenshot skips an oversized file (>4MB)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const big = join(dir, 'big.jpg');
+  writeFileSync(big, Buffer.alloc(4_000_001, 0xff));
+  const r = new Recorder(5);
+  r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 5, result: { ok: true, data: { message: big } } });
+  assert.equal(r.getScreenshot(1), undefined);
+});
+test('captureScreenshot FIFO-evicts beyond shotCap', () => {
+  const r = new Recorder(20); // shotCap = max(8, floor(20/10)) = 8
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const png = join(dir, 's.jpg');
+  writeFileSync(png, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  for (let i = 0; i < 10; i++) {
+    r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 1, result: { ok: true, data: { message: png } } });
+  }
+  assert.equal(r.getScreenshot(1), undefined, 'oldest evicted');
+  assert.equal(r.getScreenshot(2), undefined, 'second oldest evicted');
+  assert.ok(r.getScreenshot(10), 'newest kept');
+});
+test('a throwing subscriber does not break record or other subscribers', () => {
+  const r = new Recorder(5);
+  const got = [];
+  r.attach(() => { throw new Error('boom'); });
+  r.attach((e) => got.push(e.seq));
+  assert.doesNotThrow(() => r.record({ tool: 'cdp_status', params: {}, status: 'PASS', latencyMs: 1 }));
+  assert.deepEqual(got, [1]);
+});
+test('captureScreenshot skips a FAIL-status screenshot', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const f = join(dir, 'f.jpg');
+  writeFileSync(f, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  const r = new Recorder(5);
+  r.record({ tool: 'device_screenshot', params: {}, status: 'FAIL', latencyMs: 1, error: 'x', result: { ok: false, data: { message: f } } });
   assert.equal(r.getScreenshot(1), undefined);
 });
