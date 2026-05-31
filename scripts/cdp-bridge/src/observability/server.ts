@@ -34,7 +34,21 @@ export class ObservabilityServer {
   }
 
   private url(): string { return `http://${HOST}:${this.port}`; }
-  private handle(_req: IncomingMessage, res: ServerResponse): void { res.writeHead(404); res.end(); }
+
+  private handle(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.guard(req, res)) return;
+    res.writeHead(404); res.end();
+  }
+
+  private guard(req: IncomingMessage, res: ServerResponse): boolean {
+    const host = (req.headers.host ?? '').toLowerCase();
+    const okHost = host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`
+      || host === '127.0.0.1' || host === 'localhost';
+    const site = req.headers['sec-fetch-site'];
+    const okSite = site === undefined || site === 'same-origin' || site === 'none';
+    if (!okHost || !okSite) { res.writeHead(403); res.end('forbidden'); return false; }
+    return true;
+  }
 }
 
 function listen(server: Server, port: number): Promise<number> {
