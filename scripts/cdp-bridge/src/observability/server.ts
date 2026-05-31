@@ -37,7 +37,11 @@ export class ObservabilityServer {
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (!this.guard(req, res)) return;
-    if (req.url === '/api/stream') return this.stream(res);
+    const url = req.url ?? '/';
+    if (url === '/api/stream') return this.stream(res);
+    const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
+    if (shot) return this.screenshot(Number(shot[1]), res);
+    if (url === '/') return this.index(res);
     res.writeHead(404); res.end();
   }
 
@@ -61,6 +65,21 @@ export class ObservabilityServer {
     const okSite = site === undefined || site === 'same-origin' || site === 'none';
     if (!okHost || !okSite) { res.writeHead(403); res.end('forbidden'); return false; }
     return true;
+  }
+
+  private screenshot(seq: number, res: ServerResponse): void {
+    const shot = this.recorder.getScreenshot(seq);
+    if (!shot) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+    res.end(shot.buf);
+  }
+
+  private index(res: ServerResponse): void {
+    try {
+      const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch { res.writeHead(503); res.end('SPA bundle not built — run npm run build:web'); }
   }
 }
 

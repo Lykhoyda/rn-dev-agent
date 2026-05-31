@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 const HOST = '127.0.0.1';
 const __dir = dirname(fileURLToPath(import.meta.url));
 export class ObservabilityServer {
@@ -40,8 +41,14 @@ export class ObservabilityServer {
     handle(req, res) {
         if (!this.guard(req, res))
             return;
-        if (req.url === '/api/stream')
+        const url = req.url ?? '/';
+        if (url === '/api/stream')
             return this.stream(res);
+        const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
+        if (shot)
+            return this.screenshot(Number(shot[1]), res);
+        if (url === '/')
+            return this.index(res);
         res.writeHead(404);
         res.end();
     }
@@ -74,6 +81,27 @@ export class ObservabilityServer {
             return false;
         }
         return true;
+    }
+    screenshot(seq, res) {
+        const shot = this.recorder.getScreenshot(seq);
+        if (!shot) {
+            res.writeHead(404);
+            res.end();
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+        res.end(shot.buf);
+    }
+    index(res) {
+        try {
+            const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(html);
+        }
+        catch {
+            res.writeHead(503);
+            res.end('SPA bundle not built — run npm run build:web');
+        }
     }
 }
 function listen(server, port) {

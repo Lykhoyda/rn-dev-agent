@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { ObservabilityServer } from '../../dist/observability/server.js';
 import { Recorder } from '../../dist/observability/recorder.js';
 
@@ -50,5 +53,20 @@ test('GET /api/stream replays snapshot then streams live events', async () => {
   assert.ok(txt.includes('cdp_status'));
   assert.ok(txt.includes('device_press'));
   await reader.cancel();
+  await srv.stop();
+});
+
+test('GET /api/screenshot/:seq serves bytes from the recorder buffer only', async () => {
+  const rec = new Recorder(10);
+  const p = join(mkdtempSync(join(tmpdir(), 'obs-')), 's.jpg');
+  writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  rec.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 1, result: { ok: true, data: { message: p } } });
+  const srv = new ObservabilityServer(rec);
+  const { port } = await srv.start();
+  const ok = await fetch(`http://127.0.0.1:${port}/api/screenshot/1`);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('content-type'), 'image/jpeg');
+  const miss = await fetch(`http://127.0.0.1:${port}/api/screenshot/999`);
+  assert.equal(miss.status, 404);
   await srv.stop();
 });
