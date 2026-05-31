@@ -61,6 +61,8 @@ import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
+import { setToolObserver } from './experience/telemetry.js';
+import { recorder } from './observability/recorder.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
@@ -88,6 +90,7 @@ const server = new McpServer({
     name: 'rn-dev-agent-cdp-bridge',
     version: pkgVersion,
 });
+setToolObserver((o) => recorder.record(o));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
     const wrapped = instrumentTool(name, handler);
