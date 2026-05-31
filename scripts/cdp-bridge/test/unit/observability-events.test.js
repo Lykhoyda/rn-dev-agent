@@ -6,6 +6,21 @@ function envelope(data) {
   return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }] };
 }
 
+test('mapObservation redacts secrets + PII embedded in error.message (no raw secret reaches the wire)', () => {
+  const ev = mapObservation(1, {
+    tool: 'cdp_auto_login',
+    params: {},
+    status: 'FAIL',
+    latencyMs: 3,
+    error: 'auto-login failed (401): {"token":"tok_abcdefghij1234567890XYZ","email":"victim@example.com"} Bearer sk-livesecretvalue1234567890',
+  });
+  assert.ok(ev.error, 'error field present');
+  assert.ok(!ev.error.message.includes('tok_abcdefghij1234567890XYZ'), 'keyed token must be redacted');
+  assert.ok(!ev.error.message.includes('victim@example.com'), 'email must be redacted');
+  assert.ok(!ev.error.message.includes('sk-livesecretvalue1234567890'), 'bearer secret must be redacted');
+  assert.ok(/REDACTED|PII_REDACTED/.test(ev.error.message), 'redaction markers present');
+});
+
 test('classifyFamily maps tool names to families', () => {
   assert.equal(classifyFamily('device_press'), 'interaction');
   assert.equal(classifyFamily('device_fill'), 'interaction');

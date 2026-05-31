@@ -30,7 +30,10 @@ export class ObservabilityServer {
 
   async stop(): Promise<void> {
     const s = this.server; this.server = null;
-    if (s) await new Promise<void>((r) => s.close(() => r()));
+    if (s) {
+      s.closeAllConnections?.();
+      await new Promise<void>((r) => s.close(() => r()));
+    }
   }
 
   private url(): string { return `http://${HOST}:${this.port}`; }
@@ -49,7 +52,10 @@ export class ObservabilityServer {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
     res.flushHeaders?.();
     res.socket?.setTimeout(0);
-    const write = (ev: unknown): boolean => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+    const write = (ev: unknown): boolean => {
+      try { return res.write(`data: ${JSON.stringify(ev)}\n\n`); }
+      catch { return false; }
+    };
     const { snapshot, detach } = this.recorder.attach((ev) => { if (!write(ev)) { detach(); res.end(); } });
     write({ type: 'snapshot', events: snapshot });
     const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15_000);
@@ -76,10 +82,8 @@ export class ObservabilityServer {
 
   private index(res: ServerResponse): void {
     try {
-      // __dir resolves to dist/observability/ (compiled location); the SPA bundle
-      // ships at dist/observability/web-dist/index.html (vite outDir).
-      // CI NOTE (Phase 7): the bundle-freshness guard must check
-      // scripts/cdp-bridge/dist/observability/web-dist/index.html (NOT src/).
+      // __dir is dist/observability/; the SPA bundle ships at
+      // dist/observability/web-dist/index.html (vite outDir).
       const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);

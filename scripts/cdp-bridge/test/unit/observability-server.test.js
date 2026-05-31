@@ -77,6 +77,23 @@ test('GET /api/screenshot/:seq serves bytes from the recorder buffer only', asyn
   await srv.stop();
 });
 
+test('stop() resolves promptly even with an open SSE connection', async () => {
+  const srv = new ObservabilityServer(new Recorder(10));
+  const { port } = await srv.start();
+  // Open a streaming connection and keep it open (never read to completion).
+  const ac = new AbortController();
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream`, { signal: ac.signal });
+  assert.equal(res.status, 200);
+  // stop() must not wait for this connection to drain.
+  const stopped = srv.stop();
+  const timeout = new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new Error('stop() hung with an open SSE connection')), 2000);
+    t.unref?.();
+  });
+  await Promise.race([stopped, timeout]);
+  ac.abort();
+});
+
 // The SPA bundle ships at dist/observability/web-dist/index.html (vite outDir).
 // Guarded with existsSync so CI without `npm run build:web` skips rather than
 // false-fails; locally (and once the bundle is committed) it must pass.

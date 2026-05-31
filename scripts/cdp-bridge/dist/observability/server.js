@@ -34,8 +34,10 @@ export class ObservabilityServer {
     async stop() {
         const s = this.server;
         this.server = null;
-        if (s)
+        if (s) {
+            s.closeAllConnections?.();
             await new Promise((r) => s.close(() => r()));
+        }
     }
     url() { return `http://${HOST}:${this.port}`; }
     handle(req, res) {
@@ -56,7 +58,14 @@ export class ObservabilityServer {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
         res.flushHeaders?.();
         res.socket?.setTimeout(0);
-        const write = (ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+        const write = (ev) => {
+            try {
+                return res.write(`data: ${JSON.stringify(ev)}\n\n`);
+            }
+            catch {
+                return false;
+            }
+        };
         const { snapshot, detach } = this.recorder.attach((ev) => { if (!write(ev)) {
             detach();
             res.end();
@@ -94,10 +103,8 @@ export class ObservabilityServer {
     }
     index(res) {
         try {
-            // __dir resolves to dist/observability/ (compiled location); the SPA bundle
-            // ships at dist/observability/web-dist/index.html (vite outDir).
-            // CI NOTE (Phase 7): the bundle-freshness guard must check
-            // scripts/cdp-bridge/dist/observability/web-dist/index.html (NOT src/).
+            // __dir is dist/observability/; the SPA bundle ships at
+            // dist/observability/web-dist/index.html (vite outDir).
             const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(html);

@@ -146,8 +146,17 @@ export function mapObservation(seq, o) {
         event.payload = payload;
     if (truncated)
         event.truncated = true;
-    if (!ok && o.error)
-        event.error = { message: String(o.error).slice(0, 500) };
+    if (!ok && o.error) {
+        const raw = String(o.error).slice(0, 500);
+        let message;
+        try {
+            message = String(redact({ m: raw }).m);
+        }
+        catch {
+            message = '[REDACTED:error]';
+        }
+        event.error = { message };
+    }
     if (o.ghost?.attempted)
         event.ghost = o.ghost;
     return event;
