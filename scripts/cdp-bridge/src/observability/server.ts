@@ -37,7 +37,20 @@ export class ObservabilityServer {
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (!this.guard(req, res)) return;
+    if (req.url === '/api/stream') return this.stream(res);
     res.writeHead(404); res.end();
+  }
+
+  private stream(res: ServerResponse): void {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+    res.flushHeaders?.();
+    res.socket?.setTimeout(0);
+    const write = (ev: unknown): boolean => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+    const { snapshot, detach } = this.recorder.attach((ev) => { if (!write(ev)) { detach(); res.end(); } });
+    write({ type: 'snapshot', events: snapshot });
+    const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15_000);
+    hb.unref?.();
+    res.on('close', () => { clearInterval(hb); detach(); });
   }
 
   private guard(req: IncomingMessage, res: ServerResponse): boolean {

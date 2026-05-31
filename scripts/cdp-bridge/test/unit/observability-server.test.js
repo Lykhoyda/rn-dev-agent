@@ -35,3 +35,20 @@ test('rejects a foreign Host header (DNS-rebinding) and cross-site Sec-Fetch-Sit
   assert.equal(xsite.status, 403);
   await srv.stop();
 });
+
+test('GET /api/stream replays snapshot then streams live events', async () => {
+  const rec = new Recorder(10);
+  rec.record({ tool: 'cdp_status', params: {}, status: 'PASS', latencyMs: 1 });
+  const srv = new ObservabilityServer(rec);
+  const { port } = await srv.start();
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream`);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let txt = dec.decode((await reader.read()).value);
+  rec.record({ tool: 'device_press', params: {}, status: 'PASS', latencyMs: 1 });
+  for (let i = 0; i < 5 && !txt.includes('device_press'); i++) txt += dec.decode((await reader.read()).value);
+  assert.ok(txt.includes('cdp_status'));
+  assert.ok(txt.includes('device_press'));
+  await reader.cancel();
+  await srv.stop();
+});
