@@ -1,9 +1,17 @@
+import { readFileSync, statSync } from 'node:fs';
 import { RingBuffer } from '../ring-buffer.js';
 import { mapObservation } from './events.js';
 import type { AgentEvent, ToolObservation } from './events.js';
 
 const DEFAULT_CAP = 500;
+const MAX_SHOT_BYTES = 4_000_000;
 export interface ScreenshotBytes { buf: Buffer; contentType: string; }
+
+function screenshotPath(result: unknown): string | null {
+  const data = (result as { data?: { message?: string; path?: string } })?.data;
+  const p = data?.path ?? data?.message;
+  return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png')) ? p : null;
+}
 
 export class Recorder {
   private buf: RingBuffer<AgentEvent>;
@@ -33,6 +41,21 @@ export class Recorder {
   }
   getScreenshot(seq: number): ScreenshotBytes | undefined { return this.shots.get(seq); }
   clear(): void { this.buf.clear(); this.subs.clear(); this.shots.clear(); this.seq = 0; }
-  protected captureScreenshot(_ev: AgentEvent, _o: ToolObservation): void { /* implemented in Task 2.2 */ }
+  protected captureScreenshot(ev: AgentEvent, o: ToolObservation): void {
+    if (ev.tool !== 'device_screenshot' || !ev.ok) return;
+    const p = screenshotPath(o.result);
+    if (!p) return;
+    try {
+      if (statSync(p).size > MAX_SHOT_BYTES) return;
+      const buf = readFileSync(p);
+      const contentType = p.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      this.shots.set(ev.seq, { buf, contentType });
+      while (this.shots.size > this.shotCap) {
+        const oldest = this.shots.keys().next().value;
+        if (oldest === undefined) break;
+        this.shots.delete(oldest);
+      }
+    } catch { /* file vanished/unreadable — fail-safe */ }
+  }
 }
 export const recorder = new Recorder();

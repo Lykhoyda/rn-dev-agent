@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Recorder } from '../../dist/observability/recorder.js';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 test('record assigns monotonic seq and snapshot returns chronological order', () => {
   const r = new Recorder(3);
@@ -30,4 +33,18 @@ test('attach() returns a same-tick snapshot and delivers subsequent events (no g
 test('record swallows errors (never throws into the caller)', () => {
   const r = new Recorder(2);
   assert.doesNotThrow(() => r.record(null));
+});
+test('captureScreenshot reads bytes at record time and serves by seq', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const png = join(dir, 'shot.jpg');
+  writeFileSync(png, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  const r = new Recorder(5);
+  r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 5, result: { ok: true, data: { message: png } } });
+  const shot = r.getScreenshot(1);
+  assert.ok(shot); assert.equal(shot.contentType, 'image/jpeg'); assert.equal(shot.buf.length, 4);
+});
+test('captureScreenshot ignores a missing/non-image file (fail-safe)', () => {
+  const r = new Recorder(5);
+  r.record({ tool: 'device_screenshot', params: {}, status: 'PASS', latencyMs: 5, result: { ok: true, data: { message: '/nonexistent/x.png' } } });
+  assert.equal(r.getScreenshot(1), undefined);
 });
