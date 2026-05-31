@@ -1,5 +1,6 @@
 import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
 import { detectPlatform } from './platform-utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 
 // GH #136 test seam: production code calls `runAgentDevice` through this
@@ -273,4 +274,32 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
   }
 
   return false;
+}
+
+export function createDismissDevClientPickerHandler(): (
+  args: { platform?: 'ios' | 'android' },
+) => Promise<ToolResult> {
+  return async (args) => {
+    const t0 = Date.now();
+    const outcome = await clearDevClientPickerIfPresent(args.platform);
+    const meta = { timings_ms: { total: Date.now() - t0 } };
+
+    if (outcome === null) {
+      return failResult(
+        'No device session open. Call device_snapshot action="open" first.',
+        'DEV_CLIENT_PICKER_NO_SESSION',
+        meta,
+      );
+    }
+    if (outcome.skipped) {
+      return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
+    }
+    if (outcome.dismissed) {
+      return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+    }
+    if (outcome.reason.toLowerCase().includes('could not find')) {
+      return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
+    }
+    return okResult({ dismissed: false, reason: outcome.reason, platform: outcome.platform }, { meta });
+  };
 }

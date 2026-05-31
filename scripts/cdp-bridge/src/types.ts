@@ -209,7 +209,9 @@ export type ToolErrorCode =
   | 'PICKER_BLOCKING'
   // GH #186: cdp_run_action replay hit structural route-drift (live route off
   // the action's expectedRouteSequence) — distinct from a stale selector.
-  | 'ROUTE_DRIFT';
+  | 'ROUTE_DRIFT'
+  // GH #136: cdp_dismiss_dev_client_picker called with no active device session.
+  | 'DEV_CLIENT_PICKER_NO_SESSION';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
