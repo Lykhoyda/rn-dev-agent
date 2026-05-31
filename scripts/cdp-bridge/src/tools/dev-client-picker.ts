@@ -1,4 +1,5 @@
-import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession } from '../agent-device-wrapper.js';
+import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
+import { detectPlatform } from './platform-utils.js';
 import type { ToolResult } from '../utils.js';
 
 // GH #136 test seam: production code calls `runAgentDevice` through this
@@ -50,6 +51,13 @@ const PICKER_INDICATORS = [
 export interface PickerResult {
   dismissed: boolean;
   reason: string;
+}
+
+export interface PickerOutcome {
+  dismissed: boolean;
+  reason: string;
+  skipped?: boolean;
+  platform?: 'ios' | 'android' | null;
 }
 
 // GH #136: structural matcher for dev-client picker rows. The picker shows
@@ -158,6 +166,36 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
   }
 
   return { dismissed: false, reason: 'Dev Client picker not detected' };
+}
+
+/**
+ * GH #136 sub-3: the single guarded seam every on-demand/auto consumer routes
+ * through. iOS is short-circuited with an actionable message — we must NOT call
+ * handleDevClientPicker() there because its agent-device `find` path respawns
+ * the legacy AgentDeviceRunner (D1219). Returns null ONLY for Android + no
+ * device session, so the MCP tool can surface a NO_SESSION error.
+ */
+export async function clearDevClientPickerIfPresent(
+  platform?: 'ios' | 'android',
+): Promise<PickerOutcome | null> {
+  // SessionState.platform is typed `string | undefined`, so narrow it to the
+  // valid platforms before it can short-circuit the detectPlatform() fallback.
+  const sessionPlatform = getActiveSession()?.platform;
+  const resolved = platform ?? (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ?? (await detectPlatform());
+  if (resolved === 'ios') {
+    return {
+      dismissed: false,
+      skipped: true,
+      platform: 'ios',
+      reason: 'iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.',
+    };
+  }
+  if (resolved !== 'android') {
+    return { dismissed: false, platform: null, reason: 'No iOS/Android device detected.' };
+  }
+  const res = await handleDevClientPicker();
+  if (res === null) return null;
+  return { ...res, platform: 'android' };
 }
 
 /**
