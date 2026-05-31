@@ -63,6 +63,7 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 import { setToolObserver } from './experience/telemetry.js';
 import { recorder } from './observability/recorder.js';
+import { observeHandler, observeSchema } from './tools/observe.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
@@ -100,6 +101,7 @@ trackedTool('cdp_status', 'Get full environment status. Auto-connects if not con
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
 }, createStatusHandler(getClient, setClient, createClient));
+trackedTool('observe', "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
 trackedTool('cdp_diagnostic_renderers', 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {
     maxRendererId: z.number().int().min(1).max(100).optional().describe('How many renderer IDs to scan. Default 20 (matches IIFE MAX_RENDERER_IDS).'),
 }, createDiagnosticRenderersHandler(getClient));

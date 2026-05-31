@@ -93,6 +93,7 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
 import { setToolObserver } from './experience/telemetry.js';
 import { recorder } from './observability/recorder.js';
+import { observeHandler, observeSchema } from './tools/observe.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -143,6 +144,13 @@ trackedTool(
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
   },
   createStatusHandler(getClient, setClient, createClient),
+);
+
+trackedTool(
+  'observe',
+  "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.",
+  observeSchema,
+  observeHandler,
 );
 
 trackedTool(
