@@ -153,6 +153,15 @@ export interface ToolObservation {
   ghost?: { attempted: boolean; outcome: string };
 }
 
+export function unwrapResult(result: unknown): { ok?: boolean; data?: unknown; error?: string } | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const env = result as { content?: Array<{ text?: string }> };
+  const text = env.content?.[0]?.text;
+  if (typeof text !== 'string') return undefined;
+  try { return JSON.parse(text) as { ok?: boolean; data?: unknown; error?: string }; }
+  catch { return undefined; }
+}
+
 export function summarize(
   tool: string,
   _family: AgentEventFamily,
@@ -167,7 +176,9 @@ export function summarize(
 export function mapObservation(seq: number, o: ToolObservation): AgentEvent {
   const family = classifyFamily(o.tool);
   const ok = o.status === 'PASS';
-  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, ok ? o.result : undefined);
+  const unwrapped = unwrapResult(o.result);
+  const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
+  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
   const summary = summarize(o.tool, family, args, ok);
 
   const event: AgentEvent = {

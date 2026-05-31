@@ -87,6 +87,23 @@ test('a throwing subscriber does not break record or other subscribers', () => {
   assert.doesNotThrow(() => r.record({ tool: 'cdp_status', params: {}, status: 'PASS', latencyMs: 1 }));
   assert.deepEqual(got, [1]);
 });
+test('captureScreenshot reads bytes from the REAL MCP envelope (content[0].text) — regression for the unwrap bug', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'obs-'));
+  const jpg = join(dir, 'real-envelope.jpg');
+  writeFileSync(jpg, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  const r = new Recorder(5);
+  r.record({
+    tool: 'device_screenshot',
+    params: {},
+    status: 'PASS',
+    latencyMs: 5,
+    result: { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: jpg } }) }] },
+  });
+  const shot = r.getScreenshot(1);
+  assert.ok(shot, 'bytes captured from the real envelope');
+  assert.equal(shot.contentType, 'image/jpeg');
+  assert.equal(shot.buf.length, 4);
+});
 test('captureScreenshot skips a FAIL-status screenshot', () => {
   const dir = mkdtempSync(join(tmpdir(), 'obs-'));
   const f = join(dir, 'f.jpg');

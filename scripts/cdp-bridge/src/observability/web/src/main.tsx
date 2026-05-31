@@ -54,8 +54,10 @@ function pretty(value: unknown): string {
 
 function routeOf(ev: AgentEvent | undefined): string | undefined {
   if (!ev) return undefined;
-  const p = ev.payload as { data?: { current?: string; route?: string; name?: string } } | undefined;
-  const cand = p?.data?.current ?? p?.data?.route ?? p?.data?.name;
+  const p = ev.payload as
+    | { routeName?: string; nested?: { routeName?: string; nested?: { routeName?: string } } }
+    | undefined;
+  const cand = p?.nested?.nested?.routeName ?? p?.nested?.routeName ?? p?.routeName;
   return typeof cand === 'string' ? cand : undefined;
 }
 
@@ -129,7 +131,6 @@ function App(): JSX.Element {
   );
   const route = routeOf(navEv);
   const app = appOf(events);
-  const selectedEv = selected != null ? events.find((e) => e.seq === selected) : undefined;
 
   const tabEv = tab === 'route' ? navEv : tab === 'store' ? storeEv : treeEv;
 
@@ -214,7 +215,6 @@ function App(): JSX.Element {
           </div>
         </div>
       </div>
-      {selectedEv && <div className="hidden" />}
     </div>
   );
 }
@@ -268,7 +268,6 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .state { flex: 1; overflow: auto; padding: 8px 10px; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
 .empty { color: #565f89; padding: 12px; }
-.hidden { display: none; }
 `;
 
 const style = document.createElement('style');

@@ -1,10 +1,10 @@
 import { readFileSync, statSync } from 'node:fs';
 import { RingBuffer } from '../ring-buffer.js';
-import { mapObservation } from './events.js';
+import { mapObservation, unwrapResult } from './events.js';
 const DEFAULT_CAP = 500;
 const MAX_SHOT_BYTES = 4_000_000;
 function screenshotPath(result) {
-    const data = result?.data;
+    const data = (unwrapResult(result)?.data ?? result?.data);
     const p = data?.path ?? data?.message;
     return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png')) ? p : null;
 }

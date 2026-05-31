@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFamily, clipThenRedact, mapObservation } from '../../dist/observability/events.js';
+import { classifyFamily, clipThenRedact, mapObservation, unwrapResult } from '../../dist/observability/events.js';
+
+function envelope(data) {
+  return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }] };
+}
 
 test('classifyFamily maps tool names to families', () => {
   assert.equal(classifyFamily('device_press'), 'interaction');
@@ -41,4 +45,27 @@ test('mapObservation builds an AgentEvent with seq, family, summary, redaction, 
   assert.equal(e.durationMs, 42);
   assert.deepEqual(e.ghost, { attempted: true, outcome: 'recovered' });
   assert.ok(typeof e.summary === 'string' && e.summary.length > 0);
+});
+
+test('unwrapResult parses the real MCP envelope and returns {ok,data}', () => {
+  const r = unwrapResult(envelope({ routeName: 'TasksTab' }));
+  assert.deepEqual(r, { ok: true, data: { routeName: 'TasksTab' } });
+});
+test('unwrapResult returns undefined for non-envelope / unparseable input', () => {
+  assert.equal(unwrapResult(undefined), undefined);
+  assert.equal(unwrapResult({ data: { x: 1 } }), undefined);
+  assert.equal(unwrapResult({ content: [{ text: '{not json' }] }), undefined);
+});
+
+test('mapObservation unwraps the real MCP envelope: payload is the clean data, not the wrapper', () => {
+  const e = mapObservation(11, {
+    tool: 'cdp_navigation_state',
+    params: {},
+    status: 'PASS',
+    latencyMs: 8,
+    result: { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { routeName: 'TasksTab' } }) }] },
+  });
+  assert.deepEqual(e.payload, { routeName: 'TasksTab' });
+  assert.ok(!JSON.stringify(e.payload).includes('content'));
+  assert.ok(!JSON.stringify(e.payload).includes('\\"ok\\"'));
 });

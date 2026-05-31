@@ -106,6 +106,20 @@ export function clipThenRedact(args, payload) {
         return { args: redactedArgs, payload: { redacted: true } };
     }
 }
+export function unwrapResult(result) {
+    if (!result || typeof result !== 'object')
+        return undefined;
+    const env = result;
+    const text = env.content?.[0]?.text;
+    if (typeof text !== 'string')
+        return undefined;
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        return undefined;
+    }
+}
 export function summarize(tool, _family, args, ok) {
     const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? '';
     const head = target ? `${tool} ${String(target).slice(0, 60)}` : tool;
@@ -114,7 +128,9 @@ export function summarize(tool, _family, args, ok) {
 export function mapObservation(seq, o) {
     const family = classifyFamily(o.tool);
     const ok = o.status === 'PASS';
-    const { args, payload, truncated } = clipThenRedact(o.params ?? {}, ok ? o.result : undefined);
+    const unwrapped = unwrapResult(o.result);
+    const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
+    const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
     const summary = summarize(o.tool, family, args, ok);
     const event = {
         seq,

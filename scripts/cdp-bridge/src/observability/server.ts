@@ -76,6 +76,10 @@ export class ObservabilityServer {
 
   private index(res: ServerResponse): void {
     try {
+      // __dir resolves to dist/observability/ (compiled location); the SPA bundle
+      // ships at dist/observability/web-dist/index.html (vite outDir).
+      // CI NOTE (Phase 7): the bundle-freshness guard must check
+      // scripts/cdp-bridge/dist/observability/web-dist/index.html (NOT src/).
       const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);

@@ -1,11 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { writeFileSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdtempSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { ObservabilityServer } from '../../dist/observability/server.js';
 import { Recorder } from '../../dist/observability/recorder.js';
+
+const BUNDLE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../dist/observability/web-dist/index.html',
+);
 
 // Node's undici (global fetch) silently drops a forged Host header, so the
 // DNS-rebinding guard can only be exercised over a raw socket where the
@@ -68,5 +74,19 @@ test('GET /api/screenshot/:seq serves bytes from the recorder buffer only', asyn
   assert.equal(ok.headers.get('content-type'), 'image/jpeg');
   const miss = await fetch(`http://127.0.0.1:${port}/api/screenshot/999`);
   assert.equal(miss.status, 404);
+  await srv.stop();
+});
+
+// The SPA bundle ships at dist/observability/web-dist/index.html (vite outDir).
+// Guarded with existsSync so CI without `npm run build:web` skips rather than
+// false-fails; locally (and once the bundle is committed) it must pass.
+test('GET / serves the SPA bundle from the dist path', { skip: existsSync(BUNDLE_PATH) ? false : 'web-dist bundle not built' }, async () => {
+  const srv = new ObservabilityServer(new Recorder(10));
+  const { port } = await srv.start();
+  const res = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+  const body = await res.text();
+  assert.ok(body.includes('<') && body.length > 0);
   await srv.stop();
 });
