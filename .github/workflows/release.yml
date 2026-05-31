@@ -1,0 +1,59 @@
+name: Release
+
+# Changesets release automation (Version-PR pattern).
+#
+# On every push to main, this opens/updates a "Version Packages" PR that runs
+# `npm run version-packages` (changeset version -> sync-plugin-manifest -> sync-versions --fix),
+# accumulating all pending changesets into one version bump. Merging that PR
+# bumps plugin.json + marketplace.json + cdp-bridge, updates CHANGELOGs, and
+# consumes the changesets — making the new version installable from the marketplace.
+#
+# No npm publish: the "package" is the plugin manifest the marketplace reads
+# from the repo, so only the version half of changesets/action is used.
+#
+# PREREQUISITES (must be enabled in repo settings — cannot be set from this file):
+#   - Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests"
+#   - Settings > General > "Allow auto-merge"
+#   - Branch protection on main with >=1 required status check (so `gh pr merge --auto`
+#     has a check to gate on; otherwise auto-merge has nothing to wait for).
+
+on:
+  push:
+    branches: [main]
+
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Create or update the Version Packages PR
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: npm run version-packages
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge on the Version Packages PR
+        if: steps.changesets.outputs.pullRequestNumber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.changesets.outputs.pullRequestNumber }}
+        run: gh pr merge --squash --auto "$PR_NUMBER"
