@@ -1,10 +1,14 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
+// A cold `xcodebuild test` compiles the runner project before launching it; on a
+// fresh machine (no prebuilt .xctestrun) that can take several minutes, so the
+// ready-signal timeout is widened for the build path.
+const BUILD_READY_TIMEOUT_MS = 360_000;
 const HTTP_TIMEOUT_MS = 10_000;
 const STATE_FILE = '/tmp/rn-fast-runner-state.json';
 const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast-runner');
@@ -95,6 +99,38 @@ export function isFastRunnerAvailable() {
     catch { /* ignore */ }
     return false;
 }
+/**
+ * Decide which xcodebuild invocation launches the runner.
+ *
+ * `test-without-building` is the fast steady-state path, but it requires a prior
+ * `build-for-testing` to have produced a .xctestrun. On a fresh machine that
+ * artifact is absent (build/ is gitignored), so we fall back to a full `test`,
+ * which compiles the project first and then runs it — making the runner
+ * self-install on first use (D1219 follow-up).
+ */
+export function resolveRunnerXcodebuildArgs(opts) {
+    const action = opts.hasBuiltTestProduct ? 'test-without-building' : 'test';
+    return [
+        action,
+        '-project', opts.projectPath,
+        '-scheme', opts.scheme,
+        '-destination', `platform=iOS Simulator,id=${opts.deviceId}`,
+        '-derivedDataPath', opts.derivedDataPath,
+        `-only-testing:${opts.onlyTesting}`,
+    ];
+}
+/** True when a prior build-for-testing left a .xctestrun under DerivedData. */
+export function hasBuiltTestProduct(derivedDataPath) {
+    try {
+        const productsDir = join(derivedDataPath, 'Build', 'Products');
+        if (!existsSync(productsDir))
+            return false;
+        return readdirSync(productsDir).some((entry) => entry.endsWith('.xctestrun'));
+    }
+    catch {
+        return false;
+    }
+}
 // --- Lifecycle ---
 export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
     if (runnerState)
@@ -106,14 +142,15 @@ export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
             return;
         }
         const derivedDataPath = join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
-        const args = [
-            'test-without-building',
-            '-project', projectPath,
-            '-scheme', 'RnFastRunner',
-            '-destination', `platform=iOS Simulator,id=${deviceId}`,
-            '-derivedDataPath', derivedDataPath,
-            '-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand',
-        ];
+        const built = hasBuiltTestProduct(derivedDataPath);
+        const args = resolveRunnerXcodebuildArgs({
+            projectPath,
+            scheme: 'RnFastRunner',
+            deviceId,
+            derivedDataPath,
+            onlyTesting: 'RnFastRunnerUITests/RnFastRunnerTests/testCommand',
+            hasBuiltTestProduct: built,
+        });
         const child = spawn('xcodebuild', args, {
             env: {
                 ...process.env,
@@ -124,10 +161,12 @@ export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
         runnerProcess = child;
         const parser = createReadySignalParser();
         let resolved = false;
+        const readyTimeoutMs = built ? READY_TIMEOUT_MS : BUILD_READY_TIMEOUT_MS;
         const timer = setTimeout(() => {
             child.kill('SIGTERM');
-            reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
-        }, READY_TIMEOUT_MS);
+            const phase = built ? '' : ' (cold build — first run compiles the runner)';
+            reject(new Error(`Fast runner did not become ready within ${readyTimeoutMs / 1000}s${phase}`));
+        }, readyTimeoutMs);
         const handleChunk = (chunk) => {
             if (resolved)
                 return;

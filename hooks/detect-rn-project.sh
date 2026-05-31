@@ -57,9 +57,16 @@ if [ "$has_rn_config" = true ]; then
     INSTALL_WARNINGS+=("WARNING: maestro-runner not installed. Run: npm install -g maestro-runner")
   fi
 
-  # Ensure agent-device is installed (stderr visible for diagnostics)
-  if ! bash "$PLUGIN_ROOT/scripts/ensure-agent-device.sh" 2>&1; then
-    INSTALL_WARNINGS+=("WARNING: agent-device not installed. Run: npm install -g agent-device")
+  # Ensure agent-device is installed — Android targets only (stderr visible for
+  # diagnostics). Since D1219/PR #164 iOS device control is owned by the in-tree
+  # rn-fast-runner, so agent-device is Android-only. Gate the global npm install
+  # on a live Android device/emulator so iOS-only macOS users don't pay for a
+  # dependency they never use. Android users without a booted emulator at
+  # SessionStart can still install it via /rn-dev-agent:setup.
+  if command -v adb &>/dev/null && adb devices 2>/dev/null | grep -q "device$"; then
+    if ! bash "$PLUGIN_ROOT/scripts/ensure-agent-device.sh" 2>&1; then
+      INSTALL_WARNINGS+=("WARNING: agent-device not installed. Run: npm install -g agent-device")
+    fi
   fi
 
   # GH #59 #3: surface (and optionally auto-install) idb-companion when a

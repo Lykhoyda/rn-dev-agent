@@ -51,8 +51,10 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodep
   ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app 2>/dev/null
 ```
 
-- **Both present** → OK. The runner will spawn lazily on the first `device_snapshot action=open` via `xcodebuild test-without-building`.
-- **xcodeproj present, build artifacts MISSING** → run a one-time pre-build with a booted iOS simulator UDID (substitute from `xcrun simctl list devices booted -j`):
+- **Both present** → OK (built). The runner spawns lazily on the first `device_snapshot action=open` via the fast `xcodebuild test-without-building` path.
+- **xcodeproj present, build artifacts MISSING** → NEEDS_BUILD. The runner now **self-builds on first use**: `startFastRunner()` falls back to a full `xcodebuild test` (build + test) when no `.xctestrun` exists, so the first `device_snapshot action=open` will succeed on a fresh machine — it just takes several minutes while Xcode compiles the rig (the ready-signal timeout widens to 360s for this cold path).
+
+  To avoid that first-call latency, **offer to run the one-time pre-build now** ("Pre-build the iOS runner now to avoid a slow first call? [y/n]"). If the user accepts, run it with a booted iOS simulator UDID (substitute from `xcrun simctl list devices booted -j`):
   ```bash
   cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && \
     xcodebuild build-for-testing \
@@ -61,10 +63,12 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodep
       -destination "platform=iOS Simulator,id=<UDID>" \
       -derivedDataPath ../build/DerivedData
   ```
-  Expect `** TEST BUILD SUCCEEDED **`. The artifacts land at `scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/`.
+  Expect `** TEST BUILD SUCCEEDED **`. The artifacts land at `scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/`. If the user declines, leave it — the lazy fallback covers correctness; the only cost is a slow first interaction.
 - **xcodeproj missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
 
 Skip this check on systems without `xcodebuild` (non-macOS, no Xcode) — `rn-fast-runner` is iOS-only. The plugin still works on those systems for Android via the `agent-device` CLI (check 3b).
+
+**Expected simulator icons (not clutter).** Because the UI-test target is *hosted* (`TEST_TARGET_NAME = RnFastRunner`), building/running the runner installs **two** apps on the simulator home screen: `RnFastRunner` (the minimal host app, bundle `dev.lykhoyda.rndevagent.fastrunner`) and `RnFastRunnerUITests-Runner` (the XCUITest harness — the icon may show truncated as "RnFastRunnerUI…"; same pattern as WebDriverAgent's `WebDriverAgentRunner`). The Runner hosts the `POST /command` server on port 22088 and drives the *target* app via `XCUIApplication(bundleIdentifier:)` — it does not drive itself, and it stays installed/running on purpose so subsequent `device_*` calls are fast. If a user asks "what is RnFastRunnerUI on my simulator?", that's the answer — leave it in place. (This is distinct from the legacy upstream `AgentDeviceRunner`, which IS unwanted — see the daemon-leak note in the project CLAUDE.md.)
 
 ### 3b. agent-device CLI (Android — optional on iOS-only setups)
 
@@ -236,7 +240,7 @@ Present results as a table:
 |-------|--------|--------------|
 | Node.js | OK (v22.15.0) | — |
 | CDP bridge | OK | — |
-| rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | Run `xcodebuild build-for-testing` (see check 3 above) |
+| rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
 | agent-device (Android) | OK / MISSING / N/A (iOS-only setup) | Run: npm install -g agent-device — only if targeting Android |
 | maestro-runner | MISSING | Run: npm install -g maestro-runner |
 | iOS Simulator | BOOTED (iPhone 16) | — |
@@ -265,8 +269,8 @@ Setup is boring — agents skip it and pay for it later.
 | Excuse | Reality |
 |--------|---------|
 | "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use v22 LTS. |
-| "The SessionStart banner says 'WARNING: agent-device not installed' — it'll auto-install next time" | Auto-install already ran and FAILED. That's why there's a warning. iOS no longer needs `agent-device` (PR #164 — see D1219); for iOS-only setups the warning is informational. For Android setups, run the ensure script NOW and read the actual error. |
-| "rn-fast-runner build is fine, it'll lazy-build on demand" | Lazy spawn via `xcodebuild test-without-building` requires the build artifacts to already exist at `scripts/rn-fast-runner/build/DerivedData/`. Without a one-time `build-for-testing`, the first `device_snapshot action=open` will fail with "no such file or directory" on the `.xctestrun` path. Run check 3's pre-build command once after install. |
+| "The SessionStart banner says 'WARNING: agent-device not installed' — it'll auto-install next time" | The SessionStart hook only attempts the `agent-device` install when a live Android device/emulator is detected (`adb devices`), since iOS uses the in-tree `rn-fast-runner` (PR #164 / D1219). So if you see this warning at all, an Android target WAS present and the auto-install ran and FAILED — run the ensure script NOW and read the actual error. iOS-only macOS sessions no longer attempt the install or print this warning. |
+| "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` falls back to a full `xcodebuild test` (build + test) when no `.xctestrun` exists, so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
 | "The user can install agent-device themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact command with the flag they need (sudo? nvm? permission fix?). |
 | "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on critical checks passing (steps 10 + 11 are optional — N/A when no physical device, OFFLINE acceptable for the version check). Get the environment green first, then proceed. |
