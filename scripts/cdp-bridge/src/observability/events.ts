@@ -1,3 +1,7 @@
+import { redact } from '../experience/redact.js';
+
+const CLIP_LIMIT = 16000;
+
 export type AgentEventFamily =
   | 'interaction'
   | 'introspection'
@@ -92,4 +96,49 @@ export function classifyFamily(tool: string): AgentEventFamily {
   if (LIFECYCLE.has(tool)) return 'lifecycle';
   if (TESTING.has(tool)) return 'testing';
   return 'other';
+}
+
+export interface ClippedPayload {
+  args: Record<string, unknown>;
+  payload?: unknown;
+  truncated?: boolean;
+}
+
+export function clipThenRedact(
+  args: Record<string, unknown> | undefined,
+  payload: unknown,
+): ClippedPayload {
+  let redactedArgs: Record<string, unknown>;
+  try {
+    redactedArgs = redact(args ?? {});
+  } catch {
+    redactedArgs = { redacted: true };
+  }
+
+  if (payload === null || payload === undefined) {
+    return { args: redactedArgs };
+  }
+
+  try {
+    let json: string;
+    try {
+      json = JSON.stringify(payload);
+    } catch {
+      return { args: redactedArgs, payload: { redacted: true } };
+    }
+
+    let clipped: unknown = payload;
+    let truncated = false;
+    if (typeof json === 'string' && json.length > CLIP_LIMIT) {
+      clipped = { _clipped: json.slice(0, CLIP_LIMIT) };
+      truncated = true;
+    }
+
+    const redactedPayload = redact({ v: clipped }).v;
+    return truncated
+      ? { args: redactedArgs, payload: redactedPayload, truncated: true }
+      : { args: redactedArgs, payload: redactedPayload };
+  } catch {
+    return { args: redactedArgs, payload: { redacted: true } };
+  }
 }
