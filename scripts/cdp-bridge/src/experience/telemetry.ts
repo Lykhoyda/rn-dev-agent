@@ -257,6 +257,29 @@ export function isGhostRetryable(toolName: string): boolean {
   return GHOST_RETRYABLE_TOOLS.has(toolName);
 }
 
+export interface ToolObserverInput {
+  tool: string;
+  params: Record<string, unknown>;
+  status: 'PASS' | 'FAIL' | 'ERROR';
+  latencyMs: number;
+  result?: unknown;
+  error?: string;
+  ghost?: { attempted: boolean; outcome: string };
+}
+
+let toolObserver: ((o: ToolObserverInput) => void) | null = null;
+
+export function setToolObserver(fn: ((o: ToolObserverInput) => void) | null): void {
+  toolObserver = fn;
+}
+
+function notifyObserver(o: ToolObserverInput): void {
+  if (!toolObserver) return;
+  try {
+    toolObserver(o);
+  } catch { /* observability is non-load-bearing */ }
+}
+
 export function instrumentTool(toolName: string, handler: ToolHandler): ToolHandler {
   return async (...fnArgs: unknown[]) => {
     const start = Date.now();
@@ -292,6 +315,7 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
                 ghost_outcome: 'recovered',
                 family_id: ghostResult.family_id,
               });
+              notifyObserver({ tool: toolName, params, status: 'PASS', latencyMs: totalLatency, result: ghostResult.recovered_result, ghost: { attempted: true, outcome: 'recovered' } });
               return appendGhostNote(ghostResult.recovered_result, ghostResult);
             }
           } catch {
@@ -302,6 +326,7 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
 
       // Log FAIL with error text for classification
       logToolCall(toolName, params, status, latency, status === 'FAIL' ? extractErrorFromResult(result) ?? undefined : undefined);
+      notifyObserver({ tool: toolName, params, status, latencyMs: latency, result, error: status === 'FAIL' ? extractErrorFromResult(result) ?? undefined : undefined });
       return result;
     } catch (err) {
       const latency = Date.now() - start;
@@ -327,6 +352,7 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
             ghost_outcome: 'recovered',
             family_id: ghostResult.family_id,
           });
+          notifyObserver({ tool: toolName, params, status: 'PASS', latencyMs: totalLatency, result: ghostResult.recovered_result, ghost: { attempted: true, outcome: 'recovered' } });
           return appendGhostNote(ghostResult.recovered_result, ghostResult);
         }
         } catch {
@@ -335,6 +361,7 @@ export function instrumentTool(toolName: string, handler: ToolHandler): ToolHand
       }
 
       logToolCall(toolName, params, 'ERROR', latency, msg);
+      notifyObserver({ tool: toolName, params, status: 'ERROR', latencyMs: latency, error: msg });
       throw err;
     }
   };
