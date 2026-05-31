@@ -73,6 +73,7 @@ Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/comman
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — gathers parallel evidence from CDP + native logs + component tree |
 | `/rn-dev-agent:build-and-test <desc>` | Build app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + PR body |
+| `/rn-dev-agent:observe` | Start a read-only local web UI to **watch the agent live** — tool-call timeline, latest device screenshot, and route/store/component-tree panels. Prints a `127.0.0.1` URL to open in a browser. |
 
 **Actions: replayable app flows + the LLM/pragmatic hybrid**
 
@@ -216,6 +217,8 @@ Recommended usage:
 - **Don't connect to CDP targets you didn't intentionally launch.** The plugin filters Metro endpoints to `127.0.0.1` / `localhost`, but if you're running multiple Hermes targets on your machine, double-check `cdp_targets` before relying on tool output.
 
 The plugin makes no attempt to sandbox `cdp_evaluate` calls. If you need that, gate the agent's tool access through Claude Code's permission prompts rather than trusting the tool layer to enforce safety.
+
+The **observability UI** (`/rn-dev-agent:observe`) is opt-in and read-only: it binds to `127.0.0.1` on a random port, rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks, and serves no mutation endpoints. Tool arguments and payloads are deep-redacted (fail-closed — an unredactable value is dropped, not leaked) before they ever reach the stream, so tokens, passwords, and PII render as `[REDACTED_*]`. The recorder keeps only a small bounded in-memory ring buffer (recent events, never written to disk); nothing is exposed until you explicitly start the server.
 
 ## Keeping up to date
 

@@ -91,6 +91,9 @@ import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { instrumentTool, pruneOldTelemetry, autoCompactIfNeeded } from './experience/index.js';
+import { setToolObserver } from './experience/telemetry.js';
+import { recorder } from './observability/recorder.js';
+import { observeHandler, observeSchema } from './tools/observe.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -125,6 +128,8 @@ const server = new McpServer({
   version: pkgVersion,
 });
 
+setToolObserver((o) => recorder.record(o));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: any, handler: any): void {
   const wrapped = instrumentTool(name, handler as (...args: unknown[]) => Promise<unknown>);
@@ -139,6 +144,13 @@ trackedTool(
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
   },
   createStatusHandler(getClient, setClient, createClient),
+);
+
+trackedTool(
+  'observe',
+  "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.",
+  observeSchema,
+  observeHandler,
 );
 
 trackedTool(

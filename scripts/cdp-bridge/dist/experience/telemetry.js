@@ -238,6 +238,18 @@ const GHOST_RETRYABLE_TOOLS = new Set([
 export function isGhostRetryable(toolName) {
     return GHOST_RETRYABLE_TOOLS.has(toolName);
 }
+let toolObserver = null;
+export function setToolObserver(fn) {
+    toolObserver = fn;
+}
+function notifyObserver(o) {
+    if (!toolObserver)
+        return;
+    try {
+        toolObserver(o);
+    }
+    catch { /* observability is non-load-bearing */ }
+}
 export function instrumentTool(toolName, handler) {
     return async (...fnArgs) => {
         const start = Date.now();
@@ -270,6 +282,7 @@ export function instrumentTool(toolName, handler) {
                                 ghost_outcome: 'recovered',
                                 family_id: ghostResult.family_id,
                             });
+                            notifyObserver({ tool: toolName, params, status: 'PASS', latencyMs: totalLatency, result: ghostResult.recovered_result, ghost: { attempted: true, outcome: 'recovered' } });
                             return appendGhostNote(ghostResult.recovered_result, ghostResult);
                         }
                     }
@@ -280,6 +293,7 @@ export function instrumentTool(toolName, handler) {
             }
             // Log FAIL with error text for classification
             logToolCall(toolName, params, status, latency, status === 'FAIL' ? extractErrorFromResult(result) ?? undefined : undefined);
+            notifyObserver({ tool: toolName, params, status, latencyMs: latency, result, error: status === 'FAIL' ? extractErrorFromResult(result) ?? undefined : undefined });
             return result;
         }
         catch (err) {
@@ -304,6 +318,7 @@ export function instrumentTool(toolName, handler) {
                             ghost_outcome: 'recovered',
                             family_id: ghostResult.family_id,
                         });
+                        notifyObserver({ tool: toolName, params, status: 'PASS', latencyMs: totalLatency, result: ghostResult.recovered_result, ghost: { attempted: true, outcome: 'recovered' } });
                         return appendGhostNote(ghostResult.recovered_result, ghostResult);
                     }
                 }
@@ -312,6 +327,7 @@ export function instrumentTool(toolName, handler) {
                 }
             }
             logToolCall(toolName, params, 'ERROR', latency, msg);
+            notifyObserver({ tool: toolName, params, status: 'ERROR', latencyMs: latency, error: msg });
             throw err;
         }
     };

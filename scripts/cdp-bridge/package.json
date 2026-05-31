@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "build:web": "cd src/observability/web && npm install && npm run build",
     "dev": "tsc --watch",
     "test": "npm run build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js'",
     "test:integration": "npm run build && node --test 'test/integration/*.test.js'",

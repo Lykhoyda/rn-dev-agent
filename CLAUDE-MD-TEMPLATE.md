@@ -522,4 +522,5 @@ After implementing any feature, in this order:
 | `/rn-dev-agent:check-env` | Verify Metro, CDP, simulator are ready before starting work |
 | `/rn-dev-agent:proof-capture` | Feature is done, need PR-ready video + screenshots + PR body |
 | `/rn-dev-agent:nav-graph` | Need to understand or query the app's navigation structure |
+| `/rn-dev-agent:observe` | Watch the agent live in a browser — read-only `127.0.0.1` UI with the tool-call timeline, latest device screenshot, and route/store/component-tree panels (deep-redacted, opt-in) |
 | `/rn-dev-agent:send-feedback` | Report a plugin bug or issue (creates sanitized GitHub issue) |
