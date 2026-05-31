@@ -124,7 +124,7 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / in
 
 ### MCP Server (cdp-bridge)
 
-**75 tools** exposed via MCP (re-audited 2026-05-29; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
+**76 tools** exposed via MCP (re-audited 2026-05-31; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
 
 **CDP tools** — React internals via Chrome DevTools Protocol over WebSocket:
 - `cdp_status` — health check with domain capabilities + reconnect state
@@ -149,7 +149,7 @@ Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / in
 - `device_scrollintoview` / `device_back` / `device_longpress` / `device_pinch`
 - `device_permission` / `device_batch`
 
-Plus device helpers filed alongside CDP in code: `device_deeplink`, `device_accept_system_dialog`, `device_dismiss_system_dialog`, `device_focus_next`, `device_pick_date`, `device_pick_value`, `device_record`, `device_reset_state`.
+Plus device helpers filed alongside CDP in code: `device_deeplink`, `device_accept_system_dialog`, `device_dismiss_system_dialog`, `device_focus_next`, `device_pick_date`, `device_pick_value`, `device_record`, `device_reset_state`, `cdp_dismiss_dev_client_picker`.
 
 iOS-only quirks worth knowing:
 - `device_fill` may surface a Swift-internal `XCUIElement.typeText` quiescence-timeout from XCTest's main-thread sync. The TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`) because the side-effect (text appended to the field) demonstrably succeeds — observed across the iOS-MVP smoke-tests.
