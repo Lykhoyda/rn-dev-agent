@@ -142,3 +142,49 @@ export function clipThenRedact(
     return { args: redactedArgs, payload: { redacted: true } };
   }
 }
+
+export interface ToolObservation {
+  tool: string;
+  params: Record<string, unknown>;
+  status: 'PASS' | 'FAIL' | 'ERROR';
+  latencyMs: number;
+  result?: unknown;
+  error?: string;
+  ghost?: { attempted: boolean; outcome: string };
+}
+
+export function summarize(
+  tool: string,
+  _family: AgentEventFamily,
+  args: Record<string, unknown>,
+  ok: boolean,
+): string {
+  const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? '';
+  const head = target ? `${tool} ${String(target).slice(0, 60)}` : tool;
+  return ok ? head : `${head} ✗`;
+}
+
+export function mapObservation(seq: number, o: ToolObservation): AgentEvent {
+  const family = classifyFamily(o.tool);
+  const ok = o.status === 'PASS';
+  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, ok ? o.result : undefined);
+  const summary = summarize(o.tool, family, args, ok);
+
+  const event: AgentEvent = {
+    seq,
+    ts: Date.now(),
+    tool: o.tool,
+    family,
+    args,
+    ok,
+    durationMs: o.latencyMs,
+    summary,
+  };
+
+  if (payload !== undefined) event.payload = payload;
+  if (truncated) event.truncated = true;
+  if (!ok && o.error) event.error = { message: String(o.error).slice(0, 500) };
+  if (o.ghost?.attempted) event.ghost = o.ghost;
+
+  return event;
+}

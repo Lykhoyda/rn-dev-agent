@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFamily, clipThenRedact } from '../../dist/observability/events.js';
+import { classifyFamily, clipThenRedact, mapObservation } from '../../dist/observability/events.js';
 
 test('classifyFamily maps tool names to families', () => {
   assert.equal(classifyFamily('device_press'), 'interaction');
@@ -28,4 +28,17 @@ test('clipThenRedact fails closed: a throwing value yields {redacted:true}, neve
   const circular = {}; circular.self = circular;
   const r = clipThenRedact({}, circular);
   assert.deepEqual(r.payload, { redacted: true });
+});
+
+test('mapObservation builds an AgentEvent with seq, family, summary, redaction, ghost', () => {
+  const e = mapObservation(7, {
+    tool: 'device_fill', params: { ref: 'e5', text: 'secretpassword1234567890' },
+    status: 'PASS', latencyMs: 42, result: { ok: true },
+    ghost: { attempted: true, outcome: 'recovered' },
+  });
+  assert.equal(e.seq, 7); assert.equal(e.tool, 'device_fill');
+  assert.equal(e.family, 'interaction'); assert.equal(e.ok, true);
+  assert.equal(e.durationMs, 42);
+  assert.deepEqual(e.ghost, { attempted: true, outcome: 'recovered' });
+  assert.ok(typeof e.summary === 'string' && e.summary.length > 0);
 });
