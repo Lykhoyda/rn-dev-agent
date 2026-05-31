@@ -52,7 +52,8 @@
     "./commands/doctor.md",
     "./commands/list-learned-actions.md",
     "./commands/run-action.md",
-    "./commands/check-vercel-rules.md"
+    "./commands/check-vercel-rules.md",
+    "./commands/observe.md"
   ],
   "mcpServers": {
     "cdp": {
