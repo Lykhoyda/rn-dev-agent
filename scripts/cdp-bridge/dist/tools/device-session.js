@@ -3,7 +3,8 @@ import { promisify } from 'node:util';
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
-import { detectLegacyAgentDevice, detectAndroidExternalRunner, } from '../runners/external-runner-detect.js';
+import { detectAndroidExternalRunner } from '../runners/external-runner-detect.js';
+import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
@@ -119,25 +120,26 @@ export function createDeviceSnapshotHandler() {
                     openedAt: new Date().toISOString(),
                     appId,
                 });
-                // GH #105 / rn-device iOS-MVP §3.7: warn if a globally-installed
-                // external runner daemon is also running — race-prone shared
-                // automation channel. Opt-in kill via RN_DEVICE_KILL_LEGACY=1.
-                detectLegacyAgentDevice()
-                    .then((warning) => {
-                    if (!warning)
-                        return;
-                    logger.warn('rn-device', warning.message);
-                    if (process.env.RN_DEVICE_KILL_LEGACY === '1') {
-                        try {
-                            process.kill(warning.pid, 'SIGTERM');
-                            logger.info('rn-device', `Terminated legacy runner daemon (PID ${warning.pid}) per RN_DEVICE_KILL_LEGACY=1`);
+                // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
+                // known here (device-open), so scope-kill any stale AgentDeviceRunner
+                // targeting THIS simulator and clear orphaned daemon lock files.
+                // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+                if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && args.platform === 'ios' && deviceId) {
+                    ensureSingleRunner({ udid: deviceId })
+                        .then((r) => {
+                        if (r.killedPids.length) {
+                            logger.info('rn-device', `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`);
                         }
-                        catch (err) {
-                            logger.warn('rn-device', `Failed to terminate legacy daemon: ${err instanceof Error ? err.message : String(err)}`);
+                        if (r.removedFiles.length) {
+                            logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
                         }
-                    }
-                })
-                    .catch(() => { });
+                        for (const w of r.warnings)
+                            logger.warn('rn-device', w);
+                    })
+                        .catch((err) => {
+                        logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                }
                 // Task 9 of Android-MVP: warn on competing Android UIAutomator /
                 // agent-device processes that would contend for input + focus with
                 // our rn-android-runner. Fires by default (Task 11 flipped the

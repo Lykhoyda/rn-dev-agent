@@ -12,8 +12,8 @@ Dispatch a Redux action and optionally read state afterward — all in a single 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `action` | `string` | Yes |  |  | Redux action type (e.g. "tasks/softDelete", "cart/addItem") |
-| `payload` | `any` | No |  |  | Action payload. WARNING: JSON-RPC between LLM and MCP does not preserve the distinction between string "42" and number 42 — the LLM\'s JSON encoder may serialize either way. For type-critical payloads (e.g. a string that happens to be numeric), use payloadJson instead. |
-| `payloadJson` | `string` | No |  |  | Stringified JSON payload with guaranteed type preservation. Takes precedence over `payload` when provided. Example: payloadJson=\'"42"\' dispatches the STRING "42"; payloadJson=\'42\' dispatches the NUMBER 42; payloadJson=\'\{"id":"42","qty":5\}\' dispatches an object. |
+| `payload` | `any` | No |  |  | Action payload. WARNING: JSON-RPC between LLM and MCP does not preserve the distinction between string "42" and number 42 — the LLM\\'s JSON encoder may serialize either way. For type-critical payloads (e.g. a string that happens to be numeric), use payloadJson instead. |
+| `payloadJson` | `string` | No |  |  | Stringified JSON payload with guaranteed type preservation. Takes precedence over `payload` when provided. Example: payloadJson=\\'"42"\\' dispatches the STRING "42"; payloadJson=\\'42\\' dispatches the NUMBER 42; payloadJson=\\'\{"id":"42","qty":5\}\\' dispatches an object. |
 | `readPath` | `string` | No |  |  | Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete") |
 
 ## Usage

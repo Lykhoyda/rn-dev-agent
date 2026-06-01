@@ -27,9 +27,11 @@ export interface MaestroDispatch {
   /**
    * Builds the argv for `execFile(binPath, argv)` to run a single flow.
    * Both runners accept `<flow.yaml>` as the last positional but their
-   * platform-targeting flags differ.
+   * platform-targeting flags differ. `appFile` (GH#201) is the path to a
+   * built `.app`/`.ipa`; maestro-runner needs it to reinstall on iOS
+   * `clearState`. The Maestro CLI fallback does not accept it and ignores it.
    */
-  buildArgs(platform: 'ios' | 'android', flowFile: string): string[];
+  buildArgs(platform: 'ios' | 'android', flowFile: string, appFile?: string): string[];
   /**
    * Present when the fallback runner was chosen — surfaces in caller's
    * warnResult so users see why the slower path was used.
@@ -120,7 +122,10 @@ export function chooseMaestroDispatch(
     return {
       runner: 'maestro-runner',
       binPath: runnerPath,
-      buildArgs: (platform, flowFile) => ['--platform', platform, 'test', flowFile],
+      buildArgs: (platform, flowFile, appFile) =>
+        appFile
+          ? ['--app-file', appFile, '--platform', platform, 'test', flowFile]
+          : ['--platform', platform, 'test', flowFile],
     };
   }
 
@@ -142,7 +147,9 @@ export function chooseMaestroDispatch(
       // (Gemini conf 97, Codex conf 98) caught the earlier draft using a
       // non-existent --device-type flag — would have silently broken the
       // entire B59 fallback on its target machines.
-      buildArgs: (platform, flowFile) => ['test', '--platform', platform, flowFile],
+      // The Maestro CLI handles clearState reinstall from the flow's appId
+      // header and exposes no --app-file flag, so appFile is intentionally ignored here.
+      buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
       fallbackReason: reason,
     };
   }

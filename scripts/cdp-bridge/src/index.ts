@@ -91,6 +91,7 @@ import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
@@ -112,6 +113,20 @@ if (!noLock) {
     process.exit(11);
   }
   process.on('exit', () => lockfile.release());
+}
+
+// GH#202 Phase 1: at boot the simulator UDID is unknown, so only the
+// files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
+// when their daemon PID is dead. Never touches a live process at startup.
+// Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+if (process.env.RN_DEVICE_KILL_LEGACY !== '0') {
+  void ensureSingleRunner()
+    .then((r) => {
+      if (r.removedFiles.length) {
+        logger.info('rn-device', `ensureSingleRunner(boot): removed ${r.removedFiles.join(', ')}`);
+      }
+    })
+    .catch(() => { /* non-fatal */ });
 }
 
 let client = new CDPClient();
@@ -869,6 +884,7 @@ trackedTool(
     inlineYaml: z.string().optional().describe('Inline YAML flow content (written to /tmp and executed)'),
     platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
     appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
+    appFile: z.string().optional().describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
     timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
   },
   createMaestroRunHandler(),
