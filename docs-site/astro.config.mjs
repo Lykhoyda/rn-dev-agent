@@ -45,6 +45,7 @@ export default defineConfig({
         { label: 'Getting Started', slug: 'getting-started' },
         { label: 'Architecture', slug: 'architecture' },
         { label: 'Actions', slug: 'actions' },
+        { label: 'Troubleshooting Memory', slug: 'troubleshooting-memory' },
         {
           label: 'Commands',
           items: [
