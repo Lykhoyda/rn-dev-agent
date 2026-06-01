@@ -76,3 +76,42 @@ fi
 if [ -n "$diag" ]; then
   echo "Tool ${short_name} failed. Diagnostic: ${diag}"
 fi
+
+# --- Repo-local troubleshooting capture ----------------------------------
+# Append a redacted failure record to the gitignored session buffer. Fail-open.
+repo="$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+[ -z "$repo" ] && repo="$PWD"
+local_dir="$repo/.rn-agent/local"
+
+# Only buffer when we have a resolved, existing working dir (avoid littering when cwd is unknown).
+if [ -n "$repo" ] && [ -d "$repo" ]; then
+  mkdir -p "$local_dir" 2>/dev/null || exit 0
+  # Self-contained ignore in case the scaffold script hasn't run yet.
+  [ -f "$repo/.rn-agent/.gitignore" ] || printf 'local/\n' > "$repo/.rn-agent/.gitignore" 2>/dev/null || true
+
+  err_raw="$(echo "$input" | jq -r '
+    (.tool_response.content[0].text // .tool_response.error // .error // "") ' 2>/dev/null | head -c 800)"
+
+  # Lightweight secret scrub mirroring src/util/redact.ts patterns (perl: BSD-sed-safe).
+  redact_secrets() {
+    perl -pe '
+      s/Bearer\s+[A-Za-z0-9_\-.\/+=]{20,}/Bearer [REDACTED_SECRET]/g;
+      s/ghp_[A-Za-z0-9_]{36}/[REDACTED_SECRET]/g;
+      s/\bAKIA[0-9A-Z]{16}\b/[REDACTED_SECRET]/g;
+      s/\bxox[baprs]-[A-Za-z0-9\-]+\b/[REDACTED_SECRET]/g;
+      s/\bAIza[0-9A-Za-z\-_]{35}\b/[REDACTED_SECRET]/g;
+      s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_SECRET]/g;
+      s/((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["'"'"']?\s*[:=]\s*["'"'"']?)([^"'"'"'\s,;}]{6,})/$1[REDACTED_SECRET]/gi;
+      s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[PII_REDACTED]/g;
+    '
+  }
+  err_red="$(printf '%s' "$err_raw" | redact_secrets)"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  jq -nc \
+    --arg ts "$ts" --arg tool "$short_name" --arg diag "$diag" \
+    --arg err "$err_red" --arg cwd "$repo" \
+    '{ts:$ts, tool:$tool, diagnostic:$diag, error:$err, cwd:$cwd}' \
+    >> "$local_dir/session-buffer.jsonl" 2>/dev/null || true
+fi
+exit 0
