@@ -61,6 +61,7 @@ import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
@@ -80,6 +81,19 @@ if (!noLock) {
         process.exit(11);
     }
     process.on('exit', () => lockfile.release());
+}
+// GH#202 Phase 1: at boot the simulator UDID is unknown, so only the
+// files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
+// when their daemon PID is dead. Never touches a live process at startup.
+// Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+if (process.env.RN_DEVICE_KILL_LEGACY !== '0') {
+    void ensureSingleRunner()
+        .then((r) => {
+        if (r.removedFiles.length) {
+            logger.info('rn-device', `ensureSingleRunner(boot): removed ${r.removedFiles.join(', ')}`);
+        }
+    })
+        .catch(() => { });
 }
 let client = new CDPClient();
 const getClient = () => client;
