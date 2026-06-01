@@ -83,8 +83,8 @@ repo="$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)"
 [ -z "$repo" ] && repo="$PWD"
 local_dir="$repo/.rn-agent/local"
 
-# Only buffer when we have a resolved, existing working dir (avoid littering when cwd is unknown).
-if [ -n "$repo" ] && [ -d "$repo" ]; then
+  # Only buffer inside an RN project that has the scaffold (avoid littering arbitrary dirs).
+  if [ -d "$local_dir" ] || [ -f "$repo/package.json" ]; then
   mkdir -p "$local_dir" 2>/dev/null || exit 0
   # Self-contained ignore in case the scaffold script hasn't run yet.
   [ -f "$repo/.rn-agent/.gitignore" ] || printf 'local/\n' > "$repo/.rn-agent/.gitignore" 2>/dev/null || true

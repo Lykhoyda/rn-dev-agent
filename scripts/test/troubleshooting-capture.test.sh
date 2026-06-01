@@ -4,6 +4,7 @@
 set -uo pipefail
 HOOK="$(cd "$(dirname "$0")/../.." && pwd)/hooks/tool-use-failure.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+echo '{"name":"fixture"}' > "$tmp/package.json"   # project evidence so the capture guard fires
 
 bear="Bearer"; tok="${bear} abcdefghij1234567890ABCdef"
 payload=$(cat <<JSON
