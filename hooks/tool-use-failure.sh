@@ -89,23 +89,27 @@ local_dir="$repo/.rn-agent/local"
   # Self-contained ignore in case the scaffold script hasn't run yet.
   [ -f "$repo/.rn-agent/.gitignore" ] || printf 'local/\n' > "$repo/.rn-agent/.gitignore" 2>/dev/null || true
 
-  err_raw="$(echo "$input" | jq -r '
-    (.tool_response.content[0].text // .tool_response.error // .error // "") ' 2>/dev/null | head -c 800)"
-
-  # Lightweight secret scrub mirroring src/util/redact.ts patterns (perl: BSD-sed-safe).
+  # Secret scrub at parity with src/util/redact.ts. Slurp mode (-0777) so multi-line
+  # secrets (PEM bodies, key/value split across lines) are caught. ${1} (not $1) so the
+  # keyed-value rule preserves the key marker instead of Perl array-subscript misparse.
   redact_secrets() {
-    perl -pe '
+    perl -0777 -pe '
       s/Bearer\s+[A-Za-z0-9_\-.\/+=]{20,}/Bearer [REDACTED_SECRET]/g;
+      s/((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["'"'"']?\s*[:=]\s*["'"'"']?)([^"'"'"'\s,;}]{6,})/${1}[REDACTED_SECRET]/gi;
+      s/(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_\-]{20,}/[REDACTED_SECRET]/gi;
       s/ghp_[A-Za-z0-9_]{36}/[REDACTED_SECRET]/g;
+      s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_SECRET]/g;
       s/\bAKIA[0-9A-Z]{16}\b/[REDACTED_SECRET]/g;
       s/\bxox[baprs]-[A-Za-z0-9\-]+\b/[REDACTED_SECRET]/g;
       s/\bAIza[0-9A-Za-z\-_]{35}\b/[REDACTED_SECRET]/g;
-      s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_SECRET]/g;
-      s/((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["'"'"']?\s*[:=]\s*["'"'"']?)([^"'"'"'\s,;}]{6,})/$1[REDACTED_SECRET]/gi;
+      s/-----BEGIN (?:RSA |OPENSSH |EC |DSA |PRIVATE )?KEY-----.*?-----END (?:RSA |OPENSSH |EC |DSA |PRIVATE )?KEY-----/[REDACTED_SECRET]/gs;
       s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[PII_REDACTED]/g;
     '
   }
-  err_red="$(printf '%s' "$err_raw" | redact_secrets)"
+  # REDACT BEFORE TRUNCATE: a token straddling the 800-char cap must not leak a raw fragment.
+  err_full="$(echo "$input" | jq -r '
+    (.tool_response.content[0].text // .tool_response.error // .error // "") ' 2>/dev/null)"
+  err_red="$(printf '%s' "$err_full" | redact_secrets | head -c 800)"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   jq -nc \
