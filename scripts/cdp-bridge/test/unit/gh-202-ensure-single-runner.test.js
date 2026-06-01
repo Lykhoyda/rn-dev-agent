@@ -24,6 +24,17 @@ test('GH#202 selectLegacyRunnerPids: skips other simulators and never our RnFast
   assert.ok(!selectLegacyRunnerPids(PS, 'UDID-A').includes(900));
 });
 
+// Field-verified (PR #205): simulator apps run from
+// /CoreSimulator/Devices/<UDID>/data/Containers/... so the UDID is embedded in
+// the process argv as a path segment (no `-udid` flag). The substring matcher
+// must catch a real leak in that form, and still exclude our own RnFastRunner.
+test('GH#202 selectLegacyRunnerPids: matches the real CoreSimulator container-path UDID (no -udid flag)', () => {
+  const udid = '78F7D2A1-1022-4BCE-8787-C0E130EF9831';
+  const legacy = `  601 /Users/x/Library/Developer/CoreSimulator/Devices/${udid}/data/Containers/Bundle/Application/ABC/AgentDeviceRunner.app/AgentDeviceRunner`;
+  const ours = `  602 /Users/x/Library/Developer/CoreSimulator/Devices/${udid}/data/Containers/Bundle/Application/DEF/RnFastRunner.app/RnFastRunner`;
+  assert.deepEqual(selectLegacyRunnerPids(`${legacy}\n${ours}`, udid), [601]);
+});
+
 test('GH#202 shouldRemoveDaemonFiles: remove only when daemon PID is dead or absent', () => {
   assert.equal(shouldRemoveDaemonFiles(4242, () => true), false);  // alive → keep
   assert.equal(shouldRemoveDaemonFiles(4242, () => false), true);  // dead → remove
