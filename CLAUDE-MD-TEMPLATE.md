@@ -11,6 +11,21 @@ This project uses the **rn-dev-agent** plugin for React Native development and t
 It provides MCP tools across three categories: CDP introspection, device control, and testing.
 Run `/rn-dev-agent:check-env` to verify the current plugin version and tool count.
 
+### 🧠 Repo-local troubleshooting memory
+
+This project keeps an auto-maintained, gitignored notes file at
+`.rn-agent/local/troubleshooting.md` with two sections: **Configuration & How-To**
+(repo-specific facts — Metro start dir, store exposure, testID conventions,
+auth/deeplink, build quirks) and **Troubleshooting** (failure→resolution gotchas).
+
+- **Read it first.** At the start of any device/CDP task, consult this file (the
+  SessionStart hook also injects it) so you don't re-derive known gotchas or
+  re-hit a known failure.
+- **It updates itself.** When rn-dev-agent tool calls fail, a hook records them;
+  at session end a Stop hook asks you to merge new gotchas into this file. If
+  prompted, do it — keep entries concise and under ~2000 tokens total.
+- It is per-developer and never committed.
+
 ### 🚨 MANDATORY PRE-FLIGHT (before ANY device_* call)
 
 Run this 3-step checklist at the start of every UI-touching task. This is the
