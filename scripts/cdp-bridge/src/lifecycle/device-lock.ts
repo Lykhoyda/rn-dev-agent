@@ -18,7 +18,16 @@ export interface DeviceLockBody {
   version?: string;
 }
 
-export interface DeviceLockAcquired { status: 'acquired'; lockPath: string; degraded?: boolean }
+export interface DeviceLockAcquired {
+  status: 'acquired';
+  lockPath: string;
+  /**
+   * True when the lock could NOT be persisted (fs error). The session proceeds
+   * UNMANAGED: cross-bridge contention protection is OFF and touch()/release()
+   * are no-ops. Callers should treat this as "acquired but unprotected" and warn.
+   */
+  degraded?: boolean;
+}
 export interface DeviceLockConflict { status: 'conflict'; lockPath: string; holder: DeviceLockBody }
 export type DeviceLockResult = DeviceLockAcquired | DeviceLockConflict;
 
