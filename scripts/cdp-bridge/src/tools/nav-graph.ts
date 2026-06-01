@@ -570,8 +570,8 @@ export function createNavGraphHandler(getClient: () => CDPClient) {
         result.steps_executed = parsed.path?.length ?? 1;
         result.nav_state_after = parsed.nav_state;
         result.latency_ms = Date.now() - startTime;
-        // B124: surface arrived_via so callers and the experience engine can
-        // distinguish a strict deepest-route match from a "navigated but
+        // B124: surface arrived_via so callers can distinguish a strict
+        // deepest-route match from a "navigated but
         // covered by a stacked modal" success. Only the latter needs the
         // explicit hint that the visible UI may not yet reflect the target.
         if (parsed.arrived_via) {
