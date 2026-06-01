@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { instrumentTool, setToolObserver } from '../../dist/experience/telemetry.js';
+import { instrumentTool, setToolObserver } from '../../dist/observability/instrumentation.js';
 
 test('observer fires once per logical call with resolved status', async () => {
   const seen = [];
