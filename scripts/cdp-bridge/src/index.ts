@@ -869,6 +869,7 @@ trackedTool(
     inlineYaml: z.string().optional().describe('Inline YAML flow content (written to /tmp and executed)'),
     platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
     appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
+    appFile: z.string().optional().describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
     timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
   },
   createMaestroRunHandler(),

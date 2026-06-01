@@ -7,6 +7,7 @@ import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 const execFile = promisify(execFileCb);
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
@@ -63,6 +64,8 @@ export function createMaestroRunHandler() {
         // in maestro_test_all).
         let flowFile;
         let rawYaml;
+        let validatedContent;
+        let headerAppId;
         if (args.inlineYaml) {
             rawYaml = args.inlineYaml;
         }
@@ -89,11 +92,11 @@ export function createMaestroRunHandler() {
                 : {};
             const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
             const rawAppId = resolveAppId(args.appId, platform);
-            const headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
+            headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
             if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
                 return failResult(`Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`);
             }
-            const validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+            validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
             // Unique per-call path — multi-LLM review caught the fixed
             // `/tmp/rn-maestro-inline.yaml` racing on concurrent maestro_run
             // calls (parallel test invocations could overwrite each other's
@@ -113,7 +116,19 @@ export function createMaestroRunHandler() {
         // params. Validation already ran at the top of the handler so by
         // this point every key matches PARAM_KEY_RE and every value is a
         // string — no need to re-check.
-        const baseArgs = dispatch.buildArgs(platform, flowFile);
+        let appFile = args.appFile;
+        if (!appFile && platform === 'ios' && flowUsesClearState(validatedContent)) {
+            if (!headerAppId) {
+                return failResult('Flow uses clearState on iOS but no appId is known to locate the .app. ' +
+                    'Add `appId:` to the flow header or pass appFile=<path-to-.app>.');
+            }
+            appFile = resolveIosAppFile(headerAppId) ?? undefined;
+            if (!appFile) {
+                return failResult(`Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. ` +
+                    'Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).');
+            }
+        }
+        const baseArgs = dispatch.buildArgs(platform, flowFile, appFile);
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
