@@ -83,9 +83,6 @@ if [ "$has_rn_config" = true ]; then
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
 
-  # Initialize Experience Engine directory structure (silent if already present)
-  bash "$PLUGIN_ROOT/scripts/ensure-experience-engine.sh" 2>/dev/null || true
-
   # Check Android emulator readiness (if Android device detected)
   bash "$PLUGIN_ROOT/scripts/ensure-android-ready.sh" 2>/dev/null || true
 
