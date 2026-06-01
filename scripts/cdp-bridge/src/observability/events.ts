@@ -1,4 +1,4 @@
-import { redact } from '../experience/redact.js';
+import { redact } from '../util/redact.js';
 
 const CLIP_LIMIT = 16000;
 
