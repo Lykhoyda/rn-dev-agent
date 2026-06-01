@@ -77,7 +77,9 @@ export function chooseMaestroDispatch(inputs) {
         return {
             runner: 'maestro-runner',
             binPath: runnerPath,
-            buildArgs: (platform, flowFile) => ['--platform', platform, 'test', flowFile],
+            buildArgs: (platform, flowFile, appFile) => appFile
+                ? ['--app-file', appFile, '--platform', platform, 'test', flowFile]
+                : ['--platform', platform, 'test', flowFile],
         };
     }
     // Tier 2: Maestro CLI fallback. Slower JVM cold start (~2s) but works on
@@ -97,7 +99,9 @@ export function chooseMaestroDispatch(inputs) {
             // (Gemini conf 97, Codex conf 98) caught the earlier draft using a
             // non-existent --device-type flag — would have silently broken the
             // entire B59 fallback on its target machines.
-            buildArgs: (platform, flowFile) => ['test', '--platform', platform, flowFile],
+            // The Maestro CLI handles clearState reinstall from the flow's appId
+            // header and exposes no --app-file flag, so appFile is intentionally ignored here.
+            buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
             fallbackReason: reason,
         };
     }
