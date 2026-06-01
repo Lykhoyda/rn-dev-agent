@@ -12,11 +12,11 @@ Render the stored recording as replayable test code. Formats: maestro (YAML, pri
 | `format` | `enum: maestro | detox | appium` | Yes |  |  | Output format |
 | `testName` | `string` | No |  |  | Name shown in describe()/comment header |
 | `bundleId` | `string` | No |  |  | App bundle ID for the Maestro appId header |
-| `id` | `string` | No |  |  | M7 action id (stable slug). When set, emitted as `# id: &lt;slug>` header line. Default: filename without `.yaml`. |
-| `intent` | `string` | No |  |  | M7 one-line goal. When set, emitted as `# intent: &lt;intent>` header line. |
+| `id` | `string` | No |  |  | M7 action id (stable slug). When set, emitted as `# id: &lt;slug&gt;` header line. Default: filename without `.yaml`. |
+| `intent` | `string` | No |  |  | M7 one-line goal. When set, emitted as `# intent: &lt;intent&gt;` header line. |
 | `tags` | `array` | No |  |  | M7 filterable tags. When set, emitted as `# tags: [a, b, c]`. |
 | `mutates` | `boolean` | No |  |  | M7 side-effect flag. When set, emitted as `# mutates: true|false`. |
-| `status` | `enum: experimental | active | deprecated` | No |  |  | M7 lifecycle status. When set, emitted as `# status: &lt;status>`. |
+| `status` | `enum: experimental | active | deprecated` | No |  |  | M7 lifecycle status. When set, emitted as `# status: &lt;status&gt;`. |
 
 ## Usage
 
