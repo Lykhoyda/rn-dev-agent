@@ -49,23 +49,8 @@ tests, that's yours alone. The plugin doesn't read it.
    uses live device introspection to patch the YAML in place, bumps the
    sidecar `revision`, and demotes `status` to `experimental` until the
    next clean replay.
-5. **Compact** — `/rn-dev-agent:rn-agent-compact` periodically flags
-   cold (90+ day), flaky (>50% fail), or high-churn actions for
-   human review. Deletion is human-in-the-loop.
-
 Self-repair is bounded: max 3 attempts per action per 24h; failure codes
 other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
-
-## Cleanup
-
-`/rn-dev-agent:rn-agent-compact` surfaces a corpus health report:
-
-- Actions not run in 90+ days (cold storage candidates)
-- Actions repaired 5+ times in 30 days (high-churn → consider redesign)
-- Actions with `failureCount/totalRuns > 0.5` (flaky)
-- Actions with overlapping `intent` (potential duplicates)
-
-The report is informational; deletion stays a deliberate human gesture.
 
 ## Learn more
 
@@ -75,5 +60,3 @@ The report is informational; deletion stays a deliberate human gesture.
   see what's saved in this project
 - [`/rn-dev-agent:run-action`](https://lykhoyda.github.io/rn-dev-agent/commands/run-action/) —
   replay a saved action
-- [`/rn-dev-agent:rn-agent-compact`](https://lykhoyda.github.io/rn-dev-agent/commands/rn-agent-compact/) —
-  surface stale or flaky actions for review

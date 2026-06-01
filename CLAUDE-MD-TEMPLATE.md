@@ -111,7 +111,6 @@ afterward — discovery is a one-time cost, replay is the steady state.
 | **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
 | **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
 | **Assert state** | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | Macro-Asserts — embed internal-state assertions inside replays. Maestro asserts pixels; these assert what the app actually believes |
-| **Compact** | `/rn-dev-agent:rn-agent-compact` | Periodic corpus health report — flags cold (90+ day), flaky (>50% failure), or high-churn (5+ repairs/30d) actions. Deletion is human-in-the-loop |
 
 **Canonical loop.** Record a verified walk once → save as an action → in the
 next session, `list-learned-actions` surfaces it for the agent → `run-action`

@@ -91,7 +91,7 @@ The MCP server is a Node.js process that maintains a persistent WebSocket connec
 - **Testing** — Proof capture, auto-login, cross-platform verify, Maestro orchestration
 - **Macro-Asserts** — State-assertive replays (`expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text`)
 
-All tools are registered through a single `trackedTool()` wrapper that adds telemetry via the Experience Engine — that's the same mechanism that feeds the auto-action capture loop.
+All tools are registered through a single `trackedTool()` wrapper that records per-tool telemetry — the same mechanism that feeds the auto-action capture loop. Failure signals also feed a repo-local troubleshooting memory: hooks capture failures during a session and the agent synthesizes them into a gitignored `.rn-agent/local/troubleshooting.md`, read back at the next SessionStart.
 
 ### Helper injection
 

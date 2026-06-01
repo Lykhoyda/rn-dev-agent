@@ -100,7 +100,7 @@ An **action** is a saved Maestro flow the agent **emits** when `/test-feature` v
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
 
-**Experience Engine** (cross-session learning): `/rn-dev-agent:rn-agent-export`, `/rn-dev-agent:rn-agent-import`, `/rn-dev-agent:rn-agent-health`, `/rn-dev-agent:rn-agent-compact` — see [docs](https://lykhoyda.github.io/rn-dev-agent/commands/).
+Repo-local troubleshooting memory: the agent maintains a gitignored `.rn-agent/local/troubleshooting.md` per project (auto-captured failures + config notes), read at session start and updated at session end.
 
 ## What makes this different
 

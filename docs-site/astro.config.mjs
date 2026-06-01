@@ -75,15 +75,6 @@ export default defineConfig({
                 { label: 'nav-graph', slug: 'commands/nav-graph' },
               ],
             },
-            {
-              label: 'Experience Engine',
-              items: [
-                { label: 'rn-agent-health', slug: 'commands/rn-agent-health' },
-                { label: 'rn-agent-compact', slug: 'commands/rn-agent-compact' },
-                { label: 'rn-agent-export', slug: 'commands/rn-agent-export' },
-                { label: 'rn-agent-import', slug: 'commands/rn-agent-import' },
-              ],
-            },
             { label: 'send-feedback', slug: 'commands/send-feedback' },
           ],
         },
