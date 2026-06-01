@@ -83,8 +83,8 @@ if [ "$has_rn_config" = true ]; then
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
 
-  # Initialize Experience Engine directory structure (silent if already present)
-  bash "$PLUGIN_ROOT/scripts/ensure-experience-engine.sh" 2>/dev/null || true
+  # Scaffold the repo-local troubleshooting memory (silent if already present)
+  bash "$PLUGIN_ROOT/scripts/ensure-troubleshooting-doc.sh" "$PWD" 2>/dev/null || true
 
   # Check Android emulator readiness (if Android device detected)
   bash "$PLUGIN_ROOT/scripts/ensure-android-ready.sh" 2>/dev/null || true
@@ -97,8 +97,25 @@ if [ "$has_rn_config" = true ]; then
     echo ""
   fi
 
+  # Inject the repo-local troubleshooting memory so the agent starts informed.
+  TROUBLE_DOC="$PWD/.rn-agent/local/troubleshooting.md"
+  if [ -f "$TROUBLE_DOC" ]; then
+    # Only inject when the doc has real content beyond the scaffold template
+    # (ignore blank lines, markdown headers, and HTML-comment placeholder lines).
+    if grep -qvE '^\s*(#|<!--|-->|$)' "$TROUBLE_DOC" 2>/dev/null; then
+      echo "## Repo-local troubleshooting notes (.rn-agent/local/troubleshooting.md)"
+      echo ""
+      echo "Known configuration + gotchas for THIS repo. Consult before driving the app;"
+      echo "the Stop hook updates it automatically when new tool failures occur."
+      echo ""
+      head -c 8000 "$TROUBLE_DOC"
+      echo ""
+      echo ""
+    fi
+  fi
+
   cat <<'EOF'
-React Native project detected. The rn-dev-agent plugin is active with 75 MCP tools.
+React Native project detected. The rn-dev-agent plugin is active with 76 MCP tools.
 
 ## How to interact with the running app
 

@@ -45,6 +45,7 @@ export default defineConfig({
         { label: 'Getting Started', slug: 'getting-started' },
         { label: 'Architecture', slug: 'architecture' },
         { label: 'Actions', slug: 'actions' },
+        { label: 'Troubleshooting Memory', slug: 'troubleshooting-memory' },
         {
           label: 'Commands',
           items: [
@@ -73,15 +74,6 @@ export default defineConfig({
               items: [
                 { label: 'proof-capture', slug: 'commands/proof-capture' },
                 { label: 'nav-graph', slug: 'commands/nav-graph' },
-              ],
-            },
-            {
-              label: 'Experience Engine',
-              items: [
-                { label: 'rn-agent-health', slug: 'commands/rn-agent-health' },
-                { label: 'rn-agent-compact', slug: 'commands/rn-agent-compact' },
-                { label: 'rn-agent-export', slug: 'commands/rn-agent-export' },
-                { label: 'rn-agent-import', slug: 'commands/rn-agent-import' },
               ],
             },
             { label: 'send-feedback', slug: 'commands/send-feedback' },

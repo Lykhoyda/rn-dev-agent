@@ -64,13 +64,8 @@ Actions (replayable flows — see "Actions" section below):
 /rn-dev-agent:run-action <name> -e K=V — Replay a saved action; auto-repair-aware
 ```
 
-Experience Engine (cross-session learning):
-```
-/rn-dev-agent:rn-agent-health          — Health check the local experience store
-/rn-dev-agent:rn-agent-compact         — Compact telemetry on disk
-/rn-dev-agent:rn-agent-export          — Export the experience store
-/rn-dev-agent:rn-agent-import          — Import an experience snapshot
-```
+Repo-local troubleshooting memory (replaces the Experience Engine):
+`.rn-agent/local/troubleshooting.md` — gitignored, agent-read at SessionStart, auto-updated by the Stop hook after failures (GH #200).
 
 ### How it works
 1. Always start with `cdp_status` — this connects to your running app via CDP

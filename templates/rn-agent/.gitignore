@@ -9,6 +9,7 @@ recordings/
 snapshots/
 diag/
 index.json
+local/
 
 # Everything else is committable by default:
 #   actions/         (the agent's compiled L3 flows)
