@@ -37,6 +37,7 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
+import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
@@ -82,6 +83,10 @@ if (!noLock) {
     }
     process.on('exit', () => lockfile.release());
 }
+process.on('exit', () => { try {
+    releaseDeviceLockForSession();
+}
+catch { /* never fail exit */ } });
 // GH#202 Phase 1: at boot the simulator UDID is unknown, so only the
 // files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
 // when their daemon PID is dead. Never touches a live process at startup.
