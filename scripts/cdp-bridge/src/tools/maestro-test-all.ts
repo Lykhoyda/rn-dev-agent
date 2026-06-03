@@ -13,6 +13,7 @@ import {
   parseAndValidateFlow,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 
 const execFile = promisify(execFileCb);
 
@@ -127,10 +128,12 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       }
 
       try {
-        const { stdout, stderr } = await execFile(
-          dispatch.binPath,
-          dispatch.buildArgs(platform, safeFlowFile),
-          { timeout, encoding: 'utf8' },
+        const { stdout, stderr } = await runFlowParked(() =>
+          execFile(
+            dispatch.binPath,
+            dispatch.buildArgs(platform, safeFlowFile),
+            { timeout, encoding: 'utf8' },
+          ),
         );
         const output = (stdout + '\n' + stderr).trim();
         const ok = !output.includes('FAILED') && !output.includes('Error:');

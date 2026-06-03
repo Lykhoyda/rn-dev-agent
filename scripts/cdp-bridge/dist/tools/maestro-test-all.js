@@ -8,6 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
     if (!existsSync(dir))
@@ -96,7 +97,7 @@ export function createMaestroTestAllHandler() {
                 continue;
             }
             try {
-                const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile), { timeout, encoding: 'utf8' });
+                const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile), { timeout, encoding: 'utf8' }));
                 const output = (stdout + '\n' + stderr).trim();
                 const ok = !output.includes('FAILED') && !output.includes('Error:');
                 results.push({

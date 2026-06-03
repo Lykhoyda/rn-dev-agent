@@ -9,7 +9,26 @@ import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 const execFile = promisify(execFileCb);
+/**
+ * GH#202 Phase 2a: run a Maestro flow with L2 parked. The fast-runner (XCTest)
+ * would fight maestro-runner (WDA) for the device, so stop it first; mark CDP
+ * stale afterward (always — even on failure) so the next read reconnects to the
+ * post-flow app state. The fast-runner lazily restarts on the next device_* call.
+ */
+export async function runFlowParked(run, deps = {}) {
+    const stop = deps.stopFastRunner ?? defaultStopFastRunner;
+    const stale = deps.markCdpStale ?? defaultMarkCdpStale;
+    stop();
+    try {
+        return await run();
+    }
+    finally {
+        stale();
+    }
+}
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
  *  syntactically be confused with a flag (`--`, `-e`) or break the
  *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
@@ -137,7 +156,7 @@ export function createMaestroRunHandler() {
         }
         const finalArgs = [...baseArgs, ...paramArgs];
         try {
-            const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, { timeout, encoding: 'utf8' });
+            const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, { timeout, encoding: 'utf8' }));
             const output = (stdout + '\n' + stderr).trim();
             // Reaching here means the runner exited 0 — that exit code is the
             // authoritative pass signal (a real flow failure exits non-zero and is
