@@ -55,13 +55,12 @@ export interface EnsureSingleRunnerDeps {
 
 function defaultDeps(): EnsureSingleRunnerDeps {
   return {
-    listProcesses: () => {
-      try {
-        return execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 });
-      } catch {
-        return '';
-      }
-    },
+    // Let a `ps` failure (timeout / EAGAIN under load) PROPAGATE to the
+    // caller's try/catch, which records a warning. Swallowing it here and
+    // returning '' made single-runner enforcement degrade to a silent no-op
+    // with no operator signal — exactly when the machine is busy.
+    listProcesses: () =>
+      execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try { process.kill(pid, 0); return true; } catch { return false; }

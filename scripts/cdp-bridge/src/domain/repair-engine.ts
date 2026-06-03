@@ -176,7 +176,23 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
     m = line.match(sq);
     if (m) { out.push(`${m[1]}id: '${newId}'${m[2]}`); replacements++; continue; }
     m = line.match(bare);
-    if (m) { out.push(`${m[1]}id: ${newId}${m[2]}`); replacements++; continue; }
+    if (m) {
+      // D3: the bare form has no original quote style to preserve, so emit a
+      // SAFELY-quoted scalar. isSafeMaestroScalar only rejects control chars /
+      // line separators — it lets `:`, `{`, `[`, `#`, `"` through — so an
+      // unquoted `id: ${newId}` produced invalid YAML for a testID like
+      // `button: submit` or `{fab}`, permanently breaking the action after a
+      // repair. Matched-quote grammar (same as maestro-error-parser): prefer the
+      // quote the value lacks; escape only when it contains both.
+      const quoted = !newId.includes('"')
+        ? `"${newId}"`
+        : !newId.includes("'")
+          ? `'${newId}'`
+          : `"${newId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      out.push(`${m[1]}id: ${quoted}${m[2]}`);
+      replacements++;
+      continue;
+    }
     out.push(line);
   }
   return { body: out.join('\n'), replacements };

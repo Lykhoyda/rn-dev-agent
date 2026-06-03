@@ -26,7 +26,17 @@ interface ProofStepResult {
   errors?: string[];
 }
 
-export function createProofStepHandler(getClient: () => CDPClient) {
+export interface ProofStepDeps {
+  /** Defaults to the module-level session check. Injected false in tests so the
+   *  screenshot subprocess is never spawned (keeps tests hermetic + fast). */
+  hasSession?: () => boolean;
+  /** Defaults to the real resize-wrapped capture. Injectable for tests. */
+  captureScreenshot?: (opts: { path?: string }) => Promise<ToolResult>;
+}
+
+export function createProofStepHandler(getClient: () => CDPClient, deps: ProofStepDeps = {}) {
+  const hasSession = deps.hasSession ?? hasActiveSession;
+  const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
   return withConnection(getClient, async (args: ProofStepArgs, client) => {
     const result: ProofStepResult = {
       screenshotPath: '',
@@ -119,8 +129,8 @@ export function createProofStepHandler(getClient: () => CDPClient) {
     // Step 4: Screenshot — B121: route through resize wrapper so per-phase
     // proof captures pay the B120 budget (default maxWidth=800) instead of
     // emitting native-resolution images that bloat proof bundles.
-    if (hasActiveSession()) {
-      const ssResult = await captureAndResizeScreenshot({ path: args.screenshotPath });
+    if (hasSession()) {
+      const ssResult = await captureScreenshot({ path: args.screenshotPath });
       if (ssResult.isError) {
         errors.push('Screenshot failed');
       } else {

@@ -180,7 +180,6 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
   return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
     const year = new Date().getFullYear();
-    const tzOffsetMs = new Date().getTimezoneOffset() * 60_000;
     const killMs = durationMs > 0 ? durationMs : 100;
     let killed = false;
     let killedByUs = false;
@@ -225,7 +224,7 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
       for (const line of lines) {
-        const entry = parseLogcatLine(line, year, tzOffsetMs);
+        const entry = parseLogcatLine(line, year);
         if (entry) entries.push(entry);
       }
     });
@@ -237,7 +236,7 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
       if (sigkillTimer) clearTimeout(sigkillTimer);
       signal.removeEventListener('abort', onAbort);
       if (buf.trim()) {
-        const entry = parseLogcatLine(buf, year, tzOffsetMs);
+        const entry = parseLogcatLine(buf, year);
         if (entry) entries.push(entry);
       }
       if (!killedByUs && code !== 0 && entries.length === 0) {
@@ -266,13 +265,17 @@ const ANDROID_LEVEL_MAP: Record<string, string> = {
   V: 'debug', D: 'debug', I: 'info', W: 'warn', E: 'error', F: 'error', S: 'log',
 };
 
-function parseLogcatLine(line: string, year: number, tzOffsetMs: number): LogEntry | null {
+export function parseLogcatLine(line: string, year: number): LogEntry | null {
   const m = LOGCAT_RE.exec(line);
   if (!m) return null;
 
   const [, date, time, pidStr, priority, tag, message] = m;
-  const localDate = new Date(`${year}-${date}T${time}`);
-  const utcDate = new Date(localDate.getTime() + tzOffsetMs);
+  // logcat emits device-LOCAL wall-clock with no offset. `new Date("...T...")`
+  // (no trailing Z) already parses in the local zone, so getTime() is already
+  // the correct UTC epoch — the previous `+ tzOffsetMs` double-shifted every
+  // entry by the host's UTC offset, corrupting both the reported time and the
+  // cross-source merge-sort ordering.
+  const utcDate = new Date(`${year}-${date}T${time}`);
 
   return {
     source: 'native_android',

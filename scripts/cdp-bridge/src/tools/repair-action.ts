@@ -163,7 +163,7 @@ export function createRepairActionHandler() {
     // file read happens.
     if (!isValidActionId(args.actionId)) {
       return failResult(
-        `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/ and be <= 64 chars`,
+        `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ (no "..") and be <= 64 chars`,
         'BAD_FILENAME',
       );
     }
