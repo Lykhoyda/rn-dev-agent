@@ -115,6 +115,8 @@ iOS dispatch: every iOS `device_*` call short-circuits through `runIOS()` (TS cl
 
 Android dispatch unchanged: 3-tier `agent-device` (daemon socket → fast-runner → CLI). The legacy daemon is detected at session-open on iOS too and, since #202, terminated by default — `ensureSingleRunner()` kills stale `AgentDeviceRunner` processes scoped to the target simulator UDID and clears orphaned `~/.agent-device/daemon.{json,lock}` (opt out with `RN_DEVICE_KILL_LEGACY=0`) — because a stale daemon respawns the upstream `AgentDeviceRunner` and fights our `RnFastRunner` for focus.
 
+Since #202 Phase 1.5, iOS sessions also take a persisted, UDID-scoped ownership lock (`${TMPDIR}/rn-dev-agent-device-<uid>-ios-<udid>.lock`) at `device_snapshot action=open` — additive to the projectRoot bridge lock (`lifecycle/lockfile.ts`). It stops two *different* projects' bridges from driving the *same* simulator: the second gets `DEVICE_BUSY`. It self-heals via PID-liveness + a 30s heartbeat (a holder is reclaimable once its PID is dead or its heartbeat is >90s stale), so it cannot orphan the way the legacy `daemon.lock` did. On an fs error the acquire fails *open* (logged) — never blocking a legitimate session.
+
 Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / install / launch / terminate) — the runner doesn't manage device state, only interaction.
 
 ### MCP Server (cdp-bridge)
