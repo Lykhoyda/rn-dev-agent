@@ -11,6 +11,7 @@ import {
   MaestroValidationError,
 } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
+import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
 
@@ -72,11 +73,13 @@ export async function runMaestroInline(
   const flowFile = join(tmpdir(), `rn-maestro-invoke-${opts.slug ?? 'flow'}-${Date.now()}.yaml`);
 
   let content: string;
+  let headerAppId: string | undefined;
   try {
     const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
     const appIdOpts: { appId?: string } = {};
     if (rawAppId && isValidBundleId(rawAppId)) {
       appIdOpts.appId = rawAppId;
+      headerAppId = rawAppId;
     } else if (rawAppId) {
       return {
         passed: false,
@@ -111,14 +114,25 @@ export async function runMaestroInline(
 
   const timeout = opts.timeoutMs ?? 30_000;
 
+  // GH#201 parity with maestro_run: resolve --app-file so an iOS clearState flow
+  // run through this inline path (device_fill/picker/dialog fallbacks) can
+  // reinstall the app instead of failing after uninstall.
+  const appFileResolution = resolveAppFileForClearState(opts.platform, content, headerAppId, undefined);
+  if (!appFileResolution.ok) {
+    return { passed: false, output: '', flowFile, error: appFileResolution.error };
+  }
+
   try {
     const { stdout, stderr } = await execFile(
       dispatch.binPath,
-      dispatch.buildArgs(opts.platform, flowFile),
-      { timeout, encoding: 'utf8' },
+      dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile),
+      { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
     );
     const output = (stdout + '\n' + stderr).trim();
-    const passed = !output.includes('FAILED') && !output.includes('Error:');
+    // Runner exited 0 → authoritative pass. Key the secondary scan on maestro's
+    // `FAILED` token only; a broad `Error:` match false-flagged passing runs
+    // whose app/console output merely contained "Error:" (mirrors maestro_run).
+    const passed = !output.includes('FAILED');
     return { passed, output, flowFile };
   } catch (err) {
     // execFile errors carry stdout/stderr from the failed child process. When

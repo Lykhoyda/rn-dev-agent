@@ -14,7 +14,7 @@ function buildHandler(treeResponse) {
     if (expr.includes('getTree')) return { value: JSON.stringify(treeResponse) };
     return { value: undefined };
   };
-  return createProofStepHandler(() => client);
+  return createProofStepHandler(() => client, { hasSession: () => false });
 }
 
 function parseResult(toolResult) {
@@ -48,7 +48,7 @@ test('CDP-002: __agent_error envelope → verified:false', async () => {
 test('CDP-002: malformed JSON → verified:false (was true before)', async () => {
   const client = createMockClient();
   client.evaluate = async () => ({ value: 'not-json{{{' });
-  const handler = createProofStepHandler(() => client);
+  const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ verifyTestID: 'x', waitMs: 0 });
   const parsed = parseResult(r);
   assert.equal(parsed.data.verified, false, 'unparseable response must NOT pass verification');

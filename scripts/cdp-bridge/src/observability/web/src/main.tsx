@@ -99,7 +99,12 @@ function App(): JSX.Element {
       } catch {
         return;
       }
-      if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'snapshot') {
+      const type = (parsed && typeof parsed === 'object') ? (parsed as { type?: string }).type : undefined;
+      // The server sends this right before it stops. Close the EventSource so
+      // the browser does NOT auto-reconnect (which would hammer the dead port,
+      // or silently reattach to a different session reusing the same port).
+      if (type === 'shutdown') { es.close(); setConn('error'); return; }
+      if (type === 'snapshot') {
         merge(((parsed as { events?: AgentEvent[] }).events) ?? []);
       } else {
         merge([parsed as AgentEvent]);

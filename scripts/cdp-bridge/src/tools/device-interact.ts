@@ -789,6 +789,44 @@ export function buildDirectionalSwipeCliArgs(
   return ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
 }
 
+// Scroll direction → finger gesture is INVERTED vs swipe ("scroll down" = content
+// moves up = finger moves up) and scaled by `amount` (0..1). Centred half-spans
+// keep the gesture inside the viewport.
+function computeScrollFromDirection(
+  direction: 'up' | 'down' | 'left' | 'right',
+  amount: number,
+  screen: { width: number; height: number },
+): { x1: number; y1: number; x2: number; y2: number } {
+  const cx = Math.round(screen.width / 2);
+  const cy = Math.round(screen.height / 2);
+  const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
+  const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
+  switch (direction) {
+    case 'down': return { x1: cx, y1: cy + Math.round(dy / 2), x2: cx, y2: cy - Math.round(dy / 2) };
+    case 'up': return { x1: cx, y1: cy - Math.round(dy / 2), x2: cx, y2: cy + Math.round(dy / 2) };
+    case 'left': return { x1: cx + Math.round(dx / 2), y1: cy, x2: cx - Math.round(dx / 2), y2: cy };
+    case 'right': return { x1: cx - Math.round(dx / 2), y1: cy, x2: cx + Math.round(dx / 2), y2: cy };
+  }
+}
+
+// Shared by the standalone scroll handler's daemon fallthrough and device_batch
+// so a "scroll" step always dispatches the COORDINATE form. The arg builders
+// (buildRunIOSArgs / buildRunAndroidArgs) map scroll → a 4-coordinate drag and
+// throw on the direction form — so the raw ['scroll', direction] shape that used
+// to be dispatched here crashed on Android (always) and on the iOS fast-runner
+// fallback path.
+export function buildDirectionalScrollCliArgs(
+  direction: 'up' | 'down' | 'left' | 'right',
+  amount?: number,
+  durationMs?: number,
+): string[] {
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
+  const coords = computeScrollFromDirection(direction, clamped, screen);
+  const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
+  return ['scroll', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
+}
+
 export function exactModeRejectionMessage(reason: 'fast-runner-unavailable' | 'count-pattern-incompatible'): string {
   if (reason === 'count-pattern-incompatible') {
     return 'exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.';
@@ -890,21 +928,10 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     // because the UI thread is never "idle" between scroll events. Fast-runner
     // uses `RunnerDaemonProxy.synthesize(eventRecord)` which is raw HID event
     // injection and returns as soon as events are delivered.
+    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+    const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
+    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
     if (isFastRunnerAvailable()) {
-      const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
-      const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
-      const cx = Math.round(screen.width / 2);
-      const cy = Math.round(screen.height / 2);
-      const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
-      const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
-      let x1 = cx, y1 = cy, x2 = cx, y2 = cy;
-      switch (args.direction) {
-        // "scroll down" = content moves up = finger moves up (swipe up)
-        case 'down': y1 = cy + Math.round(dy / 2); y2 = cy - Math.round(dy / 2); break;
-        case 'up': y1 = cy - Math.round(dy / 2); y2 = cy + Math.round(dy / 2); break;
-        case 'left': x1 = cx + Math.round(dx / 2); x2 = cx - Math.round(dx / 2); break;
-        case 'right': x1 = cx - Math.round(dx / 2); x2 = cx + Math.round(dx / 2); break;
-      }
       try {
         const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);
         if (resp.ok) {
@@ -915,9 +942,10 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
         // Fall through to daemon on fast-runner error
       }
     }
-    const cliArgs = ['scroll', args.direction];
-    if (args.amount != null) cliArgs.push(String(args.amount));
-    return runAgentDevice(cliArgs);
+    // Daemon / Android fallthrough: dispatch the COORDINATE form. The arg
+    // builders throw on the raw direction form, so this previously crashed on
+    // Android (always) and on the iOS fast-runner fallback.
+    return runAgentDevice(buildDirectionalScrollCliArgs(args.direction, args.amount));
   });
 }
 

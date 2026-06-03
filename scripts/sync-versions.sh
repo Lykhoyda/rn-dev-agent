@@ -8,8 +8,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="$REPO_ROOT/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
 SYNTHETIC_PKG_JSON="$REPO_ROOT/.claude-plugin/package.json"
-MCP_PACKAGE_JSON="$REPO_ROOT/scripts/cdp-bridge/package.json"
 MCP_SRC_DIR="$REPO_ROOT/scripts/cdp-bridge/src"
+# NOTE: scripts/cdp-bridge/package.json (rn-dev-agent-cdp) is NOT synced here.
+# It is an INDEPENDENTLY-versioned changeset package (changeset config has
+# fixed:[]/linked:[]), so its version legitimately differs from the plugin's.
+# A prior MCP_PACKAGE_JSON variable here was declared but never used and implied
+# a sync that must not happen — removed to avoid that false impression. The MCP
+# server reads its own version from this file at runtime; keep it bumped via a
+# `rn-dev-agent-cdp` changeset entry whenever cdp-bridge/src changes.
 
 plugin_version=$(grep '"version"' "$PLUGIN_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 marketplace_version=$(grep '"version"' "$MARKETPLACE_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
