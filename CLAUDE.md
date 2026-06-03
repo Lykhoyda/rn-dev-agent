@@ -6,6 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **rn-dev-agent** — A Claude Code plugin that turns Claude into a React Native development partner. It explores the codebase, designs architecture, implements features, then verifies everything live on the simulator — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
+## Feature Development Workflow (how we work — read this first)
+
+This is the standard process for any non-trivial feature or fix, so sessions stay consistent. **Plan first, get the plan reviewed by other models, then build — verifying the design before writing code is where the cheapest fixes live.**
+
+1. **Plan comprehensively.** Use `superpowers:brainstorming` to turn the idea into an approved design spec, then `superpowers:writing-plans` for a comprehensive TDD plan. Both artifacts live under `docs/superpowers/{specs,plans}/YYYY-MM-DD-<topic>.md` and are committed. Large features are **decomposed into phases** — each phase gets its own spec section, plan, and PR (e.g. `#202` → Phase 1 / 1.5 / 2a / 2b…).
+
+2. **Review the plan with other LLMs (Codex + Gemini).** Run `/brainstorm gemini,codex <plan + key files>` BEFORE writing any code. It consistently catches blockers in the *plan* (cheap to fix) that would otherwise become bugs. Apply the findings, then amend the plan commit with an "Amendments applied from the multi-LLM plan review" note.
+
+3. **Execute the plan task-by-task** (TDD: failing test → minimal impl → pass → commit). Two options:
+   - **Codex-Pair** (`/codex-pair`) — Codex reviews **every edit** as you go; **pay attention to its per-edit feedback** and address it inline.
+   - **`superpowers:subagent-driven-development`** — a fresh Opus subagent per task with a spec-compliance + code-quality review between each.
+   Commits are **signed**, small, and per-task; `dist/` is tracked so stage rebuilt outputs; add a changeset per change.
+
+4. **Multi-review the finished changes.** Run `/multi-review` (Gemini + Codex code review of the diff) — and/or a final holistic review — once the increment is complete.
+
+5. **Run + verify on real devices, then benchmark.** Test the change on the **iOS simulator AND Android emulator** (the plugin's own `device_*`/`cdp_*` tools, or a direct `dist` test against the booted device for bridge-internal logic), and benchmark where performance matters.
+
+6. **Fix findings and re-test.** Address review + device-verification findings, then re-run the unit suite + device checks until everything is green. Then finish the branch (`superpowers:finishing-a-development-branch`) — usually a **stacked PR** on the previous phase's branch.
+
+Logging: per the global instructions, log architectural decisions to `DECISIONS.md`, bugs to `BUGS.md`, and a dated narrative to `ROADMAP.md` in the sibling `rn-dev-agent-workspace` (the `/end-session` skill does this).
+
 ## Project Structure — sibling repos
 
 This is the **pure plugin repo** — agents, commands, skills, hooks, MCP server (`scripts/cdp-bridge/`), marketplace manifest. It ships to users as-is, so it contains only what runs inside Claude Code.
