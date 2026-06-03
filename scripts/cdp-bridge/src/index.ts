@@ -160,6 +160,7 @@ trackedTool(
   {
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
+    resetArbiter: z.boolean().optional().describe('Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch — cdp_status is unarbitrated so it always runs.'),
   },
   createStatusHandler(getClient, setClient, createClient),
 );

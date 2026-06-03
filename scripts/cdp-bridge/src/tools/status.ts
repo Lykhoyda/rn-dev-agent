@@ -5,6 +5,7 @@ import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-pi
 import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
 
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
@@ -109,7 +110,17 @@ export function createStatusHandler(
   setClient: (c: CDPClient) => void,
   createClient: (port: number) => CDPClient,
 ) {
-  return async (args: { metroPort?: number; platform?: string }) => {
+  return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
+    if (args?.resetArbiter) {
+      const arbiterReset = arbiter.reset('manual via cdp_status');
+      // Best-effort: still report normal status, annotated with what was cleared.
+      try {
+        const status = await buildStatusResult(getClient());
+        return okResult({ ...status, arbiterReset });
+      } catch {
+        return okResult({ arbiterReset });
+      }
+    }
     try {
       let client = getClient();
 
