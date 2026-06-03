@@ -76,6 +76,7 @@ import { createConnectHandler, createDisconnectHandler, createTargetsHandler } f
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
+import { arbiterWrap } from './lifecycle/device-arbiter.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -146,7 +147,10 @@ setToolObserver((o) => recorder.record(o));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: any, handler: any): void {
-  const wrapped = instrumentTool(name, handler as (...args: unknown[]) => Promise<unknown>);
+  const wrapped = instrumentTool(name, arbiterWrap(
+    name,
+    handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
+  ) as (...args: unknown[]) => Promise<unknown>);
   server.tool(name, desc, schema, wrapped as typeof handler);
 }
 

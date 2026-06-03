@@ -54,6 +54,7 @@ import { createConnectHandler, createDisconnectHandler, createTargetsHandler } f
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
+import { arbiterWrap } from './lifecycle/device-arbiter.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -111,7 +112,7 @@ const server = new McpServer({
 setToolObserver((o) => recorder.record(o));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
-    const wrapped = instrumentTool(name, handler);
+    const wrapped = instrumentTool(name, arbiterWrap(name, handler));
     server.tool(name, desc, schema, wrapped);
 }
 trackedTool('cdp_status', 'Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.', {
