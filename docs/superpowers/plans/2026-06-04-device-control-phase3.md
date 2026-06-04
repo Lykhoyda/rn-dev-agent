@@ -12,6 +12,16 @@
 
 ---
 
+### Task 0: Live `ps` validation (DONE — 2026-06-04)
+
+Performed before coding (per spec §4, and required by the multi-LLM plan review). Ran a real maestro flow against a booted iPhone 17 Pro (UDID `FC78646A-56D5-4737-9CD0-A360D622F3B3`) and captured `ps ax -o pid=,command=`. Findings that shaped Tasks 1 & 3:
+- maestro's iOS driver is **`maestro-driver-iosUITests-Runner`** (not WebDriverAgent), and its process path **carries the target UDID** (`…/Devices/<UDID>/…`); `xcodebuild … -destination id=<UDID> … maestro-driver-ios-config.xctestrun` carries it too.
+- the **idle** maestro-mcp server (`java … maestro.cli.AppKt mcp`) carries **no UDID**.
+
+Conclusion: the detector is viable; the matcher targets `maestro` (not WebDriverAgent), and **UDID-scoping is mandatory** (it excludes the idle server + other-sim flows). No code in this task — it's the empirical basis for Task 1's matcher + tests.
+
+---
+
 ### Task 1: `detectIosExternalRunner()` — iOS foreign-runner detector
 
 **Files:**
@@ -28,39 +38,47 @@ import { detectIosExternalRunner } from '../../dist/runners/external-runner-dete
 
 const fakePs = (stdout) => async () => ({ stdout });
 
-test('detectIosExternalRunner: flags a foreign WebDriverAgent process', async () => {
-  const ps = fakePs('501 /path/WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner\n502 /usr/bin/login\n');
-  const w = await detectIosExternalRunner(ps);
+// Real signatures captured from a live `ps ax -o command=` during a maestro flow (Task 0).
+const UDID = 'FC78646A-56D5-4737-9CD0-A360D622F3B3';
+const OTHER_UDID = 'AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB';
+const MAESTRO_DRIVER = `18225 /Users/x/Library/Developer/CoreSimulator/Devices/${UDID}/data/Containers/Bundle/Application/155F/maestro-driver-iosUITests-Runner.app/maestro-driver-iosUITests-Runner`;
+const MAESTRO_XCODEBUILD = `17754 /Applications/Xcode.app/.../xcodebuild test-without-building -xctestrun /tmp/${UDID}/maestro-driver-ios-config.xctestrun -destination id=${UDID}`;
+const MAESTRO_MCP_IDLE = '14013 java -classpath /Users/x/.maestro/lib/* maestro.cli.AppKt mcp'; // NB: carries no UDID
+const OUR_RUNNER = `99 /Users/x/Library/Developer/CoreSimulator/Devices/${UDID}/.../RnFastRunnerUITests-Runner.app/RnFastRunnerUITests-Runner`;
+
+test('detectIosExternalRunner: flags a foreign maestro driver on the target UDID', async () => {
+  const ps = fakePs(`${MAESTRO_DRIVER}\n${MAESTRO_XCODEBUILD}\n800 /usr/bin/login\n`);
+  const w = await detectIosExternalRunner(ps, UDID);
   assert.ok(w);
   assert.equal(w.platform, 'ios');
   assert.equal(w.code, 'IOS_XCUITEST_COMPETITOR');
-  assert.equal(w.processLines.length, 1);
-  assert.match(w.processLines[0], /WebDriverAgentRunner/);
+  assert.equal(w.processLines.length, 2);
+  assert.match(w.processLines[0], /maestro-driver-iosUITests-Runner/);
 });
 
-test('detectIosExternalRunner: flags a foreign maestro process', async () => {
-  const ps = fakePs('601 /opt/homebrew/bin/maestro test flow.yaml\n');
-  const w = await detectIosExternalRunner(ps);
-  assert.ok(w);
-  assert.match(w.processLines[0], /maestro/);
+test('detectIosExternalRunner: UDID-scopes — a maestro flow on a DIFFERENT sim is ignored', async () => {
+  const ps = fakePs(MAESTRO_DRIVER + '\n');
+  assert.equal(await detectIosExternalRunner(ps, OTHER_UDID), null);
 });
 
-test('detectIosExternalRunner: excludes our own RnFastRunner host + UITests runner', async () => {
-  const ps = fakePs(
-    '701 /Users/x/Library/Developer/.../RnFastRunner.app/RnFastRunner\n' +
-    '702 /Users/x/Library/Developer/.../RnFastRunnerUITests-Runner.app/RnFastRunnerUITests-Runner\n',
-  );
-  assert.equal(await detectIosExternalRunner(ps), null);
+test('detectIosExternalRunner: ignores the idle maestro-mcp server (no UDID)', async () => {
+  const ps = fakePs(`${MAESTRO_MCP_IDLE}\n800 /usr/bin/login\n`);
+  assert.equal(await detectIosExternalRunner(ps, UDID), null);
+});
+
+test('detectIosExternalRunner: excludes our own RnFastRunner even on the target UDID', async () => {
+  const ps = fakePs(OUR_RUNNER + '\n');
+  assert.equal(await detectIosExternalRunner(ps, UDID), null);
 });
 
 test('detectIosExternalRunner: null when no automation process present', async () => {
   const ps = fakePs('801 /usr/bin/login\n802 /System/Library/Foo\n');
-  assert.equal(await detectIosExternalRunner(ps), null);
+  assert.equal(await detectIosExternalRunner(ps, UDID), null);
 });
 
 test('detectIosExternalRunner: error-safe when ps fails', async () => {
   const ps = async () => { throw new Error('ps blew up'); };
-  assert.equal(await detectIosExternalRunner(ps), null);
+  assert.equal(await detectIosExternalRunner(ps, UDID), null);
 });
 ```
 
@@ -81,15 +99,18 @@ export interface IosExternalRunnerWarning {
   processLines: string[];
 }
 
-// Narrow on purpose: WebDriverAgent is maestro's iOS driver; the `maestro` CLI
-// covers direct invocations. XCTRunner is deliberately NOT matched — it's too
-// generic and would catch our own RnFastRunner UITests host.
-const IOS_FOREIGN_RE = /WebDriverAgent|\bmaestro\b/i;
-// Our own runner shows the app NAME (not the bundle id) in the ps command line.
+// Validated against live `ps` (2026-06-04): maestro's iOS driver is
+// `maestro-driver-iosUITests-Runner` — the `maestro` token catches it, the
+// `.xctestrun`, and the java CLI. `WebDriverAgent` is a harmless secondary for
+// Appium/WDA-style foreign tools. `XCTRunner` is intentionally NOT matched (too
+// generic). The UDID filter is the real defense: the idle maestro-mcp server
+// (`java … maestro.cli.AppKt mcp`) carries NO UDID, so scoping excludes it.
+const IOS_FOREIGN_RE = /maestro|WebDriverAgent/i;
 const RN_FAST_RUNNER_RE = /RnFastRunner/i;
 
 export async function detectIosExternalRunner(
   execFileImpl: typeof execFile = execFile,
+  udid?: string,
 ): Promise<IosExternalRunnerWarning | null> {
   try {
     const opts = { timeout: 2_000, encoding: 'utf8' as const };
@@ -105,6 +126,7 @@ export async function detectIosExternalRunner(
       .split('\n')
       .filter((line) => IOS_FOREIGN_RE.test(line))
       .filter((line) => !RN_FAST_RUNNER_RE.test(line))
+      .filter((line) => (udid ? line.includes(udid) : true))
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
@@ -114,7 +136,7 @@ export async function detectIosExternalRunner(
       platform: 'ios',
       code: 'IOS_XCUITEST_COMPETITOR',
       message:
-        'A foreign WebDriverAgent/maestro automation session is running on this simulator. ' +
+        'A foreign maestro/WebDriverAgent automation session is driving this simulator. ' +
         'Interleaving device_* with it may trigger a re-foreground of your app; CDP reads are unaffected. ' +
         '(If this is your own maestro flow, it is expected.)',
       processLines: lines,
@@ -128,7 +150,7 @@ export async function detectIosExternalRunner(
 - [ ] **Step 4: Build + run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test test/unit/gh-202-detect-ios-external-runner.test.js`
-Expected: PASS (5/5). (Tests import from `dist/`, so the build must run first.)
+Expected: PASS (6/6). (Tests import from `dist/`, so the build must run first.)
 
 - [ ] **Step 5: Commit**
 
@@ -291,16 +313,22 @@ Replace it with:
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
         }
 
-        // GH#202 Phase 3: proactive foreign-runner heads-up. Gate on the arbiter
-        // flow lease — when WE hold it, a detected WebDriverAgent is our own L3
-        // maestro-runner, not a foreign session (skip the ps-scan entirely).
-        // Informational only and best-effort (the detector never throws), so it
-        // can neither delay nor fail the open.
-        let foreign = null;
-        if (platform === 'ios') {
+        // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
+        // Skip when opted out, or when WE hold the flow lease (a detected maestro
+        // driver is then our own L3 run — external opens are already refused
+        // BUSY_FLOW_ACTIVE upstream; this guard covers composite/internal callers).
+        // UDID-scoped + best-effort: the detector never throws (can't fail the
+        // open); its ≤2s latency is surfaced in meta.timings_ms.
+        let foreign: ReturnType<typeof foreignRunnerNotice> = null;
+        let foreignDetectMs: number | undefined;
+        if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
           const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
-          const detection = flowHeld ? null : await detectIosExternalRunner();
-          foreign = foreignRunnerNotice(detection, flowHeld);
+          if (!flowHeld) {
+            const t0 = Date.now();
+            const detection = await detectIosExternalRunner(undefined, deviceId);
+            foreignDetectMs = Date.now() - t0;
+            foreign = foreignRunnerNotice(detection, false);
+          }
           if (foreign) {
             logger.warn('rn-device', foreign.warning);
             for (const line of foreign.meta.foreignRunner.processLines) {
@@ -315,7 +343,9 @@ Replace it with:
             autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
             foreign ? foreign.warning : null,
           ].filter(Boolean).join('; ');
-          return warnResult(data, warning, foreign ? foreign.meta : undefined);
+          const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
+          if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
+          return warnResult(data, warning, meta);
         }
       }
 
@@ -483,7 +513,7 @@ Expected: only the already-committed dist files; no unexpected drift. If anythin
 - [ ] **Step 3: Run the full suite**
 
 Run: `cd scripts/cdp-bridge && npm test 2>&1 | grep -E '^ℹ (tests|pass|fail)'`
-Expected: `fail 0`, and the count is up by the 9 new tests (5 + 3 + 1).
+Expected: `fail 0`, and the count is up by the 10 new tests (6 + 3 + 1).
 
 - [ ] **Step 4: Commit**
 
@@ -496,7 +526,7 @@ git commit -S -m "chore(#202): changeset for Phase 3 foreign-runner contract + w
 
 ## Self-review checklist (run before handing off to execution)
 
-- **Spec coverage:** §2 contract → Task 4 (CLAUDE.md + architecture.mdx + handoff page). §3 docs → Task 4. §4 `detectIosExternalRunner` → Task 1. §5 proactive warning + gate → Tasks 2 + 3. §8 tests → Tasks 1/2/4. §0 reconciliation (no recovery rebuild) → respected (no edits to `runner-leak-recovery.ts` / the recovery path).
+- **Spec coverage:** §0 reconciliation (no recovery rebuild) → respected (no edits to `runner-leak-recovery.ts`). §2 contract → Task 4. §3 docs → Task 4. §4 `detectIosExternalRunner` + the live-`ps` validation + UDID-scoping → Task 0 + Task 1. §5 proactive warning + flow-lease gate + opt-out + timings → Tasks 2 + 3. §8 tests → Tasks 1/2/4 (incl. UDID-scope + idle-server + different-sim cases).
 - **Type consistency:** `IosExternalRunnerWarning` (Task 1) is consumed by `foreignRunnerNotice` (Task 2) and the device-session wiring (Task 3). `ForeignRunnerNotice.meta` is passed straight to `warnResult(data, warning, meta)`.
 - **No placeholders:** every code step shows complete code.
 - **Gate correctness:** the flow-lease gate is checked once (Task 3 computes `flowHeld` and skips the ps-scan when held); `foreignRunnerNotice` re-applies it as the single source of truth for the meta decision (and is unit-tested in isolation).
