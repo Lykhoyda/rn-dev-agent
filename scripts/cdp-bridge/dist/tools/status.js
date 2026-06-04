@@ -4,6 +4,7 @@ import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
+import { recoverWedge } from '../cdp/recover-wedge.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -183,19 +184,36 @@ export function createStatusHandler(getClient, setClient, createClient) {
                 }
             }
             if (status.app.isPaused) {
-                // Auto-recovery: resume paused debugger (D306)
+                // Auto-recovery: resume paused debugger (D306).
                 try {
                     await client.softReconnect();
                     status.app.isPaused = client.isPaused;
                     status.cdp.device = client.connectedTarget?.title ?? null;
                     status.cdp.pageId = client.connectedTarget?.id ?? null;
                     status.cdp.bundleId = client.connectedTarget?.description ?? null;
-                    if (status.app.isPaused) {
-                        return warnResult(status, 'Debugger is still paused after auto-recovery. Try cdp_reload(full=true).');
-                    }
                 }
                 catch {
-                    return warnResult(status, 'Debugger is paused. Auto-recovery failed. Try cdp_reload(full=true).');
+                    // softReconnect failed — fall through to the wedge recovery below.
+                }
+                if (status.app.isPaused) {
+                    // GH#202 Phase 2b: the JS thread is suspended because the app lost
+                    // foreground. Bounded re-foreground recovery (max 3 consecutive per
+                    // session; SKIPPED while a Maestro flow holds the arbiter lease).
+                    const wedge = await recoverWedge(client);
+                    if (wedge.recovered) {
+                        status.app.isPaused = client.isPaused; // resumed
+                        status.cdp.device = client.connectedTarget?.title ?? null;
+                        status.cdp.pageId = client.connectedTarget?.id ?? null;
+                        status.cdp.bundleId = client.connectedTarget?.description ?? null;
+                    }
+                    else {
+                        const hint = wedge.reason === 'flow-active'
+                            ? 'A Maestro flow is running — skipped re-foreground recovery. Wait for the flow to finish, then retry.'
+                            : wedge.reason === 'budget-exhausted'
+                                ? 'Wedge-recovery budget exhausted this session. Try cdp_restart(hardReset=true).'
+                                : 'Re-foreground recovery did not clear the wedge. Try cdp_restart(hardReset=true).';
+                        return warnResult(status, `Debugger paused / app backgrounded. ${hint}`);
+                    }
                 }
             }
             const reloadCount = getSessionReloadCount();

@@ -5,6 +5,7 @@ import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
@@ -181,6 +182,10 @@ export function createDeviceSnapshotHandler() {
                             `cross-bridge contention protection is off this session.`);
                     }
                 }
+                // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
+                // the wedge-recovery budget. Placed AFTER the device-lock conflict
+                // early-return so a refused DEVICE_BUSY open does NOT reset it.
+                resetWedgeRecoveryCounter();
                 // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
                 // known here (device-open), so scope-kill any stale AgentDeviceRunner
                 // targeting THIS simulator and clear orphaned daemon lock files.
