@@ -8,6 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
@@ -109,7 +110,7 @@ export function createMaestroTestAllHandler() {
                 continue;
             }
             try {
-                const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+                const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }));
                 const output = (stdout + '\n' + stderr).trim();
                 // The runner already exited 0 here, so that exit code is the
                 // authoritative pass signal. Key the secondary scan on maestro's own

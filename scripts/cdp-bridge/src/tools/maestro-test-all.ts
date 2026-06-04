@@ -13,6 +13,7 @@ import {
   parseAndValidateFlow,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
@@ -139,10 +140,12 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       }
 
       try {
-        const { stdout, stderr } = await execFile(
-          dispatch.binPath,
-          dispatch.buildArgs(platform, safeFlowFile, appFile),
-          { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        const { stdout, stderr } = await runFlowParked(() =>
+          execFile(
+            dispatch.binPath,
+            dispatch.buildArgs(platform, safeFlowFile, appFile),
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+          ),
         );
         const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the

@@ -7,6 +7,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { readAppId } from '../project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 const execFile = promisify(execFileCb);
 const AUTH_ROUTE_PATTERNS = [
     'login', 'signin', 'sign_in', 'sign-in',
@@ -177,10 +178,10 @@ export async function handleAutoLogin(client, opts = {}) {
         };
     }
     try {
-        await execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
+        await runFlowParked(() => execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
             timeout: 120_000,
             encoding: 'utf8',
-        });
+        }));
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -15,8 +15,32 @@ import {
   isValidBundleId,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 
 const execFile = promisify(execFileCb);
+
+export interface FlowParkDeps {
+  stopFastRunner?: () => void;
+  markCdpStale?: () => void;
+}
+
+/**
+ * GH#202 Phase 2a: run a Maestro flow with L2 parked. The fast-runner (XCTest)
+ * would fight maestro-runner (WDA) for the device, so stop it first; mark CDP
+ * stale afterward (always — even on failure) so the next read reconnects to the
+ * post-flow app state. The fast-runner lazily restarts on the next device_* call.
+ */
+export async function runFlowParked<T>(run: () => Promise<T>, deps: FlowParkDeps = {}): Promise<T> {
+  const stop = deps.stopFastRunner ?? defaultStopFastRunner;
+  const stale = deps.markCdpStale ?? defaultMarkCdpStale;
+  stop();
+  try {
+    return await run();
+  } finally {
+    stale();
+  }
+}
 
 interface MaestroRunArgs {
   flowPath?: string;
@@ -166,14 +190,16 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
     const finalArgs = [...baseArgs, ...paramArgs];
 
     try {
-      const { stdout, stderr } = await execFile(
-        dispatch.binPath,
-        finalArgs,
-        // 10MB buffer: a multi-step flow with screenshots + app console/network
-        // logs routinely exceeds Node's 1MB execFile default, which would kill
-        // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
-        // run as a failure.
-        { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+      const { stdout, stderr } = await runFlowParked(() =>
+        execFile(
+          dispatch.binPath,
+          finalArgs,
+          // 10MB buffer: a multi-step flow with screenshots + app console/network
+          // logs routinely exceeds Node's 1MB execFile default, which would kill
+          // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
+          // run as a failure.
+          { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        ),
       );
 
       const output = (stdout + '\n' + stderr).trim();

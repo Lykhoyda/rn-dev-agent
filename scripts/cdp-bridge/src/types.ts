@@ -211,7 +211,11 @@ export type ToolErrorCode =
   // the action's expectedRouteSequence) — distinct from a stale selector.
   | 'ROUTE_DRIFT'
   // GH #136: cdp_dismiss_dev_client_picker called with no active device session.
-  | 'DEV_CLIENT_PICKER_NO_SESSION';
+  | 'DEV_CLIENT_PICKER_NO_SESSION'
+  // GH #202 Phase 2a: DeviceSessionArbiter refused an op because an exclusive
+  // Maestro flow is in flight (or the requesting op is a flow and another op is
+  // active). Refuse-fast, never queue.
+  | 'BUSY_FLOW_ACTIVE';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
