@@ -36,8 +36,13 @@ export async function probeFreshness(
   }
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // If the timeout wins the race, this evaluate() promise is orphaned; attach
+    // a no-op catch so a later rejection (e.g. a mid-probe WebSocket close)
+    // can't surface as an unhandledRejection and crash the MCP process.
+    const evalPromise = client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v');
+    evalPromise.catch(() => { /* swallowed if the timeout already settled the race */ });
     const result = await Promise.race([
-      client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v'),
+      evalPromise,
       new Promise<EvaluateResult>((resolve) => {
         probeTimer = setTimeout(() => resolve({ error: 'timeout' }), timeoutMs);
       }),
@@ -93,8 +98,12 @@ async function probeDev(
 ): Promise<{ ok: boolean; timedOut: boolean }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // No-op catch on the orphaned promise if the timeout wins the race (see
+    // probeFreshness) — prevents an unhandledRejection on a mid-probe WS close.
+    const evalPromise = client.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
+    evalPromise.catch(() => { /* swallowed if the timeout already settled the race */ });
     const result = await Promise.race([
-      client.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true'),
+      evalPromise,
       new Promise<EvaluateResult>((resolve) => {
         timer = setTimeout(() => resolve({ error: 'probe timeout' }), timeoutMs);
       }),

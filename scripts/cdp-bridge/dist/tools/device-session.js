@@ -186,8 +186,13 @@ export function createDeviceSnapshotHandler() {
                 // targeting THIS simulator and clear orphaned daemon lock files.
                 // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
                 if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && args.platform === 'ios' && deviceId) {
-                    ensureSingleRunner({ udid: deviceId })
-                        .then((r) => {
+                    // Await: the stale-runner kill (SIGTERM → 500ms grace → SIGKILL) must
+                    // finish BEFORE the session is usable, or the first device_* command
+                    // races it and a stale AgentDeviceRunner can still steal focus —
+                    // which is exactly the single-runner guarantee #202 promises. The
+                    // added latency lands on an already-slow session-open, not per-command.
+                    try {
+                        const r = await ensureSingleRunner({ udid: deviceId });
                         if (r.killedPids.length) {
                             logger.info('rn-device', `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`);
                         }
@@ -196,10 +201,10 @@ export function createDeviceSnapshotHandler() {
                         }
                         for (const w of r.warnings)
                             logger.warn('rn-device', w);
-                    })
-                        .catch((err) => {
+                    }
+                    catch (err) {
                         logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
-                    });
+                    }
                 }
                 // Task 9 of Android-MVP: warn on competing Android UIAutomator /
                 // agent-device processes that would contend for input + focus with

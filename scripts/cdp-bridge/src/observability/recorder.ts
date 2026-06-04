@@ -40,7 +40,19 @@ export class Recorder {
     return { snapshot, detach: () => { this.subs.delete(fn); } };
   }
   getScreenshot(seq: number): ScreenshotBytes | undefined { return this.shots.get(seq); }
-  clear(): void { this.buf.clear(); this.subs.clear(); this.shots.clear(); this.seq = 0; }
+  clear(): void {
+    this.buf.clear();
+    // Notify live subscribers with a terminal sentinel BEFORE dropping them, so
+    // a clear() (e.g. a future "reset session") can't silently orphan an open
+    // SSE stream + its heartbeat interval. The server's stream subscriber ends
+    // the response on this event.
+    for (const fn of this.subs) {
+      try { fn({ type: 'cleared' } as unknown as AgentEvent); } catch { /* per-subscriber swallow */ }
+    }
+    this.subs.clear();
+    this.shots.clear();
+    this.seq = 0;
+  }
   protected captureScreenshot(ev: AgentEvent, o: ToolObservation): void {
     if (ev.tool !== 'device_screenshot' || !ev.ok) return;
     const p = screenshotPath(o.result);

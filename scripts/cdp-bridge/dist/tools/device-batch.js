@@ -1,5 +1,5 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
-import { buildDirectionalSwipeCliArgs } from './device-interact.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 /**
@@ -156,7 +156,9 @@ async function executeStep(step) {
         case 'scroll': {
             if (!step.direction)
                 return failResult('scroll requires direction');
-            return runAgentDevice(['scroll', step.direction]);
+            // Coordinate form — the raw ['scroll', direction] shape throws in the
+            // iOS/Android arg builders and aborted the whole batch.
+            return runAgentDevice(buildDirectionalScrollCliArgs(step.direction));
         }
         case 'back': {
             return runAgentDevice(['back']);

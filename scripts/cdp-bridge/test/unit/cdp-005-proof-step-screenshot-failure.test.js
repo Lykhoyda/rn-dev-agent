@@ -27,7 +27,7 @@ test('CDP-005: errors accumulated (e.g. navigation error) → warn metadata is s
     if (expr.includes('getTree')) return { value: JSON.stringify({ tree: { component: 'View' } }) };
     return { value: undefined };
   };
-  const handler = createProofStepHandler(() => client);
+  const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ screen: 'X', verifyTestID: 'something', waitMs: 0 });
   const env = parseEnvelope(r);
   assert.ok(typeof env.meta?.warning === 'string' && env.meta.warning.length > 0,
@@ -38,7 +38,7 @@ test('CDP-005: errors accumulated (e.g. navigation error) → warn metadata is s
 test('CDP-005: verification requested + verified=false alone triggers warning', async () => {
   const client = createMockClient();
   client.evaluate = async () => ({ value: JSON.stringify({ tree: null }) });
-  const handler = createProofStepHandler(() => client);
+  const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ verifyTestID: 'missing', waitMs: 0 });
   const env = parseEnvelope(r);
   assert.ok(typeof env.meta?.warning === 'string' && env.meta.warning.length > 0);
@@ -48,7 +48,7 @@ test('CDP-005: verification requested + verified=false alone triggers warning', 
 test('CDP-005: clean verification stays verified=true (warn may still fire from screenshot if no session — that\'s the expected CDP-005 behaviour)', async () => {
   const client = createMockClient();
   client.evaluate = async () => ({ value: JSON.stringify({ tree: { component: 'View', testID: 'real' } }) });
-  const handler = createProofStepHandler(() => client);
+  const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ verifyTestID: 'real', waitMs: 0 });
   const env = parseEnvelope(r);
   // Verification succeeded — that's the regression-preserving check.

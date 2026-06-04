@@ -14,6 +14,7 @@ import {
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
 
@@ -102,6 +103,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       // file and execute that — never the on-disk YAML directly, so
       // any inert metadata or duplicated headers can't sneak through.
       let safeFlowFile: string;
+      let appFile: string | undefined;
       try {
         const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText);
@@ -111,6 +113,16 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         );
         safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync(safeFlowFile, canonical, 'utf-8');
+        // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
+        // the app, which maestro-runner can only do given --app-file.
+        const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, undefined);
+        if (!appFileResolution.ok) {
+          results.push({ name, passed: false, durationMs: Date.now() - start, error: appFileResolution.error.slice(0, 300) });
+          failed++;
+          if (args.stopOnFailure) break;
+          continue;
+        }
+        appFile = appFileResolution.appFile;
       } catch (err) {
         const reason =
           err instanceof MaestroValidationError
@@ -131,12 +143,17 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         const { stdout, stderr } = await runFlowParked(() =>
           execFile(
             dispatch.binPath,
-            dispatch.buildArgs(platform, safeFlowFile),
-            { timeout, encoding: 'utf8' },
+            dispatch.buildArgs(platform, safeFlowFile, appFile),
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
           ),
         );
         const output = (stdout + '\n' + stderr).trim();
-        const ok = !output.includes('FAILED') && !output.includes('Error:');
+        // The runner already exited 0 here, so that exit code is the
+        // authoritative pass signal. Key the secondary scan on maestro's own
+        // `FAILED` token only — a broad `Error:` match false-flagged passing
+        // runs whose app/console logs merely contained "Error:" (mirrors the
+        // maestro_run fix).
+        const ok = !output.includes('FAILED');
 
         results.push({
           name,

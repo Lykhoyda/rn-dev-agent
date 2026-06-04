@@ -67,9 +67,13 @@ const matchKw = (...fields) =>
 // A. Feedback memories
 // ─────────────────────────────────────────────────────────────────────────────
 function scanMemories() {
-  // Claude Code encodes the project cwd by replacing both `/` and `_` with `-`
-  // (verified: /Users/anton_personal/GitHub/foo → -Users-anton-personal-GitHub-foo).
-  const encoded = flags.memoryCwd.replace(/[\/_]/g, '-');
+  // Claude Code encodes the project cwd by replacing every non-alphanumeric
+  // character with `-` — that includes `/`, `_`, AND `.` (verified:
+  // /Users/x/.claude-mem → -Users-x--claude-mem). The previous `[\/_]` regex
+  // left dots intact, so any cwd containing a dot (a dotted dir name, a dotfile
+  // dir, or a dotted username) computed a memDir that did not exist on disk and
+  // silently dropped the entire feedback-memory section.
+  const encoded = flags.memoryCwd.replace(/[^a-zA-Z0-9]/g, '-');
   const memDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory');
   if (!fs.existsSync(memDir)) return { exists: false, dir: memDir, items: [] };
 
@@ -108,7 +112,7 @@ function scanFlows() {
       if (flags.appId && meta.appId !== flags.appId) continue;
       const tagsStr = (meta.tags || []).join(',');
       if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp)) continue;
-      const params = (text.match(/\$\{([A-Z_]+)\}/g) || []).map((s) => s.slice(2, -1));
+      const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
       const uniqParams = Array.from(new Set(params));
       const replay = uniqParams.length
         ? `maestro-runner --platform ios test ${uniqParams.map((p) => `-e ${p}=...`).join(' ')} ${fp}`
