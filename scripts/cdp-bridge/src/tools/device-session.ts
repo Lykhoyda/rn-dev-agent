@@ -11,10 +11,9 @@ import {
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
-import {
-  detectLegacyAgentDevice,
-  detectAndroidExternalRunner,
-} from '../runners/external-runner-detect.js';
+import { detectAndroidExternalRunner } from '../runners/external-runner-detect.js';
+import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
@@ -25,8 +24,45 @@ import {
   recoverFromRunnerLeak,
   type RunnerLeakNode,
 } from './runner-leak-recovery.js';
+import { DeviceLock } from '../lifecycle/device-lock.js';
+import type { DeviceLockResult, DeviceLockBody } from '../lifecycle/device-lock.js';
 
 const execFile = promisify(execFileCb);
+
+const HEARTBEAT_MS = 30_000;
+let activeDeviceLock: DeviceLock | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function acquireDeviceLockForSession(udid: string, appId: string): DeviceLockResult {
+  // Single-owner: drop any prior lock + heartbeat first (release is null-safe)
+  // so a re-open can't leak a timer or orphan a lock. (#202 review — blocker.)
+  releaseDeviceLockForSession();
+  const lock = new DeviceLock({ udid, appId });
+  const result = lock.acquire();
+  // Only manage a heartbeat for a REAL exclusive lock — a degraded (fs-error)
+  // acquire is unmanaged, so there is nothing to refresh or release.
+  if (result.status === 'acquired' && !result.degraded) {
+    activeDeviceLock = lock;
+    heartbeatTimer = setInterval(() => lock.touch(), HEARTBEAT_MS);
+    // Don't keep the event loop alive solely for the heartbeat (mirrors bgPoll).
+    heartbeatTimer.unref();
+  }
+  return result;
+}
+
+export function releaseDeviceLockForSession(): void {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  if (activeDeviceLock) { activeDeviceLock.release(); activeDeviceLock = null; }
+}
+
+export function deviceBusyMessage(deviceId: string, holder: DeviceLockBody): string {
+  return (
+    `Simulator ${deviceId} is already owned by another rn-dev-agent bridge ` +
+    `(PID ${holder.pid}, project ${holder.projectRoot}` +
+    `${holder.appId ? `, app ${holder.appId}` : ''}). ` +
+    `Close that session or target a different simulator.`
+  );
+}
 
 type SnapshotAction = 'open' | 'close' | 'snapshot';
 
@@ -136,6 +172,11 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
 
       const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
 
+      // A device_snapshot action=open with `platform` OMITTED still opens an
+      // iOS session, so normalize here and gate the iOS-only lock on this rather
+      // than raw args.platform === 'ios' (which would silently skip the lock).
+      const platform = (args.platform ?? 'ios').toLowerCase();
+
       // B112 (D641): attachOnly mode — skip the app launch when the user knows
       // the app is already running. Avoids the unconditional relaunch that
       // invalidates CDP sessions and can race Metro bundle loading.
@@ -182,29 +223,62 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           appId,
         });
 
-        // GH #105 / rn-device iOS-MVP §3.7: warn if a globally-installed
-        // external runner daemon is also running — race-prone shared
-        // automation channel. Opt-in kill via RN_DEVICE_KILL_LEGACY=1.
-        detectLegacyAgentDevice()
-          .then((warning) => {
-            if (!warning) return;
-            logger.warn('rn-device', warning.message);
-            if (process.env.RN_DEVICE_KILL_LEGACY === '1') {
-              try {
-                process.kill(warning.pid, 'SIGTERM');
-                logger.info(
-                  'rn-device',
-                  `Terminated legacy runner daemon (PID ${warning.pid}) per RN_DEVICE_KILL_LEGACY=1`,
-                );
-              } catch (err) {
-                logger.warn(
-                  'rn-device',
-                  `Failed to terminate legacy daemon: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
+        // GH#202 Phase 1.5: claim exclusive ownership of THIS simulator across
+        // bridge processes. The UDID is only known now (post-open). On conflict
+        // another project's bridge owns the sim — tear our just-opened session
+        // back down and refuse, rather than fight for foreground.
+        if (platform === 'ios' && deviceId) {
+          const lockResult = acquireDeviceLockForSession(deviceId, appId);
+          if (lockResult.status === 'conflict') {
+            // Close FIRST — runAgentDevice derives `--session` from the active
+            // session, so clearing before closing would close the wrong (or no)
+            // session and leak the one we just opened (#202 review — blocker).
+            await runAgentDevice(['close']).catch(() => { /* best-effort teardown */ });
+            clearActiveSession();
+            stopFastRunner();
+            const h = lockResult.holder;
+            return failResult(
+              deviceBusyMessage(deviceId, h),
+              { code: 'DEVICE_BUSY', holder: h },
+            );
+          }
+          if (lockResult.degraded) {
+            logger.warn(
+              'rn-device',
+              `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
+              `cross-bridge contention protection is off this session.`,
+            );
+          }
+        }
+
+        // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
+        // the wedge-recovery budget. Placed AFTER the device-lock conflict
+        // early-return so a refused DEVICE_BUSY open does NOT reset it.
+        resetWedgeRecoveryCounter();
+
+        // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
+        // known here (device-open), so scope-kill any stale AgentDeviceRunner
+        // targeting THIS simulator and clear orphaned daemon lock files.
+        // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+        if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && args.platform === 'ios' && deviceId) {
+          // Await: the stale-runner kill (SIGTERM → 500ms grace → SIGKILL) must
+          // finish BEFORE the session is usable, or the first device_* command
+          // races it and a stale AgentDeviceRunner can still steal focus —
+          // which is exactly the single-runner guarantee #202 promises. The
+          // added latency lands on an already-slow session-open, not per-command.
+          try {
+            const r = await ensureSingleRunner({ udid: deviceId });
+            if (r.killedPids.length) {
+              logger.info('rn-device', `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`);
             }
-          })
-          .catch(() => { /* non-fatal */ });
+            if (r.removedFiles.length) {
+              logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
+            }
+            for (const w of r.warnings) logger.warn('rn-device', w);
+          } catch (err) {
+            logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
 
         // Task 9 of Android-MVP: warn on competing Android UIAutomator /
         // agent-device processes that would contend for input + focus with
@@ -247,6 +321,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       if (!result.isError) {
         clearActiveSession();
         stopFastRunner();
+        releaseDeviceLockForSession();
       }
       return result;
     }

@@ -31,16 +31,20 @@ export class PathTraversalError extends Error {
 // ── Action ID validation ────────────────────────────────────────────
 // Action IDs flow into `.rn-agent/actions/<id>.yaml` and the matching
 // sidecar `.rn-agent/state/<id>.state.json`. They must start with an alphanumeric
-// character, then accept hyphen/underscore/dot/alphanumeric. We
-// deliberately exclude `..`, `/`, `\`, and control characters so the
-// ID can never escape its parent directory.
+// character, then accept hyphen/underscore/dot/alphanumeric (dots support
+// versioned flow names like `v2.0-login`). We deliberately exclude `..`, `/`,
+// `\`, and control characters so the ID can never escape its parent directory.
 
-const ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const ACTION_ID_MAX_LEN = 64;
 
 export function isValidActionId(s: unknown): s is string {
   if (typeof s !== 'string') return false;
   if (s.length === 0 || s.length > ACTION_ID_MAX_LEN) return false;
+  // Belt-and-suspenders: even though `<id>.yaml` has no path separator, never
+  // allow a `..` segment in the slug — keeps the "deliberately exclude `..`"
+  // contract literally true regardless of how the id is later joined.
+  if (s.includes('..')) return false;
   return ACTION_ID_RE.test(s);
 }
 

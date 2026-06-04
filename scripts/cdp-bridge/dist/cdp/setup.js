@@ -1,4 +1,4 @@
-import { INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
+import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
 import { logger } from '../logger.js';
 import { setActiveFlag, sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
@@ -49,7 +49,7 @@ export async function performSetup(opts) {
         console.error('CDP: helper injection succeeded but __RN_AGENT not found');
         return { networkMode, helpersInjected: false, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
     }
-    logger.info('CDP', `Helpers injected (v11), network mode: ${networkMode}`);
+    logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
     setActiveFlag(port, connectedTarget);
     // D626 (B1 fix): Probe whether Network.enable actually delivers events.
     // GH #59 #9: a single 500ms probe is too tight after platform switches /

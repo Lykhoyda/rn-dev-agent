@@ -132,8 +132,17 @@ export function hasBuiltTestProduct(derivedDataPath) {
     }
 }
 // --- Lifecycle ---
+/**
+ * GH#202: only adopt an existing runner when it is bound to the SAME
+ * simulator. The state file path is a fixed constant shared across projects,
+ * so a stale state from another project (different deviceId) must never be
+ * reused — that would drive the wrong simulator.
+ */
+export function shouldReuseRunner(state, deviceId) {
+    return state !== null && state.deviceId === deviceId;
+}
 export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
-    if (runnerState)
+    if (shouldReuseRunner(runnerState, deviceId))
         return Promise.resolve(runnerState);
     return new Promise((resolve, reject) => {
         const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');

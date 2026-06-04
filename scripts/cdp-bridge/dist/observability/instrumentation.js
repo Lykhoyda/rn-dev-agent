@@ -14,6 +14,12 @@ function classifyResult(result) {
     if (!result || typeof result !== 'object')
         return 'PASS';
     const envelope = result;
+    // GH#202: a BUSY_FLOW_ACTIVE refusal is expected device contention (the arbiter
+    // declined to interleave a read/tap with a running flow), not a tool failure —
+    // keep it out of FAIL telemetry. It rides in on a failResult envelope
+    // (isError:true), so this guard must run before the isError/ok checks.
+    if (resultCode(envelope) === 'BUSY_FLOW_ACTIVE')
+        return 'PASS';
     if (envelope.isError === true)
         return 'FAIL';
     if (envelope.ok === false)
@@ -31,6 +37,20 @@ function classifyResult(result) {
         }
     }
     return 'PASS';
+}
+function resultCode(envelope) {
+    const content = envelope.content;
+    if (!Array.isArray(content) || content.length === 0)
+        return null;
+    const first = content[0];
+    if (!first?.text || typeof first.text !== 'string')
+        return null;
+    try {
+        const parsed = JSON.parse(first.text);
+        return typeof parsed.code === 'string' ? parsed.code : null;
+    }
+    catch { /* not JSON */ }
+    return null;
 }
 function extractErrorFromResult(result) {
     if (!result || typeof result !== 'object')
