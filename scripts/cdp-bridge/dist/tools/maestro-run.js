@@ -7,8 +7,28 @@ import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 const execFile = promisify(execFileCb);
+/**
+ * GH#202 Phase 2a: run a Maestro flow with L2 parked. The fast-runner (XCTest)
+ * would fight maestro-runner (WDA) for the device, so stop it first; mark CDP
+ * stale afterward (always — even on failure) so the next read reconnects to the
+ * post-flow app state. The fast-runner lazily restarts on the next device_* call.
+ */
+export async function runFlowParked(run, deps = {}) {
+    const stop = deps.stopFastRunner ?? defaultStopFastRunner;
+    const stale = deps.markCdpStale ?? defaultMarkCdpStale;
+    stop();
+    try {
+        return await run();
+    }
+    finally {
+        stale();
+    }
+}
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
  *  syntactically be confused with a flag (`--`, `-e`) or break the
  *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
@@ -63,6 +83,8 @@ export function createMaestroRunHandler() {
         // in maestro_test_all).
         let flowFile;
         let rawYaml;
+        let validatedContent;
+        let headerAppId;
         if (args.inlineYaml) {
             rawYaml = args.inlineYaml;
         }
@@ -89,11 +111,11 @@ export function createMaestroRunHandler() {
                 : {};
             const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
             const rawAppId = resolveAppId(args.appId, platform);
-            const headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
+            headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
             if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
                 return failResult(`Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`);
             }
-            const validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+            validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
             // Unique per-call path — multi-LLM review caught the fixed
             // `/tmp/rn-maestro-inline.yaml` racing on concurrent maestro_run
             // calls (parallel test invocations could overwrite each other's
@@ -113,7 +135,11 @@ export function createMaestroRunHandler() {
         // params. Validation already ran at the top of the handler so by
         // this point every key matches PARAM_KEY_RE and every value is a
         // string — no need to re-check.
-        const baseArgs = dispatch.buildArgs(platform, flowFile);
+        const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile);
+        if (!appFileResolution.ok) {
+            return failResult(appFileResolution.error);
+        }
+        const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile);
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
@@ -122,7 +148,12 @@ export function createMaestroRunHandler() {
         }
         const finalArgs = [...baseArgs, ...paramArgs];
         try {
-            const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, { timeout, encoding: 'utf8' });
+            const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, 
+            // 10MB buffer: a multi-step flow with screenshots + app console/network
+            // logs routinely exceeds Node's 1MB execFile default, which would kill
+            // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
+            // run as a failure.
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }));
             const output = (stdout + '\n' + stderr).trim();
             // Reaching here means the runner exited 0 — that exit code is the
             // authoritative pass signal (a real flow failure exits non-zero and is

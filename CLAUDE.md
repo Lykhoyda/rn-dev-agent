@@ -6,6 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **rn-dev-agent** — A Claude Code plugin that turns Claude into a React Native development partner. It explores the codebase, designs architecture, implements features, then verifies everything live on the simulator — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
+## Feature Development Workflow (how we work — read this first)
+
+This is the standard process for any non-trivial feature or fix, so sessions stay consistent. **Plan first, get the plan reviewed by other models, then build — verifying the design before writing code is where the cheapest fixes live.**
+
+1. **Plan comprehensively.** Use `superpowers:brainstorming` to turn the idea into an approved design spec, then `superpowers:writing-plans` for a comprehensive TDD plan. Both artifacts live under `docs/superpowers/{specs,plans}/YYYY-MM-DD-<topic>.md` and are committed. Large features are **decomposed into phases** — each phase gets its own spec section, plan, and PR (e.g. `#202` → Phase 1 / 1.5 / 2a / 2b…).
+
+2. **Review the plan with other LLMs (Codex + Gemini).** Run `/brainstorm gemini,codex <plan + key files>` BEFORE writing any code. It consistently catches blockers in the *plan* (cheap to fix) that would otherwise become bugs. Apply the findings, then amend the plan commit with an "Amendments applied from the multi-LLM plan review" note.
+
+3. **Execute the plan task-by-task** (TDD: failing test → minimal impl → pass → commit). Two options:
+   - **Codex-Pair** (`/codex-pair`) — Codex reviews **every edit** as you go; **pay attention to its per-edit feedback** and address it inline.
+   - **`superpowers:subagent-driven-development`** — a fresh Opus subagent per task with a spec-compliance + code-quality review between each.
+   Commits are **signed**, small, and per-task; `dist/` is tracked so stage rebuilt outputs; add a changeset per change.
+
+4. **Multi-review the finished changes.** Run `/multi-review` (Gemini + Codex code review of the diff) — and/or a final holistic review — once the increment is complete.
+
+5. **Run + verify on real devices, then benchmark.** Test the change on the **iOS simulator AND Android emulator** (the plugin's own `device_*`/`cdp_*` tools, or a direct `dist` test against the booted device for bridge-internal logic), and benchmark where performance matters.
+
+6. **Fix findings and re-test.** Address review + device-verification findings, then re-run the unit suite + device checks until everything is green. Then finish the branch (`superpowers:finishing-a-development-branch`) — usually a **stacked PR** on the previous phase's branch.
+
+Logging: per the global instructions, log architectural decisions to `DECISIONS.md`, bugs to `BUGS.md`, and a dated narrative to `ROADMAP.md` in the sibling `rn-dev-agent-workspace` (the `/end-session` skill does this).
+
 ## Project Structure — sibling repos
 
 This is the **pure plugin repo** — agents, commands, skills, hooks, MCP server (`scripts/cdp-bridge/`), marketplace manifest. It ships to users as-is, so it contains only what runs inside Claude Code.
@@ -81,7 +102,7 @@ Repo-local troubleshooting memory (replaces the Experience Engine):
 - **"CDP connection failed"** → Is Metro running? Is the app loaded on the simulator?
 - **"agent-device not installed"** → Only required for Android. If targeting Android, run `npm install -g agent-device`. iOS uses the in-tree `rn-fast-runner` and does not need it.
 - **"rn-fast-runner did not become ready" / no `.xctestrun` at the expected path** → The runner self-builds on first use (cold `xcodebuild test`), so this now usually means the cold build itself timed out or failed — not a missing prebuild. The cold-build ready timeout is 360s; a slower machine or a build error (check Xcode/simulator state) can still trip it. To take the build out of the hot path, pre-build once with `xcodebuild build-for-testing` (see Prerequisites). The build artifacts live at `scripts/rn-fast-runner/build/DerivedData/`.
-- **Legacy `AgentDeviceRunner` re-appears on the simulator** → A stale `~/.agent-device/daemon.json` is respawning the upstream runner. Either run with `RN_DEVICE_KILL_LEGACY=1` (the plugin terminates the daemon at session-open) or `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.json ~/.agent-device/daemon.lock` one-time.
+- **Legacy `AgentDeviceRunner` re-appears on the simulator** → A stale `~/.agent-device/daemon.json` is respawning the upstream runner. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`, so this should self-heal. If you've opted out via `RN_DEVICE_KILL_LEGACY=0`, either drop that override or clean up one-time: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.json ~/.agent-device/daemon.lock`.
 - **`RnFastRunner` / `RnFastRunnerUITests-Runner` icons appear on the simulator** → Expected, not clutter. iOS device control is an XCUITest rig (D1219), so running it installs two apps: `RnFastRunner` (the minimal host app, bundle `dev.lykhoyda.rndevagent.fastrunner`) and `RnFastRunnerUITests-Runner` (the XCUITest harness — same pattern as WebDriverAgent's `WebDriverAgentRunner`). The Runner hosts the `POST /command` HTTP server on port 22088 and drives YOUR app via `XCUIApplication(bundleIdentifier:)` — it never drives itself. It stays installed/running on purpose so subsequent `device_*` calls are fast; leave it. (Contrast the legacy `AgentDeviceRunner` above, which IS unwanted.)
 - **"No booted simulator"** → Open Simulator.app or boot one via Xcode
 - **iOS 26.x beta issues** → Use iOS 18 stable runtime (Xcode > Settings > Platforms)
@@ -113,7 +134,13 @@ Three layers working together:
 
 iOS dispatch: every iOS `device_*` call short-circuits through `runIOS()` (TS client at `scripts/cdp-bridge/src/runners/rn-fast-runner-client.ts`) to the in-tree runner's `/command` endpoint. Coordinate-based gestures map to `.drag`; direction-based swipes/scrolls are pre-computed to coords by `device-interact.ts` before dispatch. `device_find` non-exact + `device_scrollintoview` are TS-side orchestrators over `runIOS('snapshot')` (no Swift `.findText` round-trip for fuzzy match — too coarse, returns bool only).
 
-Android dispatch unchanged: 3-tier `agent-device` (daemon socket → fast-runner → CLI). The legacy daemon is detected at session-open on iOS too and warned about (`RN_DEVICE_KILL_LEGACY=1` opts into termination) — a stale daemon respawns the upstream `AgentDeviceRunner` and fights our `RnFastRunner` for focus.
+Android dispatch unchanged: 3-tier `agent-device` (daemon socket → fast-runner → CLI). The legacy daemon is detected at session-open on iOS too and, since #202, terminated by default — `ensureSingleRunner()` kills stale `AgentDeviceRunner` processes scoped to the target simulator UDID and clears orphaned `~/.agent-device/daemon.{json,lock}` (opt out with `RN_DEVICE_KILL_LEGACY=0`) — because a stale daemon respawns the upstream `AgentDeviceRunner` and fights our `RnFastRunner` for focus.
+
+Since #202 Phase 1.5, iOS sessions also take a persisted, UDID-scoped ownership lock (`${TMPDIR}/rn-dev-agent-device-<uid>-ios-<udid>.lock`) at `device_snapshot action=open` — additive to the projectRoot bridge lock (`lifecycle/lockfile.ts`). It stops two *different* projects' bridges from driving the *same* simulator: the second gets `DEVICE_BUSY`. It self-heals via PID-liveness + a 30s heartbeat (a holder is reclaimable once its PID is dead or its heartbeat is >90s stale), so it cannot orphan the way the legacy `daemon.lock` did. On an fs error the acquire fails *open* (logged) — never blocking a legitimate session.
+
+Since #202 Phase 2a, a process-wide in-memory `DeviceSessionArbiter` (`lifecycle/device-arbiter.ts`) serializes the three planes per MCP call: `flow` (Maestro) is exclusive, `introspection` (CDP reads) + `interaction` (`device_*`) coexist. Every tool passes through `arbiterWrap` at `trackedTool`; a read/tap issued while a Maestro flow runs refuses fast with `BUSY_FLOW_ACTIVE`. Diagnostics (`cdp_status`), connection management, and session-less tools are unarbitrated so they always work — even mid-flow. The lease is in-memory only (persisting it would recreate the #202 orphaned-lock bug); a leaked lease is cleared via `cdp_status({ resetArbiter: true })`. The flow tools (`maestro_run`/`maestro_test_all`/`cdp_auto_login`) also park the L2 fast-runner for the flow and mark CDP stale after. Composite tools call underlying handler functions, not wrapped MCP tools, so one external call takes exactly one lease.
+
+Since #202 Phase 2b, `cdp_status` auto-recovers the JS-thread-paused wedge (something stole the simulator's foreground, so iOS suspended the app's JS thread): it parks the fast-runner, re-foregrounds the target (`simctl launch <udid> <appId>` — bare launch foregrounds an already-running app with the same pid, resuming its JS thread), reconnects, and confirms recovery with a real CDP liveness probe (not the `isPaused` debugger bit). Bounded to 3 *consecutive* attempts per session (reset on a successful recovery and on `device_snapshot action=open`). It SKIPS when a Maestro flow holds the arbiter lease (it would yank the app out from under the flow), and points you at `cdp_restart(hardReset=true)` if it can't clear the wedge. It does NOT diagnose *who* stole focus (`launchctl list` shows running, not frontmost, apps) — unconditional re-foreground fixes the wedge regardless. iOS-only.
 
 Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / install / launch / terminate) — the runner doesn't manage device state, only interaction.
 

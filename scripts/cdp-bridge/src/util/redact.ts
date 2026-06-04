@@ -11,7 +11,11 @@ const SECRET_PATTERNS = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bxox[baprs]-[A-Za-z0-9\-]+\b/g,
   /\bAIza[0-9A-Za-z\-_]{35}\b/g,
-  /-----BEGIN (?:RSA |OPENSSH |PRIVATE )?KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |PRIVATE )?KEY-----/g,
+  // Any private-key label variant: PRIVATE KEY, RSA PRIVATE KEY,
+  // OPENSSH PRIVATE KEY, EC/DSA/ENCRYPTED PRIVATE KEY, ... The old single-word
+  // `(?:RSA |OPENSSH |PRIVATE )?KEY` form never matched multi-word labels like
+  // "RSA PRIVATE KEY" — the most common ssh-keygen header — so keys leaked.
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g,
 ];
 
 // Value-side secret capture: redacts the VALUE when a secret-ish key is glued
@@ -35,10 +39,11 @@ const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken
 const MAX_STRING_LENGTH = 2000;
 
 function redactString(value: string): string {
-  let result = value.length > MAX_STRING_LENGTH
-    ? value.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${value.length}]`
-    : value;
-  result = result.replace(HOME_RE, '~');
+  // Redact BEFORE truncating. Truncation can sever a paired-delimiter secret —
+  // e.g. a PEM private key's -----END----- marker — so the pattern would never
+  // match and the key body would leak through. Apply every pattern to the full
+  // string first, then clip what remains.
+  let result = value.replace(HOME_RE, '~');
   KEYED_SECRET_RE.lastIndex = 0;
   result = result.replace(KEYED_SECRET_RE, '$1[REDACTED_SECRET]');
   for (const pattern of SECRET_PATTERNS) {
@@ -48,6 +53,9 @@ function redactString(value: string): string {
   for (const pattern of PII_PATTERNS) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, '[PII_REDACTED]');
+  }
+  if (result.length > MAX_STRING_LENGTH) {
+    result = result.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${result.length}]`;
   }
   return result;
 }

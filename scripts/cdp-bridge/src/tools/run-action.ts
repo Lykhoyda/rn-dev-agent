@@ -38,6 +38,7 @@ import {
   type AutoRepairRefusedReason,
   type ActionFailureCode,
   appendRunRecord,
+  shouldAutoPromoteToActive,
 } from '../domain/reusable-action.js';
 import {
   parseMaestroFailure,
@@ -164,6 +165,12 @@ function readMaestroOutput(env: MaestroEnvelope): string {
  */
 function mapRefusedReason(repairCode: string | undefined, repairError: string): AutoRepairRefusedReason {
   if (repairCode === 'SNAPSHOT_FAILED') return 'SNAPSHOT_FAILED';
+  // RUNNER_LEAK = the snapshot returned the Agent Device Runner's own UI rather
+  // than the target app. That is structurally a snapshot-infra failure (a known,
+  // actionable focus-stealing condition), NOT a transport/contract bug — bucket
+  // it with SNAPSHOT_FAILED so MTTR analytics surface it instead of hiding it
+  // under INTERNAL_ERROR.
+  if (repairCode === 'RUNNER_LEAK') return 'SNAPSHOT_FAILED';
   if (repairCode === 'TESTID_NOT_FOUND') return 'NO_MATCH';
   if (repairCode === 'STALE_TARGET') {
     if (/repair budget/i.test(repairError)) return 'BUDGET_EXHAUSTED';
@@ -206,7 +213,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // path segment. Reject malicious slugs at the boundary.
     if (!isValidActionId(args.actionId)) {
       return failResult(
-        `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/ and be <= 64 chars`,
+        `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ (no "..") and be <= 64 chars`,
         'BAD_FILENAME',
       );
     }
@@ -591,7 +598,15 @@ async function persistRun(
       );
       return;
     }
-    const next = { ...fresh, state: appendRunRecord(fresh.state, record) };
+    // H5: promote experimental → active on a clean replay. This is the
+    // documented lifecycle ("first clean /run-action replay auto-promotes to
+    // active") that was defined + unit-tested but never wired into a call site.
+    // persistRun is the single chokepoint both success paths reach, so the
+    // promotion rides the same atomic CAS write as the RunRecord append.
+    const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record)
+      ? { ...fresh.metadata, status: 'active' as const }
+      : fresh.metadata;
+    const next = { ...fresh, metadata: promotedMetadata, state: appendRunRecord(fresh.state, record) };
     const result = saveActionWithCAS(next);
     if (result.ok) return;
     // CAS conflict — another writer raced us. Reload and retry.

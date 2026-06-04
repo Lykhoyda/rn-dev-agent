@@ -7,7 +7,7 @@ import { loadVerificationConfig, getCachedProjectRoot } from '../verification/co
  * stack form) are accepted — Expo Router and React Navigation produce slightly
  * different shapes via the helper.
  */
-function extractActiveScreen(parsed) {
+export function extractActiveScreen(parsed) {
     const direct = parsed.routeName;
     if (typeof direct === 'string' && direct.length > 0)
         return direct;
@@ -23,6 +23,26 @@ function extractActiveScreen(parsed) {
             return path;
     }
     return null;
+}
+/**
+ * Best-effort live-route reader for the GH#186 route-drift guard. Returns the
+ * active route name via getNavState(), or null on any failure (CDP not
+ * connected, helpers absent, malformed payload) — callers treat null as
+ * "couldn't determine, skip drift detection". Never throws.
+ */
+export async function readLiveRoute(client) {
+    try {
+        const result = await client.evaluate(client.helperExpr('getNavState()'));
+        if (typeof result.value !== 'string')
+            return null;
+        const parsed = JSON.parse(result.value);
+        if (parsed.error)
+            return null;
+        return extractActiveScreen(parsed);
+    }
+    catch {
+        return null;
+    }
 }
 export function createNavigationStateHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {

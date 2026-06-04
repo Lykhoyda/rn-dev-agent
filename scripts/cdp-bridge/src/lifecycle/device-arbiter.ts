@@ -1,0 +1,169 @@
+import { failResult } from '../utils.js';
+import type { ToolResult } from '../utils.js';
+
+export type Plane = 'introspection' | 'interaction' | 'flow';
+
+export interface Lease { plane: Plane; opId: number }
+export interface Holder { plane: Plane; tool: string; opId: number }
+export interface AcquireOk { ok: true; lease: Lease }
+export interface AcquireBusy { ok: false; code: 'BUSY_FLOW_ACTIVE'; holder: Holder | null }
+export type AcquireResult = AcquireOk | AcquireBusy;
+
+interface OpInfo { plane: Plane; tool: string; startedAtMs: number }
+
+/**
+ * GH#202 Phase 2a: in-memory serialization of the three device-control planes
+ * for ONE bridge process. `flow` (Maestro) is exclusive — it cannot start while
+ * any op is in flight, and no op can start while it is held. `introspection`
+ * (CDP reads) and `interaction` (device_*) are shared and coexist. Refuse-fast,
+ * never queue. MUST stay in-memory: persisting a lease recreates the #202
+ * orphaned-lock bug. A leaked op-id would wedge all flows forever, so `reset()`
+ * is the escape hatch (exposed via the unarbitrated cdp_status resetArbiter).
+ */
+export class DeviceSessionArbiter {
+  private flowLeaseHeldBy: number | null = null;
+  private readonly ops = new Map<number, OpInfo>();
+  private nextOpId = 1;
+  private readonly now: () => number;
+
+  constructor(now: () => number = Date.now) { this.now = now; }
+
+  tryAcquire(plane: Plane, tool: string): AcquireResult {
+    if (plane === 'flow') {
+      if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
+        return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+      }
+      return this.grant(plane, tool, true);
+    }
+    if (this.flowLeaseHeldBy !== null) {
+      return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+    }
+    return this.grant(plane, tool, false);
+  }
+
+  private grant(plane: Plane, tool: string, isFlow: boolean): AcquireOk {
+    const opId = this.nextOpId++;
+    this.ops.set(opId, { plane, tool, startedAtMs: this.now() });
+    if (isFlow) this.flowLeaseHeldBy = opId;
+    return { ok: true, lease: { plane, opId } };
+  }
+
+  private describeBlocker(): Holder | null {
+    const id = this.flowLeaseHeldBy ?? this.oldestOpId();
+    if (id === null) return null;
+    const info = this.ops.get(id);
+    return info ? { plane: info.plane, tool: info.tool, opId: id } : null;
+  }
+
+  private oldestOpId(): number | null {
+    let oldest: number | null = null;
+    let oldestAt = Infinity;
+    for (const [id, info] of this.ops) {
+      if (info.startedAtMs < oldestAt) { oldestAt = info.startedAtMs; oldest = id; }
+    }
+    return oldest;
+  }
+
+  release(lease: Lease): void {
+    this.ops.delete(lease.opId);
+    if (this.flowLeaseHeldBy === lease.opId) this.flowLeaseHeldBy = null;
+  }
+
+  reset(reason: string): { clearedOps: number; hadFlow: boolean; reason: string } {
+    const clearedOps = this.ops.size;
+    const hadFlow = this.flowLeaseHeldBy !== null;
+    this.ops.clear();
+    this.flowLeaseHeldBy = null;
+    return { clearedOps, hadFlow, reason };
+  }
+
+  get snapshot(): { flowLeaseHeldBy: number | null; activeOps: number; ops: Array<{ opId: number; plane: Plane; tool: string }> } {
+    return {
+      flowLeaseHeldBy: this.flowLeaseHeldBy,
+      activeOps: this.ops.size,
+      ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool })),
+    };
+  }
+}
+
+export const arbiter = new DeviceSessionArbiter();
+
+// --- Plane classification ---------------------------------------------------
+// flow: tools that drive the whole device via Maestro OR relaunch the app —
+// exclusive, because either yanks the device out from under everything else.
+// (cdp_auto_login runs a Maestro subflow; cdp_reload/restart relaunch the app —
+// none may interleave with a running flow.)
+const FLOW_TOOLS = new Set<string>([
+  'maestro_run', 'maestro_test_all', 'cdp_run_action', 'cdp_auto_login',
+  'cdp_reload', 'cdp_restart',
+]);
+// interaction: anything that mutates device/app state — gestures AND
+// state-mutating CDP calls (navigate/dispatch/set_shared_value/mmkv write).
+// These are writes, deliberately NOT "introspection".
+const INTERACTION_TOOLS = new Set<string>([
+  'device_screenshot', 'device_snapshot', 'device_find', 'device_press', 'device_fill',
+  'device_swipe', 'device_back', 'device_longpress', 'device_scroll', 'device_scrollintoview',
+  'device_pinch', 'device_permission', 'device_reset_state', 'device_deeplink',
+  'device_accept_system_dialog', 'device_dismiss_system_dialog', 'device_record',
+  'device_pick_value', 'device_pick_date', 'device_focus_next', 'device_batch',
+  'cdp_interact', 'cdp_repair_action', 'cross_platform_verify', 'proof_step',
+  'cdp_navigate', 'cdp_dispatch', 'cdp_set_shared_value', 'cdp_mmkv',
+]);
+// introspection: genuinely read-only CDP/state queries.
+const INTROSPECTION_TOOLS = new Set<string>([
+  'cdp_evaluate', 'cdp_component_tree', 'cdp_component_state', 'cdp_diagnostic_renderers',
+  'cdp_navigation_state', 'cdp_nav_graph', 'cdp_store_state',
+  'cdp_network_log', 'cdp_network_body', 'cdp_wait_for_network', 'cdp_console_log',
+  'cdp_error_log', 'cdp_native_errors', 'cdp_metro_events', 'cdp_heap_usage', 'cdp_cpu_profile',
+  'cdp_object_inspect', 'cdp_exception_breakpoint',
+  'collect_logs', 'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
+]);
+
+// Everything else is UNARBITRATED (planeForTool → null): cdp_status (the health
+// check + the reset escape hatch), cdp_connect/disconnect/targets, device_list
+// (session-less), cdp_record_test_*, dev settings/devtools. These must work even
+// mid-flow — cdp_status especially is what you run WHEN a flow looks stuck. A new
+// tool not listed in any Set above defaults here (unarbitrated) — add it to a Set
+// if it touches the device.
+export function planeForTool(name: string): Plane | null {
+  if (FLOW_TOOLS.has(name)) return 'flow';
+  if (INTERACTION_TOOLS.has(name)) return 'interaction';
+  if (INTROSPECTION_TOOLS.has(name)) return 'introspection';
+  return null;
+}
+
+/**
+ * Wrap an MCP handler so it acquires its plane before running and releases
+ * after (in a `finally`, so a throwing handler still frees its lease). A refused
+ * acquire returns a ToolResult (never throws). Unarbitrated tools (planeForTool
+ * → null) are returned unwrapped. Only EXTERNAL MCP calls pass through here;
+ * composite tools (cdp_run_action, proof_step, device_batch) call underlying
+ * handler FUNCTIONS, not the wrapped MCP tools, so a flow tool's internal
+ * device/CDP work never re-enters this wrapper — one external call = one lease.
+ */
+export function arbiterWrap(
+  name: string,
+  handler: (...args: unknown[]) => Promise<ToolResult>,
+  inst: DeviceSessionArbiter = arbiter,
+): (...args: unknown[]) => Promise<ToolResult> {
+  const plane = planeForTool(name);
+  if (plane === null) return handler;
+  return async (...args: unknown[]): Promise<ToolResult> => {
+    const res = inst.tryAcquire(plane, name);
+    if (!res.ok) {
+      const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : 'a Maestro flow';
+      return failResult(
+        `Refusing ${name}: blocked by ${who} on this device — reads and taps can't interleave ` +
+        `with a running Maestro flow. Retry after it completes; if it appears stuck, ` +
+        `run cdp_status({ resetArbiter: true }).`,
+        res.code,
+        { holder: res.holder, conflict: true },
+      );
+    }
+    try {
+      return await handler(...args);
+    } finally {
+      inst.release(res.lease);
+    }
+  };
+}

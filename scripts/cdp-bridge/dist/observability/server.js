@@ -8,6 +8,7 @@ export class ObservabilityServer {
     recorder;
     server = null;
     port = 0;
+    streams = new Set();
     constructor(recorder) {
         this.recorder = recorder;
     }
@@ -15,8 +16,12 @@ export class ObservabilityServer {
         if (this.server)
             return { url: this.url(), port: this.port };
         const server = createServer((req, res) => this.handle(req, res));
+        // SSE responses are long-lived, so disable the body timeout. But keep a
+        // small headersTimeout so a connection that stalls mid-request-headers
+        // (slow-loris) is closed instead of held open forever — SSE clients send
+        // their headers immediately, so 5s is ample.
         server.requestTimeout = 0;
-        server.headersTimeout = 0;
+        server.headersTimeout = 5_000;
         try {
             this.port = await listen(server, preferredPort ?? 0);
         }
@@ -34,6 +39,18 @@ export class ObservabilityServer {
     async stop() {
         const s = this.server;
         this.server = null;
+        // Tell live SSE clients we're shutting down BEFORE yanking the sockets, so
+        // the browser's EventSource closes instead of entering its auto-reconnect
+        // loop (which would otherwise hammer the dead port, or silently reattach to
+        // a different session started later on the same port).
+        for (const res of this.streams) {
+            try {
+                res.write('data: {"type":"shutdown"}\n\n');
+                res.end();
+            }
+            catch { /* already closed */ }
+        }
+        this.streams.clear();
         if (s) {
             s.closeAllConnections?.();
             await new Promise((r) => s.close(() => r()));
@@ -66,17 +83,26 @@ export class ObservabilityServer {
                 return false;
             }
         };
-        const { snapshot, detach } = this.recorder.attach((ev) => { if (!write(ev)) {
-            detach();
-            res.end();
-        } });
+        this.streams.add(res);
+        const { snapshot, detach } = this.recorder.attach((ev) => {
+            // Recorder.clear() emits a terminal sentinel — end the stream cleanly.
+            if (ev.type === 'cleared') {
+                detach();
+                res.end();
+                return;
+            }
+            if (!write(ev)) {
+                detach();
+                res.end();
+            }
+        });
         write({ type: 'snapshot', events: snapshot });
         const hb = setInterval(() => { try {
             res.write(': hb\n\n');
         }
         catch { /* closed */ } }, 15_000);
         hb.unref?.();
-        res.on('close', () => { clearInterval(hb); detach(); });
+        res.on('close', () => { clearInterval(hb); detach(); this.streams.delete(res); });
     }
     guard(req, res) {
         const host = (req.headers.host ?? '').toLowerCase();

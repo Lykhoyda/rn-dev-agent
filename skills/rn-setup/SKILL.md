@@ -90,7 +90,7 @@ If it still fails, give the user these manual instructions:
 3. If npm registry error: check internet connection, then `npm cache clean --force && npm install -g agent-device`
 4. Verify: `agent-device --version` should print a version number
 
-If the user is iOS-only, mark this row N/A (Android-only) and continue. The `RN_DEVICE_KILL_LEGACY=1` env var (D1219) is the recommended setting for iOS-only users with a stale daemon left over from a previous install — it terminates the legacy runner at session-open.
+If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy runner at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
 
 ### 4. maestro-runner
 ```bash

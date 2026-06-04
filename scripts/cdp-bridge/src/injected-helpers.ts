@@ -1,6 +1,12 @@
+// Single source of truth for the injected-helpers protocol version. Bump this
+// whenever the injected surface changes; it flows into the IIFE's freshness
+// check (__RN_AGENT.__v) AND the post-injection log line, so they can never
+// drift (the log previously hard-coded a stale "v11").
+export const HELPERS_VERSION = 23;
+
 export const INJECTED_HELPERS = `
 (function() {
-  var __HELPERS_VERSION__ = 23;
+  var __HELPERS_VERSION__ = ${HELPERS_VERSION};
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 

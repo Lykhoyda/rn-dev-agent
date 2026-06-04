@@ -9,6 +9,587 @@ All notable changes to rn-dev-agent will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.44.44] — 2026-05-13
+
+### Fixed (GH #119 — AutoRepairOutcome cascading-selector clarification)
+
+- **`AutoRepairOutcome.nextFailedSelector`**: new optional field, populated
+  when auto-repair succeeded but the post-repair retry failed on a DIFFERENT
+  selector. Lets MTTR analysis distinguish "patch didn't work" from
+  "cascading failure — patch worked, next selector broke." Without this,
+  the telemetry made every cascading failure look like a failed patch.
+- Absent when retry passed (happy path) OR when retry failed on the
+  SAME selector as the patch (= patch didn't actually fix it). Codex
+  flagged the misclassification at conf 85 in the PR #115 review.
+- 3 new regression tests cover the three cases. Suite 1312 → 1315 passing.
+
+## [0.44.43] — 2026-05-13
+
+### Added (GH #116 — wire cdp_run_action into /run-action slash command)
+
+- **`maestro_run` now accepts `params: Record<string, string>`** that get
+  forwarded to maestro-runner as `-e KEY=VALUE` argv pairs. Keys must
+  match `[A-Z_][A-Z0-9_]*` (Maestro env-style convention) — anything
+  else is refused at the handler boundary so a hostile payload can't
+  become a shell-injectable flag. Values must be strings. Since the
+  invocation uses `execFile` (not `exec`), values are passed as
+  separate argv entries — shell metacharacters are inert by construction.
+- **`cdp_run_action` forwards `params`** through to both the first
+  `maestro_run` call AND the post-repair retry, so a parameterised flow
+  replays identically after auto-repair.
+- **`/rn-dev-agent:run-action` slash command** is rewritten to call
+  `cdp_run_action` via MCP rather than shelling out to maestro-runner
+  directly. User invocations of `run-action wizard-create-task -e
+  TITLE=...` now benefit from auto-repair, structured RunRecords, and
+  the GH #120 per-phase timing. The slash command still parses args
+  locally (positional + `-e` + `--platform` + `--dry-run` + new
+  `--no-auto-repair`) but delegates execution to the MCP tool.
+- `--dry-run` keeps the bash-only path since `cdp_run_action` always
+  executes.
+- 6 new handler tests cover: malformed-key refusal (5 shell-injection
+  shapes), non-string-value refusal, well-formed key acceptance,
+  cdp_run_action's params forwarding to the first maestro_run call,
+  end-to-end params threading via a real temp project fixture, and
+  params persistence into the post-repair retry path.
+  Suite: 1312 → 1318 passing.
+
+### Note
+
+Step #4 of issue #116 ("Live smoke: replay wizard-create-task with
+-e TITLE=foo end-to-end on a booted simulator") is left for a
+maintainer-driven verification — it requires a live simulator with the
+test app and is outside the scope of this code-only PR.
+
+## [0.44.42] — 2026-05-13
+
+### Hardened (GH #113 — saveAction precondition becomes a runtime soft-assertion)
+
+- **`saveAction` now throws `SaveActionPreconditionError`** when the
+  on-disk YAML has been edited externally since the in-memory action was
+  loaded. Previously the "caller already gated actionWasEditedExternally"
+  contract was implicit, surfaced only in a comment block. A future caller
+  (e.g. the planned #104 auto-repair-on-failure wiring) could silently
+  clobber a real human edit if it missed the contract.
+- **Bypassed on first write** (file doesn't exist yet) since there's no
+  prior state to protect.
+- Both current callers (`cdp_repair_action`, `cdp_record_test_save_as_action`)
+  gate correctly, so the new guard fires only for misbehaving new callers.
+- Error message references `GH #113`, the offending YAML path, and points
+  the developer at `actionWasEditedExternally` / `saveActionWithCAS`.
+- 3 new regression tests; suite: 1312 → 1315 passing.
+- One `stat()` per save on the happy path — negligible cost.
+
+## [0.44.41] — 2026-05-13
+
+### Fixed (GH #112 — sidecar-io Windows path bug)
+
+- **`sidecarPathFor` now extracts the basename via `split(/[\\/]/).pop()`**
+  instead of `split('/').pop()`. The old form returned the entire
+  backslash-containing path as a single segment on Windows, producing
+  absurd deeply-nested directory trees through subsequent
+  `join(parent, 'state', base)`. PR #109's atomic-writer trusted this
+  output and `ensureDir`-ed it, making the pre-existing latent bug more
+  impactful. Gemini flagged at conf 88 in the PR #109 multi-LLM review.
+- 4 new regression tests cover POSIX-style paths, `.yml` extension,
+  Windows-style backslash input, and mixed-separator input. The fix
+  works on both POSIX and Windows runtimes since the separator split
+  is explicit rather than platform-native. Suite: 1312 → 1316 passing.
+
+## [0.44.40] — 2026-05-13
+
+### Hardened (GH #111 — atomic-writer concurrent pairWrite races)
+
+- **`pairWrite` now uses unique `.tmp.<pid>.<time36>.<rand36>` suffixes** so
+  two concurrent writers against the same action don't share a tmp namespace.
+  Without this, `cleanupOrphans` could `unlinkSync` writer A's in-flight tmp
+  file mid-rename, producing an opaque ENOENT for the user. Gemini flagged
+  the failure mode at conf 82 in the PR #109 multi-LLM review.
+- **`cleanupOrphans` is age-bounded**: scans the target directory for files
+  matching the path prefix and only unlinks orphans older than
+  `ORPHAN_MAX_AGE_MS = 5 minutes`. Concurrent writer's fresh tmp file
+  preserved; crashed process's stale tmp file becomes eligible for sweep
+  after 5 minutes.
+- **New `_readdir` test seam** for deterministic cleanup mocking.
+- 7 new regression tests cover unique-stamp generation, stale-orphan sweep,
+  fresh-orphan preservation, prefix anchoring, missing-dir tolerance, the
+  exported constant value, and round-trip orphan-free state across 5
+  repeated `pairWrite` calls. Three existing tests updated to match the
+  new `.tmp.<stamp>` filename shape. Suite: 1312 → 1319 passing.
+
+## [0.44.39] — 2026-05-13
+
+### Hardened (GH #110 — agent-device test seam fuse)
+
+- **`_setRunAgentDeviceForTest` is now one-way fused.** Once any production
+  `runAgentDevice` call has dispatched in this process, attempting to install
+  a new override throws with `blown fuse — a production runAgentDevice call
+  (cliArgs[0]="...") already dispatched in this process. ... (GH #110
+  hardening)`. The fuse fires BEFORE any tier selection (Codex review
+  conf 90), so a production call that throws downstream still seals the
+  seam.
+- **No reset escape hatch.** A reset seam would be functionally equivalent
+  to no fuse — any code that could call reset is the same code that could
+  leak the override (Codex review conf 90). Tests that genuinely need both
+  production and override paths should use Node 22's
+  `node --test --test-isolation=process` to get a fresh worker per file.
+- **Throw, not no-op** (Codex review conf 95). Silent no-op would let a
+  forgotten `afterEach(() => _setRunAgentDeviceForTest(null))` route a
+  test through the real `agent-device` CLI, producing `ENOENT` errors that
+  look nothing like a test-seam bug. The fuse error message includes the
+  `cliArgs[0]` that blew it, so post-mortem debugging can identify which
+  production call leaked first — that's the test missing its cleanup.
+- 5 new subprocess-isolated regression tests cover: override is honored
+  pre-fuse; setting null pre-fuse re-arms cleanly; production dispatch
+  blows the fuse before tier completion; error message carries GH #110 +
+  remediation hint; standard afterEach `null` cleanup remains legal.
+  Suite: 1312 → 1317 passing.
+
+## [0.44.38] — 2026-05-13
+
+### Added (GH #106 — flow + skeleton bundling in experience export/import)
+
+- **`exportExperience()` now bundles `.rn-agent/actions/*.yaml` flows and
+  `.rn-agent/skeleton.yaml`** alongside heuristics + failure stats —
+  matching what the `rn-agent-export` / `rn-agent-import` command docs
+  have advertised since D1204. Until now the underlying script handled
+  only heuristics, so a teammate exporting + importing got the muscle
+  memory metadata but not the actual reusable actions that ARE the L3
+  corpus.
+- New `src/experience/flow-bundle.ts` exposes pure anonymize/restore
+  helpers: rewrites `appId:` between `com.example.<slug>` (export) and
+  the local project's bundleId (import), truncates author-prose comment
+  lines longer than 200 chars while preserving M7 fields verbatim, and
+  extracts `${VAR}` placeholders so the importer can surface them.
+- **Placeholder manifest comments** (Codex review A, HIGH conf): on
+  import, if a flow contains `${UPPER_CASE_VARS}`, prepend a
+  `# placeholders: VAR1, VAR2 — supply via -e KEY=VALUE on replay` line
+  above the M7 header. Codex's call: don't suffix every placeholder flow
+  with `.needs-review.yaml` (that punishes correctly-authored flows);
+  don't go silent (violates spirit of acceptance criterion); use a
+  grep-able comment instead.
+- **`appId:` rewrite is line-wise** (Codex review B, HIGH conf), so
+  legitimate multi-line top sections (a `# shared across envs` comment
+  above `appId:`) round-trip cleanly. Hard-fails only when zero `appId:`
+  lines exist.
+- **Conflict semantics**: an imported flow whose `id` already exists
+  locally lands at `<id>.imported.yaml` so the user can diff and merge
+  manually. Same pattern for skeleton (`skeleton.imported.yaml`).
+- **Status forced to `experimental`** on import — keeps imported flows
+  from claiming `active` before a local replay proves they work.
+- **Sidecars are not bundled.** Per-developer runtime state (`runHistory`,
+  `repairHistory`, `stats`) is exactly what shouldn't travel; on import
+  the local `loadOrInitSidecar` seeds a fresh sidecar on first replay.
+- **`--no-flows` / `--no-skeleton` opt-outs** on both `ExportOptions`
+  and `ImportOptions` (default both true).
+- **Defense in depth**: import-side flow `id` is re-validated against
+  `^[A-Za-z0-9_-]+$` so a hand-crafted bundle with a path-traversal id
+  can't escape `.rn-agent/actions/`. Malformed flows are skipped with a
+  one-line stderr log.
+- 29 new tests — 18 pure-helper tests on `flow-bundle.ts` + 11
+  integration tests with real temp dirs covering export, import,
+  opt-outs, conflict-rename, malformed-bundle defense in depth, and
+  no-app.json fallback. Suite: 1312 → 1341 passing.
+
+## [0.44.37] — 2026-05-12
+
+### Added (GH #91 acceptance #3 closeout — per-project verification config)
+
+- **`verification.successShapes` and `verification.mutationMethods` per-project
+  overrides** in `.rn-agent/config.json` for the mutation-absence detector.
+  Closes the last open acceptance criterion on GH #91. Detector itself shipped
+  in `fed0dd0` (Apr 28).
+- New `loadVerificationConfig(projectRoot)` reads the config once per project
+  root and caches the result. Defaults are preserved (no behavior change) on
+  missing file, parse error, missing `verification` block, empty arrays, or
+  all-invalid regex strings — apps that don't opt in see zero change.
+- **ReDoS-via-typo guard** (Codex review conf 90): patterns longer than 200
+  chars are dropped before compilation, and matched-input length is capped
+  at 256 chars in `isSuccessShape`. Bounds regex evaluation cost on the
+  `cdp_navigate` / `cdp_navigation_state` / `proof_step` hot path so a
+  developer typo can't stall the MCP event loop.
+- **Empty-array means defaults**, not "disable detection" (Codex review conf
+  92). Silent loss of a safety net is the worse failure mode; explicit disable
+  is reserved for a future `verification.disable: true` flag.
+- **Observability**: one stderr log line on first config load per project root
+  (`[verification] loaded config from .../.rn-agent/config.json (patterns: N,
+  methods: M)`). Makes "is my config picked up?" a one-line check, without
+  needing SIGHUP/watcher reload machinery.
+- 18 new tests cover the loader, overrides, ReDoS guards, cache behavior, and
+  the observability log. Suite: 1312 → 1330 tests, all passing.
+
+### Notes
+
+- `device_press` / `cdp_interact` wirings remain **intentionally deferred** as
+  documented in the original `fed0dd0` commit message: these tools don't carry
+  nav-state intent, and the success-shape signal is captured downstream by the
+  next `cdp_navigation_state` call. Adding nav-state fetches per tap would
+  bloat the hot path for noise this PR considers low-value.
+
+## [0.44.36] — 2026-05-12
+
+### Fixed (Phase 134.2-followup — device_deeplink url injection)
+
+- **`device_deeplink` now POSIX-quotes the caller-supplied `url`** before
+  passing it through `adb shell am start -d <url>`. The Phase 134.2 fix
+  validated `packageName` but missed `url`. Deepsec revalidation
+  (run `20260512193352`) re-flagged the deeplink as HIGH because the
+  `url` arg still flowed unescaped into the Android remote shell, where
+  argv is joined with spaces and re-interpreted as a raw command line.
+  A URL like `myapp://path;reboot` would have executed `reboot` after
+  the `am start` completed.
+- Two-layer defense:
+  1. **Validation at the handler boundary**: reject any `url` that
+     contains control characters or newlines (which would break out of
+     the POSIX-quoted string itself), or exceeds 4096 chars.
+  2. **POSIX single-quote wrap**: every shell metacharacter inside the
+     URL (`;`, `|`, `$`, `` ` ``, `&`) becomes inert. Same pattern as
+     `device-interact.ts:524` (`buildAdbInputTextArgv`).
+- Legitimate URLs with `&`, `?`, `=`, `#` continue to work — the quote
+  wrap makes those literal arguments to `am start -d`, not shell
+  expansion targets.
+
+### Internal
+
+- 4 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`:
+  - newline-injected URL rejected
+  - control-char-bearing URL rejected
+  - oversized URL (>4096 chars) rejected
+  - legitimate URL with query+fragment passes validation
+- Full unit suite: 1308 → 1312 passing, 0 failing.
+- Closes the **last HIGH-severity** finding from the original deepsec
+  scan. Post-merge: **CRITICAL = 0, HIGH = 0** (100% security-class
+  findings closed).
+
+## [0.44.35] — 2026-05-12
+
+### Fixed (Phase 134.5 — workflow + correctness sweep, closes 3 MEDIUM + 2 BUG)
+
+- **GitHub Actions pinned to immutable commit SHAs.** Both `ci.yml`
+  and `deploy-docs.yml` previously used mutable `@v4` tags — a moved
+  tag (or compromised maintainer account) would silently substitute
+  different code on the next run. Now pinned to:
+  - `actions/checkout@de0fac2e…` (v6.0.2)
+  - `actions/setup-node@48b55a01…` (v6.4.0)
+  - `actions/upload-pages-artifact@fc324d35…` (v5.0.0)
+  - `actions/deploy-pages@cd2ce8fc…` (v5.0.0)
+
+  Per [GitHub's official security-hardening guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions):
+  "Pinning an action to a full-length commit SHA is currently the only
+  way to use an action as an immutable release."
+- **`deploy-docs.yml` per-job least-privilege permissions.** Previously
+  `pages: write` + `id-token: write` were granted at the workflow level,
+  so the `build` job (which only needs `contents: read`) had Pages-write
+  and OIDC capability it didn't use. Those permissions are now scoped
+  to the `deploy` job only.
+- **`maestro_test_all`'s `pattern` arg now guards against regex DoS.**
+  Caller-supplied `pattern` is length-capped (256 chars) and
+  RegExp construction is try/catch wrapped; on any error, discovery
+  proceeds without filtering rather than crashing.
+- **`cdp_connect`'s already-connected `bundleId` check uses
+  word-boundary matching** instead of `includes()`. Prevents
+  false-positive "already connected" when the live target is e.g.
+  `com.example.app-test` and the caller asked for `com.example.app`.
+
+### Internal
+
+- Workflows: SHA-pin comments include the resolved version name
+  (`# v6.0.2`) so Dependabot can read both and bump them together.
+- `tools/connection.ts` bundleId match uses a regex with non-bundle-id
+  boundary characters (`[^A-Za-z0-9._-]`) — bundle IDs share `.` and
+  `-` with their surrounding context, so `\b` alone wouldn't work.
+
+## [0.44.34] — 2026-05-12
+
+### Fixed (Phase 134.4 — CDP multiplexer trust boundary, closes 1 HIGH)
+
+- **CDP multiplexer now requires a per-instance capability token** in
+  the WebSocket upgrade path. Previously any process that could
+  discover the ephemeral loopback port could connect and send
+  arbitrary CDP commands (`Runtime.evaluate`, `Page.navigate`, etc.)
+  to the running Hermes runtime, **bypassing Claude Code's
+  tool-permission prompts entirely**. This included a browser tab
+  scanning local ports, a sibling shell, or any malicious process
+  with loopback access.
+- The token is 32 bytes of `crypto.randomBytes` (43 char base64url),
+  unique per multiplexer instance, included in the WebSocket URL
+  path as `ws://127.0.0.1:<port>/<token>`. The `verifyClient`
+  handler uses `timingSafeEqual` on equal-length buffers to compare
+  — no timing side channel leaks the token.
+- The exposed `proxyUrl` (from `client.startProxy()`) and the
+  DevTools URL (from `cdp_open_devtools`) automatically include the
+  token. Without the token in the path, the multiplexer returns
+  `401 Unauthorized` at upgrade time.
+- **Token never appears in logs** — log lines reference
+  `ws://127.0.0.1:<port>/<token>` literally, not the actual value.
+
+### Internal
+
+- New exports from `cdp/multiplexer.ts`: `generateCapabilityToken()`
+  and `verifyConsumerPath(reqUrl, expectedToken)`. Both pure
+  functions for unit testing. `CDPMultiplexer.token` getter for
+  callers building DevTools URLs.
+- 9 new unit tests cover the token verification truth table:
+  legitimate token accepted; wrong token / missing token / empty
+  token / length mismatch / query-style appendage / non-string
+  inputs all rejected. Plus uniqueness across instances.
+- Implements the deepsec recommendation: per-proxy high-entropy
+  capability token required during WebSocket upgrade, rejection
+  before consumer registration.
+
+## [0.44.33] — 2026-05-12
+
+### Fixed (Phase 134.3 — path containment, closes 2 HIGH + 3 MEDIUM)
+
+- **Action IDs are validated against a strict regex** at every MCP tool
+  boundary that uses them as a path segment under `.rn-agent/actions/`.
+  `cdp_run_action` and `cdp_repair_action` reject IDs like `../etc/passwd`
+  with `BAD_FILENAME` before any file read. Closes 2 deepsec HIGH
+  path-traversal findings.
+- **`actionPathFor` enforces both regex + assertWithinDir** as
+  defense-in-depth. Even if a future caller bypasses the boundary
+  regex, the path resolution refuses to land outside the actions dir.
+- **`device_screenshot` rejects paths containing `..` segments.** A
+  malicious agent could otherwise pass `path: '../../../etc/passwd'`
+  and overwrite arbitrary files. Absolute paths to legitimate
+  locations (e.g. `~/Desktop`) remain allowed.
+- **Default screenshot filename gets a random suffix** so parallel
+  same-millisecond calls can't clobber each other's output. Was
+  `/tmp/rn-screenshot-<ts>.jpg`; now `/tmp/rn-screenshot-<ts>-<rand>.jpg`.
+- **`cross_platform_verify scanDir` rejects `..` traversal.** Refuses
+  to enumerate the filesystem outside the caller's directory.
+
+### Internal
+
+- New module `scripts/cdp-bridge/src/domain/path-safety.ts` —
+  `isValidActionId`, `assertValidActionId`, `assertWithinDir`,
+  `isWithinDir`, `pathHasTraversal`, plus `PathTraversalError`. Reused
+  across action-store, repair-action, run-action, device-list,
+  cross-platform-verify. Same chokepoint discipline as Phase 134.1
+  (Maestro validator) and 134.2 (bundle-ID validation).
+- 12 new unit tests cover path-traversal payloads, absolute paths,
+  control chars, sibling-dir prefix collision, and the backward-parity
+  path. Total test count: 1284 → 1296 passing, 0 failing.
+- Implements proposed D1214 from workspace ROADMAP Phase 134.1
+  ("Tool-supplied paths must pass `assertWithinDir(p, projectActionsDir)`
+  before any `fs.write*` / `createWriteStream` call").
+
+## [0.44.32] — 2026-05-12
+
+### Fixed (Phase 134.2 — adb shell-arg hardening, closes 5 HIGH)
+
+- **`appId` / `packageName` are validated against the bundle-ID regex
+  before any `adb shell` invocation.** In the prompt-injection threat
+  model, `adb shell <cmd> <appId>` re-interprets argv under the device
+  shell — a metachar-laden `appId` becomes command injection on the
+  connected Android device/emulator. Each tool now rejects malformed
+  bundle IDs at its handler boundary with `INVALID_APPID` /
+  `DEVICE_RESET_INVALID_APPID` / `INVALID_PACKAGE_NAME`. Closes 5
+  deepsec HIGH findings.
+
+### Sites hardened
+
+- `device_permission` (`tools/device-permission.ts`) — both
+  grant/revoke/reset and query actions
+- `device_reset_state` (`tools/device-reset-state.ts`) — at the entry
+  point, before any of permission / terminate / launch helpers run
+- `device_deeplink` (`tools/device-deeplink.ts`) — `packageName` arg
+  passed to `adb shell am start -n <packageName>` is now validated;
+  `packageName` remains optional
+- `device_snapshot` action=open with attachOnly=true
+  (`tools/device-session.ts`) — `appId` reaching `adb shell pidof
+  <appId>` is validated
+
+### Internal
+
+- All 5 sites reuse `isValidBundleId` from `domain/maestro-validator.ts`
+  (introduced in Phase 134.1). Single regex chokepoint — no per-call-
+  site validation logic to drift. Implements proposed D1213 (workspace
+  ROADMAP Phase 134.1).
+- 13 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`
+  cover newline injection, shell metachars (`;`, `|`, backtick, `$()`),
+  and the backward-parity path (valid + hyphenated bundle IDs).
+- Full unit suite: 1284 passing, 0 failing.
+- New error codes added to `types.ts`: `INVALID_APPID`,
+  `DEVICE_RESET_INVALID_APPID`, `INVALID_PACKAGE_NAME`.
+
+## [0.44.31] — 2026-05-12
+
+### Fixed (Phase 134.1 — Maestro/YAML hardening, closes 7 CRITICAL + 2 HIGH)
+
+- **`runScript` and other host-executing Maestro directives are now rejected
+  by default.** New central validator at
+  `scripts/cdp-bridge/src/domain/maestro-validator.ts` enforces a strict
+  command allowlist on every Maestro-emitting AND Maestro-executing path.
+  In the prompt-injection threat model — where a malicious project file
+  can reach the agent — this closes the highest-impact RCE class: 7 CRITICAL
+  deepsec findings from the 2026-05-12 baseline scan.
+- **`appId` / bundle IDs are validated against a strict reverse-DNS regex.**
+  No string concatenation into the Maestro YAML header anywhere; all flow
+  construction goes through `buildMaestroFlow()` which serializes via the
+  `yaml` library. Newline / `---` / unicode-line-break injection in
+  `app.json` slugs no longer becomes Maestro directive injection.
+- **Project-supplied login flows (`auto-login.ts`) are now parse-and-inline,
+  not blind-replay.** Previously `.maestro/subflows/login.yaml` was loaded
+  with only a `clearState: true` strip and wrapped in `runFlow: file: ...`.
+  The new flow parses + validates the project file, then inlines the
+  validated commands directly into the wrapper — `runFlow` is no longer in
+  the allowlist, so the indirection can't smuggle a malicious flow back in.
+- **`maestro_test_all` no longer trusts disk content.** Every discovered
+  `.yaml` is read + parse-and-validated + re-serialized to a canonical temp
+  file before execution. Auto-discovery was the highest-trust gap in the
+  codebase: a single prompt-injected save earlier in a session would have
+  let attacker steps replay on every subsequent test_all invocation.
+- **Test-recorder fixes** (`test-recorder-generators.ts`): `produces` keys
+  now pass through `stripNewlines` (closes the comment-escape CRITICAL);
+  swipe directions are enum-constrained (closes the recording-replay CRITICAL).
+- **`replaceIdSelector` refuses unsafe testIDs** — the running app's
+  snapshot is attacker-controlled in the threat model; testIDs containing
+  newlines or document separators no longer become Maestro injection
+  vectors during auto-repair.
+
+### Multi-LLM review fixes (caught before merge)
+
+- Allowlist extended with `swipeUp`/`swipeDown`/`swipeLeft`/`swipeRight` —
+  test-recorder emits the shorthand form, without these every recorded
+  action with a swipe would have failed at replay (both Codex 92% and
+  Gemini 98% confidence — a real regression the test-recorder round-trip
+  test now guards against).
+- Bundle-ID regex allows hyphens — Apple's CFBundleIdentifier docs permit
+  them, Expo apps commonly use them (`com.my-app.testapp`). Earlier
+  hyphen-less regex would have refused legitimate apps.
+- `auto-login` no longer double-prepends `launchApp` when the project's
+  flow already begins with one.
+- `maestro-run` uses unique-per-call temp filenames so parallel calls
+  can't race on a shared `/tmp/rn-maestro-inline.yaml`.
+- Dropped over-strict `---` substring rejection — `\n` rejection already
+  catches the actual document-separator attack; mid-scalar `---` (in
+  legitimate text like "section --- title") is harmless when emitted
+  through `yaml.stringify`.
+
+### Internal
+
+- 26 new validator unit tests (`phase-134-1-maestro-validator.test.js`)
+  cover the exact deepsec attack vectors plus the multi-LLM-caught
+  regressions (hyphenated bundle IDs, swipe shorthand round-trip).
+- Files migrated through the validator: `maestro-invoke.ts`,
+  `maestro-run.ts`, `maestro-generate.ts`, `maestro-test-all.ts`,
+  `auto-login.ts`, `test-recorder-generators.ts`, `repair-engine.ts`.
+- Full unit suite: 1271 passing, 0 failing. TypeScript compiles clean.
+- Proposed decisions logged in workspace ROADMAP Phase 134.1:
+  - **D1212**: Reject `runScript` by default in plugin-emitted and
+    plugin-replayed Maestro flows.
+  - **D1213**: Strict bundle-ID regex at every `appId` boundary.
+
+## [0.44.30] — 2026-05-12
+
+### Fixed (Phase 134.0 — Android capturer exit-code race, deepsec follow-up)
+
+- **`defaultAndroidCapturer` no longer reports success on adb non-zero exit
+  when the stream finished first.** The prior implementation settled on
+  whichever of `out.on('finish')` or `proc.on('close', code)` fired first.
+  Node doesn't order these events, so a truncated/corrupt screenshot
+  could be reported as `ok: true` when adb exited non-zero AFTER the
+  WriteStream drained. The new two-track settle requires BOTH
+  `streamFinished === true` AND `procCode === 0` before reporting
+  success; on any failure path the partial file is unlinked so
+  `resizeWithSips` never reads a corrupt artifact.
+- The decision logic is extracted as a pure
+  `resolveCaptureOutcome(streamFinished, procCode)` helper exported for
+  unit testing; the event-wiring stays small enough to read at a glance.
+- Caught by the first deepsec full-repo scan (run
+  `20260512130956-afb409ef9132fae2`) — a class of race that neither the
+  PR-A multi-LLM review (Codex + Gemini) flagged because their attention
+  was on the stream-flush race, not the exit-code race. Phase 134 of the
+  workspace ROADMAP sequences the remaining 7 CRITICAL + 11 HIGH
+  findings from the same scan.
+
+### Internal
+
+- 3 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
+  `resolveCaptureOutcome` truth table (pending / success / failure
+  including the exact deepsec scenario: `streamFinished=true,
+  procCode=non-zero`). Full unit suite: 1245 passing, 0 failing.
+
+## [0.44.29] — 2026-05-12
+
+### Fixed (GH #136 — PR-A: Multi-Device Screenshot Routing)
+
+- **`device_screenshot platform: "ios" | "android"` now disambiguates reliably
+  when both an iOS sim and an Android emu are booted.** Previously the call
+  routed through `agent-device --platform`, which silently fell back to the
+  active session and returned a wrong-platform image (iPhone-resolution JPEG
+  when `platform: "android"` was requested). The explicit-platform path now
+  resolves the booted device directly via `xcrun simctl list -j devices
+  booted` (iOS) or `adb devices` (Android), then captures via
+  `xcrun simctl io <UDID> screenshot --type=jpeg <path>` or
+  `adb -s <emu-id> exec-out screencap -p` — bypassing agent-device entirely.
+- **Backward-safe by design.** The raw path fires only when the caller passes
+  `platform` explicitly. Calls that omit the field (the common single-device
+  case) keep the existing `runAgentDevice` flow exactly. Any failure in the
+  raw path (resolver miss, command error, missing `xcrun`/`adb`) gracefully
+  degrades to `runAgentDevice` — no new error surface for users.
+
+### Internal
+
+- New module `scripts/cdp-bridge/src/tools/device-screenshot-raw.ts` —
+  pure parsers (`parseSimctlBootedUDID`, `parseAdbDevicesEmu`) plus the
+  `tryRawScreenshot` orchestrator, with test seams (`_setForTest`,
+  `_resetForTest`) for resolver/capturer injection.
+- New `_setRunAgentDeviceForTest` / `_resetRunAgentDeviceForTest` seams on
+  `device-list.ts` for integration tests, mirroring the GH #136 PR-B picker
+  convention.
+- 14 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
+  pure parsers, orchestrator branches (both iOS and Android arms,
+  success + capturer-failure for each), raw-vs-fallback dispatch, and
+  that the resize pipeline + EPHEMERAL_PATH advisory still wrap the raw
+  result identically. Full unit suite at 1242 passing, 0 failing.
+- Multi-LLM review (Codex + Gemini, parallel) flagged an Android
+  `WriteStream` flush race in the default capturer: `out.end()` returns
+  before bytes drain, so the promise could resolve `ok: true` while
+  `resizeWithSips` reads a truncated PNG (>64KB pipe buffer = real risk
+  for high-res emulators). Fixed by waiting on the `'finish'` event and
+  destroying the stream on timeout / proc-error paths. The fix is to
+  `defaultAndroidCapturer` only — iOS uses `execFile`-completion
+  ordering which doesn't have this race.
+
+## [0.44.28] — 2026-05-07
+
+### Fixed (GH #136 — PR-B: Dev-Client Picker Reliability)
+
+- **`cdp_status` no longer hangs 60s on the Expo Dev Client picker.** The
+  picker probe now runs **before** `autoConnect` instead of inside the
+  post-failure catch block. When the picker is up, the plugin dismisses it
+  first, then connects normally — no Metro discovery timeout to wait through.
+- **`dismissPicker` now matches LAN IPs and `.local` hostnames.** Replaces
+  the literal `localhost / 127.0.0.1 / 10.0.2.2` list with a three-pass
+  matcher: literal IPs (backward parity), `<host>:<port>` port-pattern
+  matching with port range validation, then first non-footer row below the
+  picker title. Catches the previously-missed real-world setups.
+- **Auto-advance race detection.** `dismissPicker` re-probes
+  `isDevClientPickerShowing()` before tapping; if the picker auto-dismissed
+  mid-flight (single-server case has ~3-5s grace), returns success without
+  tapping. Closes the ~30% race failure for Maestro flows wrapping
+  post-launch in `runFlow when: visible: "DEVELOPMENT SERVERS"`.
+- **Tighter `waitForBundle` cadence.** 100ms polling for the first second,
+  500ms thereafter, 10s overall budget (was 2s polling + 20s budget).
+  Single-server pickers settle in ~200ms.
+
+### Internal
+
+- New pure helpers `parsePortPatternEntry` and `parseFirstServerEntry` in
+  `scripts/cdp-bridge/src/tools/dev-client-picker.ts` — testable without
+  the agent-device CLI in the loop.
+- New `runAgentDeviceFn` and `hasActiveSessionFn` test seams (underscore-
+  prefixed exports) follow the codebase convention from
+  `gh-61-b1-deep-link-depth.test.js`.
+- 18 new unit tests covering helpers, dismissPicker integration,
+  auto-advance race, and the cdp_status flow inversion.
+
+### Versions
+
+- Plugin: 0.44.27 → **0.44.28**
+- MCP server (cdp-bridge): 0.38.22 → **0.38.23**
+
 ## [0.42.0] — 2026-04-22
 
 M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.

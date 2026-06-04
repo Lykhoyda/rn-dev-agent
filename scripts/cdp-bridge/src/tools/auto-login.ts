@@ -13,6 +13,7 @@ import {
   isValidBundleId,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 
 const execFile = promisify(execFileCb);
 
@@ -219,10 +220,12 @@ export async function handleAutoLogin(
   }
 
   try {
-    await execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
-      timeout: 120_000,
-      encoding: 'utf8',
-    });
+    await runFlowParked(() =>
+      execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
+        timeout: 120_000,
+        encoding: 'utf8',
+      }),
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

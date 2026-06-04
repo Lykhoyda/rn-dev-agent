@@ -14,7 +14,7 @@ import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
-import { createNavigationStateHandler } from './tools/navigation-state.js';
+import { createNavigationStateHandler, readLiveRoute } from './tools/navigation-state.js';
 import { createErrorLogHandler } from './tools/error-log.js';
 import { createNativeErrorsHandler } from './tools/native-errors.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
@@ -42,6 +42,7 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
+import { releaseDeviceLockForSession } from './tools/device-session.js';
 import {
   createDeviceFindHandler,
   createDevicePressHandler,
@@ -75,6 +76,7 @@ import { createConnectHandler, createDisconnectHandler, createTargetsHandler } f
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
+import { arbiterWrap } from './lifecycle/device-arbiter.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -91,6 +93,7 @@ import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
@@ -113,6 +116,21 @@ if (!noLock) {
   }
   process.on('exit', () => lockfile.release());
 }
+process.on('exit', () => { try { releaseDeviceLockForSession(); } catch { /* never fail exit */ } });
+
+// GH#202 Phase 1: at boot the simulator UDID is unknown, so only the
+// files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
+// when their daemon PID is dead. Never touches a live process at startup.
+// Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+if (process.env.RN_DEVICE_KILL_LEGACY !== '0') {
+  void ensureSingleRunner()
+    .then((r) => {
+      if (r.removedFiles.length) {
+        logger.info('rn-device', `ensureSingleRunner(boot): removed ${r.removedFiles.join(', ')}`);
+      }
+    })
+    .catch(() => { /* non-fatal */ });
+}
 
 let client = new CDPClient();
 
@@ -129,7 +147,10 @@ setToolObserver((o) => recorder.record(o));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: any, handler: any): void {
-  const wrapped = instrumentTool(name, handler as (...args: unknown[]) => Promise<unknown>);
+  const wrapped = instrumentTool(name, arbiterWrap(
+    name,
+    handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
+  ) as (...args: unknown[]) => Promise<unknown>);
   server.tool(name, desc, schema, wrapped as typeof handler);
 }
 
@@ -139,6 +160,7 @@ trackedTool(
   {
     metroPort: z.number().optional().describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
     platform: z.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
+    resetArbiter: z.boolean().optional().describe('Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch — cdp_status is unarbitrated so it always runs.'),
   },
   createStatusHandler(getClient, setClient, createClient),
 );
@@ -869,6 +891,7 @@ trackedTool(
     inlineYaml: z.string().optional().describe('Inline YAML flow content (written to /tmp and executed)'),
     platform: z.enum(['ios', 'android']).optional().describe('Target platform (auto-detected from session)'),
     appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
+    appFile: z.string().optional().describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
     timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
   },
   createMaestroRunHandler(),
@@ -1131,7 +1154,11 @@ trackedTool(
     trigger: z.enum(['agent', 'ci', 'human']).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
     forceReload: z.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
   },
-  createRunActionHandler(),
+  // GH #186: supply a CDP-backed live-route reader so the route-drift guard is
+  // actually active. Without this the handler defaulted getLiveRoute to a no-op
+  // and the drift branch could never fire, silently routing screen-change
+  // failures into fuzzy selector repair.
+  createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) }),
 );
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end

@@ -307,6 +307,15 @@ export function saveActionWithCAS(action) {
             // Corrupted sidecar — treat as no prior state, proceed to write.
         }
     }
+    // NOTE on the SaveActionPreconditionError that saveAction can throw here:
+    // this throw is LOAD-BEARING, not a contract bug. When forceReload=false and
+    // the YAML was edited externally, the throw propagates to cdp_run_action's
+    // top-level catch and becomes the correct strict-mode (Phase 129) refusal —
+    // see gh-173-run-action-force-reload. Converting it to a structured conflict
+    // makes persistRun treat it as a transient CAS race and retry-then-succeed,
+    // silently dropping the refusal. The RunRecord can't be persisted in that
+    // case anyway (the sidecar is pair-written with the YAML, which strict mode
+    // is deliberately refusing to clobber), so there is nothing to recover.
     const { filePath, sidecarPath: writtenSidecarPath } = saveAction(action);
     return { ok: true, filePath, sidecarPath: writtenSidecarPath };
 }

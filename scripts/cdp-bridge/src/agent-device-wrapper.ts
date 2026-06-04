@@ -11,6 +11,8 @@ import { okResult, failResult } from './utils.js';
 import {
   isFastRunnerAvailable,
   startFastRunner,
+  probeFastRunnerLiveness,
+  reapStaleFastRunner,
 } from './runners/rn-fast-runner-client.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
@@ -323,7 +325,7 @@ export function buildRunIOSArgs(
   bundleId?: string,
 ): import('./runners/rn-fast-runner-client.js').RunIOSArgs {
   const cmd = cliArgs[0];
-  const positionals = cliArgs.slice(1).filter((a) => !a.startsWith('--'));
+  const positionals = positionalArgs(cliArgs);
   switch (cmd) {
     case 'press':
     case 'tap': {
@@ -438,7 +440,11 @@ function optionValue(cliArgs: string[], flag: string): string | undefined {
   return value && !value.startsWith('-') ? value : undefined;
 }
 
-function androidPositionals(cliArgs: string[]): string[] {
+// Extract positional args, dropping flag tokens AND their values (`--count 3`,
+// `--pattern xy`). A naive `filter(a => !a.startsWith('--'))` strips the flag
+// token but keeps its value, which then mis-parses as a trailing positional
+// (e.g. count's `3` landing in the swipe duration slot → a 3ms flick).
+function positionalArgs(cliArgs: string[]): string[] {
   const out: string[] = [];
   for (let i = 1; i < cliArgs.length; i++) {
     const a = cliArgs[i];
@@ -458,7 +464,7 @@ export function buildRunAndroidArgs(
 ): import('./runners/rn-android-runner-client.js').RunAndroidArgs {
   type RunAndroidArgs = import('./runners/rn-android-runner-client.js').RunAndroidArgs;
   const cmd = cliArgs[0];
-  const positionals = androidPositionals(cliArgs);
+  const positionals = positionalArgs(cliArgs);
   const withBundle = bundleId ? { bundleId } : {};
 
   switch (cmd) {
@@ -569,7 +575,17 @@ export function buildRunAndroidArgs(
 }
 
 export async function ensureFastRunner(deviceId: string, bundleId: string): Promise<void> {
-  if (isFastRunnerAvailable()) return;
+  // M7/Phase-109: probe tri-state liveness instead of the PID-only
+  // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server
+  // has wedged ('stale') must be reaped before a fresh start — otherwise it is
+  // reused and every subsequent device_* command burns the full HTTP timeout
+  // before failing. /health responds in ms when healthy, so the happy path is
+  // cheap; only a wedged runner pays the 2s probe timeout (vs. 10s per command).
+  const liveness = await probeFastRunnerLiveness();
+  if (liveness === 'alive') return;
+  if (liveness === 'stale') {
+    await reapStaleFastRunner();
+  }
   try {
     await startFastRunner(deviceId, bundleId);
   } catch (err) {

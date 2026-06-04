@@ -14,7 +14,7 @@ Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-tri
 | `steps` | `object[]` | No |  |  | Ordered list of UI interaction steps |
 | `delayMs` | `number` | No | `300` |  | Delay between steps in ms (default 300) |
 | `screenshotOn` | `enum: none | failure | end | each` | No | `'failure'` |  | When to capture screenshots |
-| `continueOnError` | `boolean` | No | `false` |  | When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort. |
+| `continueOnError` | `boolean` | No | `false` |  | When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results &gt; first-failure abort. |
 
 ## Usage
 
