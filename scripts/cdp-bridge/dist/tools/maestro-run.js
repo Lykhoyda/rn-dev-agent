@@ -7,7 +7,7 @@ import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
-import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
@@ -135,19 +135,11 @@ export function createMaestroRunHandler() {
         // params. Validation already ran at the top of the handler so by
         // this point every key matches PARAM_KEY_RE and every value is a
         // string — no need to re-check.
-        let appFile = args.appFile;
-        if (!appFile && platform === 'ios' && flowUsesClearState(validatedContent)) {
-            if (!headerAppId) {
-                return failResult('Flow uses clearState on iOS but no appId is known to locate the .app. ' +
-                    'Add `appId:` to the flow header or pass appFile=<path-to-.app>.');
-            }
-            appFile = resolveIosAppFile(headerAppId) ?? undefined;
-            if (!appFile) {
-                return failResult(`Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. ` +
-                    'Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).');
-            }
+        const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile);
+        if (!appFileResolution.ok) {
+            return failResult(appFileResolution.error);
         }
-        const baseArgs = dispatch.buildArgs(platform, flowFile, appFile);
+        const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile);
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
@@ -156,7 +148,12 @@ export function createMaestroRunHandler() {
         }
         const finalArgs = [...baseArgs, ...paramArgs];
         try {
-            const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, { timeout, encoding: 'utf8' }));
+            const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, 
+            // 10MB buffer: a multi-step flow with screenshots + app console/network
+            // logs routinely exceeds Node's 1MB execFile default, which would kill
+            // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
+            // run as a failure.
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }));
             const output = (stdout + '\n' + stderr).trim();
             // Reaching here means the runner exited 0 — that exit code is the
             // authoritative pass signal (a real flow failure exits non-zero and is

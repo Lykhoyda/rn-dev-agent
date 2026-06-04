@@ -14,7 +14,7 @@ import { createStatusHandler } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
-import { createNavigationStateHandler } from './tools/navigation-state.js';
+import { createNavigationStateHandler, readLiveRoute } from './tools/navigation-state.js';
 import { createErrorLogHandler } from './tools/error-log.js';
 import { createNativeErrorsHandler } from './tools/native-errors.js';
 import { createNetworkLogHandler } from './tools/network-log.js';
@@ -681,7 +681,12 @@ trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end aut
     timeoutMs: z.number().optional().describe('Maestro execution timeout per attempt (ms). Default 120_000.'),
     trigger: z.enum(['agent', 'ci', 'human']).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
     forceReload: z.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
-}, createRunActionHandler());
+}, 
+// GH #186: supply a CDP-backed live-route reader so the route-drift guard is
+// actually active. Without this the handler defaulted getLiveRoute to a no-op
+// and the drift branch could never fire, silently routing screen-change
+// failures into fuzzy selector repair.
+createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) }));
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.

@@ -61,7 +61,7 @@ The hybrid is implemented across **four MCP tools** (one conceptual family, "Act
 | Tool | Role |
 |---|---|
 | `cdp_record_test_save_as_action` | Convert a recorded interactive walk into a first-class `.rn-agent/actions/<id>.yaml` with metadata header and sidecar state file. Auto-promotes to `status: active` after the first clean replay. |
-| `cdp_run_action` | Replay an action by id with `params`. Orchestrates `maestro_run` + optional `cdp_repair_action` retry. Persists a `RunRecord` with `autoRepair` telemetry (passed / failed / refused / skipped, phase timings) so the experience engine can learn which flows are stable. |
+| `cdp_run_action` | Replay an action by id with `params`. Orchestrates `maestro_run` + optional `cdp_repair_action` retry. Persists a `RunRecord` with `autoRepair` telemetry (passed / failed / refused / skipped, phase timings) so MTTR analysis can see which flows are stable. |
 | `cdp_repair_action` | When a run fails with `SELECTOR_NOT_FOUND`, fuzzy-match the stale selector against the live snapshot, patch the YAML, retry. Refuses on human-edited files (`mtime` check), >3 repairs/24h, or snapshot infrastructure failure. |
 | `cdp_record_test_*` (start / stop / generate / annotate / save / load / list) | The recorder upstream of actions — captures device taps + CDP state assertions during interactive walks, before they get promoted to actions. |
 

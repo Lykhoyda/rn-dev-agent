@@ -61,8 +61,23 @@ export function isAndroidRunnerAvailable() {
         return false;
     }
 }
+/**
+ * GH#202 parity with iOS shouldReuseRunner: only adopt a live runner when it is
+ * bound to the SAME emulator. The state file path is a fixed constant shared
+ * across projects/sessions, so a runner bound to emulator-A must never be reused
+ * to drive emulator-B (its adb forward + port still point at A — every command
+ * would silently hit the wrong device). When no specific deviceId is requested
+ * (single-device flow), any live runner is acceptable.
+ */
+export function shouldReuseAndroidRunner(state, deviceId) {
+    if (state === null)
+        return false;
+    if (!deviceId)
+        return true;
+    return state.deviceId === deviceId;
+}
 export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT) {
-    if (isAndroidRunnerAvailable())
+    if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
         return runnerState;
     const serial = adbSerialArgs(deviceId);
     await execFileAsync('adb', [...serial, 'forward', `tcp:${port}`, `tcp:${port}`]);
