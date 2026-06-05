@@ -11,7 +11,7 @@ import {
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
-import { detectAndroidExternalRunner } from '../runners/external-runner-detect.js';
+import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import type { ToolResult } from '../utils.js';
@@ -26,6 +26,7 @@ import {
 } from './runner-leak-recovery.js';
 import { DeviceLock } from '../lifecycle/device-lock.js';
 import type { DeviceLockResult, DeviceLockBody } from '../lifecycle/device-lock.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
 
 const execFile = promisify(execFileCb);
 
@@ -300,11 +301,39 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
         }
 
-        if (autoDetected) {
-          return warnResult(
-            JSON.parse(result.content[0].text).data,
-            `appId auto-detected from app.json: ${appId}`,
-          );
+        // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
+        // Skip when opted out, or when WE hold the flow lease (a detected maestro
+        // driver is then our own L3 run — external opens are already refused
+        // BUSY_FLOW_ACTIVE upstream; this guard covers composite/internal callers).
+        // UDID-scoped + best-effort: the detector never throws (can't fail the
+        // open); its ≤2s latency is surfaced in meta.timings_ms.
+        let foreign: ReturnType<typeof foreignRunnerNotice> = null;
+        let foreignDetectMs: number | undefined;
+        if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
+          const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
+          if (!flowHeld) {
+            const t0 = Date.now();
+            const detection = await detectIosExternalRunner(undefined, deviceId);
+            foreignDetectMs = Date.now() - t0;
+            foreign = foreignRunnerNotice(detection, false);
+          }
+          if (foreign) {
+            logger.warn('rn-device', foreign.warning);
+            for (const line of foreign.meta.foreignRunner.processLines) {
+              logger.warn('rn-device', `  ${line}`);
+            }
+          }
+        }
+
+        if (autoDetected || foreign) {
+          const data = JSON.parse(result.content[0].text).data;
+          const warning = [
+            autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
+            foreign ? foreign.warning : null,
+          ].filter(Boolean).join('; ');
+          const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
+          if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
+          return warnResult(data, warning, meta);
         }
       }
 

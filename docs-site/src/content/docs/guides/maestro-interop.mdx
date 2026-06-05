@@ -1,0 +1,25 @@
+---
+title: Using rn-dev-agent with maestro-mcp
+description: How rn-dev-agent coexists with the standalone maestro-mcp server on one iOS simulator.
+---
+
+rn-dev-agent and the standalone **maestro-mcp** server can be used together: maestro *executes* resilient flows, rn-dev-agent *verifies* internal state. They share one iOS simulator, so this page describes how they coexist.
+
+## What is safe to interleave
+
+- **L1 introspection (CDP reads)** — `cdp_navigation_state`, `cdp_store_state`, `cdp_component_tree`, etc. — is **always safe**. It reads Hermes over CDP and never touches the XCUITest automation channel maestro uses.
+- **L2 interaction** (`device_*`) shares the XCUITest channel with maestro's iOS driver. After a maestro run, the next `device_*` may find the channel evicted.
+
+## What happens on handback (already automatic)
+
+When an L2 call sees the runner-leak sentinel after a maestro run, the device-session performs a **state-preserving reacquire** — it re-foregrounds your app (no relaunch) and marks CDP stale so the next read transparently reconnects. You do **not** need a manual `cdp_status` re-pin (shipped in #188).
+
+## The `FOREIGN_RUNNER_ACTIVE` warning
+
+When you `device_snapshot action=open` while a foreign maestro automation session is driving the same simulator (and rn-dev-agent is not itself running a flow), the open result carries an informational `meta.foreignRunner` and a `FOREIGN_RUNNER_ACTIVE` warning. It is a **heads-up only** — it does not block or change the open. It tells you the simulator is contended so you can expect a re-foreground if you interleave `device_*`.
+
+The detection is UDID-scoped (it ignores maestro flows on other simulators and the idle maestro-mcp server). Opt out with `RN_IOS_FOREIGN_WARN=0`. Note: immediately after your *own* `maestro_run`, you may briefly see the warning while maestro's driver is still exiting — that's expected.
+
+## L3 flows own the device
+
+A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the device exclusively for its duration — `device_*` and CDP reads issued mid-flow refuse fast with `BUSY_FLOW_ACTIVE`.
