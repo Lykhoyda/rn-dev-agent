@@ -80,6 +80,18 @@ The product layers above are organized; underneath, three implementation layers 
 
 Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device **lifecycle** (boot / install / launch / terminate) — the runner doesn't manage device state, only interaction.
 
+## Three-layer device-control contract
+
+One mechanism per capability tier — **L1 + L2 coexist** (drive with XCTest, assert with CDP in the same per-step loop); **L3 is exclusive** (owns the device for the flow).
+
+| Layer | Mechanism | Role | Exclusivity |
+|---|---|---|---|
+| **L1 INTROSPECTION** | CDP / Hermes | read store / network / component-tree / mmkv / native | shared |
+| **L2 INTERACTION** | iOS `RnFastRunner` / Android `agent-device`; `cdp_interact` | primitive taps / types / scrolls | shared |
+| **L3 FLOW-REPLAY** | `maestro-runner` (Go + WDA) | whole-`.yaml` E2E flows | exclusive |
+
+**Foreign runners** (e.g. the standalone `maestro-mcp`): L1 reads are always safe; on an L2 leak the device-session re-attaches rather than evicts (#188); `device_snapshot action=open` surfaces an informational `FOREIGN_RUNNER_ACTIVE` warning when a foreign session is present and no local flow is running.
+
 ## MCP server (CDP bridge)
 
 The MCP server is a Node.js process that maintains a persistent WebSocket connection to the React Native app's Hermes engine through Metro's CDP endpoint.

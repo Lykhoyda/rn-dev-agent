@@ -144,6 +144,18 @@ Since #202 Phase 2b, `cdp_status` auto-recovers the JS-thread-paused wedge (some
 
 Fallback: `xcrun simctl` (iOS) + `adb` (Android) for device lifecycle (boot / install / launch / terminate) — the runner doesn't manage device state, only interaction.
 
+### Three-layer device-control contract
+
+One mechanism per capability tier. The device-session honors this contract (the L2 coexistence behavior shipped in #188; #202 Phase 3 wrote it down + added a proactive warning).
+
+| Layer | Mechanism | Role | Exclusivity | Toward a foreign runner |
+|---|---|---|---|---|
+| **L1 INTROSPECTION** | CDP / Hermes | read store / network / component-tree / mmkv / native | **shared** | always safe — never touches XCUITest |
+| **L2 INTERACTION** | iOS `RnFastRunner` / Android `agent-device`; `cdp_interact` | primitive taps / types / scrolls | **shared** | re-attach, don't evict (Tier-0 reacquire + CDP re-pin, #188) |
+| **L3 FLOW-REPLAY** | `maestro-runner` (Go + WDA) | whole-`.yaml` E2E flows | **exclusive** | owns the device for the flow's duration |
+
+**Coexistence rule:** L1 reads never conflict with a foreign runner; L2 re-attaches rather than evicts; L3 owns the device. On `device_snapshot action=open`, if a foreign maestro session is detected (UDID-scoped) AND no local flow lease is held, the open result carries an informational `meta.foreignRunner` + `FOREIGN_RUNNER_ACTIVE` warning (`runners/external-runner-detect.ts`; opt out with `RN_IOS_FOREIGN_WARN=0`). See `docs-site` → "Using rn-dev-agent with maestro-mcp".
+
 ### MCP Server (cdp-bridge)
 
 **76 tools** exposed via MCP (re-audited 2026-05-31; counted from `trackedTool()` calls in `scripts/cdp-bridge/src/index.ts`). Five conceptual families:
