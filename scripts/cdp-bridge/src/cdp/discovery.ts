@@ -2,6 +2,27 @@ import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
 import type { HermesTarget } from '../types.js';
 
+/**
+ * GH #208 (RC2): thrown by `discover()` when Metro IS reachable but advertises
+ * zero Hermes debug targets — the app has detached (Expo dev launcher,
+ * backgrounded, or crashed). Distinct from the "Metro not found" case so
+ * callers (cdp_status) can trigger the bounded auto-relaunch recovery
+ * (recover-detached.ts) instead of misreporting Metro as down. Carries the
+ * resolved Metro port for the recovery + diagnostics.
+ */
+export class AppDetachedError extends Error {
+  readonly port: number;
+  constructor(port: number) {
+    super(
+      `Metro is up on port ${port} but advertises 0 Hermes debug targets — the app isn't attached ` +
+      `(it may be on the Expo dev launcher, backgrounded, or crashed). Relaunch the app, ` +
+      `or call cdp_status to auto-relaunch and reconnect.`,
+    );
+    this.name = 'AppDetachedError';
+    this.port = port;
+  }
+}
+
 export const DISCOVERY_TIMEOUT_MS = 1500;
 export const USER_METRO_PORT = process.env.RN_METRO_PORT ? parseInt(process.env.RN_METRO_PORT, 10) : null;
 export const DEFAULT_PORTS = [
@@ -330,9 +351,7 @@ export async function discover(
   });
 
   if (validTargets.length === 0) {
-    throw new Error(
-      'No Hermes debug target found. Is the app running? Is Hermes enabled?',
-    );
+    throw new AppDetachedError(metroPort);
   }
 
   inferPlatforms(validTargets);

@@ -6,6 +6,7 @@ import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
+import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
@@ -187,6 +188,7 @@ export function createDeviceSnapshotHandler() {
                 // the wedge-recovery budget. Placed AFTER the device-lock conflict
                 // early-return so a refused DEVICE_BUSY open does NOT reset it.
                 resetWedgeRecoveryCounter();
+                resetDetachedRecoveryCounter(); // GH #208 (RC3): fresh session clears the auto-relaunch budget too
                 // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
                 // known here (device-open), so scope-kill any stale AgentDeviceRunner
                 // targeting THIS simulator and clear orphaned daemon lock files.
