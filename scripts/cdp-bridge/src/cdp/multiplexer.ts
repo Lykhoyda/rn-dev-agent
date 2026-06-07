@@ -3,6 +3,7 @@ import { type AddressInfo } from 'node:net';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import WebSocket, { WebSocketServer } from 'ws';
+import { metroOrigin } from '../ws-origin.js';
 
 import { logger } from '../logger.js';
 
@@ -199,7 +200,9 @@ export class CDPMultiplexer {
 
   private connectHermes(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.opts.hermesUrl);
+      const ws = new WebSocket(this.opts.hermesUrl, {
+        headers: { Origin: metroOrigin(this.opts.hermesUrl) },
+      });
       this.hermesWs = ws;
 
       const onOpen = (): void => {

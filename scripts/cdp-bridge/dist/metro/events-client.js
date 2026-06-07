@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { metroOrigin } from '../ws-origin.js';
 import { logger } from '../logger.js';
 import { computeReconnectDelay } from '../cdp/reconnection.js';
 import { RingBuffer } from '../ring-buffer.js';
@@ -209,7 +210,9 @@ export class MetroEventsClient {
         this.state = 'connecting';
         const url = `ws://${this.opts.host}:${this.opts.port}/events`;
         return new Promise((resolve) => {
-            const ws = new WebSocket(url);
+            const ws = new WebSocket(url, {
+                headers: { Origin: metroOrigin(url) },
+            });
             this.ws = ws;
             // Multi-review catch: on ECONNREFUSED / handshake failures, the `ws` library
             // fires BOTH `error` and `close` for the same failure. Without this `outcome`

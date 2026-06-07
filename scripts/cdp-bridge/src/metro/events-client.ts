@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { metroOrigin } from '../ws-origin.js';
 
 import { logger } from '../logger.js';
 import { computeReconnectDelay } from '../cdp/reconnection.js';
@@ -279,7 +280,9 @@ export class MetroEventsClient {
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
 
     return new Promise<void>((resolve) => {
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(url, {
+        headers: { Origin: metroOrigin(url) },
+      });
       this.ws = ws;
 
       // Multi-review catch: on ECONNREFUSED / handshake failures, the `ws` library

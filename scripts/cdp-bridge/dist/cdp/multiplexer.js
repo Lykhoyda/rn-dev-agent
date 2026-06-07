@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import WebSocket, { WebSocketServer } from 'ws';
+import { metroOrigin } from '../ws-origin.js';
 import { logger } from '../logger.js';
 /**
  * Phase 134.4 (deepsec HIGH): generate a per-multiplexer capability
@@ -152,7 +153,9 @@ export class CDPMultiplexer {
     }
     connectHermes() {
         return new Promise((resolve, reject) => {
-            const ws = new WebSocket(this.opts.hermesUrl);
+            const ws = new WebSocket(this.opts.hermesUrl, {
+                headers: { Origin: metroOrigin(this.opts.hermesUrl) },
+            });
             this.hermesWs = ws;
             const onOpen = () => {
                 ws.off('error', onError);

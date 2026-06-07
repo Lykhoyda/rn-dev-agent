@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { logger } from '../logger.js';
+import { metroOrigin } from '../ws-origin.js';
 import { resolveBundleId } from '../project-config.js';
 import { discover } from './discovery.js';
 import type { SelectTargetFilters } from './discovery.js';
@@ -349,6 +350,7 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
     const ws = new WebSocket(url, {
       handshakeTimeout: 5000,
       maxPayload: 100 * 1024 * 1024,
+      headers: { Origin: metroOrigin(url) },
     });
     let settled = false;
     // Backstop: handshakeTimeout should emit 'error', but if the socket ever
