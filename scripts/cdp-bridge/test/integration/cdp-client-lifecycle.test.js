@@ -123,8 +123,11 @@ describe('CDPClient lifecycle', () => {
         () => client.autoConnect(emptyPort),
         (err) => {
           assert.ok(err instanceof Error);
+          // GH #208 (RC2): a Metro-up-but-0-targets autoConnect now rejects with the
+          // typed AppDetachedError ("…advertises 0 Hermes debug targets…"); the
+          // genuine no-Metro case still surfaces "Metro not found".
           assert.ok(
-            err.message.includes('No Hermes') || err.message.includes('Metro not found'),
+            err.name === 'AppDetachedError' || err.message.includes('Metro not found'),
             `Unexpected error: ${err.message}`,
           );
           return true;

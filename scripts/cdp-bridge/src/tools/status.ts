@@ -7,6 +7,9 @@ import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { recoverWedge } from '../cdp/recover-wedge.js';
+import { recoverDetached } from '../cdp/recover-detached.js';
+import type { DetachedRecoveryResult } from '../cdp/recover-detached.js';
+import { AppDetachedError } from '../cdp/discovery.js';
 
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
@@ -110,7 +113,9 @@ export function createStatusHandler(
   getClient: () => CDPClient,
   setClient: (c: CDPClient) => void,
   createClient: (port: number) => CDPClient,
+  deps: { recoverDetached?: typeof recoverDetached } = {},
 ) {
+  const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
   return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
     if (args?.resetArbiter) {
       const arbiterReset = arbiter.reset('manual via cdp_status');
@@ -143,7 +148,26 @@ export function createStatusHandler(
             await handleDevClientPicker();
           }
         } catch { /* fall through to autoConnect */ }
-        await client.autoConnect(args.metroPort, args.platform, 'status');
+        // GH #208 (RC1): when a reconnect storm is in flight, bare autoConnect
+        // throws "Already connecting to Metro..." (connect.ts guard) and dead-ends
+        // cdp_status — the one tool meant to diagnose+recover. Preempt the storm
+        // via softReconnect (the existing 3s softReconnectRequested handshake) for
+        // one fresh, real connection attempt instead of refusing.
+        // GH #208 review (Codex/Gemini F1): softReconnect reuses the storm's
+        // existing target/filters, so only preempt in place when the caller hasn't
+        // pinned a different target. If they pinned an explicit platform, tear the
+        // storm down first (mirrors the metroPort-change path above) so autoConnect
+        // honors it instead of returning wrong-platform data.
+        if (client.reconnectState.active && !args.platform) {
+          await client.softReconnect();
+        } else {
+          if (client.reconnectState.active) {
+            await client.disconnect();
+            client = createClient(client.metroPort);
+            setClient(client);
+          }
+          await client.autoConnect(args.metroPort, args.platform, 'status');
+        }
       } else if (args.platform) {
         // GH #21: Already connected — check if the current target matches the requested platform
         const currentTarget = client.connectedTarget;
@@ -264,6 +288,54 @@ export function createStatusHandler(
       return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+
+      // GH #208 (RC3): Metro is up but the app detached (0 Hermes targets). Auto
+      // cold-restart it (bounded, arbiter-aware, opt-out RN_AUTO_RELAUNCH_ON_DETACH=0),
+      // then reconnect and return a fresh status. On failure, surface a legible
+      // state (reconnect attempt count + escape hatch) rather than a misleading error.
+      if (err instanceof AppDetachedError) {
+        // GH #208 review (Codex F2): RC3 auto-relaunch is iOS-only and acts on the
+        // active device session. If the caller explicitly pinned a non-iOS platform,
+        // do NOT cold-restart the iOS session they didn't ask about — surface the
+        // detached state instead.
+        const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== 'ios';
+        const recovery: DetachedRecoveryResult = callerPinnedNonIos
+          ? { recovered: false, reason: 'unsupported-platform', attempt: 0 }
+          : await recoverDetachedFn(getClient());
+        if (recovery.recovered) {
+          // GH #208 review (Gemini F2): never let a post-reconnect status read throw
+          // out of the catch — degrade to a minimal warn instead of crashing the tool.
+          try {
+            return warnResult(
+              await buildStatusResult(getClient()),
+              `App had detached (Metro up, 0 Hermes targets) — auto-relaunched and reconnected (attempt ${recovery.attempt}).`,
+            );
+          } catch {
+            return warnResult(
+              { recovered: true },
+              `App had detached (Metro up, 0 Hermes targets) — auto-relaunched and reconnected (attempt ${recovery.attempt}), but reading the full status failed; retry cdp_status.`,
+            );
+          }
+        }
+        const detachedHint =
+          recovery.reason === 'flow-active'
+            ? 'A Maestro flow is running — skipped auto-relaunch. Wait for the flow to finish, then retry cdp_status.'
+            : recovery.reason === 'opted-out'
+              ? 'Auto-relaunch is disabled (RN_AUTO_RELAUNCH_ON_DETACH=0). Relaunch the app manually, or call cdp_restart(hardReset=true).'
+              : recovery.reason === 'budget-exhausted'
+                ? 'Auto-relaunch budget exhausted this session. Relaunch the app manually, or call cdp_restart(hardReset=true).'
+                : recovery.reason === 'no-session'
+                  ? 'No active device session to relaunch from. Relaunch the app on the simulator, or call cdp_restart(hardReset=true).'
+                  : recovery.reason === 'unsupported-platform'
+                    ? 'Auto-relaunch is iOS-only here. Relaunch the app on the device, then retry cdp_status.'
+                    : 'Auto-relaunch did not restore the app. Relaunch it manually, or call cdp_restart(hardReset=true).';
+        const errSuffix = recovery.error ? ` (relaunch error: ${recovery.error})` : '';
+        return failResult(`${message} ${detachedHint}${errSuffix}`, 'APP_DETACHED', {
+          reconnect: getClient().reconnectState,
+          recovery,
+        });
+      }
+
       // GH #184: the status-scoped connect aborted fast because React was
       // unreachable on a non-Hermes target (picker blocking the bundle, or it's
       // still building). The message is already actionable; still attempt the
@@ -297,7 +369,11 @@ export function createStatusHandler(
         }
       } catch { /* picker check failed, return original error */ }
 
-      return pickerBlocking ? failResult(message, 'PICKER_BLOCKING') : failResult(message);
+      // GH #208 (RC1): carry the reconnect attempt count so a connect failure
+      // during a reconnect storm reads as "attempt N/30", not a dead end.
+      return pickerBlocking
+        ? failResult(message, 'PICKER_BLOCKING')
+        : failResult(message, { reconnect: getClient().reconnectState });
     }
   };
 }
