@@ -69,3 +69,57 @@ test('verified-exact → accept', () => {
 test('unverifiable → accept', () => {
   assert.deepEqual(decideNativeRetype('unverifiable', 0, 2), { action: 'accept' });
 });
+
+import { attemptJsFill } from '../../dist/tools/fill-verify.js';
+
+// Fake CDP client: probe returns script.probe; readInputValue returns the next
+// entry from script.reads (array — models the settle-poll over time).
+function fakeClient(script) {
+  const reads = script.reads.slice();
+  return {
+    sleep: async () => {},
+    evaluate: async (expr) => {
+      if (expr.includes('interact(')) return { value: JSON.stringify(script.probe) };
+      if (expr.includes('readInputValue(')) {
+        const next = reads.length > 1 ? reads.shift() : reads[0];
+        return { value: JSON.stringify(next) };
+      }
+      throw new Error('unexpected expr');
+    },
+  };
+}
+
+test('attemptJsFill: handler fired + exact first read → verified-exact', async () => {
+  const r = await attemptJsFill(fakeClient({ probe: { handlerCalled: 'onChangeText', controlled: true, valueBefore: '' }, reads: [{ value: 'a@b.com', controlled: true }] }), 'email', 'a@b.com');
+  assert.equal(r.handled, true);
+  assert.equal(r.outcome, 'verified-exact');
+  assert.equal(r.handler, 'onChangeText');
+});
+test('attemptJsFill: debounced field (stale==valueBefore then settles) → verified-exact, not corrupted', async () => {
+  const r = await attemptJsFill(fakeClient({
+    probe: { handlerCalled: 'onChangeText', controlled: true, valueBefore: '' },
+    reads: [{ value: '', controlled: true }, { value: '', controlled: true }, { value: 'hello', controlled: true }],
+  }), 'search', 'hello');
+  assert.equal(r.outcome, 'verified-exact');
+});
+test('attemptJsFill: no JS handler → handled:false', async () => {
+  const r = await attemptJsFill(fakeClient({ probe: { handlerCalled: false, controlled: false, valueBefore: null }, reads: [] }), 'native', 'x');
+  assert.equal(r.handled, false);
+});
+test('attemptJsFill: stale v23 helper (no controlled field) → handled:false (degrade)', async () => {
+  const r = await attemptJsFill(fakeClient({ probe: { handlerCalled: 'onChangeText' }, reads: [{ value: 'x', controlled: true }] }), 'email', 'x');
+  assert.equal(r.handled, false);
+});
+test('attemptJsFill: probe error → handled:false', async () => {
+  const r = await attemptJsFill(fakeClient({ probe: { error: 'Ambiguous' }, reads: [] }), 'amb', 'x');
+  assert.equal(r.handled, false);
+});
+test('attemptJsFill: read unreadable → unverifiable (not corrupted)', async () => {
+  const r = await attemptJsFill(fakeClient({ probe: { handlerCalled: 'onChangeText', controlled: true, valueBefore: '' }, reads: [{ __agent_error: 'Component not found' }] }), 'email', 'hello');
+  assert.equal(r.handled, true);
+  assert.equal(r.outcome, 'unverifiable');
+});
+test('attemptJsFill: evaluate throws → handled:false', async () => {
+  const r = await attemptJsFill({ evaluate: async () => { throw new Error('CDP down'); }, sleep: async () => {} }, 'email', 'x');
+  assert.equal(r.handled, false);
+});

@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 23;
+export const HELPERS_VERSION = 24;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -1148,6 +1148,10 @@ export const INJECTED_HELPERS = `
         // TextInputOutlined → TextInput → InternalTextInput each forwarding
         // the same onChangeText — pick the deepest leaf), and return
         // Ambiguous only when truly distinct typed handlers compete.
+        var verify = opts.verify === true;
+        var controlled = typeof props.value === 'string';
+        var valueBefore = controlled ? props.value : null;
+
         if (typeof props.onChangeText === 'function' || typeof props.onChange === 'function') {
           var p1Handler;
           if (typeof props.onChangeText === 'function') {
@@ -1158,12 +1162,8 @@ export const INJECTED_HELPERS = `
             props.onChange({ nativeEvent: { text: text } });
           }
           return JSON.stringify({
-            success: true,
-            action: 'typeText',
-            component: typeName,
-            testID: selector,
-            text: text,
-            handlerCalled: p1Handler,
+            success: true, action: 'typeText', component: typeName, testID: selector, text: text,
+            handlerCalled: p1Handler, controlled: controlled, valueBefore: valueBefore,
             resolvedFrom: 'matched-fiber'
           });
         }
@@ -1270,6 +1270,9 @@ export const INJECTED_HELPERS = `
         }
 
         if (!picked) {
+          if (verify) {
+            return JSON.stringify({ success: true, action: 'typeText', testID: selector, handlerCalled: false, controlled: controlled, valueBefore: valueBefore });
+          }
           return JSON.stringify({
             error: 'Component has no onChangeText or onChange handler',
             component: typeName,
@@ -1288,13 +1291,11 @@ export const INJECTED_HELPERS = `
           picked.match.props.onChange({ nativeEvent: { text: text } });
         }
 
+        var pickedControlled = typeof picked.match.props.value === 'string';
         return JSON.stringify({
-          success: true,
-          action: 'typeText',
-          component: typeName,
-          testID: selector,
-          text: text,
-          handlerCalled: picked.handler,
+          success: true, action: 'typeText', component: typeName, testID: selector, text: text,
+          handlerCalled: picked.handler, controlled: pickedControlled,
+          valueBefore: pickedControlled ? picked.match.props.value : valueBefore,
           resolvedFrom: picked.match.name + (picked.match.props.testID ? ' [testID="' + picked.match.props.testID + '"]' : ''),
           visitedFibers: visited
         });
@@ -1767,6 +1768,40 @@ export const INJECTED_HELPERS = `
     }, 100000);
   }
 
+  function readInputValue(testID) {
+    if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
+    var target = null;
+    function findByTestID(fiber) {
+      if (!fiber || target) return;
+      var p = fiber.memoizedProps;
+      if (p && (p.testID === testID || p.nativeID === testID)) { target = fiber; return; }
+      var child = fiber.child;
+      while (child) { findByTestID(child); child = child.sibling; }
+    }
+    forEachRootFiber(function(rootFiber) { findByTestID(rootFiber); return target; });
+    if (!target) return JSON.stringify({ __agent_error: 'Component not found: ' + testID });
+
+    function valueOf(fiber) {
+      var p = fiber && fiber.memoizedProps;
+      return p && typeof p.value === 'string' ? p.value : null;
+    }
+    var direct = valueOf(target);
+    if (direct !== null) return JSON.stringify({ value: direct, controlled: true });
+
+    var found = [], visited = 0;
+    (function walk(node, depth) {
+      if (!node || depth > 16 || visited > 200 || found.length > 1) return;
+      visited++;
+      var v = valueOf(node);
+      if (v !== null) found.push(v);
+      if (node.child) walk(node.child, depth + 1);
+      if (node.sibling) walk(node.sibling, depth);
+    })(target.child, 1);
+
+    if (found.length === 1) return JSON.stringify({ value: found[0], controlled: true });
+    return JSON.stringify({ value: null, controlled: false });
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -1776,6 +1811,7 @@ export const INJECTED_HELPERS = `
     navigateTo: navigateTo,
     getStoreState: getStoreState,
     getComponentState: getComponentState,
+    readInputValue: readInputValue,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

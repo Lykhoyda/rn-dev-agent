@@ -10,6 +10,9 @@ import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-lea
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
+import type { CDPClient } from '../cdp-client.js';
+import { getCachedMetadata } from '../fast-runner-ref-map.js';
+import { resolveJsTestId, attemptJsFill, type FillVerifyOutcome } from './fill-verify.js';
 
 const execFile = promisify(execFileCb);
 
@@ -536,6 +539,8 @@ interface FillArgs {
    * time to land before the probe.
    */
   waitForKeyboardMs?: number;
+  /** #191: explicit testID for the JS-first path; resolved from ref's cached identifier when omitted. */
+  testID?: string;
 }
 
 // Splits a chunk into segments where no segment, after space→%s encoding,
@@ -615,6 +620,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
+  try {
+    const c = getClient();
+    return c && c.isConnected ? c : null;
+  } catch {
+    return null;
+  }
+}
+function jsVerifyMeta(outcome: FillVerifyOutcome): 'exact' | 'transformed' | 'unverifiable' {
+  return outcome === 'verified-exact' ? 'exact' : outcome === 'verified-transformed' ? 'transformed' : 'unverifiable';
+}
+
 async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 'android'): Promise<ToolResult> {
   const escapedRef = yamlEscape(ref.replace(/^@/, ''));
   const escapedText = yamlEscape(text);
@@ -629,7 +646,7 @@ async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 
   );
 }
 
-export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResult> {
+export function createDeviceFillHandler(getClient: () => CDPClient): (args: FillArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
     const androidSession = isAndroidSession();
@@ -645,6 +662,22 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
       if (pressResult.isError) return pressResult;
       await sleep(300);
       return androidClipboardFill(args.text);
+    }
+
+    // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
+    const client = cdpClientOrNull(getClient);
+    const cachedIdentifier = getCachedMetadata(ref.replace(/^@/, ''))?.identifier;
+    const jsTestId = client ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
+    if (client && jsTestId) {
+      const tJs = Date.now();
+      const js = await attemptJsFill({ evaluate: (e) => client.evaluate(e) }, jsTestId, args.text);
+      if (js.handled && js.outcome && js.outcome !== 'corrupted') {
+        return okResult(
+          { filled: true, method: 'js-onChangeText', length: args.text.length, value: js.valueAfter ?? null },
+          { meta: { textEntryPath: 'js', verify: jsVerifyMeta(js.outcome), handler: js.handler,
+                    timings_ms: { jsType: Date.now() - tJs } } },
+        );
+      }
     }
 
     const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;

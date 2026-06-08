@@ -413,7 +413,8 @@ trackedTool('device_fill', 'Type text into an input field by its @ref from devic
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
     waitForKeyboardMs: z.number().int().min(0).max(5000).optional().describe('Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land.'),
-}, createDeviceFillHandler());
+    testID: z.string().optional().describe('Explicit testID for the JS-first fill path; resolved from the ref\'s cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token.'),
+}, createDeviceFillHandler(getClient));
 trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true to require fast-runner (precise unclamped duration) — needed for momentum-sensitive UIs like UIDatePicker wheels where the agent-device daemon\'s safe-normalized 60ms cap causes overshoot. Requires an open session.', {
     direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('Simple directional swipe (delegates to scroll)'),
     x1: z.number().optional().describe('Start X coordinate (use with y1, x2, y2 for precise swipes)'),

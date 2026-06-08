@@ -78,3 +78,96 @@ export function decideNativeRetype(
   if (attemptsSoFar >= maxAttempts) return { action: 'escalate' };
   return { action: 'retype', delayMs: RETYPE_DELAY_MS };
 }
+
+export interface EvaluateSeam {
+  evaluate: (expression: string) => Promise<{ value?: unknown; error?: unknown }>;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface JsFillResult {
+  handled: boolean;
+  outcome?: FillVerifyOutcome;
+  valueAfter?: string | null;
+  controlled?: boolean;
+  handler?: string;
+}
+
+const READ_SETTLE_TRIES = 3;
+const READ_SETTLE_DELAY_MS = 70;
+
+async function readInputValueOnce(
+  deps: EvaluateSeam,
+  testID: string,
+): Promise<{ value: string | null; controlled: boolean } | null> {
+  try {
+    const r = await deps.evaluate('__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')');
+    if (!r.error && typeof r.value === 'string') {
+      const read = JSON.parse(r.value) as { value?: string | null; controlled?: boolean; __agent_error?: string };
+      if (!read.__agent_error) return { value: read.value ?? null, controlled: read.controlled ?? false };
+    }
+  } catch {
+    /* unreadable */
+  }
+  return null;
+}
+
+/**
+ * Poll readInputValue until the controlled re-render flushes. Stops on exact, or
+ * when the value diverges from the pre-type `valueBefore` (flushed → classify).
+ * Defeats the debounced-onChangeText read race. valueBefore null (uncontrolled)
+ * → polls then returns null → unverifiable upstream.
+ */
+export async function settleRead(
+  deps: EvaluateSeam,
+  testID: string,
+  text: string,
+  valueBefore: string | null,
+): Promise<{ value: string | null; controlled: boolean }> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let value: string | null = valueBefore;
+  let controlled = false;
+  let everRead = false;
+  for (let i = 0; i < READ_SETTLE_TRIES; i++) {
+    const rb = await readInputValueOnce(deps, testID);
+    if (rb) {
+      value = rb.value;
+      controlled = rb.controlled;
+      everRead = true;
+    }
+    if (value === text) break;
+    if (value !== valueBefore) break;
+    if (i < READ_SETTLE_TRIES - 1) await sleep(READ_SETTLE_DELAY_MS);
+  }
+  // If we never got a successful read, the field value is unknown → null → unverifiable upstream.
+  if (!everRead) return { value: null, controlled: false };
+  return { value, controlled };
+}
+
+/**
+ * JS-first fill: eval-1 probes + fires onChangeText (no-op when no handler), then
+ * settle-poll the value. Any CDP hiccup / stale helper degrades to handled:false.
+ */
+export async function attemptJsFill(deps: EvaluateSeam, testID: string, text: string): Promise<JsFillResult> {
+  let probe: Record<string, unknown>;
+  try {
+    const expr = '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text, verify: true }) + ')';
+    const r = await deps.evaluate(expr);
+    if (r.error || typeof r.value !== 'string') return { handled: false };
+    probe = JSON.parse(r.value) as Record<string, unknown>;
+  } catch {
+    return { handled: false };
+  }
+  if (probe.error) return { handled: false };
+  if (probe.controlled === undefined) return { handled: false };
+  if (probe.handlerCalled === false || probe.handlerCalled === undefined) return { handled: false };
+
+  const valueBefore = typeof probe.valueBefore === 'string' ? probe.valueBefore : null;
+  const settled = await settleRead(deps, testID, text, valueBefore);
+  return {
+    handled: true,
+    outcome: classifyFillVerification({ text, valueAfter: settled.value, controlled: settled.controlled }),
+    valueAfter: settled.value,
+    controlled: settled.controlled,
+    handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,
+  };
+}

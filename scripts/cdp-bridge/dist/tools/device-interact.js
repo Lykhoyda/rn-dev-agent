@@ -7,6 +7,8 @@ import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
+import { getCachedMetadata } from '../fast-runner-ref-map.js';
+import { resolveJsTestId, attemptJsFill } from './fill-verify.js';
 const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
 const ANDROID_FILL_MAX_SAFE_LEN = 30;
@@ -478,6 +480,18 @@ function isNoFocusedInputError(result) {
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
+function cdpClientOrNull(getClient) {
+    try {
+        const c = getClient();
+        return c && c.isConnected ? c : null;
+    }
+    catch {
+        return null;
+    }
+}
+function jsVerifyMeta(outcome) {
+    return outcome === 'verified-exact' ? 'exact' : outcome === 'verified-transformed' ? 'transformed' : 'unverifiable';
+}
 async function maestroFillFallback(ref, text, platform) {
     const escapedRef = yamlEscape(ref.replace(/^@/, ''));
     const escapedText = yamlEscape(text);
@@ -488,7 +502,7 @@ async function maestroFillFallback(ref, text, platform) {
     }
     return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, { code: 'FILL_FAILED', tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'] });
 }
-export function createDeviceFillHandler() {
+export function createDeviceFillHandler(getClient) {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
         const androidSession = isAndroidSession();
@@ -502,6 +516,18 @@ export function createDeviceFillHandler() {
                 return pressResult;
             await sleep(300);
             return androidClipboardFill(args.text);
+        }
+        // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
+        const client = cdpClientOrNull(getClient);
+        const cachedIdentifier = getCachedMetadata(ref.replace(/^@/, ''))?.identifier;
+        const jsTestId = client ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
+        if (client && jsTestId) {
+            const tJs = Date.now();
+            const js = await attemptJsFill({ evaluate: (e) => client.evaluate(e) }, jsTestId, args.text);
+            if (js.handled && js.outcome && js.outcome !== 'corrupted') {
+                return okResult({ filled: true, method: 'js-onChangeText', length: args.text.length, value: js.valueAfter ?? null }, { meta: { textEntryPath: 'js', verify: jsVerifyMeta(js.outcome), handler: js.handler,
+                        timings_ms: { jsType: Date.now() - tJs } } });
+            }
         }
         const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
