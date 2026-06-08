@@ -1,7 +1,8 @@
-import { runAgentDevice } from '../agent-device-wrapper.js';
+import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult } from '../utils.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 let runAgentDeviceFn = runAgentDevice;
 export function _setRunAgentDeviceForTest(fn) {
@@ -133,6 +134,18 @@ export function wrapResultWithAdvisories(result, advisories) {
     }
 }
 /**
+ * #210: pick the screenshot backend.
+ * - flow active + platform known → 'simctl' (OS-level, flow-safe).
+ * - flow active + platform unknown → 'fail' (NEVER the runner — would hit XCUITest
+ *   unleased and crash the flow, A3).
+ * - no flow → 'runner' (rn-fast-runner primary; its own simctl fallback fires on error).
+ */
+export function chooseScreenshotPath(input) {
+    if (input.flowActive)
+        return input.platform ? 'simctl' : 'fail';
+    return 'runner';
+}
+/**
  * B121: shared capture + resize helper. Extracted from
  * `createDeviceScreenshotHandler` so internal callers like `device_batch`
  * (action=screenshot, on-failure / on-each / on-end auto-captures) and
@@ -155,24 +168,47 @@ export async function captureAndResizeScreenshot(args) {
     // the user-reported regression: an OOM-unstable emulator leaves
     // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmu
     // skips it, the fallback fires, iOS screen is returned.
+    const rawResultOk = (path, platform) => ({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path, via: platform === 'android' ? 'adb' : 'simctl' } }) }],
+    });
+    const rawResultFail = (platform, reason) => {
+        const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
+        const hint = reason === 'no-device'
+            ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
+            : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
+        return failResult(`device_screenshot platform=${platform} failed: ${hint}`, 'SCREENSHOT_FAILED', { platform, reason });
+    };
     let result;
-    if (args.platformExplicit && (args.platform === 'ios' || args.platform === 'android')) {
+    const route = chooseScreenshotPath({ flowActive: arbiter.flowActive, platform: args.platform ?? null });
+    // A3: a Maestro flow owns the device and no platform could be resolved to simctl on →
+    // refuse rather than touch the XCUITest runner (which would crash the flow).
+    if (route === 'fail') {
+        return failResult('device_screenshot: a Maestro flow owns the device and the platform could not be resolved for a simctl fallback. Pass platform=ios|android, or retry after the flow completes.', 'SCREENSHOT_FAILED', { flowActive: true });
+    }
+    // simctl path: a flow owns the device (raw-ONLY — never fall through to the runner, A3),
+    // OR the existing GH#136 explicit-platform disambiguation (no flow). Both hard-fail on error.
+    if ((route === 'simctl' || args.platformExplicit) && (args.platform === 'ios' || args.platform === 'android')) {
         const raw = await tryRawScreenshot(args.platform, requestedPath);
-        if (raw.ok) {
-            result = {
-                content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: raw.path } }) }],
-            };
-        }
-        else {
-            const cli = args.platform === 'ios' ? 'xcrun simctl' : 'adb';
-            const hint = raw.reason === 'no-device'
-                ? `No booted ${args.platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
-                : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
-            return failResult(`device_screenshot platform=${args.platform} failed: ${hint}`, 'SCREENSHOT_FAILED', { platform: args.platform, reason: raw.reason });
-        }
+        if (raw.ok)
+            result = rawResultOk(raw.path, args.platform);
+        else
+            return rawResultFail(args.platform, raw.reason);
     }
     if (!result) {
-        result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+        // route === 'runner' (NO flow — runAgentDevice can never run while a flow is active here).
+        // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
+        // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
+        try {
+            result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+        }
+        catch (err) {
+            result = failResult(err instanceof Error ? err.message : String(err), 'SCREENSHOT_FAILED');
+        }
+        if (result.isError && (args.platform === 'ios' || args.platform === 'android')) {
+            const raw = await tryRawScreenshot(args.platform, requestedPath);
+            if (raw.ok)
+                result = rawResultOk(raw.path, args.platform);
+        }
     }
     if (result.isError)
         return result;
@@ -202,7 +238,10 @@ export async function captureAndResizeScreenshot(args) {
 export function createDeviceScreenshotHandler(getClient) {
     return async (args) => {
         const platformExplicit = args.platform === 'ios' || args.platform === 'android';
-        const platform = args.platform ?? getClient?.()?.connectedTarget?.platform ?? null;
+        const platform = args.platform
+            ?? getClient?.()?.connectedTarget?.platform
+            ?? getActiveSession()?.platform // A3: so a flow-active capture has a platform
+            ?? null;
         return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
     };
 }

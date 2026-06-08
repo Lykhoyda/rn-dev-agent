@@ -7,6 +7,8 @@ import { arbiter } from '../lifecycle/device-arbiter.js';
 import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import { AppDetachedError } from '../cdp/discovery.js';
+import { getDeviceSessionHealth } from './device-session-health.js';
+import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -47,6 +49,9 @@ async function buildStatusResult(client) {
         }
     }
     const metroEvents = client.metroEventsClient;
+    const deviceSession = await getDeviceSessionHealth({
+        detectForeign: async (udid) => (await detectIosExternalRunner(undefined, udid)) ? { detected: true } : null,
+    });
     return {
         metro: {
             running: true,
@@ -86,6 +91,7 @@ async function buildStatusResult(client) {
             heapProfiler: client.heapProfilerAvailable,
         },
         reconnect: client.reconnectState,
+        deviceSession,
         proxy: {
             active: client.isProxyActive,
             port: client.proxyMultiplexer?.port ?? null,

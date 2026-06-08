@@ -158,7 +158,7 @@ export function createDeviceSnapshotHandler() {
                 catch { /* best-effort */ }
                 setActiveSession({
                     name: sessionName,
-                    platform: args.platform,
+                    platform,
                     deviceId,
                     openedAt: new Date().toISOString(),
                     appId,

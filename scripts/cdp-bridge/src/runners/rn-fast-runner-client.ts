@@ -168,6 +168,11 @@ export function hasBuiltTestProduct(derivedDataPath: string): boolean {
   }
 }
 
+/** #210: the DerivedData path the runner builds into — used to check hasBuiltTestProduct before auto-spawn. */
+export function derivedDataPathForRunner(): string {
+  return join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
+}
+
 // --- Lifecycle ---
 
 /**
@@ -191,7 +196,7 @@ export function startFastRunner(deviceId: string, bundleId: string, port = DEFAU
       return;
     }
 
-    const derivedDataPath = join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
+    const derivedDataPath = derivedDataPathForRunner();
     const built = hasBuiltTestProduct(derivedDataPath);
     const args = resolveRunnerXcodebuildArgs({
       projectPath,
@@ -549,7 +554,7 @@ function commandTimeoutMs(command: unknown): number {
 async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
   const state = runnerState;
   if (!state) {
-    throw new Error('rn-fast-runner not started — open a device session first');
+    throw new Error('rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).');
   }
   const controller = new AbortController();
   const timeoutMs = commandTimeoutMs(body.command);

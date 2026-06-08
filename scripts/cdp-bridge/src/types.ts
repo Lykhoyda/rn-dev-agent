@@ -138,6 +138,21 @@ export interface StatusResult {
     attemptCount: number;
   };
   /**
+   * #210: iOS device-session visibility. `sessionOpen` is whether a device session
+   * has been opened; `rnFastRunner` is the XCUITest runner's liveness (only probed
+   * when an iOS session is open — `dead` otherwise, never misreported as down when
+   * simply never started). `foreignRunner.detected` means a Maestro/WDA flow currently
+   * owns the device. iOS-focused; on Android `rnFastRunner` is always `'dead'` (the iOS
+   * runner is never used). Always populated by buildStatusResult.
+   */
+  deviceSession?: {
+    sessionOpen: boolean;
+    rnFastRunner: 'alive' | 'stale' | 'dead';
+    appId?: string;
+    deviceId?: string;
+    foreignRunner?: { detected: true };
+  };
+  /**
    * M1b (Phase 100+): multiplexer proxy state. `active: true` means React Native
    * DevTools can coexist with the MCP by connecting to `port` on localhost.
    * `consumerCount` is the number of DevTools/other-debugger instances connected
@@ -189,6 +204,7 @@ export type ToolErrorCode =
   | 'TESTID_NOT_FOUND'          // device_batch testID-keyed step / expect_visible_by_testid
   | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
   | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
+  | 'RN_FAST_RUNNER_DOWN'       // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
   | 'SCREENSHOT_FAILED'         // rn-android-runner screenshot response missing pngBase64 payload
   | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
   | 'STORE_TRUNCATED'           // expect_redux when store payload exceeded safeStringify cap

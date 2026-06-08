@@ -22,4 +22,10 @@ The detection is UDID-scoped (it ignores maestro flows on other simulators and t
 
 ## L3 flows own the device
 
-A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the device exclusively for its duration — `device_*` and CDP reads issued mid-flow refuse fast with `BUSY_FLOW_ACTIVE`.
+A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the device exclusively for its duration — `device_*` taps and CDP *writes* issued mid-flow refuse fast with `BUSY_FLOW_ACTIVE`. (CDP reads — `cdp_component_tree`, `cdp_store_state`, etc. — are L1 and coexist; see above.)
+
+**Exception — `device_screenshot` (#210):** a screenshot during a flow does **not** refuse. It transparently captures via `xcrun simctl io screenshot` (or `adb`), which is OS-level and can't conflict with maestro's WDA, so you always get pixels (`via: 'simctl'` in the result). This is the only `device_*` verb that interleaves with a flow, because it has a safe non-XCUITest path.
+
+## Why there's no shared "WDA session" to ride (#210)
+
+A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt — `cdp_status.deviceSession` shows its `alive`/`stale`/`dead` state), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.

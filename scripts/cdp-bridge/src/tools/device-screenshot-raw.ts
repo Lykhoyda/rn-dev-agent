@@ -79,6 +79,11 @@ const defaultIosResolver: RawResolver = async () => {
   }
 };
 
+/** #210: resolve the booted iOS simulator UDID (reuses the simctl probe used for raw screenshots). null if none booted. */
+export async function resolveBootedIosUdid(): Promise<string | null> {
+  return defaultIosResolver();
+}
+
 const defaultAndroidResolver: RawResolver = async () => {
   try {
     const { stdout } = await execFileAsync('adb', ['devices'], {
