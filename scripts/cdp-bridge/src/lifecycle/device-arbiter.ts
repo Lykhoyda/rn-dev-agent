@@ -162,10 +162,12 @@ export function arbiterWrap(
   return async (...args: unknown[]): Promise<ToolResult> => {
     const res = inst.tryAcquire(plane, name);
     if (!res.ok) {
-      if (FLOW_FALLBACK_TOOLS.has(name)) {
+      if (FLOW_FALLBACK_TOOLS.has(name) && inst.flowActive) {
         // #210: a flow owns the device, but this tool has an OS-level fallback. Run it
         // WITHOUT a lease — it must not touch XCUITest while the flow holds the device
-        // (the handler routes to simctl/adb via arbiter.flowActive).
+        // (the handler routes to simctl/adb via arbiter.flowActive). The flowActive guard
+        // keeps the unleased path scoped to flow-blocks only (defensive: an interaction
+        // tool only fails tryAcquire on a flow today, but this survives arbiter changes).
         return await handler(...args);
       }
       const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : 'a Maestro flow';

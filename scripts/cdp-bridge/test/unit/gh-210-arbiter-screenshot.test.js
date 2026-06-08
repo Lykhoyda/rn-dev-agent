@@ -39,3 +39,16 @@ test('#210 arbiter: device_screenshot still acquires a lease when NO flow (coord
   await wrapped();
   assert.equal(snapshotDuring, 1, 'with no flow, screenshot holds an interaction lease while running');
 });
+
+test('#210 arbiter: another interaction op active (NO flow) → device_screenshot runs LEASED, not unleased-fallback', async () => {
+  // Interaction tools coexist — a concurrent device_press does NOT block device_screenshot.
+  // With the flowActive guard, the unleased fallback fires ONLY for a flow, so here the
+  // screenshot is granted a normal lease (2 active ops) rather than slipping through unleased.
+  const a = new DeviceSessionArbiter();
+  a.tryAcquire('interaction', 'device_press');
+  let activeOpsDuring = -1;
+  const wrapped = arbiterWrap('device_screenshot', async () => { activeOpsDuring = a.snapshot.activeOps; return { content: [] }; }, a);
+  const res = await wrapped();
+  assert.ok(!res.isError, 'interaction tools coexist — screenshot is not refused by a concurrent device_press');
+  assert.equal(activeOpsDuring, 2, 'screenshot holds its own interaction lease alongside device_press (leased, not unleased)');
+});
