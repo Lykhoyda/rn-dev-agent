@@ -8,7 +8,7 @@ import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import { getCachedMetadata } from '../fast-runner-ref-map.js';
-import { resolveJsTestId, attemptJsFill } from './fill-verify.js';
+import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype } from './fill-verify.js';
 const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
 const ANDROID_FILL_MAX_SAFE_LEN = 30;
@@ -502,6 +502,22 @@ async function maestroFillFallback(ref, text, platform) {
     }
     return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, { code: 'FILL_FAILED', tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'] });
 }
+const MAX_NATIVE_RETYPE = 2;
+async function nativeSettle(client, testID, text, valueBefore) {
+    if (!client || !testID)
+        return { outcome: 'unverifiable', value: null };
+    const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, text, valueBefore);
+    return {
+        outcome: classifyFillVerification({ text, valueAfter: settled.value, priorValueAfter: valueBefore, controlled: settled.controlled }),
+        value: settled.value,
+    };
+}
+async function readValueBefore(client, testID) {
+    if (!client || !testID)
+        return null;
+    const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, ' __rn_never__', null);
+    return settled.value;
+}
 export function createDeviceFillHandler(getClient) {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
@@ -542,6 +558,30 @@ export function createDeviceFillHandler(getClient) {
         }
         const primary = await runAgentDevice(['fill', ref, args.text]);
         if (!primary.isError) {
+            const verifyTestId = jsTestId;
+            if (client && verifyTestId) {
+                const tNative = Date.now();
+                let valueBefore = await readValueBefore(client, verifyTestId);
+                for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+                    const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, valueBefore);
+                    const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
+                    if (decision.action === 'accept') {
+                        return okResult({ filled: true, method: 'native', length: args.text.length, value }, { meta: { textEntryPath: attempt === 0 ? 'native' : 'native-retype', verify: jsVerifyMeta(outcome), retypes: attempt, timings_ms: { nativeType: Date.now() - tNative } } });
+                    }
+                    if (decision.action === 'escalate')
+                        break;
+                    valueBefore = value;
+                    await runAgentDevice(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+                }
+                const maestro = await maestroFillFallback(ref, args.text, androidSession ? 'android' : 'ios');
+                if (!maestro.isError) {
+                    const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, null);
+                    if (outcome !== 'corrupted') {
+                        return okResult({ filled: true, method: 'maestro', length: args.text.length, value }, { meta: { textEntryPath: 'maestro', verify: jsVerifyMeta(outcome), timings_ms: { nativeType: Date.now() - tNative } } });
+                    }
+                }
+                return failResult('Text entry could not be verified after retype + maestro fallback', 'TEXT_ENTRY_UNVERIFIED', { expected: args.text, pathsTried: ['js?', 'native', 'native-retype', 'maestro'] });
+            }
             return primary;
         }
         // G4: Fallback chain for "no focused text input to clear" and similar focus errors.

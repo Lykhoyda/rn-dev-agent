@@ -12,7 +12,7 @@ import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
 import { getCachedMetadata } from '../fast-runner-ref-map.js';
-import { resolveJsTestId, attemptJsFill, type FillVerifyOutcome } from './fill-verify.js';
+import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype, type FillVerifyOutcome } from './fill-verify.js';
 
 const execFile = promisify(execFileCb);
 
@@ -646,6 +646,28 @@ async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 
   );
 }
 
+const MAX_NATIVE_RETYPE = 2;
+
+async function nativeSettle(
+  client: CDPClient | null,
+  testID: string | null,
+  text: string,
+  valueBefore: string | null,
+): Promise<{ outcome: FillVerifyOutcome; value: string | null }> {
+  if (!client || !testID) return { outcome: 'unverifiable', value: null };
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, text, valueBefore);
+  return {
+    outcome: classifyFillVerification({ text, valueAfter: settled.value, priorValueAfter: valueBefore, controlled: settled.controlled }),
+    value: settled.value,
+  };
+}
+
+async function readValueBefore(client: CDPClient | null, testID: string | null): Promise<string | null> {
+  if (!client || !testID) return null;
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, ' __rn_never__', null);
+  return settled.value;
+}
+
 export function createDeviceFillHandler(getClient: () => CDPClient): (args: FillArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
@@ -694,6 +716,39 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
 
     const primary = await runAgentDevice(['fill', ref, args.text]);
     if (!primary.isError) {
+      const verifyTestId = jsTestId;
+      if (client && verifyTestId) {
+        const tNative = Date.now();
+        let valueBefore = await readValueBefore(client, verifyTestId);
+        for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+          const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, valueBefore);
+          const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
+          if (decision.action === 'accept') {
+            return okResult(
+              { filled: true, method: 'native', length: args.text.length, value },
+              { meta: { textEntryPath: attempt === 0 ? 'native' : 'native-retype', verify: jsVerifyMeta(outcome), retypes: attempt, timings_ms: { nativeType: Date.now() - tNative } } },
+            );
+          }
+          if (decision.action === 'escalate') break;
+          valueBefore = value;
+          await runAgentDevice(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+        }
+        const maestro = await maestroFillFallback(ref, args.text, androidSession ? 'android' : 'ios');
+        if (!maestro.isError) {
+          const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, null);
+          if (outcome !== 'corrupted') {
+            return okResult(
+              { filled: true, method: 'maestro', length: args.text.length, value },
+              { meta: { textEntryPath: 'maestro', verify: jsVerifyMeta(outcome), timings_ms: { nativeType: Date.now() - tNative } } },
+            );
+          }
+        }
+        return failResult(
+          'Text entry could not be verified after retype + maestro fallback',
+          'TEXT_ENTRY_UNVERIFIED',
+          { expected: args.text, pathsTried: ['js?', 'native', 'native-retype', 'maestro'] },
+        );
+      }
       return primary;
     }
 
