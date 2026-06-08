@@ -54,8 +54,11 @@ export function decideNativeRetype(outcome, attemptsSoFar, maxAttempts) {
         return { action: 'escalate' };
     return { action: 'retype', delayMs: RETYPE_DELAY_MS };
 }
-const READ_SETTLE_TRIES = 3;
-const READ_SETTLE_DELAY_MS = 70;
+// 5 reads × 80ms between = ~320ms settle window, covering the common ~300ms RN
+// onChangeText debounce so a slow-but-correct controlled update is not misread as
+// corruption (GH#191 multi-review H2). The happy path breaks on the first read.
+const READ_SETTLE_TRIES = 5;
+const READ_SETTLE_DELAY_MS = 80;
 async function readInputValueOnce(deps, testID) {
     try {
         const r = await deps.evaluate('__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')');

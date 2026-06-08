@@ -102,6 +102,18 @@ test('attemptJsFill: debounced field (stale==valueBefore then settles) → verif
   }), 'search', 'hello');
   assert.equal(r.outcome, 'verified-exact');
 });
+test('attemptJsFill: ~300ms debounce settling on read 4 → verified-exact (widened budget, GH#191 H2)', async () => {
+  // Stale empty for 3 reads, flushes on the 4th. The old 3-try window would have
+  // misread this as corrupted; the 5-try window catches the late flush.
+  const r = await attemptJsFill(fakeClient({
+    probe: { handlerCalled: 'onChangeText', controlled: true, valueBefore: '' },
+    reads: [
+      { value: '', controlled: true }, { value: '', controlled: true },
+      { value: '', controlled: true }, { value: 'hello', controlled: true },
+    ],
+  }), 'search', 'hello');
+  assert.equal(r.outcome, 'verified-exact');
+});
 test('attemptJsFill: no JS handler → handled:false', async () => {
   const r = await attemptJsFill(fakeClient({ probe: { handlerCalled: false, controlled: false, valueBefore: null }, reads: [] }), 'native', 'x');
   assert.equal(r.handled, false);
