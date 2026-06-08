@@ -70,6 +70,10 @@ export class DeviceSessionArbiter {
             ops: [...this.ops.entries()].map(([opId, i]) => ({ opId, plane: i.plane, tool: i.tool })),
         };
     }
+    /** #210: true while a flow (Maestro) owns the device. Flow-fallback tools consult this to take an OS-level path. */
+    get flowActive() {
+        return this.flowLeaseHeldBy !== null;
+    }
 }
 export const arbiter = new DeviceSessionArbiter();
 // --- Plane classification ---------------------------------------------------
@@ -117,6 +121,11 @@ export function planeForTool(name) {
         return 'introspection';
     return null;
 }
+// #210: interaction tools with a flow-SAFE fallback (OS-level, no XCUITest) that may run
+// UNLEASED while a flow owns the device instead of refusing. device_screenshot falls back
+// to `xcrun simctl io screenshot` / `adb screencap`, which cannot conflict with a Maestro/WDA
+// flow. The handler MUST consult `arbiter.flowActive` and take the raw path when true.
+const FLOW_FALLBACK_TOOLS = new Set(['device_screenshot']);
 /**
  * Wrap an MCP handler so it acquires its plane before running and releases
  * after (in a `finally`, so a throwing handler still frees its lease). A refused
@@ -133,6 +142,12 @@ export function arbiterWrap(name, handler, inst = arbiter) {
     return async (...args) => {
         const res = inst.tryAcquire(plane, name);
         if (!res.ok) {
+            if (FLOW_FALLBACK_TOOLS.has(name)) {
+                // #210: a flow owns the device, but this tool has an OS-level fallback. Run it
+                // WITHOUT a lease — it must not touch XCUITest while the flow holds the device
+                // (the handler routes to simctl/adb via arbiter.flowActive).
+                return await handler(...args);
+            }
             const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : 'a Maestro flow';
             return failResult(`Refusing ${name}: blocked by ${who} on this device — reads and taps can't interleave ` +
                 `with a running Maestro flow. Retry after it completes; if it appears stuck, ` +
