@@ -5,6 +5,7 @@ import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import { okResult, failResult, warnResult } from '../utils.js';
@@ -213,6 +214,12 @@ export function createDeviceSnapshotHandler() {
                     catch (err) {
                         logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
                     }
+                    try {
+                        const sup = await suppressIOSAutocorrect(deviceId);
+                        if (sup.warnings.length)
+                            logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
+                    }
+                    catch { /* fail-open: never block session-open on keyboard prefs */ }
                 }
                 // Task 9 of Android-MVP: warn on competing Android UIAutomator /
                 // agent-device processes that would contend for input + focus with
