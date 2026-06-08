@@ -282,10 +282,6 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           } catch (err) {
             logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
           }
-          try {
-            const sup = await suppressIOSAutocorrect(deviceId);
-            if (sup.warnings.length) logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
-          } catch { /* fail-open: never block session-open on keyboard prefs */ }
         }
 
         // Task 9 of Android-MVP: warn on competing Android UIAutomator /
@@ -306,6 +302,12 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
 
         if (args.platform === 'ios' && deviceId) {
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
+          // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
+          // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
+          try {
+            const sup = await suppressIOSAutocorrect(deviceId);
+            if (sup.warnings.length) logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
+          } catch { /* fail-open: never block session-open on keyboard prefs */ }
         }
 
         // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
