@@ -235,12 +235,14 @@ export function createDeviceSnapshotHandler() {
                     ensureFastRunner(deviceId, appId).catch(() => { });
                     // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
                     // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
-                    try {
-                        const sup = await suppressIOSAutocorrect(deviceId);
+                    // Fire-and-forget: a hung simctl must never stall session-open (up to
+                    // 3×5s timeouts), and the result is consumed only for warning logs.
+                    suppressIOSAutocorrect(deviceId)
+                        .then((sup) => {
                         if (sup.warnings.length)
                             logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
-                    }
-                    catch { /* fail-open: never block session-open on keyboard prefs */ }
+                    })
+                        .catch(() => { });
                 }
                 // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
                 // Skip when opted out, or when WE hold the flow lease (a detected maestro

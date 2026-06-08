@@ -24,3 +24,17 @@ test('no udid → no-op', async () => {
   assert.equal(calls.length, 0);
   assert.equal(res.skipped, true);
 });
+test('multiple failures accumulate multiple warnings; remaining keys still run', async () => {
+  let n = 0;
+  const calls = [];
+  const res = await suppressIOSAutocorrect('UDID-123', {
+    run: async (a) => { n++; calls.push(a); if (n === 1 || n === 3) throw new Error('boom' + n); },
+  });
+  assert.equal(calls.length, IOS_KEYBOARD_PREF_KEYS.length); // every key attempted
+  assert.equal(res.warnings.length, 2);
+});
+test('records a numeric timings_ms.suppress on the non-skipped path', async () => {
+  const res = await suppressIOSAutocorrect('UDID-123', { run: async () => {} });
+  assert.equal(typeof res.meta.timings_ms.suppress, 'number');
+  assert.ok(res.meta.timings_ms.suppress >= 0);
+});
