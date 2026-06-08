@@ -29,7 +29,7 @@ Root causes (confirmed via code trace, 2026-06-08):
 2. **Post-type verification** — read the field value back after typing and escalate on a strong corruption signal (not silent pass-through).
 3. **Native autocorrect/predictive suppression** at the source + a corrective retype backstop on the residual native path.
 
-**Architecture decision — make `device_fill` itself smart (Approach A).** Not a new tool (B) and not an agent-guidance change (C). Rationale: #191 is a *reliability* failure; approaches that rely on the agent remembering to pick the JS tool reintroduce the stochastic behavior that caused the bug. Putting the smarts at the `device_fill` choke point means **every** caller (composite flows, `cdp_auto_login`, `device_batch`) benefits with no guidance change, and it mirrors the #210 "one coherent path that self-heals internally" direction.
+**Architecture decision — make `device_fill` itself smart (Approach A).** Not a new tool (B) and not an agent-guidance change (C). Rationale: #191 is a *reliability* failure; approaches that rely on the agent remembering to pick the JS tool reintroduce the stochastic behavior that caused the bug. Putting the smarts at the `device_fill` choke point means callers that route through `createDeviceFillHandler` benefit with no guidance change, and it mirrors the #210 "one coherent path that self-heals internally" direction. (**Implementation note, 2026-06-08:** `device_batch` calls `runAgentDevice(['fill', …])` directly, bypassing `createDeviceFillHandler`, so it does **not** get JS-first in this PR — see §5. Routing batch fills through the handler is a tracked follow-up.)
 
 Consequence: `device_fill` becomes the **first `device_*` tool to opportunistically use CDP** while **gracefully degrading** to pure-native when CDP is absent. (Device tools are deliberately CDP-independent today — none take `getClient`. This is a deliberate, documented exception, not a leak of layering.)
 
@@ -106,7 +106,7 @@ The corrective backstop is what makes the native path *reliable*; the preventive
 - **Transforming inputs (mask/format/`maxLength`)** — `verified-transformed`, no escalation; the stability rule (§3.2) ensures a `maxLength<50%` truncation converges instead of retrying to exhaustion.
 - **Uncontrolled inputs** (no `value` prop) — `unverifiable` soft-warn.
 - **Secure (password) controlled inputs** — fiber `value` is the real string → verifiable via source (1); native a11y is masked (not used as authority).
-- **`device_batch` multi-field** — each fill independently JS-first; one field's path choice does not affect another.
+- **`device_batch` multi-field** — **deferred (follow-up).** `device-batch.ts` issues `runAgentDevice(['fill', …])` directly rather than through `createDeviceFillHandler`, so batch fills are NOT JS-first in this PR. They retain the existing native path (no read-back verification). Routing batch fills through the handler — which needs `getClient` threaded into the batch handler — is tracked separately.
 - **Non-RN / coordinate `ref`** — JS probe skipped, native path with verification-if-CDP-up.
 
 ## 6. Testing (TDD, red → green per unit)
