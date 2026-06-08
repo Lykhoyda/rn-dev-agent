@@ -323,7 +323,3 @@ test('source guard: getTree filter checks accessibilityLabel', () => {
   assert.match(INJECTED_HELPERS, /matchesLabel/);
   assert.match(INJECTED_HELPERS, /matchesName \|\| matchesTestID \|\| matchesLabel/);
 });
-
-test('source guard: helpers version bumped to 23 (extra-roots + iterateAllRoots, GH #126 Gap B)', () => {
-  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__ = 23;/);
-});
