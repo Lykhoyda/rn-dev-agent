@@ -7,8 +7,15 @@ name: CodeQL
 # each language's correct build command and lets CodeQL trace the resulting
 # artifacts.
 #
-# All ${{ }} interpolations here read from matrix.* (workflow-defined values)
-# and do not consume untrusted github.event.* input — safe per
+# Swift is the slow one: it needs a real `xcodebuild` compile on a macOS runner
+# (CodeQL has no build-mode:none for Swift), ~17 min including runner spin-up.
+# The `changes` pre-job skips the Swift build+analysis on PRs that don't touch
+# Swift/Xcode files (most PRs) — the previous analysis on main still applies,
+# and push-to-main + the weekly schedule always run the full scan as a backstop.
+#
+# All ${{ }} interpolations here read from matrix.*, needs.*, and github.* (event
+# name only) — they do not interpolate untrusted github.event.* text into shell.
+# The base SHA is passed through `env:` (not inline) so it can't be injected.
 # https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
 
 on:
@@ -20,8 +27,42 @@ on:
     - cron: '20 12 * * 4'
 
 jobs:
+  # Fast (ubuntu, ~30s) pre-flight: does the slow macOS Swift analysis need to run?
+  # PR → only when Swift/Xcode files (or this workflow) changed; push/schedule → always.
+  changes:
+    name: Detect changed languages
+    runs-on: ubuntu-latest
+    outputs:
+      swift: ${{ steps.detect.outputs.swift }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect Swift/Xcode changes
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Non-PR events (push to main, weekly schedule) always run the full Swift scan.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # PR: run Swift only when Swift sources, the Xcode project, or this
+          # workflow itself changed. BASE_SHA comes via env (injection-safe).
+          if git diff --name-only "$BASE_SHA"...HEAD \
+             | grep -qE '^scripts/rn-fast-runner/|^\.github/workflows/codeql\.yml$'; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "swift=false" >> "$GITHUB_OUTPUT"
+          fi
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
@@ -49,21 +90,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Swift unchanged on this PR → report green fast (the "Analyze (swift)" check
+      # still posts) without the ~17 min macOS build. Non-swift languages are fast
+      # (build-mode:none on ubuntu) and always analyze.
+      - name: Skip notice (Swift unchanged)
+        if: ${{ matrix.language == 'swift' && needs.changes.outputs.swift != 'true' }}
+        run: echo "No Swift/Xcode changes in this PR — skipping the macOS build + CodeQL analysis. The previous analysis on main still applies; push-to-main and the weekly scheduled scan re-check."
+
       - name: Set up Java (Android Gradle)
-        if: matrix.language == 'java-kotlin'
+        if: ${{ matrix.language == 'java-kotlin' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Initialize CodeQL
+        if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Build rn-android-runner
-        if: matrix.language == 'java-kotlin'
+        if: ${{ matrix.language == 'java-kotlin' }}
         working-directory: scripts/rn-android-runner
         run: ./gradlew :app:assembleDebugAndroidTest --no-daemon
 
@@ -72,7 +121,7 @@ jobs:
       # without requiring a specific device — CodeQL only needs the compile
       # commands traced, not a runnable test bundle.
       - name: Build rn-fast-runner
-        if: matrix.language == 'swift'
+        if: ${{ matrix.language == 'swift' && needs.changes.outputs.swift == 'true' }}
         working-directory: scripts/rn-fast-runner/RnFastRunner
         run: |
           set -euo pipefail
@@ -89,6 +138,7 @@ jobs:
             ONLY_ACTIVE_ARCH=YES
 
       - name: Perform CodeQL Analysis
+        if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
