@@ -54,6 +54,7 @@ import { createConnectHandler, createDisconnectHandler, createTargetsHandler } f
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
+import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap } from './lifecycle/device-arbiter.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -74,15 +75,18 @@ const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // opt-out exists for CI parallelism and benchmark harnesses; documented in the conflict
 // message. Release is registered on process.exit so ALL exit paths (graceful, uncaught,
 // signal) clean up the lock.
+// GH #182: module-scoped so the parent-death watch can touch() it (heartbeat) and
+// release() it on orphan-exit. null when --no-lock (touch/release become no-ops).
+let lockfile = null;
 const noLock = process.argv.includes('--no-lock');
 if (!noLock) {
-    const lockfile = new Lockfile({ version: pkgVersion });
+    lockfile = new Lockfile({ version: pkgVersion });
     const lockResult = lockfile.acquire();
     if (lockResult.status === 'conflict') {
         process.stderr.write(formatLockConflictMessage(lockResult) + '\n');
         process.exit(11);
     }
-    process.on('exit', () => lockfile.release());
+    process.on('exit', () => lockfile?.release());
 }
 process.on('exit', () => { try {
     releaseDeviceLockForSession();
@@ -715,6 +719,28 @@ process.on('SIGUSR2', () => { logger.info('MCP', 'SIGUSR2 — hot-reload intent'
 // (passive — doesn't flip stdin into flowing mode); StdioServerTransport flips the
 // stream inside transport.start() when server.connect() runs, so 'end' fires reliably.
 process.stdin.on('end', () => { logger.info('MCP', 'stdin closed — host disconnected'); void shutdown(0); });
+// GH #182: belt-and-suspenders host-death detection + lock heartbeat. stdin-EOF +
+// signals can silently fail to fire when CC dies abnormally (SIGKILL/crash/window
+// close on macOS) without closing the child's stdin — leaving a LIVE orphan that
+// holds the single-instance lock for up to 24h (the PID-alive reclaim can't catch a
+// live process). Poll getppid(): on orphan (PPID changed from startup → parent died
+// + reparented) self-exit + release. On a live parent, refresh the lock heartbeat —
+// and if touch() reports we were usurped (a contender reclaimed our slot while the
+// laptop slept, then we woke), self-terminate so we don't run as a second bridge on
+// the same device. Unref'd timer — never keeps a should-be-dead process alive.
+const stopParentWatch = startParentDeathWatch({
+    onOrphaned: () => { logger.info('MCP', 'parent host gone (PPID changed) — exiting'); void shutdown(0); },
+    onHeartbeat: () => {
+        try {
+            if (lockfile && !lockfile.touch()) {
+                logger.info('MCP', 'single-instance lock was reclaimed by another bridge — exiting');
+                void shutdown(0);
+            }
+        }
+        catch { /* best-effort heartbeat */ }
+    },
+});
+process.on('exit', () => stopParentWatch());
 async function main() {
     logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
     if (logger.logFilePath) {
