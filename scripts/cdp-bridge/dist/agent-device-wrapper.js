@@ -6,7 +6,8 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { okResult, failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
+import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 const execFile = promisify(execFileCb);
@@ -529,6 +530,48 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
 }
+// #210: pure decision for the iOS device_* auto-spawn. Cold-build-safe — only auto-starts
+// when a prebuilt .xctestrun exists; a missing rig or no device returns an actionable error
+// instead of a silent multi-minute xcodebuild.
+export function decideRunnerSpawn(input) {
+    if (input.liveness === 'alive')
+        return { action: 'proceed' };
+    if (!input.deviceId) {
+        return {
+            action: 'error',
+            message: 'rn-fast-runner not started and no booted iOS simulator found. Boot a simulator and run `device_snapshot action=open appId=<your.app.id> platform=ios` first.',
+        };
+    }
+    if (!input.prebuilt) {
+        return {
+            action: 'error',
+            message: 'rn-fast-runner not started and not prebuilt. Run `device_snapshot action=open appId=<your.app.id> platform=ios` first (one-time cold build, ~minutes), then retry — or pre-build once with `xcodebuild build-for-testing` (see plugin Prerequisites).',
+        };
+    }
+    return { action: 'spawn', deviceId: input.deviceId };
+}
+// #210: orchestrate probe → gate → spawn → RE-VERIFY → structured result. ensureFastRunner
+// swallows start errors, so the re-probe is what turns a failed spawn into a clean message
+// rather than the unstructured postCommand throw downstream (A6, multi-review).
+export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
+    const probe = deps.probe ?? probeFastRunnerLiveness;
+    const ensure = deps.ensure ?? ensureFastRunner;
+    const prebuilt = deps.prebuilt ?? (() => hasBuiltTestProduct(derivedDataPathForRunner()));
+    const liveness = await probe();
+    const decision = decideRunnerSpawn({ liveness, prebuilt: prebuilt(), deviceId });
+    if (decision.action === 'proceed')
+        return { ok: true };
+    if (decision.action === 'error')
+        return { ok: false, message: decision.message };
+    await ensure(decision.deviceId, bundleId);
+    const after = await probe();
+    if (after === 'alive')
+        return { ok: true };
+    return {
+        ok: false,
+        message: 'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
+    };
+}
 export async function ensureFastRunner(deviceId, bundleId) {
     // M7/Phase-109: probe tri-state liveness instead of the PID-only
     // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server
@@ -592,8 +635,17 @@ export async function runAgentDevice(cliArgs, opts = {}) {
     if (targetPlatform === 'ios' &&
         !opts.skipSession &&
         RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
+        const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
+        // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
+        // it here; the gate is only for verbs that genuinely require the XCUITest runner.
+        if (cliArgs[0] !== 'screenshot') {
+            const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
+            const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
+            if (!ready.ok)
+                return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+        }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
-        const ios = buildRunIOSArgs(cliArgs, activeSession?.appId ?? resolveBundleId('ios') ?? undefined);
+        const ios = buildRunIOSArgs(cliArgs, appId);
         return runIOS(ios);
     }
     // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
