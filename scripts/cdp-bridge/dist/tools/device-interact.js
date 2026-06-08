@@ -558,12 +558,11 @@ export function createDeviceFillHandler(getClient) {
         }
         const primary = await runAgentDevice(['fill', ref, args.text]);
         if (!primary.isError) {
-            const verifyTestId = jsTestId;
-            if (client && verifyTestId) {
+            if (client && jsTestId) {
                 const tNative = Date.now();
-                let valueBefore = await readValueBefore(client, verifyTestId);
+                let valueBefore = await readValueBefore(client, jsTestId);
                 for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-                    const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, valueBefore);
+                    const { outcome, value } = await nativeSettle(client, jsTestId, args.text, valueBefore);
                     const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
                     if (decision.action === 'accept') {
                         return okResult({ filled: true, method: 'native', length: args.text.length, value }, { meta: { textEntryPath: attempt === 0 ? 'native' : 'native-retype', verify: jsVerifyMeta(outcome), retypes: attempt, timings_ms: { nativeType: Date.now() - tNative } } });
@@ -575,12 +574,12 @@ export function createDeviceFillHandler(getClient) {
                 }
                 const maestro = await maestroFillFallback(ref, args.text, androidSession ? 'android' : 'ios');
                 if (!maestro.isError) {
-                    const { outcome, value } = await nativeSettle(client, verifyTestId, args.text, null);
+                    const { outcome, value } = await nativeSettle(client, jsTestId, args.text, null);
                     if (outcome !== 'corrupted') {
                         return okResult({ filled: true, method: 'maestro', length: args.text.length, value }, { meta: { textEntryPath: 'maestro', verify: jsVerifyMeta(outcome), timings_ms: { nativeType: Date.now() - tNative } } });
                     }
                 }
-                return failResult('Text entry could not be verified after retype + maestro fallback', 'TEXT_ENTRY_UNVERIFIED', { expected: args.text, pathsTried: ['js?', 'native', 'native-retype', 'maestro'] });
+                return failResult('Text entry could not be verified after retype + maestro fallback', 'TEXT_ENTRY_UNVERIFIED', { expected: args.text, pathsTried: ['js', 'native', 'native-retype', 'maestro'] });
             }
             return primary;
         }
