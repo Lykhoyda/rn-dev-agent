@@ -464,6 +464,10 @@ export async function runIOS(args) {
         body.text = args.text;
     if (args.durationMs !== undefined)
         body.durationMs = args.durationMs;
+    if (args.delayMs !== undefined)
+        body.delayMs = args.delayMs;
+    if (args.clearFirst !== undefined)
+        body.clearFirst = args.clearFirst;
     if (args.direction !== undefined)
         body.direction = args.direction;
     if (args.scale !== undefined)
