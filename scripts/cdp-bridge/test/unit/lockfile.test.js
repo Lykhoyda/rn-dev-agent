@@ -55,22 +55,23 @@ test('Lockfile: acquires on clean state and writes lock body', () => {
 test('Lockfile: returns conflict when valid live lock exists (same project)', () => {
   const tmpDir = makeTmpDir();
   try {
-    const preExistingLock = new Lockfile({
-      projectRoot: '/fake/project/root',
-      pid: 99999,
-      tmpDir,
-      uid: 501,
-      clock: () => 1_700_000_000_000,
-      processAlive: () => true,
-      processName: () => 'node cdp-bridge',
-    });
-    preExistingLock.acquire();
-
+    const contenderClock = 1_700_000_000_000 + 5 * 60 * 1000;
     const { lockfile } = makeLockfile({
       tmpDir,
       processAlive: (pid) => pid === 99999,
       processName: (pid) => (pid === 99999 ? 'node cdp-bridge' : null),
-      clock: () => 1_700_000_000_000 + 5 * 60 * 1000, // 5 minutes later
+      processParent: () => 4242, // GH #182: owner has a real parent (not orphaned)
+      clock: () => contenderClock,
+    });
+    // GH #182: a healthy 5-min-old bridge — started 5 min ago (ageMs) but heartbeating,
+    // so lastHeartbeat is fresh (< 90s stale window). A live, parented, freshly-beating
+    // owner must still conflict.
+    writeLockBody(lockfile.lockPath, {
+      pid: 99999,
+      projectRoot: '/fake/project/root',
+      startedAt: 1_700_000_000_000,
+      lastHeartbeat: contenderClock - 10_000,
+      version: '0.23.0-test',
     });
 
     const result = lockfile.acquire();
@@ -400,7 +401,12 @@ test('Lockfile: default processName stale check matches real node scripts (D652 
       tmpDir,
       uid: 501,
       clock: () => Date.now(),
-      // Use the REAL processAlive AND REAL processName — no stubs
+      // Model the child as the lock owner: had the child run acquire(), its getppid()
+      // would be this test process (its real parent), so record that as the lock's
+      // ppid. Otherwise the contender's real PPID lookup (child's parent === us) would
+      // differ from the recorded ppid and the GH #182 parent-changed check would
+      // falsely reclaim. Still exercises the REAL processAlive + processName needle.
+      selfPpid: () => process.pid,
     });
     preLock.acquire();
 

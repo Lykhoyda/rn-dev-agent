@@ -5,6 +5,10 @@ import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PROCESS_NAME_NEEDLE = 'cdp-bridge';
+// GH #182: heartbeat-staleness window. A healthy bridge refreshes lastHeartbeat
+// well within this (index.ts touches every ~30s); a wedged bridge stops, so its
+// lock becomes reclaimable. Matches device-lock.ts's 90s.
+const DEFAULT_STALE_MS = 90_000;
 function defaultProjectRoot() {
     return process.env.CLAUDE_USER_CWD ?? process.cwd();
 }
@@ -37,6 +41,36 @@ export function defaultProcessName(pid) {
     catch {
         return null;
     }
+}
+/**
+ * GH #182: resolve a PID's parent PID via `ps -p <pid> -o ppid=`. A cdp-bridge
+ * whose PPID is 1 has been reparented to init/launchd — i.e. its Claude Code host
+ * died and it's now a live orphan. Returns null on any failure (caller fails safe:
+ * a null PPID never triggers reclaim). Mirrors defaultProcessName's `ps` usage.
+ */
+export function defaultProcessParent(pid) {
+    try {
+        const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 1000,
+        });
+        const ppid = parseInt(out.trim(), 10);
+        return Number.isFinite(ppid) ? ppid : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * GH #182: our own parent PID, recorded at acquire. Compared later against the
+ * owner's *live* PPID — if they differ, the owner's parent (the Claude Code host)
+ * died and it was reparented, so it's a live orphan. `process.getppid` isn't on the
+ * project's `@types/node` Process type, so cast; falls back to 0 if unavailable.
+ */
+export function defaultSelfPpid() {
+    const fn = process.getppid;
+    return typeof fn === 'function' ? fn.call(process) : 0;
 }
 function hashProjectRoot(projectRoot) {
     return createHash('md5').update(resolve(projectRoot)).digest('hex').slice(0, 8);
@@ -78,8 +112,11 @@ export class Lockfile {
             clock: opts.clock ?? Date.now,
             processAlive: opts.processAlive ?? defaultProcessAlive,
             processName: opts.processName ?? defaultProcessName,
+            processParent: opts.processParent ?? defaultProcessParent,
+            selfPpid: opts.selfPpid ?? defaultSelfPpid,
             maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
             processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
+            staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
     }
@@ -116,6 +153,31 @@ export class Lockfile {
         }
         this.acquired = false;
     }
+    /**
+     * GH #182: refresh our heartbeat so a healthy bridge's lock never looks stale.
+     *
+     * Returns whether we STILL own the lock. If another bridge usurped our slot — the
+     * sleep/wake case: the laptop slept, our heartbeat went stale, a new session
+     * reclaimed, and we just woke — `body.pid` is now foreign. We must NOT overwrite
+     * (that would resurrect a lock we no longer hold and produce two live bridges on
+     * one device, Gemini HIGH); we return `false` so the caller self-terminates.
+     * Best-effort on I/O (a failed write returns true — we still own it, just stale).
+     */
+    touch() {
+        if (!this.acquired)
+            return false;
+        const body = this.readExisting();
+        if (!body || body.pid !== this.opts.pid)
+            return false; // usurped → caller should exit
+        body.lastHeartbeat = this.opts.clock();
+        try {
+            writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+        }
+        catch {
+            // Best-effort: a failed heartbeat just means the lock may look stale sooner.
+        }
+        return true;
+    }
     readExisting() {
         if (!existsSync(this.lockPath))
             return null;
@@ -140,6 +202,33 @@ export class Lockfile {
         if (name !== null && !name.toLowerCase().includes(this.opts.processNameNeedle.toLowerCase())) {
             return false;
         }
+        // GH #182: a LIVE owner whose parent CHANGED since it acquired the lock was
+        // orphaned — its Claude Code host died and it was reparented. PID-alive alone
+        // can't catch a live orphan. We compare the owner's *recorded* PPID against its
+        // *live* PPID rather than testing `=== 1`, because in a container where CC runs
+        // as PID 1 (no init system) a healthy bridge legitimately has PPID 1 — testing
+        // `=== 1` would steal a healthy lock and self-exit on every tick (Gemini HIGH).
+        // A null live lookup fails safe (treated as live, never reclaimed).
+        const livePpid = this.opts.processParent(body.pid);
+        if (livePpid !== null) {
+            if (typeof body.ppid === 'number') {
+                if (livePpid !== body.ppid)
+                    return false; // parent changed → orphaned
+            }
+            else if (livePpid === 1) {
+                // Pre-0.39 lock with no recorded PPID: best-effort legacy reclaim. PPID 1
+                // means reparented to init. The container false-positive is bounded to the
+                // upgrade window (the next acquire rewrites a ppid-bearing lock).
+                return false;
+            }
+        }
+        // GH #182: a live owner whose heartbeat went stale is wedged (event loop blocked,
+        // no longer refreshing) — reclaim. Skipped for pre-0.39 locks with no
+        // lastHeartbeat (they fall back to the mtime check above).
+        if (typeof body.lastHeartbeat === 'number' &&
+            this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
+            return false;
+        }
         return true;
     }
     ageOfLockFile() {
@@ -156,6 +245,8 @@ export class Lockfile {
             pid: this.opts.pid,
             projectRoot: this.opts.projectRoot,
             startedAt: this.opts.clock(),
+            lastHeartbeat: this.opts.clock(),
+            ppid: this.opts.selfPpid(),
             version: this.opts.version || undefined,
         };
         const dir = this.opts.tmpDir;
