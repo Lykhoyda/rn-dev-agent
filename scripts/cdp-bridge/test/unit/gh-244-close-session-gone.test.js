@@ -81,3 +81,26 @@ test('#244 isBenignSessionGoneError matches only gone-session shapes', () => {
   };
   assert.equal(isBenignSessionGoneError(withHint), false);
 });
+
+// B192: an UNPARSEABLE (non-JSON) payload is an unexpected upstream shape — there is no
+// error field to scope the match to, so it must never classify as benign, even when the
+// raw text mentions the phrase (e.g. a multi-line adb error). Surfacing it is the safe path.
+test('#244/B192 non-JSON payload mentioning the phrase is NOT benign', async () => {
+  const plainText = {
+    content: [{ type: 'text', text: 'adb: error: failed to close; no active session on device emulator-5554' }],
+    isError: true,
+  };
+  assert.equal(isBenignSessionGoneError(plainText), false);
+
+  // and closeDeviceSession must surface it unchanged, leaving local state intact
+  const calls = { clear: 0, stop: 0, release: 0 };
+  const r = await closeDeviceSession({
+    hasActiveSession: () => true,
+    closeUnderlyingSession: async () => plainText,
+    clearActiveSession: () => { calls.clear++; },
+    stopFastRunner: () => { calls.stop++; },
+    releaseDeviceLock: () => { calls.release++; },
+  });
+  assert.equal(r.isError, true);
+  assert.deepEqual(calls, { clear: 0, stop: 0, release: 0 });
+});

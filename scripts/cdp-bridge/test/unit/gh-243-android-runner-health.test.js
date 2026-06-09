@@ -53,6 +53,15 @@ test('#243 isAndroidConnectionFailure matches both startAndroidRunner + postComm
   assert.equal(isAndroidConnectionFailure('app not started'), false);
 });
 
+// B191: startAndroidRunner has two MORE rejection shapes — instrumentation exiting before
+// readiness (app not installed, am instrument crash) and spawn failure (adb missing). Both
+// are runner-down conditions thrown inside runAndroid's try{} and must classify into the
+// structured RN_ANDROID_RUNNER_DOWN path, not escape as raw exceptions.
+test('#243/B191 isAndroidConnectionFailure matches startAndroidRunner startup-failure shapes', () => {
+  assert.equal(isAndroidConnectionFailure('Android runner instrumentation exited before readiness (code 1)\nINSTRUMENTATION_FAILED: dev.lykhoyda.rnandroidrunner.test'), true);
+  assert.equal(isAndroidConnectionFailure('Failed to spawn Android runner instrumentation: spawn adb ENOENT'), true);
+});
+
 test('#243 runAndroid returns RN_ANDROID_RUNNER_DOWN (not bare "fetch failed") on connection failure', async () => {
   _setAndroidRunnerStateForTest({
     port: 22089,

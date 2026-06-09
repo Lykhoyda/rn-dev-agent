@@ -19,7 +19,10 @@ export function isBenignSessionGoneError(result) {
         envelope = JSON.parse(text);
     }
     catch {
-        return /no active session|session not found/i.test(text);
+        // B192: unparseable payload → no error field to scope the match to. Never
+        // classify as benign; surface it so a real failure can't be swallowed just
+        // because its raw text mentions the phrase.
+        return false;
     }
     if ((envelope.meta?.code ?? envelope.code) === 'SESSION_NOT_FOUND')
         return true;
