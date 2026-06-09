@@ -10,19 +10,27 @@ import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 const execFile = promisify(execFileCb);
 /**
- * GH#202 Phase 2a: run a Maestro flow with L2 parked. The fast-runner (XCTest)
- * would fight maestro-runner (WDA) for the device, so stop it first; mark CDP
- * stale afterward (always — even on failure) so the next read reconnects to the
- * post-flow app state. The fast-runner lazily restarts on the next device_* call.
+ * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
+ * fast-runner (XCTest); Android releases the single UiAutomation slot (our
+ * runner's instrumentation would otherwise block maestro-runner's UIAutomator2
+ * server — #237). Mark CDP stale afterward (always — even on failure) so the
+ * next read reconnects to post-flow state. The L2 runner lazily restarts on the
+ * next device_* call. MUST run inside the held arbiter `flow` lease.
  */
-export async function runFlowParked(run, deps = {}) {
-    const stop = deps.stopFastRunner ?? defaultStopFastRunner;
-    const stale = deps.markCdpStale ?? defaultMarkCdpStale;
-    stop();
+export async function runFlowParked(run, opts = {}) {
+    const stale = opts.markCdpStale ?? defaultMarkCdpStale;
     try {
+        if (opts.platform === 'android') {
+            const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
+            await release({ deviceId: opts.deviceId });
+        }
+        else {
+            (opts.stopFastRunner ?? defaultStopFastRunner)();
+        }
         return await run();
     }
     finally {
@@ -153,7 +161,7 @@ export function createMaestroRunHandler() {
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }));
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
             const output = (stdout + '\n' + stderr).trim();
             // Reaching here means the runner exited 0 — that exit code is the
             // authoritative pass signal (a real flow failure exits non-zero and is

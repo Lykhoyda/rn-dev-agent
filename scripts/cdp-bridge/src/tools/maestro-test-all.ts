@@ -140,12 +140,14 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       }
 
       try {
-        const { stdout, stderr } = await runFlowParked(() =>
-          execFile(
-            dispatch.binPath,
-            dispatch.buildArgs(platform, safeFlowFile, appFile),
-            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-          ),
+        const { stdout, stderr } = await runFlowParked(
+          () =>
+            execFile(
+              dispatch.binPath,
+              dispatch.buildArgs(platform, safeFlowFile, appFile),
+              { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+            ),
+          { platform, deviceId: getActiveSession()?.deviceId },
         );
         const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the
