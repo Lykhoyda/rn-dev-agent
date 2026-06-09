@@ -37,10 +37,22 @@ the TS client never probes it — the truthful readiness signal exists and is un
 1. **Health-gated readiness.** Add `waitForAndroidRunnerHealth(port, opts)` — a bounded
    `GET http://127.0.0.1:<port>/health` poll over the injectable `fetchImpl`. `startAndroidRunner`
    resolves only when `/health` returns `{ok:true}`. Readiness becomes HTTP-truthful and
-   immune to stale logcat. The logcat child is still spawned (diagnostic stream + existing
-   teardown in `stopAndroidRunner`) but no longer gates readiness. On poll timeout, reject
-   with a clear "did not become ready" message (preserves the existing `READY_TIMEOUT_MS`
-   budget).
+   immune to stale logcat. The **logcat spawn is removed** (it was the only readiness
+   consumer and an unread piped stream is dead weight + a pipe-buffer hazard); instead the
+   `am instrument` child's own stdout/stderr is captured into a bounded ~4KB tail and appended
+   to any cold-start failure message — so startup failures stay debuggable AND the child's
+   pipes are drained (an unconsumed `stdio:'pipe'` can fill its ~64KB buffer and wedge the
+   child). On poll timeout, reject with a clear "did not become ready" message + the captured
+   tail (the poll's own deadline is the `READY_TIMEOUT_MS` budget).
+
+   *Residual (documented, accepted in surgical scope):* the runner uses a fixed port (22089)
+   reused across generations, so in principle `/health` could adopt a prior generation's
+   still-bound server. In practice the #237 slot-release `am force-stop`s the hosting package
+   **before** the flow, killing that server; a LISTEN socket frees immediately on process
+   death (no TIME_WAIT for a listener), so by the next `device_*` nothing stale answers 22089.
+   A runner-identity token in `/health` would make this bulletproof but requires a native
+   (Kotlin) rebuild — out of scope. Device verification adds a **back-to-back** flow→device_*
+   repro to catch any residual.
 
 2. **Structured error, not bare `fetch failed`.** In `runAndroid`, wrap the
    `startAndroidRunner` + `postCommand` section; classify a connection-style failure
@@ -79,10 +91,17 @@ mirroring #210's `getDeviceSessionHealth(deps)` so it is unit-testable against `
    `okResult({ closed: true, sessionAlreadyGone: true, message: 'Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.' })`.
 5. else → return `result` (genuine close failure; **no** cleanup — local state stays so the caller can retry).
 
-`isBenignSessionGoneError(result)` is a pure exported predicate matching the gone-session
-shapes (code `SESSION_NOT_FOUND`, or text containing `no active session` / `session not found`,
-case-insensitive). Specific enough that a real close failure (adb error, mid-close crash) is
-never swallowed.
+`isBenignSessionGoneError(result)` is a pure exported predicate. It **parses the result
+envelope** and matches on the *structured* error code first — `runAgentDevice` returns
+`failResult(e.message, { code, hint })`, so the CLI's code lands at `envelope.meta.code`
+(confirmed against `agent-device-wrapper.ts:816`). It checks `envelope.meta?.code` (and a
+top-level `envelope.code` for completeness) against the allowlist `['SESSION_NOT_FOUND']`,
+then falls back to a narrow regex (`/no active session|session not found/i`) applied **only to
+`envelope.error`** — not the whole serialized text — so an unrelated failure whose `hint`
+happens to mention "no active session" can't be misclassified. Specific enough that a real
+close failure (adb error, mid-close crash) is never swallowed; robust enough to catch the
+gone-session case whether the exact code matches or only the message does (the precise CLI
+code is confirmed during device verification).
 
 The `device-session.ts` `close` branch becomes thin glue: delegate to `closeDeviceSession`
 with production deps (`getActiveSession`, `runAgentDevice`, `clearActiveSession`,
@@ -103,6 +122,9 @@ with production deps (`getActiveSession`, `runAgentDevice`, `clearActiveSession`
 - `waitForAndroidRunnerHealth` resolves `true` once `/health` returns `{ok:true}`.
 - `waitForAndroidRunnerHealth` returns `false` on timeout (health never ok within budget).
 - `waitForAndroidRunnerHealth` does **not** resolve while `/health` keeps failing (no premature ready).
+- `isAndroidConnectionFailure` (exported) matches **both** origins — `fetch failed` (postCommand)
+  and `did not become ready` (startAndroidRunner) — and does **not** match `RUNNER_TIMEOUT`
+  (a bound-but-wedged instrument, which is rethrown, not classified down).
 - `runAndroid` returns `RN_ANDROID_RUNNER_DOWN` (not bare `fetch failed`) when `postCommand`'s
   fetch rejects with a `fetch failed`/`ECONNREFUSED` error (existing live-state short-circuit +
   fetch mock).
@@ -132,3 +154,29 @@ with production deps (`getActiveSession`, `runAgentDevice`, `clearActiveSession`
   tighten the matcher if the real shape differs.
 - **Health-poll latency** adds a few poll iterations to a cold start. Bounded by the existing
   `READY_TIMEOUT_MS`; net effect is replacing a *premature* resolve with a *correct* one.
+
+## Amendments applied from the multi-LLM plan review (2026-06-09)
+
+Reviewed via `/brainstorm gemini,codex` (Codex hit its usage cap; Gemini endorsed; substance
+was Claude's verified pass against source). Each finding triaged with `receiving-code-review`
+rigor — verified before accepting:
+
+- **Applied:** logcat removal now captures the `am instrument` child's stdout/stderr tail into
+  cold-start failures (resolves a spec↔plan contradiction; preserves startup-failure
+  visibility; drains the child's pipes).
+- **Applied:** `isBenignSessionGoneError` switched from whole-text substring to structured
+  `meta.code` matching + a narrow `error`-field message fallback (confirmed `code` lives under
+  `meta`); test fixtures corrected to the real `{ok:false, error, meta:{code}}` envelope shape.
+- **Applied:** `isAndroidConnectionFailure` is exported and unit-tested directly against both
+  `fetch failed` (postCommand) and `did not become ready` (startAndroidRunner) so the classifier
+  is proven for *both* failure origins, not just the postCommand short-circuit path.
+- **Documented, not changed:** fixed-port (22089) cross-generation `/health` adoption — mitigated
+  by the #237 `am force-stop` (kills the prior server before the flow) + immediate LISTEN-socket
+  release; a native identity token is out of surgical scope. Device verification adds a
+  back-to-back flow→device_* repro.
+- **Rejected (verified false):** the proposal to gate `child.on('exit')`'s state-wipe on
+  `!resolved` — `am instrument -w` blocks on the infinite `mainLoop`, so the host process stays
+  alive for the runner's whole life; an exit *is* a death and must wipe state. Gating on
+  `!resolved` would leak stale state pointing at a dead runner.
+- **Declined (latent, out of scope):** `stopAndroidRunner` hardcodes `tcp:${DEFAULT_PORT}` for
+  the forward-remove — real but no production caller passes a non-default port.
