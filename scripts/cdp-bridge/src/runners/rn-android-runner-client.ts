@@ -406,5 +406,5 @@ function errMessage(err: unknown): string {
 }
 
 export function isAndroidConnectionFailure(message: string): boolean {
-  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|not started|did not become ready/i.test(message);
+  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready/i.test(message);
 }

@@ -354,5 +354,5 @@ function errMessage(err) {
     return err instanceof Error ? err.message : String(err);
 }
 export function isAndroidConnectionFailure(message) {
-    return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|not started|did not become ready/i.test(message);
+    return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready/i.test(message);
 }

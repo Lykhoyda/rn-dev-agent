@@ -47,7 +47,10 @@ test('#243 isAndroidConnectionFailure matches both startAndroidRunner + postComm
   assert.equal(isAndroidConnectionFailure('fetch failed'), true);
   assert.equal(isAndroidConnectionFailure('Android runner did not become ready within 30s (no /health on port 22089)'), true);
   assert.equal(isAndroidConnectionFailure('connect ECONNREFUSED 127.0.0.1:22089'), true);
+  assert.equal(isAndroidConnectionFailure('rn-android-runner not started'), true);
   assert.equal(isAndroidConnectionFailure('RUNNER_TIMEOUT: rn-android-runner did not respond to "snapshot" within 10000ms'), false);
+  // scoped to OUR client's message — a runner-side phrase like "app not started" must not classify down
+  assert.equal(isAndroidConnectionFailure('app not started'), false);
 });
 
 test('#243 runAndroid returns RN_ANDROID_RUNNER_DOWN (not bare "fetch failed") on connection failure', async () => {
