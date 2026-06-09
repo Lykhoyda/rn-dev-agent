@@ -29,6 +29,7 @@ import {
 import { DeviceLock } from '../lifecycle/device-lock.js';
 import type { DeviceLockResult, DeviceLockBody } from '../lifecycle/device-lock.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
+import { closeDeviceSession } from './device-session-close.js';
 
 const execFile = promisify(execFileCb);
 
@@ -353,18 +354,13 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
     }
 
     if (action === 'close') {
-      const session = getActiveSession();
-      if (!session) {
-        return okResult({ closed: true, message: 'No active session to close' });
-      }
-
-      const result = await runAgentDevice(['close']);
-      if (!result.isError) {
-        clearActiveSession();
-        stopFastRunner();
-        releaseDeviceLockForSession();
-      }
-      return result;
+      return closeDeviceSession({
+        hasActiveSession: () => getActiveSession() !== null,
+        closeUnderlyingSession: () => runAgentDevice(['close']),
+        clearActiveSession,
+        stopFastRunner,
+        releaseDeviceLock: releaseDeviceLockForSession,
+      });
     }
 
     // action === 'snapshot'
