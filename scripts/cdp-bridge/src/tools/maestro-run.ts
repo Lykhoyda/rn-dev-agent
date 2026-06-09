@@ -200,16 +200,18 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
     const finalArgs = [...baseArgs, ...paramArgs];
 
     try {
-      const { stdout, stderr } = await runFlowParked(() =>
-        execFile(
-          dispatch.binPath,
-          finalArgs,
-          // 10MB buffer: a multi-step flow with screenshots + app console/network
-          // logs routinely exceeds Node's 1MB execFile default, which would kill
-          // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
-          // run as a failure.
-          { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-        ),
+      const { stdout, stderr } = await runFlowParked(
+        () =>
+          execFile(
+            dispatch.binPath,
+            finalArgs,
+            // 10MB buffer: a multi-step flow with screenshots + app console/network
+            // logs routinely exceeds Node's 1MB execFile default, which would kill
+            // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
+            // run as a failure.
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+          ),
+        { platform, deviceId: getActiveSession()?.deviceId },
       );
 
       const output = (stdout + '\n' + stderr).trim();
