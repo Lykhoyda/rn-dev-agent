@@ -68,3 +68,16 @@ test('GH#237 runFlowParked: android still marks stale when the flow throws', asy
   );
   assert.deepEqual(calls, ['release', 'stale']);
 });
+
+test('GH#237 runFlowParked: marks stale even if the android release throws (flow skipped)', async () => {
+  const calls = [];
+  await assert.rejects(
+    runFlowParked(
+      async () => { calls.push('flow'); return 'OK'; },
+      { platform: 'android', releaseAndroidSlot: async () => { throw new Error('release boom'); }, markCdpStale: () => calls.push('stale') },
+    ),
+    /release boom/,
+  );
+  assert.ok(!calls.includes('flow'));
+  assert.ok(calls.includes('stale'));
+});

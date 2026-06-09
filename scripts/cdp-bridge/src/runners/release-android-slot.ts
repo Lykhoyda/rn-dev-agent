@@ -122,14 +122,18 @@ export async function releaseAndroidInteractionSlot(
   // Step 2 — force-stop OUR instrumentation packages. THE decisive slot-release:
   // tears down the device-side instrumentation the SIGTERM left alive.
   const tForceStop = deps.now();
-  const serial = deps.resolveSerial(opts.deviceId);
-  for (const pkg of OWNED_PACKAGES) {
-    try {
-      await deps.adbForceStop(pkg, serial);
-      forceStoppedPackages.push(pkg);
-    } catch (err) {
-      warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
+  try {
+    const serial = deps.resolveSerial(opts.deviceId);
+    for (const pkg of OWNED_PACKAGES) {
+      try {
+        await deps.adbForceStop(pkg, serial);
+        forceStoppedPackages.push(pkg);
+      } catch (err) {
+        warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
+      }
     }
+  } catch (err) {
+    warnings.push(`resolveSerial failed: ${msg(err)}`);
   }
   timings.forceStop = deps.now() - tForceStop;
 
@@ -138,31 +142,35 @@ export async function releaseAndroidInteractionSlot(
   // against our own process tree).
   const tLegacy = deps.now();
   if (deps.killLegacy()) {
-    const pid = deps.readDaemonPid();
-    let keepFiles = false;
-    if (pid !== null && deps.isAlive(pid)) {
-      const { selfPid, parentPid } = deps.protectedPids();
-      if (isProtectedPid(pid, selfPid, parentPid)) {
-        warnings.push(`Refusing to kill agent-device daemon PID ${pid} — it is our own process/parent.`);
-        keepFiles = true;
-      } else {
-        try {
-          deps.kill(pid, 'SIGTERM');
-          await deps.delay(SIGKILL_GRACE_MS);
-          if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
-          killedDaemonPids.push(pid);
-        } catch (err) {
-          warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
+    try {
+      const pid = deps.readDaemonPid();
+      let keepFiles = false;
+      if (pid !== null && deps.isAlive(pid)) {
+        const { selfPid, parentPid } = deps.protectedPids();
+        if (isProtectedPid(pid, selfPid, parentPid)) {
+          warnings.push(`Refusing to kill agent-device daemon PID ${pid} — it is our own process/parent.`);
           keepFiles = true;
+        } else {
+          try {
+            deps.kill(pid, 'SIGTERM');
+            await deps.delay(SIGKILL_GRACE_MS);
+            if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
+            killedDaemonPids.push(pid);
+          } catch (err) {
+            warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
+            keepFiles = true;
+          }
         }
       }
-    }
-    if (!keepFiles) {
-      for (const f of DAEMON_FILES) {
-        if (!deps.fileExists(f)) continue;
-        try { deps.removeFile(f); removedFiles.push(f); }
-        catch (err) { warnings.push(`rm ${f} failed: ${msg(err)}`); }
+      if (!keepFiles) {
+        for (const f of DAEMON_FILES) {
+          if (!deps.fileExists(f)) continue;
+          try { deps.removeFile(f); removedFiles.push(f); }
+          catch (err) { warnings.push(`rm ${f} failed: ${msg(err)}`); }
+        }
       }
+    } catch (err) {
+      warnings.push(`legacy daemon cleanup failed: ${msg(err)}`);
     }
   }
   timings.legacyDaemon = deps.now() - tLegacy;

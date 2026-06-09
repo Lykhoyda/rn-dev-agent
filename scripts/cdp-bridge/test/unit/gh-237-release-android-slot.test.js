@@ -150,3 +150,12 @@ test('GH#237 release: keeps daemon files when the kill itself fails (daemon may 
   assert.equal(removed.length, 0);
   assert.ok(r.warnings.some((w) => /kill daemon 777 failed/.test(w)));
 });
+
+test('GH#237 release: resolveSerial throwing does not abort (best-effort, never throws)', async () => {
+  const r = await releaseAndroidInteractionSlot({}, baseDeps({
+    resolveSerial: () => { throw new Error('adb down'); },
+    adbForceStop: async () => assert.fail('force-stop must be skipped when serial resolution fails'),
+  }));
+  assert.deepEqual(r.forceStoppedPackages, []);
+  assert.ok(r.warnings.some((w) => /resolveSerial failed/.test(w)));
+});

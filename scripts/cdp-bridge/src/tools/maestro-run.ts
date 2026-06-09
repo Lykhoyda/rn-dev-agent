@@ -39,13 +39,13 @@ export interface FlowParkOpts {
  */
 export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts = {}): Promise<T> {
   const stale = opts.markCdpStale ?? defaultMarkCdpStale;
-  if (opts.platform === 'android') {
-    const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-    await release({ deviceId: opts.deviceId });
-  } else {
-    (opts.stopFastRunner ?? defaultStopFastRunner)();
-  }
   try {
+    if (opts.platform === 'android') {
+      const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
+      await release({ deviceId: opts.deviceId });
+    } else {
+      (opts.stopFastRunner ?? defaultStopFastRunner)();
+    }
     return await run();
   } finally {
     stale();
