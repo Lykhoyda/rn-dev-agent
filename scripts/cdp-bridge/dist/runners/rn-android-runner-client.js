@@ -13,8 +13,9 @@ const READY_TIMEOUT_MS = 30_000;
 const STATE_FILE = '/tmp/rn-android-runner-state.json';
 const INSTRUMENTATION = 'dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner';
 const MAIN_LOOP_CLASS = 'dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop';
+const HEALTH_POLL_INTERVAL_MS = 150;
+const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 let runnerProcess = null;
-let logcatProcess = null;
 let runnerState = null;
 let fetchImpl = globalThis.fetch;
 try {
@@ -76,6 +77,39 @@ export function shouldReuseAndroidRunner(state, deviceId) {
         return true;
     return state.deviceId === deviceId;
 }
+/**
+ * GH#243: HTTP-truthful readiness. The runner logs RN_ANDROID_RUNNER_LISTENER_READY,
+ * but `adb logcat` replays the ring buffer — a prior runner's ready line (same tag +
+ * fixed port) fired readiness before the new ServerSocket bound, so the first
+ * post-flow POST /command hit a dead port ("fetch failed"). Poll the runner's own
+ * GET /health, which is true only once the socket is accepting. Bounded by timeoutMs
+ * (defaults to the cold-start ready budget); never throws — returns false on timeout.
+ */
+export async function waitForAndroidRunnerHealth(port, opts = {}) {
+    const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS;
+    const intervalMs = opts.intervalMs ?? HEALTH_POLL_INTERVAL_MS;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+        try {
+            const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+            if (resp.ok) {
+                const body = (await resp.json());
+                if (body?.ok === true)
+                    return true;
+            }
+        }
+        catch {
+            // server not accepting yet — keep polling
+        }
+        finally {
+            clearTimeout(timer);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return false;
+}
 export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT) {
     if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
         return runnerState;
@@ -83,10 +117,6 @@ export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT
     await execFileAsync('adb', [...serial, 'forward', `tcp:${port}`, `tcp:${port}`]);
     return new Promise((resolve, reject) => {
         let resolved = false;
-        let pending = '';
-        logcatProcess = spawn('adb', [...serial, 'logcat', '-v', 'brief', '-s', 'RnAndroidRunner:I'], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
         const child = spawn('adb', [
             ...serial,
             'shell',
@@ -105,16 +135,17 @@ export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         runnerProcess = child;
-        const timer = setTimeout(() => {
-            child.kill('SIGTERM');
-            logcatProcess?.kill('SIGTERM');
-            reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
-        }, READY_TIMEOUT_MS);
+        // GH#243: drain + tail the instrument's own output so a cold-start failure stays
+        // debuggable now that logcat is gone, and so an unconsumed stdio:'pipe' can't fill
+        // its ~64KB buffer and wedge the child.
+        let diag = '';
+        const capture = (chunk) => { diag = (diag + chunk.toString('utf-8')).slice(-4_000); };
+        child.stdout?.on('data', capture);
+        child.stderr?.on('data', capture);
         const finishReady = () => {
             if (resolved)
                 return;
             resolved = true;
-            clearTimeout(timer);
             const state = {
                 port,
                 pid: child.pid,
@@ -129,16 +160,10 @@ export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT
             catch { /* non-fatal */ }
             resolve(state);
         };
-        logcatProcess.stdout.setEncoding('utf-8');
-        logcatProcess.stdout.on('data', (chunk) => {
-            pending += chunk;
-            if (pending.includes('RN_ANDROID_RUNNER_LISTENER_READY') &&
-                pending.includes(`RN_ANDROID_RUNNER_PORT=${port}`)) {
-                finishReady();
-            }
-        });
         child.on('error', (err) => {
-            clearTimeout(timer);
+            if (resolved)
+                return;
+            resolved = true;
             reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
         });
         child.on('exit', (code) => {
@@ -151,18 +176,29 @@ export async function startAndroidRunner(deviceId, bundleId, port = DEFAULT_PORT
                 catch { /* already removed */ }
             }
             if (!resolved) {
-                clearTimeout(timer);
-                reject(new Error(`Android runner instrumentation exited before readiness (code ${code})`));
+                resolved = true;
+                reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `\n${diag.trim()}` : ''}`));
             }
+        });
+        // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
+        // ring buffer. /health is true only once the ServerSocket is actually accepting.
+        void waitForAndroidRunnerHealth(port).then((healthy) => {
+            if (resolved)
+                return;
+            if (healthy) {
+                finishReady();
+                return;
+            }
+            resolved = true;
+            child.kill('SIGTERM');
+            reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${port})${diag ? `\n${diag.trim()}` : ''}`));
         });
     });
 }
 export async function stopAndroidRunner(deviceId) {
     const serial = adbSerialArgs(deviceId ?? runnerState?.deviceId);
     runnerProcess?.kill('SIGTERM');
-    logcatProcess?.kill('SIGTERM');
     runnerProcess = null;
-    logcatProcess = null;
     runnerState = null;
     try {
         unlinkSync(STATE_FILE);
@@ -235,7 +271,6 @@ export async function runAndroid(args) {
             hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
         });
     }
-    await startAndroidRunner(args.deviceId, args.bundleId);
     const body = { command: args.command };
     if (args.bundleId)
         body.appBundleId = args.bundleId;
@@ -261,7 +296,22 @@ export async function runAndroid(args) {
         body.scale = args.scale;
     if (args.interactiveOnly !== undefined)
         body.interactiveOnly = args.interactiveOnly;
-    const resp = await postCommand(body);
+    let resp;
+    try {
+        await startAndroidRunner(args.deviceId, args.bundleId);
+        resp = await postCommand(body);
+    }
+    catch (err) {
+        const m = errMessage(err);
+        // GH#243: a connection failure (runner just restarted after a flow, or can't bind
+        // its port) must surface as a structured, retryable error — never a bare
+        // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
+        // failure and is rethrown unchanged.
+        if (isAndroidConnectionFailure(m)) {
+            return failResult(`rn-android-runner is not reachable: ${m}`, 'RN_ANDROID_RUNNER_DOWN', { hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.' });
+        }
+        throw err;
+    }
     if (!resp.ok) {
         const message = resp.error?.message ?? 'Android runner returned !ok with no error';
         const code = resp.error?.code;
@@ -299,4 +349,10 @@ export async function runAndroid(args) {
         return okResult({ path: outPath });
     }
     return okResult(resp.data ?? {});
+}
+function errMessage(err) {
+    return err instanceof Error ? err.message : String(err);
+}
+export function isAndroidConnectionFailure(message) {
+    return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready/i.test(message);
 }

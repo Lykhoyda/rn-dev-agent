@@ -15,6 +15,7 @@ import { logger } from '../logger.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak, } from './runner-leak-recovery.js';
 import { DeviceLock } from '../lifecycle/device-lock.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
+import { closeDeviceSession } from './device-session-close.js';
 const execFile = promisify(execFileCb);
 const HEARTBEAT_MS = 30_000;
 let activeDeviceLock = null;
@@ -282,17 +283,13 @@ export function createDeviceSnapshotHandler() {
             return result;
         }
         if (action === 'close') {
-            const session = getActiveSession();
-            if (!session) {
-                return okResult({ closed: true, message: 'No active session to close' });
-            }
-            const result = await runAgentDevice(['close']);
-            if (!result.isError) {
-                clearActiveSession();
-                stopFastRunner();
-                releaseDeviceLockForSession();
-            }
-            return result;
+            return closeDeviceSession({
+                hasActiveSession: () => getActiveSession() !== null,
+                closeUnderlyingSession: () => runAgentDevice(['close']),
+                clearActiveSession,
+                stopFastRunner,
+                releaseDeviceLock: releaseDeviceLockForSession,
+            });
         }
         // action === 'snapshot'
         if (!getActiveSession()) {

@@ -205,6 +205,7 @@ export type ToolErrorCode =
   | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
   | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
   | 'RN_FAST_RUNNER_DOWN'       // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
+  | 'RN_ANDROID_RUNNER_DOWN'    // #243: rn-android-runner not reachable (cold-start race / can't bind port)
   | 'SCREENSHOT_FAILED'         // rn-android-runner screenshot response missing pngBase64 payload
   | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
   | 'STORE_TRUNCATED'           // expect_redux when store payload exceeded safeStringify cap
