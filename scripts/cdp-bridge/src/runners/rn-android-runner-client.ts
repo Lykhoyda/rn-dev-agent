@@ -322,8 +322,6 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     );
   }
 
-  await startAndroidRunner(args.deviceId, args.bundleId);
-
   const body: Record<string, unknown> = { command: args.command };
   if (args.bundleId) body.appBundleId = args.bundleId;
   if (args.x !== undefined) body.x = args.x;
@@ -338,7 +336,25 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.scale !== undefined) body.scale = args.scale;
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
 
-  const resp = await postCommand(body);
+  let resp: RunnerResponse;
+  try {
+    await startAndroidRunner(args.deviceId, args.bundleId);
+    resp = await postCommand(body);
+  } catch (err) {
+    const m = errMessage(err);
+    // GH#243: a connection failure (runner just restarted after a flow, or can't bind
+    // its port) must surface as a structured, retryable error — never a bare
+    // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
+    // failure and is rethrown unchanged.
+    if (isAndroidConnectionFailure(m)) {
+      return failResult(
+        `rn-android-runner is not reachable: ${m}`,
+        'RN_ANDROID_RUNNER_DOWN',
+        { hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.' },
+      );
+    }
+    throw err;
+  }
   if (!resp.ok) {
     const message = resp.error?.message ?? 'Android runner returned !ok with no error';
     const code = resp.error?.code;
@@ -383,4 +399,12 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   }
 
   return okResult(resp.data ?? {});
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+export function isAndroidConnectionFailure(message: string): boolean {
+  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|not started|did not become ready/i.test(message);
 }
