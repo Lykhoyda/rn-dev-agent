@@ -501,6 +501,10 @@ export interface RunIOSArgs {
   compact?: boolean;
   depth?: number;
   scope?: string;
+  /** #191: per-character typing delay (ms) for the corrective retype. */
+  delayMs?: number;
+  /** #191: clear the field before typing (the runner only clears on this flag). */
+  clearFirst?: boolean;
   /**
    * Internal sentinel: when buildRunIOSArgs() in agent-device-wrapper resolves
    * a @ref via refCenter() and gets back null (snapshot stale), it injects
@@ -627,6 +631,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
+  if (args.delayMs !== undefined) body.delayMs = args.delayMs;
+  if (args.clearFirst !== undefined) body.clearFirst = args.clearFirst;
   if (args.direction !== undefined) body.direction = args.direction;
   if (args.scale !== undefined) body.scale = args.scale;
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;

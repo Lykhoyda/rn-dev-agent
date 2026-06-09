@@ -13,6 +13,7 @@ import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import type { ToolResult } from '../utils.js';
@@ -301,6 +302,15 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
 
         if (args.platform === 'ios' && deviceId) {
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
+          // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
+          // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
+          // Fire-and-forget: a hung simctl must never stall session-open (up to
+          // 3×5s timeouts), and the result is consumed only for warning logs.
+          suppressIOSAutocorrect(deviceId)
+            .then((sup) => {
+              if (sup.warnings.length) logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
+            })
+            .catch(() => { /* fail-open: never block session-open on keyboard prefs */ });
         }
 
         // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).

@@ -10,6 +10,9 @@ import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-lea
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
+import type { CDPClient } from '../cdp-client.js';
+import { getCachedMetadata, isRefMapFresh } from '../fast-runner-ref-map.js';
+import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype, type FillVerifyOutcome } from './fill-verify.js';
 
 const execFile = promisify(execFileCb);
 
@@ -536,6 +539,8 @@ interface FillArgs {
    * time to land before the probe.
    */
   waitForKeyboardMs?: number;
+  /** #191: explicit testID for the JS-first path; resolved from ref's cached identifier when omitted. */
+  testID?: string;
 }
 
 // Splits a chunk into segments where no segment, after space→%s encoding,
@@ -615,10 +620,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 'android'): Promise<ToolResult> {
+function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
+  try {
+    const c = getClient();
+    return c && c.isConnected ? c : null;
+  } catch {
+    return null;
+  }
+}
+function jsVerifyMeta(outcome: FillVerifyOutcome): 'exact' | 'transformed' | 'unverifiable' {
+  return outcome === 'verified-exact' ? 'exact' : outcome === 'verified-transformed' ? 'transformed' : 'unverifiable';
+}
+
+async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 'android', clearFirst = false): Promise<ToolResult> {
   const escapedRef = yamlEscape(ref.replace(/^@/, ''));
   const escapedText = yamlEscape(text);
-  const yaml = `- tapOn:\n    id: "${escapedRef}"\n- inputText: "${escapedText}"`;
+  // When reached from the #191 verify-escalation, the field already holds the
+  // corrupted text, so inputText alone would append. eraseText first so the
+  // fallback can actually recover (multi-review M3).
+  const clearStep = clearFirst ? '\n- eraseText' : '';
+  const yaml = `- tapOn:\n    id: "${escapedRef}"${clearStep}\n- inputText: "${escapedText}"`;
   const result = await runMaestroInline(yaml, { platform, slug: 'fill-fallback', timeoutMs: 30_000 });
   if (result.passed) {
     return okResult({ filled: true, method: 'maestro', length: text.length }, { meta: { fallbackUsed: 'maestro' } });
@@ -629,7 +650,36 @@ async function maestroFillFallback(ref: string, text: string, platform: 'ios' | 
   );
 }
 
-export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResult> {
+const MAX_NATIVE_RETYPE = 2;
+
+// `settleAnchor` is the value the read polls AWAY from (to detect a debounced
+// flush); `stabilityPrior` is the prior *attempt*'s settled value, fed to the
+// stability rule. They differ on attempt 0: a fresh fill has an anchor (its
+// post-fill value) but NO stability prior — seeding the prior from the anchor
+// would let a stable char-drop ("hel") classify as 'transformed' and skip the
+// retype, defeating the #191 fix (multi-review L4). So attempt 0 passes prior=null.
+async function nativeSettle(
+  client: CDPClient | null,
+  testID: string | null,
+  text: string,
+  settleAnchor: string | null,
+  stabilityPrior: string | null,
+): Promise<{ outcome: FillVerifyOutcome; value: string | null }> {
+  if (!client || !testID) return { outcome: 'unverifiable', value: null };
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, text, settleAnchor);
+  return {
+    outcome: classifyFillVerification({ text, valueAfter: settled.value, priorValueAfter: stabilityPrior, controlled: settled.controlled }),
+    value: settled.value,
+  };
+}
+
+async function readValueBefore(client: CDPClient | null, testID: string | null): Promise<string | null> {
+  if (!client || !testID) return null;
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, ' __rn_never__', null);
+  return settled.value;
+}
+
+export function createDeviceFillHandler(getClient: () => CDPClient): (args: FillArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
     const androidSession = isAndroidSession();
@@ -647,6 +697,35 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
       return androidClipboardFill(args.text);
     }
 
+    // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
+    // The cached-identifier resolution honors the same ref-map freshness gate as the
+    // native coordinate path (multi-review H3) so a stale snapshot can't map @eN to a
+    // reused testID on a since-navigated screen. Explicit args.testID is caller-asserted
+    // and stays ungated. Never returns the field's value (could be a password) — the
+    // `verify` classification conveys success without echoing the text (multi-review BLOCKER).
+    const client = cdpClientOrNull(getClient);
+    const cachedIdentifier = isRefMapFresh() ? getCachedMetadata(ref.replace(/^@/, ''))?.identifier : undefined;
+    const jsTestId = client ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
+    if (client && jsTestId) {
+      const tJs = Date.now();
+      const js = await attemptJsFill({ evaluate: (e) => client.evaluate(e) }, jsTestId, args.text);
+      if (js.handled && js.outcome && js.outcome !== 'corrupted') {
+        return okResult(
+          { filled: true, method: 'js-onChangeText', length: args.text.length },
+          { meta: { textEntryPath: 'js', verify: jsVerifyMeta(js.outcome), handler: js.handler,
+                    timings_ms: { jsType: Date.now() - tJs } } },
+        );
+      }
+      // Fall-through (no handler, or JS fired but corrupted). If a handler DID fire on a
+      // controlled input, clear the value it set via onChangeText('') so the native
+      // re-type below doesn't double-apply onto debounced/partial JS text (multi-review H2).
+      if (js.handled && js.controlled) {
+        try {
+          await client.evaluate('__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID: jsTestId, text: '' }) + ')');
+        } catch { /* best-effort clear */ }
+      }
+    }
+
     const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
 
     // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
@@ -661,6 +740,44 @@ export function createDeviceFillHandler(): (args: FillArgs) => Promise<ToolResul
 
     const primary = await runAgentDevice(['fill', ref, args.text]);
     if (!primary.isError) {
+      // #191 prong 2/3 — native read-back verification + corrective clear/retype.
+      // iOS-only: the corrective retype needs the runner's --clear-first, which the
+      // Android agent-device path does not honor — a retype there would APPEND and
+      // make corruption worse (multi-review H1). Android keeps the legacy result.
+      if (client && jsTestId && !androidSession) {
+        const tNative = Date.now();
+        let settleAnchor = await readValueBefore(client, jsTestId);
+        let stabilityPrior: string | null = null;
+        for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+          const { outcome, value } = await nativeSettle(client, jsTestId, args.text, settleAnchor, stabilityPrior);
+          const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
+          if (decision.action === 'accept') {
+            return okResult(
+              { filled: true, method: 'native', length: args.text.length },
+              { meta: { textEntryPath: attempt === 0 ? 'native' : 'native-retype', verify: jsVerifyMeta(outcome), retypes: attempt, timings_ms: { nativeType: Date.now() - tNative } } },
+            );
+          }
+          if (decision.action === 'escalate') break;
+          settleAnchor = value;
+          stabilityPrior = value;
+          await runAgentDevice(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+        }
+        const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
+        if (!maestro.isError) {
+          const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
+          if (outcome !== 'corrupted') {
+            return okResult(
+              { filled: true, method: 'maestro', length: args.text.length },
+              { meta: { textEntryPath: 'maestro', verify: jsVerifyMeta(outcome), timings_ms: { nativeType: Date.now() - tNative } } },
+            );
+          }
+        }
+        return failResult(
+          'Text entry could not be verified after retype + maestro fallback',
+          'TEXT_ENTRY_UNVERIFIED',
+          { expectedLength: args.text.length, pathsTried: ['js', 'native', 'native-retype', 'maestro'] },
+        );
+      }
       return primary;
     }
 

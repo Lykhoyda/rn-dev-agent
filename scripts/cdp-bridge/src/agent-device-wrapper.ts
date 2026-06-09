@@ -356,14 +356,19 @@ export function buildRunIOSArgs(
       // separate tap is needed: pass coords + text together.
       const ref = positionals[0];
       const text = positionals.slice(1).join(' ');
+      const delayRaw = optionValue(cliArgs, '--delay-ms');
+      const delayMs = delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
+      const extra: { delayMs?: number; clearFirst?: boolean } = {};
+      if (delayMs !== undefined) extra.delayMs = delayMs;
+      if (cliArgs.includes('--clear-first')) extra.clearFirst = true;
       if (ref && ref.startsWith('@')) {
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
-          return { command: 'type', _staleRef: ref, text, ...(bundleId ? { bundleId } : {}) };
+          return { command: 'type', _staleRef: ref, text, ...extra, ...(bundleId ? { bundleId } : {}) };
         }
-        return { command: 'type', x: center.x, y: center.y, text, ...(bundleId ? { bundleId } : {}) };
+        return { command: 'type', x: center.x, y: center.y, text, ...extra, ...(bundleId ? { bundleId } : {}) };
       }
-      return { command: 'type', text, ...(bundleId ? { bundleId } : {}) };
+      return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
     }
     case 'snapshot':
       return { command: 'snapshot', interactiveOnly: true, ...(bundleId ? { bundleId } : {}) };

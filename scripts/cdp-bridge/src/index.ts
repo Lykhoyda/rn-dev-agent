@@ -645,8 +645,9 @@ trackedTool(
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
     waitForKeyboardMs: z.number().int().min(0).max(5000).optional().describe('Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land.'),
+    testID: z.string().optional().describe('Explicit testID for the JS-first fill path; resolved from the ref\'s cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token.'),
   },
-  createDeviceFillHandler(),
+  createDeviceFillHandler(getClient),
 );
 
 trackedTool(

@@ -232,7 +232,9 @@ export type ToolErrorCode =
   // GH #202 Phase 2a: DeviceSessionArbiter refused an op because an exclusive
   // Maestro flow is in flight (or the requesting op is a flow and another op is
   // active). Refuse-fast, never queue.
-  | 'BUSY_FLOW_ACTIVE';
+  | 'BUSY_FLOW_ACTIVE'
+  // GH #191: native fill + retype + maestro all failed to produce the expected value.
+  | 'TEXT_ENTRY_UNVERIFIED';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
