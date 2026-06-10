@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LEGACY_BUNDLE_IDS,
   selectInstalledLegacyApps,
+  eradicateLegacyRunnerApps,
 } from '../../dist/runners/ensure-single-runner.js';
 import { parseSimctlListapps } from '../../dist/cdp/discovery.js';
 
@@ -60,8 +61,6 @@ test('GH#202-P4 selectInstalledLegacyApps: empty on a clean simulator and on gar
   assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps('')), []);
   assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps('not a plist at all')), []);
 });
-
-import { eradicateLegacyRunnerApps } from '../../dist/runners/ensure-single-runner.js';
 
 function appDeps(over = {}) {
   return {

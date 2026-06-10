@@ -138,9 +138,9 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     removeFile: (path) => unlinkSync(path),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     listApps: (udid) =>
-      execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000 }),
+      execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000 });
+      execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
     },
   };
 }
