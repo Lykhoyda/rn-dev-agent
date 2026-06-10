@@ -31,7 +31,7 @@ echo "  - Generate CI-ready Maestro YAML test files"
 echo ""
 echo "Installing maestro-runner (~24MB)..."
 
-if curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash 2>&1; then
+if curl -fsSL --connect-timeout 10 --max-time 90 https://open.devicelab.dev/install/maestro-runner | bash 2>&1; then
   echo ""
   echo "maestro-runner installed successfully."
   # Verify

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -120,22 +120,67 @@ export class Lockfile {
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
     }
+    // GH#251: acquire via atomic exclusive-create (same pattern as DeviceLock).
+    // The previous read-then-writeFileSync let two bridges starting in the same
+    // instant both see no live lock and both "acquire" — the second silently
+    // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
+    // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
+    // `degraded` so an fs hiccup never blocks a legitimate session.
     acquire() {
+        try {
+            this.writeLock();
+            this.acquired = true;
+            return { status: 'acquired', lockPath: this.lockPath };
+        }
+        catch (err) {
+            if (!isEexist(err)) {
+                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+            }
+        }
         const existing = this.readExisting();
         if (existing && this.isLockLive(existing)) {
-            return {
-                status: 'conflict',
-                lockPath: this.lockPath,
-                pid: existing.pid,
-                projectRoot: existing.projectRoot,
-                startedAt: existing.startedAt,
-                ageMs: this.opts.clock() - existing.startedAt,
-                version: existing.version,
-            };
+            return this.conflictOf(existing);
         }
-        this.writeLock();
-        this.acquired = true;
-        return { status: 'acquired', lockPath: this.lockPath };
+        // Stale/dead/unreadable holder → reclaim. Narrow the steal-a-fresh-lock
+        // window: re-read immediately before unlink and bail if a DIFFERENT,
+        // now-live holder appeared since the staleness judgment. The post-unlink
+        // race is still caught atomically — 'wx' throws EEXIST if another bridge
+        // created a fresh lock in the gap.
+        const before = this.readExisting();
+        if (before &&
+            (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) &&
+            this.isLockLive(before)) {
+            return this.conflictOf(before);
+        }
+        try {
+            unlinkSync(this.lockPath);
+        }
+        catch { /* already gone */ }
+        try {
+            this.writeLock();
+            this.acquired = true;
+            return { status: 'acquired', lockPath: this.lockPath };
+        }
+        catch (err) {
+            if (!isEexist(err)) {
+                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+            }
+            const raced = this.readExisting();
+            return raced
+                ? this.conflictOf(raced)
+                : { status: 'acquired', lockPath: this.lockPath, degraded: true };
+        }
+    }
+    conflictOf(body) {
+        return {
+            status: 'conflict',
+            lockPath: this.lockPath,
+            pid: body.pid,
+            projectRoot: body.projectRoot,
+            startedAt: body.startedAt,
+            ageMs: this.opts.clock() - body.startedAt,
+            version: body.version,
+        };
     }
     release() {
         if (!this.acquired)
@@ -253,8 +298,18 @@ export class Lockfile {
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
-        writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+        // GH#251: atomic exclusive create — throws EEXIST if another bridge won the race.
+        const fd = openSync(this.lockPath, 'wx');
+        try {
+            writeSync(fd, JSON.stringify(body, null, 2));
+        }
+        finally {
+            closeSync(fd);
+        }
     }
+}
+function isEexist(err) {
+    return typeof err === 'object' && err !== null && err.code === 'EEXIST';
 }
 function isValidLockBody(obj) {
     if (typeof obj !== 'object' || obj === null)
