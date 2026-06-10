@@ -57,15 +57,15 @@ test('interact: returns failResult when parsed response has error', async () => 
   assert.match(error, /Element not found/);
 });
 
-test('interact: returns warnResult when action_executed with handler_error', async () => {
+test('interact: returns failResult when action_executed with handler_error (GH#250)', async () => {
   const client = createMockClient({
     evaluate: async () => ({
       value: JSON.stringify({ action_executed: 'press', handler_error: 'onPress threw an error' }),
     }),
   });
   const handler = createInteractHandler(() => client);
-  const { warning } = expectWarn(await handler({ action: 'press', testID: 'btn', animated: false }));
-  assert.match(warning, /handler threw/);
+  const error = expectFail(await handler({ action: 'press', testID: 'btn', animated: false }));
+  assert.match(error, /handler threw/);
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

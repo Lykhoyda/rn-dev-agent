@@ -1,5 +1,5 @@
 import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
@@ -73,8 +73,18 @@ export function createInteractHandler(getClient: () => CDPClient) {
       );
     }
 
+    // GH#250: a handler throw is an app-side failure, not a warning — the action
+    // dispatched but its effect likely didn't happen. actionExecuted in meta keeps
+    // the "dispatched but threw" / "couldn't dispatch" distinction.
     if (parsed.action_executed && parsed.handler_error) {
-      return warnResult(parsed, `Action executed but handler threw: ${parsed.handler_error}`);
+      return failResult(
+        `Action executed but handler threw: ${parsed.handler_error}`,
+        {
+          actionExecuted: true,
+          handlerError: parsed.handler_error,
+          hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
+        },
+      );
     }
 
     return okResult(parsed);

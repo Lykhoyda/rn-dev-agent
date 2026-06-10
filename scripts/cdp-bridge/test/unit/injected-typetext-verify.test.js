@@ -15,8 +15,8 @@ function verifyNoHandlerSlice() {
   return s.slice(open, open + 400);
 }
 
-test('#191: HELPERS_VERSION bumped to 24', () => {
-  assert.equal(HELPERS_VERSION, 24);
+test('#250: HELPERS_VERSION bumped to 25 (handler-throw success:false)', () => {
+  assert.equal(HELPERS_VERSION, 25);
 });
 test('#191: verify mode reads opts.verify', () => {
   assert.match(typeTextSlice(), /opts\.verify/);
