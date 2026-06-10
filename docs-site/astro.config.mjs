@@ -132,6 +132,13 @@ export default defineConfig({
             },
           ],
         },
+        {
+          label: 'Guides',
+          items: [
+            { label: 'React Native DevTools coexistence', slug: 'guides/devtools-coexistence' },
+            { label: 'maestro-mcp interop', slug: 'guides/maestro-interop' },
+          ],
+        },
         { label: 'Benchmarks', slug: 'benchmarks' },
         { label: 'Troubleshooting', slug: 'troubleshooting' },
         { label: 'Changelog', slug: 'changelog' },

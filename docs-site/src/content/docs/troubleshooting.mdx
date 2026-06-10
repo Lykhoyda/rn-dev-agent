@@ -19,6 +19,10 @@ Open the app on the simulator and ensure Hermes is enabled. Check your `app.json
 Close React Native DevTools, Flipper, or Chrome DevTools — only one debugger can connect at a time. The 1006 close code means session conflict.
 </Aside>
 
+<Aside type="tip" title='DevTools shows "Disconnected due to opening a second DevTools window"'>
+The bridge auto-reconnects by default and evicts the visual React Native DevTools from the single debugger seat. Set `RN_CDP_AUTOCONNECT=0` (or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`) to let DevTools hold the seat — the bridge then connects only when a CDP tool runs. Full guide: [React Native DevTools coexistence](/rn-dev-agent/guides/devtools-coexistence/).
+</Aside>
+
 <Aside type="tip" title="CDP connection lost after reload">
 This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it fails, call `cdp_status` to re-establish the connection.
 </Aside>

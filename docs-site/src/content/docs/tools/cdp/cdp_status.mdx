@@ -13,6 +13,7 @@ Get full environment status. Auto-connects if not connected. Returns Metro statu
 |------|------|----------|---------|-------------|-------------|
 | `metroPort` | `number` | No |  |  | Override Metro port (default: auto-detect 8081/8082/19000/19006) |
 | `platform` | `string` | No |  |  | Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups |
+| `resetArbiter` | `boolean` | No |  |  | Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch — cdp_status is unarbitrated so it always runs. |
 
 ## Usage
 

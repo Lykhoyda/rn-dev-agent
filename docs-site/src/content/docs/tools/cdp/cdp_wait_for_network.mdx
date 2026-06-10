@@ -3,7 +3,7 @@ title: "cdp_wait_for_network"
 description: "Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses"
 ---
 
-Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses. Two-phase: scans the existing buffer first (retroactive match), then polls every poll_interval_ms until deadline. Returns \{matched:true, mutation, network_log_since\} on success or \{matched:false, timeout_ms, candidates_seen\} (capped at 10) on timeout — never errors on timeout; agents should check `data.matched`. Use after triggering an action that fires a request to deterministically confirm it landed without buffer-churn races. Pin `since` to a timestamp captured BEFORE the trigger (Date.now() ISO) to also catch mutations that land in the MCP transport window.
+Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses. Two-phase: scans the existing buffer first (retroactive match), then polls every poll_interval_ms until deadline. Returns \{matched:true, mutation, network_log_since\} on success or \{matched:false, timeout_ms, candidates_seen\} (capped at 10) on timeout — never errors on timeout; agents should check `data.matched`. Use after triggering an action that fires a request to deterministically confirm it landed without buffer-churn races. Pin `since` to a timestamp captured BEFORE the trigger (Date.now() ISO) to also catch mutations that land in the MCP transport window. On RN &lt; 0.83 (hook network mode) new-entry detection granularity is ~500ms — sub-500ms poll_interval_ms buys nothing there.
 
 ## Parameters
 
