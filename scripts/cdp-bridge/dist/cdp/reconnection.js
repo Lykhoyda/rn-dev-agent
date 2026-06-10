@@ -35,11 +35,14 @@ export function computeReconnectDelay(attempt, opts = {}) {
     const jitter = Math.floor(rng() * jitterMs);
     return capped + jitter;
 }
+function isPassive(ctx) {
+    return ctx.isAutoConnectEnabled !== undefined && !ctx.isAutoConnectEnabled();
+}
 export function handleClose(ctx, code) {
     resetState(ctx.getResettableState());
     if (ctx.isDisposed() || ctx.isReconnecting())
         return;
-    if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled()) {
+    if (isPassive(ctx)) {
         ctx.setState('disconnected');
         clearActiveFlag();
         logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
@@ -155,9 +158,13 @@ export async function softReconnect(ctx) {
 export function startBackgroundPoll(ctx) {
     if (ctx.getBgPollTimer() || ctx.isDisposed())
         return;
-    if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled())
+    if (isPassive(ctx))
         return;
     ctx.setBgPollTimer(setInterval(async () => {
+        if (isPassive(ctx)) {
+            stopBackgroundPoll(ctx);
+            return;
+        }
         if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
             stopBackgroundPoll(ctx);
             return;

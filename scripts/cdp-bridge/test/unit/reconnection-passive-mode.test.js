@@ -7,7 +7,7 @@ import { handleClose, startBackgroundPoll } from '../../dist/cdp/reconnection.js
 // poll) must not run. On-demand connect during tool calls is untouched.
 
 function makeCtx(overrides = {}) {
-  const calls = { discover: 0, stateSet: [] };
+  const calls = { discover: 0, stateSet: [], resetCalls: 0 };
   const ctx = {
     isDisposed: () => false,
     isReconnecting: () => false,
@@ -21,7 +21,7 @@ function makeCtx(overrides = {}) {
     rejectAllPending: () => {},
     discoverAndConnect: async () => { calls.discover++; return 'ws://x'; },
     getResettableState: () => ({
-      setState: () => {}, setHelpersInjected: () => {}, setBridgeDetected: () => {},
+      setState: () => {}, setHelpersInjected: () => { calls.resetCalls++; }, setBridgeDetected: () => {},
       setBridgeVersion: () => {}, setConnectedTarget: () => {}, setConnectedAt: () => {},
       setLogDomainEnabled: () => {}, setProfilerAvailable: () => {},
       setHeapProfilerAvailable: () => {}, clearScripts: () => {},
@@ -42,6 +42,7 @@ test('handleClose: passive mode → state disconnected, no reconnect loop', asyn
   assert.equal(calls.discover, 0, 'reconnect loop must not start');
   assert.ok(calls.stateSet.includes('disconnected'));
   assert.ok(!calls.stateSet.includes('reconnecting'));
+  assert.ok(calls.resetCalls >= 1, 'resetState must run before the passive gate');
 });
 
 test('handleClose: default (no isAutoConnectEnabled) → reconnect starts (back-compat)', async () => {

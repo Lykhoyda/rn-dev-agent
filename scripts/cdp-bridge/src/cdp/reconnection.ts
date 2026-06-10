@@ -81,12 +81,16 @@ export interface ReconnectContext {
   afterReconnect?: () => Promise<void>;
 }
 
+function isPassive(ctx: ReconnectContext): boolean {
+  return ctx.isAutoConnectEnabled !== undefined && !ctx.isAutoConnectEnabled();
+}
+
 export function handleClose(ctx: ReconnectContext, code: number): void {
   resetState(ctx.getResettableState());
 
   if (ctx.isDisposed() || ctx.isReconnecting()) return;
 
-  if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled()) {
+  if (isPassive(ctx)) {
     ctx.setState('disconnected');
     clearActiveFlag();
     logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
@@ -211,8 +215,12 @@ export async function softReconnect(ctx: ReconnectContext): Promise<string> {
 
 export function startBackgroundPoll(ctx: ReconnectContext): void {
   if (ctx.getBgPollTimer() || ctx.isDisposed()) return;
-  if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled()) return;
+  if (isPassive(ctx)) return;
   ctx.setBgPollTimer(setInterval(async () => {
+    if (isPassive(ctx)) {
+      stopBackgroundPoll(ctx);
+      return;
+    }
     if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
       stopBackgroundPoll(ctx);
       return;
