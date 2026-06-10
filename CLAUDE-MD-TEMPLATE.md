@@ -493,6 +493,7 @@ Tool calls must follow this sequence to avoid race conditions:
 | `cdp_reload` reports `reconnected: false` | Wait 5-10s | New Hermes target not yet registered | `cdp_connect force: true`; if ambiguous target, pass `targetId:` |
 | `device_screenshot` captures the wrong platform | — | Multi-device routing bug | Pass `platform:` explicitly, or fall back to raw `adb screencap` / `simctl io` |
 | `cdp_interact accessibilityLabel="..."` fails (label matching is fuzzy) | Prefer testID-keyed calls: `cdp_interact(testID="...")` or `device_batch` with `testID=` field. Fall back to `device_snapshot` + `device_press(ref="@eN")` only when no testID exists. | Label matching unreliable; testID matching is exact and fiber-tree-resolved | — |
+| "Disconnected due to opening a second DevTools window" / React Native DevTools keeps getting kicked | `cdp_status` → `autoConnect` field | RN allows one debugger frontend per app; bridge auto-reconnects by default (agent-first) | Set `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`. Bridge then reconnects only on explicit tool calls and yields again when DevTools reopens. Note: **any** CDP tool call — including `cdp_status` — reclaims the seat while it runs; passive mode only stops *background* re-grabs. |
 
 ### Authentication & Permission Pre-flight
 

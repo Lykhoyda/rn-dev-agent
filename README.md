@@ -95,7 +95,7 @@ An **action** is a saved Maestro flow the agent **emits** when `/test-feature` v
 | Command | Purpose |
 |---------|---------|
 | `/rn-dev-agent:setup` | Inject CLAUDE.md tool-routing rules + nav-ref + Zustand exposure |
-| `/rn-dev-agent:doctor` | 14-row diagnostic table — Node, CDP, rn-fast-runner (iOS), agent-device (Android), maestro-runner, simulators, Metro, helpers freshness, plugin version |
+| `/rn-dev-agent:doctor` | 15-row diagnostic table — Node, CDP, rn-fast-runner (iOS), agent-device (Android), maestro-runner, simulators, Metro, helpers freshness, plugin version, CDP auto-reconnect mode |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
