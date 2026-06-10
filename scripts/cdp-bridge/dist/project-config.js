@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findProjectRoot } from './nav-graph/storage.js';
+import { logger } from './logger.js';
 /**
  * Read bundle ID / package name from app.json or app.config.json.
  * Returns the platform-appropriate ID, or falls back cross-platform.
@@ -55,4 +56,35 @@ export function readExpoSlug() {
         }
     }
     return null;
+}
+let warnedBadConfig = false;
+export function readRnAgentConfig(projectRoot) {
+    const root = projectRoot ?? findProjectRoot();
+    if (!root)
+        return null;
+    const p = join(root, '.rn-agent', 'config.json');
+    if (!existsSync(p))
+        return null;
+    try {
+        return JSON.parse(readFileSync(p, 'utf-8'));
+    }
+    catch (err) {
+        if (!warnedBadConfig) {
+            warnedBadConfig = true;
+            logger.warn('CONFIG', `.rn-agent/config.json is unreadable — ignoring it: ${err instanceof Error ? err.message : err}`);
+        }
+        return null;
+    }
+}
+export function resolveAutoConnect(deps = {}) {
+    const envRaw = 'env' in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
+    if (envRaw === '0' || envRaw === 'false')
+        return { enabled: false, source: 'env' };
+    if (envRaw === '1' || envRaw === 'true')
+        return { enabled: true, source: 'env' };
+    const cfg = (deps.readConfig ?? readRnAgentConfig)();
+    if (typeof cfg?.cdp?.autoConnect === 'boolean') {
+        return { enabled: cfg.cdp.autoConnect, source: 'config' };
+    }
+    return { enabled: true, source: 'default' };
 }
