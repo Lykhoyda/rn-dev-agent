@@ -73,7 +73,7 @@ eradicateLegacyRunnerApps(udid, deps):
   call.) No new startup-time work (boot-time call has no udid → files-only
   pass, as today).
 - **Idempotence/cost:** once uninstalled, the `listapps` scan finds nothing —
-  steady-state cost is one `simctl listapps` (~tens of ms) per device-open.
+  steady-state cost is one `simctl listapps` (~150–350 ms measured on an M-series dev machine; spec originally estimated tens of ms) per device-open.
   (Plan-review amendment 2026-06-10: NO memo — the Phase 1.5 device lock fails
   open in its degraded path, so another session can reinstall the legacy app
   on the same UDID; the scan is cheap enough to run every open.)
