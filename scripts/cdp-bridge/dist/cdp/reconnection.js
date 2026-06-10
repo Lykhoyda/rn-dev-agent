@@ -39,6 +39,16 @@ export function handleClose(ctx, code) {
     resetState(ctx.getResettableState());
     if (ctx.isDisposed() || ctx.isReconnecting())
         return;
+    if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled()) {
+        ctx.setState('disconnected');
+        clearActiveFlag();
+        logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
+        console.error('CDP: connection closed (code ' + code + '). Auto-reconnect is disabled ' +
+            '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
+            'the bridge will reconnect on the next CDP tool call. ' +
+            'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.');
+        return;
+    }
     logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
     if (code === 1006) {
         console.error('CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...');
@@ -144,6 +154,8 @@ export async function softReconnect(ctx) {
 }
 export function startBackgroundPoll(ctx) {
     if (ctx.getBgPollTimer() || ctx.isDisposed())
+        return;
+    if (ctx.isAutoConnectEnabled && !ctx.isAutoConnectEnabled())
         return;
     ctx.setBgPollTimer(setInterval(async () => {
         if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
