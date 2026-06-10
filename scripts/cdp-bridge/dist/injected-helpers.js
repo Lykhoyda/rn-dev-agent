@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 24;
+export const HELPERS_VERSION = 25;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -1418,10 +1418,10 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({ error: 'Unknown action: ' + action });
     } catch(e) {
       return JSON.stringify({
-        success: true, action_executed: true,
+        success: false, action_executed: true,
         handler_error: (e && e.message || String(e)),
         component: typeName, testID: selector,
-        hint: 'The action was dispatched but the handler threw. This may be intentional (e.g., error testing).'
+        hint: 'The action was dispatched but the app handler threw — the screen may now be in an error state. Check cdp_error_log before continuing.'
       });
     }
   }
