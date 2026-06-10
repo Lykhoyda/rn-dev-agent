@@ -45,7 +45,9 @@ React Native (Hermes) allows **exactly one debugger frontend** per app at a time
   { "cdp": { "autoConnect": false } }
   ```
 
-In passive mode the bridge **yields the seat** and reconnects only when a CDP tool actually runs (e.g. `cdp_status`, `cdp_component_tree`, any `device_*` call). Once you reopen React Native DevTools after a tool call, the bridge yields again automatically.
+In passive mode the bridge **yields the seat** and reconnects only when a CDP tool actually runs (e.g. `cdp_status`, `cdp_component_tree`). Once you reopen React Native DevTools after a tool call, the bridge yields again automatically.
+
+**Known limitation:** in passive mode, a previously-opened DevTools-sharing proxy (`cdp_open_devtools`) is not auto-resumed after a disconnect — re-run `cdp_open_devtools` if you use it.
 
 **Important caveat:** *any* CDP tool call — including `cdp_status` — reclaims the seat while it runs. Passive mode stops only *background* re-grabs (the close-triggered reconnect loop and the background poll). If you need uninterrupted DevTools access, avoid running CDP tools while the window is open.
 

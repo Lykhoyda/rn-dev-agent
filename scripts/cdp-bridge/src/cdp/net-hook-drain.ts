@@ -39,16 +39,18 @@ export async function drainNetworkHookBuffer(client: DrainableClient): Promise<n
   try {
     const result = await client.evaluate(DRAIN_EXPR);
     if (result.error || typeof result.value !== 'string') return 0;
-    const entries = JSON.parse(result.value) as Array<{ t?: unknown; d?: unknown }>;
+    const entries = JSON.parse(result.value) as Array<{ t?: unknown; d?: unknown; ts?: unknown }>;
     if (!Array.isArray(entries)) return 0;
     let applied = 0;
     for (const e of entries) {
       if (!e || typeof e.t !== 'string' || !e.d || typeof (e.d as { id?: unknown }).id !== 'string') continue;
+      const atMs = typeof e.ts === 'number' ? e.ts : undefined;
       applyNetworkHookEntry(
         e.t,
         e.d as { id: string; method?: string; url?: string; status?: number; duration_ms?: number },
         client.networkBufferManager,
         client.activeDeviceKey,
+        atMs,
       );
       applied++;
     }

@@ -87,7 +87,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
  * console callback can coexist with the new buffered callback, reporting the
  * same request id twice — the getByKey guard prevents a second push.
  */
-export function applyNetworkHookEntry(type, data, networkManager, deviceKey) {
+export function applyNetworkHookEntry(type, data, networkManager, deviceKey, atMs) {
     if (type === 'request') {
         // Dedup: skip if this id is already in the buffer (double-reporting guard).
         if (networkManager.getByKey(deviceKey, data.id))
@@ -96,7 +96,7 @@ export function applyNetworkHookEntry(type, data, networkManager, deviceKey) {
             id: data.id,
             method: data.method ?? 'GET',
             url: data.url ?? '',
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(atMs ?? Date.now()).toISOString(),
         });
     }
     else if (type === 'response') {

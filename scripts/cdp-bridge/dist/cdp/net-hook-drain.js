@@ -37,7 +37,8 @@ export async function drainNetworkHookBuffer(client) {
         for (const e of entries) {
             if (!e || typeof e.t !== 'string' || !e.d || typeof e.d.id !== 'string')
                 continue;
-            applyNetworkHookEntry(e.t, e.d, client.networkBufferManager, client.activeDeviceKey);
+            const atMs = typeof e.ts === 'number' ? e.ts : undefined;
+            applyNetworkHookEntry(e.t, e.d, client.networkBufferManager, client.activeDeviceKey, atMs);
             applied++;
         }
         return applied;

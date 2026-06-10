@@ -88,8 +88,25 @@ function runCbScript() {
 test('NETWORK_CB_BUFFERED_SCRIPT: defines callback that pushes to __RN_AGENT_NET_BUF__', () => {
   const g = runCbScript();
   assert.equal(typeof g.__RN_AGENT_NETWORK_CB__, 'function');
+  const before = Date.now();
   g.__RN_AGENT_NETWORK_CB__('request', { id: 'a', method: 'GET', url: '/x' });
-  assert.deepEqual(g.__RN_AGENT_NET_BUF__, [{ t: 'request', d: { id: 'a', method: 'GET', url: '/x' } }]);
+  const after = Date.now();
+  const entry = g.__RN_AGENT_NET_BUF__[0];
+  assert.equal(entry.t, 'request');
+  assert.deepEqual(entry.d, { id: 'a', method: 'GET', url: '/x' });
+  assert.ok(typeof entry.ts === 'number', 'ts must be a number (ms epoch)');
+  assert.ok(entry.ts >= before && entry.ts <= after, 'ts must be ≈ Date.now() at push time');
+});
+
+// Fix 1(i): buffered entry includes numeric ts ≈ Date.now()
+test('NETWORK_CB_BUFFERED_SCRIPT: buffered entry has numeric ts ≈ Date.now()', () => {
+  const g = runCbScript();
+  const before = Date.now();
+  g.__RN_AGENT_NETWORK_CB__('request', { id: 'ts-test', method: 'POST', url: '/api/ts' });
+  const after = Date.now();
+  const entry = g.__RN_AGENT_NET_BUF__[0];
+  assert.ok(typeof entry.ts === 'number', 'ts must be numeric');
+  assert.ok(entry.ts >= before && entry.ts <= after, 'ts must be within the call window');
 });
 
 test('NETWORK_CB_BUFFERED_SCRIPT: never calls console.log (the whole point)', () => {
@@ -121,6 +138,7 @@ test('NETWORK_CB_BUFFERED_SCRIPT: corrupted buffer is repaired and does not thro
   assert.ok(Array.isArray(g.__RN_AGENT_NET_BUF__));
   assert.equal(g.__RN_AGENT_NET_BUF__.length, 1);
   assert.equal(g.__RN_AGENT_NET_BUF__[0].d.id, 'x');
+  assert.ok(typeof g.__RN_AGENT_NET_BUF__[0].ts === 'number', 'repaired entry still carries ts');
 });
 
 function makeDrainClient(bufEntries, mgr) {
@@ -185,4 +203,63 @@ test('drainNetworkHookBuffer: malformed single entries are skipped, valid ones a
   const drained = await drainNetworkHookBuffer(client);
   assert.equal(drained, 1);
   assert.equal(mgr.getByKey('dev1', 'ok1').url, '/good');
+});
+
+// Fix 1(ii): entry with ts:<fixed epoch ms> lands in manager with timestamp === new Date(fixed).toISOString()
+test('drainNetworkHookBuffer: entry with ts propagates app-side timestamp to the manager', async () => {
+  const FIXED_EPOCH_MS = 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
+  const mgr = makeManager();
+  const client = makeDrainClient([
+    { t: 'request', d: { id: 'ts-req', method: 'GET', url: '/timed' }, ts: FIXED_EPOCH_MS },
+  ], mgr);
+  await drainNetworkHookBuffer(client);
+  const entry = mgr.getByKey('dev1', 'ts-req');
+  assert.equal(entry.timestamp, new Date(FIXED_EPOCH_MS).toISOString(),
+    'drain must forward app-side ts so the request is stamped at fire-time, not drain-time');
+});
+
+test('drainNetworkHookBuffer: entry without ts falls back to arrival-time (still a valid ISO string)', async () => {
+  const before = Date.now();
+  const mgr = makeManager();
+  const client = makeDrainClient([
+    { t: 'request', d: { id: 'no-ts', method: 'GET', url: '/no-ts' } },
+  ], mgr);
+  await drainNetworkHookBuffer(client);
+  const after = Date.now();
+  const entry = mgr.getByKey('dev1', 'no-ts');
+  const stamped = new Date(entry.timestamp).getTime();
+  assert.ok(!isNaN(stamped), 'fallback timestamp must be a valid ISO date');
+  assert.ok(stamped >= before && stamped <= after, 'fallback must be ≈ drain time');
+});
+
+test('drainNetworkHookBuffer: non-numeric ts is treated as absent (falls back to arrival-time)', async () => {
+  const before = Date.now();
+  const mgr = makeManager();
+  const client = makeDrainClient([
+    { t: 'request', d: { id: 'bad-ts', method: 'GET', url: '/bad-ts' }, ts: 'not-a-number' },
+  ], mgr);
+  await drainNetworkHookBuffer(client);
+  const after = Date.now();
+  const entry = mgr.getByKey('dev1', 'bad-ts');
+  const stamped = new Date(entry.timestamp).getTime();
+  assert.ok(!isNaN(stamped), 'must still produce a valid timestamp');
+  assert.ok(stamped >= before && stamped <= after, 'non-numeric ts discarded, fallback is arrival-time');
+});
+
+// Fix 1(iii): applyNetworkHookEntry with explicit atMs uses it; without, uses now
+test('applyNetworkHookEntry: explicit atMs is used for the request timestamp', () => {
+  const FIXED_MS = 1_600_000_000_000;
+  const mgr = makeManager();
+  applyNetworkHookEntry('request', { id: 'atms1', method: 'GET', url: '/at' }, mgr, 'dev1', FIXED_MS);
+  const entry = mgr.getByKey('dev1', 'atms1');
+  assert.equal(entry.timestamp, new Date(FIXED_MS).toISOString());
+});
+
+test('applyNetworkHookEntry: without atMs timestamp falls back to approximately now', () => {
+  const before = Date.now();
+  const mgr = makeManager();
+  applyNetworkHookEntry('request', { id: 'atms2', method: 'GET', url: '/at' }, mgr, 'dev1');
+  const after = Date.now();
+  const stamped = new Date(mgr.getByKey('dev1', 'atms2').timestamp).getTime();
+  assert.ok(stamped >= before && stamped <= after);
 });

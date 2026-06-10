@@ -2008,7 +2008,7 @@ export const NETWORK_CB_BUFFERED_SCRIPT = `
     try {
       var buf = globalThis.__RN_AGENT_NET_BUF__;
       if (!Array.isArray(buf)) { buf = []; globalThis.__RN_AGENT_NET_BUF__ = buf; }
-      buf.push({ t: type, d: data });
+      buf.push({ t: type, d: data, ts: Date.now() });
       if (buf.length > MAX) buf.splice(0, buf.length - MAX);
     } catch (e) {}
   };

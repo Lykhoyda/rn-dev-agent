@@ -114,6 +114,7 @@ export function applyNetworkHookEntry(
   data: { id: string; method?: string; url?: string; status?: number; duration_ms?: number },
   networkManager: DeviceBufferManager<NetworkEntry, string>,
   deviceKey: string,
+  atMs?: number,
 ): void {
   if (type === 'request') {
     // Dedup: skip if this id is already in the buffer (double-reporting guard).
@@ -122,7 +123,7 @@ export function applyNetworkHookEntry(
       id: data.id,
       method: data.method ?? 'GET',
       url: data.url ?? '',
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(atMs ?? Date.now()).toISOString(),
     });
   } else if (type === 'response') {
     const entry = networkManager.getByKey(deviceKey, data.id);
