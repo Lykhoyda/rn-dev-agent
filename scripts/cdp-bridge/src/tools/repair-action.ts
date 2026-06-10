@@ -27,6 +27,7 @@ import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-act
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
+import { detectPlatform } from './platform-utils.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 
 const execFile = promisify(execFileCb);
@@ -221,9 +222,12 @@ export function createRepairActionHandler() {
     // GH #105 / B153: bring the target app to foreground before snapshot.
     // Without this, the snapshot lands on whichever app is frontmost — often
     // the Agent Device Runner (XCTest test rig) which has zero app testIDs.
-    // Resolve bundle id from app.json via project-config; fall back to ios
-    // platform if the connected target hasn't told us yet.
-    const targetPlatform = 'ios'; // TODO(gh-105 follow-up): plumb platform from CDP target
+    // GH #253 / B197: platform comes from the active device session (probe
+    // fallback when none is open) — a hardcoded 'ios' made the whole repair
+    // loop foreground via simctl, snapshot via the iOS short-circuit, and
+    // bootstrap the iOS fast-runner against Android emulators. 'ios' remains
+    // the final fallback for the no-session, no-device edge.
+    const targetPlatform = (await detectPlatform()) ?? 'ios';
     const targetBundleId = resolveBundleId(targetPlatform);
     if (targetBundleId) {
       await bringTargetAppToForeground(targetPlatform, targetBundleId);

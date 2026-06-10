@@ -109,6 +109,75 @@ test('repair-action: happy path patches stale selector with fuzzy match', async 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Platform plumbing (GH #253 / B197) — the snapshot dispatch must carry the
+// active session's platform, not a hardcoded 'ios'. With 'ios' hardcoded, an
+// Android repair foregrounds via simctl, snapshots via the iOS short-circuit,
+// and bootstraps the iOS fast-runner — none of which work against an emulator.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('GH #253: android session → snapshot dispatched with platform android', async () => {
+  setActiveSession({
+    ...FAKE_SESSION,
+    platform: 'android',
+    deviceId: 'emulator-5554',
+  });
+  project.seedAction(
+    'android-repair',
+    fixtureYaml({ id: 'android-repair', selectors: ['fab-create-task'] }),
+  );
+
+  let capturedOpts;
+  _setRunAgentDeviceForTest(async (cliArgs, opts) => {
+    capturedOpts = opts;
+    return {
+      content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn']) }],
+    };
+  });
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'android-repair',
+    failedSelector: 'fab-create-task',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, undefined, `expected ok, got ${result.content[0].text}`);
+  assert.equal(
+    capturedOpts?.platform,
+    'android',
+    `snapshot must dispatch with the session platform; got ${capturedOpts?.platform} — ` +
+    `a hardcoded 'ios' routes the snapshot through the iOS short-circuit on an emulator`,
+  );
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.data.patched, true, 'repair itself must still succeed on android');
+});
+
+test('GH #253: ios session → snapshot dispatched with platform ios (regression guard)', async () => {
+  project.seedAction(
+    'ios-repair',
+    fixtureYaml({ id: 'ios-repair', selectors: ['fab-create-task'] }),
+  );
+
+  let capturedOpts;
+  _setRunAgentDeviceForTest(async (cliArgs, opts) => {
+    capturedOpts = opts;
+    return {
+      content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn']) }],
+    };
+  });
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'ios-repair',
+    failedSelector: 'fab-create-task',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, undefined, `expected ok, got ${result.content[0].text}`);
+  assert.equal(capturedOpts?.platform, 'ios');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Validation paths
 // ─────────────────────────────────────────────────────────────────────────────
 
