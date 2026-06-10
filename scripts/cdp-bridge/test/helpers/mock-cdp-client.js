@@ -42,6 +42,9 @@ export function createMockClient(overrides = {}) {
     get reconnectState() {
       return { active: false, lastAttempt: null, attemptCount: 0 };
     },
+    get autoConnectState() {
+      return client._autoConnectState;
+    },
     /** M1b: proxy getters — default "no proxy active", override via _proxyUrl/_proxyMultiplexer. */
     get proxyUrl() { return client._proxyUrl; },
     get isProxyActive() { return client._proxyUrl !== null; },
@@ -73,6 +76,7 @@ export function createMockClient(overrides = {}) {
     _heapProfilerAvailable: true,
     _scripts: new Map(),
     _connectionGeneration: 1,
+    _autoConnectState: { enabled: true, source: 'default' },
     // M11 defaults: connectedAt=1_000_000 and timeNowFn returning 1_000_000
     // means "just connected, 0ms elapsed" — hint should NOT fire by default.
     // Tests that want the hint to fire override _timeNowFn to a later value.

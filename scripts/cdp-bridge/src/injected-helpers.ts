@@ -1993,6 +1993,28 @@ export const NETWORK_HOOK_SCRIPT = `
 })();
 `;
 
+/**
+ * Spec 2026-06-10-debugger-seat-optout Part 2: hook-mode network callback.
+ * Pushes entries into an in-app ring buffer instead of console.log so the
+ * shared console stream (Metro logs, user DevTools) stays clean. The bridge
+ * drains the buffer on demand (cdp/net-hook-drain.ts). Idempotent: preserves
+ * an existing buffer so reinjection doesn't lose undrained entries.
+ */
+export const NETWORK_CB_BUFFERED_SCRIPT = `
+(function() {
+  globalThis.__RN_AGENT_NET_BUF__ = globalThis.__RN_AGENT_NET_BUF__ || [];
+  var MAX = 100;
+  globalThis.__RN_AGENT_NETWORK_CB__ = function(type, data) {
+    try {
+      var buf = globalThis.__RN_AGENT_NET_BUF__;
+      if (!Array.isArray(buf)) { buf = []; globalThis.__RN_AGENT_NET_BUF__ = buf; }
+      buf.push({ t: type, d: data, ts: Date.now() });
+      if (buf.length > MAX) buf.splice(0, buf.length - MAX);
+    } catch (e) {}
+  };
+})();
+`;
+
 // M8: readiness probe for waitForReact — must mirror findActiveRenderer's
 // guard shape in INJECTED_HELPERS so setup.ts stops gating on a stale
 // renderers-map check. If either diverges the gate becomes a silent no-op.

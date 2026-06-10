@@ -304,7 +304,7 @@ trackedTool(
 
 trackedTool(
   'cdp_network_body',
-  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached. Pass `device` to look up requestId in a specific device buffer; defaults to the active device.',
+  'Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. In CDP mode (RN 0.83+) bodies are fetched on-demand; on RN < 0.83 hook mode a small recent-response cache is used. Pass `device` to look up requestId in a specific device buffer; defaults to the active device.',
   {
     requestId: z.string().describe('Request ID from cdp_network_log output'),
     maxLength: z.number().int().min(100).max(100000).default(10000).optional()
@@ -316,7 +316,7 @@ trackedTool(
 
 trackedTool(
   'cdp_wait_for_network',
-  'Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses. Two-phase: scans the existing buffer first (retroactive match), then polls every poll_interval_ms until deadline. Returns {matched:true, mutation, network_log_since} on success or {matched:false, timeout_ms, candidates_seen} (capped at 10) on timeout — never errors on timeout; agents should check `data.matched`. Use after triggering an action that fires a request to deterministically confirm it landed without buffer-churn races. Pin `since` to a timestamp captured BEFORE the trigger (Date.now() ISO) to also catch mutations that land in the MCP transport window.',
+  'Block until a network request matching url_pattern (URL substring) and optional method completes (response received), or timeout_ms elapses. Two-phase: scans the existing buffer first (retroactive match), then polls every poll_interval_ms until deadline. Returns {matched:true, mutation, network_log_since} on success or {matched:false, timeout_ms, candidates_seen} (capped at 10) on timeout — never errors on timeout; agents should check `data.matched`. Use after triggering an action that fires a request to deterministically confirm it landed without buffer-churn races. Pin `since` to a timestamp captured BEFORE the trigger (Date.now() ISO) to also catch mutations that land in the MCP transport window. On RN < 0.83 (hook network mode) new-entry detection granularity is ~500ms — sub-500ms poll_interval_ms buys nothing there.',
   {
     url_pattern: z.string().describe('URL substring to match (e.g. "/api/cart/add", "checkout"). Same matching semantics as cdp_network_log filter.'),
     method: z.union([z.string(), z.array(z.string())]).optional().describe('HTTP method filter, case-insensitive (e.g. "POST" or ["POST","PUT"]). Omit to match any method.'),

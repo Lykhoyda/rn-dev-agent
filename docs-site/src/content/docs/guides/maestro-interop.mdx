@@ -29,3 +29,28 @@ A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the devi
 ## Why there's no shared "WDA session" to ride (#210)
 
 A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt — `cdp_status.deviceSession` shows its `alive`/`stale`/`dead` state), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.
+
+## Using rn-dev-agent with React Native DevTools
+
+React Native (Hermes) allows **exactly one debugger frontend** per app at a time. By default, rn-dev-agent is agent-first: its CDP bridge auto-reconnects in the background after each disconnect, which means opening the visual React Native DevTools window will kick the bridge out — and the bridge will immediately reclaim the seat.
+
+**To let React Native DevTools hold the debugger seat**, disable background auto-reconnect with one of two opt-out surfaces:
+
+- **Environment variable** (takes precedence over everything):
+  ```bash
+  RN_CDP_AUTOCONNECT=0 # also accepts 'false'; '1'/'true' force it back on
+  ```
+- **Project config file** (`.rn-agent/config.json` in your project root, env wins):
+  ```json
+  { "cdp": { "autoConnect": false } }
+  ```
+
+In passive mode the bridge **yields the seat** and reconnects only when a CDP tool actually runs (e.g. `cdp_status`, `cdp_component_tree`). Once you reopen React Native DevTools after a tool call, the bridge yields again automatically.
+
+**Known limitation:** in passive mode, a previously-opened DevTools-sharing proxy (`cdp_open_devtools`) is not auto-resumed after a disconnect — re-run `cdp_open_devtools` if you use it.
+
+**Important caveat:** *any* CDP tool call — including `cdp_status` — reclaims the seat while it runs. Passive mode stops only *background* re-grabs (the close-triggered reconnect loop and the background poll). If you need uninterrupted DevTools access, avoid running CDP tools while the window is open.
+
+The resolved auto-connect mode is always visible in `cdp_status` → top-level `autoConnect` field: `{ enabled: true|false, source: 'default'|'env'|'config' }`. The `/rn-dev-agent:doctor` command also reports it as the **CDP auto-reconnect** row (YELLOW when OFF — informational, not an error).
+
+**Hook-mode network capture note:** on React Native < 0.83 (or when `RN_FORCE_NETWORK_HOOK=1` is set), network entries are captured by in-app `fetch`/XHR wrappers. As of this release that capture **no longer writes `__RN_NET__:…` lines to the console** — entries go directly to an in-app ring buffer (`globalThis.__RN_AGENT_NET_BUF__`, capped at 100) that the network tools drain on demand. Metro logs and your React Native DevTools console will no longer contain hook-mode network noise. No user action is required; the change is transparent.

@@ -1,6 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, withConnection } from '../utils.js';
 import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from './metro-clear-hint.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export interface NetworkLogArgs {
   limit: number;
@@ -14,6 +15,8 @@ export interface NetworkLogArgs {
 export function createNetworkLogHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: NetworkLogArgs, client) => {
     const scope = args.device ?? client.activeDeviceKey;
+    // Drain targets the active device; `scope` only filters the read — intentionally decoupled.
+    await drainNetworkHookBuffer(client);
 
     if (args.clear) {
       client.networkBufferManager.clear(scope === 'all' ? undefined : scope);

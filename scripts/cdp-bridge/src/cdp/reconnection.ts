@@ -63,6 +63,14 @@ export interface ReconnectContext {
   getBgPollTimer: () => ReturnType<typeof setInterval> | null;
   isConnected: () => boolean;
   /**
+   * Debugger-seat opt-out (spec 2026-06-10): when present and false, the
+   * BACKGROUND reconnect paths (handleClose loop, background poll) are
+   * disabled — the bridge yields the single RN debugger seat to a human
+   * DevTools until the next explicit tool call. Optional so existing
+   * ReconnectContext consumers/tests keep today's behavior.
+   */
+  isAutoConnectEnabled?: () => boolean;
+  /**
    * B132 (M1b follow-up): invoked after a successful reconnect inside the
    * exponential-backoff `reconnect()` loop. Used by CDPClient to auto-resume
    * the multiplexer proxy after reconnecting directly to Hermes. NOT fired
@@ -73,10 +81,27 @@ export interface ReconnectContext {
   afterReconnect?: () => Promise<void>;
 }
 
+function isPassive(ctx: ReconnectContext): boolean {
+  return ctx.isAutoConnectEnabled !== undefined && !ctx.isAutoConnectEnabled();
+}
+
 export function handleClose(ctx: ReconnectContext, code: number): void {
   resetState(ctx.getResettableState());
 
   if (ctx.isDisposed() || ctx.isReconnecting()) return;
+
+  if (isPassive(ctx)) {
+    ctx.setState('disconnected');
+    clearActiveFlag();
+    logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
+    console.error(
+      'CDP: connection closed (code ' + code + '). Auto-reconnect is disabled ' +
+      '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
+      'the bridge will reconnect on the next CDP tool call. ' +
+      'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.',
+    );
+    return;
+  }
 
   logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
   if (code === 1006) {
@@ -190,7 +215,12 @@ export async function softReconnect(ctx: ReconnectContext): Promise<string> {
 
 export function startBackgroundPoll(ctx: ReconnectContext): void {
   if (ctx.getBgPollTimer() || ctx.isDisposed()) return;
+  if (isPassive(ctx)) return;
   ctx.setBgPollTimer(setInterval(async () => {
+    if (isPassive(ctx)) {
+      stopBackgroundPoll(ctx);
+      return;
+    }
     if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
       stopBackgroundPoll(ctx);
       return;

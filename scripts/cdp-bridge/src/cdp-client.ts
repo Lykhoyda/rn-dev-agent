@@ -20,6 +20,8 @@ import {
   discoverAndConnect as discoverAndConnectFn,
 } from './cdp/connect.js';
 import type { ConnectContext, ConnectFilters, ConnectIntent } from './cdp/connect.js';
+import { resolveAutoConnect } from './project-config.js';
+import type { AutoConnectResolution } from './project-config.js';
 import {
   handleClose as handleCloseFn,
   reconnect as reconnectFn,
@@ -81,6 +83,9 @@ export class CDPClient {
   private _lastReconnectAttempt: string | null = null;
   private _reconnectAttemptCount = 0;
 
+  // Resolved once per process — env/config don't change mid-session.
+  private _autoConnectResolution: AutoConnectResolution | null = null;
+
   // M1b (Phase 100+): multiplexer proxy state. When `_proxyUrl` is non-null, the
   // CDP WebSocket routes through `_multiplexer` instead of connecting directly to
   // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
@@ -137,6 +142,15 @@ export class CDPClient {
   get scripts(): Map<string, { scriptId: string; url: string; startLine: number; endLine: number }> { return this._scripts; }
   get reconnectState(): { active: boolean; lastAttempt: string | null; attemptCount: number } {
     return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
+  }
+  /**
+   * Resolved once per process — env/config don't change mid-session.
+   * `enabled: false` gates BACKGROUND reconnect only — explicit tool-call
+   * connects (client.autoConnect()) still run regardless of this flag.
+   */
+  get autoConnectState(): AutoConnectResolution {
+    if (!this._autoConnectResolution) this._autoConnectResolution = resolveAutoConnect();
+    return this._autoConnectResolution;
   }
   /** M1b: URL the CDPClient routes through (null when connected directly). */
   get proxyUrl(): string | null { return this._proxyUrl; }
@@ -593,6 +607,7 @@ export class CDPClient {
       // suspend→reconnect→resume sequence. softReconnect has its own wrapper
       // and does NOT go through this hook — would double-fire the resume.
       afterReconnect: () => this._resumeProxy(),
+      isAutoConnectEnabled: () => this.autoConnectState.enabled,
     };
   }
 

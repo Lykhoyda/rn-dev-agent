@@ -79,6 +79,34 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
         setIsPaused(false);
     });
 }
+/**
+ * Apply a single decoded hook-mode network entry to the buffer manager.
+ * Shared by the legacy console-event path (parseNetworkHookMessage) and the
+ * new buffered drain path (Task 6) so both paths apply entries identically.
+ * Duplicate-id dedup: during the one-release back-compat window a stale
+ * console callback can coexist with the new buffered callback, reporting the
+ * same request id twice — the getByKey guard prevents a second push.
+ */
+export function applyNetworkHookEntry(type, data, networkManager, deviceKey, atMs) {
+    if (type === 'request') {
+        // Dedup: skip if this id is already in the buffer (double-reporting guard).
+        if (networkManager.getByKey(deviceKey, data.id))
+            return;
+        networkManager.push(deviceKey, {
+            id: data.id,
+            method: data.method ?? 'GET',
+            url: data.url ?? '',
+            timestamp: new Date(atMs ?? Date.now()).toISOString(),
+        });
+    }
+    else if (type === 'response') {
+        const entry = networkManager.getByKey(deviceKey, data.id);
+        if (entry) {
+            entry.status = data.status;
+            entry.duration_ms = data.duration_ms;
+        }
+    }
+}
 export function parseNetworkHookMessage(params, networkMode, networkManager, deviceKey) {
     if (networkMode !== 'hook')
         return;
@@ -90,21 +118,7 @@ export function parseNetworkHookMessage(params, networkMode, networkManager, dev
         const parts = firstArg.split(':');
         const type = parts[1];
         const data = JSON.parse(parts.slice(2).join(':'));
-        if (type === 'request') {
-            networkManager.push(deviceKey, {
-                id: data.id,
-                method: data.method ?? 'GET',
-                url: data.url ?? '',
-                timestamp: new Date().toISOString(),
-            });
-        }
-        else if (type === 'response') {
-            const entry = networkManager.getByKey(deviceKey, data.id);
-            if (entry) {
-                entry.status = data.status;
-                entry.duration_ms = data.duration_ms;
-            }
-        }
+        applyNetworkHookEntry(type, data, networkManager, deviceKey);
     }
     catch (err) {
         console.error('CDP: malformed network hook message dropped:', typeof firstArg === 'string' ? firstArg.slice(0, 100) : typeof firstArg, err instanceof Error ? err.message : '');

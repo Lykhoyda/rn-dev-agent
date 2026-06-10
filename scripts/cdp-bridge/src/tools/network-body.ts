@@ -1,5 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export function createNetworkBodyHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: { requestId: string; maxLength?: number; device?: string }, client) => {
@@ -59,6 +60,7 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
           `Invalid requestId shape: expected alphanumeric / ./_/- (e.g. CDP id "12345.67" or test fixture "hook-req1"); got ${String(args.requestId).slice(0, 80)}`,
         );
       }
+      await drainNetworkHookBuffer(client);
       try {
         const result = await client.evaluate(
           `(function() { var c = globalThis.__RN_AGENT_RESPONSE_BODIES__; if (!c) return JSON.stringify({error:'no_cache'}); var b = c.get(${JSON.stringify(args.requestId)}); if (b === undefined) return JSON.stringify({error:'not_found'}); return JSON.stringify({body: b}); })()`,
