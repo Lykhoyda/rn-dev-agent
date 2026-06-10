@@ -49,6 +49,10 @@ jobs:
       - name: Changeset-guard unit test
         run: bash scripts/test/require-changeset.test.sh
 
+      # GH#252/B196: SessionStart must stay bounded (hook timeout + curl time limits).
+      - name: SessionStart bounded-startup guard
+        run: bash scripts/test/session-start-bounded.test.sh
+
   version-sync:
     name: Version sync check
     runs-on: ubuntu-latest
