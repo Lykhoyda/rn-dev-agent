@@ -139,3 +139,18 @@ export function parseMaestroFailure(output: string): MaestroFailure {
 export function isAutoRepairable(failure: MaestroFailure): boolean {
   return failure.kind === 'SELECTOR_NOT_FOUND';
 }
+
+/**
+ * GH#249/B193: exit-0 secondary guard for "flow failed despite a zero exit".
+ * The previous bare `output.includes('FAILED')` scanned combined stdout+stderr
+ * — which carries app/console logs — so a passing flow whose app logged
+ * FETCH_FAILED (or any *_FAILED token) was flagged failed and triggered
+ * pointless auto-repair. Key on Maestro's own terminal status LINES instead:
+ * `Test FAILED` / `Flow FAILED` (JVM Maestro), a `[FAILED]` step marker, or a
+ * line that IS the bare token. maestro-runner emits no uppercase FAILED at all
+ * (verified against the binary), so app-log content is the only thing a
+ * substring match could ever catch there.
+ */
+export function outputIndicatesFlowFailure(output: string): boolean {
+  return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
+}

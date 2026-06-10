@@ -11,6 +11,7 @@ import {
   MaestroValidationError,
 } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
+import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
@@ -129,10 +130,10 @@ export async function runMaestroInline(
       { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
     );
     const output = (stdout + '\n' + stderr).trim();
-    // Runner exited 0 → authoritative pass. Key the secondary scan on maestro's
-    // `FAILED` token only; a broad `Error:` match false-flagged passing runs
-    // whose app/console output merely contained "Error:" (mirrors maestro_run).
-    const passed = !output.includes('FAILED');
+    // Runner exited 0 → authoritative pass. The secondary scan keys on Maestro's
+    // own status LINES (GH#249: a bare `FAILED` substring false-flagged passing
+    // runs whose app logs contained the token; mirrors maestro_run).
+    const passed = !outputIndicatesFlowFailure(output);
     return { passed, output, flowFile };
   } catch (err) {
     // execFile errors carry stdout/stderr from the failed child process. When

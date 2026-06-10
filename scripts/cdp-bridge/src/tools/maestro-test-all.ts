@@ -14,6 +14,7 @@ import {
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
@@ -151,11 +152,10 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         );
         const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the
-        // authoritative pass signal. Key the secondary scan on maestro's own
-        // `FAILED` token only — a broad `Error:` match false-flagged passing
-        // runs whose app/console logs merely contained "Error:" (mirrors the
-        // maestro_run fix).
-        const ok = !output.includes('FAILED');
+        // authoritative pass signal. The secondary scan keys on Maestro's own
+        // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
+        // runs whose app logs contained the token; mirrors the maestro_run fix).
+        const ok = !outputIndicatesFlowFailure(output);
 
         results.push({
           name,

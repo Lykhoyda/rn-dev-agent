@@ -9,6 +9,7 @@ import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
@@ -165,11 +166,10 @@ export function createMaestroRunHandler() {
             const output = (stdout + '\n' + stderr).trim();
             // Reaching here means the runner exited 0 — that exit code is the
             // authoritative pass signal (a real flow failure exits non-zero and is
-            // handled in the catch below). The output scan is only a secondary guard;
-            // it keys on maestro's own `FAILED` status token rather than the previous
-            // broad `Error:` match, which false-flagged passing runs whose app/console
-            // logs merely contained "Error:".
-            const passed = !output.includes('FAILED');
+            // handled in the catch below). The output scan is only a secondary guard,
+            // keyed on Maestro's own status LINES (GH#249: the prior bare `FAILED`
+            // substring false-flagged passing runs whose app logs contained the token).
+            const passed = !outputIndicatesFlowFailure(output);
             const meta = {
                 passed,
                 flowFile,

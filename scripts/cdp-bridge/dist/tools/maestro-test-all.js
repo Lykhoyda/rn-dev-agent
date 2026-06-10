@@ -9,6 +9,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
@@ -113,11 +114,10 @@ export function createMaestroTestAllHandler() {
                 const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
                 const output = (stdout + '\n' + stderr).trim();
                 // The runner already exited 0 here, so that exit code is the
-                // authoritative pass signal. Key the secondary scan on maestro's own
-                // `FAILED` token only — a broad `Error:` match false-flagged passing
-                // runs whose app/console logs merely contained "Error:" (mirrors the
-                // maestro_run fix).
-                const ok = !output.includes('FAILED');
+                // authoritative pass signal. The secondary scan keys on Maestro's own
+                // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
+                // runs whose app logs contained the token; mirrors the maestro_run fix).
+                const ok = !outputIndicatesFlowFailure(output);
                 results.push({
                     name,
                     passed: ok,
