@@ -209,6 +209,9 @@ export function createDeviceSnapshotHandler() {
                         if (r.removedFiles.length) {
                             logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
                         }
+                        if (r.removedApps.length) {
+                            logger.info('rn-device', `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(', ')} from ${deviceId}`);
+                        }
                         for (const w of r.warnings)
                             logger.warn('rn-device', w);
                     }
