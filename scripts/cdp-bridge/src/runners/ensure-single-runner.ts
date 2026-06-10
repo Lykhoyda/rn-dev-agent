@@ -98,6 +98,7 @@ export function shouldRemoveDaemonFiles(
 export interface EnsureSingleRunnerResult {
   killedPids: number[];
   removedFiles: string[];
+  removedApps: string[];
   warnings: string[];
   meta: { timings_ms: Record<string, number> };
 }
@@ -161,6 +162,7 @@ export async function ensureSingleRunner(
   const timings: Record<string, number> = {};
   const killedPids: number[] = [];
   const removedFiles: string[] = [];
+  const removedApps: string[] = [];
   const warnings: string[] = [];
 
   if (opts.udid) {
@@ -178,6 +180,16 @@ export async function ensureSingleRunner(
       }
     }
     timings.scopedKill = Date.now() - t;
+
+    // Runs on every device-open (no memo — see eradicateLegacyRunnerApps).
+    // Stays on the awaited path on purpose: an installed legacy runner must
+    // be GONE before the first maestro/WDA flow of the session, or iOS can
+    // relaunch it into the foreground mid-flow (#202 comment 2026-06-08).
+    const tApps = Date.now();
+    const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
+    removedApps.push(...apps.removedApps);
+    warnings.push(...apps.warnings);
+    timings.appEradication = Date.now() - tApps;
   }
 
   const tFiles = Date.now();
@@ -196,7 +208,7 @@ export async function ensureSingleRunner(
   }
   timings.fileCleanup = Date.now() - tFiles;
 
-  return { killedPids, removedFiles, warnings, meta: { timings_ms: timings } };
+  return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
 }
 
 function msg(err: unknown): string {

@@ -6,6 +6,8 @@ import {
   ensureSingleRunner,
 } from '../../dist/runners/ensure-single-runner.js';
 
+const LISTAPPS_NONE = '{\n    "com.rndevagent.testapp" =     {\n        ApplicationType = User;\n    };\n}';
+
 // Realistic `ps -A -o pid=,args=` lines (synthetic; see field-verification note).
 const PS = [
   '  501 /Users/x/Library/.../AgentDeviceRunner.app/AgentDeviceRunner -udid UDID-A',
@@ -50,6 +52,8 @@ function baseDeps(over = {}) {
     fileExists: () => false,
     removeFile: () => {},
     delay: async () => {},
+    listApps: () => LISTAPPS_NONE,
+    uninstallApp: () => {},
     ...over,
   };
 }

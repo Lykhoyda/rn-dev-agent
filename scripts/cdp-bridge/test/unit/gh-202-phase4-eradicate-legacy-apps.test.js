@@ -4,6 +4,7 @@ import {
   LEGACY_BUNDLE_IDS,
   selectInstalledLegacyApps,
   eradicateLegacyRunnerApps,
+  ensureSingleRunner,
 } from '../../dist/runners/ensure-single-runner.js';
 import { parseSimctlListapps } from '../../dist/cdp/discovery.js';
 
@@ -125,4 +126,47 @@ test('GH#202-P4 eradicate: zero parsed apps from a successful listapps -> parse-
   }));
   assert.deepEqual(r.removedApps, []);
   assert.ok(r.warnings.some((w) => /0 apps/.test(w)));
+});
+
+function fullDeps(over = {}) {
+  return {
+    listProcesses: () => '',
+    kill: () => {},
+    isAlive: () => false,
+    readDaemonPid: () => null,
+    fileExists: () => false,
+    removeFile: () => {},
+    delay: async () => {},
+    listApps: () => LISTAPPS_WITH_LEGACY,
+    uninstallApp: () => {},
+    ...over,
+  };
+}
+
+test('GH#202-P4 ensureSingleRunner(udid): result carries removedApps + appEradication timing', async () => {
+  const r = await ensureSingleRunner({ udid: 'UDID-A' }, fullDeps());
+  assert.deepEqual(r.removedApps, [
+    'com.callstack.agentdevice.runner',
+    'com.callstack.agentdevice.runner.uitests.xctrunner',
+  ]);
+  assert.ok('appEradication' in r.meta.timings_ms);
+});
+
+// Review-2 decision (2026-06-10): NO memo. Another bridge / agent-device
+// session can reinstall the legacy app on the same UDID mid-session (the
+// device lock's degraded fail-open path can't rule it out), so every open
+// re-scans — the scan is one listapps, ~tens of ms.
+test('GH#202-P4 ensureSingleRunner: every udid open re-scans (no memo)', async () => {
+  let listCalls = 0;
+  const deps = fullDeps({ listApps: () => { listCalls += 1; return LISTAPPS_CLEAN; } });
+  await ensureSingleRunner({ udid: 'UDID-A' }, deps);
+  await ensureSingleRunner({ udid: 'UDID-A' }, deps);
+  assert.equal(listCalls, 2);
+});
+
+test('GH#202-P4 ensureSingleRunner (startup, no udid): never touches simctl', async () => {
+  let touched = false;
+  const r = await ensureSingleRunner({}, fullDeps({ listApps: () => { touched = true; return ''; } }));
+  assert.equal(touched, false);
+  assert.deepEqual(r.removedApps, []);
 });
