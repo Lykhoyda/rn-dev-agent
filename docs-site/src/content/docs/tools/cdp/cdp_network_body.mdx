@@ -3,7 +3,7 @@ title: "cdp_network_body"
 description: "Get the actual response body for a network request by its requestId"
 ---
 
-Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. Only works in CDP network mode (RN 0.83+). Bodies are fetched on-demand, not cached. Pass `device` to look up requestId in a specific device buffer; defaults to the active device.
+Get the actual response body for a network request by its requestId. Use cdp_network_log first to find request IDs. In CDP mode (RN 0.83+) bodies are fetched on-demand; on RN &lt; 0.83 hook mode a small recent-response cache is used. Pass `device` to look up requestId in a specific device buffer; defaults to the active device.
 
 ## Parameters
 
