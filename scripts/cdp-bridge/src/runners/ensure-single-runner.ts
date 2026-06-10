@@ -2,24 +2,69 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseSimctlListapps } from '../cdp/discovery.js';
 
 const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
 const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 
-// GH#202 Phase 4: the legacy upstream runner ships as TWO installed apps.
-// Killing their processes (Phase 1) is insufficient — iOS relaunches an
-// installed XCUITest runner to the foreground during WDA sessions. The only
-// correct end-state on iOS (where agent-device is retired, D1219) is
-// "not installed".
+// GH#202 Phase 4: the legacy upstream runner ships as two installed apps.
 export const LEGACY_BUNDLE_IDS = [
   'com.callstack.agentdevice.runner',
   'com.callstack.agentdevice.runner.uitests.xctrunner',
 ] as const;
 
+/**
+ * GH#202 Phase 4: filter `installed` to only the known legacy bundle IDs.
+ * iOS relaunches an installed XCUITest runner to the foreground during WDA
+ * sessions, so killing processes (Phase 1) is insufficient — the only correct
+ * end-state on iOS (where agent-device is retired, D1219) is "not installed".
+ */
 export function selectInstalledLegacyApps(installed: Set<string>): string[] {
   return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
+}
+
+export interface EradicateLegacyAppsResult {
+  removedApps: string[];
+  warnings: string[];
+}
+
+// GH#202 Phase 4: error-safe by contract — every failure becomes a warning;
+// a device-open is never blocked on eradication. Runs on EVERY device-open
+// (no memo): the scan is one simctl listapps (~tens of ms), and a memo would
+// go stale whenever another bridge/agent-device session reinstalls the legacy
+// app on the same UDID — the device lock's degraded fail-open path cannot
+// rule that out. async only for call-site uniformity with ensureSingleRunner
+// (body is sync execFileSync).
+export async function eradicateLegacyRunnerApps(
+  udid: string,
+  deps: Pick<EnsureSingleRunnerDeps, 'listApps' | 'uninstallApp'>,
+): Promise<EradicateLegacyAppsResult> {
+  const removedApps: string[] = [];
+  const warnings: string[] = [];
+  let installed: Set<string>;
+  try {
+    installed = parseSimctlListapps(deps.listApps(udid));
+  } catch (err) {
+    return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
+  }
+  // A booted simulator always carries built-in system apps; zero parsed ids
+  // means the listapps format changed (parse failure), not a clean device.
+  if (installed.size === 0) {
+    return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
+  }
+  for (const id of selectInstalledLegacyApps(installed)) {
+    try {
+      deps.uninstallApp(udid, id);
+      removedApps.push(id);
+    } catch (err) {
+      warnings.push(
+        `uninstall ${id} failed: ${msg(err)} — remove manually: xcrun simctl uninstall ${udid} ${id}`,
+      );
+    }
+  }
+  return { removedApps, warnings };
 }
 
 /**
@@ -65,6 +110,8 @@ export interface EnsureSingleRunnerDeps {
   fileExists: (path: string) => boolean;
   removeFile: (path: string) => void;
   delay: (ms: number) => Promise<void>;
+  listApps: (udid: string) => string;
+  uninstallApp: (udid: string, bundleId: string) => void;
 }
 
 function defaultDeps(): EnsureSingleRunnerDeps {
@@ -90,6 +137,11 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     fileExists: (path) => existsSync(path),
     removeFile: (path) => unlinkSync(path),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    listApps: (udid) =>
+      execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000 }),
+    uninstallApp: (udid, bundleId) => {
+      execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000 });
+    },
   };
 }
 

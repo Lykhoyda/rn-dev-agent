@@ -76,6 +76,8 @@ export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {
 
 /**
  * B116 (D639): extract top-level bundle IDs from `xcrun simctl listapps booted`.
+ * Also used (GH#202 Phase 4) against `simctl listapps <udid>` — same plist shape;
+ * live-gated against a real device in Phase 4.
  * Output is NeXTSTEP plist; top-level keys are quoted bundle IDs at exactly
  * 4-space indentation, e.g. `    "com.foo.bar" = {`. We match that pattern
  * explicitly so we don't pick up nested keys like GroupContainers entries.
