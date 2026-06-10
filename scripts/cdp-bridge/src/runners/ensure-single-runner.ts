@@ -8,6 +8,20 @@ const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 
+// GH#202 Phase 4: the legacy upstream runner ships as TWO installed apps.
+// Killing their processes (Phase 1) is insufficient — iOS relaunches an
+// installed XCUITest runner to the foreground during WDA sessions. The only
+// correct end-state on iOS (where agent-device is retired, D1219) is
+// "not installed".
+export const LEGACY_BUNDLE_IDS = [
+  'com.callstack.agentdevice.runner',
+  'com.callstack.agentdevice.runner.uitests.xctrunner',
+] as const;
+
+export function selectInstalledLegacyApps(installed: Set<string>): string[] {
+  return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
+}
+
 /**
  * GH#202: parse `ps -A -o pid=,args=` output and return the PIDs of stale
  * legacy `AgentDeviceRunner*` processes bound to `udid`. Conservative by
