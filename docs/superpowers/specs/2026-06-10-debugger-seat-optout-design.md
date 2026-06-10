@@ -65,8 +65,11 @@ next tool call.*
 
 ### Visibility
 
-- `cdp_status` reports `connection.autoConnect: boolean` plus its source (`env` / `config` /
-  `default`).
+- `cdp_status` reports a top-level `autoConnect: { enabled: boolean, source: 'env' | 'config' | 'default' }`
+  (the status payload has no `connection` envelope — fields like `reconnect` are top-level).
+- Foreground recovery paths (`cdp_status` dev-false/isPaused `softReconnect`, `recoverWedge`,
+  `recover-detached`) are NOT gated: they run only inside a tool call, which knowingly reclaims
+  the seat. Passive mode stops background re-grabs only — documented in the troubleshooting entry.
 - `/doctor` gains a row showing the resolved mode.
 - Troubleshooting docs (CLAUDE-MD-TEMPLATE + docs-site) document the coexistence story: who owns
   the seat, how to yield it, how to take it back.
