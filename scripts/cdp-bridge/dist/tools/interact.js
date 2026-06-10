@@ -1,4 +1,4 @@
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 export function createInteractHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         if (!args.testID && !args.accessibilityLabel) {
@@ -52,8 +52,15 @@ export function createInteractHandler(getClient) {
         if (parsed.error) {
             return failResult(`Interact failed: ${parsed.error}`, parsed.hint ? { hint: parsed.hint } : undefined);
         }
+        // GH#250: a handler throw is an app-side failure, not a warning — the action
+        // dispatched but its effect likely didn't happen. actionExecuted in meta keeps
+        // the "dispatched but threw" / "couldn't dispatch" distinction.
         if (parsed.action_executed && parsed.handler_error) {
-            return warnResult(parsed, `Action executed but handler threw: ${parsed.handler_error}`);
+            return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
+                actionExecuted: true,
+                handlerError: parsed.handler_error,
+                hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
+            });
         }
         return okResult(parsed);
     });
