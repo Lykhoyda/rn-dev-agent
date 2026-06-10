@@ -179,6 +179,7 @@ test('drainNetworkHookBuffer: malformed single entries are skipped, valid ones a
   const client = makeDrainClient([
     null,
     { nope: true },
+    { t: 'request', d: { id: 42 } },
     { t: 'request', d: { id: 'ok1', method: 'GET', url: '/good' } },
   ], mgr);
   const drained = await drainNetworkHookBuffer(client);

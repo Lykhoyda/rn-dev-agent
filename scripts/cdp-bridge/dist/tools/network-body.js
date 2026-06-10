@@ -1,4 +1,5 @@
 import { okResult, failResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 export function createNetworkBodyHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         if (!args.requestId) {
@@ -37,6 +38,7 @@ export function createNetworkBodyHandler(getClient) {
         // JSON.stringify into the cache lookup. The validator below makes the injection
         // surface unreachable.
         if (client.networkMode === 'hook') {
+            await drainNetworkHookBuffer(client);
             if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.requestId)) {
                 return failResult(`Invalid requestId shape: expected alphanumeric / ./_/- (e.g. CDP id "12345.67" or test fixture "hook-req1"); got ${String(args.requestId).slice(0, 80)}`);
             }

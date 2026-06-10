@@ -24,7 +24,10 @@ interface DrainableClient {
  *
  * Destructive read: the swap is atomic (Hermes JS is single-threaded). With
  * two bridges connected to one app the first drain wins — accepted, the
- * device-ownership lock makes that rare. Response bodies are unaffected:
+ * device-ownership lock makes that rare. Two drains from one bridge are
+ * ordered by the single CDP socket (no interleaving hazard); a drain whose
+ * evaluate times out after the app-side swap loses that batch — inherent to
+ * destructive read, consistent with fail-open. Response bodies are unaffected:
  * cdp_network_body reads the separate __RN_AGENT_RESPONSE_BODIES__ cache.
  *
  * Fail-open by contract: a read tool must never error because the drain

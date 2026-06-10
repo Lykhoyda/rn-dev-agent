@@ -1,6 +1,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { NetworkEntry } from '../types.js';
 import { okResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export interface WaitForNetworkArgs {
   url_pattern: string;
@@ -60,9 +61,10 @@ export function isComplete(entry: NetworkEntry): boolean {
 }
 
 export function createWaitForNetworkHandler(getClient: () => CDPClient) {
-  // requireHelpers: false — this tool only reads the in-process network
-  // buffer (mutated by event-handlers.ts on Network.* CDP events). It never
-  // evaluates JS in Hermes, so the freshness probe is unnecessary work.
+  // requireHelpers: false — this tool reads the in-process network buffer
+  // (mutated by event-handlers.ts on Network.* CDP events). In hook mode it
+  // additionally drains the in-app __RN_AGENT_NET_BUF__ via evaluate
+  // (fail-open, throttled); the freshness probe is still unnecessary work.
   return withConnection(getClient, async (args: WaitForNetworkArgs, client) => {
     const timeoutMs = args.timeout_ms ?? DEFAULT_TIMEOUT_MS;
     const pollIntervalMs = args.poll_interval_ms ?? DEFAULT_POLL_INTERVAL_MS;
@@ -73,6 +75,7 @@ export function createWaitForNetworkHandler(getClient: () => CDPClient) {
     // Phase 1: retroactive scan — catches mutations already in the buffer
     // (the common case when no `since` is set, or when `since` predates
     // buffer entries that arrived during the MCP transport window).
+    await drainNetworkHookBuffer(client);
     const existing = client.networkBufferManager.filter(scope, predicate);
     const found = existing.find(isComplete);
     if (found) {
@@ -83,6 +86,8 @@ export function createWaitForNetworkHandler(getClient: () => CDPClient) {
     // Buffer entries are mutated in-place by Network.responseReceived
     // (event-handlers.ts:43), so polling the buffer is functionally
     // equivalent to subscribing to the event stream.
+    const DRAIN_MIN_INTERVAL_MS = 500;
+    let lastDrainAt = Date.now();
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       // Bail early if the connection died mid-wait — otherwise we'd poll a
@@ -99,6 +104,10 @@ export function createWaitForNetworkHandler(getClient: () => CDPClient) {
         });
       }
       await new Promise((r) => setTimeout(r, pollIntervalMs));
+      if (Date.now() - lastDrainAt >= DRAIN_MIN_INTERVAL_MS) {
+        lastDrainAt = Date.now();
+        await drainNetworkHookBuffer(client);
+      }
       const matches = client.networkBufferManager.filter(scope, predicate);
       const hit = matches.find(isComplete);
       if (hit) {
