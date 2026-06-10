@@ -25,7 +25,9 @@ it does not replace your own reconstruction of the session.
 1. **Append only.** Never delete, reorder, or rewrite existing entries (this honors the
    standing "never delete md files" instruction). You add new entries and, for a bug that
    got fixed this session, append its `Fix` block / move it to the Fixed section — you do
-   not edit history.
+   not edit history. **One sanctioned in-place edit:** flipping an entry's status marker
+   in its heading (`(Open …)` → `(Fixed — YYYY-MM-DD, PR #N)`, or adding `~~strikethrough~~`)
+   is house style, not a rewrite — the body text stays untouched.
 2. **Never fabricate.** If the session produced no new decisions, write nothing to
    DECISIONS.md. Same for bugs. An empty doc update is the correct output when nothing
    qualifies — say so in the summary. Only ROADMAP always gets an entry (the session
@@ -52,9 +54,18 @@ Run these and read the output before writing anything:
   `git -C . branch --show-current`.
 - Workspace: `git -C ../rn-dev-agent-workspace log --oneline -15` and
   `git -C ../rn-dev-agent-workspace status --short`.
-- Current max IDs:
-  - `grep -oE '### D[0-9]+' "$WS/DECISIONS.md" | grep -oE '[0-9]+' | sort -n | tail -1`
-  - `grep -oE '### B[0-9]+' "$WS/BUGS.md" | grep -oE '[0-9]+' | sort -n | tail -1`
+- GitHub state git can't show: `gh pr list --state merged --limit 10` and
+  `gh issue list --state all --limit 15` — PRs merged and issues filed/closed this
+  session live here, not in `git log` (issues never; squash-merges only as one line).
+- Current max IDs — patterns MUST tolerate `~~strikethrough~~` headers (fixed bugs get
+  struck through; a plain `### B[0-9]+` grep misses them and would assign a duplicate ID):
+  - `grep -oE '^#{2,4} ~?~?D[0-9]+' "$WS/DECISIONS.md" | grep -oE '[0-9]+' | sort -n | tail -1`
+  - `grep -oE '^#{2,4} ~?~?B[0-9]+' "$WS/BUGS.md" | grep -oE '[0-9]+' | sort -n | tail -1`
+- Mid-session writes: `git -C ../rn-dev-agent-workspace diff --stat docs/` — if this
+  session already wrote doc entries as it went (common in bug-hunt or multi-PR sessions),
+  your job in Steps 2–4 is to **reconcile, not re-create**: complete existing entries
+  (missing `Fix.` blocks, status flips, cross-refs to the Dxxxx you add now) and skip
+  anything already logged. Duplicated entries are worse than none.
 - Then reconstruct from THIS conversation: what was built/changed, which choices were
   architectural (→ ADR), which were defects (→ bug), which were noteworthy observations
   (→ findings in the roadmap entry).
@@ -86,8 +97,10 @@ New defect → append under the relevant section continuing the `Bxxxx` sequence
 
 **Refs.** <GH #, PR #, commit SHAs, files, related Dxxxx/Bxxxx>
 ```
-If a previously-Open bug was fixed this session, append a `Fix.` block to it (don't rewrite
-the original Observed text).
+If a previously-Open bug was fixed this session, append a `Fix.` block to it and flip its
+heading status marker (don't rewrite the original Observed text). This applies equally to
+entries this session wrote mid-stream — an entry created at discovery time and fixed later
+the same session still needs its `Fix.` block completed here.
 
 ### Step 4 — ROADMAP.md (always)
 Append a dated section at the end:
@@ -112,7 +125,11 @@ entry's Forward block that are still open.>
 
 ### Step 5 — Hygiene check (report, don't fix)
 - Uncommitted work: surface `git status --short` for **both** repos (the plugin repo and
-  the workspace, including the docs you just wrote).
+  the workspace, including the docs you just wrote). **Separate three buckets explicitly:**
+  (a) changes this session made, (b) leftovers from prior sessions (e.g. uncommitted docs
+  entries from an earlier `/end-session`), and (c) **unexplained** changes nobody in this
+  conversation made — flag (c) loudly; for a dirty tracked file you didn't touch, show a
+  few diff lines so the maintainer can judge it (a hook or stale edit may be riding along).
 - Changeset gate: if `scripts/cdp-bridge/src/` changed this session (`git diff --name-only`
   against the branch base), confirm a `.changeset/*.md` exists. If shippable src changed
   with no changeset, **flag it** — the `require-changeset` CI job will fail the PR.
