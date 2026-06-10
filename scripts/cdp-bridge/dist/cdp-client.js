@@ -112,7 +112,11 @@ export class CDPClient {
     get reconnectState() {
         return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
     }
-    /** Resolved once per process — env/config don't change mid-session. */
+    /**
+     * Resolved once per process — env/config don't change mid-session.
+     * `enabled: false` gates BACKGROUND reconnect only — explicit tool-call
+     * connects (client.autoConnect()) still run regardless of this flag.
+     */
     get autoConnectState() {
         if (!this._autoConnectResolution)
             this._autoConnectResolution = resolveAutoConnect();

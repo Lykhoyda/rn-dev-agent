@@ -301,6 +301,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 const errSuffix = recovery.error ? ` (relaunch error: ${recovery.error})` : '';
                 return failResult(`${message} ${detachedHint}${errSuffix}`, 'APP_DETACHED', {
                     reconnect: getClient().reconnectState,
+                    autoConnect: getClient().autoConnectState,
                     recovery,
                 });
             }
@@ -338,7 +339,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             // during a reconnect storm reads as "attempt N/30", not a dead end.
             return pickerBlocking
                 ? failResult(message, 'PICKER_BLOCKING')
-                : failResult(message, { reconnect: getClient().reconnectState });
+                : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState });
         }
     };
 }
