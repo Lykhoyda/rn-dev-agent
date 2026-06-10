@@ -57,3 +57,59 @@ test('applyNetworkHookEntry: duplicate request id is not pushed twice', () => {
   applyNetworkHookEntry('request', { id: 'r1', method: 'GET', url: '/a' }, mgr, 'dev1');
   assert.equal(mgr.getLast('dev1', 10).length, 1);
 });
+
+test('applyNetworkHookEntry: dedup keeps the FIRST entry (no upsert)', () => {
+  const mgr = makeManager();
+  applyNetworkHookEntry('request', { id: 'r1', method: 'GET', url: '/a' }, mgr, 'dev1');
+  applyNetworkHookEntry('request', { id: 'r1', method: 'GET', url: '/b' }, mgr, 'dev1');
+  assert.equal(mgr.getByKey('dev1', 'r1').url, '/a');
+});
+
+test('applyNetworkHookEntry: second response overwrites (no dedup on responses)', () => {
+  const mgr = makeManager();
+  applyNetworkHookEntry('request', { id: 'r1', method: 'GET', url: '/a' }, mgr, 'dev1');
+  applyNetworkHookEntry('response', { id: 'r1', status: 200, duration_ms: 5 }, mgr, 'dev1');
+  applyNetworkHookEntry('response', { id: 'r1', status: 503, duration_ms: 9 }, mgr, 'dev1');
+  assert.equal(mgr.getByKey('dev1', 'r1').status, 503);
+});
+
+import { NETWORK_CB_BUFFERED_SCRIPT } from '../../dist/injected-helpers.js';
+
+// The callback definition is a JS string evaluated inside the app's Hermes
+// context. Execute it here against an isolated fake globalThis to verify the
+// ring-buffer semantics without a device.
+
+function runCbScript() {
+  const fakeGlobal = {};
+  new Function('globalThis', NETWORK_CB_BUFFERED_SCRIPT)(fakeGlobal);
+  return fakeGlobal;
+}
+
+test('NETWORK_CB_BUFFERED_SCRIPT: defines callback that pushes to __RN_AGENT_NET_BUF__', () => {
+  const g = runCbScript();
+  assert.equal(typeof g.__RN_AGENT_NETWORK_CB__, 'function');
+  g.__RN_AGENT_NETWORK_CB__('request', { id: 'a', method: 'GET', url: '/x' });
+  assert.deepEqual(g.__RN_AGENT_NET_BUF__, [{ t: 'request', d: { id: 'a', method: 'GET', url: '/x' } }]);
+});
+
+test('NETWORK_CB_BUFFERED_SCRIPT: never calls console.log (the whole point)', () => {
+  assert.ok(!NETWORK_CB_BUFFERED_SCRIPT.includes('console.log'));
+  assert.ok(!NETWORK_CB_BUFFERED_SCRIPT.includes('__RN_NET__'));
+});
+
+test('NETWORK_CB_BUFFERED_SCRIPT: ring buffer caps at 100 (drop-oldest)', () => {
+  const g = runCbScript();
+  for (let i = 0; i < 150; i++) {
+    g.__RN_AGENT_NETWORK_CB__('request', { id: 'r' + i, method: 'GET', url: '/x' });
+  }
+  assert.equal(g.__RN_AGENT_NET_BUF__.length, 100);
+  assert.equal(g.__RN_AGENT_NET_BUF__[0].d.id, 'r50');
+  assert.equal(g.__RN_AGENT_NET_BUF__[99].d.id, 'r149');
+});
+
+test('NETWORK_CB_BUFFERED_SCRIPT: re-running preserves an existing buffer', () => {
+  const g = runCbScript();
+  g.__RN_AGENT_NETWORK_CB__('request', { id: 'keep', method: 'GET', url: '/x' });
+  new Function('globalThis', NETWORK_CB_BUFFERED_SCRIPT)(g);
+  assert.equal(g.__RN_AGENT_NET_BUF__.length, 1, 'reinjection must not wipe undrained entries');
+});

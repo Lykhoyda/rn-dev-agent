@@ -1,4 +1,4 @@
-import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
+import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_CB_BUFFERED_SCRIPT, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
 import { logger } from '../logger.js';
 import { setActiveFlag, sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
@@ -81,6 +81,10 @@ export async function performSetup(opts: {
   logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
   setActiveFlag(port, connectedTarget);
 
+  // Test seam: force the hook fallback on RN >= 0.83 so the buffered
+  // transport can be live-verified without an old-RN app.
+  if (process.env.RN_FORCE_NETWORK_HOOK === '1') networkMode = 'none';
+
   // D626 (B1 fix): Probe whether Network.enable actually delivers events.
   // GH #59 #9: a single 500ms probe is too tight after platform switches /
   // reload — the fresh JS context needs time to flush the probe fetch through
@@ -95,11 +99,7 @@ export async function performSetup(opts: {
     if (hookResult.error) {
       console.error('CDP: failed to inject network hooks:', hookResult.error);
     } else {
-      await evaluate(`
-        globalThis.__RN_AGENT_NETWORK_CB__ = function(type, data) {
-          console.log('__RN_NET__:' + type + ':' + JSON.stringify(data));
-        };
-      `);
+      await evaluate(NETWORK_CB_BUFFERED_SCRIPT);
       networkMode = 'hook';
     }
   }
