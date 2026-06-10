@@ -49,12 +49,19 @@ export async function performSetup(opts) {
         console.error('CDP: helper injection succeeded but __RN_AGENT not found');
         return { networkMode, helpersInjected: false, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
     }
+    // Test seam: force the hook fallback on RN >= 0.83 so the buffered
+    // transport can be live-verified without an old-RN app. Also disable the
+    // Network domain so CDP events don't double-feed the buffer during seam
+    // testing, making live verification vacuous.
+    if (process.env.RN_FORCE_NETWORK_HOOK === '1') {
+        networkMode = 'none';
+        try {
+            await send('Network.disable', undefined, CDP_TIMEOUT_FAST);
+        }
+        catch { /* best-effort */ }
+    }
     logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
     setActiveFlag(port, connectedTarget);
-    // Test seam: force the hook fallback on RN >= 0.83 so the buffered
-    // transport can be live-verified without an old-RN app.
-    if (process.env.RN_FORCE_NETWORK_HOOK === '1')
-        networkMode = 'none';
     // D626 (B1 fix): Probe whether Network.enable actually delivers events.
     // GH #59 #9: a single 500ms probe is too tight after platform switches /
     // reload — the fresh JS context needs time to flush the probe fetch through

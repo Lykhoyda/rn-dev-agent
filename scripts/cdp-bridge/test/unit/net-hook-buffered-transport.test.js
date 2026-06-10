@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyNetworkHookEntry } from '../../dist/cdp/event-handlers.js';
 import { DeviceBufferManager } from '../../dist/ring-buffer.js';
+import { NETWORK_CB_BUFFERED_SCRIPT } from '../../dist/injected-helpers.js';
+import { drainNetworkHookBuffer } from '../../dist/cdp/net-hook-drain.js';
 
 // Spec 2026-06-10-debugger-seat-optout Part 2: hook-mode network transport
 // moves from console.log lines to an in-app ring buffer. applyNetworkHookEntry
@@ -73,8 +75,6 @@ test('applyNetworkHookEntry: second response overwrites (no dedup on responses)'
   assert.equal(mgr.getByKey('dev1', 'r1').status, 503);
 });
 
-import { NETWORK_CB_BUFFERED_SCRIPT } from '../../dist/injected-helpers.js';
-
 // The callback definition is a JS string evaluated inside the app's Hermes
 // context. Execute it here against an isolated fake globalThis to verify the
 // ring-buffer semantics without a device.
@@ -112,4 +112,76 @@ test('NETWORK_CB_BUFFERED_SCRIPT: re-running preserves an existing buffer', () =
   g.__RN_AGENT_NETWORK_CB__('request', { id: 'keep', method: 'GET', url: '/x' });
   new Function('globalThis', NETWORK_CB_BUFFERED_SCRIPT)(g);
   assert.equal(g.__RN_AGENT_NET_BUF__.length, 1, 'reinjection must not wipe undrained entries');
+});
+
+test('NETWORK_CB_BUFFERED_SCRIPT: corrupted buffer is repaired and does not throw', () => {
+  const g = runCbScript();
+  g.__RN_AGENT_NET_BUF__ = 'corrupted';
+  assert.doesNotThrow(() => g.__RN_AGENT_NETWORK_CB__('request', { id: 'x', method: 'GET', url: '/y' }));
+  assert.ok(Array.isArray(g.__RN_AGENT_NET_BUF__));
+  assert.equal(g.__RN_AGENT_NET_BUF__.length, 1);
+  assert.equal(g.__RN_AGENT_NET_BUF__[0].d.id, 'x');
+});
+
+function makeDrainClient(bufEntries, mgr) {
+  return {
+    networkMode: 'hook',
+    activeDeviceKey: 'dev1',
+    networkBufferManager: mgr,
+    evaluate: async () => ({ value: JSON.stringify(bufEntries) }),
+  };
+}
+
+test('drainNetworkHookBuffer: merges drained entries into the manager', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([
+    { t: 'request', d: { id: 'q1', method: 'POST', url: '/api/otp' } },
+    { t: 'response', d: { id: 'q1', status: 200, duration_ms: 758 } },
+  ], mgr);
+  const drained = await drainNetworkHookBuffer(client);
+  assert.equal(drained, 2);
+  const entry = mgr.getByKey('dev1', 'q1');
+  assert.equal(entry.status, 200);
+  assert.equal(entry.url, '/api/otp');
+});
+
+test('drainNetworkHookBuffer: no-op outside hook mode', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([{ t: 'request', d: { id: 'x' } }], mgr);
+  client.networkMode = 'cdp';
+  assert.equal(await drainNetworkHookBuffer(client), 0);
+  assert.equal(mgr.getLast('dev1', 10).length, 0);
+});
+
+test('drainNetworkHookBuffer: evaluate failure is fail-open (0, no throw)', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([], mgr);
+  client.evaluate = async () => ({ error: 'app reloaded' });
+  assert.equal(await drainNetworkHookBuffer(client), 0);
+});
+
+test('drainNetworkHookBuffer: evaluate throw is fail-open (0, no throw)', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([], mgr);
+  client.evaluate = async () => { throw new Error('socket closed'); };
+  assert.equal(await drainNetworkHookBuffer(client), 0);
+});
+
+test('drainNetworkHookBuffer: malformed payload is fail-open', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([], mgr);
+  client.evaluate = async () => ({ value: '{ not json' });
+  assert.equal(await drainNetworkHookBuffer(client), 0);
+});
+
+test('drainNetworkHookBuffer: malformed single entries are skipped, valid ones applied', async () => {
+  const mgr = makeManager();
+  const client = makeDrainClient([
+    null,
+    { nope: true },
+    { t: 'request', d: { id: 'ok1', method: 'GET', url: '/good' } },
+  ], mgr);
+  const drained = await drainNetworkHookBuffer(client);
+  assert.equal(drained, 1);
+  assert.equal(mgr.getByKey('dev1', 'ok1').url, '/good');
 });

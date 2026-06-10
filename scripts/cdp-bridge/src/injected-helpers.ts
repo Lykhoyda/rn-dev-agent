@@ -2005,9 +2005,12 @@ export const NETWORK_CB_BUFFERED_SCRIPT = `
   globalThis.__RN_AGENT_NET_BUF__ = globalThis.__RN_AGENT_NET_BUF__ || [];
   var MAX = 100;
   globalThis.__RN_AGENT_NETWORK_CB__ = function(type, data) {
-    var buf = globalThis.__RN_AGENT_NET_BUF__;
-    buf.push({ t: type, d: data });
-    if (buf.length > MAX) buf.splice(0, buf.length - MAX);
+    try {
+      var buf = globalThis.__RN_AGENT_NET_BUF__;
+      if (!Array.isArray(buf)) { buf = []; globalThis.__RN_AGENT_NET_BUF__ = buf; }
+      buf.push({ t: type, d: data });
+      if (buf.length > MAX) buf.splice(0, buf.length - MAX);
+    } catch (e) {}
   };
 })();
 `;
