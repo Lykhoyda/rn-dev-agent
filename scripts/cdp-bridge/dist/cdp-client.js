@@ -13,6 +13,7 @@ import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cd
 import { discoverForList } from './cdp/discovery.js';
 import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn } from './cdp/helper-expr.js';
 import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
+import { resolveAutoConnect } from './project-config.js';
 import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
 export class CDPClient {
     ws = null;
@@ -54,6 +55,8 @@ export class CDPClient {
     // Tier 3: reconnection state visibility (D596)
     _lastReconnectAttempt = null;
     _reconnectAttemptCount = 0;
+    // Resolved once per process — env/config don't change mid-session.
+    _autoConnectResolution = null;
     // M1b (Phase 100+): multiplexer proxy state. When `_proxyUrl` is non-null, the
     // CDP WebSocket routes through `_multiplexer` instead of connecting directly to
     // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
@@ -108,6 +111,12 @@ export class CDPClient {
     get scripts() { return this._scripts; }
     get reconnectState() {
         return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
+    }
+    /** Resolved once per process — env/config don't change mid-session. */
+    get autoConnectState() {
+        if (!this._autoConnectResolution)
+            this._autoConnectResolution = resolveAutoConnect();
+        return this._autoConnectResolution;
     }
     /** M1b: URL the CDPClient routes through (null when connected directly). */
     get proxyUrl() { return this._proxyUrl; }
@@ -542,6 +551,7 @@ export class CDPClient {
             // suspend→reconnect→resume sequence. softReconnect has its own wrapper
             // and does NOT go through this hook — would double-fire the resume.
             afterReconnect: () => this._resumeProxy(),
+            isAutoConnectEnabled: () => this.autoConnectState.enabled,
         };
     }
     buildConnectCtx() {

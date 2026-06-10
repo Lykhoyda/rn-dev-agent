@@ -73,3 +73,15 @@ test('resolveAutoConnect: unrecognized env value falls through (not an off-switc
   const r = resolveAutoConnect({ env: 'banana', readConfig: () => null });
   assert.deepEqual(r, { enabled: true, source: 'default' });
 });
+
+test('resolveAutoConnect: absent env key reads process.env.RN_CDP_AUTOCONNECT', () => {
+  const prev = process.env.RN_CDP_AUTOCONNECT;
+  process.env.RN_CDP_AUTOCONNECT = '0';
+  try {
+    assert.deepEqual(resolveAutoConnect({ readConfig: () => null }),
+      { enabled: false, source: 'env' });
+  } finally {
+    if (prev === undefined) delete process.env.RN_CDP_AUTOCONNECT;
+    else process.env.RN_CDP_AUTOCONNECT = prev;
+  }
+});

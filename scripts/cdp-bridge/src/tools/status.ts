@@ -107,6 +107,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       heapProfiler: client.heapProfilerAvailable,
     },
     reconnect: client.reconnectState,
+    autoConnect: client.autoConnectState,
     deviceSession,
     proxy: {
       active: client.isProxyActive,

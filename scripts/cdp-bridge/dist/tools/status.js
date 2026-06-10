@@ -91,6 +91,7 @@ async function buildStatusResult(client) {
             heapProfiler: client.heapProfilerAvailable,
         },
         reconnect: client.reconnectState,
+        autoConnect: client.autoConnectState,
         deviceSession,
         proxy: {
             active: client.isProxyActive,

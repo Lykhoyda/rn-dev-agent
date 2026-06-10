@@ -137,6 +137,11 @@ export interface StatusResult {
     lastAttempt: string | null;
     attemptCount: number;
   };
+  /** Spec 2026-06-10-debugger-seat-optout: resolved autoConnect mode and its source. */
+  autoConnect?: {
+    enabled: boolean;
+    source: 'env' | 'config' | 'default';
+  };
   /**
    * #210: iOS device-session visibility. `sessionOpen` is whether a device session
    * has been opened; `rnFastRunner` is the XCUITest runner's liveness (only probed

@@ -77,6 +77,8 @@ export function readRnAgentConfig(projectRoot) {
     }
 }
 export function resolveAutoConnect(deps = {}) {
+    // Present-but-undefined `env` means "treat as unset, do NOT fall back to
+    // process.env" (test seam). Only an absent key reads process.env.RN_CDP_AUTOCONNECT.
     const envRaw = 'env' in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
     if (envRaw === '0' || envRaw === 'false')
         return { enabled: false, source: 'env' };
