@@ -15,6 +15,7 @@ export interface NetworkLogArgs {
 export function createNetworkLogHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: NetworkLogArgs, client) => {
     const scope = args.device ?? client.activeDeviceKey;
+    // Drain targets the active device; `scope` only filters the read — intentionally decoupled.
     await drainNetworkHookBuffer(client);
 
     if (args.clear) {

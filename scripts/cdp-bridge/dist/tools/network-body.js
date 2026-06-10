@@ -38,10 +38,10 @@ export function createNetworkBodyHandler(getClient) {
         // JSON.stringify into the cache lookup. The validator below makes the injection
         // surface unreachable.
         if (client.networkMode === 'hook') {
-            await drainNetworkHookBuffer(client);
             if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.requestId)) {
                 return failResult(`Invalid requestId shape: expected alphanumeric / ./_/- (e.g. CDP id "12345.67" or test fixture "hook-req1"); got ${String(args.requestId).slice(0, 80)}`);
             }
+            await drainNetworkHookBuffer(client);
             try {
                 const result = await client.evaluate(`(function() { var c = globalThis.__RN_AGENT_RESPONSE_BODIES__; if (!c) return JSON.stringify({error:'no_cache'}); var b = c.get(${JSON.stringify(args.requestId)}); if (b === undefined) return JSON.stringify({error:'not_found'}); return JSON.stringify({body: b}); })()`);
                 if (result.error) {

@@ -54,9 +54,13 @@ export function createWaitForNetworkHandler(getClient) {
         const since = args.since !== undefined ? normalizeSince(args.since) : undefined;
         const scope = args.device ?? client.activeDeviceKey;
         const predicate = buildMatchPredicate(args.url_pattern, args.method, since);
+        // Capture deadline before the phase-1 drain so a slow evaluate round-trip
+        // cannot silently eat into the caller's wait budget.
+        const deadline = Date.now() + timeoutMs;
         // Phase 1: retroactive scan — catches mutations already in the buffer
         // (the common case when no `since` is set, or when `since` predates
         // buffer entries that arrived during the MCP transport window).
+        // Drain targets the active device; `scope` only filters the read — intentionally decoupled.
         await drainNetworkHookBuffer(client);
         const existing = client.networkBufferManager.filter(scope, predicate);
         const found = existing.find(isComplete);
@@ -67,9 +71,10 @@ export function createWaitForNetworkHandler(getClient) {
         // Buffer entries are mutated in-place by Network.responseReceived
         // (event-handlers.ts:43), so polling the buffer is functionally
         // equivalent to subscribing to the event stream.
+        // DRAIN_MIN_INTERVAL_MS: evaluate round-trips are not free; 500ms caps
+        // drain overhead at ~2/s while phase-1 catches pre-existing entries.
         const DRAIN_MIN_INTERVAL_MS = 500;
         let lastDrainAt = Date.now();
-        const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
             // Bail early if the connection died mid-wait — otherwise we'd poll a
             // frozen buffer for the full timeout duration. Match the convention

@@ -4,6 +4,7 @@ import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk } from '../helpers/result-helpers.js';
 import { createNetworkLogHandler } from '../../dist/tools/network-log.js';
 import { createWaitForNetworkHandler } from '../../dist/tools/wait-for-network.js';
+import { createNetworkBodyHandler } from '../../dist/tools/network-body.js';
 
 // Spec 2026-06-10-debugger-seat-optout Part 2: the network-reading tools
 // drain the in-app hook buffer before serving reads, so hook-mode entries
@@ -79,4 +80,60 @@ test('cdp_wait_for_network: retroactive match against drained entries', async ()
   }));
   assert.equal(data.matched, true);
   assert.equal(data.mutation.id, 'q1');
+});
+
+test('cdp_network_body: hook branch drains buffer before body-cache lookup, returns body with entry metadata', async () => {
+  // Track evaluation order to assert drain-before-body-cache-lookup.
+  const callOrder = [];
+  // BUF contains a request+response pair for 'hook-req1'. The drain evaluate
+  // returns BUF on the first call then [] (empty) — same pattern as hookClient().
+  let bufDrained = false;
+  const client = createMockClient({
+    _isConnected: true,
+    _helpersInjected: true,
+    _networkMode: 'hook',
+    evaluate: async (expr) => {
+      if (expr.includes('__RN_AGENT_NET_BUF__')) {
+        callOrder.push('drain');
+        const payload = bufDrained ? [] : BUF;
+        bufDrained = true;
+        return { value: JSON.stringify(payload) };
+      }
+      if (expr.includes('__RN_AGENT_RESPONSE_BODIES__')) {
+        callOrder.push('body-cache');
+        // Mirror the shape the hook branch expects: JSON.stringify({body: '...'})
+        return { value: JSON.stringify({ body: '{"token":"abc"}' }) };
+      }
+      // D502 freshness probe (__RN_AGENT.__v) — return a version number
+      return { value: 13 };
+    },
+  });
+
+  // Phase 1: seed the network buffer via a network-log drain so getByKey
+  // (called at the top of createNetworkBodyHandler, before the hook block)
+  // can resolve the entry's url/status metadata.
+  const logHandler = createNetworkLogHandler(() => client);
+  expectOk(await logHandler({ limit: 20, clear: false }));
+
+  // Phase 2: reset tracking, then call the body handler.
+  callOrder.length = 0;
+  bufDrained = true; // buffer already drained; second drain returns []
+  const bodyHandler = createNetworkBodyHandler(() => client);
+  const data = expectOk(await bodyHandler({ requestId: 'q1' }));
+
+  // Body and metadata assertions.
+  assert.equal(data.source, 'hook');
+  assert.equal(data.requestId, 'q1');
+  assert.equal(data.body, '{"token":"abc"}');
+  // url and status come from the buffer entry populated by the phase-1 drain —
+  // proving that the entry metadata was resolved from the drained buffer.
+  assert.equal(data.url, '/api/v1/auth/otp');
+  assert.equal(data.status, 200);
+
+  // Drain ran before body-cache lookup within the body handler call.
+  const drainIdx = callOrder.indexOf('drain');
+  const bodyIdx = callOrder.indexOf('body-cache');
+  assert.ok(drainIdx !== -1, 'drain evaluate should have been called');
+  assert.ok(bodyIdx !== -1, 'body-cache evaluate should have been called');
+  assert.ok(drainIdx < bodyIdx, 'drain must run before body-cache lookup');
 });

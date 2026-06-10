@@ -4,6 +4,7 @@ import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 export function createNetworkLogHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const scope = args.device ?? client.activeDeviceKey;
+        // Drain targets the active device; `scope` only filters the read — intentionally decoupled.
         await drainNetworkHookBuffer(client);
         if (args.clear) {
             client.networkBufferManager.clear(scope === 'all' ? undefined : scope);
