@@ -49,6 +49,7 @@ import {
   LEGACY_BUNDLE_IDS,
   selectInstalledLegacyApps,
 } from '../../dist/runners/ensure-single-runner.js';
+import { parseSimctlListapps } from '../../dist/cdp/discovery.js';
 
 // Realistic `xcrun simctl listapps <udid>` excerpt (NeXTSTEP plist; top-level
 // bundle-id keys at exactly 4-space indent — same shape parseSimctlListapps
@@ -93,16 +94,16 @@ test('GH#202-P4 LEGACY_BUNDLE_IDS: exactly the two callstack runner bundles', ()
 });
 
 test('GH#202-P4 selectInstalledLegacyApps: finds installed legacy bundles, ignores nested keys and our own apps', () => {
-  assert.deepEqual(selectInstalledLegacyApps(LISTAPPS_WITH_LEGACY), [
+  assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps(LISTAPPS_WITH_LEGACY)), [
     'com.callstack.agentdevice.runner',
     'com.callstack.agentdevice.runner.uitests.xctrunner',
   ]);
 });
 
 test('GH#202-P4 selectInstalledLegacyApps: empty on a clean simulator and on garbage input', () => {
-  assert.deepEqual(selectInstalledLegacyApps(LISTAPPS_CLEAN), []);
-  assert.deepEqual(selectInstalledLegacyApps(''), []);
-  assert.deepEqual(selectInstalledLegacyApps('not a plist at all'), []);
+  assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps(LISTAPPS_CLEAN)), []);
+  assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps('')), []);
+  assert.deepEqual(selectInstalledLegacyApps(parseSimctlListapps('not a plist at all')), []);
 });
 ```
 
@@ -130,8 +131,7 @@ export const LEGACY_BUNDLE_IDS = [
   'com.callstack.agentdevice.runner.uitests.xctrunner',
 ] as const;
 
-export function selectInstalledLegacyApps(listappsOutput: string): string[] {
-  const installed = parseSimctlListapps(listappsOutput);
+export function selectInstalledLegacyApps(installed: Set<string>): string[] {
   return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
 }
 ```
@@ -225,6 +225,21 @@ test('GH#202-P4 eradicate: listapps failure -> warning, no throw, not clean', as
   assert.equal(r.clean, false);
   assert.ok(r.warnings.some((w) => /listapps failed/.test(w)));
 });
+
+// Plan-review amendment (Gemini, 2026-06-10): a booted simulator ALWAYS has
+// built-in system apps, so zero parsed bundle ids proves a parse/format
+// failure (e.g. a future Xcode reformats listapps output away from the
+// 4-space-indent plist parseSimctlListapps expects) — NOT a clean device.
+// Without this guard the memo would cache the broken state for the whole
+// session and silently disable eradication.
+test('GH#202-P4 eradicate: zero parsed apps from a successful listapps -> parse-failure warning, not clean', async () => {
+  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
+    listApps: () => 'totally reformatted output the parser cannot read',
+  }));
+  assert.deepEqual(r.removedApps, []);
+  assert.equal(r.clean, false);
+  assert.ok(r.warnings.some((w) => /0 apps/.test(w)));
+});
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -275,20 +290,27 @@ export interface EradicateLegacyAppsResult {
 
 // GH#202 Phase 4: error-safe by contract — every failure becomes a warning;
 // a device-open is never blocked on eradication. `clean` gates the caller's
-// memo: only a warning-free pass may be skipped next time.
+// memo: only a warning-free pass may be skipped next time. async only for
+// call-site uniformity with ensureSingleRunner (body is sync execFileSync).
 export async function eradicateLegacyRunnerApps(
   udid: string,
   deps: EnsureSingleRunnerDeps,
 ): Promise<EradicateLegacyAppsResult> {
   const removedApps: string[] = [];
   const warnings: string[] = [];
-  let listOut: string;
+  let installed: Set<string>;
   try {
-    listOut = deps.listApps(udid);
+    installed = parseSimctlListapps(deps.listApps(udid));
   } catch (err) {
     return { removedApps, warnings: [`listapps failed: ${msg(err)}`], clean: false };
   }
-  for (const id of selectInstalledLegacyApps(listOut)) {
+  // A booted simulator always carries built-in system apps; zero parsed ids
+  // means the listapps format changed (parse failure), not a clean device.
+  // Returning clean:false keeps the memo from caching a broken-parser state.
+  if (installed.size === 0) {
+    return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, will retry next open`], clean: false };
+  }
+  for (const id of selectInstalledLegacyApps(installed)) {
     try { deps.terminateApp(udid, id); } catch { /* not running — uninstall regardless */ }
     try {
       deps.uninstallApp(udid, id);
@@ -445,13 +467,44 @@ export interface EnsureSingleRunnerResult {
   return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
 ```
 
-- [ ] **Step 4: Run the full unit suite (not just the new file — the result-shape change touches existing tests)**
+- [ ] **Step 4 (MANDATORY — plan-review blocker, Claude+Gemini consensus 2026-06-10): update the pre-existing suite's `baseDeps`**
+
+The old `gh-202-ensure-single-runner.test.js` udid-bearing tests would reach `eradicateLegacyRunnerApps` with `deps.listApps === undefined`. That does NOT crash — the try/catch converts the `TypeError` into a `listapps failed:` warning — so the suite would stay green while silently exercising the failure path on every run. Do not wait for a failure signal that cannot arrive; update the helper unconditionally.
+
+In `scripts/cdp-bridge/test/unit/gh-202-ensure-single-runner.test.js`, extend the `baseDeps` helper:
+
+```javascript
+function baseDeps(over = {}) {
+  return {
+    listProcesses: () => PS,
+    kill: () => {},
+    isAlive: () => false,
+    readDaemonPid: () => null,
+    fileExists: () => false,
+    removeFile: () => {},
+    delay: async () => {},
+    listApps: () => LISTAPPS_NONE,
+    terminateApp: () => {},
+    uninstallApp: () => {},
+    ...over,
+  };
+}
+```
+
+with a minimal fixture at the top of that file (one non-legacy app so the zero-apps parse guard doesn't add a warning to these tests):
+
+```javascript
+const LISTAPPS_NONE = '{\n    "com.rndevagent.testapp" =     {\n        ApplicationType = User;\n    };\n}';
+```
+
+Also call `resetLegacyAppMemoForTests()` at the start of each udid-bearing test in that file (module-level memo persists across tests), importing it alongside the existing imports.
+
+- [ ] **Step 5: Run the full unit suite**
 
 Run: `cd scripts/cdp-bridge && npm test`
-Expected: PASS, including the pre-existing `gh-202-ensure-single-runner.test.js` (its `baseDeps` objects lack the three new deps members — they are only reached when legacy apps need eradication, and those tests use udid `UDID-A` with the old deps... **if any pre-existing test throws on a missing `listApps`, fix it by adding `listApps: () => ''` to that test's `baseDeps` helper — an empty string parses to zero bundles, preserving the old assertions**).
-Expected total: ~1908+ tests passing.
+Expected: PASS, including the updated `gh-202-ensure-single-runner.test.js`, with zero `listapps failed:` warnings asserted implicitly (the old tests' `warnings` assertions stay valid). Expected total: ~1908+ tests passing.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add scripts/cdp-bridge/src/runners/ensure-single-runner.ts scripts/cdp-bridge/test/unit/gh-202-phase4-eradicate-legacy-apps.test.js scripts/cdp-bridge/test/unit/gh-202-ensure-single-runner.test.js
@@ -642,4 +695,13 @@ Run `/multi-review` on the diff; wait for CI; address review threads; merge. Pos
 
 - **Spec §1 coverage:** detection/terminate/uninstall (Tasks 1–2), gate via existing env at call site (unchanged — verified `device-session.ts:268` gates `RN_DEVICE_KILL_LEGACY !== '0'` before calling), all call sites inherit (Task 3 wires inside `ensureSingleRunner`), memo (Task 3), failure handling + `removedApps` + timings (Tasks 2–3), docs (Task 5), unit + live gate (Tasks 1–3, 7). Boot-time call (`index.ts:130`, no udid) untouched by design.
 - **Type consistency:** `EnsureSingleRunnerDeps` gains `listApps/terminateApp/uninstallApp` (Task 2) before `fullDeps` uses them (Task 3); `EnsureSingleRunnerResult.removedApps` (Task 3) before `device-session.ts` reads it (Task 4). `msg()` helper already exists at module bottom.
-- **Known risk, decided:** pre-existing `gh-202-ensure-single-runner.test.js` deps objects lack the new members — TypeScript doesn't check JS test files, and the new code path only calls `deps.listApps` when a udid is present, which those tests use. Task 3 Step 4 explicitly instructs the fix (`listApps: () => ''`) if any throw at runtime.
+- **Known risk, resolved by plan review:** pre-existing `gh-202-ensure-single-runner.test.js` deps objects lack the new members; the try/catch would swallow the resulting `TypeError` into a warning, keeping the suite green while silently running the failure path. Task 3 Step 4 now updates `baseDeps` unconditionally (review consensus: Claude + Gemini).
+
+## Amendments applied from the multi-LLM plan review (2026-06-10)
+
+Reviewed by Gemini + the coordinator's independent Claude research (Codex quota-blocked; see follow-up Antigravity pass). Applied:
+
+1. **BLOCKER — mandatory `baseDeps` update** in the pre-existing suite (Task 3 Step 4): the missing-deps `TypeError` is swallowed by the fail-open try/catch, so the "fix if it throws" contingency could never trigger. Now unconditional, with a `LISTAPPS_NONE` fixture and per-test memo resets.
+2. **SHOULD-FIX — zero-apps parse guard** (Task 2): a successful `listapps` that parses to 0 bundle ids is treated as a parse/format failure (`clean: false`, warning), never memoized — a booted simulator always has system apps, so 0 proves the 4-space-indent plist assumption broke (e.g. future Xcode). New unit test added.
+3. **Refactor fallout:** `selectInstalledLegacyApps` now takes the parsed `Set<string>` (one parse per scan); orchestrator parses once, guards, then selects. `async` kept for call-site uniformity with a comment (review NICE-TO-HAVE).
+4. **Spec correction:** spec §1 claimed `cdp_repair_action` self-bootstrap as a second udid-bearing `ensureSingleRunner` caller — grep shows only `device-session.ts` (udid) and `index.ts` boot (no udid). Spec text amended.

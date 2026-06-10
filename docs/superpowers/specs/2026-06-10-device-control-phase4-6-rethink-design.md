@@ -66,9 +66,12 @@ eradicateLegacyRunnerApps(udid, deps):
 
 - **Gate:** same `RN_DEVICE_KILL_LEGACY` env (default ON, `=0` opts out) — one
   knob for the whole legacy-eradication behavior, as documented today.
-- **Call sites:** unchanged — every existing `ensureSingleRunner(udid)` caller
-  (device-open, `cdp_repair_action` self-bootstrap) inherits it. No new
-  startup-time work (boot-time call has no udid → files-only pass, as today).
+- **Call sites:** unchanged — the single udid-bearing `ensureSingleRunner`
+  caller (device-open, `device-session.ts`) inherits it. (Plan-review
+  correction 2026-06-10: `cdp_repair_action` self-bootstrap does NOT call
+  `ensureSingleRunner` — grep confirms only device-open + the no-udid boot
+  call.) No new startup-time work (boot-time call has no udid → files-only
+  pass, as today).
 - **Idempotence/cost:** once uninstalled, the `listapps` scan finds nothing —
   steady-state cost is one `simctl listapps` (~tens of ms) per device-open.
   Memoize per (session, udid) after a clean scan to make repeat opens free.
