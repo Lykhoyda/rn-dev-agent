@@ -27,3 +27,7 @@ scripts/rn-fast-runner/**/DerivedData/
 # pause sentinel, inflight locks) nests under a single directory so one
 # line covers everything including future additions.
 .codex-pair/
+
+# cdp-bridge eval harnesses (local-only dev scaffolding — live-gate scripts
+# driven against booted devices, e.g. eval/live-gate-gh253.mjs; not shipped)
+scripts/cdp-bridge/eval/
