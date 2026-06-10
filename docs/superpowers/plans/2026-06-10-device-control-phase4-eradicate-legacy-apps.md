@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** At iOS device-open, detect the legacy `com.callstack.agentdevice.runner` apps *installed on the simulator* and `simctl terminate` + `simctl uninstall` them — so iOS can never relaunch them into the foreground mid-flow (the #202 2026-06-08 comment repro).
+**Goal:** At iOS device-open, detect the legacy `com.callstack.agentdevice.runner` apps *installed on the simulator* and `simctl uninstall` them — so iOS can never relaunch them into the foreground mid-flow (the #202 2026-06-08 comment repro).
 
-**Architecture:** Extend `ensureSingleRunner()` (the existing single-runner enforcement module) with an app-eradication step: a pure selector over `simctl listapps` output (reusing the existing `parseSimctlListapps` plist parser), an error-safe orchestrator with injectable deps, and a per-(process, udid) memo so steady-state device-opens stay free. All existing call sites inherit the behavior through `ensureSingleRunner`; the `RN_DEVICE_KILL_LEGACY=0` opt-out at the call site keeps gating everything.
+**Architecture:** Extend `ensureSingleRunner()` (the existing single-runner enforcement module) with an app-eradication step: a pure selector over the parsed `simctl listapps` set (reusing the existing `parseSimctlListapps` plist parser) and an error-safe orchestrator with injectable deps. Runs at every device-open (one `listapps`, ~tens of ms — no memo; review-2 showed a memo can't be made safe against another session reinstalling on the same UDID). The udid-bearing call site inherits the behavior through `ensureSingleRunner`; the `RN_DEVICE_KILL_LEGACY=0` opt-out at the call site keeps gating everything.
 
 **Tech Stack:** TypeScript (Node >= 22), `node --test` unit tests against `dist/`, `xcrun simctl` via `execFileSync`, changesets.
 
@@ -18,7 +18,7 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `scripts/cdp-bridge/src/runners/ensure-single-runner.ts` | Modify | `LEGACY_BUNDLE_IDS`, `selectInstalledLegacyApps`, `eradicateLegacyRunnerApps`, wiring + memo, deps + result extension |
+| `scripts/cdp-bridge/src/runners/ensure-single-runner.ts` | Modify | `LEGACY_BUNDLE_IDS`, `selectInstalledLegacyApps`, `eradicateLegacyRunnerApps`, wiring, deps + result extension |
 | `scripts/cdp-bridge/test/unit/gh-202-phase4-eradicate-legacy-apps.test.js` | Create | unit tests for all of the above |
 | `scripts/cdp-bridge/src/tools/device-session.ts` (~line 277) | Modify | log `removedApps` at the device-open call site |
 | `CLAUDE.md` (lines 106, 139) · `docs-site/src/content/docs/architecture.mdx` (line 154) | Modify | document automatic uninstall |
@@ -166,16 +166,17 @@ import { eradicateLegacyRunnerApps } from '../../dist/runners/ensure-single-runn
 function appDeps(over = {}) {
   return {
     listApps: () => LISTAPPS_WITH_LEGACY,
-    terminateApp: () => {},
     uninstallApp: () => {},
     ...over,
   };
 }
 
-test('GH#202-P4 eradicate: terminates then uninstalls every installed legacy bundle', async () => {
+// No separate `terminate` step (review-2 finding #4): `simctl uninstall`
+// terminates a running app itself, and Phase 1's process-kill (scopedKill)
+// has already run by the time eradication is reached.
+test('GH#202-P4 eradicate: uninstalls every installed legacy bundle', async () => {
   const calls = [];
   const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    terminateApp: (udid, id) => calls.push(`term:${udid}:${id}`),
     uninstallApp: (udid, id) => calls.push(`unin:${udid}:${id}`),
   }));
   assert.deepEqual(r.removedApps, [
@@ -183,46 +184,33 @@ test('GH#202-P4 eradicate: terminates then uninstalls every installed legacy bun
     'com.callstack.agentdevice.runner.uitests.xctrunner',
   ]);
   assert.deepEqual(r.warnings, []);
-  assert.equal(r.clean, true);
   assert.deepEqual(calls, [
-    'term:UDID-A:com.callstack.agentdevice.runner',
     'unin:UDID-A:com.callstack.agentdevice.runner',
-    'term:UDID-A:com.callstack.agentdevice.runner.uitests.xctrunner',
     'unin:UDID-A:com.callstack.agentdevice.runner.uitests.xctrunner',
   ]);
 });
 
-test('GH#202-P4 eradicate: clean simulator is a clean no-op', async () => {
+test('GH#202-P4 eradicate: clean simulator is a warning-free no-op', async () => {
   const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({ listApps: () => LISTAPPS_CLEAN }));
   assert.deepEqual(r.removedApps, []);
-  assert.equal(r.clean, true);
+  assert.deepEqual(r.warnings, []);
 });
 
-test('GH#202-P4 eradicate: terminate failure is ignored (app may not be running), uninstall still runs', async () => {
-  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    terminateApp: () => { throw new Error('found nothing to terminate'); },
-  }));
-  assert.equal(r.removedApps.length, 2);
-  assert.equal(r.clean, true);
-});
-
-test('GH#202-P4 eradicate: uninstall failure -> warning with the manual command, other bundle still removed, not clean', async () => {
+test('GH#202-P4 eradicate: uninstall failure -> warning with the manual command, other bundle still removed', async () => {
   const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
     uninstallApp: (udid, id) => {
       if (id === 'com.callstack.agentdevice.runner') throw new Error('Device busy');
     },
   }));
   assert.deepEqual(r.removedApps, ['com.callstack.agentdevice.runner.uitests.xctrunner']);
-  assert.equal(r.clean, false);
   assert.ok(r.warnings.some((w) => w.includes('xcrun simctl uninstall UDID-A com.callstack.agentdevice.runner')));
 });
 
-test('GH#202-P4 eradicate: listapps failure -> warning, no throw, not clean', async () => {
+test('GH#202-P4 eradicate: listapps failure -> warning, no throw', async () => {
   const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
     listApps: () => { throw new Error('Invalid device state'); },
   }));
   assert.deepEqual(r.removedApps, []);
-  assert.equal(r.clean, false);
   assert.ok(r.warnings.some((w) => /listapps failed/.test(w)));
 });
 
@@ -230,14 +218,13 @@ test('GH#202-P4 eradicate: listapps failure -> warning, no throw, not clean', as
 // built-in system apps, so zero parsed bundle ids proves a parse/format
 // failure (e.g. a future Xcode reformats listapps output away from the
 // 4-space-indent plist parseSimctlListapps expects) — NOT a clean device.
-// Without this guard the memo would cache the broken state for the whole
-// session and silently disable eradication.
-test('GH#202-P4 eradicate: zero parsed apps from a successful listapps -> parse-failure warning, not clean', async () => {
+// Surfacing it as a warning keeps the breakage visible instead of reading
+// as "no legacy apps installed".
+test('GH#202-P4 eradicate: zero parsed apps from a successful listapps -> parse-failure warning', async () => {
   const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
     listApps: () => 'totally reformatted output the parser cannot read',
   }));
   assert.deepEqual(r.removedApps, []);
-  assert.equal(r.clean, false);
   assert.ok(r.warnings.some((w) => /0 apps/.test(w)));
 });
 ```
@@ -261,7 +248,6 @@ export interface EnsureSingleRunnerDeps {
   removeFile: (path: string) => void;
   delay: (ms: number) => Promise<void>;
   listApps: (udid: string) => string;
-  terminateApp: (udid: string, bundleId: string) => void;
   uninstallApp: (udid: string, bundleId: string) => void;
 }
 ```
@@ -271,12 +257,22 @@ Extend `defaultDeps()` with (inside the returned object):
 ```typescript
     listApps: (udid) =>
       execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000 }),
-    terminateApp: (udid, bundleId) => {
-      execFileSync('xcrun', ['simctl', 'terminate', udid, bundleId], { encoding: 'utf8', timeout: 5_000 });
-    },
     uninstallApp: (udid, bundleId) => {
       execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000 });
     },
+```
+
+Also update the doc comment on `parseSimctlListapps` in `scripts/cdp-bridge/src/cdp/discovery.ts` (line ~78) to note it is now also relied on for the `simctl listapps <udid>` form (same plist shape as `booted`; the Task 7 live gate proves it against a real device):
+
+```typescript
+/**
+ * B116 (D639): extract top-level bundle IDs from `xcrun simctl listapps booted`.
+ * Also used (GH#202 Phase 4) against `simctl listapps <udid>` — same plist
+ * shape; live-gated against a real device in Phase 4.
+ * Output is NeXTSTEP plist; top-level keys are quoted bundle IDs at exactly
+ * 4-space indentation, e.g. `    "com.foo.bar" = {`. We match that pattern
+ * explicitly so we don't pick up nested keys like GroupContainers entries.
+ */
 ```
 
 Add the orchestrator (below `selectInstalledLegacyApps`; `eradicateLegacyRunnerApps` takes full deps so callers reuse one deps object):
@@ -285,13 +281,15 @@ Add the orchestrator (below `selectInstalledLegacyApps`; `eradicateLegacyRunnerA
 export interface EradicateLegacyAppsResult {
   removedApps: string[];
   warnings: string[];
-  clean: boolean;
 }
 
 // GH#202 Phase 4: error-safe by contract — every failure becomes a warning;
-// a device-open is never blocked on eradication. `clean` gates the caller's
-// memo: only a warning-free pass may be skipped next time. async only for
-// call-site uniformity with ensureSingleRunner (body is sync execFileSync).
+// a device-open is never blocked on eradication. Runs on EVERY device-open
+// (no memo): the scan is one simctl listapps (~tens of ms), and a memo would
+// go stale whenever another bridge/agent-device session reinstalls the legacy
+// app on the same UDID — the device lock's degraded fail-open path cannot
+// rule that out. async only for call-site uniformity with ensureSingleRunner
+// (body is sync execFileSync).
 export async function eradicateLegacyRunnerApps(
   udid: string,
   deps: EnsureSingleRunnerDeps,
@@ -302,16 +300,16 @@ export async function eradicateLegacyRunnerApps(
   try {
     installed = parseSimctlListapps(deps.listApps(udid));
   } catch (err) {
-    return { removedApps, warnings: [`listapps failed: ${msg(err)}`], clean: false };
+    return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
   }
   // A booted simulator always carries built-in system apps; zero parsed ids
   // means the listapps format changed (parse failure), not a clean device.
-  // Returning clean:false keeps the memo from caching a broken-parser state.
   if (installed.size === 0) {
-    return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, will retry next open`], clean: false };
+    return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
   }
+  // No terminate step: `simctl uninstall` terminates a running app itself,
+  // and the Phase 1 scopedKill has already SIGTERM/SIGKILLed legacy procs.
   for (const id of selectInstalledLegacyApps(installed)) {
-    try { deps.terminateApp(udid, id); } catch { /* not running — uninstall regardless */ }
     try {
       deps.uninstallApp(udid, id);
       removedApps.push(id);
@@ -321,7 +319,7 @@ export async function eradicateLegacyRunnerApps(
       );
     }
   }
-  return { removedApps, warnings, clean: warnings.length === 0 };
+  return { removedApps, warnings };
 }
 ```
 
@@ -339,7 +337,7 @@ git commit -m "feat(#202-p4): eradicateLegacyRunnerApps — terminate + uninstal
 
 ---
 
-### Task 3: Wire into `ensureSingleRunner` — result field, memo, timings
+### Task 3: Wire into `ensureSingleRunner` — result field, timings (scan every open)
 
 **Files:**
 - Modify: `scripts/cdp-bridge/src/runners/ensure-single-runner.ts`
@@ -347,13 +345,10 @@ git commit -m "feat(#202-p4): eradicateLegacyRunnerApps — terminate + uninstal
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to the test file (note the memo reset in each test — module state persists across tests in one process):
+Append to the test file:
 
 ```javascript
-import {
-  ensureSingleRunner,
-  resetLegacyAppMemoForTests,
-} from '../../dist/runners/ensure-single-runner.js';
+import { ensureSingleRunner } from '../../dist/runners/ensure-single-runner.js';
 
 function fullDeps(over = {}) {
   return {
@@ -365,14 +360,12 @@ function fullDeps(over = {}) {
     removeFile: () => {},
     delay: async () => {},
     listApps: () => LISTAPPS_WITH_LEGACY,
-    terminateApp: () => {},
     uninstallApp: () => {},
     ...over,
   };
 }
 
 test('GH#202-P4 ensureSingleRunner(udid): result carries removedApps + appEradication timing', async () => {
-  resetLegacyAppMemoForTests();
   const r = await ensureSingleRunner({ udid: 'UDID-A' }, fullDeps());
   assert.deepEqual(r.removedApps, [
     'com.callstack.agentdevice.runner',
@@ -381,32 +374,19 @@ test('GH#202-P4 ensureSingleRunner(udid): result carries removedApps + appEradic
   assert.ok('appEradication' in r.meta.timings_ms);
 });
 
-test('GH#202-P4 ensureSingleRunner: clean pass memoizes — second open on the same UDID skips listapps', async () => {
-  resetLegacyAppMemoForTests();
+// Review-2 decision (2026-06-10): NO memo. Another bridge / agent-device
+// session can reinstall the legacy app on the same UDID mid-session (the
+// device lock's degraded fail-open path can't rule it out), so every open
+// re-scans — the scan is one listapps, ~tens of ms.
+test('GH#202-P4 ensureSingleRunner: every udid open re-scans (no memo)', async () => {
   let listCalls = 0;
   const deps = fullDeps({ listApps: () => { listCalls += 1; return LISTAPPS_CLEAN; } });
   await ensureSingleRunner({ udid: 'UDID-A' }, deps);
-  await ensureSingleRunner({ udid: 'UDID-A' }, deps);
-  assert.equal(listCalls, 1);
-  await ensureSingleRunner({ udid: 'UDID-B' }, deps);
-  assert.equal(listCalls, 2);
-});
-
-test('GH#202-P4 ensureSingleRunner: a warning pass does NOT memoize — next open retries', async () => {
-  resetLegacyAppMemoForTests();
-  let listCalls = 0;
-  const deps = fullDeps({
-    listApps: () => { listCalls += 1; return LISTAPPS_WITH_LEGACY; },
-    uninstallApp: () => { throw new Error('Device busy'); },
-  });
-  const r1 = await ensureSingleRunner({ udid: 'UDID-A' }, deps);
-  assert.ok(r1.warnings.length > 0);
   await ensureSingleRunner({ udid: 'UDID-A' }, deps);
   assert.equal(listCalls, 2);
 });
 
 test('GH#202-P4 ensureSingleRunner (startup, no udid): never touches simctl', async () => {
-  resetLegacyAppMemoForTests();
   let touched = false;
   const r = await ensureSingleRunner({}, fullDeps({ listApps: () => { touched = true; return ''; } }));
   assert.equal(touched, false);
@@ -417,26 +397,13 @@ test('GH#202-P4 ensureSingleRunner (startup, no udid): never touches simctl', as
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test test/unit/gh-202-phase4-eradicate-legacy-apps.test.js`
-Expected: FAIL — missing export `resetLegacyAppMemoForTests` (and `removedApps` undefined on the result)
+Expected: FAIL — `removedApps` undefined on the result (deepEqual against an array fails)
 
 - [ ] **Step 3: Implement the wiring**
 
 In `ensure-single-runner.ts`:
 
-1. Module-level memo (above `ensureSingleRunner`):
-
-```typescript
-// GH#202 Phase 4: per-(process, udid) memo — after one warning-free scan the
-// steady-state device-open pays nothing. A mid-session reinstall of the legacy
-// agent-device is not re-detected until the next bridge process; accepted.
-const cleanedUdids = new Set<string>();
-
-export function resetLegacyAppMemoForTests(): void {
-  cleanedUdids.clear();
-}
-```
-
-2. Extend the result interface:
+1. Extend the result interface:
 
 ```typescript
 export interface EnsureSingleRunnerResult {
@@ -448,20 +415,21 @@ export interface EnsureSingleRunnerResult {
 }
 ```
 
-3. Inside `ensureSingleRunner`, declare `const removedApps: string[] = [];` next to the other accumulators; inside the existing `if (opts.udid) { ... }` block, after `timings.scopedKill = Date.now() - t;`, add:
+2. Inside `ensureSingleRunner`, declare `const removedApps: string[] = [];` next to the other accumulators; inside the existing `if (opts.udid) { ... }` block, after `timings.scopedKill = Date.now() - t;`, add:
 
 ```typescript
-    if (!cleanedUdids.has(opts.udid)) {
-      const tApps = Date.now();
-      const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
-      removedApps.push(...apps.removedApps);
-      warnings.push(...apps.warnings);
-      if (apps.clean) cleanedUdids.add(opts.udid);
-      timings.appEradication = Date.now() - tApps;
-    }
+    // Runs on every device-open (no memo — see eradicateLegacyRunnerApps).
+    // Stays on the awaited path on purpose: an installed legacy runner must
+    // be GONE before the first maestro/WDA flow of the session, or iOS can
+    // relaunch it into the foreground mid-flow (#202 comment 2026-06-08).
+    const tApps = Date.now();
+    const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
+    removedApps.push(...apps.removedApps);
+    warnings.push(...apps.warnings);
+    timings.appEradication = Date.now() - tApps;
 ```
 
-4. Return `removedApps` in the result object:
+3. Return `removedApps` in the result object:
 
 ```typescript
   return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
@@ -484,7 +452,6 @@ function baseDeps(over = {}) {
     removeFile: () => {},
     delay: async () => {},
     listApps: () => LISTAPPS_NONE,
-    terminateApp: () => {},
     uninstallApp: () => {},
     ...over,
   };
@@ -497,8 +464,6 @@ with a minimal fixture at the top of that file (one non-legacy app so the zero-a
 const LISTAPPS_NONE = '{\n    "com.rndevagent.testapp" =     {\n        ApplicationType = User;\n    };\n}';
 ```
 
-Also call `resetLegacyAppMemoForTests()` at the start of each udid-bearing test in that file (module-level memo persists across tests), importing it alongside the existing imports.
-
 - [ ] **Step 5: Run the full unit suite**
 
 Run: `cd scripts/cdp-bridge && npm test`
@@ -508,7 +473,7 @@ Expected: PASS, including the updated `gh-202-ensure-single-runner.test.js`, wit
 
 ```bash
 git add scripts/cdp-bridge/src/runners/ensure-single-runner.ts scripts/cdp-bridge/test/unit/gh-202-phase4-eradicate-legacy-apps.test.js scripts/cdp-bridge/test/unit/gh-202-ensure-single-runner.test.js
-git commit -m "feat(#202-p4): wire app eradication into ensureSingleRunner with clean-scan memo"
+git commit -m "feat(#202-p4): wire app eradication into ensureSingleRunner (scan every open)"
 ```
 
 ---
@@ -557,7 +522,7 @@ git commit -m "feat(#202-p4): log uninstalled legacy runner apps at device-open"
 - [ ] **Step 2: Update CLAUDE.md line 139** — append to the existing sentence (after "...fights our `RnFastRunner` for focus."):
 
 ```markdown
-Phase 4 (#202) extends this to the installed apps themselves: at device-open, `ensureSingleRunner` also `simctl terminate` + `simctl uninstall`s the legacy `com.callstack.agentdevice.runner{,.uitests.xctrunner}` bundles (memoized per UDID after a clean scan; same `RN_DEVICE_KILL_LEGACY=0` opt-out), because killing processes can't stop iOS relaunching an installed XCUITest runner mid-flow.
+Phase 4 (#202) extends this to the installed apps themselves: at device-open, `ensureSingleRunner` also `simctl uninstall`s the legacy `com.callstack.agentdevice.runner{,.uitests.xctrunner}` bundles (scanned at every open — one `simctl listapps`, ~tens of ms; same `RN_DEVICE_KILL_LEGACY=0` opt-out), because killing processes can't stop iOS relaunching an installed XCUITest runner mid-flow.
 ```
 
 - [ ] **Step 3: Update `docs-site/src/content/docs/architecture.mdx` line 154** — replace the sentence ending "opt out with `RN_DEVICE_KILL_LEGACY=0`." with:
@@ -595,7 +560,7 @@ git commit -m "docs(#202-p4): legacy runner apps are now uninstalled automatical
 
 #202 Phase 4 — eradicate legacy runner apps, not just processes.
 
-At iOS device-open, `ensureSingleRunner` now detects the legacy upstream runner apps installed on the target simulator (`com.callstack.agentdevice.runner` + `.uitests.xctrunner`) and `simctl terminate` + `simctl uninstall`s them. Killing the host processes (Phase 1) was insufficient: iOS relaunches an installed XCUITest runner into the foreground mid-`maestro_run`, backgrounding the app under test and wedging CDP. Memoized per UDID after a clean scan; error-safe (warnings, never a blocked session); opt out with `RN_DEVICE_KILL_LEGACY=0`. Results surface as `removedApps` + `meta.timings_ms.appEradication`.
+At iOS device-open, `ensureSingleRunner` now detects the legacy upstream runner apps installed on the target simulator (`com.callstack.agentdevice.runner` + `.uitests.xctrunner`) and `simctl uninstall`s them. Killing the host processes (Phase 1) was insufficient: iOS relaunches an installed XCUITest runner into the foreground mid-`maestro_run`, backgrounding the app under test and wedging CDP. Scanned at every device-open (one `simctl listapps`, ~tens of ms — no memo, so a reinstall by another session is always caught); error-safe (warnings, never a blocked session); opt out with `RN_DEVICE_KILL_LEGACY=0`. Results surface as `removedApps` + `meta.timings_ms.appEradication`.
 ```
 
 - [ ] **Step 2: Full suite + stage rebuilt dist**
@@ -630,7 +595,8 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureSingleRunner, resetLegacyAppMemoForTests, LEGACY_BUNDLE_IDS } from '../dist/runners/ensure-single-runner.js';
+import { ensureSingleRunner, LEGACY_BUNDLE_IDS } from '../dist/runners/ensure-single-runner.js';
+import { parseSimctlListapps } from '../dist/cdp/discovery.js';
 
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' });
 const udid = sh('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'])
@@ -646,11 +612,21 @@ cpSync(SRC_APP, stub, { recursive: true });
 sh('/usr/libexec/PlistBuddy', ['-c', `Set :CFBundleIdentifier ${LEGACY_ID}`, join(stub, 'Info.plist')]);
 sh('xcrun', ['simctl', 'install', udid, stub]);
 
-const installed = () => sh('xcrun', ['simctl', 'listapps', udid]).includes(`"${LEGACY_ID}"`);
-if (!installed()) { console.error('GATE FAIL: stub install did not take'); process.exit(1); }
+// Detect via the SAME parser production ships (review-2 BLOCKER): a raw
+// .includes() also matches nested GroupContainers keys and would keep this
+// gate green even if parseSimctlListapps stopped reading real listapps
+// output — the exact regression this gate exists to catch.
+const parsedApps = () => parseSimctlListapps(sh('xcrun', ['simctl', 'listapps', udid]));
+const installed = () => parsedApps().has(LEGACY_ID);
+
+// Prove the parser reads the real `listapps <udid>` form (it was field-
+// verified only against `listapps booted` in B116): a booted sim always has
+// system apps, so an empty parse means the format assumption broke.
+if (parsedApps().size === 0) { console.error('GATE FAIL: parseSimctlListapps reads 0 apps from real listapps output'); process.exit(1); }
+
+if (!installed()) { console.error('GATE FAIL: stub install did not take (or parser cannot see it)'); process.exit(1); }
 console.log(`planted ${LEGACY_ID} on ${udid}`);
 
-resetLegacyAppMemoForTests();
 const r = await ensureSingleRunner({ udid });
 console.log(JSON.stringify({ removedApps: r.removedApps, warnings: r.warnings, timings: r.meta.timings_ms }, null, 2));
 
@@ -693,15 +669,24 @@ Run `/multi-review` on the diff; wait for CI; address review threads; merge. Pos
 
 ## Self-review notes (done at authoring time)
 
-- **Spec §1 coverage:** detection/terminate/uninstall (Tasks 1–2), gate via existing env at call site (unchanged — verified `device-session.ts:268` gates `RN_DEVICE_KILL_LEGACY !== '0'` before calling), all call sites inherit (Task 3 wires inside `ensureSingleRunner`), memo (Task 3), failure handling + `removedApps` + timings (Tasks 2–3), docs (Task 5), unit + live gate (Tasks 1–3, 7). Boot-time call (`index.ts:130`, no udid) untouched by design.
-- **Type consistency:** `EnsureSingleRunnerDeps` gains `listApps/terminateApp/uninstallApp` (Task 2) before `fullDeps` uses them (Task 3); `EnsureSingleRunnerResult.removedApps` (Task 3) before `device-session.ts` reads it (Task 4). `msg()` helper already exists at module bottom.
+- **Spec §1 coverage:** detection/uninstall (Tasks 1–2), gate via existing env at call site (unchanged — verified `device-session.ts:268` gates `RN_DEVICE_KILL_LEGACY !== '0'` before calling), the udid-bearing call site inherits (Task 3 wires inside `ensureSingleRunner`), failure handling + `removedApps` + timings (Tasks 2–3), docs (Task 5), unit + live gate (Tasks 1–3, 7). Boot-time call (`index.ts:130`, no udid) untouched by design.
+- **Type consistency:** `EnsureSingleRunnerDeps` gains `listApps/uninstallApp` (Task 2) before `fullDeps` uses them (Task 3); `EnsureSingleRunnerResult.removedApps` (Task 3) before `device-session.ts` reads it (Task 4). `msg()` helper already exists at module bottom.
 - **Known risk, resolved by plan review:** pre-existing `gh-202-ensure-single-runner.test.js` deps objects lack the new members; the try/catch would swallow the resulting `TypeError` into a warning, keeping the suite green while silently running the failure path. Task 3 Step 4 now updates `baseDeps` unconditionally (review consensus: Claude + Gemini).
 
 ## Amendments applied from the multi-LLM plan review (2026-06-10)
 
-Reviewed by Gemini + the coordinator's independent Claude research (Codex quota-blocked; see follow-up Antigravity pass). Applied:
+**Round 1 — Gemini + coordinator's independent Claude research** (Codex quota-blocked):
 
-1. **BLOCKER — mandatory `baseDeps` update** in the pre-existing suite (Task 3 Step 4): the missing-deps `TypeError` is swallowed by the fail-open try/catch, so the "fix if it throws" contingency could never trigger. Now unconditional, with a `LISTAPPS_NONE` fixture and per-test memo resets.
-2. **SHOULD-FIX — zero-apps parse guard** (Task 2): a successful `listapps` that parses to 0 bundle ids is treated as a parse/format failure (`clean: false`, warning), never memoized — a booted simulator always has system apps, so 0 proves the 4-space-indent plist assumption broke (e.g. future Xcode). New unit test added.
-3. **Refactor fallout:** `selectInstalledLegacyApps` now takes the parsed `Set<string>` (one parse per scan); orchestrator parses once, guards, then selects. `async` kept for call-site uniformity with a comment (review NICE-TO-HAVE).
+1. **BLOCKER — mandatory `baseDeps` update** in the pre-existing suite (Task 3 Step 4): the missing-deps `TypeError` is swallowed by the fail-open try/catch, so the "fix if it throws" contingency could never trigger. Now unconditional, with a `LISTAPPS_NONE` fixture.
+2. **SHOULD-FIX — zero-apps parse guard** (Task 2): a successful `listapps` that parses to 0 bundle ids is a parse/format failure (warning), not a clean device — a booted simulator always has system apps, so 0 proves the 4-space-indent plist assumption broke (e.g. future Xcode). New unit test added.
+3. **Refactor fallout:** `selectInstalledLegacyApps` takes the parsed `Set<string>` (one parse per scan). `async` kept for call-site uniformity with a comment.
 4. **Spec correction:** spec §1 claimed `cdp_repair_action` self-bootstrap as a second udid-bearing `ensureSingleRunner` caller — grep shows only `device-session.ts` (udid) and `index.ts` boot (no udid). Spec text amended.
+
+**Round 2 — second-reviewer pass** (Antigravity MCP not registered in this session, so the reviewer agent performed a source-verified pass itself; register via `claude mcp add antigravity` for next time):
+
+5. **BLOCKER — live gate detects via `parseSimctlListapps`, not `.includes()`** (Task 7): a raw substring also matches nested `GroupContainers` keys, so the gate could stay green while the production parser regressed — the exact drift the gate exists to catch. The gate now also asserts the parser reads real `listapps <udid>` output non-empty (it was field-verified only against `booted` in B116).
+6. **SHOULD-FIX — memo dropped entirely** (Task 3): the memo's safety rested on "one bridge per UDID", but the Phase 1.5 device lock fails open in its degraded path (`device-lock.ts:108`), so another bridge/agent-device session can reinstall the legacy app on a memoized-clean UDID. Scan every open instead (one `listapps`, ~tens of ms); `clean` field and `resetLegacyAppMemoForTests` removed as fallout. Spec §1 cost bullet amended.
+7. **SHOULD-FIX — `terminateApp` dropped** (Task 2): `simctl uninstall` terminates a running app itself, and Phase 1's scopedKill already ran; the unconditional catch around terminate masked real signals for zero benefit.
+8. **Justified the awaited path** (Task 3 wiring comment): eradication must complete before the session's first maestro/WDA flow or iOS can relaunch the legacy runner mid-flow — same urgency argument as the Phase 1 kill.
+9. **Changeset phrasing** fixed (no memo claim; scan-every-open).
+10. `parseSimctlListapps` doc comment in `discovery.ts` updated to record the `<udid>` form reliance (Task 2).

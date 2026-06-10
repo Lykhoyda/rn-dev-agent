@@ -59,8 +59,8 @@ LEGACY_BUNDLE_IDS = [
 eradicateLegacyRunnerApps(udid, deps):
   installed = parse(simctl listapps <udid>)        // bundle-id scan, error-safe
   for id in LEGACY_BUNDLE_IDS ∩ installed:
-    simctl terminate <udid> <id>                   // ignore "not running"
-    simctl uninstall <udid> <id>
+    simctl uninstall <udid> <id>                   // uninstall terminates a running app;
+                                                   // Phase-1 process kill already ran
   → { removedApps: string[], warnings: string[], timings }
 ```
 
@@ -74,7 +74,9 @@ eradicateLegacyRunnerApps(udid, deps):
   pass, as today).
 - **Idempotence/cost:** once uninstalled, the `listapps` scan finds nothing —
   steady-state cost is one `simctl listapps` (~tens of ms) per device-open.
-  Memoize per (session, udid) after a clean scan to make repeat opens free.
+  (Plan-review amendment 2026-06-10: NO memo — the Phase 1.5 device lock fails
+  open in its degraded path, so another session can reinstall the legacy app
+  on the same UDID; the scan is cheap enough to run every open.)
 - **Failure handling:** every step error-safe; a failed uninstall appends a
   warning (with the manual command) and never blocks the session. Result
   surfaces `removedApps` + `meta.timings_ms.appEradication`.
