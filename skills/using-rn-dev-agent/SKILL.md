@@ -71,7 +71,7 @@ What is the user asking for?
 │
 ├── Design architecture before implementing
 │   └─► Spawn rn-code-architect via Task tool (read-only, safe to spawn)
-│       (Opus-powered blueprint with testID placement + proof flow)
+│       (Fable-powered blueprint with testID placement + proof flow)
 │
 ├── Review code before merging
 │   └─► Spawn rn-code-reviewer via Task tool (read-only, safe to spawn)
@@ -145,7 +145,7 @@ read them as reference, execute the steps INLINE in the parent session.
 
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|-----------|
-| `rn-tester` | sonnet | Verify feature works live on device | Run `/test-feature` — protocol executes inline in parent session |
+| `rn-tester` | opus | Verify feature works live on device | Run `/test-feature` — protocol executes inline in parent session |
 | `rn-debugger` | opus | Diagnose broken screen, apply fix | Run `/debug-screen` — protocol executes inline in parent session |
 
 ### Spawnable agents (read-only — safe to use via Task tool)
@@ -155,9 +155,9 @@ in parallel via the Task tool for concurrent codebase analysis.
 
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|-----------|
-| `rn-code-explorer` | sonnet | Map feature implementation across layers | `Task(subagent_type='rn-dev-agent:rn-code-explorer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 2 |
-| `rn-code-architect` | opus | Design blueprint with proof flow | `Task(subagent_type='rn-dev-agent:rn-code-architect', ...)` — typically × 1-2 during `/rn-feature-dev` Phase 4 |
-| `rn-code-reviewer` | sonnet | Review for bugs + RN convention violations | `Task(subagent_type='rn-dev-agent:rn-code-reviewer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 6 |
+| `rn-code-explorer` | opus | Map feature implementation across layers | `Task(subagent_type='rn-dev-agent:rn-code-explorer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 2 |
+| `rn-code-architect` | fable | Design blueprint with proof flow | `Task(subagent_type='rn-dev-agent:rn-code-architect', ...)` — typically × 1-2 during `/rn-feature-dev` Phase 4 |
+| `rn-code-reviewer` | opus | Review for bugs + RN convention violations | `Task(subagent_type='rn-dev-agent:rn-code-reviewer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 6 |
 
 ---
 
