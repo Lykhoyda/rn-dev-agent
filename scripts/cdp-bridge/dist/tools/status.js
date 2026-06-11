@@ -9,6 +9,7 @@ import { recoverDetached } from '../cdp/recover-detached.js';
 import { AppDetachedError } from '../cdp/discovery.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
+import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -92,6 +93,7 @@ async function buildStatusResult(client) {
         },
         reconnect: client.reconnectState,
         autoConnect: client.autoConnectState,
+        bridge: bridgeEnvState(process.env),
         deviceSession,
         proxy: {
             active: client.isProxyActive,
