@@ -60,8 +60,14 @@ const child = spawn(process.execPath, [new URL('../dist/index.js', import.meta.u
 let id = 0;
 const send = (method, params = {}) =>
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) + '\n');
+// Buffer partial lines across 'data' events — a JSON-RPC response split
+// across stdout chunks must not be dropped as parse garbage (codex-pair MED).
+let diagBuf = '';
 child.stdout.on('data', (c) => {
-  for (const line of c.toString().split('\n').filter(Boolean)) {
+  diagBuf += c.toString('utf8');
+  const parts = diagBuf.split('\n');
+  diagBuf = parts.pop() ?? '';
+  for (const line of parts.filter(Boolean)) {
     try {
       const m = JSON.parse(line);
       const text = m.result?.content?.[0]?.text ?? '';
@@ -1099,6 +1105,11 @@ git commit -m "chore(#264): rebuilt dist (supervisor entry)"
 // Live gate for #264: supervisor + REAL dist/index.js worker. Kill the worker
 // with SIGKILL (same signal class as kill-by-port) and prove the SAME MCP
 // session keeps working: next cdp_status succeeds and reports workerRestarts=1.
+//
+// --no-lock is INTENTIONAL (codex-pair MED): this gate runs alongside the
+// developer's live Claude session whose bridge holds the project lock; the
+// gate validates respawn/replay, NOT singleton behavior. Lock ownership in
+// the supervisor is validated separately by the lock-conflict step below.
 import { spawn } from 'node:child_process';
 const sup = spawn(process.execPath, [new URL('../dist/supervisor.js', import.meta.url).pathname, '--no-lock'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -1151,6 +1162,17 @@ sup.kill('SIGTERM');
 
 Run: `node eval/gate-264-supervisor.mjs` → `GATE PASS`.
 
+- [ ] **Step 2b: Lock-ownership check (the path gate 1 intentionally bypasses).** The supervisor now owns the single-instance project lock; prove the conflict path works end-to-end in an isolated project dir so the live session's bridge is not involved:
+
+```bash
+cd "$(mktemp -d)" && node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js & SUP1=$!
+sleep 2
+node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js; echo "second supervisor exit: $?"
+kill $SUP1
+```
+
+Expected: the second supervisor prints the lock-conflict message and exits `11` (same contract as the pre-split bridge, `index.ts` lock path). Record the output in the PR body. If the Lockfile keys on project cwd, both must run from the SAME temp dir (adjust accordingly — check `lifecycle/lockfile.ts` key derivation when running this).
+
 - [ ] **Step 3: Live gate 2 — the actual #264 repro (kill-by-port with Metro).** Manual, reusing the Task 0 setup (Metro running, app on simulator): run `node eval/diag-264-matrix.mjs` but pointed at the SUPERVISOR (`RN_BRIDGE_WORKER_PATH` unset, change the spawned path to `../dist/supervisor.js` or copy the file to `eval/diag-264-supervisor.mjs`), confirm `cdp_status` shows a connected state, then `lsof -ti tcp:8081 | xargs kill -9`. Expected: the worker dies (it held the :8081 sockets), the supervisor survives (it holds none), the next periodic `cdp_status` succeeds with `metro` down/disconnected, and after `npx expo start` the bridge reconnects — all WITHOUT the probe process (the "session") seeing a dead server. Record the console transcript for the PR body.
 
 - [ ] **Step 4: Record both gate outputs in the PR body.** Nothing to commit (eval/ is gitignored).
@@ -1191,3 +1213,5 @@ Reviewed by Gemini + the coordinator's independent Claude research, both source-
 7. **NICE — `apply()`'s `spawn` branch now calls `onSpawned()`** (replay sequencing decoupled from the `exit` listener); **NICE — comment** at the pending-set noting it assumes no server-initiated requests (verified: this bridge sends none today — a future sampling/roots capability must revisit).
 
 Verified non-issues (recorded so they aren't re-litigated): the SDK does NOT gate `tools/call` on `notifications/initialized` (replay order is belt-and-suspenders); client request ids are per-session monotonic (no reuse against the pending-set); the `RN_BRIDGE_SUPERVISOR=0` escape hatch composes with `index.ts`'s own lock acquisition; worker writes nothing to stdout before the handshake (logger → stderr/file only).
+
+**Round 2 — codex-pair per-edit review (2026-06-11):** (8) Task 0 diagnosis probe now buffers partial stdout lines across data events (a split JSON-RPC response was dropped as parse garbage — unreliable Task 0 evidence). (9) Live gate 1's `--no-lock` labeled intentional (it runs beside the live session's locked bridge and validates respawn/replay only) + new Step 2b lock-conflict gate proving the supervisor's singleton path end-to-end (second instance → exit 11) in an isolated dir.
