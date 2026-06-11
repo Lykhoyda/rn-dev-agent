@@ -55,7 +55,7 @@
     "cdp": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/index.js"
+        "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/supervisor.js"
       ]
     }
   }
