@@ -4,7 +4,7 @@
 
 **Goal:** A detected foreign Maestro session becomes an arbiter input — local L2/L3 tools refuse fast with `BUSY_FOREIGN_FLOW` instead of triggering the ~44 s leak-recovery cascade (#186) — and the plugin's `maestro_run` is declared the canonical Maestro surface after live-gating the two historical escape hatches (#201 `--app-file`, #188 `runFlow`) closed.
 
-**Architecture:** A new `ForeignFlowGate` (TTL-cached async wrapper over the existing `detectIosExternalRunner`, fail-open, sync `lastActive` for handlers) plugs into `arbiterWrap` — the single choke point every arbitrated tool already passes through. Only `interaction` + `flow` planes consult it (L1 introspection stays free by contract); `device_screenshot` keeps its OS-level simctl fallback mid-foreign-flow by OR-ing `foreignFlowGate.lastActive` into its existing `flowActive` routing. The udid comes from the active device session via a setter-injected provider (avoids a device-session ↔ arbiter import cycle). `RN_IOS_FOREIGN_WARN=0` disables both the Phase 3 warning and the new refusal.
+**Architecture:** A new `ForeignFlowGate` (TTL-cached async wrapper over the existing `detectIosExternalRunner`, fail-open, sync `lastActive` for handlers) plugs into `arbiterWrap` — the single choke point every arbitrated tool already passes through. Only `interaction` + `flow` planes consult it (L1 introspection stays free by contract); `device_screenshot` keeps its OS-level simctl fallback mid-foreign-flow by OR-ing `foreignFlowGate.lastActive` into its existing `flowActive` routing. The udid comes from the active device session via a setter-injected provider (avoids a device-session ↔ arbiter import cycle). `RN_IOS_FOREIGN_GUARD=0` (with `RN_IOS_FOREIGN_WARN` as a deprecated alias) disables both the Phase 3 warning and the new refusal.
 
 **Tech Stack:** TypeScript (Node >= 22, ESM), `node --test` against `dist/`, live gates on the booted simulator, changesets.
 
@@ -27,8 +27,9 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `scripts/cdp-bridge/src/lifecycle/foreign-flow-gate.ts` | Create | `ForeignFlowGate` (TTL cache, fail-open, `lastActive`), singleton, udid-provider setter, enable-knob logic |
-| `scripts/cdp-bridge/src/lifecycle/device-arbiter.ts` | Modify | foreign check in `arbiterWrap` for interaction/flow planes; `BUSY_FOREIGN_FLOW` refusal |
+| `scripts/cdp-bridge/src/lifecycle/foreign-flow-gate.ts` | Create | `ForeignFlowGate` (TTL cache, udid-gated in-flight dedup, fail-open, `lastActive`), singleton, udid-provider setter, enable-knob logic (`RN_IOS_FOREIGN_GUARD` + deprecated `RN_IOS_FOREIGN_WARN` alias) |
+| `scripts/cdp-bridge/src/lifecycle/device-arbiter.ts` | Modify | foreign check in `arbiterWrap` for interaction/flow planes; `BUSY_FOREIGN_FLOW` refusal; `lastFlowReleasedAt` teardown grace |
+| `scripts/cdp-bridge/src/runners/external-runner-detect.ts` | Modify | `ps axww` (review fix: command-column truncation could drop the mid-path udid → false negatives) |
 | `scripts/cdp-bridge/src/tools/device-list.ts` (~line 247) | Modify | screenshot routing ORs `foreignFlowGate.lastActive` |
 | `scripts/cdp-bridge/src/index.ts` | Modify | register the udid provider (one line after imports wiring) |
 | `scripts/cdp-bridge/test/unit/gh-186-foreign-flow-gate.test.js` | Create | gate unit tests |
@@ -121,6 +122,31 @@ test('GH#186 gate: concurrent checks share one in-flight scan (no thundering her
   await Promise.all([p1, p2]);
   assert.equal(scans, 1);
 });
+
+// Plan-review SHOULD-FIX: the in-flight dedup must be udid-gated — a UDID-B
+// caller must not receive UDID-A's in-flight answer.
+test('GH#186 gate: a different udid does NOT share the in-flight scan', async () => {
+  const releases = [];
+  let scans = 0;
+  const gate = new ForeignFlowGate({
+    detect: () => { scans += 1; return new Promise((r) => releases.push(() => r(null))); },
+    ttlMs: 5000,
+    now: () => 0,
+  });
+  const p1 = gate.check('UDID-A');
+  const p2 = gate.check('UDID-B');
+  releases.forEach((r) => r());
+  await Promise.all([p1, p2]);
+  assert.equal(scans, 2);
+});
+
+test('GH#186 gate: enable knob — RN_IOS_FOREIGN_GUARD wins, RN_IOS_FOREIGN_WARN is a deprecated alias', async () => {
+  const { foreignGateEnabled } = await import('../../dist/lifecycle/foreign-flow-gate.js');
+  assert.equal(foreignGateEnabled({}), true, 'default on');
+  assert.equal(foreignGateEnabled({ RN_IOS_FOREIGN_WARN: '0' }), false, 'legacy alias still disables');
+  assert.equal(foreignGateEnabled({ RN_IOS_FOREIGN_GUARD: '0' }), false);
+  assert.equal(foreignGateEnabled({ RN_IOS_FOREIGN_GUARD: '1', RN_IOS_FOREIGN_WARN: '0' }), true, 'explicit GUARD overrides the alias');
+});
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -164,6 +190,7 @@ export class ForeignFlowGate {
   private cachedUdid: string | null = null;
   private cached: IosExternalRunnerWarning | null = null;
   private inFlight: Promise<ForeignCheckResult> | null = null;
+  private inFlightUdid: string | null = null;
   private _lastActive = false;
 
   constructor(deps: ForeignFlowGateDeps = {}) {
@@ -181,7 +208,8 @@ export class ForeignFlowGate {
     if (this.cachedUdid === udid && t - this.cachedAt < this.ttlMs) {
       return { active: this.cached !== null, warning: this.cached, fromCache: true, scanMs: 0 };
     }
-    if (this.inFlight) return this.inFlight;
+    if (this.inFlight && this.inFlightUdid === udid) return this.inFlight;
+    this.inFlightUdid = udid;
     this.inFlight = (async (): Promise<ForeignCheckResult> => {
       const started = this.now();
       let warning: IosExternalRunnerWarning | null = null;
@@ -200,6 +228,7 @@ export class ForeignFlowGate {
       return await this.inFlight;
     } finally {
       this.inFlight = null;
+      this.inFlightUdid = null;
     }
   }
 }
@@ -220,18 +249,25 @@ export function foreignGateUdid(): string | null {
   return udidProvider();
 }
 
+/** Plan-review SHOULD-FIX: the knob now gates an active refusal, not just a
+ * log line — give it an honest name. `RN_IOS_FOREIGN_GUARD` is authoritative;
+ * the Phase 3 `RN_IOS_FOREIGN_WARN` stays as a deprecated alias so existing
+ * opt-outs keep working (and are documented as ALSO disabling the refusal). */
 export function foreignGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.RN_IOS_FOREIGN_GUARD !== undefined) return env.RN_IOS_FOREIGN_GUARD !== '0';
   return env.RN_IOS_FOREIGN_WARN !== '0';
 }
 ```
 
-- [ ] **Step 4: Run to verify pass** — same command, expect PASS (6 tests).
+- [ ] **Step 4: Run to verify pass** — same command, expect PASS (8 tests).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: `ps -ww` fix (plan-review SHOULD-FIX)** — in `src/runners/external-runner-detect.ts` (~line 78), change the iOS scan from `['ax', '-o', 'pid=,command=']` to `['axww', '-o', 'pid=,command=']`. macOS `ps` bounds the command column; a long path with the udid mid-string can truncate past the udid → `includes(udid)` false-negative in PRODUCTION (and a flaky Task 5 gate). Update the function's doc comment to note `-ww`. Run the existing detector tests (`node --test test/unit/gh-202-foreign-runner-notice.test.js` and any `external-runner` test file) — they inject `execFileImpl`, so they must still pass unchanged.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/cdp-bridge/src/lifecycle/foreign-flow-gate.ts scripts/cdp-bridge/test/unit/gh-186-foreign-flow-gate.test.js
-git commit -m "feat(#186): ForeignFlowGate — TTL-cached fail-open foreign-maestro detection"
+git add scripts/cdp-bridge/src/lifecycle/foreign-flow-gate.ts scripts/cdp-bridge/src/runners/external-runner-detect.ts scripts/cdp-bridge/test/unit/gh-186-foreign-flow-gate.test.js
+git commit -m "feat(#186): ForeignFlowGate — TTL-cached fail-open foreign-maestro detection (+ps -ww)"
 ```
 
 ---
@@ -275,7 +311,7 @@ test('GH#186 arbiter: interaction tool refuses BUSY_FOREIGN_FLOW when a foreign 
   assert.equal(body.code, 'BUSY_FOREIGN_FLOW');
   assert.match(body.error, /foreign/i);
   assert.match(body.error, /cdp_component_tree|introspection|L1/i, 'message points at the safe L1 alternatives');
-  assert.match(body.error, /RN_IOS_FOREIGN_WARN/, 'message names the opt-out');
+  assert.match(body.error, /RN_IOS_FOREIGN_GUARD/, 'message names the opt-out');
   assert.equal(inst.snapshot.activeOps, 0, 'no lease was taken');
 });
 
@@ -325,6 +361,44 @@ test('GH#186 arbiter: our OWN flow lease skips the foreign check (a detected dri
   assert.equal(scans, 0);
 });
 
+// Plan-review BLOCKER: after OUR flow lease releases, the spawned maestro
+// driver (which carries the udid) keeps tearing down WDA for several seconds
+// and matches the detector — the first tap after our own maestro_run would
+// read a stale BUSY_FOREIGN_FLOW. Busting the cache does NOT help (a fresh
+// scan still sees the dying PID); a teardown GRACE window on the arbiter does.
+test('GH#186 arbiter: teardown grace — no foreign scan within FOREIGN_GRACE_MS of our own flow release', async () => {
+  let t = 0;
+  let scans = 0;
+  const gate = new ForeignFlowGate({ detect: async () => { scans += 1; return WARNING; }, ttlMs: 5000, now: () => t });
+  const inst = new DeviceSessionArbiter(() => t);
+  const lease = inst.tryAcquire('flow', 'maestro_run');
+  t += 1000;
+  inst.release(lease.lease);                            // our flow just ended
+  t += 4000;                                            // < grace (10s)
+  const wrapped = arbiterWrap('device_press', okHandler, inst, foreignOpts({ gate }));
+  const body = JSON.parse((await wrapped({})).content[0].text);
+  assert.equal(body.ok, true, 'tap goes through — the dying driver is OURS');
+  assert.equal(scans, 0, 'no scan during the grace window');
+  t += 7000;                                            // past grace → scans resume
+  const body2 = JSON.parse((await wrapped({})).content[0].text);
+  assert.equal(body2.code, 'BUSY_FOREIGN_FLOW');
+  assert.ok(scans >= 1);
+});
+
+test('GH#186 arbiter: releasing a NON-flow lease does not start a grace window', async () => {
+  let t = 0;
+  let scans = 0;
+  const gate = new ForeignFlowGate({ detect: async () => { scans += 1; return WARNING; }, ttlMs: 5000, now: () => t });
+  const inst = new DeviceSessionArbiter(() => t);
+  const lease = inst.tryAcquire('interaction', 'device_fill');
+  t += 100;
+  inst.release(lease.lease);
+  t += 100;
+  const wrapped = arbiterWrap('device_press', okHandler, inst, foreignOpts({ gate }));
+  const body = JSON.parse((await wrapped({})).content[0].text);
+  assert.equal(body.code, 'BUSY_FOREIGN_FLOW', 'interaction releases do not suppress the guard');
+});
+
 test('GH#186 arbiter: no foreign flow → normal lease + handler runs', async () => {
   const gate = new ForeignFlowGate({ detect: async () => null, ttlMs: 5000, now: () => 0 });
   const inst = new DeviceSessionArbiter();
@@ -355,6 +429,31 @@ test('GH#186 index.ts registers the foreign-gate udid provider from the active s
 
 - [ ] **Step 3: Implement** in `src/lifecycle/device-arbiter.ts`:
 
+(0) Teardown grace on the arbiter (plan-review BLOCKER). Add to `DeviceSessionArbiter`:
+
+```typescript
+  /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
+   * carries the udid) keeps tearing down WDA for seconds after release and
+   * matches the foreign detector — taps inside this window must not scan. */
+  private lastFlowReleasedAt = -Infinity;
+
+  get msSinceFlowReleased(): number {
+    return this.now() - this.lastFlowReleasedAt;
+  }
+```
+
+and in `release(lease)`, before clearing the flow lease:
+
+```typescript
+  release(lease: Lease): void {
+    this.ops.delete(lease.opId);
+    if (this.flowLeaseHeldBy === lease.opId) {
+      this.flowLeaseHeldBy = null;
+      this.lastFlowReleasedAt = this.now();
+    }
+  }
+```
+
 (a) Add imports:
 
 ```typescript
@@ -366,6 +465,10 @@ import type { IosExternalRunnerWarning } from '../runners/external-runner-detect
 (b) Add the refusal builder + options interface (below `FLOW_FALLBACK_TOOLS`):
 
 ```typescript
+/** GH#186: WDA teardown after our own flow takes seconds; within this window
+ * the detector cannot distinguish our dying driver from a foreign one. */
+const FOREIGN_GRACE_MS = 10_000;
+
 export interface ForeignGateOpts {
   gate?: ForeignFlowGate;
   getUdid?: () => string | null;
@@ -378,7 +481,7 @@ function foreignRefusal(name: string, warning: IosExternalRunnerWarning, scanMs:
     `(${warning.processLines[0] ?? 'detected via ps'}). L1 introspection stays safe — use ` +
     `cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot ` +
     `for pixels (simctl fallback). Retry taps/flows after the foreign run completes. ` +
-    `Opt out of this guard with RN_IOS_FOREIGN_WARN=0.`,
+    `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`,
     'BUSY_FOREIGN_FLOW',
     { foreignRunner: warning, conflict: true, meta: { timings_ms: { foreignScan: scanMs } } },
   );
@@ -403,10 +506,17 @@ export function arbiterWrap(
     // GH#186 Phase 6: a foreign Maestro session is an external flow-plane
     // holder. Checked for interaction/flow planes only (L1 reads never
     // conflict — the three-layer contract), only with an iOS session (an
-    // unscoped scan false-positives on idle maestro-mcp), and only when no
+    // unscoped scan false-positives on idle maestro-mcp), only when no
     // LOCAL flow lease exists (a detected driver is then our own L3 run —
-    // the plain BUSY_FLOW_ACTIVE refusal below already covers contenders).
-    if (plane !== 'introspection' && !inst.flowActive && enabled()) {
+    // the plain BUSY_FLOW_ACTIVE refusal below already covers contenders),
+    // and not within the teardown grace of our own just-released flow (the
+    // dying driver still matches the detector; a fresh scan can't tell).
+    if (
+      plane !== 'introspection' &&
+      !inst.flowActive &&
+      inst.msSinceFlowReleased >= FOREIGN_GRACE_MS &&
+      enabled()
+    ) {
       const udid = getUdid();
       if (udid !== null) {
         const check = await gate.check(udid);
@@ -495,6 +605,9 @@ import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 ```
 
 ```typescript
+  // GH#186: a foreign flow routes pixels to simctl exactly like a local one.
+  // lastActive is never falsely-false here: device_screenshot is an
+  // interaction tool, so arbiterWrap ran gate.check() before this handler.
   const route = chooseScreenshotPath({ flowActive: arbiter.flowActive || foreignFlowGate.lastActive, platform: args.platform ?? null });
 ```
 
@@ -686,13 +799,13 @@ console.log('GATE PASS: foreign-flow arbitration end-to-end');
 - [ ] **Step 1: CLAUDE.md** — in the "Three-layer device-control contract" section, replace the **Coexistence rule** paragraph with:
 
 ```markdown
-**Coexistence rule:** L1 reads never conflict with a foreign runner; L2 re-attaches rather than evicts; L3 owns the device. Since #202 Phase 6 (#186), a detected foreign Maestro session is an **arbiter input**, not just a warning: while it is live (UDID-scoped, 5 s-TTL `ps` scan, fail-open), local L2 `device_*` and L3 flow tools refuse fast with `BUSY_FOREIGN_FLOW` — instead of the ~44 s runner-leak cascade — while L1 reads stay free and `device_screenshot` serves pixels via its simctl fallback. The plugin's `maestro_run` is the **canonical** Maestro surface (it participates in the arbiter, parks the L2 runner, marks CDP stale, auto-repairs actions); the standalone maestro-mcp coexists for ad-hoc use and is refused against rather than collided with mid-flow. `RN_IOS_FOREIGN_WARN=0` disables BOTH the device-open warning and the refusal (one knob; name kept for back-compat).
+**Coexistence rule:** L1 reads never conflict with a foreign runner; L2 re-attaches rather than evicts; L3 owns the device. Since #202 Phase 6 (#186), a detected foreign Maestro session is an **arbiter input**, not just a warning: while it is live (UDID-scoped, 5 s-TTL `ps` scan, fail-open), local L2 `device_*` and L3 flow tools refuse fast with `BUSY_FOREIGN_FLOW` — instead of the ~44 s runner-leak cascade — while L1 reads stay free and `device_screenshot` serves pixels via its simctl fallback. The plugin's `maestro_run` is the **canonical** Maestro surface (it participates in the arbiter, parks the L2 runner, marks CDP stale, auto-repairs actions); the standalone maestro-mcp coexists for ad-hoc use and is refused against rather than collided with mid-flow. `RN_IOS_FOREIGN_GUARD=0` disables BOTH the device-open warning and the refusal; the Phase 3 name `RN_IOS_FOREIGN_WARN=0` remains a deprecated alias with the same (full) effect — if you set it to quiet the warning, know it now also drops the refusal.
 ```
 
 - [ ] **Step 2: CLAUDE.md troubleshooting** — add after the Phase 5 row:
 
 ```markdown
-- **`BUSY_FOREIGN_FLOW` on device_*/maestro_run** → A foreign Maestro/XCUITest session (e.g. standalone maestro-mcp) is driving the same simulator. By design (#186): wait for it to finish (the guard clears within ~5 s of the foreign run ending), use L1 reads (`cdp_component_tree`, `cdp_store_state`) and `device_screenshot` meanwhile, or disable the guard with `RN_IOS_FOREIGN_WARN=0`.
+- **`BUSY_FOREIGN_FLOW` on device_*/maestro_run** → A foreign Maestro/XCUITest session (e.g. standalone maestro-mcp) is driving the same simulator. By design (#186): wait for it to finish (the guard clears within ~5 s of the foreign run ending), use L1 reads (`cdp_component_tree`, `cdp_store_state`) and `device_screenshot` meanwhile, or disable the guard with `RN_IOS_FOREIGN_GUARD=0` (`RN_IOS_FOREIGN_WARN=0` is a deprecated alias with the same effect). Note: the first tap within ~10 s after your OWN `maestro_run` is exempt by design (WDA teardown grace).
 ```
 
 - [ ] **Step 3: docs-site** — `guides/maestro-interop.mdx`: update the "what happens on collision" guidance to describe the fast refusal (was: reactive reacquire only) and declare `maestro_run` canonical; `architecture.mdx`: extend the three-layer contract paragraph with the same coexistence-rule sentence. Match each page's existing voice; keep it to one short paragraph per page.
@@ -707,7 +820,7 @@ console.log('GATE PASS: foreign-flow arbitration end-to-end');
 
 #202 Phase 6 / #186 — foreign Maestro sessions become arbiter refusals; plugin maestro_run is the canonical surface.
 
-While a foreign Maestro/XCUITest session drives the target simulator (UDID-scoped detection, 5 s TTL, fail-open), local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` — pointing at the safe L1 reads — instead of colliding into the ~44 s runner-leak cascade. L1 introspection stays free; `device_screenshot` serves pixels via its simctl fallback. The two historical reasons to leave the plugin surface (iOS `clearState` `--app-file`, `runFlow` actions) are live-gate-verified closed; #201 closed. `RN_IOS_FOREIGN_WARN=0` disables both the warning and the refusal.
+While a foreign Maestro/XCUITest session drives the target simulator (UDID-scoped detection, 5 s TTL, fail-open), local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` — pointing at the safe L1 reads — instead of colliding into the ~44 s runner-leak cascade. L1 introspection stays free; `device_screenshot` serves pixels via its simctl fallback. The two historical reasons to leave the plugin surface (iOS `clearState` `--app-file`, `runFlow` actions) are live-gate-verified closed; #201 closed. `RN_IOS_FOREIGN_GUARD=0` disables both the warning and the refusal (`RN_IOS_FOREIGN_WARN=0` remains a deprecated alias). A ~10 s teardown grace after the plugin's own flows prevents self-false-positives while WDA dies.
 ```
 
 - [ ] **Step 5: Build docs-site** — `cd docs-site && npm run build` → success.
@@ -748,4 +861,16 @@ gh pr create --title "feat(#186): Phase 6 — foreign-flow arbitration + canonic
 
 - **Spec §3 coverage:** (a) escape-hatch verify + close #201 → Task 4 (both already implemented — verified against `maestro-run.ts:190` and `maestro-validator.ts:121`; the plan gates them live rather than re-building). (b) foreign flow = external flow-plane holder → Tasks 1–3 (refusal for L2+L3 with L1 free: plane check `!== 'introspection'`; TTL cache ~5 s: Task 1; `meta.timings_ms.foreignScan`: refusal extras; knob `RN_IOS_FOREIGN_WARN=0` disabling both: `foreignGateEnabled` + docs; fail-open: gate catch + getUdid-null skip; screenshot simctl fallback: Task 3 + FLOW_FALLBACK_TOOLS branch in Task 2). (c) docs canonical declaration → Task 6. Non-goals honored: no cross-process lease handshake with maestro-mcp; #211/#240 untouched.
 - **Type consistency:** `ForeignFlowGate.check(udid): Promise<ForeignCheckResult>` (Task 1) consumed in Task 2; `ForeignGateOpts {gate,getUdid,enabled}` matches the test helper `foreignOpts`; `foreignFlowGate.lastActive` (Task 1) consumed in Task 3; `setForeignGateUdidProvider` (Task 1) pinned by the Task 2 wiring test.
-- **Known design points (reviewers: weigh in):** (1) the foreign check makes formerly-sync-refusing wrapped handlers await one cached read per call — cost is a Map/els lookup within TTL, one ~10–20 ms `ps` per 5 s window otherwise; (2) `cdp_reload`/`cdp_restart` are FLOW_TOOLS and therefore also refuse during a foreign flow — intentional (relaunching the app yanks it out from under the foreign run), but worth a reviewer sanity-check; (3) the Task 5 fake-foreign-runner trick (script path carrying the maestro token + UDID) tests the detector's real `ps` matching without Java/WDA — the REAL-maestro variant was already validated in Phase 3's live detector test; (4) `inFlight` dedup in the gate ignores udid changes mid-flight (two different udids racing share one scan) — acceptable: single-simulator sessions are the norm and the next check rescans.
+- **Known design points (reviewers: weigh in):** (1) the foreign check makes formerly-sync-refusing wrapped handlers await one cached read per call — cost is a map lookup within TTL, one ~10–20 ms `ps` per 5 s window otherwise; (2) `cdp_reload`/`cdp_restart` are FLOW_TOOLS and therefore also refuse during a foreign flow — intentional (relaunching the app yanks it out from under the foreign run), but worth a reviewer sanity-check; (3) the Task 5 fake-foreign-runner trick (script path carrying the maestro token + UDID) tests the detector's real `ps` matching without Java/WDA — the REAL-maestro variant was already validated in Phase 3's live detector test.
+
+## Amendments applied from the multi-LLM plan review (2026-06-11)
+
+Reviewed by Gemini (source-grounded) + the coordinator's independent Claude research (Codex quota-limited until ~16:11 — not consulted). Applied:
+
+1. **BLOCKER — teardown grace window** (`FOREIGN_GRACE_MS = 10_000`): our own flow tools release the arbiter lease the instant the runner's execFile resolves, but the spawned maestro driver (argv carries the udid) keeps tearing down WDA for seconds and matches the detector — the first tap after our own `maestro_run` would read a stale `BUSY_FOREIGN_FLOW`. Cache-busting cannot fix it (a fresh scan still sees the dying PID); `DeviceSessionArbiter.lastFlowReleasedAt` + `msSinceFlowReleased` gate the scan instead. Two new unit tests (grace suppresses, non-flow releases don't).
+2. **SHOULD-FIX — `ps axww`** in `external-runner-detect.ts`: macOS `ps` bounds the command column; a udid mid-path can truncate away → production false negatives AND a flaky Task 5 gate. One-line fix folded into Task 1 Step 5.
+3. **SHOULD-FIX — knob renamed honestly**: `RN_IOS_FOREIGN_GUARD` is authoritative (it now gates an active refusal, not a log line); `RN_IOS_FOREIGN_WARN` stays as a deprecated alias with the SAME full effect, loudly documented (a user who silenced the warning must know they also dropped the refusal).
+4. **SHOULD-FIX — udid-gated in-flight dedup**: a UDID-B caller no longer receives UDID-A's in-flight scan result (`inFlightUdid` check + test). Severity debated (Gemini: BLOCKER; Claude: SHOULD-FIX given the one-bridge-per-simulator device lock) — fixed regardless, it's one line.
+5. **NICE — screenshot comment**: `lastActive` is never falsely-false for `device_screenshot` (it's an interaction tool, so `arbiterWrap` runs `gate.check()` before the handler); the OR's only residual exposure is one stale-true screenshot routed to simctl (slower, still correct).
+
+Verified non-issues (recorded so they aren't re-litigated): composite one-call-one-lease holds (`cdp_run_action`/`maestro_test_all`/`cdp_auto_login` call raw handler functions; the outer flow lease makes `inst.flowActive` true throughout → no internal gate hits); no lease-then-await-gate deadlock path (gate check strictly precedes `tryAcquire`); Task 4's `r1.ok === true` matches `maestro_run`'s okResult/warnResult shape including the skipped-`runFlow` case; `getActiveSession()` exposes `{ platform, deviceId }` as assumed.
