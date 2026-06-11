@@ -30,12 +30,13 @@ test('M5: iOS clearState with no appId is a structured error (not a silent miss)
   assert.match(r.error, /no appId is known/);
 });
 
-test('M5: iOS clearState resolves via the injected container lookup', () => {
+test('M5: iOS clearState resolves via the injected container lookup (snapshotted — GH#186 contract)', () => {
   const r = resolveAppFileForClearState('ios', IOS_CLEARSTATE, 'com.app', undefined, {
     getAppContainer: () => '/Containers/My.app',
     exists: () => true,
+    snapshotApp: () => '/tmp/rn-appfile-y/My.app',
   });
-  assert.deepEqual(r, { ok: true, appFile: '/Containers/My.app' });
+  assert.deepEqual(r, { ok: true, appFile: '/tmp/rn-appfile-y/My.app' });
 });
 
 test('M5: iOS clearState with no locatable .app is a structured error', () => {
