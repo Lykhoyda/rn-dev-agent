@@ -1,0 +1,136 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SUPERVISOR = resolve(__dirname, '../../dist/supervisor.js');
+const FAKE = resolve(__dirname, '../fixtures/fake-worker.mjs');
+const CRASHER = resolve(__dirname, '../fixtures/crashing-worker.mjs');
+
+function startSupervisor(workerPath, extraEnv = {}) {
+  const child = spawn(process.execPath, [SUPERVISOR, '--no-lock'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, RN_BRIDGE_WORKER_PATH: workerPath, ...extraEnv },
+  });
+  let buf = '';
+  const pendingLines = [];
+  const waiters = [];
+  child.stdout.on('data', (c) => {
+    buf += c.toString('utf8');
+    const parts = buf.split('\n');
+    buf = parts.pop() ?? '';
+    for (const p of parts) {
+      if (!p.length) continue;
+      const w = waiters.shift();
+      if (w) w(p); else pendingLines.push(p);
+    }
+  });
+  const nextLine = () => new Promise((resolveLine, reject) => {
+    const queued = pendingLines.shift();
+    if (queued !== undefined) return resolveLine(queued);
+    const t = setTimeout(() => reject(new Error('timeout waiting for supervisor stdout line')), 15_000);
+    waiters.push((line) => { clearTimeout(t); resolveLine(line); });
+  });
+  let id = 0;
+  const send = (method, params = {}) => {
+    id += 1;
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    return id;
+  };
+  const notify = (method) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
+  return { child, nextLine, send, notify };
+}
+
+test('GH#264 supervisor: kill -9 worker → in-flight error, respawn, handshake replayed once, new pid serves', async () => {
+  const s = startSupervisor(FAKE);
+  try {
+    const initId = s.send('initialize');
+    const initRes = JSON.parse(await s.nextLine());
+    assert.equal(initRes.id, initId);
+    const pid1 = initRes.result.pid;
+    assert.equal(initRes.result.supervised, '1');
+    s.notify('notifications/initialized');
+
+    const hangId = s.send('hang');                       // stays in flight
+    process.kill(pid1, 'SIGKILL');
+
+    const deathErr = JSON.parse(await s.nextLine());
+    assert.equal(deathErr.id, hangId);
+    assert.equal(deathErr.error.code, -32000);
+    assert.match(deathErr.error.message, /SIGKILL/);
+
+    const pingId = s.send('ping');
+    const pingRes = JSON.parse(await s.nextLine());
+    assert.equal(pingRes.id, pingId, 'duplicate initialize response must have been swallowed');
+    assert.notEqual(pingRes.result.pid, pid1, 'served by a respawned worker');
+    assert.equal(pingRes.result.restarts, '1');
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
+
+test('GH#264 supervisor: graceful SIGTERM exits 0 without respawn', async () => {
+  const s = startSupervisor(FAKE);
+  const initId = s.send('initialize');
+  await s.nextLine();
+  const exited = new Promise((resolveExit) => s.child.on('exit', (code) => resolveExit(code)));
+  s.child.kill('SIGTERM');
+  assert.equal(await exited, 0);
+  assert.ok(initId >= 1);
+});
+
+test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error names last exit', async () => {
+  const s = startSupervisor(CRASHER, { RN_BRIDGE_MAX_RESPAWNS: '2' });
+  try {
+    // The crasher dies pre-handshake repeatedly; after the budget the
+    // supervisor stays alive and answers requests with the terminal error.
+    await new Promise((r) => setTimeout(r, 1500));      // let the crash loop burn its budget
+    const qId = s.send('tools/list');
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, qId);
+    assert.equal(reply.error.code, -32000);
+    assert.match(reply.error.message, /crash-looping/);
+    assert.match(reply.error.message, /exit code 1/);
+    assert.equal(s.child.exitCode, null, 'supervisor itself stays alive');
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
+
+test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervisor (plan-review BLOCKER)', async () => {
+  const s = startSupervisor('/nonexistent/worker.js', { RN_BRIDGE_MAX_RESPAWNS: '2' });
+  try {
+    await new Promise((r) => setTimeout(r, 1500));      // spawn errors burn the budget
+    assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');
+    const qId = s.send('tools/list');
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, qId);
+    assert.equal(reply.error.code, -32000);
+    assert.match(reply.error.message, /crash-looping/);
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
+
+test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer writes stays intact (plan-review BLOCKER)', async () => {
+  const s = startSupervisor(FAKE);
+  try {
+    s.send('initialize');
+    await s.nextLine();
+    // Hand-build a request with multi-byte UTF-8 in the method, then write
+    // its bytes in two chunks split INSIDE the é codepoint. setEncoding's
+    // StringDecoder must reassemble it; without it the JSON corrupts to �.
+    const raw = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'écho→test', params: {} }) + '\n', 'utf8');
+    const splitAt = raw.indexOf(0xc3) + 1;              // first byte of the 2-byte é sequence
+    s.child.stdin.write(raw.subarray(0, splitAt));
+    await new Promise((r) => setTimeout(r, 50));         // force two distinct 'data' events
+    s.child.stdin.write(raw.subarray(splitAt));
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, 99);
+    assert.equal(reply.result.echo, 'écho→test');
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
