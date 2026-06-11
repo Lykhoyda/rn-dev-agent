@@ -78,6 +78,8 @@ import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap } from './lifecycle/device-arbiter.js';
+import { setForeignGateUdidProvider } from './lifecycle/foreign-flow-gate.js';
+import { getActiveSession } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -148,6 +150,13 @@ const server = new McpServer({
 });
 
 setToolObserver((o) => recorder.record(o));
+
+// GH#186 Phase 6: the foreign-flow gate needs the active iOS session's udid
+// (registered here — a direct import inside the gate would cycle modules).
+setForeignGateUdidProvider(() => {
+  const s = getActiveSession();
+  return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: any, handler: any): void {

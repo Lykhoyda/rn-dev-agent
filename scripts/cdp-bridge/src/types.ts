@@ -246,6 +246,9 @@ export type ToolErrorCode =
   // Maestro flow is in flight (or the requesting op is a flow and another op is
   // active). Refuse-fast, never queue.
   | 'BUSY_FLOW_ACTIVE'
+  // GH#186 Phase 6: a FOREIGN Maestro/XCUITest session holds the flow plane
+  // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
+  | 'BUSY_FOREIGN_FLOW'
   // GH #191: native fill + retype + maestro all failed to produce the expected value.
   | 'TEXT_ENTRY_UNVERIFIED';
 
