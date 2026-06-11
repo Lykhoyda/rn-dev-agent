@@ -5,17 +5,13 @@ paths:
   - "**/*.{ts,tsx,js,jsx}"
   - "**/package.json"
 description: >
-  React Native and Expo best practices. Routes through rules.index.json (118
-  rules: 70 from vercel-labs/agent-skills react-best-practices + 36 from
-  react-native-skills + 8 from composition-patterns + 4 rn-dev-agent custom).
-  Use when reviewing React Native code, designing component architecture,
-  implementing features, optimizing list performance, implementing animations,
-  designing component APIs, working with navigation, auditing UI components,
-  reviewing state management, checking production readiness. Triggers on
-  "review best practices", "check performance", "optimize renders", "review
-  list rendering", "check animation patterns", "review state management",
-  "audit UI", "review composition", "review for production readiness", "check
-  React Native conventions", "performance audit".
+  This skill should be used when writing or reviewing React Native / Expo
+  code — before writing list rendering, animations, data fetching, component
+  APIs, navigation, or image/media UI — and when asked to "review best
+  practices", "check performance", "optimize renders", "review list
+  rendering", "check animation patterns", "review state management",
+  "audit UI", "review composition", "review for production readiness",
+  "check React Native conventions", "performance audit".
 ---
 
 # React Native Best Practices — Procedural Adapter

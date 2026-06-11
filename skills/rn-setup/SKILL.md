@@ -1,6 +1,6 @@
 ---
 skill: setup
-description: Check and install all rn-dev-agent prerequisites — Node.js, Metro, simulators, rn-fast-runner (iOS), agent-device (Android), maestro-runner, CDP bridge. Run this when tools fail or on first setup.
+description: This skill should be used when the user runs /rn-dev-agent:setup, on first use of the plugin in a project, or when tooling fails — "set up rn-dev-agent", "check prerequisites", "cdp_status fails", "CDP connection failed", "agent-device not installed", "maestro-runner not found", "rn-fast-runner did not become ready", "Metro not running", "no booted simulator", "plugin tools not working", "wrong Node version".
 ---
 
 # Environment Setup & Dependency Check

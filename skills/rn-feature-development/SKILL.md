@@ -1,12 +1,11 @@
 ---
 name: rn-feature-development
 description: >
-  Full 8-phase React Native feature development pipeline — discovery, codebase
-  exploration, clarifying questions, architecture, implementation, live
-  verification, quality review, and E2E proof. Use when building any new
-  feature in a React Native or Expo app. Triggers on "build a feature",
-  "add X to the app", "implement Y", "create a new screen", "rn-feature-dev",
-  "feature development", "build me X".
+  This skill should be used when building any new feature in a React Native
+  or Expo app, or when the /rn-dev-agent:rn-feature-dev command runs.
+  Triggers on "build a feature", "add X to the app", "implement Y",
+  "create a new screen", "rn-feature-dev", "feature development",
+  "build me X", "add a screen", "wire up this flow".
 ---
 
 # React Native Feature Development (8-Phase Pipeline)
@@ -34,6 +33,10 @@ the simulator, review quality, and produce E2E proof with screenshots.
 - **Cross-platform visual verification**: When both iOS and Android are
   available, compare screenshots element-by-element. A screen that renders
   without crashing but has missing icons/images is a FAIL, not a PASS.
+- **Evaluator hook**: if `dev/evaluator.md` exists in the plugin root, log
+  every phase's events per its matching Phase section there (it defines what
+  each phase records; re-verification logs as Phase 5.5-retry); Phase 7
+  finalizes the report and appends high-confidence bugs to `docs/BUGS.md`.
 
 ---
 
@@ -49,8 +52,6 @@ the simulator, review quality, and produce E2E proof with screenshots.
    - Does this touch the store — if so which slice?
    - Are there API calls involved?
 3. Summarize your understanding and confirm with the user
-
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, initialize report — record feature name, slug, start time per `dev/evaluator.md` Phase 1.
 
 ---
 
@@ -71,8 +72,6 @@ the simulator, review quality, and produce E2E proof with screenshots.
    - Include a list of 5–10 key files to read
 2. Once agents return, read all files they identified
 3. Present a comprehensive summary of findings
-
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log agent launches and files identified per `dev/evaluator.md` Phase 2.
 
 ---
 
@@ -98,8 +97,6 @@ the simulator, review quality, and produce E2E proof with screenshots.
 
 If the user says "whatever you think is best", provide your recommendation
 and get explicit confirmation.
-
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log question counts per `dev/evaluator.md` Phase 3.
 
 ---
 
@@ -138,8 +135,6 @@ and get explicit confirmation.
 6. **Ask: "Proceed with implementation?"**
 7. **Do NOT start Phase 5 without explicit user approval**
 
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log agent launches and blueprint completeness per `dev/evaluator.md` Phase 4.
-
 ---
 
 ## Phase 5: Implementation
@@ -159,8 +154,6 @@ and get explicit confirmation.
    - If `requiresFullReload` is true: call `cdp_reload(full=true)` and wait
      for reconnection
    - Otherwise: wait 2 seconds for Fast Refresh to apply
-
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log files changed, reload type, and cdp_reload result per `dev/evaluator.md` Phase 5.
 
 ---
 
@@ -371,8 +364,6 @@ verification as complete. This catches platform-specific rendering failures
 A screen that loads without crashing but has missing icons is a FAIL, not
 a PASS.
 
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log every CDP tool call, recovery action, and fix-retry loop per `dev/evaluator.md` Phase 5.5.
-
 ---
 
 ## Phase 6: Quality Review
@@ -406,8 +397,6 @@ a PASS.
 6. Apply approved fixes
 7. If fixes were applied, re-run Phase 5.5 verification to confirm nothing broke
 
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, log agent launches, findings, and re-verification per `dev/evaluator.md` Phase 6. If re-verification ran, log as Phase 5.5-retry.
-
 ---
 
 ## Phase 7: Summary
@@ -422,262 +411,65 @@ a PASS.
    - **Verification results** (the Phase 5.5 table)
    - **Review findings** (count fixed / count deferred)
 
-**Evaluator**: If `dev/evaluator.md` exists in the plugin root, finalize and write the evaluation report per `dev/evaluator.md` Phase 7. Append high-confidence bugs to `docs/BUGS.md`.
-
 ---
 
 ## Phase 8: E2E Proof
 
-**Goal**: Produce a permanent proof artifact showing the feature works end-to-end,
-with screenshots of each step of the user flow.
+**Goal**: A permanent proof artifact — `docs/proof/<feature-slug>/` with
+numbered screenshots, `PROOF.md`, `PR-BODY.md`, and the rehearsed flow
+persisted as a replayable action.
 
-**CRITICAL**: This phase executes the **E2E Proof Flow** designed by the architect
-in Phase 4 — step by step, mechanically. Do NOT improvise the flow, skip steps,
-or simplify the sequence. The architect (Opus) designed this flow with full feature
-context. Your job is to execute it faithfully and capture the evidence.
+**Protocol — single source of truth**: execute the `/rn-dev-agent:proof-capture`
+protocol (read `${CLAUDE_PLUGIN_ROOT}/commands/proof-capture.md` and run its
+Protocol steps with `<feature-slug>`). The pipeline adds these deltas:
 
-The output is a `docs/proof/<feature-slug>/` directory with numbered screenshots
-and a `PROOF.md` summary.
+1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
+   execute it mechanically. Do NOT improvise, skip, or simplify steps; the
+   architect designed it with full feature context. If rehearsal reveals drift
+   (wrong testID, renamed route, store-path typo), reconcile reality and
+   update the blueprint table.
+2. **Persist the rehearsed flow as a reusable action** at
+   `<project-root>/.rn-agent/actions/<feature-slug>.yaml` (the RN app's root —
+   written `<test-app>` in the command docs) — follow the creating-actions
+   skill Steps 3–6 (flow diagram, M7 header, pre-replay validation,
+   replay-to-promote; the architect's proof-flow table maps nearly 1:1 onto
+   the diagram). `maestro_generate` and `cdp_record_test_generate` emit the
+   YAML body but NOT the M7 header — prepend it per creating-actions.
+3. **Smoke-test before recording** via
+   `cdp_run_action({actionId: "<feature-slug>", params: {...}})` — it records
+   the RunRecord and a clean pass auto-promotes `experimental` → `active`,
+   which the Gate below requires. Plain `maestro_run(flowPath=...,
+   params={KEY: "VALUE"})` is for the ON-CAMERA replay only (no auto-repair
+   mid-recording — a repair would mutate the flow on camera).
+4. **PROOF.md carries a "Deviations from Plan" section** — every step where
+   the actual result differed from the architect's expected state, or
+   "None — all steps matched the architect's E2E Proof Flow."
 
-**Actions**:
+**Hard gates (from the protocol — enforced here too):**
 
-### Step 1: Prepare proof directory
+- **Rehearsal BEFORE recording.** Discovery happens OFF camera; recording
+  captures a verified replay, never exploration. Max 3 rehearsal fix-loops,
+  then escalate with the failing step/assertion plus `cdp_navigation_state`
+  and `cdp_store_state` snapshots.
+- **Maestro-inexpressible carve-out**: only when a step genuinely cannot be
+  expressed in Maestro (custom gestures, native-module side-effects,
+  Reanimated captures via `cdp_set_shared_value`, JS introspection mid-flow)
+  may the rehearsed `device_*`/`cdp_*` sequence be the on-camera artifact —
+  and the missing Maestro primitive MUST be named in PROOF.md "Deviations".
+- **A flow failure ON camera = stop, rebase to clean state, re-rehearse.**
+  It means drift between rehearsal and recording (timing, residue from a
+  `mutates: true` flow) — never "fix it on camera."
+- **Validate artifacts before presenting** (video exists and > 10KB, final
+  screenshot shows the expected end state, `cdp_error_log` clean, every
+  numbered screenshot non-zero). Report invalid proof — never present it as
+  complete.
 
-```bash
-mkdir -p docs/proof/<feature-slug>
-```
-
-Use the feature slug from Phase 1 (e.g., `s4-notification-snooze`, `profile-edit-modal`).
-
-### Step 1.4: Rehearsal pass — discovery happens OFF camera (MANDATORY)
-
-**Rule.** The video must capture a known-good replay of the feature, NOT
-the LLM figuring out how to navigate. Recording during discovery produces
-multi-minute videos full of dead-ends, wrong screens, and "let me check the
-testID" pauses — nobody wants that in a PR. Discovery is cheap; re-recording
-is expensive.
-
-**Protocol — perform every step BEFORE pressing record:**
-
-1. **Dry-run the architect's E2E Proof Flow once with NO video.** Use
-   `device_*` / `cdp_*` calls to walk every row of the blueprint table from
-   start to end. Verify each interaction lands and each assertion holds.
-2. **Fix discovered drift.** The blueprint is the contract, but the live app
-   is reality — wrong testID, renamed route, store-path typo, late-mounted
-   component. Reconcile both. Update the blueprint table if the rehearsal
-   reveals a missing step.
-3. **Persist the verified sequence as a Maestro flow.** Once the rehearsal
-   completes clean end-to-end, write the flow to
-   `<test-app>/.rn-agent/actions/<feature-slug>.yaml`. Two authoring paths:
-   - `maestro_generate(name="<feature-slug>", steps=[...], appId="...")` —
-     structured-step authoring; the MCP tool writes the YAML but does NOT
-     emit the M7 metadata header.
-   - `cdp_record_test_generate(format="maestro")` — converts the recorder
-     buffer (started via `cdp_record_test_start` during rehearsal) into
-     YAML text returned in the response; the MCP tool schema does not
-     forward the M7 fields, so the header is not auto-populated.
-   In both cases, the agent MUST then read the file (or capture the
-   returned text) and PREPEND the 5-key M7 metadata header by hand
-   (`id`, `intent`, `tags`, `mutates`, `status`) — see
-   `skills/rn-testing/SKILL.md` § "Reusable Action Metadata Schema".
-4. **Smoke-test the flow.** Replay it once before recording. For flows
-   with `${VAR}` placeholders, use the Bash CLI (which supports `-e`
-   substitution):
-   ```bash
-   maestro-runner --platform <ios|android> test \
-     <test-app>/.rn-agent/actions/<feature-slug>.yaml \
-     -e KEY=VALUE
-   ```
-   For env-free flows, the MCP tool also works:
-   `maestro_run(flowPath="<test-app>/.rn-agent/actions/<feature-slug>.yaml")`.
-   The replay must pass end-to-end without a single failure.
-5. **Retry budget: max 3 fix-and-replay loops.** If the rehearsal still
-   fails after 3 attempts, escalate to the user with (a) the failing
-   step, (b) the failing assertion, and (c) snapshots from
-   `cdp_navigation_state` and `cdp_store_state`. Do NOT loop indefinitely.
-
-**Maestro-inexpressible carve-out.** If the flow genuinely cannot be
-expressed in Maestro (custom gestures, native-module side-effects,
-Reanimated proof captures via `cdp_set_shared_value`, JS-introspection
-mid-flow), the rehearsal walk itself via `device_*` / `cdp_*` becomes the
-artifact. Document the specific Maestro primitive that is missing in
-PROOF.md "Deviations" — naming the inexpressibility is mandatory; without
-it you must keep trying to express the flow.
-
-**Hard gate.** Do not proceed to Step 1.5 until either step 4 passes
-cleanly OR the inexpressibility carve-out has been written into PROOF.md.
-If you catch yourself thinking "I'll just record while I work out the
-last step," stop — that's the failure mode this gate exists to prevent.
-
-### Step 1.5: Pre-recording setup and start video
-
-**Pre-recording readiness (GH #8, #9):**
-1. Call `cdp_status` — auto-detects and dismisses the Dev Client picker if
-   an agent-device session is open (GH #9). If warning returned, retry.
-2. Call `cdp_navigation_state` — verify a valid route (not Dev Client picker).
-   If still stuck, ask the user to select the Metro server.
-3. Call `cdp_dev_settings(action="disableDevMenu")` — suppress dev menu popups
-   during recording.
-4. Take a baseline screenshot to confirm app is on an actual screen.
-
-Then start recording:
-
-```bash
-# Detect platform
-PLATFORM="ios"  # or "android" based on booted devices
-
-# Start recording
-rn-record-proof start $PLATFORM docs/proof/<feature-slug>/flow-$PLATFORM.mp4
-```
-
-If recording fails to start (no simulator, permissions), log a warning and
-continue — video is a nice-to-have, not a gate. Screenshots remain primary.
-
-### Step 2: Replay the rehearsed flow ON CAMERA
-
-**Preferred path: replay the Maestro flow generated in Step 1.4.** With
-recording running, invoke the rehearsed flow.
-
-For flows with `${VAR}` placeholders (need env substitution):
-```bash
-maestro-runner --platform <ios|android> test \
-  <test-app>/.rn-agent/actions/<feature-slug>.yaml \
-  -e KEY=VALUE
-```
-
-For env-free flows, use the MCP tool:
-- `maestro_run(flowPath="<test-app>/.rn-agent/actions/<feature-slug>.yaml")`
-
-(The MCP `maestro_run` tool schema accepts `flowPath`, `inlineYaml`,
-`platform`, `appId`, `timeoutMs` — there is no `-e` env-var pass-through.
-For substitution you need the `maestro-runner` CLI via Bash.)
-
-Either path produces a deterministic, hesitation-free recording. The LLM
-is NOT in the loop during the actual replay — Maestro drives the device
-at native speed. While the flow runs, take numbered screenshots at meaningful state
-changes via `device_screenshot(path="docs/proof/<feature-slug>/<NN-stepname>.jpg")`.
-
-**Flow assertion failure during recording = stop and re-rehearse.** A
-failure here means the flow drifted between rehearsal and recording (timing,
-state, leftover residue from a `mutates: true` flow). Stop the recording,
-rebase to a clean app state, redo Step 1.4. Do not "fix it on camera."
-
-**Fallback: only when Maestro cannot express the flow** — custom gestures,
-native-module side-effects, Reanimated proof captures via
-`cdp_set_shared_value`, or anything that needs JS-level introspection
-mid-flow. In that case, execute the rehearsed sequence step-by-step using
-the same `device_*` / `cdp_*` calls you ran in Step 1.4. Every action must
-be one you already executed cleanly during rehearsal — do NOT debug,
-explore, or improvise on camera.
-
-For each meaningful state change (whether driven by Maestro or by the
-fallback path), capture:
-
-1. **Screenshot** with the exact filename from the blueprint table:
-   `device_screenshot(path="docs/proof/<feature-slug>/<filename>")`
-2. **State assertion** matching what the table specified:
-   - Store assertion → `cdp_store_state` value matches
-   - Navigation assertion → `cdp_navigation_state`
-   - Visual assertion → verified via the screenshot
-3. **Record the actual value** for PROOF.md — the rehearsal already proved
-   this works, so deviations here are recording-environment bugs, not
-   feature bugs.
-
-### Step 2.5: Stop recording and convert
-
-Stop the background video recording:
-
-```bash
-rn-record-proof stop
-```
-
-Attempt GIF conversion for inline PR display:
-
-```bash
-rn-record-proof convert-gif \
-  docs/proof/<feature-slug>/flow-$PLATFORM.mp4 \
-  docs/proof/<feature-slug>/flow-$PLATFORM.gif
-```
-
-If ffmpeg is not available, skip GIF conversion — the raw .mp4 is still useful.
-
-### Step 3: Write PROOF.md
-
-Create `docs/proof/<feature-slug>/PROOF.md` with this structure:
-
-```markdown
-# <Feature Name> — E2E Proof
-
-**Date:** <YYYY-MM-DD>
-**Device:** <device name> (<OS version>, Simulator/Emulator)
-**Method:** CDP interactions + screenshots (flow designed by architect in Phase 4)
-
-## Flow
-
-| Step | Screenshot | Action | Verification |
-|------|-----------|--------|--------------|
-| 1 | 01-initial.jpg | Navigate to <screen> | Route confirmed via cdp_navigation_state |
-| 2 | 02-action.jpg | <interaction description> | <state or visual confirmation> |
-| 3 | 03-result.jpg | <interaction description> | <state or visual confirmation> |
-
-## Key State Snapshots
-
-- After step 2: `store.path = <value>`
-- After step 3: `store.path = <value>`
-
-## Deviations from Plan
-
-List any steps where the actual result differed from the architect's expected
-state, or any steps that required retries. If none, write "None — all steps
-matched the architect's E2E Proof Flow."
-
-## Files
-
-- `01-initial.jpg` — <description>
-- `02-action.jpg` — <description>
-- `03-result.jpg` — <description>
-```
-
-### Step 4: Validate proof artifacts (CRITICAL)
-
-**Before presenting proof to the user, verify the recording and screenshots
-actually show the expected feature.** This prevents presenting invalid proof.
-
-Validation checklist:
-1. **Video file exists and has reasonable size** (> 10KB):
-   ```bash
-   ls -la docs/proof/<feature-slug>/flow-*.mp4 2>/dev/null
-   ```
-2. **Final screenshot shows the expected end state** — verify via
-   `cdp_component_tree` or `cdp_navigation_state` that the app is on the
-   expected screen with expected data visible.
-3. **No errors during recording** — call `cdp_error_log` and confirm no
-   new errors appeared during the proof flow.
-4. **All numbered screenshots exist** with non-zero size.
-
-If validation fails: report what went wrong and ask the user if they want
-to re-record. Do NOT present invalid proof as complete.
-
-### Step 5: Generate PR body
-
-```bash
-rn-generate-pr-body docs/proof/<feature-slug>/
-```
-
-This produces `docs/proof/<feature-slug>/PR-BODY.md` — a ready-to-paste PR
-description with embedded screenshots, video upload placeholders, device
-info, and a files-changed summary.
-
-### Step 6: Mark complete
-
-Mark all todos complete. The feature is done — implemented, verified, reviewed,
-and proven with screenshots and video.
-
-**Gate**: PROOF.md exists, contains screenshots for ALL steps in the architect's
-E2E Proof Flow, all state assertions match, and PR-BODY.md is generated.
-If screenshot capture fails (e.g., no simulator), log the failure in PROOF.md
-and note it in the Phase 7 summary. If a state assertion doesn't match,
-this is a bug — fix it before completing.
+**Gate**: PROOF.md exists with screenshots for ALL steps of the architect's
+flow, all state assertions match, PR-BODY.md is generated, and the action
+file exists and has replayed clean at least once. If screenshot capture
+fails (e.g., no simulator), log it in PROOF.md and note it in the Phase 7
+summary. If a state assertion doesn't match, that is a bug — fix it before
+completing. Mark all todos complete.
 
 ---
 
@@ -726,7 +518,7 @@ Each phase has shortcuts agents reach for. Don't.
 | "I tested iOS — Android works the same" | Wrong ~40% of the time. Keyboard, permissions, back button, text input, safe-area all differ. `cross_platform_verify` is mandatory unless explicitly single-platform. |
 | "Phase 6 found 1 issue — ship it" | Review agents already filter by confidence. If ONE flags an issue, read it fully. |
 | "Phase 8 (E2E Proof) is just for PR theater" | Proof flows become the permanent Maestro test file. Skip them and you pay in manual testing every sprint. |
-| "I'll record while I figure out the flow — saves a pass" | The video then shows you stuck on a wrong testID for 90 seconds. Rehearsal (Step 1.4) is the cheap pass; re-recording is the expensive one. Discovery happens off camera, replay happens on camera. |
+| "I'll record while I figure out the flow — saves a pass" | The video then shows you stuck on a wrong testID for 90 seconds. The rehearsal pass is the cheap one; re-recording is the expensive one. Discovery happens off camera, replay happens on camera. |
 
 ## Red Flags — Stop and Reconsider
 
@@ -736,10 +528,10 @@ Each phase has shortcuts agents reach for. Don't.
 - About to skip a phase "because the feature is small"
 - About to add a dependency without asking the user first
 - Editing files outside the architect's blueprint "while I'm here"
-- About to call `rn-record-proof start` before the Step 1.4 rehearsal flow has replayed clean (via `maestro-runner` CLI or `maestro_run`)
+- About to call `rn-record-proof start` before the rehearsed flow has replayed clean (proof-capture protocol Step 2.5)
 - About to use `device_*` exploratory calls during recording to "find the right testID"
-- About to take the `device_*` / `cdp_*` fallback path in Phase 8 Step 2 without naming the specific Maestro primitive that cannot express the step in PROOF.md "Deviations"
-- About to enter a fourth rehearsal-fix loop in Step 1.4 without escalating to the user
+- About to take the `device_*` / `cdp_*` fallback path for the on-camera replay without naming the specific Maestro primitive that cannot express the step in PROOF.md "Deviations"
+- About to enter a fourth rehearsal-fix loop without escalating to the user
 
 ## Boundaries
 
@@ -749,7 +541,7 @@ Each phase has shortcuts agents reach for. Don't.
 - Use MCP tools (cdp_*, device_*) for app state reads
 - Present the Phase 5.5 verification table with concrete Evidence
 - Gate Phase 5 on user approval of the architecture
-- Run the Phase 8 Step 1.4 rehearsal pass and confirm `maestro_run` replays the generated flow cleanly BEFORE starting any video recording
+- Run the Phase 8 rehearsal pass and confirm the persisted flow replays cleanly (`cdp_run_action`) BEFORE starting any video recording
 
 ### Ask First
 - Adding any new dependency to the user's project

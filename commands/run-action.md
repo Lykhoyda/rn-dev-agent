@@ -67,7 +67,7 @@ Example calls:
 3. **Pre-flight safety checks** before replay:
    - **Read the flow file** and look for a `mutates: true` or
      `destructive: true` line in the metadata header (per the schema in
-     `skills/rn-testing/SKILL.md` "Maestro Flow Standards"). If present,
+     `skills/rn-testing/SKILL.md` § "Reusable Action Metadata Schema (M7)"). If present,
      **warn the user explicitly** and ask for confirmation before running.
      Mention that destructive flows can create duplicate backend rows when
      replayed multiple times — suggest using a timestamp-suffixed TITLE

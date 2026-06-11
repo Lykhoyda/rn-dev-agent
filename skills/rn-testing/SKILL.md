@@ -233,51 +233,30 @@ maestro-runner --platform <ios|android> test /tmp/step.yaml
 
 ## Reusable Action Metadata Schema (M7)
 
-Every reusable Maestro flow MUST declare a 5-field metadata header so
-`/rn-dev-agent:list-learned-actions` and `/rn-dev-agent:run-action` can
-filter, replay, and reason about it without parsing the YAML body. The
-header lives in YAML comments above (or just below) the `---` separator
-so Maestro itself ignores it.
+Every reusable Maestro flow MUST declare an M7 metadata header — `# key: value`
+comment lines above the body (Maestro ignores them; the inventory and the
+`/run-action` pre-flight parse them). The 5 inventory keys:
 
-```yaml
-appId: com.example.app
----
-# id: <stable-slug>           # Stable identifier. Defaults to the filename
-                              # without `.yaml`. Set explicitly only when you
-                              # want to rename the file later without breaking
-                              # references.
-# intent: <one-line goal>     # Human-readable goal. Surfaced verbatim by the
-                              # `list-learned-actions` inventory; replaces the
-                              # older "first comment block = purpose" heuristic.
-# tags: [a, b, c]             # Filterable keywords (lower-case kebab-case).
-                              # Conventions: feature area (tasks, auth,
-                              # profile), operation (create, update, delete),
-                              # markers (smoke, regression).
-# mutates: true|false         # `true` if the flow leaves persistent residue
-                              # (created/deleted rows, toggled settings,
-                              # anything a subsequent test would need to clean
-                              # up). Read-only flows are `false`. Consumed by
-                              # `/run-action` to require explicit confirmation
-                              # before replay.
-# status: active|deprecated|experimental
-                              # `active` = production-quality, replay anytime.
-                              # `experimental` = under construction, may break.
-                              # `deprecated` = kept for history, do NOT replay.
-- launchApp
-```
+| Key | Value | Notes |
+|---|---|---|
+| `id` | kebab-case slug | defaults to filename without `.yaml` |
+| `intent` | one-line goal | surfaced verbatim by `/list-learned-actions`; the routing key |
+| `tags` | `[a, b, c]` lower-case kebab | feature area (auth, tasks), operation (create, delete), markers (smoke, regression) |
+| `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `?` |
+| `status` | `experimental` \| `active` \| `deprecated` | start `experimental`; first clean replay promotes; `deprecated` = never replay |
 
 **Auto-generated flows** from `cdp_record_test_generate` populate these fields
 when supplied via `GenerateOpts.id|intent|tags|mutates|status` (see
-`tools/test-recorder-generators.ts`). **Hand-written flows** must add the
-header manually before the flow is considered reusable.
+`tools/test-recorder-generators.ts`). `maestro_generate` and **hand-written
+flows** must add the header manually before the flow is considered reusable.
 
-For the full end-to-end authoring workflow (inventory dedup, selector
-grounding, the ASCII flow diagram, validation, replay-to-promote), load the
+**Verification rule:** before approving a new flow for the artifact-first
+inventory, confirm the header carries all 5 keys.
+
+For the full authoring workflow (inventory dedup, selector grounding, the
+ASCII flow diagram, optional fields — `params`, `appId`, `produces`,
+`expectedRouteSequence` — validation, and replay-to-promote), load the
 **creating-actions** skill.
-
-**Verification rule:** Before approving a new flow for the artifact-first
-inventory, confirm the header carries all 5 keys. A flow missing `mutates:` is
-parsed as `mutates: null` and `list-learned-actions` renders it as `?`.
 
 ---
 
