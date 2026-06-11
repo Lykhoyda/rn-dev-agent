@@ -20,15 +20,14 @@ export function parentWatchTick(getppid, initialPpid, onOrphaned, onHeartbeat) {
         onHeartbeat();
 }
 /**
- * Read the parent PID. process.getppid() exists at runtime on Node >= 16 (incl. the
- * Node 22+ this plugin requires) but isn't on this project's @types/node Process type
- * — the structural cast bridges that gap without an `any`. Returns 0 if unavailable;
- * since the watch compares current-vs-initial PPID, a constant 0 simply never trips
- * the orphan signal, so it fails safe to "parent alive".
+ * Read the parent PID. B200: Node exposes this as the `process.ppid` PROPERTY —
+ * there is no process.getppid() function (the old feature-detect always returned
+ * 0, so the orphan watch never fired: 0 === 0 forever, silently dead since #182).
+ * Returns 0 if somehow unavailable; the watch compares current-vs-initial PPID,
+ * so a constant 0 fails safe to "parent alive".
  */
 function defaultGetppid() {
-    const fn = process.getppid;
-    return typeof fn === 'function' ? fn.call(process) : 0;
+    return typeof process.ppid === 'number' ? process.ppid : 0;
 }
 /**
  * GH #182: belt-and-suspenders host-death detection. The existing stdin-EOF + signal

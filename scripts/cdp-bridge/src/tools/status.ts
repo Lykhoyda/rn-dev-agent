@@ -344,6 +344,7 @@ export function createStatusHandler(
         return failResult(`${message} ${detachedHint}${errSuffix}`, 'APP_DETACHED', {
           reconnect: getClient().reconnectState,
           autoConnect: getClient().autoConnectState,
+          bridge: bridgeEnvState(process.env),
           recovery,
         });
       }
@@ -384,8 +385,8 @@ export function createStatusHandler(
       // GH #208 (RC1): carry the reconnect attempt count so a connect failure
       // during a reconnect storm reads as "attempt N/30", not a dead end.
       return pickerBlocking
-        ? failResult(message, 'PICKER_BLOCKING', { autoConnect: getClient().autoConnectState })
-        : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState });
+        ? failResult(message, 'PICKER_BLOCKING', { autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) })
+        : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) });
     }
   };
 }

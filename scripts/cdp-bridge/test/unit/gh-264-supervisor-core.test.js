@@ -178,6 +178,15 @@ test('GH#264 cdp_status wires bridgeEnvState into the status result', () => {
   assert.match(statusSrc, /bridge:\s*bridgeEnvState\(process\.env\)/);
 });
 
+// Supervision facts are env-derived and must be visible exactly when the
+// bridge is unhealthy — the connect-failure paths (APP_DETACHED, picker,
+// generic) carry them alongside reconnect/autoConnect (live-gate finding:
+// a sim with no Hermes target hid bridge.* entirely).
+test('GH#264 cdp_status failure paths also carry bridge supervision facts', () => {
+  const wired = (statusSrc.match(/bridge:\s*bridgeEnvState\(process\.env\)/g) ?? []).length;
+  assert.ok(wired >= 4, `expected bridge on success + 3 failure paths, found ${wired}`);
+});
+
 // Plan-review pin: the supervisor's hot-reload forwards SIGUSR2 to the worker
 // and relies on the worker's documented `SIGUSR2 → shutdown(1)` (exit code 1
 // → respawn). If someone "fixes" that to shutdown(0), the clean-exit-0 policy
