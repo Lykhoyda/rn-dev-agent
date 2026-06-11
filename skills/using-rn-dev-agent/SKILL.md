@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code. **64 MCP tools**, **5 agents**, **16 commands**, **7 skills**.
+The React Native development plugin for Claude Code. **64 MCP tools**, **5 agents**, **16 commands**, **8 skills**.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -33,6 +33,12 @@ What is the user asking for?
 │       (Counterpart to list-learned-actions: list discovers, run executes.
 │        Pre-flights mutates flag, appId match, parameter coverage. Use to
 │        skip a 7-min manual walk when a 23-sec flow already exists.)
+│
+├── CREATE a new reusable action ("save this flow", "make this replayable")
+│   └─► Load the creating-actions skill
+│       (Inventory-dedup first, ground selectors in evidence, ASCII flow
+│        diagram, M7 header, validate, then replay to promote. Covers both
+│        the recorder path and direct YAML authoring.)
 │
 ├── BUILD a new feature / "add X to the app"
 │   └─► /rn-dev-agent:rn-feature-dev <description>
@@ -120,6 +126,7 @@ These apply to every RN task:
 | `rn-setup` | Process | User runs `/rn-dev-agent:setup` or tools fail |
 | `rn-feature-development` | Process | Inside `/rn-dev-agent:rn-feature-dev` — 8-phase pipeline |
 | `rn-testing` | Reference + process | Test writing, Maestro flows, E2E verification |
+| `creating-actions` | Process + reference | Authoring a new reusable action (save / replay a flow) |
 | `rn-debugging` | Reference + process | Diagnosing crashes, errors, blank screens |
 | `rn-device-control` | Reference | Simulator / emulator commands, screenshots |
 | `rn-best-practices` | Reference | 46 RN rules for architecture + review |
