@@ -16,6 +16,7 @@ Replay a learned action by id with end-to-end auto-repair. Loads the action from
 | `timeoutMs` | `number` | No |  |  | Maestro execution timeout per attempt (ms). Default 120_000. |
 | `trigger` | `enum: agent | ci | human` | No |  |  | RunRecord trigger annotation. Default "agent". CI calls should pass "ci". |
 | `forceReload` | `boolean` | No |  |  | GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines). |
+| `params` | `Record<string, unknown>` | No |  |  | Parameter bindings for the action\\'s $\{VAR\} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run). |
 
 ## Usage
 

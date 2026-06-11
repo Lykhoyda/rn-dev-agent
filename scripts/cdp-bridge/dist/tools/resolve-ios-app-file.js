@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, cpSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
 /**
  * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
  * (and so need `--app-file` to reinstall on maestro-runner):
@@ -10,18 +12,41 @@ export function flowUsesClearState(flowText) {
     return /clearState:\s*true\b/.test(flowText)
         || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
+/** GH#186 live-gate finding: clearState UNINSTALLS the app, deleting the very
+ * container `--app-file` pointed into — the reinstall then read a deleted
+ * path. Snapshot the bundle outside the container (APFS clonefile via cp -c
+ * fallback to plain copy) so it survives the uninstall. */
+function defaultSnapshotApp(appPath) {
+    try {
+        const dest = join(mkdtempSync(join(tmpdir(), 'rn-appfile-')), basename(appPath));
+        try {
+            execFileSync('cp', ['-Rc', appPath, dest], { timeout: 30_000, stdio: 'ignore' });
+        }
+        catch {
+            cpSync(appPath, dest, { recursive: true });
+        }
+        return dest;
+    }
+    catch {
+        return null;
+    }
+}
 /**
  * GH#201: locate a built `.app` to pass to `maestro-runner --app-file` so an
- * iOS `clearState` flow can reinstall after uninstall. Tries the simulator's
- * installed container first (cheapest, always current), then the newest
- * DerivedData product. Returns null when neither resolves.
+ * iOS `clearState` flow can reinstall after uninstall. The installed container
+ * is the most current source, but its path dies with the uninstall — so it is
+ * snapshotted out first. Falls back to the newest DerivedData product.
  */
 export function resolveIosAppFile(bundleId, deps = {}) {
     const exists = deps.exists ?? existsSync;
     const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
+    const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
     const fromContainer = getAppContainer(bundleId);
-    if (fromContainer && exists(fromContainer))
-        return fromContainer;
+    if (fromContainer && exists(fromContainer)) {
+        const snapshot = snapshotApp(fromContainer);
+        if (snapshot)
+            return snapshot;
+    }
     const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
     if (fromDerived && exists(fromDerived))
         return fromDerived;
