@@ -121,7 +121,11 @@ test('GH#264 LineSplitter: multiple lines in one chunk, empty lines skipped', ()
   assert.deepEqual(s.push('one\n\ntwo\nthree\n'), ['one', 'two', 'three']);
 });
 
-test('GH#264 LineSplitter: chunk split mid-codepoint-safe via string input', () => {
+// NOTE (plan-review): this only proves STRING-level buffering. Byte-level
+// codepoint splits are handled one layer up — supervisor.ts calls
+// stream.setEncoding('utf8') so Node's StringDecoder holds partial UTF-8
+// sequences; the integration suite has a real Buffer-split test.
+test('GH#264 LineSplitter: partial line across string chunks is buffered', () => {
   const s = new LineSplitter();
   assert.deepEqual(s.push('{"x":"é'), []);
   assert.deepEqual(s.push('"}\n'), ['{"x":"é"}']);
@@ -222,6 +226,26 @@ test('GH#264 core: worker death errors out in-flight requests with -32000 and re
   assert.match(parsed.error.message, /retry/);
 });
 
+test('GH#264 core: worker death does NOT -32000 the initialize id (handshake is replayable, not retryable)', () => {
+  const core = new SupervisorCore();
+  core.onClientLine(req(1, 'initialize'));             // in flight — worker dies before answering
+  const actions = core.onWorkerExit(null, 'SIGKILL', false);
+  assert.ok(!actions.some((a) => a.kind === 'toClient'), 'no death error for the initialize id');
+  assert.deepEqual(actions.at(-1), { kind: 'spawn' });
+});
+
+test('GH#264 core: crash BEFORE the first initialize response — fresh worker answer forwards to client (no swallow)', () => {
+  const core = new SupervisorCore();
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerExit(null, 'SIGKILL', false);
+  const replay = core.onSpawned();
+  assert.deepEqual(replay[0], { kind: 'toWorker', line: req(1, 'initialize') });
+  // Claude Code never saw an initialize response — the fresh worker's answer
+  // must reach it, not be swallowed.
+  assert.deepEqual(core.onWorkerLine(res(1)), [{ kind: 'toClient', line: res(1) }]);
+  assert.equal(core.state, 'running');
+});
+
 test('GH#264 core: replay cached initialize+initialized on respawn, swallow duplicate response, flush queue', () => {
   const core = new SupervisorCore();
   core.onClientLine(req(1, 'initialize'));
@@ -301,11 +325,27 @@ test('GH#264 workerExitDetail: signal wins over code', () => {
   assert.equal(workerExitDetail(1, null), 'exit code 1');
 });
 
-test('GH#264 terminalErrorLine: names last exit and the bridge log', () => {
-  const err = JSON.parse(terminalErrorLine(7, 'signal SIGKILL'));
+test('GH#264 terminalErrorLine: names last exit and the RESOLVED bridge log path', () => {
+  const err = JSON.parse(terminalErrorLine(7, 'signal SIGKILL', '/var/folders/x/bridge.log'));
   assert.equal(err.id, 7);
   assert.match(err.error.message, /signal SIGKILL/);
-  assert.match(err.error.message, /rn-dev-agent-cdp-bridge\.log/);
+  assert.match(err.error.message, /\/var\/folders\/x\/bridge\.log/);
+  // No log file at the current LOG_LEVEL → point at the env var instead of a
+  // path that does not exist (plan-review: tmpdir() was wrong — logger.ts
+  // resolves CLAUDE_PLUGIN_DATA / ~/.claude/logs first, and warn writes none).
+  const noLog = JSON.parse(terminalErrorLine(7, 'exit code 1', null));
+  assert.match(noLog.error.message, /LOG_LEVEL/);
+});
+
+test('GH#264 core: workerRestarts is monotonic lifetime telemetry, distinct from the windowed budget', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 3, windowMs: 60_000, now: () => t });
+  for (let i = 0; i < 5; i++) {
+    t += 61_000;                                        // window always slides — budget never exhausts
+    core.onWorkerExit(1, null, false);
+    core.onSpawned();
+  }
+  assert.equal(core.restartCount, 5, 'monotonic — does not shrink as the window slides');
 });
 ```
 
@@ -314,9 +354,6 @@ test('GH#264 terminalErrorLine: names last exit and the bridge log', () => {
 - [ ] **Step 3: Implement** — create `src/lifecycle/supervisor-core.ts`:
 
 ```typescript
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 export type JsonRpcId = string | number;
 
 export type SupervisorAction =
@@ -329,6 +366,8 @@ export interface SupervisorCoreOpts {
   maxRespawns?: number;
   windowMs?: number;
   now?: () => number;
+  /** Resolved bridge log path (logger.logFilePath) for the terminal error; null when the current LOG_LEVEL writes no file. */
+  logPath?: string | null;
 }
 
 interface ParsedMsg {
@@ -358,14 +397,16 @@ export function workerDeathErrorLine(id: JsonRpcId, detail: string): string {
   });
 }
 
-export function terminalErrorLine(id: JsonRpcId, lastExit: string | null): string {
-  const log = join(tmpdir(), 'rn-dev-agent-cdp-bridge.log');
+export function terminalErrorLine(id: JsonRpcId, lastExit: string | null, logPath: string | null = null): string {
+  const where = logPath
+    ? `Check ${logPath}`
+    : 'Set LOG_LEVEL=info and check the bridge log';
   return JSON.stringify({
     jsonrpc: '2.0',
     id,
     error: {
       code: -32000,
-      message: `rn-dev-agent bridge worker is crash-looping (last: ${lastExit ?? 'unknown'}); restart budget exhausted. Check ${log}, then restart the Claude Code session.`,
+      message: `rn-dev-agent bridge worker is crash-looping (last: ${lastExit ?? 'unknown'}); restart budget exhausted. ${where}, then restart the Claude Code session.`,
     },
   });
 }
@@ -410,20 +451,27 @@ export class SupervisorCore {
   private cachedInitialize: string | null = null;
   private cachedInitialized: string | null = null;
   private initializeId: JsonRpcId | null = null;
+  private initializeAnswered = false;
   private replaySwallowId: JsonRpcId | null = null;
   private pending = new Set<JsonRpcId>();
   private queue: string[] = [];
   private respawnTimes: number[] = [];
+  private totalRestarts = 0;
+  private readonly logPath: string | null;
   lastExit: string | null = null;
 
   constructor(opts: SupervisorCoreOpts = {}) {
     this.maxRespawns = opts.maxRespawns ?? 3;
     this.windowMs = opts.windowMs ?? 60_000;
     this.now = opts.now ?? Date.now;
+    this.logPath = opts.logPath ?? null;
   }
 
+  /** Monotonic lifetime restart count (telemetry, RN_BRIDGE_RESTARTS) — the
+   * windowed respawnTimes array is only the crash-loop BUDGET and shrinks as
+   * the window slides; surfacing it would make cdp_status counts go down. */
   get restartCount(): number {
-    return this.respawnTimes.length;
+    return this.totalRestarts;
   }
 
   get state(): 'running' | 'restarting' | 'terminal' {
@@ -439,11 +487,14 @@ export class SupervisorCore {
     if (msg?.method === 'notifications/initialized') this.cachedInitialized = line;
     if (this.mode === 'terminal') {
       if (msg?.id !== undefined && !msg.isResponse) {
-        return [{ kind: 'toClient', line: terminalErrorLine(msg.id, this.lastExit) }];
+        return [{ kind: 'toClient', line: terminalErrorLine(msg.id, this.lastExit, this.logPath) }];
       }
       return [];
     }
-    if (msg?.id !== undefined && !msg.isResponse) this.pending.add(msg.id);
+    // initialize stays OUT of the pending-set: on worker death it is replayed
+    // to the fresh worker (and its answer forwarded if the client never got
+    // one) — a -32000 "retry" for it would wedge the MCP handshake.
+    if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') this.pending.add(msg.id);
     if (this.mode === 'restarting') {
       this.queue.push(line);
       return [];
@@ -460,7 +511,13 @@ export class SupervisorCore {
       this.queue = [];
       return flushed;
     }
-    if (msg?.isResponse && msg.id !== undefined) this.pending.delete(msg.id);
+    // Pending-set + swallow logic key on CLIENT request ids. This bridge
+    // server sends zero server-initiated requests today (no sampling/roots/
+    // ping) — if that ever changes, worker-originated ids could collide here.
+    if (msg?.isResponse && msg.id !== undefined) {
+      this.pending.delete(msg.id);
+      if (msg.id === this.initializeId) this.initializeAnswered = true;
+    }
     return [{ kind: 'toClient', line }];
   }
 
@@ -482,6 +539,7 @@ export class SupervisorCore {
       return errors;
     }
     this.respawnTimes.push(t);
+    this.totalRestarts += 1;
     this.mode = 'restarting';
     return [...errors, { kind: 'spawn' }];
   }
@@ -489,12 +547,25 @@ export class SupervisorCore {
   onSpawned(): SupervisorAction[] {
     if (this.mode !== 'restarting') return [];
     if (this.cachedInitialize !== null && this.initializeId !== null) {
-      this.replaySwallowId = this.initializeId;
       const replay: SupervisorAction[] = [{ kind: 'toWorker', line: this.cachedInitialize }];
       if (this.cachedInitialized !== null) replay.push({ kind: 'toWorker', line: this.cachedInitialized });
-      return replay;
+      if (this.initializeAnswered) {
+        // Claude Code already has its initialize response — the fresh
+        // worker's duplicate must be swallowed; queue flushes on swallow.
+        this.replaySwallowId = this.initializeId;
+        return replay;
+      }
+      // Crash before the first initialize response: the fresh worker's
+      // answer is the REAL one — forward it. Nothing can be queued yet
+      // (the client is still waiting on initialize), so run immediately.
+      this.mode = 'running';
+      return [...replay, ...this.drainQueue()];
     }
     this.mode = 'running';
+    return this.drainQueue();
+  }
+
+  private drainQueue(): SupervisorAction[] {
     const flushed = this.queue.map((queued): SupervisorAction => ({ kind: 'toWorker', line: queued }));
     this.queue = [];
     return flushed;
@@ -502,7 +573,7 @@ export class SupervisorCore {
 }
 ```
 
-- [ ] **Step 4: Run to verify pass** — same command, expect PASS (11 tests).
+- [ ] **Step 4: Run to verify pass** — same command, expect PASS (14 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -656,6 +727,42 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
     s.child.kill('SIGTERM');
   }
 });
+
+test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervisor (plan-review BLOCKER)', async () => {
+  const s = startSupervisor('/nonexistent/worker.js', { RN_BRIDGE_MAX_RESPAWNS: '2' });
+  try {
+    await new Promise((r) => setTimeout(r, 1500));      // spawn errors burn the budget
+    assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');
+    const qId = s.send('tools/list');
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, qId);
+    assert.equal(reply.error.code, -32000);
+    assert.match(reply.error.message, /crash-looping/);
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
+
+test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer writes stays intact (plan-review BLOCKER)', async () => {
+  const s = startSupervisor(FAKE);
+  try {
+    s.send('initialize');
+    await s.nextLine();
+    // Hand-build a request with multi-byte UTF-8 in the method, then write
+    // its bytes in two chunks split INSIDE the é codepoint. setEncoding's
+    // StringDecoder must reassemble it; without it the JSON corrupts to �.
+    const raw = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'écho→test', params: {} }) + '\n', 'utf8');
+    const splitAt = raw.indexOf(0xc3) + 1;              // first byte of the 2-byte é sequence
+    s.child.stdin.write(raw.subarray(0, splitAt));
+    await new Promise((r) => setTimeout(r, 50));         // force two distinct 'data' events
+    s.child.stdin.write(raw.subarray(splitAt));
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, 99);
+    assert.equal(reply.result.echo, 'écho→test');
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
 ```
 
 - [ ] **Step 3: Run to verify failure** — `cd scripts/cdp-bridge && npm run build && node --test test/integration/gh-264-supervisor-respawn.test.js` → FAIL (`dist/supervisor.js` does not exist).
@@ -672,6 +779,7 @@ import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
+import { logger } from './logger.js';
 
 // GH#264 Phase 5: the component that owns stdio with Claude Code must hold
 // ZERO network sockets — `lsof -ti tcp:8081 | xargs kill -9` (a documented
@@ -702,6 +810,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 
   const core = new SupervisorCore({
     maxRespawns: Number(process.env.RN_BRIDGE_MAX_RESPAWNS ?? '3') || 3,
+    logPath: logger.logFilePath,
   });
   const clientLines = new LineSplitter();
   const workerLines = new LineSplitter();
@@ -712,8 +821,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     for (const action of actions) {
       if (action.kind === 'toWorker') worker?.stdin?.write(action.line + '\n');
       else if (action.kind === 'toClient') process.stdout.write(action.line + '\n');
-      else if (action.kind === 'spawn') spawnWorker();
-      else process.exit(action.code);
+      else if (action.kind === 'spawn') {
+        spawnWorker();
+        apply(core.onSpawned());
+      } else process.exit(action.code);
     }
   }
 
@@ -729,15 +840,28 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     });
     worker = child;
     process.stderr.write(`rn-bridge-supervisor: worker pid ${child.pid}\n`);
-    child.stdin?.on('error', () => { /* EPIPE on a dying worker — exit handler covers it */ });
-    child.stdout?.on('data', (chunk: Buffer) => {
-      for (const line of workerLines.push(chunk.toString('utf8'))) apply(core.onWorkerLine(line));
-    });
-    child.on('exit', (code, signal) => {
+    // 'error' + 'exit' can both fire (or only 'error' for ENOENT) — funnel
+    // both into ONE death-handling pass per child or the budget double-counts.
+    let handled = false;
+    const onDeath = (code: number | null, signal: NodeJS.Signals | null, cause: string): void => {
+      if (handled) return;
+      handled = true;
+      if (cause) process.stderr.write(`rn-bridge-supervisor: worker ${cause}\n`);
       if (worker === child) worker = null;
       apply(core.onWorkerExit(code, signal, shutdownRequested));
-      apply(core.onSpawned());
-    });
+    };
+    child.stdin?.on('error', () => { /* EPIPE on a dying worker — exit handler covers it */ });
+    child.on('error', (err) => onDeath(null, null, `spawn failed: ${err.message}`));
+    if (child.stdout) {
+      // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences —
+      // a multi-byte codepoint split across 'data' events must not corrupt
+      // the JSON (plan-review BLOCKER; the SDK's own ReadBuffer does the same).
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        for (const line of workerLines.push(chunk)) apply(core.onWorkerLine(line));
+      });
+    }
+    child.on('exit', (code, signal) => onDeath(code, signal, ''));
   }
 
   function beginShutdown(why: string): void {
@@ -752,8 +876,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     child.on('exit', () => process.exit(0));
   }
 
-  process.stdin.on('data', (chunk: Buffer) => {
-    for (const line of clientLines.push(chunk.toString('utf8'))) apply(core.onClientLine(line));
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk: string) => {
+    for (const line of clientLines.push(chunk)) apply(core.onClientLine(line));
   });
   process.stdin.on('end', () => beginShutdown('stdin closed — host disconnected'));
   process.on('SIGTERM', () => beginShutdown('SIGTERM'));
@@ -776,7 +901,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 }
 ```
 
-- [ ] **Step 5: Run to verify pass** — `npm run build && node --test test/integration/gh-264-supervisor-respawn.test.js` → PASS (3 tests). Then the full unit suite: `npm test` → all green (~1924).
+- [ ] **Step 5: Run to verify pass** — `npm run build && node --test test/integration/gh-264-supervisor-respawn.test.js` → PASS (5 tests). Then the full unit suite: `npm test` → all green (~1927).
 
 - [ ] **Step 6: Commit**
 
@@ -834,6 +959,17 @@ const statusSrc = readFileSync(
 
 test('GH#264 cdp_status wires bridgeEnvState into the status result', () => {
   assert.match(statusSrc, /bridge:\s*bridgeEnvState\(process\.env\)/);
+});
+
+// Plan-review pin: the supervisor's hot-reload forwards SIGUSR2 to the worker
+// and relies on the worker's documented `SIGUSR2 → shutdown(1)` (exit code 1
+// → respawn). If someone "fixes" that to shutdown(0), the clean-exit-0 policy
+// would make SIGUSR2 silently kill the whole session instead of reloading.
+const indexSrc = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/index.ts'), 'utf8');
+
+test('GH#264 worker SIGUSR2 stays exit-1 (hot-reload contract with the supervisor)', () => {
+  assert.match(indexSrc, /SIGUSR2[\s\S]{0,200}?shutdown\(1\)/);
 });
 ```
 
@@ -1040,4 +1176,18 @@ PR body must reference spec §2, #264 (Closes #264), the Task 0 findings table, 
 
 - **Spec §2 coverage:** Task 0 diagnosis matrix → Task 0 (with the gating rule + findings table); supervisor entry + byte forwarding + initialize cache/replay + duplicate-swallow + in-flight `-32000` → Tasks 2–3; bounded respawn (3/60 s rolling) + terminal error naming last exit + log path → Task 2 (`terminalErrorLine` names `$TMPDIR/rn-dev-agent-cdp-bridge.log`); lock ownership move (project Lockfile + parent watch → supervisor; worker `--no-lock`; UDID device lock stays in worker — no code change needed, it already lives in worker-side `device-lock.ts`) → Task 3; worker-side hardening from findings → Task 6; `cdp_status.bridge` → Task 4; entry-point flip + `RN_BRIDGE_SUPERVISOR=0` escape hatch → Tasks 3+5; accepted-loss documentation (arbiter lease, ring buffers rebuilt on respawn) → Task 7 docs; unit tests with scripted fake worker (death mid-request, double-init swallow, backoff cap) → Tasks 2–3; live gates (kill -9 same-session recovery; real kill-by-port against Metro) → Task 8. Non-goals (supervisor SIGKILL survival, state persistence, worker pooling) intentionally absent.
 - **Type consistency:** `SupervisorAction`/`SupervisorCore`/`bridgeEnvState`/`workerDeathErrorLine`/`terminalErrorLine`/`workerExitDetail` defined once in Task 2, consumed by Tasks 3–4 with matching signatures; `LineSplitter.push(string): string[]` consistent between Tasks 1 and 3.
-- **Known design points (reviewers: weigh in):** (1) line-based forwarding (not raw bytes) is required for the swallow/error logic and is safe because MCP stdio is newline-delimited JSON; partial tails are buffered. (2) Worker stderr is `inherit` — worker logs keep flowing to the host's stderr as today. (3) An unexpected-but-clean worker exit 0 exits the supervisor (mirrors intent) rather than respawning. (4) `RN_BRIDGE_WORKER_PATH` env exists for test injection only; not documented for users. (5) The crash-loop budget test relies on a 1.5 s sleep — the crasher burns its budget in well under that on any machine; if flaky in CI, poll for the terminal reply instead.
+- **Known design points (reviewers: weigh in):** (1) line-based forwarding (not raw bytes) is required for the swallow/error logic and is safe because MCP stdio is newline-delimited JSON; partial tails are buffered. (2) Worker stderr is `inherit` — worker logs keep flowing to the host's stderr as today. (3) An unexpected-but-clean worker exit 0 exits the supervisor (mirrors intent) rather than respawning — verified safe: the worker only self-exits 0 via stdin-EOF or orphan-watch, both of which mean the supervisor is already going away. (4) `RN_BRIDGE_WORKER_PATH` env exists for test injection only; not documented for users. (5) The crash-loop budget test relies on a 1.5 s sleep — the crasher burns its budget in well under that on any machine; if flaky in CI, poll for the terminal reply instead.
+
+## Amendments applied from the multi-LLM plan review (2026-06-11)
+
+Reviewed by Gemini + the coordinator's independent Claude research, both source-verified against the plan code, `@modelcontextprotocol/sdk@1.29.0` internals, and `index.ts`/`logger.ts` (Codex was cut off mid-run — silent-detachment, not quota; its partial work corroborated the UTF-8 finding). Applied:
+
+1. **BLOCKER — `child.on('error')` in `spawnWorker`**: an ENOENT/fd-exhaustion spawn error had no listener → uncaughtException → dead supervisor, bypassing the whole bounded-budget design exactly when Task 5 flips all users to the new entry. Now funneled (with the `exit` event) through one `onDeath` pass per child; new integration test with a nonexistent `RN_BRIDGE_WORKER_PATH`.
+2. **BLOCKER — `setEncoding('utf8')`** on `process.stdin` + `worker.stdout` instead of per-chunk `Buffer.toString()`: a multi-byte codepoint split across `data` events corrupted to U+FFFD, breaking JSON for non-ASCII payloads (component trees, store state). The SDK's own `ReadBuffer` does the equivalent. Task 1's string-only "codepoint-safe" test claim demoted; new integration test splits a real Buffer inside an `é` sequence.
+3. **SHOULD-FIX — `initialize` stays out of the pending-set** + `initializeAnswered` tracking: a crash before the first initialize response previously produced a `-32000` for the handshake AND swallowed the fresh worker's real answer — wedging the session at startup. Now: no death error for initialize; the replayed response is forwarded (not swallowed) when the client never got one. Two new unit tests.
+4. **SHOULD-FIX — terminal error names the RESOLVED log path** (`logger.logFilePath` threaded via `SupervisorCoreOpts.logPath`), not a hard-coded `tmpdir()` file that usually doesn't exist (logger resolves `CLAUDE_PLUGIN_DATA`/`~/.claude/logs` first and writes nothing at the default `warn` level — message falls back to a `LOG_LEVEL=info` hint).
+5. **SHOULD-FIX — SIGUSR2 = exit-1 pinned** by a source-text test: hot-reload depends on the worker's `shutdown(1)`; a future change to `shutdown(0)` would make SIGUSR2 hit the clean-exit-0 branch and silently kill the session.
+6. **SHOULD-FIX — `workerRestarts` is now a monotonic `totalRestarts`** (lifetime telemetry), separate from the windowed `respawnTimes` budget which legitimately shrinks as the window slides. New unit test.
+7. **NICE — `apply()`'s `spawn` branch now calls `onSpawned()`** (replay sequencing decoupled from the `exit` listener); **NICE — comment** at the pending-set noting it assumes no server-initiated requests (verified: this bridge sends none today — a future sampling/roots capability must revisit).
+
+Verified non-issues (recorded so they aren't re-litigated): the SDK does NOT gate `tools/call` on `notifications/initialized` (replay order is belt-and-suspenders); client request ids are per-session monotonic (no reuse against the pending-set); the `RN_BRIDGE_SUPERVISOR=0` escape hatch composes with `index.ts`'s own lock acquisition; worker writes nothing to stdout before the handshake (logger → stderr/file only).
