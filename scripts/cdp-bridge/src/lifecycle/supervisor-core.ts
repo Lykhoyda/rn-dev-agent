@@ -143,8 +143,10 @@ export class SupervisorCore {
     // delivered to a worker, so a worker death doesn't fail them — they
     // drain (once) to the next incarnation. Marking them pending would yield
     // a death error AND a queued replay: two responses for one JSON-RPC id.
+    // `initialized` is cache-only here: the replay path delivers it after
+    // the handshake response; queueing it too would send it twice.
     if (this.mode === 'restarting') {
-      this.queue.push(line);
+      if (msg?.method !== 'notifications/initialized') this.queue.push(line);
       return [];
     }
     // initialize stays OUT of the pending-set: on worker death it is replayed

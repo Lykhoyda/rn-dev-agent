@@ -319,3 +319,20 @@ test('GH#264 core: terminal transition errors queued never-sent requests (no sil
   assert.ok(errored.some((e) => e.id === 8 && /crash-looping/.test(e.error.message)),
     'queued id 8 gets the terminal error instead of hanging');
 });
+
+// An `initialized` arriving mid-restart is CACHED for replay — queueing the
+// same line too made the fresh worker receive it twice (once from the
+// cache after the swallow, once from the queue drain).
+test('GH#264 core: initialized arriving mid-restart replays exactly once', () => {
+  const core = new SupervisorCore();
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerLine(res(1));                            // client got its answer...
+  core.onWorkerExit(1, null, false);                    // ...worker dies before initialized reaches it
+  core.onClientLine(note('notifications/initialized')); // arrives mid-restart
+  core.onClientLine(req(5, 'tools/call'));              // queued
+  core.onSpawned();
+  const after = core.onWorkerLine(res(1));              // swallow → initialized + queue
+  const initializedCount = after.filter((a) => a.kind === 'toWorker' && a.line.includes('initialized')).length;
+  assert.equal(initializedCount, 1, 'exactly one initialized reaches the fresh worker');
+  assert.deepEqual(after.at(-1), { kind: 'toWorker', line: req(5, 'tools/call') });
+});
