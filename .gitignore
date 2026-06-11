@@ -31,3 +31,4 @@ scripts/rn-fast-runner/**/DerivedData/
 # cdp-bridge eval harnesses (local-only dev scaffolding — live-gate scripts
 # driven against booted devices, e.g. eval/live-gate-gh253.mjs; not shipped)
 scripts/cdp-bridge/eval/
+.brainstorm-tmp/

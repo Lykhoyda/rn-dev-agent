@@ -9,6 +9,7 @@ import { recoverDetached } from '../cdp/recover-detached.js';
 import { AppDetachedError } from '../cdp/discovery.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
+import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -92,6 +93,7 @@ async function buildStatusResult(client) {
         },
         reconnect: client.reconnectState,
         autoConnect: client.autoConnectState,
+        bridge: bridgeEnvState(process.env),
         deviceSession,
         proxy: {
             active: client.isProxyActive,
@@ -302,6 +304,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 return failResult(`${message} ${detachedHint}${errSuffix}`, 'APP_DETACHED', {
                     reconnect: getClient().reconnectState,
                     autoConnect: getClient().autoConnectState,
+                    bridge: bridgeEnvState(process.env),
                     recovery,
                 });
             }
@@ -338,8 +341,8 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             // GH #208 (RC1): carry the reconnect attempt count so a connect failure
             // during a reconnect storm reads as "attempt N/30", not a dead end.
             return pickerBlocking
-                ? failResult(message, 'PICKER_BLOCKING', { autoConnect: getClient().autoConnectState })
-                : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState });
+                ? failResult(message, 'PICKER_BLOCKING', { autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) })
+                : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) });
         }
     };
 }

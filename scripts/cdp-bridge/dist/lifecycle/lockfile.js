@@ -65,12 +65,14 @@ export function defaultProcessParent(pid) {
 /**
  * GH #182: our own parent PID, recorded at acquire. Compared later against the
  * owner's *live* PPID — if they differ, the owner's parent (the Claude Code host)
- * died and it was reparented, so it's a live orphan. `process.getppid` isn't on the
- * project's `@types/node` Process type, so cast; falls back to 0 if unavailable.
+ * died and it was reparented, so it's a live orphan.
+ * B200: Node exposes the parent pid as the `process.ppid` PROPERTY — there is
+ * no process.getppid() function. The old feature-detect always fell back to 0,
+ * recording ppid:0 in every lock; isLockLive's orphan check then read any live
+ * holder as reparented (livePpid !== 0) and stole its lock.
  */
 export function defaultSelfPpid() {
-    const fn = process.getppid;
-    return typeof fn === 'function' ? fn.call(process) : 0;
+    return typeof process.ppid === 'number' ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
     return createHash('md5').update(resolve(projectRoot)).digest('hex').slice(0, 8);

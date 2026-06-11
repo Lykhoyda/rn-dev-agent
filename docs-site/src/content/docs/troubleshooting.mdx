@@ -27,6 +27,10 @@ The bridge auto-reconnects by default and evicts the visual React Native DevTool
 This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it fails, call `cdp_status` to re-establish the connection.
 </Aside>
 
+<Aside type="tip" title="MCP server died when Metro was restarted">
+Fixed since #264: the bridge entry point is a stdio supervisor that holds no network sockets, so port-based kills (`lsof -ti tcp:8081 | xargs kill -9`) only take the worker process — the supervisor respawns it automatically and the session keeps its tools (`cdp_status` → `bridge.workerRestarts`). If tools error with "worker is crash-looping", check the bridge log (`LOG_LEVEL=info` writes one) and restart the Claude Code session. `RN_BRIDGE_SUPERVISOR=0` opts back into the legacy single-process bridge.
+</Aside>
+
 ## Store state issues
 
 <Aside type="tip" title="cdp_store_state error for Zustand">
