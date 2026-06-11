@@ -1165,9 +1165,13 @@ Run: `node eval/gate-264-supervisor.mjs` → `GATE PASS`.
 - [ ] **Step 2b: Lock-ownership check (the path gate 1 intentionally bypasses).** The supervisor now owns the single-instance project lock; prove the conflict path works end-to-end in an isolated project dir so the live session's bridge is not involved:
 
 ```bash
-cd "$(mktemp -d)" && node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js & SUP1=$!
+# Both invocations MUST share one cwd (the Lockfile keys on project root);
+# backgrounding a `cd ... && node ...` AND-list would leave the second node
+# in the ORIGINAL cwd (codex-pair MED) — use explicit subshells instead.
+GATE_DIR=$(mktemp -d)
+(cd "$GATE_DIR" && exec node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js) & SUP1=$!
 sleep 2
-node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js; echo "second supervisor exit: $?"
+(cd "$GATE_DIR" && node /Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/supervisor.js); echo "second supervisor exit: $?"
 kill $SUP1
 ```
 
