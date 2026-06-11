@@ -22,7 +22,7 @@ Since #186 shipped, the contention handling goes further: while a foreign sessio
 
 **Division of labor:** rn-dev-agent's `maestro_run` is the canonical Maestro surface — it participates in the device arbiter, parks the L2 interaction runner for the flow, marks CDP stale afterwards, and auto-repairs saved actions. Use the standalone maestro-mcp for ad-hoc exploration; when both target one simulator, rn-dev-agent now steps back cleanly instead of fighting.
 
-The detection is UDID-scoped (it ignores maestro flows on other simulators and the idle maestro-mcp server). Opt out with `RN_IOS_FOREIGN_WARN=0`. Note: immediately after your *own* `maestro_run`, you may briefly see the warning while maestro's driver is still exiting — that's expected.
+The detection is UDID-scoped (it ignores maestro flows on other simulators and the idle maestro-mcp server). Opt out with `RN_IOS_FOREIGN_GUARD=0` (disables the refusal too). Note: immediately after your *own* `maestro_run`, you may briefly see the warning while maestro's driver is still exiting — that's expected, and the refusal guard explicitly exempts that window.
 
 ## L3 flows own the device
 

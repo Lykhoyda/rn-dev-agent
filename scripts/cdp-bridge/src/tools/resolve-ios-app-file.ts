@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, cpSync } from 'node:fs';
+import { existsSync, cpSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 
@@ -31,7 +31,14 @@ export interface ResolveAppFileDeps {
  * fallback to plain copy) so it survives the uninstall. */
 function defaultSnapshotApp(appPath: string): string | null {
   try {
-    const dest = join(mkdtempSync(join(tmpdir(), 'rn-appfile-')), basename(appPath));
+    // Fixed per-app destination, replaced each resolve — an mkdtemp per
+    // clearState flow would accumulate full .app copies in $TMPDIR until OS
+    // reaping (PR #276 review). Concurrent same-app flows can't race: the
+    // arbiter makes the flow plane exclusive.
+    const destDir = join(tmpdir(), 'rn-appfile-snapshots');
+    const dest = join(destDir, basename(appPath));
+    rmSync(dest, { recursive: true, force: true });
+    mkdirSync(destDir, { recursive: true });
     try {
       execFileSync('cp', ['-Rc', appPath, dest], { timeout: 30_000, stdio: 'ignore' });
     } catch {
