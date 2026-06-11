@@ -112,9 +112,14 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   process.on('SIGTERM', () => beginShutdown('SIGTERM'));
   process.on('SIGINT', () => beginShutdown('SIGINT'));
   process.on('SIGHUP', () => beginShutdown('SIGHUP'));
-  // Hot reload, now real: forward to the worker, whose documented SIGUSR2
-  // path exits 1 — the supervisor respawns it with the handshake replayed.
-  process.on('SIGUSR2', () => worker?.kill('SIGUSR2'));
+  // Hot reload, now real: flag the core FIRST (so the exit-1 is treated as
+  // requested — never charged to the crash budget), then forward to the
+  // worker, whose documented SIGUSR2 path exits 1 → respawn + replay.
+  process.on('SIGUSR2', () => {
+    if (!worker) return;
+    core.onHotReloadRequested();
+    worker.kill('SIGUSR2');
+  });
 
   startParentDeathWatch({
     onOrphaned: () => beginShutdown('parent host gone (PPID changed)'),

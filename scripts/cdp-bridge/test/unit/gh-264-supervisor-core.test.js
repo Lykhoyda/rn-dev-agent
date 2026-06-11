@@ -197,3 +197,43 @@ const indexSrc = readFileSync(
 test('GH#264 worker SIGUSR2 stays exit-1 (hot-reload contract with the supervisor)', () => {
   assert.match(indexSrc, /SIGUSR2[\s\S]{0,200}?shutdown\(1\)/);
 });
+
+// Review finding (Gemini, PR #273): SIGUSR2 hot-reload exits 1, which charged
+// the crash budget — 3 intentional reloads in 60s wedged the bridge into
+// terminal mode. A requested reload respawns + replays + counts in restart
+// telemetry, but never burns the anti-crash-loop budget.
+test('GH#264 core: hot-reload exits never charge the respawn budget (no terminal wedge)', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 3, windowMs: 60_000, now: () => t });
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerLine(res(1));
+  for (let i = 0; i < 5; i++) {
+    t += 1000;
+    core.onHotReloadRequested();
+    const a = core.onWorkerExit(1, null, false);
+    assert.deepEqual(a.at(-1), { kind: 'spawn' }, `hot-reload ${i + 1} respawns`);
+    core.onSpawned();
+    core.onWorkerLine(res(1));                          // swallow replay response
+  }
+  assert.equal(core.state, 'running');
+  assert.equal(core.restartCount, 5, 'reloads still count as restarts (telemetry)');
+  // a REAL crash right after still has its full budget
+  t += 1000;
+  assert.deepEqual(core.onWorkerExit(1, null, false).at(-1), { kind: 'spawn' });
+});
+
+test('GH#264 core: hot-reload flag is one-shot — a later real crash charges the budget', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 1, windowMs: 60_000, now: () => t });
+  core.onHotReloadRequested();
+  t += 1000;
+  core.onWorkerExit(1, null, false);                    // the requested reload — free
+  core.onSpawned();
+  t += 1000;
+  core.onWorkerExit(1, null, false);                    // real crash #1 — charges
+  core.onSpawned();
+  t += 1000;
+  const a = core.onWorkerExit(1, null, false);          // real crash #2 — budget (1) gone
+  assert.ok(!a.some((x) => x.kind === 'spawn'));
+  assert.equal(core.state, 'terminal');
+});

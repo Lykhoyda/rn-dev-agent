@@ -134,3 +134,31 @@ test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer wr
     s.child.kill('SIGTERM');
   }
 });
+
+test('GH#264 supervisor: SIGUSR2 hot-reload respawns without burning the crash budget (PR #273 review)', async () => {
+  // fake-worker has no SIGUSR2 handler, so default disposition terminates it
+  // (signal exit) — the supervisor must treat that as the REQUESTED reload.
+  const s = startSupervisor(FAKE, { RN_BRIDGE_MAX_RESPAWNS: '1' });
+  try {
+    const initId = s.send('initialize');
+    const initRes = JSON.parse(await s.nextLine());
+    assert.equal(initRes.id, initId);
+    const pid1 = initRes.result.pid;
+    s.notify('notifications/initialized');
+
+    // Two hot-reloads with budget=1: if reloads charged the budget, the
+    // second would push the core into terminal mode.
+    for (let round = 1; round <= 2; round++) {
+      s.child.kill('SIGUSR2');
+      await new Promise((r) => setTimeout(r, 700));      // respawn + replay
+      const qId = s.send('ping');
+      const reply = JSON.parse(await s.nextLine());
+      assert.equal(reply.id, qId, `round ${round}: session still serves`);
+      assert.ok(!reply.error, `round ${round}: no terminal error`);
+      assert.notEqual(reply.result.pid, pid1, `round ${round}: fresh worker`);
+      assert.equal(reply.result.restarts, String(round), `round ${round}: telemetry counts reloads`);
+    }
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});

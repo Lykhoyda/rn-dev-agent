@@ -103,6 +103,7 @@ export class SupervisorCore {
   private queue: string[] = [];
   private respawnTimes: number[] = [];
   private totalRestarts = 0;
+  private hotReloadPending = false;
   private readonly logPath: string | null;
   lastExit: string | null = null;
 
@@ -165,6 +166,13 @@ export class SupervisorCore {
     return [{ kind: 'toClient', line }];
   }
 
+  /** PR #273 review (Gemini): SIGUSR2 hot-reload exits 1 — without this
+   * one-shot flag the requested reload charged the crash budget, so three
+   * reloads in 60s wedged the bridge into terminal mode. */
+  onHotReloadRequested(): void {
+    this.hotReloadPending = true;
+  }
+
   onWorkerExit(code: number | null, signal: string | null, shutdownRequested: boolean): SupervisorAction[] {
     if (shutdownRequested) return [{ kind: 'exit', code: 0 }];
     this.lastExit = workerExitDetail(code, signal);
@@ -173,6 +181,14 @@ export class SupervisorCore {
       line: workerDeathErrorLine(id, this.lastExit as string),
     }));
     this.pending.clear();
+    if (this.hotReloadPending) {
+      // Requested reload: respawn + replay + count in telemetry, but never
+      // burn the anti-crash-loop budget — the exit was intentional.
+      this.hotReloadPending = false;
+      this.totalRestarts += 1;
+      this.mode = 'restarting';
+      return [...errors, { kind: 'spawn' }];
+    }
     // Unexpected-but-clean end: mirror it. Something intentionally finished
     // the worker (not a crash); respawning would fight that intent.
     if (code === 0 && !signal) return [...errors, { kind: 'exit', code: 0 }];
@@ -191,6 +207,11 @@ export class SupervisorCore {
   onSpawned(): SupervisorAction[] {
     if (this.mode !== 'restarting') return [];
     if (this.cachedInitialize !== null && this.initializeId !== null) {
+      // The replayed `initialized` notification is written immediately after
+      // the `initialize` request, BEFORE the fresh worker has answered it.
+      // Safe because both drain in order off one stdin pipe and the SDK
+      // server doesn't gate tool calls on `initialized` (verified v1.29.0) —
+      // but it does rely on that in-order draining (PR #273 review note).
       const replay: SupervisorAction[] = [{ kind: 'toWorker', line: this.cachedInitialize }];
       if (this.cachedInitialized !== null) replay.push({ kind: 'toWorker', line: this.cachedInitialized });
       if (this.initializeAnswered) {
