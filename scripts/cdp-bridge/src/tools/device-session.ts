@@ -178,7 +178,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
 
       // A device_snapshot action=open with `platform` OMITTED still opens an
       // iOS session, so normalize here and gate the iOS-only lock on this rather
-      // than raw args.platform === 'ios' (which would silently skip the lock).
+      // than checking raw args.platform directly (which would silently skip the lock when omitted).
       const platform = (args.platform ?? 'ios').toLowerCase();
 
       // B112 (D641): attachOnly mode — skip the app launch when the user knows
@@ -265,7 +265,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         // known here (device-open), so scope-kill any stale AgentDeviceRunner
         // targeting THIS simulator and clear orphaned daemon lock files.
         // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
-        if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && args.platform === 'ios' && deviceId) {
+        if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && platform === 'ios' && deviceId) {
           // Await: the stale-runner kill (SIGTERM → 500ms grace → SIGKILL) must
           // finish BEFORE the session is usable, or the first device_* command
           // races it and a stale AgentDeviceRunner can still steal focus —
@@ -304,7 +304,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
             .catch(() => { /* non-fatal */ });
         }
 
-        if (args.platform === 'ios' && deviceId) {
+        if (platform === 'ios' && deviceId) {
           ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
           // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
           // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
