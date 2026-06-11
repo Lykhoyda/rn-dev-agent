@@ -60,7 +60,11 @@ test('GH#264 core: crash BEFORE the first initialize response — fresh worker a
   assert.equal(core.state, 'running');
 });
 
-test('GH#264 core: replay cached initialize+initialized on respawn, swallow duplicate response, flush queue', () => {
+// codex-pair MED (round 4): the replayed `initialized` notification must wait
+// for the fresh worker's initialize RESPONSE — sending it eagerly relied on a
+// version-specific SDK behavior (v1.29.0 not gating tool calls). Strict MCP
+// ordering: initialize → response (swallowed) → initialized → queued traffic.
+test('GH#264 core: respawn replays initialize ONLY; initialized + queue follow the swallowed response', () => {
   const core = new SupervisorCore();
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerLine(res(1));
@@ -70,10 +74,12 @@ test('GH#264 core: replay cached initialize+initialized on respawn, swallow dupl
   const replay = core.onSpawned();
   assert.deepEqual(replay, [
     { kind: 'toWorker', line: req(1, 'initialize') },
-    { kind: 'toWorker', line: note('notifications/initialized') },
   ]);
-  // duplicate initialize response from the fresh worker is swallowed; queue flushes
-  assert.deepEqual(core.onWorkerLine(res(1)), [{ kind: 'toWorker', line: req(3, 'tools/call') }]);
+  // duplicate initialize response is swallowed; THEN initialized replays, THEN the queue
+  assert.deepEqual(core.onWorkerLine(res(1)), [
+    { kind: 'toWorker', line: note('notifications/initialized') },
+    { kind: 'toWorker', line: req(3, 'tools/call') },
+  ]);
   // and the queued request's eventual response forwards normally
   assert.deepEqual(core.onWorkerLine(res(3)), [{ kind: 'toClient', line: res(3) }]);
 });

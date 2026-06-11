@@ -125,7 +125,13 @@ export class SupervisorCore {
         if (msg?.isResponse && msg.id !== undefined && msg.id === this.replaySwallowId) {
             this.replaySwallowId = null;
             this.mode = 'running';
-            return this.drainQueue();
+            // Strict MCP ordering (codex-pair): the cached `initialized`
+            // notification follows the fresh worker's initialize RESPONSE — never
+            // precedes it — then the queued client traffic drains.
+            const after = [];
+            if (this.cachedInitialized !== null)
+                after.push({ kind: 'toWorker', line: this.cachedInitialized });
+            return [...after, ...this.drainQueue()];
         }
         // Pending-set + swallow logic key on CLIENT request ids. This bridge
         // server sends zero server-initiated requests today (no sampling/roots/
@@ -194,23 +200,21 @@ export class SupervisorCore {
         if (this.mode !== 'restarting')
             return [];
         if (this.cachedInitialize !== null && this.initializeId !== null) {
-            // The replayed `initialized` notification is written immediately after
-            // the `initialize` request, BEFORE the fresh worker has answered it.
-            // Safe because both drain in order off one stdin pipe and the SDK
-            // server doesn't gate tool calls on `initialized` (verified v1.29.0) —
-            // but it does rely on that in-order draining (PR #273 review note).
+            // Only the `initialize` request replays here. The cached `initialized`
+            // notification follows the fresh worker's RESPONSE (see onWorkerLine's
+            // swallow branch) — strict MCP handshake ordering, no reliance on the
+            // SDK tolerating early notifications (codex-pair MED).
             const replay = [{ kind: 'toWorker', line: this.cachedInitialize }];
-            if (this.cachedInitialized !== null)
-                replay.push({ kind: 'toWorker', line: this.cachedInitialized });
             if (this.initializeAnswered) {
                 // Claude Code already has its initialize response — the fresh
-                // worker's duplicate must be swallowed; queue flushes on swallow.
+                // worker's duplicate must be swallowed; initialized + queue follow.
                 this.replaySwallowId = this.initializeId;
                 return replay;
             }
             // Crash before the first initialize response: the fresh worker's
-            // answer is the REAL one — forward it. Nothing can be queued yet
-            // (the client is still waiting on initialize), so run immediately.
+            // answer is the REAL one — forward it. The client sends its own
+            // `initialized` after receiving it (normal flow), so nothing else
+            // replays. Nothing can be queued yet either.
             this.mode = 'running';
             return [...replay, ...this.drainQueue()];
         }
