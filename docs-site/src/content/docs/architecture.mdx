@@ -151,7 +151,7 @@ Since PR #164 / D1219 the two platforms use different dispatch paths:
 
 Measured: iOS `rn-fast-runner` delivers ~216ms tap, ~5ms snapshot, ~74ms screenshot — the fast-runner path is ~13× faster than CLI fallbacks on either platform.
 
-A stale `~/.agent-device/daemon.json` can respawn the upstream `AgentDeviceRunner` and fight the in-tree `rn-fast-runner` for focus on iOS. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
+A stale `~/.agent-device/daemon.json` can respawn the upstream `AgentDeviceRunner` and fight the in-tree `rn-fast-runner` for focus on iOS. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID), clears orphaned `~/.agent-device/daemon.{json,lock}`, and uninstalls the legacy runner apps (`com.callstack.agentdevice.runner` and its xctrunner companion) from the target simulator — an installed XCUITest runner is otherwise relaunched by iOS mid-flow even after its process is killed. Opt out with `RN_DEVICE_KILL_LEGACY=0`.
 
 ## What we're NOT using (and why)
 

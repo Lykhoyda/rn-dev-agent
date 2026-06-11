@@ -2,10 +2,58 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseSimctlListapps } from '../cdp/discovery.js';
 const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
 const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
+// GH#202 Phase 4: the legacy upstream runner ships as two installed apps.
+export const LEGACY_BUNDLE_IDS = [
+    'com.callstack.agentdevice.runner',
+    'com.callstack.agentdevice.runner.uitests.xctrunner',
+];
+/**
+ * GH#202 Phase 4: filter `installed` to only the known legacy bundle IDs.
+ * iOS relaunches an installed XCUITest runner to the foreground during WDA
+ * sessions, so killing processes (Phase 1) is insufficient — the only correct
+ * end-state on iOS (where agent-device is retired, D1219) is "not installed".
+ */
+export function selectInstalledLegacyApps(installed) {
+    return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
+}
+// GH#202 Phase 4: error-safe by contract — every failure becomes a warning;
+// a device-open is never blocked on eradication. Runs on EVERY device-open
+// (no memo): the scan is one simctl listapps (~tens of ms), and a memo would
+// go stale whenever another bridge/agent-device session reinstalls the legacy
+// app on the same UDID — the device lock's degraded fail-open path cannot
+// rule that out. async only for call-site uniformity with ensureSingleRunner
+// (body is sync execFileSync).
+export async function eradicateLegacyRunnerApps(udid, deps) {
+    const removedApps = [];
+    const warnings = [];
+    let installed;
+    try {
+        installed = parseSimctlListapps(deps.listApps(udid));
+    }
+    catch (err) {
+        return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
+    }
+    // A booted simulator always carries built-in system apps; zero parsed ids
+    // means the listapps format changed (parse failure), not a clean device.
+    if (installed.size === 0) {
+        return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
+    }
+    for (const id of selectInstalledLegacyApps(installed)) {
+        try {
+            deps.uninstallApp(udid, id);
+            removedApps.push(id);
+        }
+        catch (err) {
+            warnings.push(`uninstall ${id} failed: ${msg(err)} — remove manually: xcrun simctl uninstall ${udid} ${id}`);
+        }
+    }
+    return { removedApps, warnings };
+}
 /**
  * GH#202: parse `ps -A -o pid=,args=` output and return the PIDs of stale
  * legacy `AgentDeviceRunner*` processes bound to `udid`. Conservative by
@@ -63,6 +111,10 @@ function defaultDeps() {
         fileExists: (path) => existsSync(path),
         removeFile: (path) => unlinkSync(path),
         delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        listApps: (udid) => execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] }),
+        uninstallApp: (udid, bundleId) => {
+            execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+        },
     };
 }
 /**
@@ -78,6 +130,7 @@ export async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
     const timings = {};
     const killedPids = [];
     const removedFiles = [];
+    const removedApps = [];
     const warnings = [];
     if (opts.udid) {
         const t = Date.now();
@@ -101,6 +154,15 @@ export async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
             }
         }
         timings.scopedKill = Date.now() - t;
+        // Runs on every device-open (no memo — see eradicateLegacyRunnerApps).
+        // Stays on the awaited path on purpose: an installed legacy runner must
+        // be GONE before the first maestro/WDA flow of the session, or iOS can
+        // relaunch it into the foreground mid-flow (#202 comment 2026-06-08).
+        const tApps = Date.now();
+        const apps = await eradicateLegacyRunnerApps(opts.udid, deps);
+        removedApps.push(...apps.removedApps);
+        warnings.push(...apps.warnings);
+        timings.appEradication = Date.now() - tApps;
     }
     const tFiles = Date.now();
     if (DAEMON_FILES.some((f) => deps.fileExists(f))) {
@@ -129,7 +191,7 @@ export async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
         }
     }
     timings.fileCleanup = Date.now() - tFiles;
-    return { killedPids, removedFiles, warnings, meta: { timings_ms: timings } };
+    return { killedPids, removedFiles, removedApps, warnings, meta: { timings_ms: timings } };
 }
 function msg(err) {
     return err instanceof Error ? err.message : String(err);
