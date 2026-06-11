@@ -139,3 +139,9 @@ const indexSrc = readFileSync(
 test('GH#186 index.ts registers the foreign-gate udid provider from the active session', () => {
   assert.match(indexSrc, /setForeignGateUdidProvider\(/);
 });
+
+test('GH#186 screenshot routing treats a foreign flow like a local one (simctl path)', () => {
+  const srcPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../src/tools/device-list.ts');
+  const listSrc = readFileSync(srcPath, 'utf8');
+  assert.match(listSrc, /flowActive:\s*arbiter\.flowActive\s*\|\|\s*foreignFlowGate\.lastActive/);
+});

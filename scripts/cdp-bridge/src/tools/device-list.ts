@@ -5,6 +5,7 @@ import type { ToolResult } from '../utils.js';
 import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
+import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 
 type RunAgentDeviceFn = typeof runAgentDevice;
@@ -244,7 +245,10 @@ export async function captureAndResizeScreenshot(
   };
 
   let result: ToolResult | undefined;
-  const route = chooseScreenshotPath({ flowActive: arbiter.flowActive, platform: args.platform ?? null });
+  // GH#186: a foreign flow routes pixels to simctl exactly like a local one.
+  // lastActive is never falsely-false here: device_screenshot is an
+  // interaction tool, so arbiterWrap ran gate.check() before this handler.
+  const route = chooseScreenshotPath({ flowActive: arbiter.flowActive || foreignFlowGate.lastActive, platform: args.platform ?? null });
 
   // A3: a Maestro flow owns the device and no platform could be resolved to simctl on →
   // refuse rather than touch the XCUITest runner (which would crash the flow).
