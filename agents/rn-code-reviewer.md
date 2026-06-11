@@ -25,7 +25,7 @@ description: |
   </commentary>
   </example>
 tools: Glob, Grep, LS, Read
-model: sonnet
+model: opus
 skills: rn-testing, rn-best-practices
 color: magenta
 ---

@@ -108,6 +108,26 @@ Decision tree:
 
 ---
 
+## Recovering from HELPERS_NOT_INJECTED
+
+When a `cdp_*` tool returns `code: HELPERS_NOT_INJECTED`, the bridge has already done all of this:
+
+1. Waited up to 5s for the connect-time injection to flip the flag
+2. Actively re-injected `__RN_AGENT` once with a 3s React-ready timeout
+3. Attempted a Dev Client picker dismissal (in case a native overlay was blocking React)
+4. Waited up to another 30s if the picker was dismissed
+
+So when this error appears, **the JS world is genuinely hung** — Hermes is up but `__RN_AGENT` won't land. Two recovery paths, in order:
+
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | Switch the immediate task to `device_*` tools (`device_press`, `device_fill`, `device_snapshot`, `device_screenshot`) | These run through XCTest / adb and don't depend on injected JS at all. The task usually doesn't need React fiber introspection — it just needs to interact with the visible UI. |
+| 2 | If React state is specifically needed (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`), call `cdp_reload` once | Forces a clean bundle reload + reconnect, which re-runs the full injection handshake. Note: open modals, in-progress forms, or unsaved screen state are wiped — confirm with the user before reloading if their work is at risk. |
+
+**Anti-pattern**: retrying `cdp_status` in a loop. The connection is up; status calls don't re-trigger injection in this state — they return immediately and let you spin. The error code is the signal to change strategy, not to wait longer.
+
+---
+
 ## Post-Reload Readiness
 
 After `cdp_reload`, the server auto-reconnects and waits up to 30 seconds for

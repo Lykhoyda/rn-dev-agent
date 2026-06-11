@@ -36,7 +36,7 @@ description: |
   </commentary>
   </example>
 tools: Bash, Read, Write, Edit, Glob, Grep
-model: sonnet
+model: opus
 memory: true
 color: cyan
 skills: rn-device-control, rn-testing, rn-debugging

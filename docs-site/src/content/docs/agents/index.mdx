@@ -11,9 +11,9 @@ These use only `Glob, Grep, LS, Read` — safe to spawn via the Task tool, typic
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
-| [`rn-code-explorer`](/rn-dev-agent/agents/rn-code-explorer/) | Sonnet | Codebase mapping: screens, store, navigation, testIDs |
-| [`rn-code-architect`](/rn-dev-agent/agents/rn-code-architect/) | Opus | Architecture design with E2E proof flow |
-| [`rn-code-reviewer`](/rn-dev-agent/agents/rn-code-reviewer/) | Sonnet | Correctness, RN conventions, project patterns |
+| [`rn-code-explorer`](/rn-dev-agent/agents/rn-code-explorer/) | Opus | Codebase mapping: screens, store, navigation, testIDs |
+| [`rn-code-architect`](/rn-dev-agent/agents/rn-code-architect/) | Fable | Architecture design with E2E proof flow |
+| [`rn-code-reviewer`](/rn-dev-agent/agents/rn-code-reviewer/) | Opus | Correctness, RN conventions, project patterns |
 
 ## Parent-session-only agents (protocol playbooks)
 
@@ -21,7 +21,7 @@ These agents' protocols require `cdp_*` / `device_*` MCP tools. **Do NOT spawn t
 
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|---------------|
-| [`rn-tester`](/rn-dev-agent/agents/rn-tester/) | Sonnet | 7-step test verification protocol | `/rn-dev-agent:test-feature` — runs inline |
+| [`rn-tester`](/rn-dev-agent/agents/rn-tester/) | Opus | 7-step test verification protocol | `/rn-dev-agent:test-feature` — runs inline |
 | [`rn-debugger`](/rn-dev-agent/agents/rn-debugger/) | Opus | Parallel evidence gathering + targeted fix | `/rn-dev-agent:debug-screen` — runs inline |
 
 ## When agents are used

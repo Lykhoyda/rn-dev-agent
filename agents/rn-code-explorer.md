@@ -26,7 +26,7 @@ description: |
   </commentary>
   </example>
 tools: Glob, Grep, LS, Read
-model: sonnet
+model: opus
 skills: rn-testing
 color: yellow
 ---
