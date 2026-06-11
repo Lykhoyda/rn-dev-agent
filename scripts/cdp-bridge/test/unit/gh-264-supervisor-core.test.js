@@ -237,3 +237,41 @@ test('GH#264 core: hot-reload flag is one-shot — a later real crash charges th
   assert.ok(!a.some((x) => x.kind === 'spawn'));
   assert.equal(core.state, 'terminal');
 });
+
+// PR #273 Codex P2 (round 2): a worker that crash-loops to budget exhaustion
+// WITHOUT ever answering the first initialize previously entered terminal
+// mode silently — initialize is exempt from pending (replayable by design),
+// so no error reached the MCP host, which hung on the handshake forever.
+test('GH#264 core: budget exhausted before the first initialize answer -> terminal error for the handshake id', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 2, windowMs: 60_000, now: () => t });
+  core.onClientLine(req(1, 'initialize'));
+  for (let i = 0; i < 2; i++) {
+    t += 1000;
+    core.onWorkerExit(1, null, false);
+    core.onSpawned();
+  }
+  t += 1000;
+  const final = core.onWorkerExit(1, null, false);
+  assert.equal(core.state, 'terminal');
+  assert.equal(final.length, 1);
+  assert.equal(final[0].kind, 'toClient');
+  const err = JSON.parse(final[0].line);
+  assert.equal(err.id, 1, 'the hanging initialize gets the terminal error');
+  assert.match(err.error.message, /crash-looping/);
+});
+
+test('GH#264 core: budget exhausted AFTER a successful handshake -> no spurious initialize error', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 1, windowMs: 60_000, now: () => t });
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerLine(res(1));                            // handshake answered
+  t += 1000;
+  core.onWorkerExit(1, null, false);
+  core.onSpawned();
+  core.onWorkerLine(res(1));                            // replay swallowed
+  t += 1000;
+  const final = core.onWorkerExit(1, null, false);      // budget gone
+  assert.equal(core.state, 'terminal');
+  assert.deepEqual(final, [], 'no error lines — nothing pending, handshake already answered');
+});

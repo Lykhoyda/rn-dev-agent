@@ -163,6 +163,12 @@ export class SupervisorCore {
         this.respawnTimes = this.respawnTimes.filter((ts) => t - ts < this.windowMs);
         if (this.respawnTimes.length >= this.maxRespawns) {
             this.mode = 'terminal';
+            // PR #273 review: initialize is exempt from pending (replayable), so a
+            // worker that crash-loops to exhaustion before EVER answering it would
+            // otherwise go terminal silently — the MCP host hangs on the handshake.
+            if (this.initializeId !== null && !this.initializeAnswered) {
+                errors.push({ kind: 'toClient', line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath) });
+            }
             return errors;
         }
         this.respawnTimes.push(t);
