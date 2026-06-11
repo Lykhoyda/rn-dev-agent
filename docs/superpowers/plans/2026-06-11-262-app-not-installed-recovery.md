@@ -43,11 +43,11 @@ Create `test/unit/gh-262-app-installed-probe.test.js`:
 
 ```js
 // GH #262: ground-truth probe for "is the app bundle installed on the sim?".
-// Classification is ALLOWLIST-only (codex-pair spec review): `false` (not
-// installed) requires the documented app-missing signal (NSPOSIXErrorDomain
-// code=2 / "No such file or directory"); every other failure shape — device
-// errors, unknown stderr, timeouts — returns `null` (verdict unknown).
-// Never claim not-installed without proof.
+// Classification is ALLOWLIST-only (codex-pair spec + plan reviews): `false`
+// (not installed) requires the documented app-missing signal — the
+// NSPOSIXErrorDomain code=2 marker. Every other failure shape — bare ENOENT
+// text, device errors, unknown stderr, timeouts — returns `null` (verdict
+// unknown). Never claim not-installed without proof.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -79,8 +79,10 @@ test('probeAppInstalled: NSPOSIXErrorDomain code=2 → false (not installed)', a
   assert.equal(await probeAppInstalled('U', 'a', execFailing(stderr)), false);
 });
 
-test('probeAppInstalled: bare "No such file or directory" → false', async () => {
-  assert.equal(await probeAppInstalled('U', 'a', execFailing('No such file or directory')), false);
+test('probeAppInstalled: bare "No such file or directory" WITHOUT the domain marker → null', async () => {
+  // codex-pair plan review: generic ENOENT text can appear in unrelated simctl
+  // failures — only the NSPOSIXErrorDomain code=2 marker is proof.
+  assert.equal(await probeAppInstalled('U', 'a', execFailing('No such file or directory')), null);
 });
 
 test('probeAppInstalled: device-level error → null (fail open)', async () => {
@@ -142,14 +144,15 @@ type Exec = (
   opts?: { timeout?: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-// Allowlist classification (codex-pair spec review): `false` requires the
-// documented app-missing signal — issue #262's manual diagnosis was exactly
-// `get_app_container` failing with NSPOSIXErrorDomain code=2. Device-level
+// Allowlist classification (codex-pair spec + plan reviews): `false` requires
+// the documented app-missing signal — issue #262's manual diagnosis was exactly
+// `get_app_container` failing with NSPOSIXErrorDomain code=2, and the domain
+// marker is always present in that message. Bare "No such file or directory"
+// text is NOT sufficient (it can appear in unrelated failures). Device-level
 // errors and unrecognized shapes return null: never claim "not installed"
 // without proof.
 const DEVICE_ERROR = /Invalid device|No devices/i;
 const APP_MISSING_POSIX = /NSPOSIXErrorDomain[\s\S]{0,40}code[^\d]{0,3}2\b/;
-const APP_MISSING_ENOENT = /No such file or directory/i;
 
 /**
  * GH #262: ground-truth "is this bundle installed?" probe.
@@ -169,7 +172,7 @@ export async function probeAppInstalled(
     const stderr = (e as { stderr?: string }).stderr ?? '';
     const detail = `${stderr}\n${e instanceof Error ? e.message : String(e)}`;
     if (DEVICE_ERROR.test(detail)) return null;
-    if (APP_MISSING_POSIX.test(detail) || APP_MISSING_ENOENT.test(detail)) return false;
+    if (APP_MISSING_POSIX.test(detail)) return false;
     return null;
   }
 }

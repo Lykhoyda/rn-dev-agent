@@ -23,7 +23,7 @@ Theme (shared with the rest of the #262 family): **recovery must resolve the app
 
 ### 1. `cdp/recover-detached.ts`
 
-- New injectable dep `isAppInstalled(udid: string, appId: string): Promise<boolean | null>` — default impl runs `xcrun simctl get_app_container <udid> <appId> app` (timeout ~5 s). Returns `true` when the container resolves; `false` **only on the known app-missing signal** (stderr matching `NSPOSIXErrorDomain` + `code=2` / `No such file or directory` — the signal issue #262 documents); `null` for **every other** failure shape (device-level errors, unrecognized stderr, timeout). Allowlist classification: unknown failures must never be reported as not-installed.
+- New injectable dep `isAppInstalled(udid: string, appId: string): Promise<boolean | null>` — default impl runs `xcrun simctl get_app_container <udid> <appId> app` (timeout ~5 s). Returns `true` when the container resolves; `false` **only on the known app-missing signal** (stderr matching the `NSPOSIXErrorDomain` + `code=2` marker — the signal issue #262 documents; bare `No such file or directory` text is NOT sufficient, it can appear in unrelated failures); `null` for **every other** failure shape (device-level errors, unrecognized stderr, timeout). Allowlist classification: unknown failures must never be reported as not-installed.
 - When `relaunchApp` throws: run the probe. On `false` → **short-circuit** (skip the 1.2 s settle, reconnect, and liveness probe — they cannot succeed) and return:
   - `DetachedReason` union gains `'app-not-installed'`.
   - `DetachedRecoveryResult` gains optional `snapshotHint?: { path: string; ageMinutes: number }`.
