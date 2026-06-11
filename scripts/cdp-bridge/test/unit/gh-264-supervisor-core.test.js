@@ -275,3 +275,45 @@ test('GH#264 core: budget exhausted AFTER a successful handshake -> no spurious 
   assert.equal(core.state, 'terminal');
   assert.deepEqual(final, [], 'no error lines — nothing pending, handshake already answered');
 });
+
+// codex-pair MED (2026-06-11): a request queued mid-restart was added to
+// pending before ever being forwarded. If the fresh worker crashed before
+// the queue drained, the id got a -32000 death error AND was later replayed
+// from the queue — a second response for an already-failed JSON-RPC id.
+// Correct semantics: a never-delivered request didn't fail — it stays queued
+// (exactly one eventual response); terminal mode errors it instead of hanging.
+test('GH#264 core: queued mid-restart request is NOT death-errored, drains once after the next respawn', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 5, windowMs: 60_000, now: () => t });
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerLine(res(1));
+  t += 1000;
+  core.onWorkerExit(1, null, false);                    // crash 1 → restarting
+  core.onClientLine(req(7, 'tools/call'));              // arrives mid-restart → queued, never sent
+  core.onSpawned();
+  t += 1000;
+  const crash2 = core.onWorkerExit(1, null, false);     // fresh worker dies BEFORE queue drained
+  assert.ok(!crash2.some((a) => a.kind === 'toClient' && a.line.includes('"id":7')),
+    'queued id 7 was never delivered — no death error for it');
+  core.onSpawned();
+  const drained = core.onWorkerLine(res(1));            // swallow replay → queue flushes ONCE
+  assert.deepEqual(drained, [{ kind: 'toWorker', line: req(7, 'tools/call') }]);
+  assert.deepEqual(core.onWorkerLine(res(7)), [{ kind: 'toClient', line: res(7) }]);
+});
+
+test('GH#264 core: terminal transition errors queued never-sent requests (no silent hang) and clears the queue', () => {
+  let t = 0;
+  const core = new SupervisorCore({ maxRespawns: 1, windowMs: 60_000, now: () => t });
+  core.onClientLine(req(1, 'initialize'));
+  core.onWorkerLine(res(1));
+  t += 1000;
+  core.onWorkerExit(1, null, false);                    // burns the only budget slot → restarting
+  core.onClientLine(req(8, 'tools/call'));              // queued mid-restart
+  core.onSpawned();
+  t += 1000;
+  const final = core.onWorkerExit(1, null, false);      // budget gone → terminal
+  assert.equal(core.state, 'terminal');
+  const errored = final.filter((a) => a.kind === 'toClient').map((a) => JSON.parse(a.line));
+  assert.ok(errored.some((e) => e.id === 8 && /crash-looping/.test(e.error.message)),
+    'queued id 8 gets the terminal error instead of hanging');
+});

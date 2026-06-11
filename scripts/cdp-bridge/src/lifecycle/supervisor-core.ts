@@ -138,14 +138,19 @@ export class SupervisorCore {
       }
       return [];
     }
-    // initialize stays OUT of the pending-set: on worker death it is replayed
-    // to the fresh worker (and its answer forwarded if the client never got
-    // one) — a -32000 "retry" for it would wedge the MCP handshake.
-    if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') this.pending.add(msg.id);
+    // Queued-while-restarting requests are NOT pending: they were never
+    // delivered to a worker, so a worker death doesn't fail them — they
+    // drain (once) to the next incarnation. Marking them pending produced a
+    // death error AND a queued replay: two responses for one JSON-RPC id
+    // (codex-pair MED 2026-06-11).
     if (this.mode === 'restarting') {
       this.queue.push(line);
       return [];
     }
+    // initialize stays OUT of the pending-set: on worker death it is replayed
+    // to the fresh worker (and its answer forwarded if the client never got
+    // one) — a -32000 "retry" for it would wedge the MCP handshake.
+    if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') this.pending.add(msg.id);
     return [{ kind: 'toWorker', line }];
   }
 
@@ -202,6 +207,15 @@ export class SupervisorCore {
       if (this.initializeId !== null && !this.initializeAnswered) {
         errors.push({ kind: 'toClient', line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath) });
       }
+      // Queued never-delivered requests can no longer be served — error each
+      // (they're not in pending, so the loop above missed them) and drop them.
+      for (const queued of this.queue) {
+        const msg = parseLine(queued);
+        if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') {
+          errors.push({ kind: 'toClient', line: terminalErrorLine(msg.id, this.lastExit, this.logPath) });
+        }
+      }
+      this.queue = [];
       return errors;
     }
     this.respawnTimes.push(t);
@@ -237,7 +251,12 @@ export class SupervisorCore {
   }
 
   private drainQueue(): SupervisorAction[] {
-    const flushed = this.queue.map((queued): SupervisorAction => ({ kind: 'toWorker', line: queued }));
+    const flushed = this.queue.map((queued): SupervisorAction => {
+      // Delivery is the moment a request becomes failable — pending from here.
+      const msg = parseLine(queued);
+      if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') this.pending.add(msg.id);
+      return { kind: 'toWorker', line: queued };
+    });
     this.queue = [];
     return flushed;
   }
