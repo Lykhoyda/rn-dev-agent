@@ -26,7 +26,8 @@
     "./skills/rn-testing",
     "./skills/rn-debugging",
     "./skills/rn-best-practices",
-    "./skills/rn-setup"
+    "./skills/rn-setup",
+    "./skills/creating-actions"
   ],
   "agents": [
     "./agents/rn-tester.md",

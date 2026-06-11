@@ -271,6 +271,10 @@ when supplied via `GenerateOpts.id|intent|tags|mutates|status` (see
 `tools/test-recorder-generators.ts`). **Hand-written flows** must add the
 header manually before the flow is considered reusable.
 
+For the full end-to-end authoring workflow (inventory dedup, selector
+grounding, the ASCII flow diagram, validation, replay-to-promote), load the
+**creating-actions** skill.
+
 **Verification rule:** Before approving a new flow for the artifact-first
 inventory, confirm the header carries all 5 keys. A flow missing `mutates:` is
 parsed as `mutates: null` and `list-learned-actions` renders it as `?`.
