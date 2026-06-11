@@ -16,9 +16,13 @@ When an L2 call sees the runner-leak sentinel after a maestro run, the device-se
 
 ## The `FOREIGN_RUNNER_ACTIVE` warning
 
-When you `device_snapshot action=open` while a foreign maestro automation session is driving the same simulator (and rn-dev-agent is not itself running a flow), the open result carries an informational `meta.foreignRunner` and a `FOREIGN_RUNNER_ACTIVE` warning. It is a **heads-up only** — it does not block or change the open. It tells you the simulator is contended so you can expect a re-foreground if you interleave `device_*`.
+When you `device_snapshot action=open` while a foreign maestro automation session is driving the same simulator (and rn-dev-agent is not itself running a flow), the open result carries an informational `meta.foreignRunner` and a `FOREIGN_RUNNER_ACTIVE` warning. The open itself is never blocked.
 
-The detection is UDID-scoped (it ignores maestro flows on other simulators and the idle maestro-mcp server). Opt out with `RN_IOS_FOREIGN_WARN=0`. Note: immediately after your *own* `maestro_run`, you may briefly see the warning while maestro's driver is still exiting — that's expected.
+Since #186 shipped, the contention handling goes further: while a foreign session is live (UDID-scoped detection, ~5 s cache), rn-dev-agent's `device_*` taps and `maestro_run` flows **refuse fast with `BUSY_FOREIGN_FLOW`** (~50 ms) instead of colliding into the multi-second runner-leak recovery cascade. L1 reads (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`) keep working throughout, and `device_screenshot` serves pixels via its OS-level simctl fallback. The guard clears within ~5 s of the foreign run ending; the first tap within ~10 s after rn-dev-agent's **own** flows is exempt (WDA teardown grace). Disable with `RN_IOS_FOREIGN_GUARD=0` (`RN_IOS_FOREIGN_WARN=0` is a deprecated alias — it disables the refusal too, not just this warning).
+
+**Division of labor:** rn-dev-agent's `maestro_run` is the canonical Maestro surface — it participates in the device arbiter, parks the L2 interaction runner for the flow, marks CDP stale afterwards, and auto-repairs saved actions. Use the standalone maestro-mcp for ad-hoc exploration; when both target one simulator, rn-dev-agent now steps back cleanly instead of fighting.
+
+The detection is UDID-scoped (it ignores maestro flows on other simulators and the idle maestro-mcp server). Opt out with `RN_IOS_FOREIGN_GUARD=0` (disables the refusal too). Note: immediately after your *own* `maestro_run`, you may briefly see the warning while maestro's driver is still exiting — that's expected, and the refusal guard explicitly exempts that window.
 
 ## L3 flows own the device
 

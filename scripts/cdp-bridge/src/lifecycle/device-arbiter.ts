@@ -1,5 +1,8 @@
 import { failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
+import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
+import type { ForeignFlowGate } from './foreign-flow-gate.js';
+import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
 
 export type Plane = 'introspection' | 'interaction' | 'flow';
 
@@ -64,9 +67,21 @@ export class DeviceSessionArbiter {
     return oldest;
   }
 
+  /** GH#186: set when a FLOW lease releases. Our own maestro driver (argv
+   * carries the udid) keeps tearing down WDA for seconds after release and
+   * matches the foreign detector — taps inside this window must not scan. */
+  private lastFlowReleasedAt = -Infinity;
+
+  get msSinceFlowReleased(): number {
+    return this.now() - this.lastFlowReleasedAt;
+  }
+
   release(lease: Lease): void {
     this.ops.delete(lease.opId);
-    if (this.flowLeaseHeldBy === lease.opId) this.flowLeaseHeldBy = null;
+    if (this.flowLeaseHeldBy === lease.opId) {
+      this.flowLeaseHeldBy = null;
+      this.lastFlowReleasedAt = this.now();
+    }
   }
 
   reset(reason: string): { clearedOps: number; hadFlow: boolean; reason: string } {
@@ -143,6 +158,28 @@ export function planeForTool(name: string): Plane | null {
 // flow. The handler MUST consult `arbiter.flowActive` and take the raw path when true.
 const FLOW_FALLBACK_TOOLS = new Set<string>(['device_screenshot']);
 
+/** GH#186: WDA teardown after our own flow takes seconds; within this window
+ * the detector cannot distinguish our dying driver from a foreign one. */
+const FOREIGN_GRACE_MS = 10_000;
+
+export interface ForeignGateOpts {
+  gate?: ForeignFlowGate;
+  getUdid?: () => string | null;
+  enabled?: () => boolean;
+}
+
+function foreignRefusal(name: string, warning: IosExternalRunnerWarning, scanMs: number): ToolResult {
+  return failResult(
+    `Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator ` +
+    `(${warning.processLines[0] ?? 'detected via ps'}). L1 introspection stays safe — use ` +
+    `cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot ` +
+    `for pixels (simctl fallback). Retry taps/flows after the foreign run completes. ` +
+    `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`,
+    'BUSY_FOREIGN_FLOW',
+    { foreignRunner: warning, conflict: true, timings_ms: { foreignScan: scanMs } },
+  );
+}
+
 /**
  * Wrap an MCP handler so it acquires its plane before running and releases
  * after (in a `finally`, so a throwing handler still frees its lease). A refused
@@ -156,10 +193,41 @@ export function arbiterWrap(
   name: string,
   handler: (...args: unknown[]) => Promise<ToolResult>,
   inst: DeviceSessionArbiter = arbiter,
+  foreign: ForeignGateOpts = {},
 ): (...args: unknown[]) => Promise<ToolResult> {
   const plane = planeForTool(name);
   if (plane === null) return handler;
+  const gate = foreign.gate ?? foreignFlowGate;
+  const getUdid = foreign.getUdid ?? foreignGateUdid;
+  const enabled = foreign.enabled ?? foreignGateEnabled;
   return async (...args: unknown[]): Promise<ToolResult> => {
+    // GH#186 Phase 6: a foreign Maestro session is an external flow-plane
+    // holder. Checked for interaction/flow planes only (L1 reads never
+    // conflict — the three-layer contract), only with an iOS session (an
+    // unscoped scan false-positives on idle maestro-mcp), only when no
+    // LOCAL flow lease exists (a detected driver is then our own L3 run —
+    // the plain BUSY_FLOW_ACTIVE refusal below already covers contenders),
+    // and not within the teardown grace of our own just-released flow (the
+    // dying driver still matches the detector; a fresh scan can't tell).
+    if (
+      plane !== 'introspection' &&
+      !inst.flowActive &&
+      inst.msSinceFlowReleased >= FOREIGN_GRACE_MS &&
+      enabled()
+    ) {
+      const udid = getUdid();
+      if (udid !== null) {
+        const check = await gate.check(udid);
+        if (check.active && check.warning) {
+          if (FLOW_FALLBACK_TOOLS.has(name)) {
+            // Same OS-level fallback contract as a local flow: pixels stay
+            // available via simctl (the handler routes by gate.lastActive).
+            return await handler(...args);
+          }
+          return foreignRefusal(name, check.warning, check.scanMs);
+        }
+      }
+    }
     const res = inst.tryAcquire(plane, name);
     if (!res.ok) {
       if (FLOW_FALLBACK_TOOLS.has(name) && inst.flowActive) {

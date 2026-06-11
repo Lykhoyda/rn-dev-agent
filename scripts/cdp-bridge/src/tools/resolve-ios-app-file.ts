@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, cpSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
 
 /**
  * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
@@ -19,19 +21,50 @@ export interface ResolveAppFileDeps {
   newestDerivedDataApp?: () => string | null;
   /** Existence check (injectable for tests). */
   exists?: (path: string) => boolean;
+  /** Copies an installed .app OUT of the device container; returns the copy's path or null. */
+  snapshotApp?: (appPath: string) => string | null;
+}
+
+/** GH#186 live-gate finding: clearState UNINSTALLS the app, deleting the very
+ * container `--app-file` pointed into — the reinstall then read a deleted
+ * path. Snapshot the bundle outside the container (APFS clonefile via cp -c
+ * fallback to plain copy) so it survives the uninstall. */
+function defaultSnapshotApp(appPath: string): string | null {
+  try {
+    // Fixed per-app destination, replaced each resolve — an mkdtemp per
+    // clearState flow would accumulate full .app copies in $TMPDIR until OS
+    // reaping (PR #276 review). Concurrent same-app flows can't race: the
+    // arbiter makes the flow plane exclusive.
+    const destDir = join(tmpdir(), 'rn-appfile-snapshots');
+    const dest = join(destDir, basename(appPath));
+    rmSync(dest, { recursive: true, force: true });
+    mkdirSync(destDir, { recursive: true });
+    try {
+      execFileSync('cp', ['-Rc', appPath, dest], { timeout: 30_000, stdio: 'ignore' });
+    } catch {
+      cpSync(appPath, dest, { recursive: true });
+    }
+    return dest;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * GH#201: locate a built `.app` to pass to `maestro-runner --app-file` so an
- * iOS `clearState` flow can reinstall after uninstall. Tries the simulator's
- * installed container first (cheapest, always current), then the newest
- * DerivedData product. Returns null when neither resolves.
+ * iOS `clearState` flow can reinstall after uninstall. The installed container
+ * is the most current source, but its path dies with the uninstall — so it is
+ * snapshotted out first. Falls back to the newest DerivedData product.
  */
 export function resolveIosAppFile(bundleId: string, deps: ResolveAppFileDeps = {}): string | null {
   const exists = deps.exists ?? existsSync;
   const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
+  const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
   const fromContainer = getAppContainer(bundleId);
-  if (fromContainer && exists(fromContainer)) return fromContainer;
+  if (fromContainer && exists(fromContainer)) {
+    const snapshot = snapshotApp(fromContainer);
+    if (snapshot) return snapshot;
+  }
   const fromDerived = (deps.newestDerivedDataApp ?? (() => null))();
   if (fromDerived && exists(fromDerived)) return fromDerived;
   return null;

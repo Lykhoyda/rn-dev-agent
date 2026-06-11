@@ -75,7 +75,10 @@ export async function detectIosExternalRunner(
           a: string[],
           o: typeof opts,
         ) => Promise<{ stdout: string }>);
-    const { stdout } = await run('ps', ['ax', '-o', 'pid=,command='], opts);
+    // -ww: unlimited command-column width — macOS ps truncates otherwise, and
+    // a UDID sitting mid-path in a long driver command line would be cut off,
+    // silently breaking the includes(udid) scoping (GH#186 plan review).
+    const { stdout } = await run('ps', ['axww', '-o', 'pid=,command='], opts);
     const lines = stdout
       .split('\n')
       .filter((line) => IOS_FOREIGN_RE.test(line))
