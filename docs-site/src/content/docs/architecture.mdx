@@ -90,7 +90,7 @@ One mechanism per capability tier — **L1 + L2 coexist** (drive with XCTest, as
 | **L2 INTERACTION** | iOS `RnFastRunner` / Android `agent-device`; `cdp_interact` | primitive taps / types / scrolls | shared |
 | **L3 FLOW-REPLAY** | `maestro-runner` (Go + WDA) | whole-`.yaml` E2E flows | exclusive |
 
-**Foreign runners** (e.g. the standalone `maestro-mcp`): L1 reads are always safe; on an L2 leak the device-session re-attaches rather than evicts (#188); `device_snapshot action=open` surfaces an informational `FOREIGN_RUNNER_ACTIVE` warning when a foreign session is present and no local flow is running.
+**Foreign runners** (e.g. the standalone `maestro-mcp`): L1 reads are always safe; on an L2 leak the device-session re-attaches rather than evicts (#188); `device_snapshot action=open` surfaces an informational `FOREIGN_RUNNER_ACTIVE` warning. Since #186, a LIVE foreign session (UDID-scoped, 5 s-TTL `ps` scan, fail-open) also makes local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms, vs the ~44 s runner-leak cascade) while CDP reads stay free and `device_screenshot` falls back to simctl; the plugin's `maestro_run` is the canonical Maestro surface. Opt out with `RN_IOS_FOREIGN_GUARD=0`.
 
 ## MCP server (CDP bridge)
 
