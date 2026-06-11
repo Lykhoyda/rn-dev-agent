@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, cpSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import type { SnapshotHint } from '../cdp/app-installed-probe.js';
 
 /**
  * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
@@ -122,4 +123,108 @@ function defaultGetAppContainer(bundleId: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** GH #262: injectable deps for the snapshot-hint lookup. */
+export interface FindSnapshotDeps {
+  /** Absolute paths of candidate .app dirs in the snapshot dir. */
+  listSnapshots?: () => string[];
+  /** CFBundleIdentifier of a candidate (within timeoutMs), or null if unreadable. */
+  readBundleId?: (appPath: string, timeoutMs: number) => string | null;
+  /** mtime (ms) of a candidate, or null. */
+  mtimeMs?: (appPath: string) => number | null;
+  now?: () => number;
+}
+
+// Budget (codex-pair + multi-LLM plan reviews): the hint rides on an
+// ALREADY-FAILED recovery path — it must never add meaningful latency. The
+// dir is bounded by design (one snapshot per app basename), so these are
+// insurance caps. Per-read timeouts are clamped to the remaining deadline so
+// one slow plutil cannot blow the total budget.
+const SNAPSHOT_SCAN_CAP = 10;
+const SNAPSHOT_SCAN_BUDGET_MS = 3000;
+const PLUTIL_TIMEOUT_MS = 2000;
+
+function defaultListSnapshots(): string[] {
+  const dir = join(tmpdir(), 'rn-appfile-snapshots');
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.app'))
+      .map((name) => join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
+function defaultReadBundleId(appPath: string, timeoutMs: number): string | null {
+  try {
+    const out = execFileSync(
+      'plutil',
+      ['-extract', 'CFBundleIdentifier', 'raw', join(appPath, 'Info.plist')],
+      { timeout: timeoutMs, encoding: 'utf8' },
+    );
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultMtimeMs(appPath: string): number | null {
+  try {
+    return statSync(appPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GH #262: find a reinstallable .app snapshot for a bundle id in the GH #201
+ * snapshot dir. Cheap stat pass first, NEWEST-FIRST sort, THEN the cap —
+ * readdir order is arbitrary, so capping before sorting could drop the newest
+ * match. plutil (the expensive read) runs only on the capped, ordered list,
+ * so the first match is the newest. Latency contract: the lookup IS awaited
+ * on the already-failed error path, so it may add up to the budget (~3s worst
+ * case; typically a few ms — the dir holds one snapshot per app). It can
+ * never fail or abort the report it rides on (all errors → null).
+ */
+export function findSnapshotForBundleId(
+  bundleId: string,
+  deps: FindSnapshotDeps = {},
+): { path: string; mtimeMs: number } | null {
+  const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
+  const readBundleId = deps.readBundleId ?? defaultReadBundleId;
+  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
+  const now = deps.now ?? Date.now;
+  const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
+  try {
+    const candidates = listSnapshots()
+      .map((path) => ({ path, m: mtimeMs(path) }))
+      .filter((c): c is { path: string; m: number } => c.m !== null)
+      .sort((a, b) => b.m - a.m)
+      .slice(0, SNAPSHOT_SCAN_CAP);
+    for (const { path, m } of candidates) {
+      const remaining = deadline - now();
+      if (remaining <= 0) return null;
+      if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
+        return { path, mtimeMs: m };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** GH #262: `findSnapshotForBundleId` formatted as advice input. */
+export function snapshotHintForBundleId(
+  bundleId: string,
+  deps: FindSnapshotDeps = {},
+): SnapshotHint | null {
+  const now = deps.now ?? Date.now;
+  const snap = findSnapshotForBundleId(bundleId, deps);
+  if (!snap) return null;
+  return {
+    path: snap.path,
+    ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 60_000)),
+  };
 }
