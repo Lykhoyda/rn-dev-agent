@@ -898,6 +898,7 @@ trackedTool(
     appId: z.string().optional().describe('App bundle ID (auto-detected from app.json)'),
     appFile: z.string().optional().describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
     timeoutMs: z.number().int().min(5000).max(300000).default(120000).describe('Execution timeout in ms'),
+    params: z.record(z.string(), z.string()).optional().describe('GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).'),
   },
   createMaestroRunHandler(),
 );
@@ -1158,6 +1159,7 @@ trackedTool(
     timeoutMs: z.number().optional().describe('Maestro execution timeout per attempt (ms). Default 120_000.'),
     trigger: z.enum(['agent', 'ci', 'human']).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
     forceReload: z.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
+    params: z.record(z.string(), z.string()).optional().describe('Parameter bindings for the action\'s ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).'),
   },
   // GH #186: supply a CDP-backed live-route reader so the route-drift guard is
   // actually active. Without this the handler defaulted getLiveRoute to a no-op
