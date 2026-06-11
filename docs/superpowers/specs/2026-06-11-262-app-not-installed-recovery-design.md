@@ -33,7 +33,7 @@ Theme (shared with the rest of the #262 family): **recovery must resolve the app
 
 ### 2. `tools/resolve-ios-app-file.ts` — `findSnapshotForBundleId(bundleId)`
 
-Scans `$TMPDIR/rn-appfile-snapshots/*.app` (the GH #201 bounded snapshot dir this file owns), matches `CFBundleIdentifier` via `plutil -extract CFBundleIdentifier raw <app>/Info.plist`, returns the newest match as `{ path, mtimeMs }` or `null`. Best-effort with an explicit budget: ≤ 10 candidates scanned, ~2 s timeout per `plutil` read, ~3 s total; any error or budget overrun → `null`. The hint never blocks or delays the error report. Deps (fs scan, plist read) injectable for tests.
+Scans `$TMPDIR/rn-appfile-snapshots/*.app` (the GH #201 bounded snapshot dir this file owns), matches `CFBundleIdentifier` via `plutil -extract CFBundleIdentifier raw <app>/Info.plist`, returns the newest match as `{ path, mtimeMs }` or `null`. Best-effort with an explicit budget: ≤ 10 candidates scanned, ~2 s timeout per `plutil` read, ~3 s total; any error or budget overrun → `null`. **Latency contract:** the lookup is awaited on the (already-failed) error path, so it may add up to the ~3 s budget in the worst case — typically a few ms, since the #201 dir holds one snapshot per app. It can never fail or abort the error report (all errors → no hint). Deps (fs scan, plist read) injectable for tests.
 
 ### 3. `tools/status.ts` — mapping
 

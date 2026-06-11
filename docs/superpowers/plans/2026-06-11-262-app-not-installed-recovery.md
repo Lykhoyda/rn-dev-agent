@@ -119,8 +119,8 @@ test('buildNotInstalledAdvice: base advice without hint; shell-quoted install li
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd scripts/cdp-bridge && npm run build 2>/dev/null; node --test test/unit/gh-262-app-installed-probe.test.js`
-Expected: FAIL — `Cannot find module .../dist/cdp/app-installed-probe.js`
+Run: `cd scripts/cdp-bridge && npm run build && node --test test/unit/gh-262-app-installed-probe.test.js`
+Expected: the build PASSES (no source changes yet — if it fails, stop and fix the build first), then the test FAILS with `Cannot find module .../dist/cdp/app-installed-probe.js`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -230,7 +230,8 @@ Create `test/unit/gh-262-find-snapshot.test.js`:
 ```js
 // GH #262: best-effort lookup of a reinstallable .app snapshot in the GH #201
 // bounded dir ($TMPDIR/rn-appfile-snapshots). Budgeted (≤10 candidates, ~3s
-// total) and never throws — the hint must never block or delay an error report.
+// total) and never throws — the hint may add at most the bounded scan budget
+// to an already-failed path and must never FAIL the report it rides on.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -380,7 +381,10 @@ function defaultMtimeMs(appPath: string): number | null {
 /**
  * GH #262: find a reinstallable .app snapshot for a bundle id in the GH #201
  * snapshot dir. Best-effort under an explicit budget; returns null on any
- * error or budget overrun — the hint never blocks the error report it rides on.
+ * error or budget overrun. Latency contract: the lookup IS awaited on the
+ * already-failed error path, so it may add up to the budget (~3s worst case;
+ * typically a few ms — the dir holds one snapshot per app). It can never
+ * fail or abort the report it rides on.
  */
 export function findSnapshotForBundleId(
   bundleId: string,
