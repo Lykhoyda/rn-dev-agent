@@ -92,6 +92,12 @@ else {
             // buffer to the child makes that impossible.
             const childLines = new LineSplitter();
             child.stdout.on('data', (chunk) => {
+                // Node can emit 'exit' before stdout fully drains; once this child's
+                // death was handled (pending ids errored, replacement possibly
+                // spawned), a late line must not double-answer an errored id or
+                // satisfy the replayed-initialize gate in the fresh worker's place.
+                if (handled)
+                    return;
                 for (const line of childLines.push(chunk))
                     apply(core.onWorkerLine(line));
             });
