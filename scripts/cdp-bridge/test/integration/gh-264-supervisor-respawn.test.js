@@ -188,3 +188,16 @@ test('GH#264 supervisor: dead worker\'s partial stdout frame does not contaminat
     s.child.kill('SIGTERM');
   }
 });
+
+const REAL_WORKER = resolve(__dirname, '../../dist/index.js');
+
+test('GH#264 worker SIGUSR2 exits 1 (hot-reload contract, behavioral)', async () => {
+  // The supervisor's hot-reload relies on the REAL worker's SIGUSR2 path
+  // exiting 1 (respawn), never 0 (which the clean-exit policy mirrors by
+  // shutting the supervisor down). Pin the contract by driving dist/index.js.
+  const w = spawn(process.execPath, [REAL_WORKER, '--no-lock'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  await new Promise((r) => setTimeout(r, 1200));        // let handlers register
+  const exited = new Promise((resolveExit) => w.on('exit', (code) => resolveExit(code)));
+  w.kill('SIGUSR2');
+  assert.equal(await exited, 1, 'SIGUSR2 must exit 1 so the supervisor respawns');
+});

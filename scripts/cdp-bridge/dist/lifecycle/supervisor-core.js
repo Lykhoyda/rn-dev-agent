@@ -68,6 +68,7 @@ export class SupervisorCore {
     initializeId = null;
     initializeAnswered = false;
     replaySwallowId = null;
+    replayForwardId = null;
     pending = new Set();
     queue = [];
     respawnTimes = [];
@@ -106,9 +107,8 @@ export class SupervisorCore {
         }
         // Queued-while-restarting requests are NOT pending: they were never
         // delivered to a worker, so a worker death doesn't fail them — they
-        // drain (once) to the next incarnation. Marking them pending produced a
-        // death error AND a queued replay: two responses for one JSON-RPC id
-        // (codex-pair MED 2026-06-11).
+        // drain (once) to the next incarnation. Marking them pending would yield
+        // a death error AND a queued replay: two responses for one JSON-RPC id.
         if (this.mode === 'restarting') {
             this.queue.push(line);
             return [];
@@ -125,13 +125,21 @@ export class SupervisorCore {
         if (msg?.isResponse && msg.id !== undefined && msg.id === this.replaySwallowId) {
             this.replaySwallowId = null;
             this.mode = 'running';
-            // Strict MCP ordering (codex-pair): the cached `initialized`
-            // notification follows the fresh worker's initialize RESPONSE — never
-            // precedes it — then the queued client traffic drains.
+            // Strict MCP ordering: the cached `initialized` notification follows
+            // the fresh worker's initialize RESPONSE — never precedes it — then
+            // the queued client traffic drains.
             const after = [];
             if (this.cachedInitialized !== null)
                 after.push({ kind: 'toWorker', line: this.cachedInitialized });
             return [...after, ...this.drainQueue()];
+        }
+        if (msg?.isResponse && msg.id !== undefined && msg.id === this.replayForwardId) {
+            // The client never received an initialize answer — this one is the
+            // real handshake response: forward it, then release queued traffic.
+            this.replayForwardId = null;
+            this.initializeAnswered = true;
+            this.mode = 'running';
+            return [{ kind: 'toClient', line }, ...this.drainQueue()];
         }
         // Pending-set + swallow logic key on CLIENT request ids. This bridge
         // server sends zero server-initiated requests today (no sampling/roots/
@@ -143,9 +151,9 @@ export class SupervisorCore {
         }
         return [{ kind: 'toClient', line }];
     }
-    /** PR #273 review (Gemini): SIGUSR2 hot-reload exits 1 — without this
-     * one-shot flag the requested reload charged the crash budget, so three
-     * reloads in 60s wedged the bridge into terminal mode. */
+    /** SIGUSR2 hot-reload exits 1 — without this one-shot flag the requested
+     * reload would charge the crash budget, so three reloads in 60s would wedge
+     * the bridge into terminal mode. */
     onHotReloadRequested() {
         this.hotReloadPending = true;
     }
@@ -174,9 +182,9 @@ export class SupervisorCore {
         this.respawnTimes = this.respawnTimes.filter((ts) => t - ts < this.windowMs);
         if (this.respawnTimes.length >= this.maxRespawns) {
             this.mode = 'terminal';
-            // PR #273 review: initialize is exempt from pending (replayable), so a
-            // worker that crash-loops to exhaustion before EVER answering it would
-            // otherwise go terminal silently — the MCP host hangs on the handshake.
+            // initialize is exempt from pending (replayable), so a worker that
+            // crash-loops to exhaustion before EVER answering it would otherwise go
+            // terminal silently — the MCP host would hang on the handshake.
             if (this.initializeId !== null && !this.initializeAnswered) {
                 errors.push({ kind: 'toClient', line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath) });
             }
@@ -200,23 +208,22 @@ export class SupervisorCore {
         if (this.mode !== 'restarting')
             return [];
         if (this.cachedInitialize !== null && this.initializeId !== null) {
-            // Only the `initialize` request replays here. The cached `initialized`
-            // notification follows the fresh worker's RESPONSE (see onWorkerLine's
-            // swallow branch) — strict MCP handshake ordering, no reliance on the
-            // SDK tolerating early notifications (codex-pair MED).
+            // Only the `initialize` request replays here; the mode stays
+            // `restarting` until the fresh worker answers it, so no client traffic
+            // can reach a pre-handshake worker. The cached `initialized`
+            // notification follows the response (strict MCP handshake ordering).
             const replay = [{ kind: 'toWorker', line: this.cachedInitialize }];
             if (this.initializeAnswered) {
                 // Claude Code already has its initialize response — the fresh
                 // worker's duplicate must be swallowed; initialized + queue follow.
                 this.replaySwallowId = this.initializeId;
-                return replay;
             }
-            // Crash before the first initialize response: the fresh worker's
-            // answer is the REAL one — forward it. The client sends its own
-            // `initialized` after receiving it (normal flow), so nothing else
-            // replays. Nothing can be queued yet either.
-            this.mode = 'running';
-            return [...replay, ...this.drainQueue()];
+            else {
+                // Crash before the first initialize response: the fresh worker's
+                // answer is the REAL one — forwarded on arrival, then the queue.
+                this.replayForwardId = this.initializeId;
+            }
+            return replay;
         }
         this.mode = 'running';
         return this.drainQueue();

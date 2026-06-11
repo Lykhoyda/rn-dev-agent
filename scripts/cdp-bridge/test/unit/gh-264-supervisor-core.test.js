@@ -53,10 +53,16 @@ test('GH#264 core: crash BEFORE the first initialize response — fresh worker a
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerExit(null, 'SIGKILL', false);
   const replay = core.onSpawned();
-  assert.deepEqual(replay[0], { kind: 'toWorker', line: req(1, 'initialize') });
-  // Claude Code never saw an initialize response — the fresh worker's answer
-  // must reach it, not be swallowed.
-  assert.deepEqual(core.onWorkerLine(res(1)), [{ kind: 'toClient', line: res(1) }]);
+  assert.deepEqual(replay, [{ kind: 'toWorker', line: req(1, 'initialize') }]);
+  // Until the fresh worker answers, the supervisor stays restarting — client
+  // traffic queued in this window must NOT reach a pre-handshake worker.
+  assert.equal(core.state, 'restarting');
+  core.onClientLine(req(4, 'tools/call'));             // queued, not forwarded
+  // The fresh worker's answer is the REAL one — forwarded, then queue drains.
+  assert.deepEqual(core.onWorkerLine(res(1)), [
+    { kind: 'toClient', line: res(1) },
+    { kind: 'toWorker', line: req(4, 'tools/call') },
+  ]);
   assert.equal(core.state, 'running');
 });
 
@@ -193,16 +199,6 @@ test('GH#264 cdp_status failure paths also carry bridge supervision facts', () =
   assert.ok(wired >= 4, `expected bridge on success + 3 failure paths, found ${wired}`);
 });
 
-// Plan-review pin: the supervisor's hot-reload forwards SIGUSR2 to the worker
-// and relies on the worker's documented `SIGUSR2 → shutdown(1)` (exit code 1
-// → respawn). If someone "fixes" that to shutdown(0), the clean-exit-0 policy
-// would make SIGUSR2 silently kill the whole session instead of reloading.
-const indexSrc = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/index.ts'), 'utf8');
-
-test('GH#264 worker SIGUSR2 stays exit-1 (hot-reload contract with the supervisor)', () => {
-  assert.match(indexSrc, /SIGUSR2[\s\S]{0,200}?shutdown\(1\)/);
-});
 
 // Review finding (Gemini, PR #273): SIGUSR2 hot-reload exits 1, which charged
 // the crash budget — 3 intentional reloads in 60s wedged the bridge into

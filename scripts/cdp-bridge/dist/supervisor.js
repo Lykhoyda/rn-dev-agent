@@ -84,12 +84,12 @@ else {
         if (child.stdout) {
             // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences —
             // a multi-byte codepoint split across 'data' events must not corrupt
-            // the JSON (plan-review BLOCKER; the SDK's own ReadBuffer does the same).
+            // the JSON (the SDK's own ReadBuffer does the equivalent).
             child.stdout.setEncoding('utf8');
-            // Per-child splitter (PR #273 Codex P2): a worker killed mid-write
-            // leaves an unterminated tail; a shared splitter would prefix the NEXT
-            // worker's first line with it, corrupting the replayed-initialize
-            // answer. Scoping the buffer to the child makes that impossible.
+            // Per-child splitter: a worker killed mid-write leaves an unterminated
+            // tail; a shared splitter would prefix the NEXT worker's first line
+            // with it, corrupting the replayed-initialize answer. Scoping the
+            // buffer to the child makes that impossible.
             const childLines = new LineSplitter();
             child.stdout.on('data', (chunk) => {
                 for (const line of childLines.push(chunk))
