@@ -96,6 +96,8 @@ One mechanism per capability tier — **L1 + L2 coexist** (drive with XCTest, as
 
 The MCP server is a Node.js process that maintains a persistent WebSocket connection to the React Native app's Hermes engine through Metro's CDP endpoint.
 
+Since #264 the entry point is a **supervisor split**: a thin stdio shim (`dist/supervisor.js`) that holds zero network sockets owns the MCP connection with Claude Code and spawns the real bridge as a respawnable worker. Killing everything on Metro's port (`lsof -ti tcp:8081 | xargs kill -9` — a common recovery step) used to SIGKILL the whole server and cost the session every tool; now it only takes the worker, which the supervisor respawns (bounded: 3 per rolling 60 s), replaying the cached MCP `initialize` handshake so the session continues. In-flight calls at the moment of death fail fast with a "worker restarted — retry the call" error. Supervision state is visible in `cdp_status` → `bridge: { supervised, workerRestarts, lastWorkerExit }`; opt out with `RN_BRIDGE_SUPERVISOR=0`.
+
 **74 tools** across five families:
 - **CDP** — React internals via Chrome DevTools Protocol (component tree, store state, navigation, profiling, network)
 - **Device** — Native interaction (iOS: rn-fast-runner, Android: agent-device)
