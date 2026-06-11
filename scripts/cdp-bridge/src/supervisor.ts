@@ -41,7 +41,6 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     logPath: logger.logFilePath,
   });
   const clientLines = new LineSplitter();
-  const workerLines = new LineSplitter();
   let worker: ChildProcess | null = null;
   let shutdownRequested = false;
 
@@ -85,8 +84,13 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       // a multi-byte codepoint split across 'data' events must not corrupt
       // the JSON (plan-review BLOCKER; the SDK's own ReadBuffer does the same).
       child.stdout.setEncoding('utf8');
+      // Per-child splitter (PR #273 Codex P2): a worker killed mid-write
+      // leaves an unterminated tail; a shared splitter would prefix the NEXT
+      // worker's first line with it, corrupting the replayed-initialize
+      // answer. Scoping the buffer to the child makes that impossible.
+      const childLines = new LineSplitter();
       child.stdout.on('data', (chunk: string) => {
-        for (const line of workerLines.push(chunk)) apply(core.onWorkerLine(line));
+        for (const line of childLines.push(chunk)) apply(core.onWorkerLine(line));
       });
     }
     child.on('exit', (code, signal) => onDeath(code, signal, ''));

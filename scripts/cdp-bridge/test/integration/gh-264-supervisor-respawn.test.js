@@ -162,3 +162,29 @@ test('GH#264 supervisor: SIGUSR2 hot-reload respawns without burning the crash b
     s.child.kill('SIGTERM');
   }
 });
+
+const PARTIAL = resolve(__dirname, '../fixtures/partial-then-echo-worker.mjs');
+
+test('GH#264 supervisor: dead worker\'s partial stdout frame does not contaminate the respawned worker (PR #273 Codex P2)', async () => {
+  // Incarnation 0 writes a partial JSON frame (no newline) and dies; the
+  // splitter must not prefix the fresh worker's first line with that tail —
+  // otherwise the replayed-initialize answer corrupts and garbage reaches
+  // the client.
+  const s = startSupervisor(PARTIAL);
+  try {
+    const initId = s.send('initialize');
+    // First incarnation never answers (partial frame only) and exits 1;
+    // the respawned echo incarnation answers the REPLAYED initialize.
+    const initRes = JSON.parse(await s.nextLine());
+    assert.equal(initRes.id, initId, 'first full line is the fresh worker\'s initialize answer');
+    assert.equal(initRes.result.echo, 'initialize');
+    assert.equal(initRes.result.restarts, '1');
+
+    const qId = s.send('ping');
+    const reply = JSON.parse(await s.nextLine());
+    assert.equal(reply.id, qId);
+    assert.equal(reply.result.echo, 'ping');
+  } finally {
+    s.child.kill('SIGTERM');
+  }
+});
