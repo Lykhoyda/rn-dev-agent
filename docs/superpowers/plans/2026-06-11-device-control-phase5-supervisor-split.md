@@ -94,12 +94,14 @@ console.log(`[diag] bridge pid ${child.pid} — now kill Metro per the matrix; C
 
 - [ ] **Step 3: Record findings in THIS plan file** under "Task 0 findings" below (amend the plan commit). Expected per spec: (a)/(b) leave the bridge process alive (if NOT — that's a worker crash bug: STOP, debug with superpowers:systematic-debugging, fix with a TDD test before proceeding; the known suspect class is unguarded `'error'` emitters on closed sockets in `metro/events-client.ts` and `cdp/recovery.ts`); (c) SIGKILLs the bridge (confirming the split is the only fix); (d) documents whether a surviving bridge reconnects.
 
-#### Task 0 findings (fill in before Task 1)
+#### Task 0 findings (run 2026-06-11, booted iPhone 17 Pro, Metro for workspace test-app, probe bridge pid 65520)
 
-- (a) graceful Metro stop: _pending_
-- (b) Metro killed by PID: _pending_
-- (c) kill-by-port: _pending_
-- (d) reconnect after new Metro: _pending_
+- (a) graceful Metro stop (`kill -INT <metro>`): **BRIDGE ALIVE** — degrades cleanly within one 2s poll to `"Metro not found on ports 8081, 8082, 19000, 19006"`. No crash path. No hardening needed.
+- (b) Metro killed by PID (`kill -9 <metro>`): **BRIDGE ALIVE** — same clean degradation.
+- (c) kill-by-port (`lsof -ti tcp:8081 | xargs kill -9`): **BRIDGE DIED `signal=SIGKILL`** — pre-kill `lsof -ti tcp:8081` listed the bridge (ESTABLISHED WS to Metro), so the xargs kill took it with Metro + the simulator app. #264 reproduced exactly; unsurvivable in-process, motivating the split.
+- (d) reconnect after new Metro: **YES** — the surviving bridge ((a)/(b) variants) resumed `"Metro is up on port 8081..."` within seconds of `expo start`, no restart needed.
+
+**Conclusion:** worker hardening (Task 6) is a **no-op** — both graceful and PID-kill paths already degrade without crashing; (c) is fatal by OS semantics and only the supervisor fixes it.
 
 ---
 
