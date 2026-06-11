@@ -143,6 +143,12 @@ export interface StatusResult {
     enabled: boolean;
     source: 'env' | 'config' | 'default';
   };
+  /** GH#264 Phase 5: supervision facts the supervisor sets via env at each worker spawn. */
+  bridge?: {
+    supervised: boolean;
+    workerRestarts: number;
+    lastWorkerExit: string | null;
+  };
   /**
    * #210: iOS device-session visibility. `sessionOpen` is whether a device session
    * has been opened; `rnFastRunner` is the XCUITest runner's liveness (only probed

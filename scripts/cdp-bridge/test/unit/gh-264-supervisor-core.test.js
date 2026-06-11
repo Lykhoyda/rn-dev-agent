@@ -1,10 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import {
   SupervisorCore,
   workerDeathErrorLine,
   terminalErrorLine,
   workerExitDetail,
+  bridgeEnvState,
 } from '../../dist/lifecycle/supervisor-core.js';
 
 const req = (id, method) => JSON.stringify({ jsonrpc: '2.0', id, method, params: {} });
@@ -156,4 +160,31 @@ test('GH#264 core: workerRestarts is monotonic lifetime telemetry, distinct from
     core.onSpawned();
   }
   assert.equal(core.restartCount, 5, 'monotonic — does not shrink as the window slides');
+});
+
+test('GH#264 bridgeEnvState: unsupervised by default, parses supervisor-set env', () => {
+  assert.deepEqual(bridgeEnvState({}), { supervised: false, workerRestarts: 0, lastWorkerExit: null });
+  assert.deepEqual(
+    bridgeEnvState({ RN_BRIDGE_SUPERVISED: '1', RN_BRIDGE_RESTARTS: '2', RN_BRIDGE_LAST_EXIT: 'signal SIGKILL' }),
+    { supervised: true, workerRestarts: 2, lastWorkerExit: 'signal SIGKILL' },
+  );
+  assert.equal(bridgeEnvState({ RN_BRIDGE_RESTARTS: 'garbage' }).workerRestarts, 0);
+});
+
+const statusSrc = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/tools/status.ts'), 'utf8');
+
+test('GH#264 cdp_status wires bridgeEnvState into the status result', () => {
+  assert.match(statusSrc, /bridge:\s*bridgeEnvState\(process\.env\)/);
+});
+
+// Plan-review pin: the supervisor's hot-reload forwards SIGUSR2 to the worker
+// and relies on the worker's documented `SIGUSR2 → shutdown(1)` (exit code 1
+// → respawn). If someone "fixes" that to shutdown(0), the clean-exit-0 policy
+// would make SIGUSR2 silently kill the whole session instead of reloading.
+const indexSrc = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/index.ts'), 'utf8');
+
+test('GH#264 worker SIGUSR2 stays exit-1 (hot-reload contract with the supervisor)', () => {
+  assert.match(indexSrc, /SIGUSR2[\s\S]{0,200}?shutdown\(1\)/);
 });
