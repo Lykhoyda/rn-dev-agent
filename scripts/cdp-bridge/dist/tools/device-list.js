@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult } from '../utils.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
@@ -25,10 +26,22 @@ export function createDeviceListHandler() {
 export function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
     // Phase 134.3 (deepsec MEDIUM path-traversal): caller-supplied `path`
     // could contain `..` segments that escape the intended directory.
-    // Absolute paths to legitimate locations (e.g. ~/Desktop) are still
-    // allowed — only `..` traversal is refused.
+    // Absolute paths to legitimate locations are still allowed — only `..`
+    // traversal is refused. The guard runs on the RAW input, before tilde
+    // expansion, so `~/../` can't smuggle a collapsed `..` past it via join().
     if (args.path && pathHasTraversal(args.path)) {
         throw new PathTraversalScreenshotError(`Screenshot path "${args.path}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`);
+    }
+    // GH #265 (codex review): Node never expands `~`, and with the mkdir-p
+    // precondition a `~/Desktop/x.jpg` path would otherwise create a literal
+    // `./~/Desktop/` under the bridge cwd and report success into the wrong
+    // location. Expand a leading `~/` here so every consumer (mkdir,
+    // advisories, all capture tiers) sees the same real path; refuse the
+    // unexpandable forms (`~user/...`, bare `~`) instead of mislanding.
+    if (args.path?.startsWith('~')) {
+        if (args.path.startsWith('~/'))
+            return join(homedir(), args.path.slice(2));
+        throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
     }
     if (args.path)
         return args.path;
@@ -61,6 +74,12 @@ class PathTraversalScreenshotError extends Error {
     constructor(message) {
         super(message);
         this.name = 'PathTraversalScreenshotError';
+    }
+}
+class TildeScreenshotPathError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'TildeScreenshotPathError';
     }
 }
 /**

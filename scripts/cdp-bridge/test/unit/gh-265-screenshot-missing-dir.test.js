@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 
 const RAW_MOD = '../../dist/tools/device-screenshot-raw.js';
 const DEVICE_LIST_MOD = '../../dist/tools/device-list.js';
@@ -95,6 +95,32 @@ test('mkdir failure (file blocks an intermediate segment): honest target-dir err
   } finally {
     raw._resetForTest();
   }
+});
+
+// Codex review of the mkdir fix: Node never expands `~`, so mkdir-p on a
+// `~/Desktop/x.jpg` path would create a literal `./~/Desktop/` under the
+// bridge cwd and report SUCCESS into the wrong location — converting the old
+// loud failure into a silent mislanding. Expansion/rejection must happen in
+// deriveScreenshotPath so every consumer (mkdir, advisories, all capture
+// tiers) sees the same real path.
+
+test('deriveScreenshotPath: leading ~/ expands to the real home directory', async () => {
+  const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
+  assert.equal(
+    deriveScreenshotPath({ path: '~/Desktop/gh265.jpg' }),
+    join(homedir(), 'Desktop/gh265.jpg'),
+  );
+});
+
+test('deriveScreenshotPath: unexpandable ~ forms are refused honestly, never a literal ./~ directory', async () => {
+  const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
+  assert.throws(() => deriveScreenshotPath({ path: '~someuser/gh265.jpg' }), /absolute path/i);
+  assert.throws(() => deriveScreenshotPath({ path: '~' }), /absolute path/i);
+});
+
+test('deriveScreenshotPath: traversal inside a ~/ path is still refused (guard runs on raw input, before expansion)', async () => {
+  const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
+  assert.throws(() => deriveScreenshotPath({ path: '~/../etc/gh265.jpg' }), /traversal/i);
 });
 
 test('runner path (implicit platform): parent directory exists by the time runAgentDevice dispatches', async (t) => {
