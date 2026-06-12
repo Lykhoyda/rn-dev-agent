@@ -87,14 +87,26 @@ elif curl -s --max-time 2 http://localhost:8082/status 2>/dev/null | grep -q "pa
 fi
 
 # --- Collect recent telemetry (last 20 events, redacted) ---
+# GH #266: the per-tool-call telemetry writer was removed with the Experience
+# Engine (GH #200), so on current plugin versions these files stop updating.
+# Cross-check the newest event's age against now and only ship events that are
+# actually recent (<24h, e.g. a legacy plugin version still writing); report
+# staleness explicitly instead of presenting weeks-old events as current.
 
 recent_telemetry="[]"
+telemetry_status="none"
 if [ -d "$TELEMETRY_DIR" ]; then
   latest_log=$(ls -t "$TELEMETRY_DIR"/*.jsonl 2>/dev/null | head -1)
   if [ -n "$latest_log" ]; then
-    raw=$(tail -20 "$latest_log" 2>/dev/null || echo "")
-    if [ -n "$raw" ]; then
-      recent_telemetry=$(redact "$raw")
+    age_days=$(python3 -c "import os,sys,time; print(int((time.time()-os.path.getmtime(sys.argv[1]))//86400))" "$latest_log" 2>/dev/null || echo "")
+    if [ -n "$age_days" ] && [ "$age_days" -lt 1 ] 2>/dev/null; then
+      telemetry_status="ok"
+      raw=$(tail -20 "$latest_log" 2>/dev/null || echo "")
+      if [ -n "$raw" ]; then
+        recent_telemetry=$(redact "$raw")
+      fi
+    else
+      telemetry_status="stale (last event ${age_days:-unknown} days ago — telemetry capture is not active in this plugin version; it was removed with the Experience Engine, GH #200. Old events omitted.)"
     fi
   fi
 fi
@@ -147,6 +159,8 @@ for line in lines:
         continue
     try:
         e = json.loads(line)
+        if not isinstance(e, dict):
+            continue
         safe = {k: e[k] for k in ['ts','event','tool','result','latency_ms','phase'] if k in e}
         events.append(safe)
     except:
@@ -171,6 +185,7 @@ data = {
         'maestro_runner': sys.argv[11],
     },
     'recent_telemetry_lines': json.loads(sys.argv[12]),
+    'telemetry_status': sys.argv[14],
 }
 log_tail = sys.argv[13].strip()
 if log_tail:
@@ -189,4 +204,5 @@ print(json.dumps(data, indent=2))
   "$agent_device_version" \
   "$maestro_runner_version" \
   "$telemetry_json" \
-  "$cdp_log_tail"
+  "$cdp_log_tail" \
+  "$telemetry_status"

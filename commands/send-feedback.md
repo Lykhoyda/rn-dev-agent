@@ -46,7 +46,7 @@ This collects (all redacted):
 - OS, Node.js, npm versions
 - Simulator/emulator status, Metro status
 - agent-device and maestro-runner versions
-- Last 20 telemetry events (tool name, result, latency — no params or paths)
+- Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
 
 Also call `cdp_status` to get current CDP connection state (if available).
 
@@ -116,7 +116,7 @@ gh issue create \
 
 ## Recent Tool Activity
 
-<table of last 5 tool calls with result and latency>
+<ONLY if recent_telemetry_lines is non-empty: table of last 5 tool calls with result and latency. Otherwise render the telemetry_status value verbatim on one line (e.g. "Telemetry: none" or the stale explanation) — never present old events as recent (GH #266).>
 
 ## CDP State at Time of Report
 
