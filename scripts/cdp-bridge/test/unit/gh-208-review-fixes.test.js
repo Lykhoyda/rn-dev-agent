@@ -74,6 +74,7 @@ test('recoverDetached surfaces a simctl launch error instead of hiding it behind
     reconnect: async () => {},
     probeAlive: async () => false,
     sleep: async () => {},
+    isAppInstalled: async () => null,
   });
   assert.equal(r.recovered, false);
   assert.equal(r.reason, 'still-detached');

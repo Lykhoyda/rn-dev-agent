@@ -5,6 +5,8 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { probeFreshness } from './recovery.js';
+import { probeAppInstalled } from './app-installed-probe.js';
+import type { SnapshotHint } from './app-installed-probe.js';
 
 const execFile = promisify(execFileCb);
 const DEFAULT_MAX_PER_SESSION = 3;
@@ -13,6 +15,7 @@ const RELAUNCH_SETTLE_MS = 1200;
 export type DetachedReason =
   | 'recovered'
   | 'still-detached'
+  | 'app-not-installed'
   | 'no-session'
   | 'flow-active'
   | 'opted-out'
@@ -25,11 +28,27 @@ export interface DetachedRecoveryResult {
   attempt: number;
   /** GH #208 review (Codex F3): a `simctl launch` failure message, surfaced instead of hidden. */
   error?: string;
+  /** GH #262: set on 'app-not-installed' so the caller can build install advice. */
+  udid?: string;
+  appId?: string;
+  snapshotHint?: SnapshotHint;
 }
 
 let attempts = 0;
+/** GH #262: a CONFIRMED missing bundle, cached so follow-up recoveries
+ * short-circuit (no pointless terminate/launch, no budget burn) until a
+ * cheap re-probe sees it reinstalled. */
+let confirmedNotInstalled: { udid: string; appId: string } | null = null;
+/** GH #262: serialize concurrent recoveries — agent workflows fire cdp_status
+ * in bursts; followers share the leader's verdict instead of racing their own
+ * simctl terminate/launch and burning the consecutive-attempt budget. */
+let inflight: Promise<DetachedRecoveryResult> | null = null;
+
 /** Reset the per-session recovery budget (on device_snapshot open AND on a successful recovery). */
-export function resetDetachedRecoveryCounter(): void { attempts = 0; }
+export function resetDetachedRecoveryCounter(): void {
+  attempts = 0;
+  confirmedNotInstalled = null;
+}
 
 type Exec = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ stdout: string; stderr: string }>;
 
@@ -67,6 +86,14 @@ export interface RecoverDetachedDeps {
   probeAlive?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
   maxPerSession?: number;
+  /** GH #262: tri-state install probe (true/false/null=unknown). */
+  isAppInstalled?: (udid: string, appId: string) => Promise<boolean | null>;
+  /**
+   * GH #262: best-effort reinstallable-snapshot hint. NO default — the
+   * implementation lives in the tools layer (resolve-ios-app-file.ts) and
+   * cdp/ must not import from tools/; status.ts/restart.ts inject it.
+   */
+  snapshotHint?: (appId: string) => SnapshotHint | null;
 }
 
 /**
@@ -84,6 +111,19 @@ export interface RecoverDetachedDeps {
  * who'd rather recover manually.
  */
 export async function recoverDetached(
+  client: CDPClient,
+  deps: RecoverDetachedDeps = {},
+): Promise<DetachedRecoveryResult> {
+  if (inflight) return inflight;
+  inflight = recoverDetachedInner(client, deps);
+  try {
+    return await inflight;
+  } finally {
+    inflight = null;
+  }
+}
+
+async function recoverDetachedInner(
   client: CDPClient,
   deps: RecoverDetachedDeps = {},
 ): Promise<DetachedRecoveryResult> {
@@ -105,6 +145,34 @@ export async function recoverDetached(
   if ((session.platform ?? 'ios') !== 'ios') {
     return { recovered: false, reason: 'unsupported-platform', attempt: attempts };
   }
+
+  const udid = session.deviceId;
+  const appId = session.appId;
+  const isAppInstalled = deps.isAppInstalled ?? probeAppInstalled;
+  const buildHint = (): SnapshotHint | undefined => {
+    if (!deps.snapshotHint) return undefined;
+    try { return deps.snapshotHint(appId) ?? undefined; } catch { return undefined; }
+  };
+
+  // GH #262: a previously CONFIRMED missing bundle short-circuits the whole
+  // attempt — but a cheap re-probe first, so a user reinstall self-heals.
+  if (confirmedNotInstalled
+      && confirmedNotInstalled.udid === udid
+      && confirmedNotInstalled.appId === appId) {
+    if ((await isAppInstalled(udid, appId)) === false) {
+      const snapshotHint = buildHint();
+      return {
+        recovered: false,
+        reason: 'app-not-installed',
+        attempt: attempts,
+        udid,
+        appId,
+        ...(snapshotHint ? { snapshotHint } : {}),
+      };
+    }
+    confirmedNotInstalled = null;
+  }
+
   if (attempts >= max) {
     return { recovered: false, reason: 'budget-exhausted', attempt: attempts };
   }
@@ -112,8 +180,6 @@ export async function recoverDetached(
   // A real, side-effecting attempt.
   attempts += 1;
   const attempt = attempts;
-  const udid = session.deviceId;
-  const appId = session.appId;
 
   const stopFastRunner = deps.stopFastRunner ?? defaultStopFastRunner;
   const relaunchApp = deps.relaunchApp ?? defaultRelaunchApp;
@@ -130,6 +196,24 @@ export async function recoverDetached(
     // here is a real `simctl launch` failure (bad UDID/bundleId, sim unavailable).
     // Capture it (Codex F3) so the verdict is actionable, not a bare "still-detached".
     relaunchError = e instanceof Error ? e.message : String(e);
+    // GH #262: a failed launch is ambiguous — a transient hiccup and a missing
+    // bundle look identical here, but the second makes every retry (and the
+    // "relaunch manually" advice) pointless. Ask simctl for ground truth; on a
+    // CONFIRMED missing bundle, short-circuit — settle/reconnect/liveness below
+    // cannot succeed. Probe verdict null = unknown → fall through (fail open).
+    if ((await isAppInstalled(udid, appId)) === false) {
+      confirmedNotInstalled = { udid, appId };
+      const snapshotHint = buildHint();
+      return {
+        recovered: false,
+        reason: 'app-not-installed',
+        attempt,
+        error: relaunchError,
+        udid,
+        appId,
+        ...(snapshotHint ? { snapshotHint } : {}),
+      };
+    }
   }
   await sleep(RELAUNCH_SETTLE_MS);
   try { await reconnect(); } catch { /* best-effort; the liveness probe is the verdict */ }

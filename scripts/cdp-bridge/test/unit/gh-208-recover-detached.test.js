@@ -93,7 +93,7 @@ test('recoverDetached: caps CONSECUTIVE failures; a success resets the budget', 
 
 test('recoverDetached: relaunch throws + probe FALSE → still-detached (no false positive)', async () => {
   resetDetachedRecoveryCounter();
-  const { deps } = baseDeps({ relaunchApp: async () => { throw new Error('simctl boom'); }, probeAlive: async () => false });
+  const { deps } = baseDeps({ relaunchApp: async () => { throw new Error('simctl boom'); }, probeAlive: async () => false, isAppInstalled: async () => null });
   const r = await recoverDetached({}, deps);
   assert.equal(r.recovered, false);
   assert.equal(r.reason, 'still-detached');
