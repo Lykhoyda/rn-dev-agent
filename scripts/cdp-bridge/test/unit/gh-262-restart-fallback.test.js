@@ -64,12 +64,78 @@ test('hardReset: active iOS session appId outranks app.json; simctl targets the 
     execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
     stopFastRunner: () => {},
     sleep: async () => {},
-    getSession: () => ({ deviceId: 'UDID-S', appId: 'com.session.app', platform: 'ios' }),
+    getSession: () => ({ deviceId: 'F1A2B3C4-1111-2222-3333-444455556666', appId: 'com.session.app', platform: 'ios' }),
     resolveBundleIdStrict: () => 'com.fallback.app',
   });
   expectOk(await handler({ hardReset: true }));
-  assert.ok(simctl.some((c) => c === 'simctl terminate UDID-S com.session.app'), `got: ${simctl}`);
-  assert.ok(simctl.some((c) => c === 'simctl launch UDID-S com.session.app'));
+  assert.ok(simctl.some((c) => c === 'simctl terminate F1A2B3C4-1111-2222-3333-444455556666 com.session.app'), `got: ${simctl}`);
+  assert.ok(simctl.some((c) => c === 'simctl launch F1A2B3C4-1111-2222-3333-444455556666 com.session.app'));
+});
+
+test('codex-pair Fix 1: active session appId outranks the (stale) cache', async () => {
+  // 1st restart: an iOS connectedTarget populates the cache with the OLD app.
+  const oldAppClient = {
+    get metroPort() { return 8081; },
+    get isConnected() { return false; },
+    connectedTarget: { description: 'com.old.app', platform: 'ios' },
+    disconnect: async () => {},
+    autoConnect: async () => 'Connected',
+  };
+  const plainClient = {
+    get metroPort() { return 8081; },
+    get isConnected() { return false; },
+    disconnect: async () => {},
+    autoConnect: async () => 'Connected',
+  };
+  let current = oldAppClient;
+  const simctl = [];
+  let session = null;
+  const handler = createRestartHandler(
+    () => current,
+    () => {},
+    () => plainClient,
+    {
+      getSession: () => session,
+      execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+      stopFastRunner: () => {},
+      sleep: async () => {},
+      resolveBundleIdStrict: () => null,
+    },
+  );
+  // Soft restart through the old-app client → cache now holds com.old.app (ios).
+  expectOk(await handler({}));
+  // Switch apps in the same bridge process: no connectedTarget, but a live
+  // session pointing at the CURRENT app.
+  current = plainClient;
+  session = { deviceId: 'F1A2B3C4-1111-2222-3333-444455556666', appId: 'com.current.app', platform: 'ios' };
+
+  expectOk(await handler({ hardReset: true }));
+  assert.ok(
+    simctl.some((c) => c === 'simctl launch F1A2B3C4-1111-2222-3333-444455556666 com.current.app'),
+    `session appId must outrank the stale cache — got: ${JSON.stringify(simctl)}`,
+  );
+  assert.ok(
+    !simctl.some((c) => c.includes('com.old.app')),
+    `stale cached app.id must NOT reach simctl — got: ${JSON.stringify(simctl)}`,
+  );
+});
+
+test('codex-pair Fix 2: malformed session deviceId falls back to booted (never reaches simctl argv)', async () => {
+  const simctl = [];
+  const handler = harness({
+    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    stopFastRunner: () => {},
+    sleep: async () => {},
+    getSession: () => ({ deviceId: 'evil; rm -rf /', appId: 'com.session.app', platform: 'ios' }),
+    resolveBundleIdStrict: () => 'com.fallback.app',
+  });
+  expectOk(await handler({ hardReset: true }));
+  // bundleId from the session is still trusted; only the deviceId is rejected.
+  assert.ok(simctl.some((c) => c === 'simctl launch booted com.session.app'), `got: ${JSON.stringify(simctl)}`);
+  assert.ok(
+    !simctl.some((c) => c.includes('evil')),
+    `malformed deviceId must never reach simctl argv — got: ${JSON.stringify(simctl)}`,
+  );
 });
 
 test('hardReset: strict resolver also unresolvable → existing skip-simctl step (unchanged)', async () => {
@@ -83,7 +149,7 @@ test('hardReset: strict resolver also unresolvable → existing skip-simctl step
   assert.ok(data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'));
 });
 
-test('hardReset: launch fails + probe FALSE → APP_NOT_INSTALLED step with quoted advice', async () => {
+test('hardReset: launch fails + probe FALSE → typed APP_NOT_INSTALLED failure (advice as error, steps in meta)', async () => {
   const handler = harness({
     execFile: async (cmd, args) => {
       if (args.includes('launch')) throw new Error('FBSOpenApplicationServiceErrorDomain, code=4');
@@ -99,11 +165,18 @@ test('hardReset: launch fails + probe FALSE → APP_NOT_INSTALLED step with quot
     },
     snapshotHint: () => ({ path: '/tmp/rn-appfile-snapshots/My App.app', ageMinutes: 3 }),
   });
-  const data = expectOk(await handler({ hardReset: true }));
-  const step = data.hardResetSteps.find((s) => s.includes('APP_NOT_INSTALLED'));
-  assert.ok(step, `expected an APP_NOT_INSTALLED step, got: ${JSON.stringify(data.hardResetSteps)}`);
-  assert.match(step, /com\.fallback\.app is not installed/);
-  assert.match(step, /xcrun simctl install 'booted' '\/tmp\/rn-appfile-snapshots\/My App\.app'/);
+  const result = await handler({ hardReset: true });
+  // A confirmed-missing bundle is the primary error, not a buried step.
+  const error = expectFail(result);
+  assert.match(error, /com\.fallback\.app is not installed/);
+  assert.match(error, /xcrun simctl install 'booted' '\/tmp\/rn-appfile-snapshots\/My App\.app'/);
+  const env = parseEnvelope(result);
+  assert.equal(env.code, 'APP_NOT_INSTALLED');
+  // hardResetSteps stays complete in meta — the launch:err step is recorded
+  // before we return.
+  const steps = env.meta?.hardResetSteps;
+  assert.ok(Array.isArray(steps), `expected hardResetSteps in meta, got: ${JSON.stringify(env.meta)}`);
+  assert.ok(steps.some((s) => s.includes('APP_NOT_INSTALLED')), `got: ${JSON.stringify(steps)}`);
 });
 
 test('hardReset: launch fails + probe NULL → raw launch:err step (fail open, unchanged)', async () => {

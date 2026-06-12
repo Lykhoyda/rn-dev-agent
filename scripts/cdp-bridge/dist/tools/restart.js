@@ -11,24 +11,33 @@ import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 const defaultExecFile = promisify(execFileCb);
 /**
- * Module-scoped last-known bundle id (Codex review finding #1, conf 92).
+ * Module-scoped last-known bundle id, keyed by platform (GH #262 / #194 BUG 2).
  *
- * After a first `hardReset=true` call, a NEW CDPClient is set via
- * `setClient(createClient(...))`. Its `connectedTarget` starts as `null`
- * until `autoConnect` succeeds. If `autoConnect` fails (very plausible —
- * Hermes hasn't re-registered on Metro yet within our 3s window), a
- * second `cdp_restart hardReset=true` would read `null` as bundleId and
- * skip the simctl path — degrading to a useless soft reset exactly when
- * the user needs the hard path most.
- *
+ * After a first `hardReset=true` call, a NEW CDPClient is set whose
+ * `connectedTarget` is `null` until `autoConnect` succeeds. If autoConnect
+ * fails (Hermes hasn't re-registered within our window), a second
+ * `hardReset=true` would read `null` as bundleId and degrade to a soft reset.
  * Cache the bundleId at module scope so subsequent calls keep working.
- * Updated every time we observe a non-null `connectedTarget.description`.
  *
- * GH #262 multi-review: keyed by platform — a single bridge process can
- * switch platform between connects, and a cross-platform cache hit would
- * feed an Android package to iOS simctl (then misreport APP_NOT_INSTALLED).
+ * Keyed by platform because a single bridge process can switch platform
+ * between connects, and a cross-platform cache hit would feed an Android
+ * package to iOS simctl (then misreport APP_NOT_INSTALLED).
  */
 const lastSeenBundleIds = new Map();
+/** Strict iOS simulator UDID shape (matches `xcrun simctl list` output). */
+const SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+/**
+ * GH #262: `session.deviceId` is persisted, untrusted state that reaches
+ * `xcrun simctl` argv. Accept only the literal `'booted'` or a strict UDID;
+ * anything else falls back to `'booted'` rather than shelling out with it.
+ */
+function safeSimctlTarget(deviceId) {
+    if (deviceId === 'booted')
+        return 'booted';
+    if (deviceId && SIMULATOR_UDID_RE.test(deviceId))
+        return deviceId;
+    return 'booted';
+}
 /**
  * Module-scoped in-flight guard (Codex review finding #2, conf 82).
  *
@@ -85,36 +94,46 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
             // is cleared on disconnect, and we need it to issue simctl commands.
             const observedBundleId = oldClient.connectedTarget?.description ?? null;
             const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+            // The cache write must happen on every restart (incl. soft) so a later
+            // hardReset still has a bundleId after autoConnect clears connectedTarget.
             if (observedBundleId)
                 lastSeenBundleIds.set(targetPlatform, observedBundleId);
-            const session = getSessionFn();
-            const sessionMatches = !!session && (session.platform ?? 'ios') === targetPlatform;
-            // Resolution priority (GH #262 / #194 BUG 2): explicit arg > current
-            // connectedTarget > cache > active-session appId > STRICT app.json.
-            // A fresh bridge process has no cache — without the fallbacks, hardReset
-            // silently degraded to a soft reset exactly when the hard path was
-            // needed. STRICT: an Android package must never be fed to iOS simctl.
-            let bundleId = args.bundleId
-                ?? observedBundleId
-                ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
-                ?? (sessionMatches ? session?.appId ?? null : null)
-                ?? resolveBundleIdStrictFn(targetPlatform);
-            // simctl targets the session's simulator when one is open — 'booted' is
-            // ambiguous with multiple booted sims.
-            const targetUdid = (sessionMatches ? session?.deviceId : undefined) ?? 'booted';
             const hardResetSteps = [];
-            // Phase 134.2 precedent (see device-session.ts): never let an
-            // unvalidated string reach `xcrun simctl terminate/launch` argv. An
-            // explicit bad arg fails fast; a bad value resolved from cache/config
-            // is dropped (treated as no-bundleId) rather than shelling out with it.
-            if (bundleId !== null && !isValidBundleId(bundleId)) {
-                if (args.bundleId !== undefined) {
-                    return failResult(`cdp_restart: invalid bundleId argument "${String(args.bundleId).slice(0, 80)}" — expected reverse-DNS app id like com.example.app`, 'INVALID_BUNDLE_ID');
-                }
-                hardResetSteps.push('skip-simctl:invalid-bundleId-from-cache-or-config');
-                bundleId = null;
-            }
+            let bundleId = null;
+            // Session lookup, the bundleId resolution chain, and UDID targeting only
+            // matter for the hardReset simctl path — a soft reset must do zero
+            // session/app.json I/O and must never fail on bundleId state.
             if (args.hardReset) {
+                const session = getSessionFn();
+                const sessionMatches = !!session && (session.platform ?? 'ios') === targetPlatform;
+                // Resolution priority (GH #262 / #194 BUG 2): explicit arg > current
+                // connectedTarget > active-session appId > cache > STRICT app.json.
+                // The open device session is current user intent; the cache is
+                // connect-time state that can be stale after switching apps in the
+                // same bridge process — so the session outranks the cache. A fresh
+                // bridge process has no cache, so without the fallbacks hardReset
+                // silently degraded to a soft reset. STRICT: an Android package must
+                // never be fed to iOS simctl.
+                bundleId = args.bundleId
+                    ?? observedBundleId
+                    ?? (sessionMatches ? session?.appId ?? null : null)
+                    ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
+                    ?? resolveBundleIdStrictFn(targetPlatform);
+                // simctl targets the session's simulator when one is open — 'booted' is
+                // ambiguous with multiple booted sims. deviceId is persisted/untrusted,
+                // so validate before it reaches argv (invalid → 'booted').
+                const targetUdid = safeSimctlTarget(sessionMatches ? session?.deviceId : undefined);
+                // Phase 134.2 precedent (see device-session.ts): never let an
+                // unvalidated string reach `xcrun simctl terminate/launch` argv. An
+                // explicit bad arg fails fast; a bad value resolved from cache/config
+                // is dropped (treated as no-bundleId) rather than shelling out with it.
+                if (bundleId !== null && !isValidBundleId(bundleId)) {
+                    if (args.bundleId !== undefined) {
+                        return failResult(`cdp_restart: invalid bundleId argument "${String(args.bundleId).slice(0, 80)}" — expected reverse-DNS app id like com.example.app`, 'INVALID_BUNDLE_ID');
+                    }
+                    hardResetSteps.push('skip-simctl:invalid-bundleId-from-cache-or-config');
+                    bundleId = null;
+                }
                 // Step 1: kill the fast-runner xcodebuild process. This is the
                 // agent-device XCTest test rig — if it's foreground, iOS treats
                 // the test-app as backgrounded and pauses its JS thread.
@@ -151,7 +170,14 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                                 hint = snapshotHintFn(bundleId);
                             }
                             catch { /* best-effort */ }
-                            hardResetSteps.push(`simctl launch:err(APP_NOT_INSTALLED — ${buildNotInstalledAdvice(targetUdid, bundleId, hint)})`);
+                            const advice = buildNotInstalledAdvice(targetUdid, bundleId, hint);
+                            // Record the step BEFORE returning so hardResetSteps in meta stays
+                            // complete, then return a typed failure: a confirmed-missing bundle
+                            // is the primary error, not a buried step the caller has to fish
+                            // out. The soft reset below cannot help — nothing connects to a
+                            // missing app — so we skip it and leave the existing client.
+                            hardResetSteps.push(`simctl launch:err(APP_NOT_INSTALLED — ${advice})`);
+                            return failResult(advice, 'APP_NOT_INSTALLED', { hardResetSteps });
                         }
                         else {
                             // Fatal-ish: if launch fails, the soft reset below will likely
