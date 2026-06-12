@@ -172,7 +172,8 @@ async function recoverDetachedInner(
   if (confirmedNotInstalled
       && confirmedNotInstalled.udid === udid
       && confirmedNotInstalled.appId === appId) {
-    if ((await isAppInstalled(udid, appId)) === false) {
+    const verdict = await isAppInstalled(udid, appId);
+    if (verdict === false) {
       const snapshotHint = buildHint();
       return {
         recovered: false,
@@ -182,6 +183,12 @@ async function recoverDetachedInner(
         appId,
         ...(snapshotHint ? { snapshotHint } : {}),
       };
+    }
+    if (verdict === true) {
+      // GH #262 (PR #280 review): a confirmed reinstall invalidates the
+      // consecutive-failure budget along with the cached diagnosis —
+      // otherwise recovery stays budget-exhausted against a healthy app.
+      attempts = 0;
     }
     confirmedNotInstalled = null;
   }

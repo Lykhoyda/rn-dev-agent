@@ -118,6 +118,40 @@ test('terminal cache self-heals: re-probe TRUE clears the cache and recovery pro
   assert.ok(calls.includes('relaunch'), 'normal recovery resumed after reinstall');
 });
 
+test('self-heal after exhausted-budget diagnosis also resets the budget (PR #280 P2)', async () => {
+  resetDetachedRecoveryCounter();
+  // Exhaust the budget (app installed, just wedged).
+  for (let i = 0; i < 3; i += 1) {
+    await recoverDetached({}, baseDeps({ isAppInstalled: async () => true }).deps);
+  }
+  // App uninstalled: exhausted-path probe diagnoses + caches.
+  assert.equal(
+    (await recoverDetached({}, baseDeps({ isAppInstalled: async () => false }).deps)).reason,
+    'app-not-installed',
+  );
+  // User reinstalls: recovery must actually RETRY (not budget-exhausted).
+  const calls = [];
+  const { deps } = baseDeps({
+    isAppInstalled: async () => true,
+    probeAlive: async () => true,
+  });
+  deps.relaunchApp = async () => { calls.push('relaunch'); };
+  const r = await recoverDetached({}, deps);
+  assert.equal(r.reason, 'recovered');
+  assert.equal(r.attempt, 1, 'budget restarted fresh after confirmed reinstall');
+  assert.ok(calls.includes('relaunch'));
+});
+
+test('self-heal re-probe NULL clears the cache but keeps the exhausted budget (fail open)', async () => {
+  resetDetachedRecoveryCounter();
+  for (let i = 0; i < 3; i += 1) {
+    await recoverDetached({}, baseDeps({ isAppInstalled: async () => true }).deps);
+  }
+  await recoverDetached({}, baseDeps({ isAppInstalled: async () => false }).deps); // cache it
+  const r = await recoverDetached({}, baseDeps({ isAppInstalled: async () => null }).deps);
+  assert.equal(r.reason, 'budget-exhausted', 'null verdict is not evidence of reinstall');
+});
+
 test('concurrent recoveries are serialized: followers share the leader verdict, one relaunch total', async () => {
   resetDetachedRecoveryCounter();
   let release;
