@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { CDPClient } from '../cdp-client.js';
 import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult } from '../utils.js';
@@ -49,6 +51,24 @@ export function deriveScreenshotPath(
   // allow cross-run races. `rand` is injectable for tests.
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
+}
+
+/**
+ * GH #265: every dispatch tier (simctl raw, rn-fast-runner, agent-device
+ * daemon/CLI, adb stream) fails opaquely when the target's parent directory
+ * doesn't exist — and that failure used to be blamed on device state
+ * ("transitioning state (booting, OOM, locked)"). New directories are the
+ * EXPECTED case: the EPHEMERAL_PATH advisory itself steers agents toward
+ * fresh `docs/proof/<slug>/` paths. Create the parent up front; surface a
+ * filesystem error honestly when creation fails.
+ */
+export function ensureScreenshotDir(path: string): { ok: true } | { ok: false; error: string } {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 class PathTraversalScreenshotError extends Error {
@@ -225,6 +245,16 @@ export async function captureAndResizeScreenshot(
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
   const argsWithPath = { ...args, path: requestedPath };
   const advisories = computeScreenshotAdvisories(args, requestedPath);
+  // GH #265: precondition check BEFORE any device probing — an unwritable
+  // target path must never be diagnosed as a device-state problem.
+  const targetDir = ensureScreenshotDir(requestedPath);
+  if (!targetDir.ok) {
+    return failResult(
+      `device_screenshot: target directory for "${requestedPath}" does not exist and could not be created (${targetDir.error}). The device is not at fault — fix the output path and retry.`,
+      'SCREENSHOT_FAILED',
+      { reason: 'target-dir-unavailable', path: requestedPath },
+    );
+  }
   // GH #136 PR-B: when `platform:` is explicit, hard-fail instead of falling
   // through to runAgentDevice. The original PR-A "graceful degradation" was
   // backwards — if the caller explicitly asked for iOS or Android, silently
