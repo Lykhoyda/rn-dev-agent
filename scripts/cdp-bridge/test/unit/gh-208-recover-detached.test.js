@@ -97,6 +97,8 @@ test('recoverDetached: relaunch throws + probe FALSE → still-detached (no fals
   const r = await recoverDetached({}, deps);
   assert.equal(r.recovered, false);
   assert.equal(r.reason, 'still-detached');
+  // Codex F3 contract: the launch failure is surfaced, never swallowed.
+  assert.match(r.error ?? '', /simctl boom/);
 });
 
 // The distinguishing behavior vs recover-wedge: a COLD restart (terminate THEN
