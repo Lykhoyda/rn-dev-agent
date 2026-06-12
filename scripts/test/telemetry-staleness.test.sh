@@ -31,6 +31,11 @@ run_collect() { # $1=fake home
   HOME="$1" CLAUDE_PLUGIN_DATA="$1/plugin-data" bash "$COLLECT" 2>/dev/null
 }
 
+# make_home runs inside $(...) subshells, so cleanup state can't be
+# accumulated there — the trap references the parent-scope home vars instead
+# (":-" keeps `set -u` happy for homes not yet created at failure time).
+trap 'rm -rf "${home1:-}" "${home2:-}" "${home3:-}" "${home4:-}" "${home5:-}"' EXIT
+
 make_home() {
   local h
   h="$(mktemp -d)"
@@ -85,7 +90,30 @@ count3="$(get_field "$out3" "len(d.get('recent_telemetry_lines',[]))")"
 check "fresh: telemetry_status ok" "$status3" "ok"
 check "fresh: events ARE shipped" "$count3" "1"
 
-rm -rf "$home1" "$home2" "$home3"
+# ── Case 4: telemetry dir exists but is EMPTY (manual cleanup) ──────
+# Pre-existing hazard surfaced in the #266 review: the unmatched glob made
+# `ls` fail and, under `set -euo pipefail`, killed the WHOLE collector —
+# /send-feedback got zero JSON. Must degrade to status "none" instead.
+home4="$(make_home)"
+mkdir -p "$home4/.claude/rn-agent/telemetry"
+out4="$(run_collect "$home4")"
+status4="$(get_field "$out4" "d.get('telemetry_status','<missing>')")"
+check "empty dir: collector survives and reports none" "$status4" "none"
+
+# ── Case 5: future mtime (clock skew / filesystem restore) ──────────
+# A negative age must never count as fresh (it would ship stale events).
+home5="$(make_home)"
+tdir5="$home5/.claude/rn-agent/telemetry"
+mkdir -p "$tdir5"
+cat > "$tdir5/skewed-session.jsonl" <<'EOF'
+{"ts":"2031-01-01T00:00:00.000Z","event":"tool_call","tool":"cdp_status","result":"PASS","latency_ms":3,"phase":"tool"}
+EOF
+touch -t 203101010000 "$tdir5/skewed-session.jsonl"
+out5="$(run_collect "$home5")"
+status5="$(get_field "$out5" "d.get('telemetry_status','<missing>')")"
+count5="$(get_field "$out5" "len(d.get('recent_telemetry_lines',['sentinel']))")"
+check "future mtime: not treated as fresh" "$status5" "stale"
+check "future mtime: no events shipped" "$count5" "0"
 
 if [ "$fail" -ne 0 ]; then
   echo "telemetry-staleness.test.sh: FAILURES"

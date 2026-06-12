@@ -96,17 +96,25 @@ fi
 recent_telemetry="[]"
 telemetry_status="none"
 if [ -d "$TELEMETRY_DIR" ]; then
-  latest_log=$(ls -t "$TELEMETRY_DIR"/*.jsonl 2>/dev/null | head -1)
+  # `|| true`: an empty dir makes the unmatched glob fail `ls`, and under
+  # `set -euo pipefail` that used to kill the WHOLE collector (zero JSON).
+  latest_log=$(ls -t "$TELEMETRY_DIR"/*.jsonl 2>/dev/null | head -1 || true)
   if [ -n "$latest_log" ]; then
     age_days=$(python3 -c "import os,sys,time; print(int((time.time()-os.path.getmtime(sys.argv[1]))//86400))" "$latest_log" 2>/dev/null || echo "")
-    if [ -n "$age_days" ] && [ "$age_days" -lt 1 ] 2>/dev/null; then
+    # `-ge 0`: a future mtime (clock skew, fs restore) yields a negative age
+    # and must not count as fresh.
+    if [ -n "$age_days" ] && [ "$age_days" -ge 0 ] 2>/dev/null && [ "$age_days" -lt 1 ] 2>/dev/null; then
       telemetry_status="ok"
       raw=$(tail -20 "$latest_log" 2>/dev/null || echo "")
       if [ -n "$raw" ]; then
         recent_telemetry=$(redact "$raw")
       fi
     else
-      telemetry_status="stale (last event ${age_days:-unknown} days ago — telemetry capture is not active in this plugin version; it was removed with the Experience Engine, GH #200. Old events omitted.)"
+      case "$age_days" in
+        ''|-*) age_label="unknown";;
+        *) age_label="$age_days";;
+      esac
+      telemetry_status="stale (last event ${age_label} day(s) ago — telemetry capture is not active in this plugin version; it was removed with the Experience Engine, GH #200. Old events omitted.)"
     fi
   fi
 fi
