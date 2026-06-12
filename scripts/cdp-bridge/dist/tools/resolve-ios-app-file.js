@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, cpSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 /**
@@ -93,6 +93,90 @@ function defaultGetAppContainer(bundleId) {
     try {
         const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], { encoding: 'utf8', timeout: 5_000 }).trim();
         return out || null;
+    }
+    catch {
+        return null;
+    }
+}
+// Insurance caps: the lookup rides on an already-failed recovery path and
+// must stay bounded — per-read timeouts are clamped to the remaining
+// deadline so one slow plutil cannot blow the total budget.
+const SNAPSHOT_SCAN_CAP = 10;
+const SNAPSHOT_SCAN_BUDGET_MS = 3000;
+const PLUTIL_TIMEOUT_MS = 2000;
+function defaultListSnapshots() {
+    const dir = join(tmpdir(), 'rn-appfile-snapshots');
+    try {
+        return readdirSync(dir)
+            .filter((name) => name.endsWith('.app'))
+            .map((name) => join(dir, name));
+    }
+    catch {
+        return [];
+    }
+}
+function defaultReadBundleId(appPath, timeoutMs) {
+    try {
+        const out = execFileSync('plutil', ['-extract', 'CFBundleIdentifier', 'raw', join(appPath, 'Info.plist')], { timeout: timeoutMs, encoding: 'utf8' });
+        return out.trim() || null;
+    }
+    catch {
+        return null;
+    }
+}
+function defaultMtimeMs(appPath) {
+    try {
+        return statSync(appPath).mtimeMs;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * GH #262: find a reinstallable .app snapshot for a bundle id in the GH #201
+ * snapshot dir. Stat pass → newest-first sort → cap (readdir order is
+ * arbitrary; capping first could drop the newest match), so plutil only runs
+ * on the newest candidates and the first match is the newest. Bounded and
+ * best-effort: any error or budget overrun returns null — the hint never
+ * fails the report it rides on.
+ */
+export function findSnapshotForBundleId(bundleId, deps = {}) {
+    const listSnapshots = deps.listSnapshots ?? defaultListSnapshots;
+    const readBundleId = deps.readBundleId ?? defaultReadBundleId;
+    const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
+    const now = deps.now ?? Date.now;
+    try {
+        const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
+        const candidates = listSnapshots()
+            .map((path) => ({ path, m: mtimeMs(path) }))
+            .filter((c) => c.m !== null)
+            .sort((a, b) => b.m - a.m)
+            .slice(0, SNAPSHOT_SCAN_CAP);
+        for (const { path, m } of candidates) {
+            const remaining = deadline - now();
+            if (remaining <= 0)
+                return null;
+            if (readBundleId(path, Math.min(PLUTIL_TIMEOUT_MS, remaining)) === bundleId) {
+                return { path, mtimeMs: m };
+            }
+        }
+        return null;
+    }
+    catch {
+        return null;
+    }
+}
+/** GH #262: `findSnapshotForBundleId` formatted as advice input. */
+export function snapshotHintForBundleId(bundleId, deps = {}) {
+    try {
+        const now = deps.now ?? Date.now;
+        const snap = findSnapshotForBundleId(bundleId, deps);
+        if (!snap)
+            return null;
+        return {
+            path: snap.path,
+            ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 60_000)),
+        };
     }
     catch {
         return null;

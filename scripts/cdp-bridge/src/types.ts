@@ -188,6 +188,7 @@ export type ToolErrorCode =
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
   | 'APP_DETACHED'              // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
+  | 'APP_NOT_INSTALLED'         // GH #262: relaunch failed and get_app_container confirms the bundle is missing
   | 'NOT_CONNECTED'
   | 'HELPERS_NOT_INJECTED'
   // M6 / Phase 112 (D669): cdp_record_test_* tool family.
@@ -225,6 +226,7 @@ export type ToolErrorCode =
   | 'INVALID_APPID'             // device_permission
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
   | 'INVALID_PACKAGE_NAME'      // device_deeplink
+  | 'INVALID_BUNDLE_ID'         // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
   // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
   | 'RUNNER_LEAK'
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the

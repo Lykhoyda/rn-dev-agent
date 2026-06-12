@@ -66,7 +66,7 @@ test('AppDetachedError does NOT auto-relaunch when the caller pinned a non-iOS p
 test('recoverDetached surfaces a simctl launch error instead of hiding it behind still-detached', async () => {
   resetDetachedRecoveryCounter();
   const r = await recoverDetached({}, {
-    getSession: () => ({ deviceId: 'U', appId: 'a', platform: 'ios' }),
+    getSession: () => ({ deviceId: 'AAAAAAAA-0000-0000-0000-000000000001', appId: 'com.example.app', platform: 'ios' }),
     isFlowActive: () => false,
     isOptedOut: () => false,
     stopFastRunner: () => {},
@@ -74,6 +74,7 @@ test('recoverDetached surfaces a simctl launch error instead of hiding it behind
     reconnect: async () => {},
     probeAlive: async () => false,
     sleep: async () => {},
+    isAppInstalled: async () => null,
   });
   assert.equal(r.recovered, false);
   assert.equal(r.reason, 'still-detached');

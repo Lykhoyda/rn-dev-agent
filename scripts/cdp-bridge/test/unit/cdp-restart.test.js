@@ -203,6 +203,11 @@ test('cdp_restart hardReset:true skips simctl when bundleId unknown (no connecte
       execFile,
       stopFastRunner: () => { stopFastRunnerCalls += 1; },
       sleep: async () => {},
+      // GH #262: pin the new strict-app.json fallback + active-session lookups
+      // off so this case keeps asserting the genuine no-bundleId skip path —
+      // a developer's open session or RN-project cwd must not resolve a real id.
+      resolveBundleIdStrict: () => null,
+      getSession: () => null,
     },
   );
 
