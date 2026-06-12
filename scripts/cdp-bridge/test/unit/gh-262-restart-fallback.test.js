@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import {
   createRestartHandler, _resetRestartHandlerStateForTest,
 } from '../../dist/tools/restart.js';
-import { expectOk } from '../helpers/result-helpers.js';
+import { expectOk, expectFail, parseEnvelope } from '../helpers/result-helpers.js';
 
 beforeEach(() => {
   _resetRestartHandlerStateForTest();
@@ -150,14 +150,65 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
       resolveBundleIdStrict: () => null,
     },
   );
-  await handler({}); // android-flavored soft restart populates the cache
+  expectOk(await handler({})); // android-flavored soft restart populates the cache
   current = plainClient; // fresh-process-like state: no connectedTarget
+
+  // Same-platform control: an android-targeted hardReset (current client has
+  // NO connectedTarget) must FIND the android cache entry and proceed to the
+  // 'android-not-yet-supported' skip — NOT the 'no-bundleId' skip. This proves
+  // the android entry was actually populated (and would fail if the
+  // platform-keyed Map were reverted to a single shared slot: the later
+  // iOS lookup below would then evict/overwrite it — see note in report).
+  const androidData = expectOk(await handler({ hardReset: true, platform: 'android' }));
+  assert.ok(
+    !androidData.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'),
+    `android cache entry should have been found — got: ${JSON.stringify(androidData.hardResetSteps)}`,
+  );
+  assert.ok(
+    androidData.hardResetSteps.includes('skip-simctl:platform=android-not-yet-supported'),
+    `android cache hit should fall through to the android-not-supported skip — got: ${JSON.stringify(androidData.hardResetSteps)}`,
+  );
+
   const data = expectOk(await handler({ hardReset: true, platform: 'ios' }));
   assert.ok(
     !simctl.some((c) => c.includes('com.android.pkg')),
     `android package must never reach iOS simctl — got: ${JSON.stringify(simctl)}`,
   );
   assert.ok(data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'));
+});
+
+test('codex-pair Fix 1: explicit invalid bundleId arg fails fast, simctl never called', async () => {
+  const simctl = [];
+  const handler = harness({
+    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    stopFastRunner: () => {},
+    sleep: async () => {},
+    resolveBundleIdStrict: () => 'com.fallback.app',
+  });
+  const err = expectFail(await handler({ hardReset: true, bundleId: 'rm -rf /; echo pwned' }));
+  assert.match(err, /invalid bundleId argument/);
+  const env = parseEnvelope(await handler({ hardReset: true, bundleId: 'not a bundle' }));
+  assert.equal(env.code, 'INVALID_BUNDLE_ID');
+  assert.equal(simctl.length, 0, `simctl must never run with an invalid explicit bundleId — got: ${JSON.stringify(simctl)}`);
+});
+
+test('codex-pair Fix 1: invalid cached/config bundleId → skip-simctl step, never reaches simctl argv', async () => {
+  const simctl = [];
+  const handler = harness({
+    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    stopFastRunner: () => {},
+    sleep: async () => {},
+    // A corrupted app.json / config value resolved from a NON-arg source.
+    resolveBundleIdStrict: () => 'com.evil.app; rm -rf /',
+  });
+  const data = expectOk(await handler({ hardReset: true }));
+  assert.ok(
+    data.hardResetSteps.includes('skip-simctl:invalid-bundleId-from-cache-or-config'),
+    `expected the invalid-from-cache skip step — got: ${JSON.stringify(data.hardResetSteps)}`,
+  );
+  assert.equal(simctl.length, 0, `simctl must never run with an invalid resolved bundleId — got: ${JSON.stringify(simctl)}`);
+  // bundleId nulled out → omitted from the envelope (never echoed back as valid).
+  assert.equal(data.bundleId, undefined);
 });
 
 test('hardReset success resets the detached-recovery budget', async () => {

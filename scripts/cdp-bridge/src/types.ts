@@ -226,6 +226,7 @@ export type ToolErrorCode =
   | 'INVALID_APPID'             // device_permission
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
   | 'INVALID_PACKAGE_NAME'      // device_deeplink
+  | 'INVALID_BUNDLE_ID'         // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
   // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
   | 'RUNNER_LEAK'
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the

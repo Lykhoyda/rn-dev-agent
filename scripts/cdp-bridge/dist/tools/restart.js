@@ -8,6 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { probeAppInstalled, buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * Module-scoped last-known bundle id (Codex review finding #1, conf 92).
@@ -93,7 +94,7 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
             // A fresh bridge process has no cache — without the fallbacks, hardReset
             // silently degraded to a soft reset exactly when the hard path was
             // needed. STRICT: an Android package must never be fed to iOS simctl.
-            const bundleId = args.bundleId
+            let bundleId = args.bundleId
                 ?? observedBundleId
                 ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
                 ?? (sessionMatches ? session?.appId ?? null : null)
@@ -102,6 +103,17 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
             // ambiguous with multiple booted sims.
             const targetUdid = (sessionMatches ? session?.deviceId : undefined) ?? 'booted';
             const hardResetSteps = [];
+            // Phase 134.2 precedent (see device-session.ts): never let an
+            // unvalidated string reach `xcrun simctl terminate/launch` argv. An
+            // explicit bad arg fails fast; a bad value resolved from cache/config
+            // is dropped (treated as no-bundleId) rather than shelling out with it.
+            if (bundleId !== null && !isValidBundleId(bundleId)) {
+                if (args.bundleId !== undefined) {
+                    return failResult(`cdp_restart: invalid bundleId argument "${String(args.bundleId).slice(0, 80)}" — expected reverse-DNS app id like com.example.app`, 'INVALID_BUNDLE_ID');
+                }
+                hardResetSteps.push('skip-simctl:invalid-bundleId-from-cache-or-config');
+                bundleId = null;
+            }
             if (args.hardReset) {
                 // Step 1: kill the fast-runner xcodebuild process. This is the
                 // agent-device XCTest test rig — if it's foreground, iOS treats
