@@ -1,3 +1,6 @@
+import { mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
 import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult } from '../utils.js';
@@ -35,11 +38,24 @@ export function deriveScreenshotPath(
 ): string {
   // Phase 134.3 (deepsec MEDIUM path-traversal): caller-supplied `path`
   // could contain `..` segments that escape the intended directory.
-  // Absolute paths to legitimate locations (e.g. ~/Desktop) are still
-  // allowed — only `..` traversal is refused.
+  // Absolute paths to legitimate locations are still allowed — only `..`
+  // traversal is refused. The guard runs on the RAW input, before tilde
+  // expansion, so `~/../` can't smuggle a collapsed `..` past it via join().
   if (args.path && pathHasTraversal(args.path)) {
     throw new PathTraversalScreenshotError(
       `Screenshot path "${args.path}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`,
+    );
+  }
+  // GH #265 (codex review): Node never expands `~`, and with the mkdir-p
+  // precondition a `~/Desktop/x.jpg` path would otherwise create a literal
+  // `./~/Desktop/` under the bridge cwd and report success into the wrong
+  // location. Expand a leading `~/` here so every consumer (mkdir,
+  // advisories, all capture tiers) sees the same real path; refuse the
+  // unexpandable forms (`~user/...`, bare `~`) instead of mislanding.
+  if (args.path?.startsWith('~')) {
+    if (args.path.startsWith('~/')) return join(homedir(), args.path.slice(2));
+    throw new TildeScreenshotPathError(
+      `Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`,
     );
   }
   if (args.path) return args.path;
@@ -51,10 +67,35 @@ export function deriveScreenshotPath(
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
 }
 
+/**
+ * GH #265: every dispatch tier (simctl raw, rn-fast-runner, agent-device
+ * daemon/CLI, adb stream) fails opaquely when the target's parent directory
+ * doesn't exist — and that failure used to be blamed on device state
+ * ("transitioning state (booting, OOM, locked)"). New directories are the
+ * EXPECTED case: the EPHEMERAL_PATH advisory itself steers agents toward
+ * fresh `docs/proof/<slug>/` paths. Create the parent up front; surface a
+ * filesystem error honestly when creation fails.
+ */
+export function ensureScreenshotDir(path: string): { ok: true } | { ok: false; error: string } {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 class PathTraversalScreenshotError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PathTraversalScreenshotError';
+  }
+}
+
+class TildeScreenshotPathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TildeScreenshotPathError';
   }
 }
 
@@ -225,6 +266,16 @@ export async function captureAndResizeScreenshot(
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
   const argsWithPath = { ...args, path: requestedPath };
   const advisories = computeScreenshotAdvisories(args, requestedPath);
+  // GH #265: precondition check BEFORE any device probing — an unwritable
+  // target path must never be diagnosed as a device-state problem.
+  const targetDir = ensureScreenshotDir(requestedPath);
+  if (!targetDir.ok) {
+    return failResult(
+      `device_screenshot: target directory for "${requestedPath}" does not exist and could not be created (${targetDir.error}). The device is not at fault — fix the output path and retry.`,
+      'SCREENSHOT_FAILED',
+      { reason: 'target-dir-unavailable', path: requestedPath },
+    );
+  }
   // GH #136 PR-B: when `platform:` is explicit, hard-fail instead of falling
   // through to runAgentDevice. The original PR-A "graceful degradation" was
   // backwards — if the caller explicitly asked for iOS or Android, silently
