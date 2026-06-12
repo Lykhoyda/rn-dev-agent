@@ -121,6 +121,45 @@ test('hardReset: launch fails + probe NULL → raw launch:err step (fail open, u
   assert.ok(data.hardResetSteps.some((s) => s.startsWith('simctl launch:err(') && !s.includes('APP_NOT_INSTALLED')));
 });
 
+test('hardReset: android-cached bundleId is NOT used for an iOS target (platform-keyed cache)', async () => {
+  // 1st restart: android connectedTarget populates the cache.
+  const androidClient = {
+    get metroPort() { return 8081; },
+    get isConnected() { return false; },
+    connectedTarget: { description: 'com.android.pkg', platform: 'android' },
+    disconnect: async () => {},
+    autoConnect: async () => 'Connected',
+  };
+  const plainClient = {
+    get metroPort() { return 8081; },
+    get isConnected() { return false; },
+    disconnect: async () => {},
+    autoConnect: async () => 'Connected',
+  };
+  let current = androidClient;
+  const simctl = [];
+  const handler = createRestartHandler(
+    () => current,
+    (c) => {},
+    () => plainClient,
+    {
+      getSession: () => null,
+      execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+      stopFastRunner: () => {},
+      sleep: async () => {},
+      resolveBundleIdStrict: () => null,
+    },
+  );
+  await handler({}); // android-flavored soft restart populates the cache
+  current = plainClient; // fresh-process-like state: no connectedTarget
+  const data = expectOk(await handler({ hardReset: true, platform: 'ios' }));
+  assert.ok(
+    !simctl.some((c) => c.includes('com.android.pkg')),
+    `android package must never reach iOS simctl — got: ${JSON.stringify(simctl)}`,
+  );
+  assert.ok(data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'));
+});
+
 test('hardReset success resets the detached-recovery budget', async () => {
   let resets = 0;
   const handler = harness({

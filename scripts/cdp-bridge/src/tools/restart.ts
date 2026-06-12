@@ -78,8 +78,12 @@ export interface RestartArgs {
  *
  * Cache the bundleId at module scope so subsequent calls keep working.
  * Updated every time we observe a non-null `connectedTarget.description`.
+ *
+ * GH #262 multi-review: keyed by platform — a single bridge process can
+ * switch platform between connects, and a cross-platform cache hit would
+ * feed an Android package to iOS simctl (then misreport APP_NOT_INSTALLED).
  */
-let lastSeenBundleId: string | null = null;
+const lastSeenBundleIds = new Map<string, string>();
 
 /**
  * Module-scoped in-flight guard (Codex review finding #2, conf 82).
@@ -95,11 +99,11 @@ let lastSeenBundleId: string | null = null;
 let inflightRestart: Promise<ToolResult> | null = null;
 
 /**
- * Test-only: reset module state between tests. The lastSeenBundleId
+ * Test-only: reset module state between tests. The lastSeenBundleIds
  * cache and inflight guard would otherwise leak across test files.
  */
 export function _resetRestartHandlerStateForTest(): void {
-  lastSeenBundleId = null;
+  lastSeenBundleIds.clear();
   inflightRestart = null;
 }
 
@@ -144,8 +148,8 @@ export function createRestartHandler(
       // Capture the bundle id BEFORE we disconnect — the connectedTarget
       // is cleared on disconnect, and we need it to issue simctl commands.
       const observedBundleId = oldClient.connectedTarget?.description ?? null;
-      if (observedBundleId) lastSeenBundleId = observedBundleId;
       const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+      if (observedBundleId) lastSeenBundleIds.set(targetPlatform, observedBundleId);
       const session = getSessionFn();
       const sessionMatches = !!session && (session.platform ?? 'ios') === targetPlatform;
       // Resolution priority (GH #262 / #194 BUG 2): explicit arg > current
@@ -155,7 +159,7 @@ export function createRestartHandler(
       // needed. STRICT: an Android package must never be fed to iOS simctl.
       const bundleId = args.bundleId
         ?? observedBundleId
-        ?? lastSeenBundleId
+        ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
         ?? (sessionMatches ? session?.appId ?? null : null)
         ?? resolveBundleIdStrictFn(targetPlatform);
       // simctl targets the session's simulator when one is open — 'booted' is
@@ -234,7 +238,10 @@ export function createRestartHandler(
         // Refresh the cache from the freshly-connected target so a
         // subsequent recovery cycle keeps a valid bundleId. (Codex #1.)
         const postConnectBundle = newClient.connectedTarget?.description;
-        if (postConnectBundle) lastSeenBundleId = postConnectBundle;
+        if (postConnectBundle) {
+          const postConnectPlatform = (newClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+          lastSeenBundleIds.set(postConnectPlatform, postConnectBundle);
+        }
       } catch (err) {
         connectError = err instanceof Error ? err.message : String(err);
         logger.warn('MCP', `cdp_restart: autoConnect failed (best-effort): ${connectError}`);
