@@ -119,6 +119,20 @@ async function recoverDetachedInner(client, deps = {}) {
         confirmedNotInstalled = null;
     }
     if (attempts >= max) {
+        // GH #262 (PR #280 review): an exhausted budget must not mask a freshly
+        // missing bundle — probe (side-effect-free) before reporting exhaustion.
+        if ((await isAppInstalled(udid, appId)) === false) {
+            confirmedNotInstalled = { udid, appId };
+            const snapshotHint = buildHint();
+            return {
+                recovered: false,
+                reason: 'app-not-installed',
+                attempt: attempts,
+                udid,
+                appId,
+                ...(snapshotHint ? { snapshotHint } : {}),
+            };
+        }
         return { recovered: false, reason: 'budget-exhausted', attempt: attempts };
     }
     // A real, side-effecting attempt.

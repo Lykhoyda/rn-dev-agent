@@ -149,3 +149,36 @@ test('relaunch SUCCEEDS → probe never called (cost lands only on the failed pa
   assert.equal(r.reason, 'recovered');
   assert.equal(probed, false);
 });
+
+test('exhausted budget does not mask a freshly missing bundle (PR #280 P2)', async () => {
+  resetDetachedRecoveryCounter();
+  // Exhaust the budget with still-detached attempts (app installed, just wedged).
+  for (let i = 0; i < 3; i += 1) {
+    const r = await recoverDetached({}, baseDeps({ isAppInstalled: async () => true }).deps);
+    assert.equal(r.reason, 'still-detached');
+  }
+  // App now uninstalled: the 4th call must diagnose, not surrender.
+  const { calls, deps } = baseDeps({
+    isAppInstalled: async () => false,
+    snapshotHint: () => ({ path: '/tmp/rn-appfile-snapshots/My App.app', ageMinutes: 1 }),
+  });
+  const r4 = await recoverDetached({}, deps);
+  assert.equal(r4.reason, 'app-not-installed');
+  assert.equal(r4.udid, 'UDID-A');
+  assert.deepEqual(r4.snapshotHint, { path: '/tmp/rn-appfile-snapshots/My App.app', ageMinutes: 1 });
+  assert.ok(!calls.includes('relaunch'), 'no side effects on the exhausted path');
+  // And it cached: the next call short-circuits the same way.
+  const r5 = await recoverDetached({}, baseDeps({ isAppInstalled: async () => false }).deps);
+  assert.equal(r5.reason, 'app-not-installed');
+});
+
+test('exhausted budget + probe true/null → budget-exhausted unchanged (fail open)', async () => {
+  resetDetachedRecoveryCounter();
+  for (let i = 0; i < 3; i += 1) {
+    await recoverDetached({}, baseDeps({ isAppInstalled: async () => true }).deps);
+  }
+  const rTrue = await recoverDetached({}, baseDeps({ isAppInstalled: async () => true }).deps);
+  assert.equal(rTrue.reason, 'budget-exhausted');
+  const rNull = await recoverDetached({}, baseDeps({ isAppInstalled: async () => null }).deps);
+  assert.equal(rNull.reason, 'budget-exhausted');
+});
