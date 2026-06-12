@@ -16,7 +16,7 @@ function baseDeps(over = {}) {
   return {
     calls,
     deps: {
-      getSession: () => ({ deviceId: 'UDID-A', appId: 'com.example.app', platform: 'ios' }),
+      getSession: () => ({ deviceId: 'AAAAAAAA-0000-0000-0000-000000000001', appId: 'com.example.app', platform: 'ios' }),
       isFlowActive: () => false,
       isOptedOut: () => false,
       relaunchApp: async (udid, appId) => { calls.push(`relaunch:${udid}:${appId}`); },
@@ -37,7 +37,7 @@ test('recoverDetached: parks runner, cold-restarts, reconnects, recovers (happy 
   assert.equal(r.recovered, true);
   assert.equal(r.reason, 'recovered');
   assert.equal(r.attempt, 1);
-  assert.deepEqual(calls, ['stop', 'relaunch:UDID-A:com.example.app', 'reconnect']);
+  assert.deepEqual(calls, ['stop', 'relaunch:AAAAAAAA-0000-0000-0000-000000000001:com.example.app', 'reconnect']);
 });
 
 test('recoverDetached: liveness probe FALSE after relaunch → still-detached', async () => {

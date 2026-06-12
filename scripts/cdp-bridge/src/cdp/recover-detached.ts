@@ -7,10 +7,14 @@ import { arbiter } from '../lifecycle/device-arbiter.js';
 import { probeFreshness } from './recovery.js';
 import { probeAppInstalled } from './app-installed-probe.js';
 import type { SnapshotHint } from './app-installed-probe.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 
 const execFile = promisify(execFileCb);
 const DEFAULT_MAX_PER_SESSION = 3;
 const RELAUNCH_SETTLE_MS = 1200;
+
+/** Strict iOS simulator UDID shape (matches `xcrun simctl list` output). */
+const SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
 export type DetachedReason =
   | 'recovered'
@@ -150,6 +154,13 @@ async function recoverDetachedInner(
 
   const udid = session.deviceId;
   const appId = session.appId;
+
+  // GH #262 (codex-pair): session values come from a file on disk — validate
+  // before they reach simctl argv. An unusable session is the same as none.
+  if (!SIMULATOR_UDID_RE.test(udid) || !isValidBundleId(appId)) {
+    return { recovered: false, reason: 'no-session', attempt: attempts };
+  }
+
   const isAppInstalled = deps.isAppInstalled ?? probeAppInstalled;
   const buildHint = (): SnapshotHint | undefined => {
     if (!deps.snapshotHint) return undefined;

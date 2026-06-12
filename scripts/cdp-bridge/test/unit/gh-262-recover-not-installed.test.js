@@ -17,7 +17,7 @@ function baseDeps(over = {}) {
   return {
     calls,
     deps: {
-      getSession: () => ({ deviceId: 'UDID-A', appId: 'com.example.app', platform: 'ios' }),
+      getSession: () => ({ deviceId: 'AAAAAAAA-0000-0000-0000-000000000001', appId: 'com.example.app', platform: 'ios' }),
       isFlowActive: () => false,
       isOptedOut: () => false,
       relaunchApp: async () => { calls.push('relaunch'); throw new Error('FBSOpenApplicationServiceErrorDomain, code=4'); },
@@ -44,11 +44,11 @@ test('launch fails + probe FALSE → app-not-installed, short-circuits settle/re
   assert.equal(r.recovered, false);
   assert.equal(r.reason, 'app-not-installed');
   assert.equal(r.attempt, 1);
-  assert.equal(r.udid, 'UDID-A');
+  assert.equal(r.udid, 'AAAAAAAA-0000-0000-0000-000000000001');
   assert.equal(r.appId, 'com.example.app');
   assert.match(r.error, /code=4/);
   assert.deepEqual(r.snapshotHint, { path: '/tmp/rn-appfile-snapshots/My App.app', ageMinutes: 7 });
-  assert.ok(calls.includes('probe:UDID-A:com.example.app'));
+  assert.ok(calls.includes('probe:AAAAAAAA-0000-0000-0000-000000000001:com.example.app'));
   assert.ok(!calls.includes('sleep'), 'short-circuit: no settle wait');
   assert.ok(!calls.includes('reconnect'), 'short-circuit: no reconnect attempt');
 });
@@ -164,7 +164,7 @@ test('exhausted budget does not mask a freshly missing bundle (PR #280 P2)', asy
   });
   const r4 = await recoverDetached({}, deps);
   assert.equal(r4.reason, 'app-not-installed');
-  assert.equal(r4.udid, 'UDID-A');
+  assert.equal(r4.udid, 'AAAAAAAA-0000-0000-0000-000000000001');
   assert.deepEqual(r4.snapshotHint, { path: '/tmp/rn-appfile-snapshots/My App.app', ageMinutes: 1 });
   assert.ok(!calls.includes('relaunch'), 'no side effects on the exhausted path');
   // And it cached: the next call short-circuits the same way.
@@ -181,4 +181,27 @@ test('exhausted budget + probe true/null → budget-exhausted unchanged (fail op
   assert.equal(rTrue.reason, 'budget-exhausted');
   const rNull = await recoverDetached({}, baseDeps({ isAppInstalled: async () => null }).deps);
   assert.equal(rNull.reason, 'budget-exhausted');
+});
+
+test('malformed session identifiers → no-session, nothing reaches simctl (codex-pair)', async () => {
+  resetDetachedRecoveryCounter();
+  const evilUdid = baseDeps({
+    getSession: () => ({ deviceId: 'evil; rm -rf /', appId: 'com.example.app', platform: 'ios' }),
+    isAppInstalled: async () => { throw new Error('probe must not run'); },
+  });
+  const r1 = await recoverDetached({}, evilUdid.deps);
+  assert.equal(r1.reason, 'no-session');
+  assert.ok(!evilUdid.calls.includes('relaunch'), 'no simctl side effects');
+
+  const evilAppId = baseDeps({
+    getSession: () => ({ deviceId: 'F1A2B3C4-1111-2222-3333-444455556666', appId: 'not a bundle id!', platform: 'ios' }),
+    isAppInstalled: async () => { throw new Error('probe must not run'); },
+  });
+  const r2 = await recoverDetached({}, evilAppId.deps);
+  assert.equal(r2.reason, 'no-session');
+  assert.ok(!evilAppId.calls.includes('relaunch'));
+
+  // Budget untouched by the rejections: a real attempt is still attempt 1.
+  const real = await recoverDetached({}, baseDeps({ isAppInstalled: async () => null }).deps);
+  assert.equal(real.attempt, 1);
 });
