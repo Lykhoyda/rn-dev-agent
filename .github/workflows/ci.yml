@@ -53,6 +53,10 @@ jobs:
       - name: SessionStart bounded-startup guard
         run: bash scripts/test/session-start-bounded.test.sh
 
+      # GH#266: feedback collector must not present stale/orphaned telemetry as recent.
+      - name: Feedback telemetry staleness guard
+        run: bash scripts/test/telemetry-staleness.test.sh
+
   version-sync:
     name: Version sync check
     runs-on: ubuntu-latest
