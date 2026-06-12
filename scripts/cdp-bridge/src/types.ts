@@ -188,6 +188,7 @@ export type ToolErrorCode =
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
   | 'APP_DETACHED'              // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
+  | 'APP_NOT_INSTALLED'         // GH #262: relaunch failed and get_app_container confirms the bundle is missing
   | 'NOT_CONNECTED'
   | 'HELPERS_NOT_INJECTED'
   // M6 / Phase 112 (D669): cdp_record_test_* tool family.

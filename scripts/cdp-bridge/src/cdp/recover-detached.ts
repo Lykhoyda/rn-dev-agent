@@ -114,6 +114,8 @@ export async function recoverDetached(
   client: CDPClient,
   deps: RecoverDetachedDeps = {},
 ): Promise<DetachedRecoveryResult> {
+  // Followers inherit the leader's deps and verdict by design — all real
+  // callers pass equivalent deps, and a shared verdict is the point.
   if (inflight) return inflight;
   inflight = recoverDetachedInner(client, deps);
   try {
