@@ -6,6 +6,8 @@ import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
+import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
+import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 import { AppDetachedError } from '../cdp/discovery.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
@@ -278,7 +280,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== 'ios';
                 const recovery = callerPinnedNonIos
                     ? { recovered: false, reason: 'unsupported-platform', attempt: 0 }
-                    : await recoverDetachedFn(getClient());
+                    : await recoverDetachedFn(getClient(), { snapshotHint: snapshotHintForBundleId });
                 if (recovery.recovered) {
                     // GH #208 review (Gemini F2): never let a post-reconnect status read throw
                     // out of the catch — degrade to a minimal warn instead of crashing the tool.
@@ -288,6 +290,17 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                     catch {
                         return warnResult({ recovered: true }, `App had detached (Metro up, 0 Hermes targets) — auto-relaunched and reconnected (attempt ${recovery.attempt}), but reading the full status failed; retry cdp_status.`);
                     }
+                }
+                // GH #262: the bundle is CONFIRMED missing (e.g. simulator erased) —
+                // the generic "relaunch manually / hardReset" hints below can never
+                // work. Return the distinct code with install advice instead.
+                if (recovery.reason === 'app-not-installed') {
+                    return failResult(`${message} ${buildNotInstalledAdvice(recovery.udid ?? 'booted', recovery.appId ?? 'the app', recovery.snapshotHint ?? null)}`, 'APP_NOT_INSTALLED', {
+                        reconnect: getClient().reconnectState,
+                        autoConnect: getClient().autoConnectState,
+                        bridge: bridgeEnvState(process.env),
+                        recovery,
+                    });
                 }
                 const detachedHint = recovery.reason === 'flow-active'
                     ? 'A Maestro flow is running — skipped auto-relaunch. Wait for the flow to finish, then retry cdp_status.'

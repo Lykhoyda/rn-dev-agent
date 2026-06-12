@@ -3,6 +3,11 @@ import { promisify } from 'node:util';
 import { logger } from '../logger.js';
 import { okResult, failResult } from '../utils.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { resolveBundleIdStrict } from '../project-config.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { probeAppInstalled, buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
+import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
+import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * Module-scoped last-known bundle id (Codex review finding #1, conf 92).
@@ -61,6 +66,11 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
     const execFile = deps.execFile ?? defaultExecFile;
     const stopFastRunner = deps.stopFastRunner ?? defaultStopFastRunner;
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    const resolveBundleIdStrictFn = deps.resolveBundleIdStrict ?? resolveBundleIdStrict;
+    const getSessionFn = deps.getSession ?? getActiveSession;
+    const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
+    const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
+    const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
     async function doRestart(args) {
         try {
             logger.info('MCP', `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -71,9 +81,22 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
             const observedBundleId = oldClient.connectedTarget?.description ?? null;
             if (observedBundleId)
                 lastSeenBundleId = observedBundleId;
-            // Resolution priority: explicit arg > current connectedTarget > cache.
-            const bundleId = args.bundleId ?? observedBundleId ?? lastSeenBundleId;
             const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+            const session = getSessionFn();
+            const sessionMatches = !!session && (session.platform ?? 'ios') === targetPlatform;
+            // Resolution priority (GH #262 / #194 BUG 2): explicit arg > current
+            // connectedTarget > cache > active-session appId > STRICT app.json.
+            // A fresh bridge process has no cache — without the fallbacks, hardReset
+            // silently degraded to a soft reset exactly when the hard path was
+            // needed. STRICT: an Android package must never be fed to iOS simctl.
+            const bundleId = args.bundleId
+                ?? observedBundleId
+                ?? lastSeenBundleId
+                ?? (sessionMatches ? session?.appId ?? null : null)
+                ?? resolveBundleIdStrictFn(targetPlatform);
+            // simctl targets the session's simulator when one is open — 'booted' is
+            // ambiguous with multiple booted sims.
+            const targetUdid = (sessionMatches ? session?.deviceId : undefined) ?? 'booted';
             const hardResetSteps = [];
             if (args.hardReset) {
                 // Step 1: kill the fast-runner xcodebuild process. This is the
@@ -90,7 +113,7 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 // android branch is a follow-up.
                 if (bundleId && targetPlatform === 'ios') {
                     try {
-                        await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], { timeout: 5000 });
+                        await execFile('xcrun', ['simctl', 'terminate', targetUdid, bundleId], { timeout: 5000 });
                         hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
                     }
                     catch (err) {
@@ -98,14 +121,28 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                         hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
                     }
                     try {
-                        await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], { timeout: 8000 });
+                        await execFile('xcrun', ['simctl', 'launch', targetUdid, bundleId], { timeout: 8000 });
                         hardResetSteps.push(`simctl launch ${bundleId}:ok`);
                     }
                     catch (err) {
-                        // Fatal-ish: if launch fails, the soft reset below will likely
-                        // fail too. Still continue — caller sees the launch error in
-                        // hardResetSteps and the connectError from the autoConnect.
-                        hardResetSteps.push(`simctl launch:err(${err instanceof Error ? err.message : err})`);
+                        const msg = err instanceof Error ? err.message : String(err);
+                        // GH #262: distinguish "launch hiccup" from "bundle not installed" —
+                        // the latter needs install advice, not the soft-reset retry below.
+                        // Probe verdict null = unknown → keep the raw error (fail open).
+                        if ((await probeAppInstalledFn(targetUdid, bundleId)) === false) {
+                            let hint = null;
+                            try {
+                                hint = snapshotHintFn(bundleId);
+                            }
+                            catch { /* best-effort */ }
+                            hardResetSteps.push(`simctl launch:err(APP_NOT_INSTALLED — ${buildNotInstalledAdvice(targetUdid, bundleId, hint)})`);
+                        }
+                        else {
+                            // Fatal-ish: if launch fails, the soft reset below will likely
+                            // fail too. Still continue — caller sees the launch error in
+                            // hardResetSteps and the connectError from the autoConnect.
+                            hardResetSteps.push(`simctl launch:err(${msg})`);
+                        }
                     }
                     // Step 4: give Hermes time to re-register on Metro before we try
                     // to connect. Empirically 2-3s is enough on iPhone 16 Pro sim.
@@ -142,6 +179,11 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 connectError = err instanceof Error ? err.message : String(err);
                 logger.warn('MCP', `cdp_restart: autoConnect failed (best-effort): ${connectError}`);
             }
+            // GH #262: a successful manual hard reset is a working recovery — clear
+            // the detached-recovery budget so the auto-recovery path gets a fresh
+            // attempt allowance after the user fixes the wedge by hand.
+            if (args.hardReset && connected)
+                resetDetachedBudgetFn();
             return okResult({
                 restarted: true,
                 connected,

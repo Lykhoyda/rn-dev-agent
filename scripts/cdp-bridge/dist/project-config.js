@@ -37,6 +37,35 @@ export function resolveBundleId(platform) {
     return readAppId(projectRoot, platform);
 }
 /**
+ * GH #262: strict per-platform app id — NO cross-platform fallback. Used by
+ * recovery paths where a wrong-platform id would produce a confidently wrong
+ * diagnosis (an Android package fed to iOS simctl "is not installed").
+ */
+export function readAppIdStrict(projectRoot, platform) {
+    for (const filename of ['app.json', 'app.config.json']) {
+        const p = join(projectRoot, filename);
+        if (!existsSync(p))
+            continue;
+        try {
+            const raw = JSON.parse(readFileSync(p, 'utf-8'));
+            const expo = (raw.expo ?? raw);
+            if (platform === 'android')
+                return expo?.android?.package ?? null;
+            return expo?.ios?.bundleIdentifier ?? null;
+        }
+        catch {
+            continue;
+        }
+    }
+    return null;
+}
+export function resolveBundleIdStrict(platform) {
+    const projectRoot = findProjectRoot();
+    if (!projectRoot)
+        return null;
+    return readAppIdStrict(projectRoot, platform);
+}
+/**
  * Read the Expo slug from app.json (used for Maestro app ID resolution).
  */
 export function readExpoSlug() {
