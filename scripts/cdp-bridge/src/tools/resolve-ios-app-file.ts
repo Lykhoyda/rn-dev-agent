@@ -136,11 +136,9 @@ export interface FindSnapshotDeps {
   now?: () => number;
 }
 
-// Budget (codex-pair + multi-LLM plan reviews): the hint rides on an
-// ALREADY-FAILED recovery path — it must never add meaningful latency. The
-// dir is bounded by design (one snapshot per app basename), so these are
-// insurance caps. Per-read timeouts are clamped to the remaining deadline so
-// one slow plutil cannot blow the total budget.
+// Insurance caps: the lookup rides on an already-failed recovery path and
+// must stay bounded — per-read timeouts are clamped to the remaining
+// deadline so one slow plutil cannot blow the total budget.
 const SNAPSHOT_SCAN_CAP = 10;
 const SNAPSHOT_SCAN_BUDGET_MS = 3000;
 const PLUTIL_TIMEOUT_MS = 2000;
@@ -179,13 +177,11 @@ function defaultMtimeMs(appPath: string): number | null {
 
 /**
  * GH #262: find a reinstallable .app snapshot for a bundle id in the GH #201
- * snapshot dir. Cheap stat pass first, NEWEST-FIRST sort, THEN the cap —
- * readdir order is arbitrary, so capping before sorting could drop the newest
- * match. plutil (the expensive read) runs only on the capped, ordered list,
- * so the first match is the newest. Latency contract: the lookup IS awaited
- * on the already-failed error path, so it may add up to the budget (~3s worst
- * case; typically a few ms — the dir holds one snapshot per app). It can
- * never fail or abort the report it rides on (all errors → null).
+ * snapshot dir. Stat pass → newest-first sort → cap (readdir order is
+ * arbitrary; capping first could drop the newest match), so plutil only runs
+ * on the newest candidates and the first match is the newest. Bounded and
+ * best-effort: any error or budget overrun returns null — the hint never
+ * fails the report it rides on.
  */
 export function findSnapshotForBundleId(
   bundleId: string,
@@ -195,8 +191,8 @@ export function findSnapshotForBundleId(
   const readBundleId = deps.readBundleId ?? defaultReadBundleId;
   const mtimeMs = deps.mtimeMs ?? defaultMtimeMs;
   const now = deps.now ?? Date.now;
-  const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
   try {
+    const deadline = now() + SNAPSHOT_SCAN_BUDGET_MS;
     const candidates = listSnapshots()
       .map((path) => ({ path, m: mtimeMs(path) }))
       .filter((c): c is { path: string; m: number } => c.m !== null)
@@ -220,11 +216,15 @@ export function snapshotHintForBundleId(
   bundleId: string,
   deps: FindSnapshotDeps = {},
 ): SnapshotHint | null {
-  const now = deps.now ?? Date.now;
-  const snap = findSnapshotForBundleId(bundleId, deps);
-  if (!snap) return null;
-  return {
-    path: snap.path,
-    ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 60_000)),
-  };
+  try {
+    const now = deps.now ?? Date.now;
+    const snap = findSnapshotForBundleId(bundleId, deps);
+    if (!snap) return null;
+    return {
+      path: snap.path,
+      ageMinutes: Math.max(0, Math.round((now() - snap.mtimeMs) / 60_000)),
+    };
+  } catch {
+    return null;
+  }
 }

@@ -17,9 +17,8 @@ type Exec = (
 
 const DEVICE_ERROR = /Invalid device|No devices/i;
 
-// Allowlist (codex-pair + multi-LLM plan reviews): `false` requires the
-// documented app-missing signal — verified live as
-// "(domain=NSPOSIXErrorDomain, code=2)". Case-insensitive and
+// Allowlist: `false` requires the documented app-missing signal — verified
+// live as "(domain=NSPOSIXErrorDomain, code=2)". Case-insensitive and
 // distance-independent (Xcode formatting may drift), but `2\b` after an
 // optional '='/':'/space separator so `code=-2` / `code=20` never match.
 function isAppMissingSignal(stderr: string): boolean {

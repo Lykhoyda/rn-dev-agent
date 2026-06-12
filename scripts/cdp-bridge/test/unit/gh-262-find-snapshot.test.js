@@ -99,3 +99,22 @@ test('snapshotHintForBundleId: converts mtime to ageMinutes (rounded, never nega
   assert.deepEqual(snapshotHintForBundleId('com.example.app', deps), { path: A, ageMinutes: 5 });
   assert.equal(snapshotHintForBundleId('com.missing', deps), null);
 });
+
+test('snapshotHintForBundleId: future mtime (clock skew) clamps to ageMinutes 0', () => {
+  const deps = {
+    listSnapshots: () => [A],
+    readBundleId: () => 'com.example.app',
+    mtimeMs: () => 600_000,
+    now: () => 300_000,
+  };
+  assert.deepEqual(snapshotHintForBundleId('com.example.app', deps), { path: A, ageMinutes: 0 });
+});
+
+test('never throws: throwing deps → null from both functions', () => {
+  const boom = () => { throw new Error('boom'); };
+  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: boom }), null);
+  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: boom }), null);
+  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: () => 1, readBundleId: boom }), null);
+  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: () => 1, now: boom }), null);
+  assert.equal(snapshotHintForBundleId('com.x', { listSnapshots: boom }), null);
+});
