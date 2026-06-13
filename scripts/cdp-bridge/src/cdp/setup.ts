@@ -26,17 +26,27 @@ export async function performSetup(opts: {
   setupEventHandlers: () => void;
   clearScripts: () => void;
   clearEventHandlers: () => void;
+  /**
+   * Test seam: probe wait intervals forwarded to probeNetworkDomain. Defaults
+   * to its production [500, 1500]. Lets tests drive the fallback path without
+   * paying the ~2s real probe wait. Mirrors the existing `waits` seam.
+   */
+  probeWaits?: number[];
 }): Promise<SetupResult> {
-  const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers } = opts;
+  const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits } = opts;
 
   logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
   await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
   await send('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
 
   let networkMode: 'cdp' | 'hook' | 'none';
+  // GH #214: track whether the CDP Network domain is actually enabled, so the
+  // hook fallback can disable it and avoid double-feeding the buffer.
+  let networkDomainEnabled = false;
   try {
     await send('Network.enable', undefined, timeoutForMethod('Network.enable'));
     networkMode = 'cdp';
+    networkDomainEnabled = true;
   } catch {
     networkMode = 'none';
   }
@@ -85,6 +95,7 @@ export async function performSetup(opts: {
   if (process.env.RN_FORCE_NETWORK_HOOK === '1') {
     networkMode = 'none';
     try { await send('Network.disable', undefined, CDP_TIMEOUT_FAST); } catch { /* best-effort */ }
+    networkDomainEnabled = false;
   }
 
   logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
@@ -96,10 +107,23 @@ export async function performSetup(opts: {
   // its CDP event channel. Retry once at a longer interval before declaring
   // RN<0.83. Total worst-case wait for legitimate fallback: 500ms + 1500ms.
   if (networkMode === 'cdp') {
-    networkMode = await probeNetworkDomain({ evaluate, port, networkManager, getDeviceKey });
+    networkMode = await probeNetworkDomain({ evaluate, port, networkManager, getDeviceKey, waits: probeWaits });
   }
 
   if (networkMode === 'none') {
+    // GH #214: if the CDP Network domain is still enabled here, the probe fell
+    // back to the hook despite Network.enable succeeding — a false negative on
+    // RN >= 0.83 where the probe fetch's events flush after the probe window.
+    // Disable the domain so the injected hook is the SINGLE capture source.
+    // Leaving it on double-feeds the buffer (CDP numeric-id entries + hook
+    // UUID-id entries for the same request); the getByKey dedup can't collapse
+    // them because the two id schemes never collide. This also makes
+    // cdp_status's networkDomain:false truthful instead of a label over a
+    // still-running domain.
+    if (networkDomainEnabled) {
+      try { await send('Network.disable', undefined, CDP_TIMEOUT_FAST); } catch { /* best-effort */ }
+      networkDomainEnabled = false;
+    }
     const hookResult = await evaluate(NETWORK_HOOK_SCRIPT);
     if (hookResult.error) {
       console.error('CDP: failed to inject network hooks:', hookResult.error);
