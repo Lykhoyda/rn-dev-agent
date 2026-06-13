@@ -28,9 +28,9 @@ test('buildMmkvExpression: get with type=number uses getNumber', () => {
   assert.match(expr, /getNumber\("count"\)/);
 });
 
-test('buildMmkvExpression: get with type=boolean uses getBool', () => {
+test('buildMmkvExpression: get with type=boolean uses getBoolean (GH #209 — getBool exists on no MMKV surface)', () => {
   const expr = buildMmkvExpression({ action: 'get', key: 'flag', type: 'boolean' });
-  assert.match(expr, /getBool\("flag"\)/);
+  assert.match(expr, /getBoolean\("flag"\)/);
 });
 
 test('buildMmkvExpression: get without key returns __agent_error literal', () => {
@@ -62,9 +62,12 @@ test('buildMmkvExpression: set without value returns __agent_error', () => {
   assert.match(expr, /__agent_error.*set requires value/);
 });
 
-test('buildMmkvExpression: delete includes the key literal', () => {
+test('buildMmkvExpression: delete prefers Nitro remove() with wrapper delete() fallback (GH #209)', () => {
   const expr = buildMmkvExpression({ action: 'delete', key: 'foo' });
-  assert.match(expr, /\.delete\("foo"\)/);
+  assert.match(expr, /mmkv\.remove\("foo"\)/);
+  assert.match(expr, /mmkv\.delete\("foo"\)/);
+  // remove (the hybrid-object spec name) must be tried first.
+  assert.ok(expr.indexOf('mmkv.remove') < expr.indexOf('mmkv.delete'));
 });
 
 test('buildMmkvExpression: has uses contains()', () => {

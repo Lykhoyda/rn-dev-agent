@@ -45,9 +45,13 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'get requires non-empty key' })`;
       }
+      // GH #209: `getBoolean` — the spelling on BOTH the Nitro hybrid object
+      // (MMKV.nitro.ts) and the JS wrapper class. The previous `getBool`
+      // existed on neither; type=boolean reads were broken since the tool
+      // shipped.
       const getMethod =
         valueType === 'number' ? 'getNumber' :
-        valueType === 'boolean' ? 'getBool' : 'getString';
+        valueType === 'boolean' ? 'getBoolean' : 'getString';
       actionBody = `var v = mmkv.${getMethod}(${JSON.stringify(args.key)}); return JSON.stringify({ value: v === undefined ? null : v });`;
       break;
     }
@@ -75,7 +79,14 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'delete requires non-empty key' })`;
       }
-      actionBody = `mmkv.delete(${JSON.stringify(args.key)}); return JSON.stringify({ ok: true });`;
+      // GH #209: the raw Nitro hybrid object (v4 / 3.0-beta line) exposes
+      // `remove(key)` per MMKV.nitro.ts — `delete(key)` only exists on the JS
+      // wrapper class. Prefer the spec name, fall back to the wrapper name,
+      // and fail with a named error instead of a bare TypeError.
+      actionBody = `if (typeof mmkv.remove === 'function') { mmkv.remove(${JSON.stringify(args.key)}); }
+      else if (typeof mmkv.delete === 'function') { mmkv.delete(${JSON.stringify(args.key)}); }
+      else { return JSON.stringify({ __agent_error: 'MMKV instance has neither remove() nor delete() — unexpected API surface; report the react-native-mmkv version' }); }
+      return JSON.stringify({ ok: true });`;
       break;
     }
     case 'has': {
