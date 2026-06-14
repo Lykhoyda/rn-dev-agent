@@ -61,3 +61,38 @@ async function runCapture(deps: LiveCaptureDeps): Promise<void> {
   } catch { /* route best-effort */ }
   if (frame.shot || frame.route) deps.pushLive(frame);
 }
+
+interface BuildLiveDepsInput {
+  recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
+  isFlowActive: () => boolean;
+  getActiveSession: () => { platform?: string } | null;
+  getClient: () => { isConnected: boolean; connectedTarget: { platform?: string } | null };
+  captureScreenshot: LiveCaptureDeps['captureScreenshot'];
+  readRoute: (client: unknown) => Promise<string | null>;
+  readShotFile: LiveCaptureDeps['readShotFile'];
+}
+
+function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
+  return p === 'ios' || p === 'android' ? p : null;
+}
+
+export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
+  return {
+    hasObservers: () => input.recorder.hasSubscribers(),
+    isFlowActive: () => input.isFlowActive(),
+    getPlatform: () => {
+      const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
+      if (fromSession) return fromSession;
+      return asDevicePlatform(input.getClient().connectedTarget?.platform);
+    },
+    captureScreenshot: input.captureScreenshot,
+    readRoute: async () => {
+      const c = input.getClient();
+      if (!c.isConnected) return null;
+      return input.readRoute(c);
+    },
+    readShotFile: input.readShotFile,
+    pushLive: input.recorder.pushLive,
+    tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
+  };
+}

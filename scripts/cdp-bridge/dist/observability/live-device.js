@@ -1,3 +1,6 @@
+// src/observability/live-device.ts
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { classifyFamily } from './events.js';
 /**
  * GH #206: which tools change on-screen state and so should trigger a live
@@ -58,4 +61,29 @@ async function runCapture(deps) {
     catch { /* route best-effort */ }
     if (frame.shot || frame.route)
         deps.pushLive(frame);
+}
+function asDevicePlatform(p) {
+    return p === 'ios' || p === 'android' ? p : null;
+}
+export function buildLiveDeps(input) {
+    return {
+        hasObservers: () => input.recorder.hasSubscribers(),
+        isFlowActive: () => input.isFlowActive(),
+        getPlatform: () => {
+            const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
+            if (fromSession)
+                return fromSession;
+            return asDevicePlatform(input.getClient().connectedTarget?.platform);
+        },
+        captureScreenshot: input.captureScreenshot,
+        readRoute: async () => {
+            const c = input.getClient();
+            if (!c.isConnected)
+                return null;
+            return input.readRoute(c);
+        },
+        readShotFile: input.readShotFile,
+        pushLive: input.recorder.pushLive,
+        tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
+    };
 }

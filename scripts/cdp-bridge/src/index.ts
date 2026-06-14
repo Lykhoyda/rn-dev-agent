@@ -77,8 +77,8 @@ import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
-import { arbiterWrap } from './lifecycle/device-arbiter.js';
-import { setForeignGateUdidProvider } from './lifecycle/foreign-flow-gate.js';
+import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
+import { setForeignGateUdidProvider, foreignFlowGate } from './lifecycle/foreign-flow-gate.js';
 import { getActiveSession } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -99,6 +99,8 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
+import { maybeCaptureLiveFrame, isStateMutating, buildLiveDeps } from './observability/live-device.js';
+import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
@@ -158,12 +160,35 @@ setForeignGateUdidProvider(() => {
   return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
 });
 
+const liveEnabled = process.env.RN_OBSERVE_LIVE !== '0';
+const liveDeps = buildLiveDeps({
+  recorder,
+  isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
+  getActiveSession,
+  getClient: () => getClient(),
+  captureScreenshot: (platform, path) => tryRawScreenshot(platform, path),
+  readRoute: (c) => readLiveRoute(c as Parameters<typeof readLiveRoute>[0]),
+  readShotFile: (path) => {
+    try {
+      const buf = readFileSync(path);
+      return { buf, contentType: path.endsWith('.png') ? 'image/png' : 'image/jpeg' };
+    } catch { return null; }
+  },
+});
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: any, handler: any): void {
-  const wrapped = instrumentTool(name, arbiterWrap(
+  const base = instrumentTool(name, arbiterWrap(
     name,
     handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
   ) as (...args: unknown[]) => Promise<unknown>);
+  const wrapped = (liveEnabled && isStateMutating(name))
+    ? async (...a: unknown[]): Promise<unknown> => {
+        const result = await base(...a);
+        void maybeCaptureLiveFrame(liveDeps);
+        return result;
+      }
+    : base;
   server.tool(name, desc, schema, wrapped as typeof handler);
 }
 
