@@ -83,7 +83,11 @@ export function buildLiveDeps(input) {
             return input.readRoute(c);
         },
         readShotFile: input.readShotFile,
-        pushLive: input.recorder.pushLive,
+        // Arrow-wrap, NOT a bare method reference: `input.recorder.pushLive`
+        // detaches `this`, so the real Recorder.pushLive throws "this.subs is not
+        // iterable" when invoked as deps.pushLive(...). The live device gate caught
+        // this — the unit fakes used standalone arrows and missed it.
+        pushLive: (frame) => input.recorder.pushLive(frame),
         tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
     };
 }
