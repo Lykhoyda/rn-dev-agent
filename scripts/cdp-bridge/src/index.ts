@@ -99,7 +99,7 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
-import { maybeCaptureLiveFrame, isStateMutating, buildLiveDeps } from './observability/live-device.js';
+import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, buildLiveDeps } from './observability/live-device.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
 
@@ -186,10 +186,15 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
     name,
     handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
   ) as (...args: unknown[]) => Promise<unknown>);
-  const wrapped = (liveEnabled && isStateMutating(name))
+  // Install the live-capture wrapper for any tool that COULD mutate (some only
+  // do for certain args, e.g. device_find action="click"), then make the actual
+  // decision per-call from the args (PR #296 review P2).
+  const wrapped = (liveEnabled && mayTriggerLiveCapture(name))
     ? async (...a: unknown[]): Promise<unknown> => {
         const result = await base(...a);
-        void maybeCaptureLiveFrame(liveDeps);
+        if (isStateMutating(name, a[0] as Record<string, unknown> | undefined)) {
+          void maybeCaptureLiveFrame(liveDeps);
+        }
         return result;
       }
     : base;

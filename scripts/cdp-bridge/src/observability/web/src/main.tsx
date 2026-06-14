@@ -219,12 +219,15 @@ function App(): JSX.Element {
             ))}
           </div>
           <div className="state">
+            {tab === 'route' && liveRoute && (
+              <div className="liveroute">live route: {liveRoute}</div>
+            )}
             {tabEv ? (
               <>
                 {tabEv.truncated && <div className="trunc">payload truncated</div>}
                 <pre>{pretty(tabEv.payload)}</pre>
               </>
-            ) : (
+            ) : tab === 'route' && liveRoute ? null : (
               <div className="empty">no {tab} captured yet</div>
             )}
           </div>
@@ -282,6 +285,7 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .tab.on { background: #283457; color: #c0caf5; }
 .state { flex: 1; overflow: auto; padding: 8px 10px; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
+.liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 6px; }
 .empty { color: #565f89; padding: 12px; }
 `;
 

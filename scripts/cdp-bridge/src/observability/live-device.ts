@@ -4,13 +4,30 @@ import { tmpdir } from 'node:os';
 import { classifyFamily } from './events.js';
 
 /**
- * GH #206: which tools change on-screen state and so should trigger a live
- * /observe refresh. Single source of truth, derived from events.ts families —
- * all INTERACTION-family tools plus cdp_navigate. Read-only NAVIGATION tools
- * (cdp_navigation_state, cdp_nav_graph) are excluded: reads change nothing.
+ * GH #206: does THIS tool call change on-screen state (→ trigger a live
+ * /observe refresh)? Derived from events.ts families — all INTERACTION-family
+ * tools plus cdp_navigate. Read-only NAVIGATION tools (cdp_navigation_state,
+ * cdp_nav_graph) are excluded: reads change nothing.
+ *
+ * `device_find` is special: it is INTROSPECTION (search) by default, but
+ * `device_find({ action: 'click' })` taps the match — a real state change. So
+ * the decision is per-CALL (depends on args), which is why callers pass the
+ * tool's args (PR #296 review P2).
  */
-export function isStateMutating(tool: string): boolean {
-  return classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate';
+export function isStateMutating(tool: string, args?: Record<string, unknown>): boolean {
+  if (classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate') return true;
+  if (tool === 'device_find' && args?.action === 'click') return true;
+  return false;
+}
+
+/**
+ * Registration-time gate: could this tool EVER trigger a live capture (for
+ * some args)? Used to decide whether to install the per-call wrapper at all.
+ * Tools that can only mutate for certain args (device_find) must still be
+ * wrapped so the per-call `isStateMutating(tool, args)` check can run.
+ */
+export function mayTriggerLiveCapture(tool: string): boolean {
+  return classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find';
 }
 
 export interface LiveCaptureDeps {
