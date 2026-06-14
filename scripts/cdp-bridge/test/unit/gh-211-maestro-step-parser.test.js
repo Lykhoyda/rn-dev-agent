@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseSteps, stripAnsi, findFailedStep, lastObservedStep, summarizeReason, buildStepSummary,
+  classifyExecError, formatFailureHeadline,
 } from '../../dist/domain/maestro-step-parser.js';
 
 // Real maestro-runner format (same shape as the gh-263 fixtures).
@@ -96,4 +97,56 @@ test('buildStepSummary: timeout partial (no ✗) → failedStep null, lastStep =
   const s = buildStepSummary(partial, { failed: true });
   assert.equal(s.failedStep, null);
   assert.equal(s.lastStep.name, 'tapOn: id="a"');
+});
+
+test('classifyExecError: timeout (killed, no code) → timedOut, not truncated', () => {
+  assert.deepEqual(
+    classifyExecError({ killed: true, signal: 'SIGTERM', code: null }),
+    { timedOut: true, outputTruncated: false },
+  );
+});
+
+test('classifyExecError: maxBuffer overflow → truncated, not timedOut', () => {
+  assert.deepEqual(
+    classifyExecError({ killed: true, code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
+    { timedOut: false, outputTruncated: true },
+  );
+});
+
+test('classifyExecError: normal non-zero exit → neither; null safe', () => {
+  assert.deepEqual(classifyExecError({ killed: false, code: 1 }), { timedOut: false, outputTruncated: false });
+  assert.deepEqual(classifyExecError(null), { timedOut: false, outputTruncated: false });
+});
+
+test('catch-path assembly: timeout → timedOut, partial steps, failedStep null', () => {
+  const err = { killed: true, code: null, stdout: '  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)', stderr: '' };
+  const combined = (err.stdout + '\n' + err.stderr).trim();
+  const cls = classifyExecError(err);
+  const summary = buildStepSummary(combined, { failed: true });
+  assert.equal(cls.timedOut, true);
+  assert.equal(cls.outputTruncated, false);
+  assert.equal(summary.failedStep, null);
+  assert.equal(summary.lastStep.name, 'tapOn: id="a"');
+});
+
+test('formatFailureHeadline: structured & raw-free; raw fallback only for system errors', () => {
+  const t = buildStepSummary('  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)', { failed: true });
+  assert.equal(
+    formatFailureHeadline(t, { timedOut: true, outputTruncated: false }, 'Command failed: …'),
+    'Maestro flow timed out after step "tapOn: id="a""',
+  );
+  const f = buildStepSummary('  ✗ tapOn: id="c" (12.7s)\nElement with id \'c\' not found', { failed: true });
+  assert.equal(
+    formatFailureHeadline(f, { timedOut: false, outputTruncated: false }, 'x'),
+    'Maestro flow failed at step "tapOn: id="c"" (SELECTOR_NOT_FOUND: c)',
+  );
+  const empty = { steps: [], failedStep: null, reason: null, lastStep: null };
+  assert.equal(
+    formatFailureHeadline(empty, { timedOut: false, outputTruncated: false }, 'spawn ENOENT'),
+    'Maestro flow failed: spawn ENOENT',
+  );
+  assert.equal(
+    formatFailureHeadline(empty, { timedOut: false, outputTruncated: true }, 'x'),
+    'Maestro flow output exceeded the 10MB buffer',
+  );
 });

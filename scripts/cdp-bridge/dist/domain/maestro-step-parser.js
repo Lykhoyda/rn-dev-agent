@@ -74,3 +74,33 @@ export function buildStepSummary(output, opts) {
         lastStep: lastObservedStep(steps),
     };
 }
+// execFile timeout kills the child (killed===true, signal 'SIGTERM', code null).
+// A 10MB maxBuffer overflow ALSO rejects with killed===true but code
+// 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' — that's truncation, not a timeout, so it
+// must not be mislabeled. `killed` is authoritative; `code` only subtracts the
+// overflow case (a SIGTERM-trapping child can leave a non-null exit code).
+export function classifyExecError(err) {
+    const e = err;
+    const killed = e?.killed === true;
+    const overflow = e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+    return { timedOut: killed && !overflow, outputTruncated: overflow };
+}
+// Headline for a failed maestro_run, built from STRUCTURED data so it never
+// re-embeds raw runner/app output. The raw fallbackMsg (err.message, which
+// execFile populates with stderr) is used ONLY when there is no structured
+// signal — e.g. a spawn/system error with no step output. Raw output still
+// lives in the bounded `output` field.
+export function formatFailureHeadline(summary, cls, fallbackMsg) {
+    if (cls.timedOut) {
+        return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ''}`;
+    }
+    if (cls.outputTruncated) {
+        return 'Maestro flow output exceeded the 10MB buffer';
+    }
+    if (summary.failedStep) {
+        const r = summary.reason;
+        const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ''})` : '';
+        return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+    }
+    return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
+}
