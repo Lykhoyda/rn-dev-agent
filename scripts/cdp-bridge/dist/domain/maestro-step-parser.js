@@ -16,6 +16,13 @@ export function stripAnsi(s) {
 // `.*?` is non-greedy + `$`-anchored so a duration-looking token inside the
 // selector value (`text="took (2.0s)"`) loses to the real trailing duration.
 const STEP_RE = /^([✓✗])\s+(.*?)\s*\(([\d.]+)s\)\s*$/;
+// Bound any text interpolated into results/headline so a pathological step name
+// or selector (e.g. a multi-KB inputText value) can't balloon the failure
+// message and defeat the sliced `output` field (codex-pair review).
+const MAX_FIELD = 200;
+function cap(s) {
+    return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + '…' : s;
+}
 export function parseSteps(output) {
     if (!output || typeof output !== 'string')
         return [];
@@ -34,7 +41,7 @@ export function parseSteps(output) {
             continue;
         steps.push({
             index: index++,
-            name,
+            name: cap(name),
             verb,
             status: m[1] === '✓' ? 'pass' : 'fail',
             durationMs: Math.round(seconds * 1000),
@@ -42,12 +49,13 @@ export function parseSteps(output) {
     }
     return steps;
 }
+// The TERMINAL failed step: the last parsed step iff it failed. maestro-runner
+// stops at the first real failure, so the terminal ✗ is the last parsed step; a
+// transient ✗ that was retried-✓ before a later timeout is NOT reported, because
+// the last parsed step is then the recovery ✓ (codex-pair review).
 export function findFailedStep(steps) {
-    for (let i = steps.length - 1; i >= 0; i--) {
-        if (steps[i].status === 'fail')
-            return steps[i];
-    }
-    return null;
+    const last = steps.length ? steps[steps.length - 1] : null;
+    return last && last.status === 'fail' ? last : null;
 }
 export function lastObservedStep(steps) {
     return steps.length ? steps[steps.length - 1] : null;
@@ -60,7 +68,7 @@ export function summarizeReason(output) {
     if (f.kind === 'UNKNOWN')
         return null;
     const selector = 'selector' in f ? (f.selector ?? null) : null;
-    return { kind: f.kind, selector };
+    return { kind: f.kind, selector: selector === null ? null : cap(selector) };
 }
 // failedStep/reason are populated ONLY when the run's terminal verdict is fail
 // (opts.failed). maestro-runner logs transient retries; a fail-then-retry-✓ on

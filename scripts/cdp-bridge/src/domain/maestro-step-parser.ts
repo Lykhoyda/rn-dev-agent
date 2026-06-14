@@ -28,6 +28,14 @@ export function stripAnsi(s: string): string {
 // selector value (`text="took (2.0s)"`) loses to the real trailing duration.
 const STEP_RE = /^([✓✗])\s+(.*?)\s*\(([\d.]+)s\)\s*$/;
 
+// Bound any text interpolated into results/headline so a pathological step name
+// or selector (e.g. a multi-KB inputText value) can't balloon the failure
+// message and defeat the sliced `output` field (codex-pair review).
+const MAX_FIELD = 200;
+function cap(s: string): string {
+  return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + '…' : s;
+}
+
 export function parseSteps(output: string): MaestroStep[] {
   if (!output || typeof output !== 'string') return [];
   const steps: MaestroStep[] = [];
@@ -42,7 +50,7 @@ export function parseSteps(output: string): MaestroStep[] {
     if (!Number.isFinite(seconds)) continue;
     steps.push({
       index: index++,
-      name,
+      name: cap(name),
       verb,
       status: m[1] === '✓' ? 'pass' : 'fail',
       durationMs: Math.round(seconds * 1000),
@@ -51,11 +59,13 @@ export function parseSteps(output: string): MaestroStep[] {
   return steps;
 }
 
+// The TERMINAL failed step: the last parsed step iff it failed. maestro-runner
+// stops at the first real failure, so the terminal ✗ is the last parsed step; a
+// transient ✗ that was retried-✓ before a later timeout is NOT reported, because
+// the last parsed step is then the recovery ✓ (codex-pair review).
 export function findFailedStep(steps: MaestroStep[]): MaestroStep | null {
-  for (let i = steps.length - 1; i >= 0; i--) {
-    if (steps[i].status === 'fail') return steps[i];
-  }
-  return null;
+  const last = steps.length ? steps[steps.length - 1] : null;
+  return last && last.status === 'fail' ? last : null;
 }
 
 export function lastObservedStep(steps: MaestroStep[]): MaestroStep | null {
@@ -74,7 +84,7 @@ export function summarizeReason(output: string): ReasonSummary | null {
   const f = parseMaestroFailure(output);
   if (f.kind === 'UNKNOWN') return null;
   const selector = 'selector' in f ? (f.selector ?? null) : null;
-  return { kind: f.kind, selector };
+  return { kind: f.kind, selector: selector === null ? null : cap(selector) };
 }
 
 export interface StepSummary {

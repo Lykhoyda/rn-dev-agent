@@ -150,3 +150,22 @@ test('formatFailureHeadline: structured & raw-free; raw fallback only for system
     'Maestro flow output exceeded the 10MB buffer',
   );
 });
+
+test('findFailedStep: transient ✗ retried-✓ then nothing → null (terminal-fail only)', () => {
+  const out = '  ✗ tapOn: id="a" (12.0s)\n  ✓ tapOn: id="a" (1.0s)\n  ✓ tapOn: id="b" (1.0s)';
+  assert.equal(findFailedStep(parseSteps(out)), null);
+});
+
+test('parseSteps: a pathologically long step name is capped', () => {
+  const steps = parseSteps('  ✓ inputText: "' + 'x'.repeat(500) + '" (1.0s)');
+  assert.equal(steps.length, 1);
+  assert.ok(steps[0].name.length <= 201, `name len ${steps[0].name.length}`);
+  assert.ok(steps[0].name.endsWith('…'));
+  assert.equal(steps[0].verb, 'inputText'); // verb still derived from the uncapped first token
+});
+
+test('formatFailureHeadline: long parsed names stay bounded (no raw blowup)', () => {
+  const s = buildStepSummary('  ✗ tapOn: id="' + 'y'.repeat(500) + '" (3.0s)', { failed: true });
+  const h = formatFailureHeadline(s, { timedOut: false, outputTruncated: false }, 'x');
+  assert.ok(h.length < 300, `headline len ${h.length}`);
+});
