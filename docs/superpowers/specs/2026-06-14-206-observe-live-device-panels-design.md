@@ -41,9 +41,9 @@ trackedTool wrapper (index.ts)
 ### Components
 
 **`observability/live-device.ts` (new).** Exports `maybeCaptureLiveFrame(deps)`. Pure orchestration with injectable deps so it is unit-testable with fakes (mirrors the codebase's existing seam pattern):
-- `captureScreenshot(platform, path) → { ok, path } | { ok:false }` (inject `tryRawScreenshot`)
-- `readRoute() → payload | null` (inject the navigation-state handler / CDP eval)
-- `getSession() → { platform, udid } | null`, `isFlowActive() → boolean`, `hasObservers() → boolean`
+- `captureScreenshot(platform, path) → { ok, path } | { ok:false }` (inject `tryRawScreenshot` — it self-resolves the booted device, so only the platform is needed, not a udid)
+- `readRoute() → route | null` (inject `readLiveRoute`; best-effort, null when CDP down)
+- `getPlatform() → 'ios' | 'android' | null` (resolved from the agent-device session OR the connected CDP target — see note below), `isFlowActive() → boolean`, `hasObservers() → boolean`
 - `recorder` sink
 - A module-level **single-flight with trailing-coalesce** guard (two booleans: `inFlight`, `pending`). If no capture is running, start one. If one is in flight, set `pending = true` and return immediately. When the in-flight capture finishes, if `pending` was set, clear it and run exactly one more. This guarantees the **final** post-burst state is captured (a pure drop would freeze `/observe` on the *first* frame of a rapid `device_batch`), while never running more than one trailing capture regardless of how many triggers arrived during the burst. Never throws; all errors swallowed.
 
@@ -65,7 +65,8 @@ This is the single source of truth (no hand-maintained second list). It is deriv
 
 - **Fire-and-forget:** the capture is scheduled with `void` after the handler returns its result to the caller — it never extends the triggering tool's latency or throws into the tool path.
 - **Single-flight:** at most one live capture in flight; rapid `device_batch` taps coalesce.
-- **Flow-aware:** skipped entirely while a Maestro flow owns the device (`arbiter.flowActive` / `foreignFlowGate.lastActive`) — the flow contends for CDP and the agent isn't driving via these tools then anyway.
+- **Flow-aware:** skipped while a Maestro flow owns the device. `arbiter.flowActive` (in-memory, set by the plugin's own flow tools) is the hard guard. `foreignFlowGate.lastActive` is also checked but is a *best-effort* sync mirror that only updates when some tool calls `gate.check()`, so a foreign flow may not always be reflected (plan-review N1) — acceptable because the consequence is benign: the screenshot is OS-level simctl (cannot conflict) and the route read is an L1 CDP introspection eval (coexists with a flow by design).
+- **Platform resolution:** the capture needs only the platform (`tryRawScreenshot` self-resolves the booted device). Platform comes from the active agent-device session, falling back to the connected CDP target's platform — so a purely CDP-driven flow (`cdp_navigate`/`cdp_interact`, no `device_snapshot` open) still refreshes. Skips when neither yields `ios`/`android`.
 - **Observer-gated:** no capture unless ≥1 SSE client is connected (zero cost when nobody is watching `/observe`).
 - **CDP-route best-effort:** the route read is attempted only when CDP is connected; failure leaves the route on its last value (no error surfaced).
 - **simctl/adb screenshot** is OS-level and cannot conflict with CDP or a foreign runner (same rationale as `device_screenshot`'s simctl fallback).
@@ -91,6 +92,7 @@ Every layer is best-effort and swallows errors, consistent with the recorder's e
 - Timer/heartbeat polling for async/animated changes between actions (deferred; can layer on later).
 - Any change to the timeline, event families, or non-device panels (store/tree tabs).
 - Android-specific tuning beyond the existing `adb` screenshot path.
+- **State-mutating CDP *writes* as triggers** (`cdp_dispatch`, `cdp_mmkv`, `cdp_set_shared_value`) — these are `INTROSPECTION`/other family, not `INTERACTION`, so they don't trigger a refresh even though e.g. a Redux dispatch can change the screen (plan-review N3). Intentional: the predicate stays tight and testable; the feature targets gesture/navigation drift. Adding `cdp_dispatch` is a possible fast-follow if dispatch-driven navigation proves common.
 
 ## Refs
 

@@ -256,7 +256,7 @@ function baseDeps(over = {}) {
   const deps = {
     hasObservers: () => true,
     isFlowActive: () => false,
-    getSession: () => ({ platform: 'ios', udid: 'UDID' }),
+    getPlatform: () => 'ios',
     captureScreenshot: async (_p, path) => ({ ok: true, path }),
     readRoute: async () => 'Home',
     readShotFile: () => ({ buf: Buffer.from([1]), contentType: 'image/jpeg' }),
@@ -290,9 +290,9 @@ test('skips when a flow is active', async () => {
   assert.equal(pushed.length, 0);
 });
 
-test('skips when no device session', async () => {
+test('skips when no platform resolvable (no session and CDP not connected)', async () => {
   _resetLiveCaptureForTest();
-  const { deps, pushed } = baseDeps({ getSession: () => null });
+  const { deps, pushed } = baseDeps({ getPlatform: () => null });
   await maybeCaptureLiveFrame(deps);
   assert.equal(pushed.length, 0);
 });
@@ -353,7 +353,12 @@ Expected: FAIL — `maybeCaptureLiveFrame` undefined.
 export interface LiveCaptureDeps {
   hasObservers: () => boolean;
   isFlowActive: () => boolean;
-  getSession: () => { platform: 'ios' | 'android'; udid: string } | null;
+  // GH#206 plan-review fix #4: resolve PLATFORM only (not a full agent-device
+  // session). tryRawScreenshot self-resolves the booted device, so no udid is
+  // needed — and the reporter's flow (cdp_navigate/cdp_interact, CDP-level) has
+  // no agent-device session, so requiring one would skip the exact case this
+  // feature targets. Platform comes from the session OR the connected CDP target.
+  getPlatform: () => 'ios' | 'android' | null;
   captureScreenshot: (platform: 'ios' | 'android', path: string) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
@@ -382,11 +387,11 @@ export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void
 }
 
 async function runCapture(deps: LiveCaptureDeps): Promise<void> {
-  const session = deps.getSession();
-  if (!session) return;
+  const platform = deps.getPlatform();
+  if (!platform) return;
   const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
   try {
-    const shot = await deps.captureScreenshot(session.platform, deps.tmpPath());
+    const shot = await deps.captureScreenshot(platform, deps.tmpPath());
     if (shot.ok) {
       const bytes = deps.readShotFile(shot.path);
       if (bytes) frame.shot = bytes;
@@ -400,7 +405,7 @@ async function runCapture(deps: LiveCaptureDeps): Promise<void> {
 }
 ```
 
-Note: the `getSession()===null` skip lives in `runCapture`, AFTER the single-flight latch is taken — so the "skips when no device session" test (which calls once) sees zero pushes and the latch is released in `finally`. Verified by the test.
+Note: the `getPlatform()===null` skip lives in `runCapture`, AFTER the single-flight latch is taken — so the "no platform resolvable" test (which calls once) sees zero pushes and the latch is released in `finally`. Verified by the test.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -517,54 +522,44 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildLiveDeps } from '../../dist/observability/live-device.js';
 
-test('buildLiveDeps.getSession returns null for non-ios/android or missing udid', () => {
-  const deps = buildLiveDeps({
-    recorder: { hasSubscribers: () => true, pushLive: () => {} },
-    isFlowActive: () => false,
-    getActiveSession: () => ({ platform: 'web', deviceId: 'x' }),
-    getClient: () => ({ isConnected: true }),
-    captureScreenshot: async () => ({ ok: false }),
-    readRoute: async () => null,
-    readShotFile: () => null,
-  });
-  assert.equal(deps.getSession(), null);
-
-  const deps2 = buildLiveDeps({
-    recorder: { hasSubscribers: () => true, pushLive: () => {} },
-    isFlowActive: () => false,
-    getActiveSession: () => ({ platform: 'ios', deviceId: '' }),
-    getClient: () => ({ isConnected: true }),
-    captureScreenshot: async () => ({ ok: false }),
-    readRoute: async () => null,
-    readShotFile: () => null,
-  });
-  assert.equal(deps2.getSession(), null);
+const baseInput = (over = {}) => ({
+  recorder: { hasSubscribers: () => true, pushLive: () => {} },
+  isFlowActive: () => false,
+  getActiveSession: () => null,
+  getClient: () => ({ isConnected: true, connectedTarget: null }),
+  captureScreenshot: async () => ({ ok: false }),
+  readRoute: async () => null,
+  readShotFile: () => null,
+  ...over,
 });
 
-test('buildLiveDeps.getSession maps a valid ios session', () => {
-  const deps = buildLiveDeps({
-    recorder: { hasSubscribers: () => true, pushLive: () => {} },
-    isFlowActive: () => false,
-    getActiveSession: () => ({ platform: 'ios', deviceId: 'UDID-1' }),
-    getClient: () => ({ isConnected: true }),
-    captureScreenshot: async () => ({ ok: false }),
-    readRoute: async () => null,
-    readShotFile: () => null,
-  });
-  assert.deepEqual(deps.getSession(), { platform: 'ios', udid: 'UDID-1' });
+test('getPlatform prefers a valid agent-device session platform', () => {
+  const deps = buildLiveDeps(baseInput({ getActiveSession: () => ({ platform: 'ios', deviceId: 'UDID-1' }) }));
+  assert.equal(deps.getPlatform(), 'ios');
 });
 
-test('buildLiveDeps.readRoute returns null when CDP disconnected (no eval attempted)', async () => {
-  let called = false;
-  const deps = buildLiveDeps({
-    recorder: { hasSubscribers: () => true, pushLive: () => {} },
-    isFlowActive: () => false,
+test('getPlatform falls back to the connected CDP target when there is no session (the reporter flow)', () => {
+  const deps = buildLiveDeps(baseInput({
     getActiveSession: () => null,
-    getClient: () => ({ isConnected: false }),
-    captureScreenshot: async () => ({ ok: false }),
+    getClient: () => ({ isConnected: true, connectedTarget: { platform: 'ios' } }),
+  }));
+  assert.equal(deps.getPlatform(), 'ios');
+});
+
+test('getPlatform returns null when neither session nor CDP target yields ios/android', () => {
+  const deps = buildLiveDeps(baseInput({
+    getActiveSession: () => ({ platform: 'web' }),
+    getClient: () => ({ isConnected: true, connectedTarget: { platform: undefined } }),
+  }));
+  assert.equal(deps.getPlatform(), null);
+});
+
+test('readRoute returns null when CDP disconnected (no eval attempted)', async () => {
+  let called = false;
+  const deps = buildLiveDeps(baseInput({
+    getClient: () => ({ isConnected: false, connectedTarget: null }),
     readRoute: async () => { called = true; return 'X'; },
-    readShotFile: () => null,
-  });
+  }));
   assert.equal(await deps.readRoute(), null);
   assert.equal(called, false, 'must not call the route reader when disconnected');
 });
@@ -584,21 +579,28 @@ import { tmpdir } from 'node:os';
 interface BuildLiveDepsInput {
   recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
   isFlowActive: () => boolean;
-  getActiveSession: () => { platform?: string; deviceId?: string } | null;
-  getClient: () => { isConnected: boolean };
+  getActiveSession: () => { platform?: string } | null;
+  getClient: () => { isConnected: boolean; connectedTarget: { platform?: string } | null };
   captureScreenshot: LiveCaptureDeps['captureScreenshot'];
   readRoute: (client: unknown) => Promise<string | null>;
   readShotFile: LiveCaptureDeps['readShotFile'];
+}
+
+function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
+  return p === 'ios' || p === 'android' ? p : null;
 }
 
 export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
   return {
     hasObservers: () => input.recorder.hasSubscribers(),
     isFlowActive: () => input.isFlowActive(),
-    getSession: () => {
-      const s = input.getActiveSession();
-      if (!s || (s.platform !== 'ios' && s.platform !== 'android') || !s.deviceId) return null;
-      return { platform: s.platform, udid: s.deviceId };
+    getPlatform: () => {
+      // Prefer the agent-device session; fall back to the connected CDP
+      // target so a purely CDP-driven flow (cdp_navigate/cdp_interact, no
+      // device_snapshot open) still refreshes — the exact #206 reporter case.
+      const fromSession = asDevicePlatform(input.getActiveSession()?.platform);
+      if (fromSession) return fromSession;
+      return asDevicePlatform(input.getClient().connectedTarget?.platform);
     },
     captureScreenshot: input.captureScreenshot,
     readRoute: async () => {
@@ -616,7 +618,7 @@ export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm run build && node --test test/unit/gh-206-live-deps-wiring.test.js`
-Expected: PASS (3/3).
+Expected: PASS (4/4).
 
 - [ ] **Step 5: Wire into `index.ts` `trackedTool`**
 
@@ -711,6 +713,12 @@ In `es.onmessage`, add a branch BEFORE the `if (type === 'snapshot')` block:
       }
 ```
 
+In the existing `shutdown` branch, also clear the live channel so a stale frame can't outlive its session (plan-review NICE-TO-HAVE #5) — change it to:
+
+```ts
+      if (type === 'shutdown') { es.close(); setConn('error'); setLiveShotSeq(null); setLiveRoute(null); return; }
+```
+
 Replace the device `<img>` block:
 
 ```tsx
@@ -785,8 +793,8 @@ const { tryRawScreenshot } = await import(D+'/tools/device-screenshot-raw.js');
 const srv = new ObservabilityServer(recorder); const { port } = await srv.start(0);
 recorder.attach(()=>{}); // simulate a connected observer
 const deps = buildLiveDeps({ recorder, isFlowActive:()=>false,
-  getActiveSession:()=>({platform:'ios',deviceId:process.env.UDID}),
-  getClient:()=>({isConnected:false}),
+  getActiveSession:()=>({platform:'ios'}),
+  getClient:()=>({isConnected:false, connectedTarget:{platform:'ios'}}),
   captureScreenshot:(p,path)=>tryRawScreenshot(p,path),
   readRoute:async()=>null,
   readShotFile:(path)=>{const fs=require('node:fs');try{return {buf:fs.readFileSync(path),contentType:'image/jpeg'};}catch{return null;}} });
