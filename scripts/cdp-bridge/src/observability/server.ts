@@ -57,6 +57,7 @@ export class ObservabilityServer {
     if (url === '/api/stream') return this.stream(res);
     const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
     if (shot) return this.screenshot(Number(shot[1]), res);
+    if (/^\/api\/live-screenshot\/\d+$/.test(url)) return this.liveScreenshot(res);
     if (url === '/') return this.index(res);
     res.writeHead(404); res.end();
   }
@@ -93,6 +94,15 @@ export class ObservabilityServer {
 
   private screenshot(seq: number, res: ServerResponse): void {
     const shot = this.recorder.getScreenshot(seq);
+    if (!shot) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+    res.end(shot.buf);
+  }
+
+  private liveScreenshot(res: ServerResponse): void {
+    // The <seq> in the path is a cache-busting key only — always serve the
+    // current live frame; 404 only when none has been captured this session.
+    const shot = this.recorder.getLiveScreenshot();
     if (!shot) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
     res.end(shot.buf);
