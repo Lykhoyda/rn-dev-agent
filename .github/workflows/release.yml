@@ -51,9 +51,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge on the Version Packages PR
+      # Prefer auto-merge (it gates on any pending checks). `gh pr merge --auto`
+      # ERRORS only when auto-merge can't be enabled — most commonly because the
+      # PR is already in a clean/mergeable state: the changeset-release/main
+      # branch has no required status checks, so the Version PR is usually
+      # immediately mergeable and there is no gate to attach to. Fall back to a
+      # direct merge ONLY for that specific benign error. Any OTHER auto-merge
+      # failure (e.g. "Allow auto-merge" disabled, missing permission) must fail
+      # the job loudly rather than silently direct-merging — a failing/pending
+      # check never lands here, because --auto succeeds at *enabling* in that
+      # case and simply waits.
+      - name: Merge the Version Packages PR (auto-merge, or direct only if already clean)
         if: steps.changesets.outputs.pullRequestNumber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.changesets.outputs.pullRequestNumber }}
-        run: gh pr merge --squash --auto "$PR_NUMBER"
+        run: |
+          if out=$(gh pr merge --squash --auto "$PR_NUMBER" 2>&1); then
+            echo "$out"
+          else
+            echo "$out"
+            if printf '%s' "$out" | grep -q "Pull request is in clean status"; then
+              echo "auto-merge not applicable (PR already mergeable) — merging directly"
+              gh pr merge --squash "$PR_NUMBER"
+            else
+              echo "auto-merge failed for an unexpected reason — not falling back" >&2
+              exit 1
+            fi
+          fi
