@@ -303,7 +303,7 @@ git commit -m "feat(#211): buildStepSummary + helpers (raw-free reason, terminal
 - [ ] **Step 1: Write the failing test** (append)
 
 ```js
-import { classifyExecError } from '../../dist/domain/maestro-step-parser.js';
+import { classifyExecError, formatFailureHeadline } from '../../dist/domain/maestro-step-parser.js';
 
 test('classifyExecError: timeout (killed, no code) → timedOut, not truncated', () => {
   assert.deepEqual(
@@ -335,6 +335,28 @@ test('catch-path assembly: timeout → timedOut, partial steps, failedStep null'
   assert.equal(summary.failedStep, null);
   assert.equal(summary.lastStep.name, 'tapOn: id="a"');
 });
+
+test('formatFailureHeadline: structured & raw-free; raw fallback only for system errors', () => {
+  const t = buildStepSummary('  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)', { failed: true });
+  assert.equal(
+    formatFailureHeadline(t, { timedOut: true, outputTruncated: false }, 'Command failed: …'),
+    'Maestro flow timed out after step "tapOn: id="a""',
+  );
+  const f = buildStepSummary('  ✗ tapOn: id="c" (12.7s)\nElement with id \'c\' not found', { failed: true });
+  assert.equal(
+    formatFailureHeadline(f, { timedOut: false, outputTruncated: false }, 'x'),
+    'Maestro flow failed at step "tapOn: id="c"" (SELECTOR_NOT_FOUND: c)',
+  );
+  const empty = { steps: [], failedStep: null, reason: null, lastStep: null };
+  assert.equal(
+    formatFailureHeadline(empty, { timedOut: false, outputTruncated: false }, 'spawn ENOENT'),
+    'Maestro flow failed: spawn ENOENT',
+  );
+  assert.equal(
+    formatFailureHeadline(empty, { timedOut: false, outputTruncated: true }, 'x'),
+    'Maestro flow output exceeded the 10MB buffer',
+  );
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -360,6 +382,30 @@ export function classifyExecError(err: unknown): ExecErrorClass {
   const killed = e?.killed === true;
   const overflow = e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
   return { timedOut: killed && !overflow, outputTruncated: overflow };
+}
+
+// Headline for a failed maestro_run, built from STRUCTURED data so it never
+// re-embeds raw runner/app output. The raw fallbackMsg (err.message, which
+// execFile populates with stderr) is used ONLY when there is no structured
+// signal — e.g. a spawn/system error with no step output. Raw output still
+// lives in the bounded `output` field.
+export function formatFailureHeadline(
+  summary: StepSummary,
+  cls: ExecErrorClass,
+  fallbackMsg: string,
+): string {
+  if (cls.timedOut) {
+    return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ''}`;
+  }
+  if (cls.outputTruncated) {
+    return 'Maestro flow output exceeded the 10MB buffer';
+  }
+  if (summary.failedStep) {
+    const r = summary.reason;
+    const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ''})` : '';
+    return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+  }
+  return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
 ```
 
@@ -428,7 +474,7 @@ git commit -m "refactor(#211): parseTapLatencies derives from shared parseSteps 
 - [ ] **Step 1: Add the import** (after line 19, alongside the other domain imports)
 
 ```ts
-import { buildStepSummary, classifyExecError } from '../domain/maestro-step-parser.js';
+import { buildStepSummary, classifyExecError, formatFailureHeadline } from '../domain/maestro-step-parser.js';
 ```
 
 - [ ] **Step 2: Rewrite the success/warn block**
@@ -488,12 +534,15 @@ Replace the catch body (current lines 256-287) with:
       const combined = (stdout + '\n' + stderr).trim();
       const { timedOut, outputTruncated } = classifyExecError(err);
       const summary = buildStepSummary(combined, { failed: true });
+      // Headline from structured data (raw-free); the raw err.message is the
+      // fallback only for system errors with no step output (e.g. spawn ENOENT).
+      const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(
         combined,
         resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS),
-        `Maestro flow failed: ${msg.slice(0, 500)}`,
+        headline,
         {
           flowFile,
           platform,
@@ -525,37 +574,36 @@ git commit -m "feat(#211): maestro_run returns steps/failedStep/reason/lastStep 
 
 ## Task 6: Changeset + final green
 
+> **Working dir for THIS task: repo root** (`/Users/anton_personal/GitHub/claude-react-native-dev-plugin`). Changesets live at repo-root `.changeset/`, NOT under `scripts/cdp-bridge/` (verified: `.changeset/gh-263-runtime-degraded.md`). `git add .changeset/` from the subdir would stage the wrong path and silently drop the changeset (codex-pair MED #2).
+
 **Files:**
-- Create: `scripts/cdp-bridge/.changeset/<run-name>.md` (or repo-root `.changeset/` — match where existing changesets live; check `ls .changeset` from repo root)
+- Create: `.changeset/maestro-structured-step-results.md` (repo root)
 
-- [ ] **Step 1: Locate the changeset dir**
+- [ ] **Step 1: Write the changeset** (two-package frontmatter, mirroring `.changeset/gh-263-runtime-degraded.md`)
 
-Run (from repo root): `ls .changeset/*.md | head` and open one to copy the frontmatter package name (e.g. `"rn-dev-agent"` / the cdp-bridge package name).
-
-- [ ] **Step 2: Write the changeset**
-
-Create `.changeset/maestro-structured-step-results.md` (use the package name from Step 1):
+Create `.changeset/maestro-structured-step-results.md`:
 
 ```markdown
 ---
-"<package-name-from-step-1>": patch
+"rn-dev-agent-cdp": patch
+"rn-dev-agent-plugin": patch
 ---
 
-maestro_run: structured per-step results (steps/failedStep/reason/lastStep) and
-partial progress on timeout. Parsed from maestro-runner stdout; reason is
-sanitized (no raw log); timeout is distinguished from maxBuffer overflow
-(timedOut vs outputTruncated). Fields are additive — output is preserved (#211).
+`maestro_run` now returns structured per-step results and partial progress on timeout (GH #211).
+
+The result gains `steps[]` (`{index,name,verb,status,durationMs}`), `failedStep`, `reason` (sanitized `{kind,selector}` — never the raw runner log), `lastStep` (progress marker), `timedOut`, and `outputTruncated`. On timeout the partial steps are returned instead of a bare failure, and the headline names the failing/last step. Parsed from maestro-runner stdout (the JVM Maestro CLI fallback degrades fail-open to empty steps); `tapOn` latencies for #263 now derive from the shared parser. Additive — `output` is preserved for `run-action` consumers.
 ```
 
-- [ ] **Step 3: Final full suite + typecheck**
+- [ ] **Step 2: Final full suite** (from `scripts/cdp-bridge`)
 
-Run (from `scripts/cdp-bridge`): `npm test`
-Expected: PASS, full suite green.
+Run: `cd scripts/cdp-bridge && npm test`
+Expected: PASS, full suite green (≥ the pre-change baseline of 2063).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit** (from repo root)
 
 ```bash
-git add .changeset/
+cd /Users/anton_personal/GitHub/claude-react-native-dev-plugin
+git add .changeset/maestro-structured-step-results.md
 git commit -m "chore(#211): changeset for maestro_run structured step results"
 ```
 
@@ -566,6 +614,11 @@ git commit -m "chore(#211): changeset for maestro_run structured step results"
 - **/multi-review** the diff (Gemini + Codex).
 - **On-device verify** (`maestro_run` on a real iOS sim flow): assert `data.steps`/`data.failedStep`/`data.lastStep` populate on pass and a forced-fail flow; settle the **ANSI question** empirically — `~/.maestro-runner/bin/maestro-runner --platform ios test <flow> | cat -v | grep -c '\^\['` (or pipe to a file and `grep -c $'\x1b'`); confirm `runFlow` sub-flow step rendering. Repeat one check on Android emulator.
 - Fix findings, re-run suite, finish branch → PR.
+
+## Amendments applied (codex-pair plan review, 2026-06-14)
+
+- **MED #1 — raw-free failure headline:** added pure `formatFailureHeadline(summary, cls, fallbackMsg)` (Task 3) and wired it in Task 5 so the catch-path headline is built from structured data (names the failing/last step) instead of `Maestro flow failed: ${err.message.slice(0,500)}`; the raw `err.message` is kept only as a fallback for system errors with no step output. Raw output stays in the bounded `output` field.
+- **MED #2 — changeset path:** Task 6 now runs from the repo root and stages the repo-root `.changeset/` explicitly (changesets are NOT under `scripts/cdp-bridge/`); two-package frontmatter (`rn-dev-agent-cdp` + `rn-dev-agent-plugin`).
 
 ## Self-Review
 
