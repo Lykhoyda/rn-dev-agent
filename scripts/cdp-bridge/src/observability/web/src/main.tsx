@@ -75,6 +75,8 @@ function App(): JSX.Element {
   const [conn, setConn] = useState<'connecting' | 'open' | 'error'>('connecting');
   const [selected, setSelected] = useState<number | null>(null);
   const [tab, setTab] = useState<'route' | 'store' | 'tree'>('route');
+  const [liveShotSeq, setLiveShotSeq] = useState<number | null>(null);
+  const [liveRoute, setLiveRoute] = useState<string | null>(null);
   const maxSeqRef = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -103,7 +105,13 @@ function App(): JSX.Element {
       // The server sends this right before it stops. Close the EventSource so
       // the browser does NOT auto-reconnect (which would hammer the dead port,
       // or silently reattach to a different session reusing the same port).
-      if (type === 'shutdown') { es.close(); setConn('error'); return; }
+      if (type === 'shutdown') { es.close(); setConn('error'); setLiveShotSeq(null); setLiveRoute(null); return; }
+      if (type === 'live') {
+        const p = parsed as { shotSeq?: number; route?: string };
+        if (typeof p.shotSeq === 'number') setLiveShotSeq(p.shotSeq);
+        if (typeof p.route === 'string') setLiveRoute(p.route);
+        return;
+      }
       if (type === 'snapshot') {
         merge(((parsed as { events?: AgentEvent[] }).events) ?? []);
       } else {
@@ -145,7 +153,7 @@ function App(): JSX.Element {
         <span className={`dot ${conn}`} />
         <strong>{conn}</strong>
         <span className="sep">events {events.length}</span>
-        <span className="sep">route {route ?? '—'}</span>
+        <span className="sep">route {liveRoute ?? route ?? '—'}</span>
         {app && <span className="sep">app {app}</span>}
       </div>
       <div className="panes">
@@ -193,7 +201,9 @@ function App(): JSX.Element {
         <div className="pane center">
           <div className="pane-head">Device</div>
           <div className="screen">
-            {shotEv ? (
+            {liveShotSeq != null ? (
+              <img src={`/api/live-screenshot/${liveShotSeq}`} alt="live device screenshot" />
+            ) : shotEv ? (
               <img src={`/api/screenshot/${shotEv.seq}`} alt={`screenshot seq ${shotEv.seq}`} />
             ) : (
               <div className="empty">no screenshot yet</div>
@@ -209,12 +219,15 @@ function App(): JSX.Element {
             ))}
           </div>
           <div className="state">
+            {tab === 'route' && liveRoute && (
+              <div className="liveroute">live route: {liveRoute}</div>
+            )}
             {tabEv ? (
               <>
                 {tabEv.truncated && <div className="trunc">payload truncated</div>}
                 <pre>{pretty(tabEv.payload)}</pre>
               </>
-            ) : (
+            ) : tab === 'route' && liveRoute ? null : (
               <div className="empty">no {tab} captured yet</div>
             )}
           </div>
@@ -272,6 +285,7 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .tab.on { background: #283457; color: #c0caf5; }
 .state { flex: 1; overflow: auto; padding: 8px 10px; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
+.liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 6px; }
 .empty { color: #565f89; padding: 12px; }
 `;
 

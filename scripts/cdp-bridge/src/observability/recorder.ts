@@ -19,6 +19,8 @@ export class Recorder {
   private subs = new Set<(e: AgentEvent) => void>();
   private shots = new Map<number, ScreenshotBytes>();
   private readonly shotCap: number;
+  private liveShotData: ScreenshotBytes | undefined;
+  private liveSeqVal = 0;
 
   constructor(capacity: number = DEFAULT_CAP) {
     this.buf = new RingBuffer<AgentEvent>(capacity);
@@ -40,6 +42,25 @@ export class Recorder {
     return { snapshot, detach: () => { this.subs.delete(fn); } };
   }
   getScreenshot(seq: number): ScreenshotBytes | undefined { return this.shots.get(seq); }
+  hasSubscribers(): boolean { return this.subs.size > 0; }
+  getLiveScreenshot(): ScreenshotBytes | undefined { return this.liveShotData; }
+  pushLive(frame: { shot?: ScreenshotBytes; route?: string }): void {
+    const ev: Record<string, unknown> = { type: 'live' };
+    let changed = false;
+    if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+      this.liveShotData = frame.shot;
+      ev.shotSeq = ++this.liveSeqVal;
+      changed = true;
+    }
+    if (typeof frame.route === 'string' && frame.route.length > 0) {
+      ev.route = frame.route;
+      changed = true;
+    }
+    if (!changed) return;
+    for (const fn of this.subs) {
+      try { fn(ev as unknown as AgentEvent); } catch { /* per-subscriber swallow */ }
+    }
+  }
   clear(): void {
     this.buf.clear();
     // Notify live subscribers with a terminal sentinel BEFORE dropping them, so
@@ -52,6 +73,8 @@ export class Recorder {
     this.subs.clear();
     this.shots.clear();
     this.seq = 0;
+    this.liveShotData = undefined;
+    this.liveSeqVal = 0;
   }
   protected captureScreenshot(ev: AgentEvent, o: ToolObservation): void {
     if (ev.tool !== 'device_screenshot' || !ev.ok) return;
