@@ -14,6 +14,8 @@ export class Recorder {
     subs = new Set();
     shots = new Map();
     shotCap;
+    liveShotData;
+    liveSeqVal = 0;
     constructor(capacity = DEFAULT_CAP) {
         this.buf = new RingBuffer(capacity);
         this.shotCap = Math.max(8, Math.floor(capacity / 10));
@@ -41,6 +43,29 @@ export class Recorder {
         return { snapshot, detach: () => { this.subs.delete(fn); } };
     }
     getScreenshot(seq) { return this.shots.get(seq); }
+    hasSubscribers() { return this.subs.size > 0; }
+    getLiveScreenshot() { return this.liveShotData; }
+    pushLive(frame) {
+        const ev = { type: 'live' };
+        let changed = false;
+        if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+            this.liveShotData = frame.shot;
+            ev.shotSeq = ++this.liveSeqVal;
+            changed = true;
+        }
+        if (typeof frame.route === 'string' && frame.route.length > 0) {
+            ev.route = frame.route;
+            changed = true;
+        }
+        if (!changed)
+            return;
+        for (const fn of this.subs) {
+            try {
+                fn(ev);
+            }
+            catch { /* per-subscriber swallow */ }
+        }
+    }
     clear() {
         this.buf.clear();
         // Notify live subscribers with a terminal sentinel BEFORE dropping them, so
@@ -56,6 +81,8 @@ export class Recorder {
         this.subs.clear();
         this.shots.clear();
         this.seq = 0;
+        this.liveShotData = undefined;
+        this.liveSeqVal = 0;
     }
     captureScreenshot(ev, o) {
         if (ev.tool !== 'device_screenshot' || !ev.ok)
