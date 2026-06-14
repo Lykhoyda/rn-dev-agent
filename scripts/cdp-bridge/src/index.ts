@@ -171,7 +171,11 @@ const liveDeps = buildLiveDeps({
   readShotFile: (path) => {
     try {
       const buf = readFileSync(path);
-      return { buf, contentType: path.endsWith('.png') ? 'image/png' : 'image/jpeg' };
+      // Derive content-type from the magic bytes, not the extension: Android's
+      // `adb screencap -p` writes PNG bytes regardless of the .jpg tmp path, so
+      // an extension-based guess would mislabel them (final-review finding).
+      const isPng = buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+      return { buf, contentType: isPng ? 'image/png' : 'image/jpeg' };
     } catch { return null; }
   },
 });
