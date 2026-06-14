@@ -14,8 +14,10 @@ export function parseTapLatencies(output: string): number[] {
   const out: number[] = [];
   for (const raw of output.split('\n')) {
     const line = raw.trim();
-    if (!line.startsWith('✓')) continue;       // successful steps only
-    if (!/\btapOn\b/.test(line)) continue;     // tap steps only
+    // Anchor on the step verb (`✓ tapOn:`) so "tapOn" inside another step's
+    // text/selector value (e.g. `✓ assertVisible: text="tapOn …"`) is not
+    // counted. Successful (✓) steps only — a ✗ duration is the step timeout.
+    if (!/^✓\s+tapOn\b/.test(line)) continue;
     const m = line.match(/\(([\d.]+)s\)\s*$/); // trailing (N.Ns)
     if (!m) continue;
     const seconds = Number(m[1]);
@@ -44,11 +46,17 @@ export interface RuntimeDegradation {
   sampleCount: number;
 }
 
+// Require at least this many successful-tap samples before attributing slowness
+// to a wedge. A single slow tap (e.g. a cold-start navigation tap) is normal
+// variance — flagging it would mis-hint "reboot" on an ordinary element-not-found
+// failure, the exact misdirection this feature fights (review finding #1).
+const MIN_SAMPLES_FOR_DEGRADED = 2;
+
 export function classifyRuntimeDegradation(output: string, floorMs: number): RuntimeDegradation {
   const samples = parseTapLatencies(output);
   const medianMs = median(samples);
   return {
-    degraded: medianMs != null && medianMs >= floorMs,
+    degraded: medianMs != null && samples.length >= MIN_SAMPLES_FOR_DEGRADED && medianMs >= floorMs,
     medianMs,
     floorMs,
     sampleCount: samples.length,

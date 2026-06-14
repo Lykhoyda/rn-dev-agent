@@ -20,8 +20,9 @@ A recurring iOS failure mode: tap latencies degrade 3–4× (~0.7s → ~2.6–3.
   ```
   Each `tapOn` step line ends with a parenthesized duration in **seconds**.
 - **Only `✓` (successful) tapOn lines count.** A `✗` line's duration is the step *timeout* (e.g. 12.7s), not a tap latency — including it would false-positive on an ordinary "element not found" failure (one timed-out tap → median ≥ floor → bogus hint). The wedge signal is in the *successful* taps being slow (the reporter's 2.6–3.0s were completed taps). So the parser ignores `✗` lines.
-- **Statistic:** **median** of the successful `tapOn` durations (robust to a single slow tap), in ms.
-- **Threshold:** degraded when `median ≥ floorMs`, default **1500** (1.5s), overridable via `RN_RUNTIME_DEGRADED_FLOOR_MS` (parsed defensively; invalid → default).
+- **Statistic:** **median** of the successful `tapOn` durations, in ms.
+- **Minimum samples:** require **≥2** successful-tap samples before flagging degraded. A single slow tap (e.g. a cold-start navigation tap > 1.5s) is normal variance — `median` of one sample is just that value, so without this guard an ordinary element-not-found failure that happened after one slow nav tap would mis-fire "reboot" (the exact misdirection this feature fights; caught in multi-LLM review against the canonical #105 fixture). A real wedge degrades *multiple* taps (the reporter saw 2.6–3.0s across the replay), so ≥2 preserves true-positive detection.
+- **Threshold:** degraded when `sampleCount ≥ 2 && median ≥ floorMs`, default floor **1500** (1.5s), overridable via `RN_RUNTIME_DEGRADED_FLOOR_MS` (parsed defensively; invalid → default).
 - **Gate:** evaluated **only on a failed flow** — never nag on a passing-but-slow run.
 
 ## Architecture

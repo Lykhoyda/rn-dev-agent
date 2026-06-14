@@ -38,6 +38,30 @@ test('parseTapLatencies: output with no tapOn lines → []', () => {
   assert.deepEqual(parseTapLatencies(''), []);
 });
 
+// Review finding #2: a non-tap step whose text VALUE contains "tapOn" must not
+// be counted (anchor on the step verb, not a substring match).
+test('parseTapLatencies: "tapOn" inside another step\'s text value is not a tap sample', () => {
+  assert.deepEqual(parseTapLatencies('  ✓ assertVisible: text="tapOn the button" (3.0s)'), []);
+});
+
+// Review finding #1 (both reviewers, verified vs the canonical #105 fixture):
+// one successful tap before an element-not-found failure must NOT be flagged
+// degraded — a single slow cold-start tap is normal, and hinting "reboot" on an
+// ordinary missing-element failure is the exact misdirection this feature fights.
+const SINGLE_SUCCESS_THEN_NOTFOUND = `  ✓ launchApp (2.3s)
+  ✓ tapOn: id="tab-tasks" (2.8s)
+  ✓ assertVisible: text="Tasks" (1.3s)
+  ✗ tapOn: id="task-mark-all-done" (12.7s)
+      ╰─ Element not found: id='task-mark-all-done'
+✗ rn-maestro-run 23.8s`;
+
+test('classifyRuntimeDegradation: a single successful slow tap is NOT degraded (needs ≥2 samples)', () => {
+  const d = classifyRuntimeDegradation(SINGLE_SUCCESS_THEN_NOTFOUND, 1500);
+  assert.equal(d.sampleCount, 1);
+  assert.equal(d.medianMs, 2800);
+  assert.equal(d.degraded, false, 'one slow tap is not enough evidence of a wedge');
+});
+
 test('median: odd, even, single, empty', () => {
   assert.equal(median([3000, 2800, 1000]), 2800);  // sorted 1000,2800,3000
   assert.equal(median([2800, 3000]), 2900);        // average of two middle
