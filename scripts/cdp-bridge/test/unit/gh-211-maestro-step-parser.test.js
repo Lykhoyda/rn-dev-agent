@@ -1,7 +1,9 @@
 // test/unit/gh-211-maestro-step-parser.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSteps, stripAnsi } from '../../dist/domain/maestro-step-parser.js';
+import {
+  parseSteps, stripAnsi, findFailedStep, lastObservedStep, summarizeReason, buildStepSummary,
+} from '../../dist/domain/maestro-step-parser.js';
 
 // Real maestro-runner format (same shape as the gh-263 fixtures).
 const FAILED_RUN = `  ✓ launchApp (2.3s)
@@ -52,4 +54,46 @@ test('stripAnsi: removes SGR codes; ANSI-wrapped glyph line still parses', () =>
   const steps = parseSteps(colored);
   assert.equal(steps.length, 1);
   assert.equal(steps[0].verb, 'tapOn');
+});
+
+test('findFailedStep: last ✗ step; null when all pass', () => {
+  assert.equal(findFailedStep(parseSteps(FAILED_RUN)).name, 'tapOn: id="c"');
+  assert.equal(findFailedStep(parseSteps('  ✓ launchApp (1.0s)')), null);
+});
+
+test('lastObservedStep: steps.at(-1); null when empty', () => {
+  assert.equal(lastObservedStep(parseSteps(FAILED_RUN)).name, 'tapOn: id="c"');
+  assert.equal(lastObservedStep([]), null);
+});
+
+test('summarizeReason: sanitized {kind, selector}; NEVER carries raw', () => {
+  const r = summarizeReason(`Element with id 'submit' not found`);
+  assert.deepEqual(r, { kind: 'SELECTOR_NOT_FOUND', selector: 'submit' });
+  assert.equal('raw' in r, false);
+});
+
+test('summarizeReason: unrecognized output → null', () => {
+  assert.equal(summarizeReason('some unrecognized output'), null);
+});
+
+test('buildStepSummary: failed=false → failedStep/reason null even with a transient ✗', () => {
+  const s = buildStepSummary(FAILED_RUN, { failed: false });
+  assert.equal(s.failedStep, null);
+  assert.equal(s.reason, null);
+  assert.equal(s.steps.length, 5);
+  assert.equal(s.lastStep.name, 'tapOn: id="c"');
+});
+
+test('buildStepSummary: failed=true → failedStep + reason populated', () => {
+  const out = FAILED_RUN + `\nElement with id 'c' not found`;
+  const s = buildStepSummary(out, { failed: true });
+  assert.equal(s.failedStep.name, 'tapOn: id="c"');
+  assert.deepEqual(s.reason, { kind: 'SELECTOR_NOT_FOUND', selector: 'c' });
+});
+
+test('buildStepSummary: timeout partial (no ✗) → failedStep null, lastStep = last ✓', () => {
+  const partial = `  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)`;
+  const s = buildStepSummary(partial, { failed: true });
+  assert.equal(s.failedStep, null);
+  assert.equal(s.lastStep.name, 'tapOn: id="a"');
 });

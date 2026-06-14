@@ -3,6 +3,8 @@
 // I/O, fail-open: unparseable output yields []. Generalizes the #263 step-line
 // parser (tap-latency.ts derives parseTapLatencies from parseSteps).
 
+import { parseMaestroFailure } from './maestro-error-parser.js';
+
 export interface MaestroStep {
   index: number;
   name: string;
@@ -47,4 +49,50 @@ export function parseSteps(output: string): MaestroStep[] {
     });
   }
   return steps;
+}
+
+export function findFailedStep(steps: MaestroStep[]): MaestroStep | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].status === 'fail') return steps[i];
+  }
+  return null;
+}
+
+export function lastObservedStep(steps: MaestroStep[]): MaestroStep | null {
+  return steps.length ? steps[steps.length - 1] : null;
+}
+
+export interface ReasonSummary {
+  kind: 'SELECTOR_NOT_FOUND' | 'TIMEOUT' | 'ASSERTION_FAILED';
+  selector: string | null;
+}
+
+// Project parseMaestroFailure to {kind, selector}, DROPPING its `raw` field —
+// every MaestroFailure variant carries `raw` = the full unsliced output, which
+// must not be re-embedded into the result (it would defeat the output slice).
+export function summarizeReason(output: string): ReasonSummary | null {
+  const f = parseMaestroFailure(output);
+  if (f.kind === 'UNKNOWN') return null;
+  const selector = 'selector' in f ? (f.selector ?? null) : null;
+  return { kind: f.kind, selector };
+}
+
+export interface StepSummary {
+  steps: MaestroStep[];
+  failedStep: MaestroStep | null;
+  reason: ReasonSummary | null;
+  lastStep: MaestroStep | null;
+}
+
+// failedStep/reason are populated ONLY when the run's terminal verdict is fail
+// (opts.failed). maestro-runner logs transient retries; a fail-then-retry-✓ on
+// a PASSED run must not report a failedStep (mirrors parseMaestroFailure GH#118).
+export function buildStepSummary(output: string, opts: { failed: boolean }): StepSummary {
+  const steps = parseSteps(output);
+  return {
+    steps,
+    failedStep: opts.failed ? findFailedStep(steps) : null,
+    reason: opts.failed ? summarizeReason(output) : null,
+    lastStep: lastObservedStep(steps),
+  };
 }
