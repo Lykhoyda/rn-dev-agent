@@ -16,6 +16,7 @@ import {
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
@@ -241,12 +242,17 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         }
         return okResult(meta);
       }
-      return warnResult(
+      const baseWarnMsg = dispatch.fallbackReason
+        ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
+        : 'Flow completed with warnings or failures';
+      // GH #263: classify on the FULL output (not the sliced meta.output).
+      const warnAug = augmentFailureWithDegradation(
+        output,
+        resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS),
+        baseWarnMsg,
         meta,
-        dispatch.fallbackReason
-          ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
-          : 'Flow completed with warnings or failures',
       );
+      return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
@@ -261,15 +267,23 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
       const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
       const combined = (stdout + '\n' + stderr).trim();
-      return failResult(`Maestro flow failed: ${msg.slice(0, 500)}`, {
-        flowFile,
-        platform,
-        runner: dispatch.runner,
-        passed: false,
-        // `output` mirrors the success/warn shape so callers can read
-        // it the same way regardless of which path they hit.
-        output: combined.slice(0, 4000),
-      });
+      // GH #263: a timeout/non-zero exit is also a failure surface — flag a
+      // wedged runtime here too if the successful taps were degraded.
+      const failAug = augmentFailureWithDegradation(
+        combined,
+        resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS),
+        `Maestro flow failed: ${msg.slice(0, 500)}`,
+        {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          passed: false,
+          // `output` mirrors the success/warn shape so callers can read
+          // it the same way regardless of which path they hit.
+          output: combined.slice(0, 4000),
+        },
+      );
+      return failResult(failAug.message, failAug.meta);
     }
   };
 }
