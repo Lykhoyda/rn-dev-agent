@@ -9,7 +9,7 @@ const sessionSrc = readFileSync(resolve(__dirname, '../../src/tools/device-sessi
 const indexSrc = readFileSync(resolve(__dirname, '../../src/index.ts'), 'utf8');
 
 test('GH#202 device-open acquires the UDID lock and refuses on conflict', () => {
-  assert.match(sessionSrc, /acquireDeviceLockForSession\(deviceId, appId\)/);
+  assert.match(sessionSrc, /acquireDeviceLockForSession\('ios', deviceId, appId\)/);
   assert.match(sessionSrc, /DEVICE_BUSY/);
 });
 

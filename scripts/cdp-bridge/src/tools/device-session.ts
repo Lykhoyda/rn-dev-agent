@@ -37,11 +37,11 @@ const HEARTBEAT_MS = 30_000;
 let activeDeviceLock: DeviceLock | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-function acquireDeviceLockForSession(udid: string, appId: string): DeviceLockResult {
+function acquireDeviceLockForSession(platform: 'ios' | 'android', deviceId: string, appId: string): DeviceLockResult {
   // Single-owner: drop any prior lock + heartbeat first (release is null-safe)
   // so a re-open can't leak a timer or orphan a lock. (#202 review — blocker.)
   releaseDeviceLockForSession();
-  const lock = new DeviceLock({ udid, appId });
+  const lock = new DeviceLock({ platform, deviceId, appId });
   const result = lock.acquire();
   // Only manage a heartbeat for a REAL exclusive lock — a degraded (fs-error)
   // acquire is unmanaged, so there is nothing to refresh or release.
@@ -232,7 +232,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         // another project's bridge owns the sim — tear our just-opened session
         // back down and refuse, rather than fight for foreground.
         if (platform === 'ios' && deviceId) {
-          const lockResult = acquireDeviceLockForSession(deviceId, appId);
+          const lockResult = acquireDeviceLockForSession('ios', deviceId, appId);
           if (lockResult.status === 'conflict') {
             // Close FIRST — runAgentDevice derives `--session` from the active
             // session, so clearing before closing would close the wrong (or no)
