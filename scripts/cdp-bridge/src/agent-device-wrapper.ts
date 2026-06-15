@@ -762,8 +762,31 @@ export async function runNative(
     targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
     RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
   ) {
+    const appId = activeSession?.appId ?? resolveBundleId('android') ?? undefined;
+    // Parity with the iOS short-circuit: ensure the runner is up before dispatch so
+    // a cold device_* gets a clear RN_ANDROID_RUNNER_DOWN rather than a buried
+    // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
+    // fallback (like iOS simctl) — don't gate it on the runner.
+    if (cliArgs[0] !== 'screenshot') {
+      const { resolveAndroidSerial, startAndroidRunner } = await import('./runners/rn-android-runner-client.js');
+      const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
+      if (!serial) {
+        return failResult(
+          'No Android device resolved (none booted, or multiple — pass deviceId / set ANDROID_SERIAL).',
+          'RN_ANDROID_RUNNER_DOWN',
+        );
+      }
+      try {
+        await startAndroidRunner(serial, appId);
+      } catch (err) {
+        return failResult(
+          `rn-android-runner did not start: ${err instanceof Error ? err.message : String(err)}`,
+          'RN_ANDROID_RUNNER_DOWN',
+        );
+      }
+    }
     const { runAndroid } = await import('./runners/rn-android-runner-client.js');
-    const android = buildRunAndroidArgs(cliArgs, activeSession?.appId ?? resolveBundleId('android') ?? undefined);
+    const android = buildRunAndroidArgs(cliArgs, appId);
     return runAndroid({ ...android, deviceId: activeSession?.deviceId });
   }
 
