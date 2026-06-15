@@ -367,7 +367,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
     if (action === 'close') {
       return closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
-        closeUnderlyingSession: () => runAgentDevice(['close']),
+        closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
         stopFastRunner,
         stopAndroidRunner,
@@ -400,10 +400,10 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // ref-map is stale (from pre-recovery) OR non-existent (after fresh
           // session open), and fast-runner serves the (ref-less) snapshot.
           closeSession: async () => {
-            const closeResult = await runAgentDevice(['close']);
             clearActiveSession(); // also clears refMap via its side-effect
             stopFastRunner();
-            return closeResult;
+            await stopAndroidRunner();
+            return okResult({ closed: true });
           },
           openSession: ({ appId, platform, attachOnly }) =>
             reopenSessionForRecovery(appId, platform, attachOnly),
@@ -537,48 +537,20 @@ export async function reopenSessionForRecovery(
   attachOnly: boolean,
 ): Promise<ToolResult> {
   // Always mint a fresh recovery name (Gemini G3): reusing the original
-  // session name risks the daemon either rejecting as "already exists" or
-  // silently re-attaching to the corrupted session, defeating the rebuild.
+  // session name risks silently re-attaching to the corrupted session.
   const recoveryName = `rn-agent-recovery-${Date.now()}`;
 
-  let cliArgs: string[];
-  if (attachOnly) {
-    // attachOnly only makes sense if the target app is already running.
-    // Otherwise there's nothing to attach to and we should let the caller
-    // escalate (typically to the full-relaunch tier).
-    const running = await isAppRunning(platform, appId);
-    if (!running) {
-      return failResult(
-        `attachOnly recovery aborted: ${appId} is not running on ${platform}.`,
-        { code: 'NOT_CONNECTED', recoveryAbort: true },
-      );
-    }
-    cliArgs = ['open', '--session', recoveryName, '--platform', platform];
-  } else {
-    cliArgs = ['open', appId, '--session', recoveryName, '--platform', platform];
-  }
-
-  const result = await runAgentDevice(cliArgs, { skipSession: true });
-  if (result.isError) return result;
-
-  let deviceId: string | undefined;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const data = envelope?.data;
-    const rawId = data?.deviceId
-      ?? data?.device_udid
-      ?? data?.id
-      ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
-    const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
-    deviceId = typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
-  } catch { /* best-effort */ }
-
-  setActiveSession({
-    name: recoveryName,
-    platform,
-    deviceId,
-    openedAt: new Date().toISOString(),
+  // Delegate to the native open path (Phase 2 Task 4): resolve device → acquire
+  // lock → ensure runner → launch → set session. The recovery closeSession
+  // intentionally left our device lock held; the native open re-acquires it
+  // cleanly (acquireDeviceLockForSession releases any prior same-process lock
+  // first), so there is no self-DEVICE_BUSY. This replaces the old
+  // agent-device `open` RPC + envelope/UDID_RE parse.
+  return createDeviceSnapshotHandler()({
+    action: 'open',
     appId,
+    platform: platform as SnapshotArgs['platform'],
+    attachOnly,
+    sessionName: recoveryName,
   });
-  return result;
 }

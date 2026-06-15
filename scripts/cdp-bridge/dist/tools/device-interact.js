@@ -1,7 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
-import { isFastRunnerAvailable, fastSwipe } from '../runners/rn-fast-runner-client.js';
+import { runAgentDevice, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
+import { isFastRunnerAvailable, fastSwipe, stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
@@ -110,7 +111,7 @@ async function fetchSnapshotNodes() {
     }
     const session = getActiveSession();
     const recovery = await recoverFromRunnerLeak({ platform: session?.platform, appId: session?.appId, sessionName: session?.name }, {
-        closeSession: () => runAgentDevice(['close']),
+        closeSession: async () => { clearActiveSession(); stopFastRunner(); await stopAndroidRunner(); return okResult({ closed: true }); },
         openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
         resnapshot: () => runAgentDevice(['snapshot', '-i']),
         parseNodes: parseSnapshotEnvelope,

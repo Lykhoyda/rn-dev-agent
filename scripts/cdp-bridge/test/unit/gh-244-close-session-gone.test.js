@@ -133,3 +133,43 @@ test('android close teardown: stopAndroidRunner is called on SESSION_NOT_FOUND (
   assert.equal(r.isError, undefined);
   assert.equal(androidStopCalled, true, 'stopAndroidRunner must be called even when the underlying session was already gone');
 });
+
+// Task 5 (Phase 2): no runAgentDevice(['close']) / runNative(['close']) literal may remain
+// in device-session.ts or device-interact.ts — session close is now fully native.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SRC_ROOT = join(import.meta.dirname, '..', '..', 'src', 'tools');
+
+function sourceOf(filename) {
+  return readFileSync(join(SRC_ROOT, filename), 'utf8');
+}
+
+test('Task5: no runAgentDevice([\'close\']) literal in device-session.ts', () => {
+  const src = sourceOf('device-session.ts');
+  assert.ok(
+    !src.includes("runAgentDevice(['close'])") && !src.includes('runNative([\'close\'])'),
+    'device-session.ts must not call runAgentDevice/runNative with "close"',
+  );
+});
+
+test('Task5: no runAgentDevice([\'close\']) literal in device-interact.ts', () => {
+  const src = sourceOf('device-interact.ts');
+  assert.ok(
+    !src.includes("runAgentDevice(['close'])") && !src.includes('runNative([\'close\'])'),
+    'device-interact.ts must not call runAgentDevice/runNative with "close"',
+  );
+});
+
+test('Task5: device-session.ts closeUnderlyingSession wired to okResult no-op (not agent-device)', () => {
+  const src = sourceOf('device-session.ts');
+  // The call site must NOT delegate to runAgentDevice/runNative for close
+  assert.ok(
+    !src.includes("closeUnderlyingSession: () => runAgentDevice(['close'])"),
+    'closeUnderlyingSession must not call runAgentDevice — it should be a no-op okResult',
+  );
+  assert.ok(
+    !src.includes("closeUnderlyingSession: () => runNative(['close'])"),
+    'closeUnderlyingSession must not call runNative',
+  );
+});
