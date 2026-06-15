@@ -40,6 +40,12 @@ function cap(s: string): string {
   return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + '…' : s;
 }
 
+// Cap the returned steps so a pathological run (a multi-MB stdout/stderr with
+// many step-shaped log lines) can't bloat the MCP response past the `output`
+// slice. Keep the most recent steps — failures and partial-progress live at the
+// tail — with their true `index` preserved (a gap signals truncation).
+const MAX_STEPS = 1000;
+
 export function parseSteps(output: string): MaestroStep[] {
   if (!output || typeof output !== 'string') return [];
   const steps: MaestroStep[] = [];
@@ -60,7 +66,7 @@ export function parseSteps(output: string): MaestroStep[] {
       durationMs: Math.round(seconds * 1000),
     });
   }
-  return steps;
+  return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
 }
 
 // The TERMINAL failed step: the last parsed step iff it failed. maestro-runner

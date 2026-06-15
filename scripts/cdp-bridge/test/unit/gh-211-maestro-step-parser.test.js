@@ -191,3 +191,13 @@ test('formatFailureHeadline: reason without a failed step → structured (raw-fr
     'Maestro flow failed (SELECTOR_NOT_FOUND: missing)',
   );
 });
+
+test('parseSteps: caps returned steps to the most recent 1000 (tail kept, true index)', () => {
+  const lines = [];
+  for (let i = 0; i < 1500; i++) lines.push(`  ✓ tapOn: id="s${i}" (1.0s)`);
+  const steps = parseSteps(lines.join('\n'));
+  assert.equal(steps.length, 1000);                       // capped
+  assert.equal(steps[steps.length - 1].name, 'tapOn: id="s1499"'); // tail kept
+  assert.equal(steps[steps.length - 1].index, 1499);      // true index preserved
+  assert.equal(steps[0].index, 500);                      // 1500 total → first kept index = 500 (gap = truncation signal)
+});
