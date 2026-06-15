@@ -1,5 +1,5 @@
 import { runAgentDevice } from '../agent-device-wrapper.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs } from './device-interact.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -173,9 +173,15 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
         return okResult({ resolved: ref, testID: step.testID, snapshotEnvelopePreviewBytes: envelope?.length ?? 0 });
       }
       if (!step.text) return failResult('find requires text or testID');
-      const args = ['find', step.text];
-      if (step.tap) args.push('click');
-      return runAgentDevice(args);
+      const findResult = await fetchFindCandidates(step.text, false);
+      if (!findResult.ok) {
+        return failResult(`find: snapshot unavailable for "${step.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: step.text });
+      }
+      if (findResult.candidates.length === 0) {
+        return failResult(`No element matches "${step.text}"`, { code: 'NOT_FOUND', query: step.text });
+      }
+      if (step.tap) return pressCandidate(findResult.candidates[0], 'click');
+      return okResult({ ref: findResult.candidates[0].ref, label: findResult.candidates[0].label, testID: findResult.candidates[0].testID });
     }
     case 'press': {
       if (step.testID) {

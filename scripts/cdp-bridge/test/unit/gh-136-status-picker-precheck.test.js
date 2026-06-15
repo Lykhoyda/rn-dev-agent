@@ -15,6 +15,8 @@ import {
   _resetRunAgentDeviceForTest,
   _setHasSessionForTest,
   _resetHasSessionForTest,
+  _setFetchCandidatesForTest,
+  _resetFetchCandidatesForTest,
 } from '../../dist/tools/dev-client-picker.js';
 
 function makeStatusProbe(extraAppInfo = {}) {
@@ -30,14 +32,14 @@ function makeStatusProbe(extraAppInfo = {}) {
 test('cdp_status: picker probe runs BEFORE autoConnect when not connected', async () => {
   const events = [];
   _setHasSessionForTest(true);
-  _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && args[1] === 'Development servers') {
-      events.push('pickerProbe');
-      // Picker is gone — auto-advanced. Returns isError so the precheck
-      // dismisses without any further work.
-      return { isError: true, content: [{ type: 'text', text: 'gone' }] };
-    }
-    return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
+  let probeCount = 0;
+  _setFetchCandidatesForTest(async (_text) => {
+    // Only record the first probe call; subsequent PICKER_INDICATORS loop
+    // calls are part of the same probe sweep and must not double-push the event.
+    if (probeCount === 0) events.push('pickerProbe');
+    probeCount++;
+    // Picker is gone — no candidates. precheck dismisses without any further work.
+    return { ok: true, candidates: [] };
   });
   const client = createMockClient({
     _isConnected: false,
@@ -55,7 +57,7 @@ test('cdp_status: picker probe runs BEFORE autoConnect when not connected', asyn
     expectOk(await handler({}));
     assert.deepEqual(events, ['pickerProbe', 'autoConnect'], `events out of order: ${JSON.stringify(events)}`);
   } finally {
-    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }
 });
@@ -63,12 +65,12 @@ test('cdp_status: picker probe runs BEFORE autoConnect when not connected', asyn
 test('cdp_status: picker probe is skipped when already connected', async () => {
   let pickerProbed = false;
   _setHasSessionForTest(true);
-  _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && args[1] === 'Development servers') {
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
       pickerProbed = true;
-      return { isError: true, content: [{ type: 'text', text: 'gone' }] };
+      return { ok: true, candidates: [] };
     }
-    return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
+    return { ok: true, candidates: [] };
   });
   const client = createMockClient({
     _isConnected: true,
@@ -80,7 +82,7 @@ test('cdp_status: picker probe is skipped when already connected', async () => {
     expectOk(await handler({}));
     assert.equal(pickerProbed, false, 'connected client should NOT trigger picker probe');
   } finally {
-    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }
 });

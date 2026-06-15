@@ -29,7 +29,7 @@ interface SnapshotNode {
   rect?: { x: number; y: number; width: number; height: number };
 }
 
-interface FindCandidate {
+export interface FindCandidate {
   ref: string;
   label?: string;
   testID?: string;
@@ -172,7 +172,7 @@ export type FindCandidatesResult =
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
-async function fetchFindCandidates(query: string, exact: boolean): Promise<FindCandidatesResult> {
+export async function fetchFindCandidates(query: string, exact = false): Promise<FindCandidatesResult> {
   const snap = await fetchSnapshotNodes();
   if (!snap.ok) return snap;
 
@@ -204,7 +204,7 @@ function runnerLeakFailResult(query: string | undefined, recoveryReason?: string
   );
 }
 
-async function pressCandidate(candidate: FindCandidate, action?: string): Promise<ToolResult> {
+export async function pressCandidate(candidate: FindCandidate, action?: string): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
     return runAgentDevice(['press', ref]);
@@ -325,89 +325,10 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
       );
     }
 
-    const cliArgs = ['find', args.text];
-    if (args.action) cliArgs.push(args.action);
-    const result = await runAgentDevice(cliArgs);
-
-    // B92 fix: On AMBIGUOUS_MATCH, fetch a snapshot and return disambiguation candidates.
-    if (result.isError) {
-      const text = result.content?.[0]?.text ?? '';
-      if (text.includes('AMBIGUOUS_MATCH') || (text.includes('matched') && text.includes('elements'))) {
-        const find = await fetchFindCandidates(args.text, false);
-        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.ok) {
-          const candidates = find.candidates;
-          return failResult(
-            `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`,
-            {
-              code: 'AMBIGUOUS_MATCH',
-              query: args.text,
-              candidates,
-              hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
-            },
-          );
-        }
-      }
-
-      // GH #60 Bug 7: Maestro/agent-device daemon timeouts leave callers
-      // staring at "Daemon error: daemon timeout" with no obvious recovery.
-      // Try the snapshot-based fuzzy path as a self-recovery before giving up
-      // — it routes through agent-device's daemon-less snapshot tier (or its
-      // CLI fallback) and delivers a usable result without the user needing
-      // to know the workaround.
-      if (isDaemonTimeoutError(text)) {
-        const find = await fetchFindCandidates(args.text, false);
-        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.ok) {
-          const candidates = find.candidates;
-          if (candidates.length === 0) {
-            return failResult(
-              `No element matches "${args.text}". Original daemon timeout: ${truncate(text, 200)}`,
-              {
-                code: 'NOT_FOUND',
-                query: args.text,
-                recovered_via: 'snapshot_fallback_after_daemon_timeout',
-                hint: 'agent-device daemon timed out; recovered via snapshot but found no matches. Try cdp_interact with a testID instead.',
-              },
-            );
-          }
-          if (candidates.length === 1) {
-            const pressed = tagPressIfRecovered(
-              await pressCandidate(candidates[0], args.action),
-              find.recoveredTier,
-            );
-            return mergeMeta(pressed, {
-              recovered_via: 'snapshot_fallback_after_daemon_timeout',
-              note: 'agent-device daemon timed out; recovered via snapshot-based match. If this repeats, restart the daemon (`agent-device daemon restart`) or use cdp_interact for testID-based interactions.',
-            });
-          }
-          return failResult(
-            `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements (recovered via snapshot after daemon timeout).`,
-            {
-              code: 'AMBIGUOUS_MATCH',
-              query: args.text,
-              candidates,
-              recovered_via: 'snapshot_fallback_after_daemon_timeout',
-              hint: 'Pass index: N or use device_press(ref="...") directly. The snapshot fallback succeeded, but the daemon itself remains unhealthy — consider restarting it.',
-            },
-          );
-        }
-        // Snapshot fallback also failed — surface both error sources.
-        return failResult(
-          `agent-device daemon timed out AND snapshot fallback failed. Original: ${truncate(text, 200)}`,
-          {
-            code: 'DAEMON_TIMEOUT',
-            query: args.text,
-            hint: 'Restart the daemon (`agent-device daemon restart`) and retry, or fall back to cdp_interact with a testID.',
-          },
-        );
-      }
-    }
-    return result;
+    return failResult(
+      `device_find requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${(activeSession as { platform?: string } | null)?.platform ?? 'none'}.`,
+      { code: 'IN_TREE_RUNNER_REQUIRED', platform: (activeSession as { platform?: string } | null)?.platform ?? null },
+    );
   });
 }
 

@@ -1,10 +1,12 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
-import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
+import { hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
+import { fetchFindCandidates } from './device-interact.js';
+import type { FindCandidatesResult } from './device-interact.js';
 
 interface ProofStepArgs {
   screen?: string;
@@ -32,11 +34,14 @@ export interface ProofStepDeps {
   hasSession?: () => boolean;
   /** Defaults to the real resize-wrapped capture. Injectable for tests. */
   captureScreenshot?: (opts: { path?: string }) => Promise<ToolResult>;
+  /** Injectable for tests — defaults to fetchFindCandidates from device-interact. */
+  fetchCandidates?: (text: string) => Promise<FindCandidatesResult>;
 }
 
 export function createProofStepHandler(getClient: () => CDPClient, deps: ProofStepDeps = {}) {
   const hasSession = deps.hasSession ?? hasActiveSession;
   const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
+  const fetchCandidates = deps.fetchCandidates ?? ((text: string) => fetchFindCandidates(text, false));
   return withConnection(getClient, async (args: ProofStepArgs, client) => {
     const result: ProofStepResult = {
       screenshotPath: '',
@@ -72,9 +77,9 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
     }
 
     // Step 3: Verify element (optional)
-    if (args.verifyText && hasActiveSession()) {
-      const findResult = await runAgentDevice(['find', args.verifyText]);
-      if (findResult.isError) {
+    if (args.verifyText && hasSession()) {
+      const findResult = await fetchCandidates(args.verifyText);
+      if (!findResult.ok || findResult.candidates.length === 0) {
         result.verified = false;
         result.verifyDetail = `Text "${args.verifyText}" not found on screen`;
         errors.push(result.verifyDetail);
@@ -82,7 +87,7 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
         result.verified = true;
         result.verifyDetail = `Found "${args.verifyText}"`;
       }
-    } else if (args.verifyText && !hasActiveSession()) {
+    } else if (args.verifyText && !hasSession()) {
       // Requested a text verification but no device session is open — surface it
       // as a failure rather than leaving result.verified undefined (which reads
       // as "not failed" to callers).

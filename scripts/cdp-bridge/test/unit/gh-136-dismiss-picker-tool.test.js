@@ -9,6 +9,10 @@ import {
   _setHasSessionForTest,
   _resetRunAgentDeviceForTest,
   _resetHasSessionForTest,
+  _setFetchCandidatesForTest,
+  _resetFetchCandidatesForTest,
+  _setPressCandidateForTest,
+  _resetPressCandidateForTest,
 } from '../../dist/tools/dev-client-picker.js';
 
 test('helper: iOS is guarded — skips without calling runAgentDevice', async () => {
@@ -39,15 +43,15 @@ test('helper: Android with no session returns null', async () => {
 test('helper: Android delegates to handleDevClientPicker (auto-advance → dismissed)', async () => {
   _setHasSessionForTest(true);
   let findCount = 0;
-  _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && (args[1] === 'Development servers' || args[1] === 'DEVELOPMENT SERVERS')) {
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
       findCount += 1;
       // 1st find = detected; 2nd find (dismissPicker re-probe) = gone → auto-advanced
       return findCount >= 2
-        ? { content: [{ type: 'text', text: 'not found' }], isError: true }
-        : { content: [{ type: 'text', text: '{}' }] };
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
     }
-    return { content: [{ type: 'text', text: '{}' }] };
+    return { ok: true, candidates: [] };
   });
   try {
     const out = await clearDevClientPickerIfPresent('android');
@@ -55,7 +59,7 @@ test('helper: Android delegates to handleDevClientPicker (auto-advance → dismi
     assert.equal(out.dismissed, true);
     assert.equal(out.platform, 'android');
   } finally {
-    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }
 });
@@ -91,46 +95,58 @@ test('handler: iOS → warn, dismissed:false, never calls runAgentDevice', async
 test('handler: Android dismissed → ok dismissed:true with timings', async () => {
   _setHasSessionForTest(true);
   let findCount = 0;
-  _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && (args[1] === 'Development servers' || args[1] === 'DEVELOPMENT SERVERS')) {
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
       findCount += 1;
-      return findCount >= 2 ? { content: [{ type: 'text', text: 'gone' }], isError: true } : { content: [{ type: 'text', text: '{}' }] };
+      // 1st call = detected; 2nd call (dismissPicker re-probe) = gone → auto-advanced
+      return findCount >= 2
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
     }
-    return { content: [{ type: 'text', text: '{}' }] };
+    return { ok: true, candidates: [] };
   });
   try {
     const r = await handle({ platform: 'android' });
     const p = parse(r);
     assert.equal(p.data.dismissed, true);
     assert.ok(p.meta && typeof p.meta.timings_ms.total === 'number');
-  } finally { _resetRunAgentDeviceForTest(); _resetHasSessionForTest(); }
+  } finally { _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
 });
 
 test('handler: Android picker not detected → ok dismissed:false (no warning)', async () => {
   _setHasSessionForTest(true);
-  _setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: 'not found' }], isError: true }));
+  // find goes through fetchCandidatesFn — no candidates means picker not detected
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
   try {
     const r = await handle({ platform: 'android' });
     assert.equal(r.isError, undefined);
     const p = parse(r);
     assert.equal(p.data.dismissed, false);
     assert.equal(p.meta?.warning, undefined);
-  } finally { _resetRunAgentDeviceForTest(); _resetHasSessionForTest(); }
+  } finally { _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
 });
 
 test('handler: Android detected but no entry → warn dismissed:false', async () => {
   _setHasSessionForTest(true);
+  // snapshot still routes through runAgentDeviceFn
   _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && (args[1] === 'Development servers' || args[1] === 'DEVELOPMENT SERVERS')) return { content: [{ type: 'text', text: '{}' }] };
     if (args[0] === 'snapshot') return { content: [{ type: 'text', text: 'Development servers\nEnter URL manually' }] };
     return { content: [{ type: 'text', text: '{}' }] };
+  });
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
+      // Picker detected on first probe; auto-advance re-probe also finds it.
+      return { ok: true, candidates: [{ ref: 'e1', label: text }] };
+    }
+    // No match for the server entry extracted from snapshot text
+    return { ok: true, candidates: [] };
   });
   try {
     const r = await handle({ platform: 'android' });
     const p = parse(r);
     assert.equal(p.data.dismissed, false);
     assert.match(p.meta.warning, /could not find|manually/i);
-  } finally { _resetRunAgentDeviceForTest(); _resetHasSessionForTest(); }
+  } finally { _resetRunAgentDeviceForTest(); _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
 });
 
 import { annotatePicker } from '../../dist/tools/device-deeplink.js';
