@@ -1,30 +1,17 @@
 // src/domain/tap-latency.ts
 // GH #263: detect a wedged simulator test-runtime from maestro-runner output.
 // Pure, no I/O. Fail-open: unparseable output yields no samples → no hint.
+import { parseSteps } from './maestro-step-parser.js';
 export const DEFAULT_FLOOR_MS = 1500;
 /**
- * Extract latencies (ms) of SUCCESSFUL tapOn steps from maestro-runner output.
- * maestro-runner prints each step as `  ✓ tapOn: id="x" (2.8s)` (seconds, in
- * parens at end). Only ✓ lines count: a ✗ line's duration is the step TIMEOUT
- * (~12.7s), which would false-positive an ordinary element-not-found failure.
+ * Latencies (ms) of SUCCESSFUL tapOn steps. Derived from parseSteps (GH #211):
+ * a ✗ tap's duration is the step TIMEOUT (~12.7s) and would false-positive an
+ * ordinary element-not-found failure, so only pass tapOn steps count.
  */
 export function parseTapLatencies(output) {
-    const out = [];
-    for (const raw of output.split('\n')) {
-        const line = raw.trim();
-        // Anchor on the step verb (`✓ tapOn:`) so "tapOn" inside another step's
-        // text/selector value (e.g. `✓ assertVisible: text="tapOn …"`) is not
-        // counted. Successful (✓) steps only — a ✗ duration is the step timeout.
-        if (!/^✓\s+tapOn\b/.test(line))
-            continue;
-        const m = line.match(/\(([\d.]+)s\)\s*$/); // trailing (N.Ns)
-        if (!m)
-            continue;
-        const seconds = Number(m[1]);
-        if (Number.isFinite(seconds))
-            out.push(Math.round(seconds * 1000));
-    }
-    return out;
+    return parseSteps(output)
+        .filter((s) => s.verb === 'tapOn' && s.status === 'pass')
+        .map((s) => s.durationMs);
 }
 export function median(samples) {
     if (samples.length === 0)
