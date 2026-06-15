@@ -53,6 +53,48 @@ export function parseSimctlBootedUDID(jsonText: string): string | null {
   return null;
 }
 
+export function parseSimctlBootedAll(jsonText: string): string[] {
+  let data: SimctlListPayload;
+  try {
+    data = JSON.parse(jsonText) as SimctlListPayload;
+  } catch {
+    return [];
+  }
+  const runtimes = data?.devices;
+  if (!runtimes || typeof runtimes !== 'object') return [];
+  const udids: string[] = [];
+  for (const list of Object.values(runtimes)) {
+    if (!Array.isArray(list)) continue;
+    for (const device of list) {
+      if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+        udids.push(device.udid);
+      }
+    }
+  }
+  return udids;
+}
+
+async function defaultSimctlBootedJson(): Promise<string> {
+  const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+  });
+  return stdout;
+}
+
+export async function resolveIosUdid(
+  explicit?: string,
+  probe: () => Promise<string> = defaultSimctlBootedJson,
+): Promise<string | undefined> {
+  if (explicit) return explicit;
+  try {
+    const all = parseSimctlBootedAll(await probe());
+    return all.length === 1 ? all[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const EMU_LINE = /^(emulator-\d+)\s+device\b/;
 
 export function parseAdbDevicesEmu(stdout: string): string | null {
