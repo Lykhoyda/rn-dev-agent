@@ -25,9 +25,9 @@ Commands for device management, deep links, screenshots, UI hierarchy extraction
 - `uiautomator dump --compressed` provides full structured accessibility tree
 - Disable animations before test runs (window, transition, animator scales to 0)
 
-### agent-device CLI
+### Device tools
 
-Cross-platform unified device interaction that eliminates platform-specific branching:
+Cross-platform unified device interaction that eliminates platform-specific branching. The `device_*` tools route through the in-tree runners (iOS: `rn-fast-runner`; Android: `rn-android-runner`) — the sole device backend:
 
 | Task | Tool |
 |------|------|

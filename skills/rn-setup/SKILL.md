@@ -1,6 +1,6 @@
 ---
 skill: setup
-description: This skill should be used when the user runs /rn-dev-agent:setup, on first use of the plugin in a project, or when tooling fails — "set up rn-dev-agent", "check prerequisites", "cdp_status fails", "CDP connection failed", "agent-device not installed", "maestro-runner not found", "rn-fast-runner did not become ready", "Metro not running", "no booted simulator", "plugin tools not working", "wrong Node version".
+description: This skill should be used when the user runs /rn-dev-agent:setup, on first use of the plugin in a project, or when tooling fails — "set up rn-dev-agent", "check prerequisites", "cdp_status fails", "CDP connection failed", "device runner not ready", "maestro-runner not found", "rn-fast-runner did not become ready", "rn-android-runner not started", "Metro not running", "no booted simulator", "plugin tools not working", "wrong Node version".
 ---
 
 # Environment Setup & Dependency Check
@@ -44,7 +44,7 @@ If it still fails, give the user manual instructions:
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)
 
-iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project, NOT the upstream `agent-device` CLI (see D1219). Verify the Xcode project ships with the plugin and the build artifacts are present:
+iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (see D1219) — the in-tree runner is the sole iOS device backend, there is no external CLI involved. Verify the Xcode project ships with the plugin and the build artifacts are present:
 
 ```bash
 ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj 2>/dev/null && \
@@ -66,31 +66,26 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodep
   Expect `** TEST BUILD SUCCEEDED **`. The artifacts land at `scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/`. If the user declines, leave it — the lazy fallback covers correctness; the only cost is a slow first interaction.
 - **xcodeproj missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
 
-Skip this check on systems without `xcodebuild` (non-macOS, no Xcode) — `rn-fast-runner` is iOS-only. The plugin still works on those systems for Android via the `agent-device` CLI (check 3b).
+Skip this check on systems without `xcodebuild` (non-macOS, no Xcode) — `rn-fast-runner` is iOS-only. The plugin still works on those systems for Android via the in-tree `rn-android-runner` (check 3b).
 
 **Expected simulator icons (not clutter).** Because the UI-test target is *hosted* (`TEST_TARGET_NAME = RnFastRunner`), building/running the runner installs **two** apps on the simulator home screen: `RnFastRunner` (the minimal host app, bundle `dev.lykhoyda.rndevagent.fastrunner`) and `RnFastRunnerUITests-Runner` (the XCUITest harness — the icon may show truncated as "RnFastRunnerUI…"; same pattern as WebDriverAgent's `WebDriverAgentRunner`). The Runner hosts the `POST /command` server on port 22088 and drives the *target* app via `XCUIApplication(bundleIdentifier:)` — it does not drive itself, and it stays installed/running on purpose so subsequent `device_*` calls are fast. If a user asks "what is RnFastRunnerUI on my simulator?", that's the answer — leave it in place. (This is distinct from the legacy upstream `AgentDeviceRunner`, which IS unwanted — see the daemon-leak note in the project CLAUDE.md.)
 
-### 3b. agent-device CLI (Android — optional on iOS-only setups)
+### 3b. rn-android-runner (Android — in-tree UiAutomator rig; optional on iOS-only setups)
 
-Android device automation still routes through the upstream `agent-device` CLI. iOS no longer needs it (PR #164). Only flag this row as critical when the user is targeting Android.
+Android device automation is owned by the in-tree `rn-android-runner` Gradle project (`scripts/rn-android-runner/`) — the sole Android device backend, there is no external CLI to install. Only flag this row as critical when the user is targeting Android.
+
+Verify the project ships with the plugin and its prebuilt APKs are present:
 
 ```bash
-command -v agent-device && agent-device --version
+ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts 2>/dev/null && \
+  ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk 2>/dev/null
 ```
 
-If missing AND the user targets Android, run the ensure script to attempt automatic installation:
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-agent-device.sh
-```
-Then re-check: `command -v agent-device && agent-device --version`
+- **Both present** → OK. The runner installs its APKs and starts its UiAutomator instrumentation (`dev.lykhoyda.rndevagent.androidrunner`) lazily on the first `device_*` call against a booted emulator. The runner is default-on; opt out with `RN_ANDROID_RUNNER=0` (which now ERRORS with `RUNNER_DISABLED` on a `device_*` call — it does NOT fall back to anything).
+- **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
+- **build.gradle.kts missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
 
-If it still fails, give the user these manual instructions:
-1. `npm install -g agent-device` — most common install method
-2. If EACCES permission error: check if using nvm (`command -v nvm`). With nvm, global installs go to the user directory and don't need sudo. Without nvm: `sudo npm install -g agent-device`
-3. If npm registry error: check internet connection, then `npm cache clean --force && npm install -g agent-device`
-4. Verify: `agent-device --version` should print a version number
-
-If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy runner at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
+Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
 
 ### 4. maestro-runner
 ```bash
@@ -241,7 +236,7 @@ Present results as a table:
 | Node.js | OK (v22.15.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
-| agent-device (Android) | OK / MISSING / N/A (iOS-only setup) | Run: npm install -g agent-device — only if targeting Android |
+| rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
 | maestro-runner | MISSING | Run: npm install -g maestro-runner |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
@@ -253,7 +248,7 @@ Present results as a table:
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
 
-If any critical check fails (CDP bridge, **rn-fast-runner on iOS targets**, **agent-device on Android targets**, Metro, or simulator), provide step-by-step instructions to fix it. Do not proceed with feature development until all critical checks pass. Note: iOS-only setups do NOT need `agent-device`; Android-only setups do NOT need `rn-fast-runner` build artifacts.
+If any critical check fails (CDP bridge, **rn-fast-runner on iOS targets**, **rn-android-runner on Android targets**, Metro, or simulator), provide step-by-step instructions to fix it. Do not proceed with feature development until all critical checks pass. Note: iOS-only setups do NOT need `rn-android-runner`; Android-only setups do NOT need `rn-fast-runner` build artifacts.
 
 ## After setup
 
@@ -269,10 +264,10 @@ Setup is boring — agents skip it and pay for it later.
 | Excuse | Reality |
 |--------|---------|
 | "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use v22 LTS. |
-| "The SessionStart banner says 'WARNING: agent-device not installed' — it'll auto-install next time" | The SessionStart hook only attempts the `agent-device` install when a live Android device/emulator is detected (`adb devices`), since iOS uses the in-tree `rn-fast-runner` (PR #164 / D1219). So if you see this warning at all, an Android target WAS present and the auto-install ran and FAILED — run the ensure script NOW and read the actual error. iOS-only macOS sessions no longer attempt the install or print this warning. |
+| "There's no external device CLI to install — surely device control just works" | Both device backends are in-tree (iOS: `rn-fast-runner`; Android: `rn-android-runner`) and there is no `agent-device` install step anymore — but they still need their build artifacts present. The runners build/install lazily on the first `device_*` call, which means the first call cold-builds (slow) if you skipped the pre-build. Verify checks 3 / 3b and offer the one-time pre-build to move that cost out of the first interaction. `RN_ANDROID_RUNNER=0` does NOT fall back to anything — it ERRORS with `RUNNER_DISABLED`. |
 | "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` falls back to a full `xcodebuild test` (build + test) when no `.xctestrun` exists, so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
-| "The user can install agent-device themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact command with the flag they need (sudo? nvm? permission fix?). |
+| "The user can pre-build the device runner themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact pre-build command for their target (iOS: the `xcodebuild build-for-testing` form in check 3; Android: `./gradlew assembleDebug assembleDebugAndroidTest` in check 3b) — don't punt. |
 | "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on critical checks passing (steps 10 + 11 are optional — N/A when no physical device, OFFLINE acceptable for the version check). Get the environment green first, then proceed. |
 
 ## Red Flags — Stop and Reconsider
@@ -280,14 +275,14 @@ Setup is boring — agents skip it and pay for it later.
 - Attempting to run a `cdp_*` tool when `cdp_status` returns `connected: false`
 - Proceeding with feature dev when setup shows any RED row
 - Suggesting `sudo npm install -g` without first checking if nvm is available
-- Ignoring "WARNING: not installed" from the SessionStart banner
+- Treating a device-runner `RN_FAST_RUNNER_DOWN` / `RN_ANDROID_RUNNER_DOWN` error as something that "self-heals" without checking the runner build artifacts (checks 3 / 3b)
 - Claiming "setup passed" without showing the 11-row table with evidence (row 10 may be "N/A" when no physical device is connected and row 11 may be "OFFLINE" when GitHub is unreachable — both are still evidence)
 
 ## Verification — Setup Complete When
 
 - [ ] Node.js is an even-numbered version >= 22 (v22, v24, NOT v23, v25)
 - [ ] `cd scripts/cdp-bridge && npm ls --depth=0` shows no WARN/ERR
-- [ ] `agent-device --version` prints a version number — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
+- [ ] **Android targets**: `scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
 - [ ] **iOS targets**: `scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)
 - [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running

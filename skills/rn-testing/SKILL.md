@@ -102,7 +102,7 @@ Improvement: 2.2x faster per step. Over a 10-step test: saves ~17 seconds.
 
 After any UI interaction, React needs time to commit updates to the Fiber tree.
 
-### With agent-device (preferred for live verification)
+### With device tools (preferred for live verification)
 ```
 1. device_find text="Submit" action=click  → native tap
 2. device_snapshot  → verify UI changed (new elements, @refs)
@@ -504,7 +504,8 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
-| agent-device | Recommended | Live device interaction | `npm install -g agent-device` |
+| rn-fast-runner (iOS) | iOS | Live device interaction | In-tree; builds on first use (or pre-build via `xcodebuild build-for-testing`) |
+| rn-android-runner (Android) | Android | Live device interaction | In-tree; build via `./gradlew assembleDebug assembleDebugAndroidTest` |
 | maestro-runner | Recommended | YAML E2E test execution | Single binary download |
 | Maestro | Fallback | YAML E2E test execution | `brew install maestro` |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |

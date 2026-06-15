@@ -12,9 +12,9 @@ Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 10 prereq
 
 **Abort thresholds.** Only the rows that block ALL plugin functionality count as critical for onboarding:
 
-- **CRITICAL (abort if any fail)**: Node.js version, CDP bridge dependencies. Platform-specific device-control row: **`rn-fast-runner` build artifacts on macOS targeting iOS**, OR **`agent-device` CLI when targeting Android**. iOS-only users on macOS no longer need `agent-device` after PR #164 (D1219); Android-only users don't need `rn-fast-runner`. Without the relevant device-control row green, the plugin can't drive the simulator/emulator. Show the install (or one-time pre-build) commands and ask the user to run them, then re-run `/rn-dev-agent:setup`.
+- **CRITICAL (abort if any fail)**: Node.js version, CDP bridge dependencies. Platform-specific device-control row: **`rn-fast-runner` build artifacts on macOS targeting iOS**, OR **`rn-android-runner` build/install when targeting Android**. Both runners ship in-tree — there is no external CLI to install; they build/install on first use. iOS-only users don't need `rn-android-runner`; Android-only users don't need `rn-fast-runner`. Without the relevant device-control row green, the plugin can't drive the simulator/emulator. Show the one-time pre-build commands (if any) and ask the user to run them, then re-run `/rn-dev-agent:setup`.
 - **DEFERRED (warn but continue)**: Metro dev server, iOS/Android simulator/emulator, CDP connection. A clean-clone user running `/setup` immediately after `git clone` typically hasn't started Metro or booted a simulator yet — that's a normal onboarding state, not a failure. The CLAUDE.md / nav-ref / Zustand / scaffold injection steps don't need Metro running. Phase 2 Step E verification (cdp_status) WILL skip with a note if Metro+simulator aren't up; the user can come back to it later.
-- **OPTIONAL (note, continue)**: ffmpeg, physical-device prerequisites when no devices connected, the off-platform device row (e.g. `agent-device` on an iOS-only macOS setup → N/A).
+- **OPTIONAL (note, continue)**: ffmpeg, physical-device prerequisites when no devices connected, the off-platform device row (e.g. `rn-android-runner` on an iOS-only macOS setup → N/A).
 
 ## Phase 2 — Inject project instructions
 

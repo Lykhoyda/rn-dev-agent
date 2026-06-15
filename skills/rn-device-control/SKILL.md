@@ -287,10 +287,13 @@ Quick decision table:
 
 ---
 
-## agent-device CLI (Cross-Platform Native Control)
+## Device tools (Cross-Platform Native Control)
 
-agent-device provides unified device interaction across iOS and Android without
-platform-specific branching. Prefer it over raw simctl/adb for interactive testing.
+The `device_*` MCP tools provide unified device interaction across iOS and Android
+without platform-specific branching. They route through the in-tree runners — the
+SOLE device backend (iOS: `rn-fast-runner` via `POST /command`; Android:
+`rn-android-runner` via UiAutomator instrumentation) — so prefer them over raw
+simctl/adb for interactive testing. There is no external `agent-device` CLI involved.
 
 ### When to Use
 
@@ -323,9 +326,12 @@ platform-specific branching. Prefer it over raw simctl/adb for interactive testi
 
 ### Fallback
 
-If agent-device is unavailable, fall back to:
-- iOS: `xcrun simctl` for device lifecycle, Maestro for interaction
-- Android: `adb` for device lifecycle, Maestro for interaction
+The in-tree runner IS the device backend — there is nothing to "fall back from" for primitive interaction. When a `device_*` call can't serve a need, route to the right mechanism instead:
+- **Reliable testID** → `cdp_interact(testID=..., action="press")` (JS-level; deterministic, no native round-trip).
+- **Raw device lifecycle** (boot / install / launch / terminate) → `xcrun simctl` (iOS) / `adb` (Android). The runners drive interaction, not device state.
+- **Whole-flow E2E** → maestro-runner (`.yaml`).
+
+If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_DOWN` (iOS) / `RN_ANDROID_RUNNER_DOWN` (Android) — fix the runner build (see `/rn-dev-agent:doctor`), it does not silently fall back to a legacy CLI.
 
 ---
 

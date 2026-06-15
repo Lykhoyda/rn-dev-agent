@@ -59,9 +59,9 @@ The product layers above are organized; underneath, three implementation layers 
 │  └─────────┬───────────────────────────┬───────────┘ │
 │            │                            │             │
 │  ┌─────────▼──────────┐      ┌─────────▼──────────┐ │
-│  │   rn-fast-runner   │      │  agent-device CLI  │ │
-│  │   (iOS, in-tree)   │      │  (Android, 3-tier) │ │
-│  │   XCTest /command  │      │  daemon → CLI      │ │
+│  │   rn-fast-runner   │      │  rn-android-runner │ │
+│  │   (iOS, in-tree)   │      │  (Android, in-tree)│ │
+│  │   XCTest /command  │      │  UiAutomator instr.│ │
 │  └────────────────────┘      └────────────────────┘ │
 └─────────────────────────────────────────────────────┘
          │                              │
@@ -73,8 +73,8 @@ The product layers above are organized; underneath, three implementation layers 
 
 | Implementation tier | Tool | Role |
 |-------|------|------|
-| **Device interaction (iOS)** | In-tree `rn-fast-runner` XCTest rig (`scripts/rn-fast-runner/`) — `POST /command` HTTP | Native iOS device control. Always calls `XCUIApplication.activate()` per request (D1219, PR #164). iOS no longer requires `agent-device`. |
-| **Device interaction (Android)** | `agent-device` CLI (auto-installed) | 3-tier dispatch: daemon socket → fast-runner → CLI fallback |
+| **Device interaction (iOS)** | In-tree `rn-fast-runner` XCTest rig (`scripts/rn-fast-runner/`) — `POST /command` HTTP | Native iOS device control. Always calls `XCUIApplication.activate()` per request (D1219, PR #164). The in-tree runner is the sole iOS device backend. |
+| **Device interaction (Android)** | In-tree `rn-android-runner` (`scripts/rn-android-runner/`) — UiAutomator instrumentation via `adb shell am instrument` | Native Android device control. The in-tree runner is the sole Android device backend (default-on; `RN_ANDROID_RUNNER=0` errors, it does not fall back). |
 | **App introspection** | Custom MCP server → Hermes CDP via WebSocket | Persistent WebSocket — reads React fiber tree, store state, network, console, errors |
 | **E2E testing** | maestro-runner (preferred) / Maestro (fallback) | YAML-based persistent test files; underlying format for actions in `.rn-agent/actions/` |
 
@@ -87,7 +87,7 @@ One mechanism per capability tier — **L1 + L2 coexist** (drive with XCTest, as
 | Layer | Mechanism | Role | Exclusivity |
 |---|---|---|---|
 | **L1 INTROSPECTION** | CDP / Hermes | read store / network / component-tree / mmkv / native | shared |
-| **L2 INTERACTION** | iOS `RnFastRunner` / Android `agent-device`; `cdp_interact` | primitive taps / types / scrolls | shared |
+| **L2 INTERACTION** | iOS `RnFastRunner` / Android `rn-android-runner`; `cdp_interact` | primitive taps / types / scrolls | shared |
 | **L3 FLOW-REPLAY** | `maestro-runner` (Go + WDA) | whole-`.yaml` E2E flows | exclusive |
 
 **Foreign runners** (e.g. the standalone `maestro-mcp`): L1 reads are always safe; on an L2 leak the device-session re-attaches rather than evicts (#188); `device_snapshot action=open` surfaces an informational `FOREIGN_RUNNER_ACTIVE` warning. Since #186, a LIVE foreign session (UDID-scoped, 5 s-TTL `ps` scan, fail-open) also makes local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms, vs the ~44 s runner-leak cascade) while CDP reads stay free and `device_screenshot` falls back to simctl; the plugin's `maestro_run` is the canonical Maestro surface. Opt out with `RN_IOS_FOREIGN_GUARD=0`.
@@ -100,7 +100,7 @@ Since #264 the entry point is a **supervisor split**: a thin stdio shim (`dist/s
 
 **74 tools** across five families:
 - **CDP** — React internals via Chrome DevTools Protocol (component tree, store state, navigation, profiling, network)
-- **Device** — Native interaction (iOS: rn-fast-runner, Android: agent-device)
+- **Device** — Native interaction (iOS: rn-fast-runner, Android: rn-android-runner)
 - **[Actions](actions/)** — Record / replay / self-repair (`cdp_run_action`, `cdp_repair_action`, `cdp_record_test_save_as_action`, `cdp_record_test_*`)
 - **Testing** — Proof capture, auto-login, cross-platform verify, Maestro orchestration
 - **Macro-Asserts** — State-assertive replays (`expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text`)
@@ -141,17 +141,13 @@ Since MCP is pull-based (tools are called on demand), events that fire between c
 
 ## Device dispatch by platform
 
-Since PR #164 / D1219 the two platforms use different dispatch paths:
+Both platforms dispatch through a single native entry point — `runNative()` in `agent-device-wrapper.ts` — which routes to the in-tree runner for the target platform. There is no external CLI tier on either platform:
 
-**iOS — single-endpoint `rn-fast-runner`.** Every iOS `device_*` call short-circuits through `runIOS()` (TS client at `scripts/cdp-bridge/src/runners/rn-fast-runner-client.ts`) to a `POST /command` HTTP endpoint exposed by an in-tree XCTest rig. Coordinate-based gestures map to `.drag`; direction-based swipes/scrolls are pre-computed to coords by `device-interact.ts` before dispatch. `device_find` (non-exact) and `device_scrollintoview` are TS-side orchestrators over `runIOS('snapshot')` — no Swift `.findText` round-trip for fuzzy matching. iOS no longer requires `agent-device`.
+**iOS — single-endpoint `rn-fast-runner`.** Every iOS `device_*` call short-circuits through `runIOS()` (TS client at `scripts/cdp-bridge/src/runners/rn-fast-runner-client.ts`) to a `POST /command` HTTP endpoint exposed by an in-tree XCTest rig. Coordinate-based gestures map to `.drag`; direction-based swipes/scrolls are pre-computed to coords by `device-interact.ts` before dispatch. `device_find` (non-exact) and `device_scrollintoview` are TS-side orchestrators over `runIOS('snapshot')` — no Swift `.findText` round-trip for fuzzy matching. The in-tree runner is the sole iOS device backend.
 
-**Android — 3-tier `agent-device` fallback.** The Android path retains the original tiered dispatch via `agent-device-wrapper.ts`:
+**Android — single-endpoint `rn-android-runner`.** Every Android `device_*` call routes through `runAndroid()` (TS client at `scripts/cdp-bridge/src/runners/rn-android-runner-client.ts`), which drives an in-tree UiAutomator instrumentation started via `adb shell am instrument`. The runner is default-on and the sole Android device backend — the legacy `agent-device` daemon + CLI tiers were removed (eradicate-agent-device). Setting `RN_ANDROID_RUNNER=0` does NOT fall back to anything; it makes `device_*` error with `RUNNER_DISABLED`.
 
-1. **fast-runner** (XCTest-style HTTP server bundled with `agent-device`) — lowest latency
-2. **agent-device daemon** — persistent process, medium latency
-3. **agent-device CLI** — direct invocation, highest latency
-
-Measured: iOS `rn-fast-runner` delivers ~216ms tap, ~5ms snapshot, ~74ms screenshot — the fast-runner path is ~13× faster than CLI fallbacks on either platform.
+Measured: iOS `rn-fast-runner` delivers ~216ms tap, ~5ms snapshot, ~74ms screenshot.
 
 A stale `~/.agent-device/daemon.json` can respawn the upstream `AgentDeviceRunner` and fight the in-tree `rn-fast-runner` for focus on iOS. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID), clears orphaned `~/.agent-device/daemon.{json,lock}`, and uninstalls the legacy runner apps (`com.callstack.agentdevice.runner` and its xctrunner companion) from the target simulator — an installed XCUITest runner is otherwise relaunched by iOS mid-flow even after its process is killed. Opt out with `RN_DEVICE_KILL_LEGACY=0`.
 

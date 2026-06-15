@@ -41,7 +41,7 @@ Call `cdp_status` to confirm the app is running and CDP is connected.
 
 **Pre-recording readiness check (GH #8, #9):**
 1. Call `cdp_status` — this auto-detects and auto-dismisses the Dev Client
-   server picker if an agent-device session is open (GH #9). If `cdp_status`
+   server picker if a device session is open (GH #9). If `cdp_status`
    returns a warning about the picker, call it again after a few seconds.
 2. Call `cdp_navigation_state` — verify it returns a valid route name
    (not empty, not "DevClientLauncher", not "ServerPicker"). If still stuck,

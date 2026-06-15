@@ -33,7 +33,7 @@ This checks **10 prerequisites** and fixes what it can automatically:
 | Node.js >= 22 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only — ships in-tree; one-time `xcodebuild build-for-testing` | No |
-| [agent-device](https://github.com/nicklama/agent-device) | Android targets only — iOS no longer needs it (PR #164) | Yes |
+| rn-android-runner (Android) | Android targets only — ships in-tree; built/installed on first use | No |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes |
 | iOS Simulator / Android Emulator | One platform | No |
 | Metro dev server | Yes | No |
@@ -95,7 +95,7 @@ An **action** is a saved Maestro flow the agent **emits** when `/test-feature` v
 | Command | Purpose |
 |---------|---------|
 | `/rn-dev-agent:setup` | Inject CLAUDE.md tool-routing rules + nav-ref + Zustand exposure |
-| `/rn-dev-agent:doctor` | 15-row diagnostic table — Node, CDP, rn-fast-runner (iOS), agent-device (Android), maestro-runner, simulators, Metro, helpers freshness, plugin version, CDP auto-reconnect mode |
+| `/rn-dev-agent:doctor` | 15-row diagnostic table — Node, CDP, rn-fast-runner (iOS), rn-android-runner (Android), maestro-runner, simulators, Metro, helpers freshness, plugin version, CDP auto-reconnect mode |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:send-feedback` | Open a GitHub issue with sanitized environment context |
@@ -165,7 +165,7 @@ Claude Code
   │
   └── Device interaction
       ├── iOS    → in-tree rn-fast-runner (XCTest /command HTTP)  ← D1219, PR #164
-      └── Android → agent-device CLI (daemon socket → fast-runner → CLI)
+      └── Android → in-tree rn-android-runner (UiAutomator instrumentation)
           │                         │
      iOS Simulator           Android Emulator
 
@@ -200,7 +200,7 @@ Claude Code
 | Tools fail after upgrade | Restart Claude Code ([why](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)) |
 | Spawned subagent says "MCP tools unavailable" | Never spawn `rn-tester` / `rn-debugger` via Task tool — MCP stdio doesn't propagate to subprocesses (GH #31). Use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead; protocols run inline in the parent session. |
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles. Kill Metro, restart it, relaunch the app. `cdp_status` warns when reload count is high. |
-| `device_scroll` times out on Reanimated screens | agent-device daemon `waitForIdle` deadlocks with Reanimated worklets. Fixed in v0.22.0 — scroll routes through fast-runner HID synthesis. Ensure fast-runner is healthy via device session. |
+| `device_scroll` times out on Reanimated screens | A `waitForIdle` round-trip can deadlock against Reanimated worklets. Scroll routes through the in-tree runner's HID synthesis instead. Ensure the runner is healthy via the device session (iOS: `rn-fast-runner`, Android: `rn-android-runner`). |
 | Legacy `AgentDeviceRunner` re-appears on iOS sim | Stale `~/.agent-device/daemon.json` respawns the upstream runner alongside our in-tree `rn-fast-runner`. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`, so this self-heals. Opt out with `RN_DEVICE_KILL_LEGACY=0`; to clean up manually: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}`. |
 | iOS `device_*` calls fail with "rn-fast-runner did not become ready" | Build artifacts missing. Pre-build once: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData`. After that, the runner spawns lazily on `device_snapshot action=open`. |
 | iOS `device_fill` returns "main thread execution timed out" but text appears in the field | Known XCTest-internal quiescence behavior; the TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`). The side-effect succeeded — proceed. |

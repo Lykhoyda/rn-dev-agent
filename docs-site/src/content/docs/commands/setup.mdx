@@ -15,7 +15,7 @@ description: Onboard the plugin into your project — diagnose, then inject the 
 
 | Phase | Step | Action |
 |---|---|---|
-| 1. Diagnose | A | Run [`/doctor`](../doctor/) — check Node, CDP bridge, agent-device, maestro-runner, simulators, Metro, ffmpeg |
+| 1. Diagnose | A | Run [`/doctor`](../doctor/) — check Node, CDP bridge, device runner (rn-fast-runner iOS / rn-android-runner Android), maestro-runner, simulators, Metro, ffmpeg |
 | 2. Inject | B | Append the plugin's tool-routing rules to your project `CLAUDE.md` (or create one) |
 | 2. Inject | C | Add a small dev-only bridge call to your app entry — exposes the navigation ref + Zustand stores in `__DEV__` only |
 | 2. Inject | D | Scaffold `.rn-agent/` — the plugin's home in your project (README, `.gitignore`, `dev-bridge.ts`, `globals.d.ts`, starter folders) |
@@ -38,7 +38,7 @@ Re-running `/setup` is idempotent. Already-applied blocks are detected and skipp
 |-----------------|-----------------------|-----------------------------------------|
 | Node.js         | OK (v22.15.0)         | —                                       |
 | CDP bridge      | OK                    | —                                       |
-| agent-device    | MISSING               | Run: npm install -g agent-device        |
+| rn-fast-runner (iOS) | OK (built)       | —                                       |
 | maestro-runner  | OK (v1.0.9)           | —                                       |
 | iOS Simulator   | BOOTED (iPhone 16)    | —                                       |
 | Android         | NOT RUNNING           | Boot an emulator                        |
