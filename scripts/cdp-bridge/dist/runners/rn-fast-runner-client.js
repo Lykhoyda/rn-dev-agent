@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
+import { isPortFree } from './free-port.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -145,9 +146,10 @@ export function derivedDataPathForRunner() {
 export function shouldReuseRunner(state, deviceId) {
     return state !== null && state.deviceId === deviceId;
 }
-export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
+export async function startFastRunner(deviceId, bundleId, port) {
     if (shouldReuseRunner(runnerState, deviceId))
-        return Promise.resolve(runnerState);
+        return runnerState;
+    const desired = port ?? (await isPortFree(DEFAULT_PORT) ? DEFAULT_PORT : 0);
     return new Promise((resolve, reject) => {
         const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
         if (!existsSync(projectPath)) {
@@ -167,7 +169,7 @@ export function startFastRunner(deviceId, bundleId, port = DEFAULT_PORT) {
         const child = spawn('xcodebuild', args, {
             env: {
                 ...process.env,
-                RN_FAST_RUNNER_PORT: String(port),
+                RN_FAST_RUNNER_PORT: String(desired),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
