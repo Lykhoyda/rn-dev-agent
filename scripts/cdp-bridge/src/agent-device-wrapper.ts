@@ -715,7 +715,7 @@ export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
   _runAgentDeviceOverrideForTest = fn;
 }
 
-export async function runAgentDevice(
+export async function runNative(
   cliArgs: string[],
   opts: { skipSession?: boolean; platform?: 'ios' | 'android' | null } = {},
 ): Promise<ToolResult> {
@@ -857,3 +857,5 @@ export async function runAgentDevice(
     return failResult(`agent-device error: ${msg}`);
   }
 }
+
+export { runNative as runAgentDevice };

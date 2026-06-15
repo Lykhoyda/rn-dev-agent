@@ -623,7 +623,7 @@ export function _setRunAgentDeviceForTest(fn) {
     }
     _runAgentDeviceOverrideForTest = fn;
 }
-export async function runAgentDevice(cliArgs, opts = {}) {
+export async function runNative(cliArgs, opts = {}) {
     if (_runAgentDeviceOverrideForTest) {
         return _runAgentDeviceOverrideForTest(cliArgs, opts);
     }
@@ -742,3 +742,4 @@ export async function runAgentDevice(cliArgs, opts = {}) {
         return failResult(`agent-device error: ${msg}`);
     }
 }
+export { runNative as runAgentDevice };
