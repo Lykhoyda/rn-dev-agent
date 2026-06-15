@@ -638,6 +638,20 @@ export async function runNative(
   // UIAutomator's `By.text()` returns regex-match semantics while findInLatestSnapshot
   // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
   const RN_ANDROID_RUNNER_COMMANDS = new Set<string>(['snapshot', 'tap', 'press', 'fill', 'type', 'back', 'screenshot', 'keyboard', 'swipe', 'scroll', 'drag', 'longpress', 'pinch']);
+
+  // eradicate-agent-device Phase 2 Task 9: when the operator explicitly disables the
+  // Android runner (RN_ANDROID_RUNNER=0), return an actionable error instead of
+  // silently falling through to NO_NATIVE_ROUTE. There is no agent-device fallback.
+  if (
+    targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER === '0' &&
+    !opts.skipSession && RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
+  ) {
+    return failResult(
+      'In-tree Android runner is the only device backend; the agent-device fallback was removed (eradicate-agent-device). Unset RN_ANDROID_RUNNER (or set it to anything but "0") to use it.',
+      'RUNNER_DISABLED',
+    );
+  }
+
   if (
     targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
     RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
