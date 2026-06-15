@@ -8,7 +8,8 @@ import {
 import { refCenter, clearRefMap } from '../../../dist/fast-runner-ref-map.js';
 
 _setAndroidRunnerStateForTest({
-  port: 22089,
+  hostPort: 22089,
+  devicePort: 22089,
   pid: process.pid,
   deviceId: 'emulator-5554',
   bundleId: 'com.example',
