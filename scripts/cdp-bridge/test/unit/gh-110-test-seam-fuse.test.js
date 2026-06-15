@@ -41,7 +41,7 @@ test('fuse: override fn is honored when set before any production dispatch', () 
       captured = { args, opts };
       return { content: [{ type: 'text', text: '{"ok":true,"data":"stubbed"}' }] };
     });
-    const r = await mod.runAgentDevice(['snapshot'], {});
+    const r = await mod.runNative(['snapshot'], {});
     if (!r.content[0].text.includes('stubbed')) throw new Error('override not invoked');
     if (captured.args[0] !== 'snapshot') throw new Error('args not threaded through');
   `);
@@ -52,7 +52,7 @@ test('fuse: setting override to null re-enables production tier as long as fuse 
   const { stdout } = runScenario(`
     let called = 0;
     mod._setRunAgentDeviceForTest(async () => { called++; return { content: [{ type: 'text', text: '{"ok":true}' }] }; });
-    await mod.runAgentDevice(['snapshot'], {});
+    await mod.runNative(['snapshot'], {});
     if (called !== 1) throw new Error('override not invoked on first call');
 
     // Set back to null — fuse has NOT blown (no production dispatch occurred).
@@ -60,7 +60,7 @@ test('fuse: setting override to null re-enables production tier as long as fuse 
     // Subsequent installs should still work
     let called2 = 0;
     mod._setRunAgentDeviceForTest(async () => { called2++; return { content: [{ type: 'text', text: '{"ok":true}' }] }; });
-    await mod.runAgentDevice(['tap'], {});
+    await mod.runNative(['tap'], {});
     if (called2 !== 1) throw new Error('second override not invoked');
   `);
   assert.match(stdout, /SCENARIO_OK/, `expected SCENARIO_OK, got: ${stdout}`);
@@ -74,7 +74,7 @@ test('fuse: a production runAgentDevice call (no override) blows the fuse', () =
     // begins → fuse blows immediately (before any tier returns).
     let prodThrew = false;
     try {
-      await mod.runAgentDevice(['list-devices'], { skipSession: true });
+      await mod.runNative(['list-devices'], { skipSession: true });
     } catch {
       prodThrew = true;
     }
@@ -98,7 +98,7 @@ test('fuse: error message includes GH #110 reference and remediation hint', () =
     // Production tier may throw (no booted device in test env) — that's
     // fine, the fuse must still seal. Use list-devices because it dodges
     // the slow fast-runner path that snapshot would take.
-    try { await mod.runAgentDevice(['list-devices'], { skipSession: true }); } catch {}
+    try { await mod.runNative(['list-devices'], { skipSession: true }); } catch {}
     let threw = false;
     try {
       mod._setRunAgentDeviceForTest(null);
@@ -119,12 +119,12 @@ test('fuse: setting null to clear override does not block when fuse has NOT blow
   // cleanup case — must not throw.
   const { stdout } = runScenario(`
     mod._setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: '{"ok":true}' }] }));
-    await mod.runAgentDevice(['snapshot'], {});
+    await mod.runNative(['snapshot'], {});
     // Standard cleanup — must not throw because no production dispatch happened.
     mod._setRunAgentDeviceForTest(null);
     // Installing a new override after clean cleanup must still work.
     mod._setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: '{"ok":true,"data":"second"}' }] }));
-    const r = await mod.runAgentDevice(['snapshot'], {});
+    const r = await mod.runNative(['snapshot'], {});
     if (!r.content[0].text.includes('second')) throw new Error('second override not active');
   `);
   assert.match(stdout, /SCENARIO_OK/, `expected SCENARIO_OK, got: ${stdout}`);

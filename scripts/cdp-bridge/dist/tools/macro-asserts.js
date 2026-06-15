@@ -12,7 +12,7 @@
 // during interactive walks and (eventually) embedded in Maestro flows
 // via runScript: shell-out to the future CLI surface.
 import { okResult, failResult, withConnection, withSession } from '../utils.js';
-import { runAgentDevice } from '../agent-device-wrapper.js';
+import { runNative } from '../agent-device-wrapper.js';
 import { findRefByTestID, snapshotEnvelopeFailed } from './device-batch.js';
 /**
  * Phase 128 (post-review #1): unwrap the {type, state} envelope produced
@@ -321,7 +321,7 @@ export function createExpectVisibleByTestIDHandler() {
         }
         const expectVisible = args.exists !== false; // default true
         const probe = async () => {
-            const result = await runAgentDevice(['snapshot', '-i']);
+            const result = await runNative(['snapshot', '-i']);
             const envelope = result.content?.[0]?.text ?? '';
             // Phase 128 (post-review #5): peek ok flag BEFORE computing
             // visibility — distinguishes infrastructure failure from "not present"
@@ -385,7 +385,7 @@ export function createExpectTextHandler() {
         const expectVisible = args.exists !== false;
         const exact = args.exact === true;
         const probe = async () => {
-            const result = await runAgentDevice(['snapshot', '-i']);
+            const result = await runNative(['snapshot', '-i']);
             const envelope = result.content?.[0]?.text ?? '';
             // Phase 128 (post-review #5): same snapshot-failure peek as
             // expect_visible_by_testid. exists:false would otherwise silent-pass.

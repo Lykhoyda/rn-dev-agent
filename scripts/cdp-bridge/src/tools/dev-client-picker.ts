@@ -1,4 +1,4 @@
-import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
+import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';

@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
-  runAgentDevice,
+  runNative,
   setActiveSession,
   clearActiveSession,
   getActiveSession,
@@ -489,7 +489,7 @@ async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<T
 }
 
 async function rawSnapshot(): Promise<ToolResult> {
-  return runAgentDevice(['snapshot', '-i']);
+  return runNative(['snapshot', '-i']);
 }
 
 function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
