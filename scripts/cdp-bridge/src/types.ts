@@ -252,7 +252,9 @@ export type ToolErrorCode =
   // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
   | 'BUSY_FOREIGN_FLOW'
   // GH #191: native fill + retype + maestro all failed to produce the expected value.
-  | 'TEXT_ENTRY_UNVERIFIED';
+  | 'TEXT_ENTRY_UNVERIFIED'
+  // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
+  | 'NO_NATIVE_ROUTE';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
