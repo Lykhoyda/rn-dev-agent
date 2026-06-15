@@ -189,7 +189,7 @@ export function createDeviceSnapshotHandler() {
                         if (lockPlatform === 'ios')
                             stopFastRunner();
                         else
-                            await stopAndroidRunner();
+                            await stopAndroidRunner(lockDeviceId);
                         return failResult(deviceBusyMessage(lockDeviceId, lockResult.holder), { code: 'DEVICE_BUSY', holder: lockResult.holder });
                     }
                     if (lockResult.degraded) {
@@ -302,6 +302,7 @@ export function createDeviceSnapshotHandler() {
                 closeUnderlyingSession: () => runAgentDevice(['close']),
                 clearActiveSession,
                 stopFastRunner,
+                stopAndroidRunner,
                 releaseDeviceLock: releaseDeviceLockForSession,
             });
         }

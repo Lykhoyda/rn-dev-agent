@@ -248,7 +248,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
             // session and leak the one we just opened (#202 review — blocker).
             await runAgentDevice(['close']).catch(() => { /* best-effort teardown */ });
             clearActiveSession();
-            if (lockPlatform === 'ios') stopFastRunner(); else await stopAndroidRunner();
+            if (lockPlatform === 'ios') stopFastRunner(); else await stopAndroidRunner(lockDeviceId);
             return failResult(
               deviceBusyMessage(lockDeviceId, lockResult.holder),
               { code: 'DEVICE_BUSY', holder: lockResult.holder },
@@ -370,6 +370,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         closeUnderlyingSession: () => runAgentDevice(['close']),
         clearActiveSession,
         stopFastRunner,
+        stopAndroidRunner,
         releaseDeviceLock: releaseDeviceLockForSession,
       });
     }

@@ -43,6 +43,6 @@ test('GH#202 Android open resolves the adb serial and acquires the device lock',
   assert.match(sessionSrc, /resolveAndroidSerial\(/);
   assert.match(sessionSrc, /acquireDeviceLockForSession\(lockPlatform, lockDeviceId, appId\)/);
 });
-test('GH#202 Android conflict teardown stops the android runner', () => {
-  assert.match(sessionSrc, /stopAndroidRunner\(\)/);
+test('GH#202 Android conflict teardown stops the android runner with the locked serial', () => {
+  assert.match(sessionSrc, /stopAndroidRunner\(lockDeviceId\)/);
 });

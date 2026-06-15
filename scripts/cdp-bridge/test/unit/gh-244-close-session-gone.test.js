@@ -13,60 +13,67 @@ const errClose = (error, code) => ({
   isError: true,
 });
 
-test('#244 no in-memory session → ok no-op; underlying close NOT called', async () => {
-  const calls = { clear: 0, stop: 0, release: 0, close: 0 };
-  const r = await closeDeviceSession({
-    hasActiveSession: () => false,
+// Base deps factory: stopAndroidRunner is a no-op async spy by default.
+function makeDeps(overrides = {}) {
+  const calls = { clear: 0, stop: 0, stopAndroid: 0, release: 0, close: 0 };
+  const deps = {
+    hasActiveSession: () => true,
     closeUnderlyingSession: async () => { calls.close++; return okClose(); },
     clearActiveSession: () => { calls.clear++; },
     stopFastRunner: () => { calls.stop++; },
+    stopAndroidRunner: async () => { calls.stopAndroid++; },
     releaseDeviceLock: () => { calls.release++; },
-  });
+    ...overrides,
+  };
+  return { deps, calls };
+}
+
+test('#244 no in-memory session → ok no-op; underlying close NOT called', async () => {
+  const { deps, calls } = makeDeps({ hasActiveSession: () => false });
+  const r = await closeDeviceSession(deps);
   assert.equal(r.isError, undefined);
   assert.match(r.content[0].text, /No active session to close/);
   assert.equal(calls.close, 0);
 });
 
 test('#244 close succeeds → ok; cleanup all called once', async () => {
-  const calls = { clear: 0, stop: 0, release: 0, close: 0 };
-  const r = await closeDeviceSession({
-    hasActiveSession: () => true,
-    closeUnderlyingSession: async () => { calls.close++; return okClose(); },
-    clearActiveSession: () => { calls.clear++; },
-    stopFastRunner: () => { calls.stop++; },
-    releaseDeviceLock: () => { calls.release++; },
-  });
+  const { deps, calls } = makeDeps();
+  const r = await closeDeviceSession(deps);
   assert.equal(r.isError, undefined);
-  assert.deepEqual(calls, { clear: 1, stop: 1, release: 1, close: 1 });
+  assert.equal(calls.clear, 1);
+  assert.equal(calls.stop, 1);
+  assert.equal(calls.stopAndroid, 1);
+  assert.equal(calls.release, 1);
+  assert.equal(calls.close, 1);
 });
 
 test('#244 SESSION_NOT_FOUND after a flow → ok with sessionAlreadyGone; cleanup all called', async () => {
-  const calls = { clear: 0, stop: 0, release: 0, close: 0 };
-  const r = await closeDeviceSession({
-    hasActiveSession: () => true,
+  const { deps, calls } = makeDeps({
     closeUnderlyingSession: async () => { calls.close++; return errClose('No active session', 'SESSION_NOT_FOUND'); },
-    clearActiveSession: () => { calls.clear++; },
-    stopFastRunner: () => { calls.stop++; },
-    releaseDeviceLock: () => { calls.release++; },
   });
+  const r = await closeDeviceSession(deps);
   assert.equal(r.isError, undefined);
   const env = JSON.parse(r.content[0].text);
   assert.equal(env.data.sessionAlreadyGone, true);
-  assert.deepEqual(calls, { clear: 1, stop: 1, release: 1, close: 1 });
+  assert.equal(calls.clear, 1);
+  assert.equal(calls.stop, 1);
+  assert.equal(calls.stopAndroid, 1);
+  assert.equal(calls.release, 1);
+  assert.equal(calls.close, 1);
 });
 
 test('#244 unrelated close error → surfaced as-is; cleanup NOT called', async () => {
-  const calls = { clear: 0, stop: 0, release: 0, close: 0 };
-  const r = await closeDeviceSession({
-    hasActiveSession: () => true,
+  const { deps, calls } = makeDeps({
     closeUnderlyingSession: async () => { calls.close++; return errClose('adb: device offline', 'BAD_RESPONSE'); },
-    clearActiveSession: () => { calls.clear++; },
-    stopFastRunner: () => { calls.stop++; },
-    releaseDeviceLock: () => { calls.release++; },
   });
+  const r = await closeDeviceSession(deps);
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /device offline/);
-  assert.deepEqual(calls, { clear: 0, stop: 0, release: 0, close: 1 });
+  assert.equal(calls.clear, 0);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.stopAndroid, 0);
+  assert.equal(calls.release, 0);
+  assert.equal(calls.close, 1);
 });
 
 test('#244 isBenignSessionGoneError matches only gone-session shapes', () => {
@@ -93,14 +100,36 @@ test('#244/B192 non-JSON payload mentioning the phrase is NOT benign', async () 
   assert.equal(isBenignSessionGoneError(plainText), false);
 
   // and closeDeviceSession must surface it unchanged, leaving local state intact
-  const calls = { clear: 0, stop: 0, release: 0 };
-  const r = await closeDeviceSession({
-    hasActiveSession: () => true,
+  const { deps, calls } = makeDeps({
     closeUnderlyingSession: async () => plainText,
-    clearActiveSession: () => { calls.clear++; },
-    stopFastRunner: () => { calls.stop++; },
-    releaseDeviceLock: () => { calls.release++; },
   });
+  const r = await closeDeviceSession(deps);
   assert.equal(r.isError, true);
-  assert.deepEqual(calls, { clear: 0, stop: 0, release: 0 });
+  assert.equal(calls.clear, 0);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.stopAndroid, 0);
+  assert.equal(calls.release, 0);
+});
+
+// Finding 1a: stopAndroidRunner must be called on a normal successful close (dep-injection proof).
+test('android close teardown: stopAndroidRunner is called on successful close', async () => {
+  let androidStopCalled = false;
+  const { deps } = makeDeps({
+    stopAndroidRunner: async () => { androidStopCalled = true; },
+  });
+  const r = await closeDeviceSession(deps);
+  assert.equal(r.isError, undefined);
+  assert.equal(androidStopCalled, true, 'stopAndroidRunner must be called on a normal close');
+});
+
+// Finding 1a: stopAndroidRunner must also be called when the session is already gone (benign path).
+test('android close teardown: stopAndroidRunner is called on SESSION_NOT_FOUND (benign gone path)', async () => {
+  let androidStopCalled = false;
+  const { deps } = makeDeps({
+    closeUnderlyingSession: async () => errClose('No active session', 'SESSION_NOT_FOUND'),
+    stopAndroidRunner: async () => { androidStopCalled = true; },
+  });
+  const r = await closeDeviceSession(deps);
+  assert.equal(r.isError, undefined);
+  assert.equal(androidStopCalled, true, 'stopAndroidRunner must be called even when the underlying session was already gone');
 });

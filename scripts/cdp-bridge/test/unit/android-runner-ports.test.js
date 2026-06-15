@@ -20,3 +20,7 @@ test('parseAdbDevicesSerials: extracts only online device serials', () => {
   const out = 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\toffline\n\n';
   assert.deepEqual(parseAdbDevicesSerials(out), ['emulator-5554']);
 });
+test('parseAdbDevicesSerials: tolerates trailing attributes (transport_id/product)', () => {
+  const out = 'List of devices attached\nemulator-5554\tdevice product:sdk_gphone64 transport_id:1\nemulator-5556\toffline\n\n';
+  assert.deepEqual(parseAdbDevicesSerials(out), ['emulator-5554']);
+});

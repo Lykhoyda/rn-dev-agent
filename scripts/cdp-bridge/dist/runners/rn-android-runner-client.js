@@ -48,8 +48,9 @@ export function _setAndroidRunnerStateForTest(state) {
 export function parseAdbDevicesSerials(stdout) {
     return stdout.split('\n').slice(1)
         .map((l) => l.trim())
-        .filter((l) => l.endsWith('\tdevice'))
-        .map((l) => l.split('\t')[0]);
+        .map((l) => /^(\S+)\s+device\b/.exec(l))
+        .filter((m) => m !== null)
+        .map((m) => m[1]);
 }
 export async function resolveAndroidSerial(explicit) {
     if (explicit)
@@ -209,12 +210,17 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
         });
         child.on('exit', (code) => {
             if (runnerProcess === child) {
+                const exitState = runnerState;
                 runnerProcess = null;
                 runnerState = null;
                 try {
                     unlinkSync(STATE_FILE);
                 }
                 catch { /* already removed */ }
+                if (typeof exitState?.hostPort === 'number') {
+                    execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort))
+                        .catch(() => { });
+                }
             }
             if (!resolved) {
                 resolved = true;
@@ -245,12 +251,13 @@ export async function stopAndroidRunner(deviceId) {
         unlinkSync(STATE_FILE);
     }
     catch { /* already removed */ }
-    const hostPort = stoppedState?.hostPort ?? DEFAULT_PORT;
-    const resolvedDeviceId = deviceId ?? stoppedState?.deviceId;
-    try {
-        await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, hostPort));
+    if (typeof stoppedState?.hostPort === 'number') {
+        const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
+        try {
+            await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort));
+        }
+        catch { /* non-fatal */ }
     }
-    catch { /* non-fatal */ }
 }
 async function postCommand(body) {
     const state = runnerState;
