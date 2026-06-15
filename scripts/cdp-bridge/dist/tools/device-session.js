@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
+import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
@@ -390,7 +390,7 @@ async function reacquireIosTargetApp(appId, deviceId) {
     return okResult({ reacquired: true, appId });
 }
 async function rawSnapshot() {
-    return runAgentDevice(['snapshot', '-i']);
+    return runNative(['snapshot', '-i']);
 }
 function parseSnapshotNodes(result) {
     if (result.isError)

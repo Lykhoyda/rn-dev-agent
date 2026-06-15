@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult, okResult } from '../utils.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
@@ -11,12 +11,12 @@ import { arbiter } from '../lifecycle/device-arbiter.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
-let runAgentDeviceFn = runAgentDevice;
+let runAgentDeviceFn = runNative;
 export function _setRunAgentDeviceForTest(fn) {
     runAgentDeviceFn = fn;
 }
 export function _resetRunAgentDeviceForTest() {
-    runAgentDeviceFn = runAgentDevice;
+    runAgentDeviceFn = runNative;
 }
 const execFileAsync = promisify(execFile);
 const defaultExec = (cmd, args) => execFileAsync(cmd, args);

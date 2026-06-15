@@ -583,7 +583,7 @@ let _testSeamFuseBlownBy: string | null = null;
 export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
   if (_testSeamFused) {
     throw new Error(
-      `_setRunAgentDeviceForTest: blown fuse — a production runAgentDevice ` +
+      `_setRunAgentDeviceForTest: blown fuse — a production runNative ` +
       `call (cliArgs[0]=${JSON.stringify(_testSeamFuseBlownBy)}) already ` +
       `dispatched in this process. The test seam cannot be re-armed at runtime ` +
       `(GH #110 hardening). The most likely cause is a prior test forgot to ` +
@@ -692,5 +692,3 @@ export async function runNative(
     'NO_NATIVE_ROUTE',
   );
 }
-
-export { runNative as runAgentDevice };

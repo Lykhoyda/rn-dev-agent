@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
-import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession } from '../agent-device-wrapper.js';
 import { failResult, okResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
@@ -15,15 +15,15 @@ import { pathHasTraversal } from '../domain/path-safety.js';
 import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
 
 // ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
-type RunAgentDeviceFn = typeof runAgentDevice;
-let runAgentDeviceFn: RunAgentDeviceFn = runAgentDevice;
+type RunAgentDeviceFn = typeof runNative;
+let runAgentDeviceFn: RunAgentDeviceFn = runNative;
 
 export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn): void {
   runAgentDeviceFn = fn;
 }
 
 export function _resetRunAgentDeviceForTest(): void {
-  runAgentDeviceFn = runAgentDevice;
+  runAgentDeviceFn = runNative;
 }
 
 // ── device-list native enumeration ───────────────────────────────────────────

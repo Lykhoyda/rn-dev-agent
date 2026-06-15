@@ -7,7 +7,7 @@
 // domain/repair-engine.ts; this file is the I/O orchestration.
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureFastRunner, getActiveSession, runAgentDevice } from '../agent-device-wrapper.js';
+import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { loadAction, saveAction, actionWasEditedExternally, } from '../domain/action-store.js';
@@ -31,7 +31,7 @@ const execFile = promisify(execFileCb);
  * prior `maestro_run`) is still alive — `XCUIApplication.activate()` inside
  * the runner re-foregrounds the runner before the snapshot lands. The fix
  * is to `stopFastRunner()` FIRST so there's nothing competing for focus,
- * THEN `simctl launch` the test-app. The next `runAgentDevice(snapshot)`
+ * THEN `simctl launch` the test-app. The next `runNative(snapshot)`
  * will lazily re-spawn the fast-runner, which is fine because by then
  * agent-device knows which bundle to attach to (it inherits the foreground
  * app's XCUIApplication).
@@ -168,10 +168,10 @@ export function createRepairActionHandler() {
             }
         }
         // Take a fresh device snapshot to see what testIDs are currently rendered.
-        // GH #105 iOS-MVP: pass platform so runAgentDevice's iOS short-circuit fires
+        // GH #105 iOS-MVP: pass platform so runNative's iOS short-circuit fires
         // and routes through rn-fast-runner — otherwise dispatch falls through to
         // the legacy agent-device CLI path which hits the upstream AgentDeviceRunner.
-        const snapResult = await runAgentDevice(['snapshot', '-i'], { platform: targetPlatform });
+        const snapResult = await runNative(['snapshot', '-i'], { platform: targetPlatform });
         const snapEnvelope = snapResult.content?.[0]?.text ?? '';
         if (snapshotEnvelopeFailed(snapEnvelope)) {
             return failResult(`cdp_repair_action: snapshot failed while gathering candidate testIDs for "${args.actionId}" — agent-device unreachable`, 'SNAPSHOT_FAILED', {

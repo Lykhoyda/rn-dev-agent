@@ -515,7 +515,7 @@ let _testSeamFused = false;
 let _testSeamFuseBlownBy = null;
 export function _setRunAgentDeviceForTest(fn) {
     if (_testSeamFused) {
-        throw new Error(`_setRunAgentDeviceForTest: blown fuse — a production runAgentDevice ` +
+        throw new Error(`_setRunAgentDeviceForTest: blown fuse — a production runNative ` +
             `call (cliArgs[0]=${JSON.stringify(_testSeamFuseBlownBy)}) already ` +
             `dispatched in this process. The test seam cannot be re-armed at runtime ` +
             `(GH #110 hardening). The most likely cause is a prior test forgot to ` +
@@ -598,4 +598,3 @@ export async function runNative(cliArgs, opts = {}) {
     // above). The agent-device daemon + CLI tiers were removed (eradicate-agent-device).
     return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, 'NO_NATIVE_ROUTE');
 }
-export { runNative as runAgentDevice };

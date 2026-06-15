@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { withSession } from '../utils.js';
@@ -99,7 +99,7 @@ function parseSnapshotEnvelope(result) {
     }
 }
 async function fetchSnapshotNodes() {
-    const first = await runAgentDevice(['snapshot', '-i']);
+    const first = await runNative(['snapshot', '-i']);
     const initialNodes = parseSnapshotEnvelope(first);
     if (initialNodes === null)
         return { ok: false, reason: 'fetch-failed' };
@@ -113,7 +113,7 @@ async function fetchSnapshotNodes() {
     const recovery = await recoverFromRunnerLeak({ platform: session?.platform, appId: session?.appId, sessionName: session?.name }, {
         closeSession: async () => { clearActiveSession(); stopFastRunner(); await stopAndroidRunner(); return okResult({ closed: true }); },
         openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
-        resnapshot: () => runAgentDevice(['snapshot', '-i']),
+        resnapshot: () => runNative(['snapshot', '-i']),
         parseNodes: parseSnapshotEnvelope,
     });
     if (!recovery.recovered) {
@@ -158,7 +158,7 @@ function runnerLeakFailResult(query, recoveryReason) {
 export async function pressCandidate(candidate, action) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
     if (action === 'click') {
-        return runAgentDevice(['press', ref]);
+        return runNative(['press', ref]);
     }
     return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -214,7 +214,7 @@ export function createDeviceFindHandler() {
         // always and on Android (default-on; opt-out via RN_ANDROID_RUNNER=0).
         // The legacy CLI path would respawn the upstream agent-device daemon,
         // which fights our in-tree runner for focus / UIAutomator. Using
-        // runAgentDevice + fetchFindCandidates keeps us on the platform-aware
+        // runNative + fetchFindCandidates keeps us on the platform-aware
         // short-circuit.
         const activeSession = getActiveSession();
         const usesInTreeRunner = activeSession?.platform === 'ios' ||
@@ -316,7 +316,7 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = await runAgentDevice(cliArgs);
+        const result = await runNative(cliArgs);
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }
@@ -328,13 +328,13 @@ export function createDeviceLongPressHandler() {
         if (args.ref) {
             const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
             const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
-            return runAgentDevice(cliArgs);
+            return runNative(cliArgs);
         }
         if (args.x != null && args.y != null) {
             const cliArgs = ['longpress', String(args.x), String(args.y)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
-            return runAgentDevice(cliArgs);
+            return runNative(cliArgs);
         }
         return Promise.resolve(failResult('Provide either ref or x+y coordinates'));
     });
@@ -472,7 +472,7 @@ export function createDeviceFillHandler(getClient) {
         // Android workaround path: press + chunked adb input. Short-circuits — no fallback
         // chain needed because the Android path is already a fallback for agent-device fill.
         if (needsAndroidWorkaround) {
-            const pressResult = await runAgentDevice(['press', ref]);
+            const pressResult = await runNative(['press', ref]);
             if (pressResult.isError)
                 return pressResult;
             await sleep(300);
@@ -507,7 +507,7 @@ export function createDeviceFillHandler(getClient) {
         const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
         // press+fill+press+fill flows where the previous call left focus on a different field.
-        const preTap = await runAgentDevice(['press', ref]);
+        const preTap = await runNative(['press', ref]);
         if (preTap.isError) {
             // If we can't even tap the element, fall straight through to fill — it may still
             // work via the fast-runner coordinate path, and we want its error message, not ours.
@@ -515,7 +515,7 @@ export function createDeviceFillHandler(getClient) {
         else {
             await sleep(focusWaitMs);
         }
-        const primary = await runAgentDevice(['fill', ref, args.text]);
+        const primary = await runNative(['fill', ref, args.text]);
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -535,7 +535,7 @@ export function createDeviceFillHandler(getClient) {
                         break;
                     settleAnchor = value;
                     stabilityPrior = value;
-                    await runAgentDevice(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+                    await runNative(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
                 }
                 const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
                 if (!maestro.isError) {
@@ -562,10 +562,10 @@ export function createDeviceFillHandler(getClient) {
         if (snap.ok) {
             const resolvedRef = findInputForPressable(snap.nodes, ref);
             if (resolvedRef && resolvedRef !== ref) {
-                const innerTap = await runAgentDevice(['press', resolvedRef]);
+                const innerTap = await runNative(['press', resolvedRef]);
                 if (!innerTap.isError) {
                     await sleep(focusWaitMs);
-                    const resolved = await runAgentDevice(['fill', resolvedRef, args.text]);
+                    const resolved = await runNative(['fill', resolvedRef, args.text]);
                     if (!resolved.isError) {
                         try {
                             const envelope = JSON.parse(resolved.content[0].text);
@@ -580,10 +580,10 @@ export function createDeviceFillHandler(getClient) {
         }
         // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
         // to propagate focus from a wrapping Pressable to the inner TextInput.
-        const retryTap = await runAgentDevice(['press', ref]);
+        const retryTap = await runNative(['press', ref]);
         if (!retryTap.isError) {
             await sleep(300);
-            const retry = await runAgentDevice(['fill', ref, args.text]);
+            const retry = await runNative(['fill', ref, args.text]);
             if (!retry.isError) {
                 // Re-wrap the okResult to attach the fallback marker.
                 try {
@@ -716,7 +716,7 @@ export function createDeviceSwipeHandler() {
                 cliArgs.push('--count', String(args.count));
             if (args.pattern)
                 cliArgs.push('--pattern', args.pattern);
-            return runAgentDevice(cliArgs);
+            return runNative(cliArgs);
         }
         if (args.direction) {
             // B-Tier3 fix: Use real swipe gesture (not scroll) for direction-based swipes.
@@ -745,7 +745,7 @@ export function createDeviceSwipeHandler() {
                 cliArgs.push('--count', String(args.count));
             if (args.pattern)
                 cliArgs.push('--pattern', args.pattern);
-            return runAgentDevice(cliArgs);
+            return runNative(cliArgs);
         }
         return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
     });
@@ -777,7 +777,7 @@ export function createDeviceScrollHandler() {
         // Daemon / Android fallthrough: dispatch the COORDINATE form. The arg
         // builders throw on the raw direction form, so this previously crashed on
         // Android (always) and on the iOS fast-runner fallback.
-        return runAgentDevice(buildDirectionalScrollCliArgs(args.direction, args.amount));
+        return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
     });
 }
 export function createDeviceScrollIntoViewHandler() {
@@ -790,7 +790,7 @@ export function createDeviceScrollIntoViewHandler() {
         // Task 8 of the Android MVP plan extends the same orchestrator to
         // Android (default-on; opt-out via RN_ANDROID_RUNNER=0) — the snapshot
         // + swipe verbs route through the platform-aware short-circuit in
-        // runAgentDevice so this function is platform-neutral. The in-tree
+        // runNative so this function is platform-neutral. The in-tree
         // runners are the only execution targets for scrollintoview now; the
         // upstream agent-device CLI never owned a stable scrollintoview verb
         // and routing through it re-spawns the legacy runner that fights us
@@ -807,7 +807,7 @@ export function createDeviceScrollIntoViewHandler() {
 /**
  * GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: platform-neutral
  * TS orchestrator for device_scrollintoview. Loops snapshot → find → check
- * viewport → swipe up to MAX_ITERATIONS times. Uses runAgentDevice for both
+ * viewport → swipe up to MAX_ITERATIONS times. Uses runNative for both
  * the `snapshot` and `swipe` verbs so the in-tree iOS short-circuit
  * (rn-fast-runner) and the Android short-circuit (rn-android-runner, env-gated)
  * both apply transparently — no daemon, no upstream agent-device runner.
@@ -818,7 +818,7 @@ async function scrollIntoViewWithRunner(args) {
     const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const screenRect = { x: 0, y: 0, width: screen.width, height: screen.height };
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-        const snapRes = await runAgentDevice(['snapshot', '-i']);
+        const snapRes = await runNative(['snapshot', '-i']);
         timer.mark('snapshot');
         if (snapRes.isError) {
             return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? 'unknown'}`, { code: 'SNAPSHOT_UNAVAILABLE' });
@@ -841,7 +841,7 @@ async function scrollIntoViewWithRunner(args) {
             if (i === 0) {
                 const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect);
                 const coords = computeSwipeFromDirection(fallbackDir ?? 'down', screen);
-                await runAgentDevice([
+                await runNative([
                     'swipe',
                     String(coords.x1),
                     String(coords.y1),
@@ -866,7 +866,7 @@ async function scrollIntoViewWithRunner(args) {
             }, { meta: { timings_ms: timer.timings() } });
         }
         const coords = computeSwipeFromDirection(direction, screen);
-        const swipeResp = await runAgentDevice([
+        const swipeResp = await runNative([
             'swipe',
             String(coords.x1),
             String(coords.y1),
@@ -887,12 +887,12 @@ export function createDevicePinchHandler() {
         if (args.x != null && args.y != null) {
             cliArgs.push(String(args.x), String(args.y));
         }
-        return runAgentDevice(cliArgs);
+        return runNative(cliArgs);
     });
 }
 // --- Back ---
 export function createDeviceBackHandler() {
-    return withSession(() => runAgentDevice(['back']));
+    return withSession(() => runNative(['back']));
 }
 // --- Focus Next (keyboard Next/Return button) ---
 // Label priority order: "Go" and "Done" first because they are less likely to
@@ -918,7 +918,7 @@ export function createDeviceFocusNextHandler() {
             const match = nodes.find((n) => n.label === label);
             if (!match)
                 continue;
-            const pressResult = await runAgentDevice(['press', `@${match.ref}`]);
+            const pressResult = await runNative(['press', `@${match.ref}`]);
             if (pressResult.isError)
                 continue; // Match found but tap failed — try next label
             try {
