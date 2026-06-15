@@ -1,16 +1,20 @@
 import { mkdirSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
 import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
-import { failResult } from '../utils.js';
+import { failResult, okResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
+import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
 
+// ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
 type RunAgentDeviceFn = typeof runAgentDevice;
 let runAgentDeviceFn: RunAgentDeviceFn = runAgentDevice;
 
@@ -22,8 +26,69 @@ export function _resetRunAgentDeviceForTest(): void {
   runAgentDeviceFn = runAgentDevice;
 }
 
+// ── device-list native enumeration ───────────────────────────────────────────
+
+type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
+
+const execFileAsync = promisify(execFile);
+const defaultExec: ExecFn = (cmd, args) => execFileAsync(cmd, args);
+let execFn: ExecFn = defaultExec;
+
+export function _setDeviceListExecForTest(fn: ExecFn): void {
+  execFn = fn;
+}
+
+export function _resetDeviceListExecForTest(): void {
+  execFn = defaultExec;
+}
+
+/**
+ * Parse `xcrun simctl list devices --json` output into a flat list of booted
+ * iOS simulators. Returns [] on any parse error so one platform's absence
+ * never breaks the other.
+ */
+export function parseSimctlDevicesAll(jsonText: string): Array<{ platform: 'ios'; id: string; name: string; state: string }> {
+  try {
+    const parsed = JSON.parse(jsonText) as { devices?: Record<string, Array<{ udid: string; name: string; state: string }>> };
+    const runtimes = parsed?.devices;
+    if (!runtimes || typeof runtimes !== 'object') return [];
+    const result: Array<{ platform: 'ios'; id: string; name: string; state: string }> = [];
+    for (const devices of Object.values(runtimes)) {
+      if (!Array.isArray(devices)) continue;
+      for (const d of devices) {
+        // Guard udid/name: beta Xcode runtimes occasionally emit a partial
+        // Booted entry; an undefined id would poison the UDID lock path.
+        if (d.state === 'Booted' && d.udid && d.name) {
+          result.push({ platform: 'ios', id: d.udid, name: d.name, state: d.state });
+        }
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 export function createDeviceListHandler(): (args: Record<string, never>) => Promise<ToolResult> {
-  return async () => runAgentDeviceFn(['devices'], { skipSession: true });
+  return async () => {
+    const [iosDevices, androidSerials] = await Promise.all([
+      execFn('xcrun', ['simctl', 'list', 'devices', '--json'])
+        .then(({ stdout }) => parseSimctlDevicesAll(stdout))
+        .catch(() => []),
+      execFn('adb', ['devices'])
+        .then(({ stdout }) => parseAdbDevicesSerials(stdout))
+        .catch(() => []),
+    ]);
+
+    const androidDevices = androidSerials.map((serial) => ({
+      platform: 'android' as const,
+      id: serial,
+      name: serial,
+      state: 'device',
+    }));
+
+    return okResult({ devices: [...iosDevices, ...androidDevices] });
+  };
 }
 
 /**
