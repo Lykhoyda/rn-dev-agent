@@ -1,7 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, unlinkSync, existsSync, copyFileSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -20,8 +17,6 @@ import type { FastRunnerLiveness } from './runners/rn-fast-runner-client.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
-
-const execFile = promisify(execFileCb);
 
 /**
  * CDP-015: derive a per-user, per-project session file path. The previous
@@ -54,39 +49,6 @@ function getSessionFilePath(): string {
 
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
-const EXEC_TIMEOUT = 30_000;
-const DAEMON_TIMEOUT = 30_000;
-
-// --- Direct Daemon Socket Client ---
-
-interface DaemonInfo {
-  port: number;
-  token: string;
-}
-
-let cachedDaemonInfo: DaemonInfo | null = null;
-
-function loadDaemonInfo(): DaemonInfo | null {
-  if (cachedDaemonInfo) return cachedDaemonInfo;
-  return refreshDaemonInfo();
-}
-
-function refreshDaemonInfo(): DaemonInfo | null {
-  const daemonPath = join(homedir(), '.agent-device', 'daemon.json');
-  try {
-    if (!existsSync(daemonPath)) return null;
-    const raw = JSON.parse(readFileSync(daemonPath, 'utf-8')) as { port?: number; token?: string };
-    if (!raw.port || !raw.token) return null;
-    cachedDaemonInfo = { port: raw.port, token: raw.token };
-    return cachedDaemonInfo;
-  } catch {
-    return null;
-  }
-}
-
-function invalidateDaemonCache(): void {
-  cachedDaemonInfo = null;
-}
 
 function extractFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
   const positionals: string[] = [];
@@ -107,76 +69,6 @@ function extractFlags(args: string[]): { positionals: string[]; flags: Record<st
     }
   }
   return { positionals, flags };
-}
-
-function sendToDaemon(command: string, rawArgs: string[], session: string, timeoutMs = DAEMON_TIMEOUT): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string; hint?: string } }> {
-  const info = loadDaemonInfo();
-  if (!info) return Promise.reject(new Error('daemon not available'));
-
-  const { positionals, flags } = extractFlags(rawArgs);
-
-  const req = {
-    token: info.token,
-    session,
-    command,
-    positionals,
-    flags,
-  };
-
-  return new Promise((resolve, reject) => {
-    const sock = createConnection({ host: '127.0.0.1', port: info.port }, () => {
-      sock.write(JSON.stringify(req) + '\n');
-    });
-
-    let data = '';
-    sock.setEncoding('utf8');
-    const timer = setTimeout(() => { sock.destroy(); reject(new Error('daemon timeout')); }, timeoutMs);
-
-    sock.on('data', (chunk: string) => {
-      data += chunk;
-      const nl = data.indexOf('\n');
-      if (nl !== -1) {
-        clearTimeout(timer);
-        sock.end();
-        try {
-          resolve(JSON.parse(data.slice(0, nl).trim()));
-        } catch {
-          reject(new Error('invalid daemon response'));
-        }
-      }
-    });
-    sock.on('error', (err: Error) => { clearTimeout(timer); reject(err); });
-  });
-}
-
-async function runViaDaemon(command: string, positionals: string[], session: string): Promise<ToolResult> {
-  try {
-    const resp = await sendToDaemon(command, positionals, session);
-    if (resp.ok) {
-      return okResult(resp.data ?? {});
-    }
-    const e = resp.error!;
-    return failResult(e.message, { code: e.code, ...(e.hint ? { hint: e.hint } : {}) });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // B95 fix: If daemon connection refused, the daemon may have restarted
-    // with a new port. Invalidate cache and retry once with fresh daemon info.
-    if (msg.includes('ECONNREFUSED')) {
-      invalidateDaemonCache();
-      const freshInfo = refreshDaemonInfo();
-      if (freshInfo) {
-        try {
-          const retryResp = await sendToDaemon(command, positionals, session);
-          if (retryResp.ok) return okResult(retryResp.data ?? {});
-          const e = retryResp.error!;
-          return failResult(e.message, { code: e.code, ...(e.hint ? { hint: e.hint } : {}) });
-        } catch (retryErr) {
-          return failResult(`Daemon error (after refresh): ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
-        }
-      }
-    }
-    return failResult(`Daemon error: ${msg}`);
-  }
 }
 
 let activeSession: SessionState | null = null;
@@ -666,18 +558,6 @@ export async function ensureFastRunner(deviceId: string, bundleId: string): Prom
   }
 }
 
-interface AgentDeviceJsonSuccess {
-  success: true;
-  data: unknown;
-}
-
-interface AgentDeviceJsonError {
-  success: false;
-  error: { code: string; message: string; hint?: string };
-}
-
-type AgentDeviceJson = AgentDeviceJsonSuccess | AgentDeviceJsonError;
-
 // Issue #103 — test-only override hook. Tests that exercise handlers
 // orchestrating agent-device snapshots (e.g. cdp_repair_action) can
 // inject a fake CLI response without booting a device. Production code
@@ -790,95 +670,13 @@ export async function runNative(
     return runAndroid({ ...android, deviceId: activeSession?.deviceId });
   }
 
-  // GH #60: when an explicit platform is requested AND it doesn't match the
-  // active session's platform (e.g. user asks for android while an iOS
-  // session is active from prior work), skip the session-bound dispatch
-  // tier — it would otherwise route to the wrong device. Forcing CLI with
-  // `--platform` is correct in this case.
-  const platformMismatch =
-    !!opts.platform && !!activeSession?.platform && opts.platform !== activeSession.platform;
-  const sessionName = (!opts.skipSession && !platformMismatch && activeSession) ? activeSession.name : '';
-
-  // Fast path: direct daemon socket (Android only — iOS short-circuited above)
-  if (sessionName && loadDaemonInfo()) {
-    const command = cliArgs[0];
-    const positionals = cliArgs.slice(1);
-    try {
-      return await runViaDaemon(command, positionals, sessionName);
-    } catch {
-      // Daemon unavailable — fall through to CLI
-    }
-  }
-
-  const args = [...cliArgs, '--json'];
-  if (sessionName) {
-    args.push('--session', sessionName);
-  } else if (opts.platform) {
-    // B117/D638: when no session is open but a platform hint is provided (e.g. from
-    // CDPClient.connectedTarget.platform), pass --platform so agent-device doesn't
-    // default to whichever booted device it finds first. Avoids wrong-device
-    // screenshots when both iOS sim and Android emulator are booted.
-    args.push('--platform', opts.platform);
-  }
-
-  try {
-    const { stdout } = await execFile('agent-device', args, {
-      timeout: EXEC_TIMEOUT,
-      encoding: 'utf8',
-    });
-
-    let parsed: AgentDeviceJson;
-    try {
-      parsed = JSON.parse(stdout) as AgentDeviceJson;
-    } catch {
-      return failResult(`agent-device returned non-JSON: ${stdout.slice(0, 300)}`);
-    }
-
-    if (!parsed.success) {
-      const e = parsed.error;
-      return failResult(
-        e.message,
-        { code: e.code, ...(e.hint ? { hint: e.hint } : {}) },
-      );
-    }
-
-    return okResult(parsed.data ?? {});
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-
-    if (msg.includes('ENOENT') || msg.includes('not found')) {
-      return failResult(
-        'agent-device CLI not found. Install with: npm install -g agent-device',
-      );
-    }
-
-    // Detect timeout (SIGTERM from execFile timeout)
-    if (typeof err === 'object' && err !== null && 'killed' in err && (err as { killed?: boolean }).killed) {
-      return failResult(`agent-device timed out after ${EXEC_TIMEOUT / 1000}s`);
-    }
-
-    // Try to parse JSON from stdout on non-zero exit
-    if (typeof err === 'object' && err !== null && 'stdout' in err) {
-      const stdout = (err as { stdout: string }).stdout;
-      if (stdout) {
-        try {
-          const parsed = JSON.parse(stdout) as AgentDeviceJson;
-          if (parsed.success) {
-            return okResult(parsed.data ?? {});
-          }
-          const e = parsed.error;
-          return failResult(
-            e.message,
-            { code: e.code, ...(e.hint ? { hint: e.hint } : {}) },
-          );
-        } catch {
-          // Not JSON — fall through
-        }
-      }
-    }
-
-    return failResult(`agent-device error: ${msg}`);
-  }
+  // No native route for this verb (open/close/devices/find are handled by their
+  // own native tools; interaction verbs route via the iOS/Android short-circuits
+  // above). The agent-device daemon + CLI tiers were removed (eradicate-agent-device).
+  return failResult(
+    `No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`,
+    'NO_NATIVE_ROUTE',
+  );
 }
 
 export { runNative as runAgentDevice };
