@@ -2,6 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentDevice, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial } from '../runners/rn-android-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
@@ -47,7 +48,8 @@ export function releaseDeviceLockForSession() {
     }
 }
 export function deviceBusyMessage(deviceId, holder) {
-    return (`Simulator ${deviceId} is already owned by another rn-dev-agent bridge ` +
+    const label = holder.platform === 'android' ? 'Emulator/device' : 'Simulator';
+    return (`${label} ${deviceId} is already owned by another rn-dev-agent bridge ` +
         `(PID ${holder.pid}, project ${holder.projectRoot}` +
         `${holder.appId ? `, app ${holder.appId}` : ''}). ` +
         `Close that session or target a different simulator.`);
@@ -165,24 +167,33 @@ export function createDeviceSnapshotHandler() {
                     openedAt: new Date().toISOString(),
                     appId,
                 });
-                // GH#202 Phase 1.5: claim exclusive ownership of THIS simulator across
-                // bridge processes. The UDID is only known now (post-open). On conflict
-                // another project's bridge owns the sim — tear our just-opened session
-                // back down and refuse, rather than fight for foreground.
-                if (platform === 'ios' && deviceId) {
-                    const lockResult = acquireDeviceLockForSession('ios', deviceId, appId);
+                // GH#202 Phase 1.5 (iOS) + Task 5 (Android): claim exclusive ownership
+                // of THIS device across bridge processes. On conflict another project's
+                // bridge owns it — tear our just-opened session back down and refuse.
+                // Android: deviceId is filtered through UDID_RE and is always undefined
+                // for adb serials like "emulator-5554", so we resolve the serial
+                // independently via `adb devices` rather than keying on deviceId.
+                const lockPlatform = platform === 'android' ? 'android' : 'ios';
+                const lockDeviceId = lockPlatform === 'android'
+                    ? await resolveAndroidSerial(deviceId)
+                    : deviceId;
+                if (lockDeviceId) {
+                    // TODO(phase2): acquire the lock BEFORE the open side-effect once 'open' is resolved via simctl/adb instead of agent-device — spec D-e.
+                    const lockResult = acquireDeviceLockForSession(lockPlatform, lockDeviceId, appId);
                     if (lockResult.status === 'conflict') {
                         // Close FIRST — runAgentDevice derives `--session` from the active
                         // session, so clearing before closing would close the wrong (or no)
                         // session and leak the one we just opened (#202 review — blocker).
                         await runAgentDevice(['close']).catch(() => { });
                         clearActiveSession();
-                        stopFastRunner();
-                        const h = lockResult.holder;
-                        return failResult(deviceBusyMessage(deviceId, h), { code: 'DEVICE_BUSY', holder: h });
+                        if (lockPlatform === 'ios')
+                            stopFastRunner();
+                        else
+                            await stopAndroidRunner();
+                        return failResult(deviceBusyMessage(lockDeviceId, lockResult.holder), { code: 'DEVICE_BUSY', holder: lockResult.holder });
                     }
                     if (lockResult.degraded) {
-                        logger.warn('rn-device', `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
+                        logger.warn('rn-device', `Device-ownership lock unavailable (fs error) for ${lockDeviceId} — ` +
                             `cross-bridge contention protection is off this session.`);
                     }
                 }

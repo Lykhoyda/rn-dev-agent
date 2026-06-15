@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAdbForwardArgs, buildAdbForwardRemoveArgs, buildInstrumentPortArgs,
+  parseAdbDevicesSerials,
 } from '../../dist/runners/rn-android-runner-client.js';
 
 test('Android ports: adb forward maps probed hostPort → fixed devicePort', () => {
@@ -14,4 +15,8 @@ test('Android ports: instrumentation receives the DEVICE port, not the host port
 test('Android ports: forward --remove targets the host port', () => {
   assert.deepEqual(buildAdbForwardRemoveArgs('emulator-5554', 41001),
     ['-s', 'emulator-5554', 'forward', '--remove', 'tcp:41001']);
+});
+test('parseAdbDevicesSerials: extracts only online device serials', () => {
+  const out = 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\toffline\n\n';
+  assert.deepEqual(parseAdbDevicesSerials(out), ['emulator-5554']);
 });

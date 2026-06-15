@@ -108,6 +108,23 @@ export function _setAndroidRunnerStateForTest(state: AndroidRunnerState | null):
   runnerState = state;
 }
 
+export function parseAdbDevicesSerials(stdout: string): string[] {
+  return stdout.split('\n').slice(1)
+    .map((l) => l.trim())
+    .filter((l) => l.endsWith('\tdevice'))
+    .map((l) => l.split('\t')[0]);
+}
+
+export async function resolveAndroidSerial(explicit?: string): Promise<string | undefined> {
+  if (explicit) return explicit;
+  if (process.env.ANDROID_SERIAL) return process.env.ANDROID_SERIAL;
+  try {
+    const { stdout } = await execFileAsync('adb', ['devices']);
+    const serials = parseAdbDevicesSerials(stdout);
+    return serials.length === 1 ? serials[0] : undefined;
+  } catch { return undefined; }
+}
+
 function adbSerialArgs(deviceId?: string): string[] {
   if (deviceId) return ['-s', deviceId];
   if (process.env.ANDROID_SERIAL) return ['-s', process.env.ANDROID_SERIAL];
