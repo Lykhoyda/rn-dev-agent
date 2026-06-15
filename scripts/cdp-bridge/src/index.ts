@@ -621,7 +621,7 @@ trackedTool(
   createCollectLogsHandler(getClient),
 );
 
-// --- agent-device tools (native device interaction) ---
+// --- device tools (native interaction via in-tree runners) ---
 
 trackedTool(
   'device_list',
@@ -695,14 +695,14 @@ trackedTool(
 
 trackedTool(
   'device_swipe',
-  'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true to require fast-runner (precise unclamped duration) — needed for momentum-sensitive UIs like UIDatePicker wheels where the agent-device daemon\'s safe-normalized 60ms cap causes overshoot. Requires an open session.',
+  'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true for a precise unclamped gesture duration via the in-tree runner — needed for momentum-sensitive UIs like UIDatePicker wheels where a normalized/clamped duration causes overshoot. Requires an open session.',
   {
     direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('Simple directional swipe (delegates to scroll)'),
     x1: z.number().optional().describe('Start X coordinate (use with y1, x2, y2 for precise swipes)'),
     y1: z.number().optional().describe('Start Y coordinate'),
     x2: z.number().optional().describe('End X coordinate'),
     y2: z.number().optional().describe('End Y coordinate'),
-    durationMs: z.number().int().min(50).max(10000).optional().describe('Swipe duration in ms (slower = more precise, default ~300). Note: agent-device daemon caps at ~60ms via safe-normalized timing — use exact: true to bypass.'),
+    durationMs: z.number().int().min(50).max(10000).optional().describe('Swipe duration in ms (slower = more precise, default ~300). Note: the non-exact path may normalize/clamp very short durations — use exact: true for an unclamped duration.'),
     count: z.number().int().min(1).max(50).optional().describe('Repeat swipe N times (incompatible with exact: true)'),
     pattern: z.enum(['one-way', 'ping-pong']).optional().describe('Repeat pattern: one-way (reset to start) or ping-pong (reverse direction). Incompatible with exact: true.'),
     exact: z.boolean().optional().describe('B123: REQUIRE fast-runner (no daemon fallback). Preserves user-supplied durationMs verbatim — needed for slow precise swipes on UIDatePicker wheels and similar momentum-sensitive UIs. Fails with EXACT_REQUIRES_FAST_RUNNER if fast-runner unavailable instead of silently degrading.'),
