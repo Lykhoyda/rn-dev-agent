@@ -1,16 +1,18 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
-  runAgentDevice,
+  runNative,
   setActiveSession,
   clearActiveSession,
   getActiveSession,
   ensureFastRunner,
+  ensureRunnerForCommand,
   cacheSnapshot,
   getAdbSerial,
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial } from '../runners/rn-android-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner } from '../runners/rn-android-runner-client.js';
+import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
@@ -75,6 +77,8 @@ type SnapshotAction = 'open' | 'close' | 'snapshot';
 interface SnapshotArgs {
   action: SnapshotAction;
   appId?: string;
+  /** Explicit device UDID (iOS) or adb serial (Android). Auto-resolved when omitted. */
+  deviceId?: string;
   platform?: string;
   sessionName?: string;
   /**
@@ -166,12 +170,13 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         );
       }
 
-      // Warn when targeting Expo Go — agent-device steals focus from Expo Go (B71)
+      // Refuse Expo Go — the in-tree device runner needs a Dev Client or
+      // standalone build and cannot drive Expo Go.
       const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];
       if (EXPO_GO_BUNDLES.includes(appId)) {
         return failResult(
-          'agent-device is incompatible with Expo Go — it steals foreground focus (B71). ' +
-          'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) and xcrun simctl for screenshots instead.',
+          'Expo Go is not supported — the in-tree device runner needs a Dev Client or standalone build. ' +
+          'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.',
           { hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.' },
         );
       }
@@ -182,192 +187,187 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       // iOS session, so normalize here and gate the iOS-only lock on this rather
       // than checking raw args.platform directly (which would silently skip the lock when omitted).
       const platform = (args.platform ?? 'ios').toLowerCase();
+      const lockPlatform: 'ios' | 'android' = platform === 'android' ? 'android' : 'ios';
+
+      // GH#202 Phase 2 Task 4: resolve device id NATIVELY (no agent-device).
+      const deviceId = lockPlatform === 'android'
+        ? await resolveAndroidSerial(args.deviceId)
+        : await resolveIosUdid(args.deviceId);
+      if (!deviceId) {
+        return failResult(
+          `No booted ${platform} device found (or multiple booted — pass deviceId explicitly).`,
+          'NOT_CONNECTED',
+        );
+      }
+
+      // GH#202 Phase 1.5 / Task 4: acquire the lock BEFORE any side-effect.
+      // On conflict, nothing has been launched yet — no teardown needed.
+      const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
+      if (lockResult.status === 'conflict') {
+        return failResult(
+          deviceBusyMessage(deviceId, lockResult.holder),
+          { code: 'DEVICE_BUSY', holder: lockResult.holder },
+        );
+      }
+      if (lockResult.degraded) {
+        logger.warn(
+          'rn-device',
+          `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
+          `cross-bridge contention protection is off this session.`,
+        );
+      }
 
       // B112 (D641): attachOnly mode — skip the app launch when the user knows
       // the app is already running. Avoids the unconditional relaunch that
       // invalidates CDP sessions and can race Metro bundle loading.
-      let cliArgs: string[];
       if (args.attachOnly) {
-        const running = await isAppRunning(args.platform, appId);
+        const running = await isAppRunning(platform, appId);
         if (!running) {
+          releaseDeviceLockForSession();
           return failResult(
-            `attachOnly=true but ${appId} is not running on ${args.platform ?? 'ios'}. Launch it manually (e.g. xcrun simctl launch / adb monkey) or drop attachOnly to let the session opener launch it.`,
+            `attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`,
             'NOT_CONNECTED',
           );
         }
-        cliArgs = ['open', '--session', sessionName];
-      } else {
-        cliArgs = ['open', appId, '--session', sessionName];
       }
-      if (args.platform) cliArgs.push('--platform', args.platform);
 
-      const result = await runAgentDevice(cliArgs, { skipSession: true });
+      // Ensure runner + launch. Any failure releases the lock before returning.
+      try {
+        if (lockPlatform === 'ios') {
+          // ensureRunnerForCommand re-probes liveness and returns a clean
+          // {ok:false,message} when the XCUITest rig can't come up (ensureFastRunner
+          // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
+          // here instead of falsely reporting success against an un-prebuilt rig.
+          const ready = await ensureRunnerForCommand(deviceId, appId);
+          if (!ready.ok) {
+            releaseDeviceLockForSession();
+            return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+          }
+          // A bare simctl launch foregrounds a running PID without relaunch —
+          // safe whether or not attachOnly; ignore errors (app may be frontmost).
+          await execFile('xcrun', ['simctl', 'launch', deviceId, appId], { timeout: 10_000, encoding: 'utf8' })
+            .catch(() => { /* already frontmost is OK */ });
+        } else {
+          await startAndroidRunner(deviceId, appId);
+          if (!args.attachOnly) {
+            await execFile('adb', ['-s', deviceId, 'shell', 'monkey', '-p', appId, '-c', 'android.intent.category.LAUNCHER', '1'], { timeout: 10_000, encoding: 'utf8' });
+          }
+        }
+      } catch (err) {
+        releaseDeviceLockForSession();
+        const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
+        return failResult(
+          `Failed to start device runner: ${err instanceof Error ? err.message : String(err)}`,
+          code,
+        );
+      }
 
-      if (!result.isError) {
-        let deviceId: string | undefined;
+      // Set session LAST — only after lock + runner + launch all succeeded.
+      setActiveSession({
+        name: sessionName,
+        platform,
+        deviceId,
+        openedAt: new Date().toISOString(),
+        appId,
+      });
+
+      // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
+      // the wedge-recovery budget. Placed AFTER the device-lock conflict
+      // early-return so a refused DEVICE_BUSY open does NOT reset it.
+      resetWedgeRecoveryCounter();
+      resetDetachedRecoveryCounter(); // GH #208 (RC3): fresh session clears the auto-relaunch budget too
+
+      // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
+      // known here (device-open), so scope-kill any stale AgentDeviceRunner
+      // targeting THIS simulator and clear orphaned daemon lock files.
+      // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
+      if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && platform === 'ios' && deviceId) {
         try {
-          const envelope = JSON.parse(result.content[0].text);
-          const data = envelope?.data;
-          // agent-device `open` response shape (v0.8.0):
-          //   data.id = device UDID (top-level)
-          //   data.device_udid = UDID (duplicate)
-          //   data.device = device NAME (string, e.g. "iPhone 17 Pro") — NOT an object
-          //   data.deviceId = legacy field (older agent-device)
-          // B107 fix: also read data.id / data.device_udid / (data.device.id when object).
-          const rawId = data?.deviceId
-            ?? data?.device_udid
-            ?? data?.id
-            ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
-          const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
-          deviceId = typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
-        } catch { /* best-effort */ }
-        setActiveSession({
-          name: sessionName,
-          platform,
-          deviceId,
-          openedAt: new Date().toISOString(),
-          appId,
-        });
-
-        // GH#202 Phase 1.5 (iOS) + Task 5 (Android): claim exclusive ownership
-        // of THIS device across bridge processes. On conflict another project's
-        // bridge owns it — tear our just-opened session back down and refuse.
-        // Android: deviceId is filtered through UDID_RE and is always undefined
-        // for adb serials like "emulator-5554", so we resolve the serial
-        // independently via `adb devices` rather than keying on deviceId.
-        const lockPlatform: 'ios' | 'android' = platform === 'android' ? 'android' : 'ios';
-        const lockDeviceId = lockPlatform === 'android'
-          ? await resolveAndroidSerial(deviceId)
-          : deviceId;
-        if (lockDeviceId) {
-          // TODO(phase2): acquire the lock BEFORE the open side-effect once 'open' is resolved via simctl/adb instead of agent-device — spec D-e.
-          const lockResult = acquireDeviceLockForSession(lockPlatform, lockDeviceId, appId);
-          if (lockResult.status === 'conflict') {
-            // Close FIRST — runAgentDevice derives `--session` from the active
-            // session, so clearing before closing would close the wrong (or no)
-            // session and leak the one we just opened (#202 review — blocker).
-            await runAgentDevice(['close']).catch(() => { /* best-effort teardown */ });
-            clearActiveSession();
-            if (lockPlatform === 'ios') stopFastRunner(); else await stopAndroidRunner(lockDeviceId);
-            return failResult(
-              deviceBusyMessage(lockDeviceId, lockResult.holder),
-              { code: 'DEVICE_BUSY', holder: lockResult.holder },
-            );
+          const r = await ensureSingleRunner({ udid: deviceId });
+          if (r.killedPids.length) {
+            logger.info('rn-device', `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`);
           }
-          if (lockResult.degraded) {
-            logger.warn(
-              'rn-device',
-              `Device-ownership lock unavailable (fs error) for ${lockDeviceId} — ` +
-              `cross-bridge contention protection is off this session.`,
-            );
+          if (r.removedFiles.length) {
+            logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
           }
-        }
-
-        // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
-        // the wedge-recovery budget. Placed AFTER the device-lock conflict
-        // early-return so a refused DEVICE_BUSY open does NOT reset it.
-        resetWedgeRecoveryCounter();
-        resetDetachedRecoveryCounter(); // GH #208 (RC3): fresh session clears the auto-relaunch budget too
-
-        // GH#202 Phase 1: enforce a single iOS interaction runner. The UDID is
-        // known here (device-open), so scope-kill any stale AgentDeviceRunner
-        // targeting THIS simulator and clear orphaned daemon lock files.
-        // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
-        if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && platform === 'ios' && deviceId) {
-          // Await: the stale-runner kill (SIGTERM → 500ms grace → SIGKILL) must
-          // finish BEFORE the session is usable, or the first device_* command
-          // races it and a stale AgentDeviceRunner can still steal focus —
-          // which is exactly the single-runner guarantee #202 promises. The
-          // added latency lands on an already-slow session-open, not per-command.
-          try {
-            const r = await ensureSingleRunner({ udid: deviceId });
-            if (r.killedPids.length) {
-              logger.info('rn-device', `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`);
-            }
-            if (r.removedFiles.length) {
-              logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
-            }
-            if (r.removedApps.length) {
-              logger.info('rn-device', `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(', ')} from ${deviceId}`);
-            }
-            for (const w of r.warnings) logger.warn('rn-device', w);
-          } catch (err) {
-            logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
+          if (r.removedApps.length) {
+            logger.info('rn-device', `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(', ')} from ${deviceId}`);
           }
-        }
-
-        // Task 9 of Android-MVP: warn on competing Android UIAutomator /
-        // agent-device processes that would contend for input + focus with
-        // our rn-android-runner. Fires by default (Task 11 flipped the
-        // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
-        if (args.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
-          detectAndroidExternalRunner(undefined, getAdbSerial())
-            .then((warning) => {
-              if (!warning) return;
-              logger.warn('rn-device', warning.message);
-              for (const line of warning.processLines) {
-                logger.warn('rn-device', `  ${line.trim()}`);
-              }
-            })
-            .catch(() => { /* non-fatal */ });
-        }
-
-        if (platform === 'ios' && deviceId) {
-          ensureFastRunner(deviceId, appId).catch(() => { /* non-fatal */ });
-          // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
-          // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
-          // Fire-and-forget: a hung simctl must never stall session-open (up to
-          // 3×5s timeouts), and the result is consumed only for warning logs.
-          suppressIOSAutocorrect(deviceId)
-            .then((sup) => {
-              if (sup.warnings.length) logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
-            })
-            .catch(() => { /* fail-open: never block session-open on keyboard prefs */ });
-        }
-
-        // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
-        // Skip when opted out, or when WE hold the flow lease (a detected maestro
-        // driver is then our own L3 run — external opens are already refused
-        // BUSY_FLOW_ACTIVE upstream; this guard covers composite/internal callers).
-        // UDID-scoped + best-effort: the detector never throws (can't fail the
-        // open); its ≤2s latency is surfaced in meta.timings_ms.
-        let foreign: ReturnType<typeof foreignRunnerNotice> = null;
-        let foreignDetectMs: number | undefined;
-        if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
-          const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
-          if (!flowHeld) {
-            const t0 = Date.now();
-            const detection = await detectIosExternalRunner(undefined, deviceId);
-            foreignDetectMs = Date.now() - t0;
-            foreign = foreignRunnerNotice(detection, false);
-          }
-          if (foreign) {
-            logger.warn('rn-device', foreign.warning);
-            for (const line of foreign.meta.foreignRunner.processLines) {
-              logger.warn('rn-device', `  ${line}`);
-            }
-          }
-        }
-
-        if (autoDetected || foreign) {
-          const data = JSON.parse(result.content[0].text).data;
-          const warning = [
-            autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
-            foreign ? foreign.warning : null,
-          ].filter(Boolean).join('; ');
-          const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
-          if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
-          return warnResult(data, warning, meta);
+          for (const w of r.warnings) logger.warn('rn-device', w);
+        } catch (err) {
+          logger.warn('rn-device', `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
-      return result;
+      // Task 9 of Android-MVP: warn on competing Android UIAutomator /
+      // agent-device processes that would contend for input + focus with
+      // our rn-android-runner. Fires by default (Task 11 flipped the
+      // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
+      if (platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
+        detectAndroidExternalRunner(undefined, getAdbSerial())
+          .then((warning) => {
+            if (!warning) return;
+            logger.warn('rn-device', warning.message);
+            for (const line of warning.processLines) {
+              logger.warn('rn-device', `  ${line.trim()}`);
+            }
+          })
+          .catch(() => { /* non-fatal */ });
+      }
+
+      if (platform === 'ios') {
+        // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
+        // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
+        // Fire-and-forget: a hung simctl must never stall session-open (up to
+        // 3×5s timeouts), and the result is consumed only for warning logs.
+        suppressIOSAutocorrect(deviceId)
+          .then((sup) => {
+            if (sup.warnings.length) logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
+          })
+          .catch(() => { /* fail-open: never block session-open on keyboard prefs */ });
+      }
+
+      // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
+      // Skip when opted out, or when WE hold the flow lease (a detected maestro
+      // driver is then our own L3 run — external opens are already refused
+      // BUSY_FLOW_ACTIVE upstream; this guard covers composite/internal callers).
+      // UDID-scoped + best-effort: the detector never throws (can't fail the
+      // open); its ≤2s latency is surfaced in meta.timings_ms.
+      let foreign: ReturnType<typeof foreignRunnerNotice> = null;
+      let foreignDetectMs: number | undefined;
+      if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
+        const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
+        if (!flowHeld) {
+          const t0 = Date.now();
+          const detection = await detectIosExternalRunner(undefined, deviceId);
+          foreignDetectMs = Date.now() - t0;
+          foreign = foreignRunnerNotice(detection, false);
+        }
+        if (foreign) {
+          logger.warn('rn-device', foreign.warning);
+          for (const line of foreign.meta.foreignRunner.processLines) {
+            logger.warn('rn-device', `  ${line}`);
+          }
+        }
+      }
+
+      const data = { ok: true, sessionName, platform, deviceId, appId };
+      if (autoDetected || foreign) {
+        const warning = [
+          autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
+          foreign ? foreign.warning : null,
+        ].filter(Boolean).join('; ');
+        const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
+        if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
+        return warnResult(data, warning, meta);
+      }
+      return okResult(data);
     }
 
     if (action === 'close') {
       return closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
-        closeUnderlyingSession: () => runAgentDevice(['close']),
+        closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
         stopFastRunner,
         stopAndroidRunner,
@@ -400,10 +400,10 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // ref-map is stale (from pre-recovery) OR non-existent (after fresh
           // session open), and fast-runner serves the (ref-less) snapshot.
           closeSession: async () => {
-            const closeResult = await runAgentDevice(['close']);
             clearActiveSession(); // also clears refMap via its side-effect
             stopFastRunner();
-            return closeResult;
+            await stopAndroidRunner();
+            return okResult({ closed: true });
           },
           openSession: ({ appId, platform, attachOnly }) =>
             reopenSessionForRecovery(appId, platform, attachOnly),
@@ -489,7 +489,7 @@ async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<T
 }
 
 async function rawSnapshot(): Promise<ToolResult> {
-  return runAgentDevice(['snapshot', '-i']);
+  return runNative(['snapshot', '-i']);
 }
 
 function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
@@ -537,48 +537,20 @@ export async function reopenSessionForRecovery(
   attachOnly: boolean,
 ): Promise<ToolResult> {
   // Always mint a fresh recovery name (Gemini G3): reusing the original
-  // session name risks the daemon either rejecting as "already exists" or
-  // silently re-attaching to the corrupted session, defeating the rebuild.
+  // session name risks silently re-attaching to the corrupted session.
   const recoveryName = `rn-agent-recovery-${Date.now()}`;
 
-  let cliArgs: string[];
-  if (attachOnly) {
-    // attachOnly only makes sense if the target app is already running.
-    // Otherwise there's nothing to attach to and we should let the caller
-    // escalate (typically to the full-relaunch tier).
-    const running = await isAppRunning(platform, appId);
-    if (!running) {
-      return failResult(
-        `attachOnly recovery aborted: ${appId} is not running on ${platform}.`,
-        { code: 'NOT_CONNECTED', recoveryAbort: true },
-      );
-    }
-    cliArgs = ['open', '--session', recoveryName, '--platform', platform];
-  } else {
-    cliArgs = ['open', appId, '--session', recoveryName, '--platform', platform];
-  }
-
-  const result = await runAgentDevice(cliArgs, { skipSession: true });
-  if (result.isError) return result;
-
-  let deviceId: string | undefined;
-  try {
-    const envelope = JSON.parse(result.content[0].text);
-    const data = envelope?.data;
-    const rawId = data?.deviceId
-      ?? data?.device_udid
-      ?? data?.id
-      ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
-    const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
-    deviceId = typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
-  } catch { /* best-effort */ }
-
-  setActiveSession({
-    name: recoveryName,
-    platform,
-    deviceId,
-    openedAt: new Date().toISOString(),
+  // Delegate to the native open path (Phase 2 Task 4): resolve device → acquire
+  // lock → ensure runner → launch → set session. The recovery closeSession
+  // intentionally left our device lock held; the native open re-acquires it
+  // cleanly (acquireDeviceLockForSession releases any prior same-process lock
+  // first), so there is no self-DEVICE_BUSY. This replaces the old
+  // agent-device `open` RPC + envelope/UDID_RE parse.
+  return createDeviceSnapshotHandler()({
+    action: 'open',
     appId,
+    platform: platform as SnapshotArgs['platform'],
+    attachOnly,
+    sessionName: recoveryName,
   });
-  return result;
 }

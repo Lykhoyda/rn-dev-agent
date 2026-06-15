@@ -137,27 +137,39 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
   const {
     _setRunAgentDeviceForTest,
     _resetRunAgentDeviceForTest,
+    _setFetchCandidatesForTest,
+    _resetFetchCandidatesForTest,
+    _setPressCandidateForTest,
+    _resetPressCandidateForTest,
     _setHasSessionForTest,
     _resetHasSessionForTest,
     dismissPicker,
   } = await import(MOD_PATH);
   _setHasSessionForTest(true);
   let pickerCheckCalls = 0;
+  // snapshot still goes through runAgentDeviceFn
   _setRunAgentDeviceForTest(async (args) => {
     if (args[0] === 'snapshot') {
       return { content: [{ type: 'text', text: 'Development servers\n192.168.1.5:8081' }] };
     }
-    if (args[0] === 'find' && args[1] === '192.168.1.5:8081' && args[2] === 'click') {
-      return { content: [{ type: 'text', text: 'tapped' }] };
-    }
-    if (args[0] === 'find' && args[1] === 'Development servers') {
+    return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
+  });
+  // find calls now go through fetchCandidatesFn
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers') {
       pickerCheckCalls++;
       // First call: pre-tap auto-advance probe — picker still showing.
       // Subsequent: waitForBundle — picker is gone after tap.
-      if (pickerCheckCalls === 1) return { content: [{ type: 'text', text: 'still showing' }] };
-      return { isError: true, content: [{ type: 'text', text: 'not found' }] };
+      if (pickerCheckCalls === 1) return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+      return { ok: true, candidates: [] };
     }
-    return { isError: true, content: [{ type: 'text', text: 'unhandled' }] };
+    if (text === '192.168.1.5:8081') {
+      return { ok: true, candidates: [{ ref: 'e2', label: '192.168.1.5:8081' }] };
+    }
+    return { ok: true, candidates: [] };
+  });
+  _setPressCandidateForTest(async (_candidate, _action) => {
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { pressed: true } }) }] };
   });
   try {
     const result = await dismissPicker();
@@ -165,6 +177,8 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
     assert.match(result.reason, /192\.168\.1\.5:8081/);
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
+    _resetPressCandidateForTest();
     _resetHasSessionForTest();
   }
 });
@@ -173,20 +187,28 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
   const {
     _setRunAgentDeviceForTest,
     _resetRunAgentDeviceForTest,
+    _setFetchCandidatesForTest,
+    _resetFetchCandidatesForTest,
     _setHasSessionForTest,
     _resetHasSessionForTest,
     dismissPicker,
   } = await import(MOD_PATH);
   _setHasSessionForTest(true);
+  // snapshot goes through runAgentDeviceFn
   _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && args[1] === 'Development servers') {
-      // Auto-advance probe — picker still showing so we proceed to snapshot.
-      return { content: [{ type: 'text', text: 'still showing' }] };
-    }
     if (args[0] === 'snapshot') {
       return { content: [{ type: 'text', text: 'No picker visible' }] };
     }
     return { isError: true, content: [{ type: 'text', text: 'no match' }] };
+  });
+  // find calls: auto-advance probe sees picker showing; no target found after snapshot
+  _setFetchCandidatesForTest(async (_text) => {
+    if (_text === 'Development servers') {
+      // Auto-advance probe — picker still showing so we proceed to snapshot.
+      return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+    }
+    // No server entry found in snapshot text
+    return { ok: true, candidates: [] };
   });
   try {
     const result = await dismissPicker();
@@ -194,6 +216,7 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
     assert.match(result.reason, /could not find a server entry/i);
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }
 });
@@ -203,13 +226,13 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
 // ── waitForBundle: cadence — fast-then-slow polling ──────────────────
 
 test('waitForBundle: returns within 500ms when picker dismissed quickly', async () => {
-  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, waitForBundle } = await import(MOD_PATH);
+  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(MOD_PATH);
   let calls = 0;
-  _setRunAgentDeviceForTest(async (_args) => {
+  _setFetchCandidatesForTest(async (_text) => {
     calls++;
     // First call (~100ms in): still loading. Second call (~200ms in): bundle loaded.
-    if (calls < 2) return { content: [{ type: 'text', text: 'Development servers' }] };
-    return { isError: true, content: [{ type: 'text', text: 'gone' }] };
+    if (calls < 2) return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+    return { ok: true, candidates: [] };
   });
   try {
     const start = Date.now();
@@ -218,21 +241,21 @@ test('waitForBundle: returns within 500ms when picker dismissed quickly', async 
     assert.ok(elapsed < 500, `waitForBundle should complete fast in single-server case; took ${elapsed}ms`);
     assert.ok(calls >= 2, `waitForBundle should poll at least twice; saw ${calls} calls`);
   } finally {
-    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
   }
 });
 
 test('waitForBundle: bounded by ~10s wall-clock budget', async () => {
-  const { _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest, waitForBundle } = await import(MOD_PATH);
+  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(MOD_PATH);
   // Always-loading mock: picker text always present.
-  _setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: 'Development servers' }] }));
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] }));
   try {
     const start = Date.now();
     await waitForBundle();
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 12_000, `waitForBundle should give up within ~10s; took ${elapsed}ms`);
   } finally {
-    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
   }
 });
 
@@ -240,25 +263,30 @@ test('handleDevClientPicker: returns success without tap when picker auto-advanc
   const {
     _setRunAgentDeviceForTest,
     _resetRunAgentDeviceForTest,
+    _setFetchCandidatesForTest,
+    _resetFetchCandidatesForTest,
     _setHasSessionForTest,
     _resetHasSessionForTest,
     handleDevClientPicker,
   } = await import(MOD_PATH);
   let detectCalls = 0;
   _setHasSessionForTest(true);
+  // snapshot should not be reached in auto-advance case
   _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'find' && args[1] === 'Development servers') {
-      detectCalls++;
-      // First call: picker visible (find succeeds, handleDevClientPicker proceeds).
-      // Second call (re-check inside dismissPicker): picker gone (find fails).
-      if (detectCalls === 1) return { content: [{ type: 'text', text: 'found' }] };
-      return { isError: true, content: [{ type: 'text', text: 'gone' }] };
-    }
     if (args[0] === 'snapshot') {
-      // Should not be reached if auto-advance is detected before snapshot.
       return { content: [{ type: 'text', text: 'No picker visible' }] };
     }
     return { isError: true, content: [{ type: 'text', text: 'unexpected call' }] };
+  });
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers') {
+      detectCalls++;
+      // First call: picker visible (handleDevClientPicker proceeds to dismissPicker).
+      // Second call (re-check inside dismissPicker.isDevClientPickerShowing): picker gone.
+      if (detectCalls === 1) return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+      return { ok: true, candidates: [] };
+    }
+    return { ok: true, candidates: [] };
   });
   try {
     const result = await handleDevClientPicker();
@@ -266,6 +294,7 @@ test('handleDevClientPicker: returns success without tap when picker auto-advanc
     assert.match(result?.reason ?? '', /auto-advanced/i);
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }
 });

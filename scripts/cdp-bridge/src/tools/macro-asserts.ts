@@ -15,7 +15,7 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
-import { runAgentDevice } from '../agent-device-wrapper.js';
+import { runNative } from '../agent-device-wrapper.js';
 import { findRefByTestID, snapshotEnvelopeFailed } from './device-batch.js';
 
 /**
@@ -433,7 +433,7 @@ export function createExpectVisibleByTestIDHandler() {
       | { kind: 'resolved'; ref: string | null };
 
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
-      const result = await runAgentDevice(['snapshot', '-i']);
+      const result = await runNative(['snapshot', '-i']);
       const envelope = result.content?.[0]?.text ?? '';
       // Phase 128 (post-review #5): peek ok flag BEFORE computing
       // visibility — distinguishes infrastructure failure from "not present"
@@ -521,7 +521,7 @@ export function createExpectTextHandler() {
       | { kind: 'resolved'; refs: string[] };
 
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
-      const result = await runAgentDevice(['snapshot', '-i']);
+      const result = await runNative(['snapshot', '-i']);
       const envelope = result.content?.[0]?.text ?? '';
       // Phase 128 (post-review #5): same snapshot-failure peek as
       // expect_visible_by_testid. exists:false would otherwise silent-pass.

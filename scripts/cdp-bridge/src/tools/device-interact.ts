@@ -1,7 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runAgentDevice, getActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
-import { isFastRunnerAvailable, fastSwipe } from '../runners/rn-fast-runner-client.js';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
+import { isFastRunnerAvailable, fastSwipe, stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
@@ -28,7 +29,7 @@ interface SnapshotNode {
   rect?: { x: number; y: number; width: number; height: number };
 }
 
-interface FindCandidate {
+export interface FindCandidate {
   ref: string;
   label?: string;
   testID?: string;
@@ -132,7 +133,7 @@ export type SnapshotFetchResult =
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
 async function fetchSnapshotNodes(): Promise<SnapshotFetchResult> {
-  const first = await runAgentDevice(['snapshot', '-i']);
+  const first = await runNative(['snapshot', '-i']);
   const initialNodes = parseSnapshotEnvelope(first);
   if (initialNodes === null) return { ok: false, reason: 'fetch-failed' };
 
@@ -146,10 +147,10 @@ async function fetchSnapshotNodes(): Promise<SnapshotFetchResult> {
   const recovery = await recoverFromRunnerLeak(
     { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
     {
-      closeSession: () => runAgentDevice(['close']),
+      closeSession: async () => { clearActiveSession(); stopFastRunner(); await stopAndroidRunner(); return okResult({ closed: true }); },
       openSession: ({ appId, platform, attachOnly }) =>
         reopenSessionForRecovery(appId, platform, attachOnly),
-      resnapshot: () => runAgentDevice(['snapshot', '-i']),
+      resnapshot: () => runNative(['snapshot', '-i']),
       parseNodes: parseSnapshotEnvelope,
     },
   );
@@ -171,7 +172,7 @@ export type FindCandidatesResult =
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
-async function fetchFindCandidates(query: string, exact: boolean): Promise<FindCandidatesResult> {
+export async function fetchFindCandidates(query: string, exact = false): Promise<FindCandidatesResult> {
   const snap = await fetchSnapshotNodes();
   if (!snap.ok) return snap;
 
@@ -203,10 +204,10 @@ function runnerLeakFailResult(query: string | undefined, recoveryReason?: string
   );
 }
 
-async function pressCandidate(candidate: FindCandidate, action?: string): Promise<ToolResult> {
+export async function pressCandidate(candidate: FindCandidate, action?: string): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    return runAgentDevice(['press', ref]);
+    return runNative(['press', ref]);
   }
   return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -284,7 +285,7 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
     // always and on Android (default-on; opt-out via RN_ANDROID_RUNNER=0).
     // The legacy CLI path would respawn the upstream agent-device daemon,
     // which fights our in-tree runner for focus / UIAutomator. Using
-    // runAgentDevice + fetchFindCandidates keeps us on the platform-aware
+    // runNative + fetchFindCandidates keeps us on the platform-aware
     // short-circuit.
     const activeSession = getActiveSession();
     const usesInTreeRunner =
@@ -324,89 +325,10 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
       );
     }
 
-    const cliArgs = ['find', args.text];
-    if (args.action) cliArgs.push(args.action);
-    const result = await runAgentDevice(cliArgs);
-
-    // B92 fix: On AMBIGUOUS_MATCH, fetch a snapshot and return disambiguation candidates.
-    if (result.isError) {
-      const text = result.content?.[0]?.text ?? '';
-      if (text.includes('AMBIGUOUS_MATCH') || (text.includes('matched') && text.includes('elements'))) {
-        const find = await fetchFindCandidates(args.text, false);
-        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.ok) {
-          const candidates = find.candidates;
-          return failResult(
-            `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`,
-            {
-              code: 'AMBIGUOUS_MATCH',
-              query: args.text,
-              candidates,
-              hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
-            },
-          );
-        }
-      }
-
-      // GH #60 Bug 7: Maestro/agent-device daemon timeouts leave callers
-      // staring at "Daemon error: daemon timeout" with no obvious recovery.
-      // Try the snapshot-based fuzzy path as a self-recovery before giving up
-      // — it routes through agent-device's daemon-less snapshot tier (or its
-      // CLI fallback) and delivers a usable result without the user needing
-      // to know the workaround.
-      if (isDaemonTimeoutError(text)) {
-        const find = await fetchFindCandidates(args.text, false);
-        if (!find.ok && find.reason === 'runner-leak-unrecovered') {
-          return runnerLeakFailResult(args.text, find.recoveryReason);
-        }
-        if (find.ok) {
-          const candidates = find.candidates;
-          if (candidates.length === 0) {
-            return failResult(
-              `No element matches "${args.text}". Original daemon timeout: ${truncate(text, 200)}`,
-              {
-                code: 'NOT_FOUND',
-                query: args.text,
-                recovered_via: 'snapshot_fallback_after_daemon_timeout',
-                hint: 'agent-device daemon timed out; recovered via snapshot but found no matches. Try cdp_interact with a testID instead.',
-              },
-            );
-          }
-          if (candidates.length === 1) {
-            const pressed = tagPressIfRecovered(
-              await pressCandidate(candidates[0], args.action),
-              find.recoveredTier,
-            );
-            return mergeMeta(pressed, {
-              recovered_via: 'snapshot_fallback_after_daemon_timeout',
-              note: 'agent-device daemon timed out; recovered via snapshot-based match. If this repeats, restart the daemon (`agent-device daemon restart`) or use cdp_interact for testID-based interactions.',
-            });
-          }
-          return failResult(
-            `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements (recovered via snapshot after daemon timeout).`,
-            {
-              code: 'AMBIGUOUS_MATCH',
-              query: args.text,
-              candidates,
-              recovered_via: 'snapshot_fallback_after_daemon_timeout',
-              hint: 'Pass index: N or use device_press(ref="...") directly. The snapshot fallback succeeded, but the daemon itself remains unhealthy — consider restarting it.',
-            },
-          );
-        }
-        // Snapshot fallback also failed — surface both error sources.
-        return failResult(
-          `agent-device daemon timed out AND snapshot fallback failed. Original: ${truncate(text, 200)}`,
-          {
-            code: 'DAEMON_TIMEOUT',
-            query: args.text,
-            hint: 'Restart the daemon (`agent-device daemon restart`) and retry, or fall back to cdp_interact with a testID.',
-          },
-        );
-      }
-    }
-    return result;
+    return failResult(
+      `device_find requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${(activeSession as { platform?: string } | null)?.platform ?? 'none'}.`,
+      { code: 'IN_TREE_RUNNER_REQUIRED', platform: (activeSession as { platform?: string } | null)?.platform ?? null },
+    );
   });
 }
 
@@ -494,7 +416,7 @@ export function createDevicePressHandler(): (args: PressArgs) => Promise<ToolRes
     if (args.doubleTap) cliArgs.push('--double-tap');
     if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
     if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
-    const result = await runAgentDevice(cliArgs);
+    const result = await runNative(cliArgs);
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
       await new Promise((r) => setTimeout(r, args.waitForFocusMs));
     }
@@ -516,12 +438,12 @@ export function createDeviceLongPressHandler(): (args: LongPressArgs) => Promise
     if (args.ref) {
       const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
       const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
-      return runAgentDevice(cliArgs);
+      return runNative(cliArgs);
     }
     if (args.x != null && args.y != null) {
       const cliArgs = ['longpress', String(args.x), String(args.y)];
       if (args.durationMs) cliArgs.push(String(args.durationMs));
-      return runAgentDevice(cliArgs);
+      return runNative(cliArgs);
     }
     return Promise.resolve(failResult('Provide either ref or x+y coordinates'));
   });
@@ -691,7 +613,7 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
     // Android workaround path: press + chunked adb input. Short-circuits — no fallback
     // chain needed because the Android path is already a fallback for agent-device fill.
     if (needsAndroidWorkaround) {
-      const pressResult = await runAgentDevice(['press', ref]);
+      const pressResult = await runNative(['press', ref]);
       if (pressResult.isError) return pressResult;
       await sleep(300);
       return androidClipboardFill(args.text);
@@ -730,7 +652,7 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
 
     // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
     // press+fill+press+fill flows where the previous call left focus on a different field.
-    const preTap = await runAgentDevice(['press', ref]);
+    const preTap = await runNative(['press', ref]);
     if (preTap.isError) {
       // If we can't even tap the element, fall straight through to fill — it may still
       // work via the fast-runner coordinate path, and we want its error message, not ours.
@@ -738,7 +660,7 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
       await sleep(focusWaitMs);
     }
 
-    const primary = await runAgentDevice(['fill', ref, args.text]);
+    const primary = await runNative(['fill', ref, args.text]);
     if (!primary.isError) {
       // #191 prong 2/3 — native read-back verification + corrective clear/retype.
       // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -760,7 +682,7 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
           if (decision.action === 'escalate') break;
           settleAnchor = value;
           stabilityPrior = value;
-          await runAgentDevice(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+          await runNative(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
         }
         const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
         if (!maestro.isError) {
@@ -796,10 +718,10 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
     if (snap.ok) {
       const resolvedRef = findInputForPressable(snap.nodes, ref);
       if (resolvedRef && resolvedRef !== ref) {
-        const innerTap = await runAgentDevice(['press', resolvedRef]);
+        const innerTap = await runNative(['press', resolvedRef]);
         if (!innerTap.isError) {
           await sleep(focusWaitMs);
-          const resolved = await runAgentDevice(['fill', resolvedRef, args.text]);
+          const resolved = await runNative(['fill', resolvedRef, args.text]);
           if (!resolved.isError) {
             try {
               const envelope = JSON.parse(resolved.content[0].text) as { ok: true; data: unknown };
@@ -814,10 +736,10 @@ export function createDeviceFillHandler(getClient: () => CDPClient): (args: Fill
 
     // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
     // to propagate focus from a wrapping Pressable to the inner TextInput.
-    const retryTap = await runAgentDevice(['press', ref]);
+    const retryTap = await runNative(['press', ref]);
     if (!retryTap.isError) {
       await sleep(300);
-      const retry = await runAgentDevice(['fill', ref, args.text]);
+      const retry = await runNative(['fill', ref, args.text]);
       if (!retry.isError) {
         // Re-wrap the okResult to attach the fallback marker.
         try {
@@ -997,7 +919,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       if (args.durationMs) cliArgs.push(String(args.durationMs));
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runAgentDevice(cliArgs);
+      return runNative(cliArgs);
     }
     if (args.direction) {
       // B-Tier3 fix: Use real swipe gesture (not scroll) for direction-based swipes.
@@ -1023,7 +945,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       const cliArgs = ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runAgentDevice(cliArgs);
+      return runNative(cliArgs);
     }
     return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
   });
@@ -1062,7 +984,7 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     // Daemon / Android fallthrough: dispatch the COORDINATE form. The arg
     // builders throw on the raw direction form, so this previously crashed on
     // Android (always) and on the iOS fast-runner fallback.
-    return runAgentDevice(buildDirectionalScrollCliArgs(args.direction, args.amount));
+    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
   });
 }
 
@@ -1083,7 +1005,7 @@ export function createDeviceScrollIntoViewHandler(): (args: ScrollIntoViewArgs) 
     // Task 8 of the Android MVP plan extends the same orchestrator to
     // Android (default-on; opt-out via RN_ANDROID_RUNNER=0) — the snapshot
     // + swipe verbs route through the platform-aware short-circuit in
-    // runAgentDevice so this function is platform-neutral. The in-tree
+    // runNative so this function is platform-neutral. The in-tree
     // runners are the only execution targets for scrollintoview now; the
     // upstream agent-device CLI never owned a stable scrollintoview verb
     // and routing through it re-spawns the legacy runner that fights us
@@ -1106,7 +1028,7 @@ export function createDeviceScrollIntoViewHandler(): (args: ScrollIntoViewArgs) 
 /**
  * GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: platform-neutral
  * TS orchestrator for device_scrollintoview. Loops snapshot → find → check
- * viewport → swipe up to MAX_ITERATIONS times. Uses runAgentDevice for both
+ * viewport → swipe up to MAX_ITERATIONS times. Uses runNative for both
  * the `snapshot` and `swipe` verbs so the in-tree iOS short-circuit
  * (rn-fast-runner) and the Android short-circuit (rn-android-runner, env-gated)
  * both apply transparently — no daemon, no upstream agent-device runner.
@@ -1117,7 +1039,7 @@ async function scrollIntoViewWithRunner(args: ScrollIntoViewArgs): Promise<ToolR
   const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
   const screenRect: ViewportRect = { x: 0, y: 0, width: screen.width, height: screen.height };
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const snapRes = await runAgentDevice(['snapshot', '-i']);
+    const snapRes = await runNative(['snapshot', '-i']);
     timer.mark('snapshot');
     if (snapRes.isError) {
       return failResult(
@@ -1142,7 +1064,7 @@ async function scrollIntoViewWithRunner(args: ScrollIntoViewArgs): Promise<ToolR
       if (i === 0) {
         const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect);
         const coords = computeSwipeFromDirection(fallbackDir ?? 'down', screen);
-        await runAgentDevice([
+        await runNative([
           'swipe',
           String(coords.x1),
           String(coords.y1),
@@ -1173,7 +1095,7 @@ async function scrollIntoViewWithRunner(args: ScrollIntoViewArgs): Promise<ToolR
       );
     }
     const coords = computeSwipeFromDirection(direction, screen);
-    const swipeResp = await runAgentDevice([
+    const swipeResp = await runNative([
       'swipe',
       String(coords.x1),
       String(coords.y1),
@@ -1208,14 +1130,14 @@ export function createDevicePinchHandler(): (args: PinchArgs) => Promise<ToolRes
     if (args.x != null && args.y != null) {
       cliArgs.push(String(args.x), String(args.y));
     }
-    return runAgentDevice(cliArgs);
+    return runNative(cliArgs);
   });
 }
 
 // --- Back ---
 
 export function createDeviceBackHandler(): (args: Record<string, never>) => Promise<ToolResult> {
-  return withSession(() => runAgentDevice(['back']));
+  return withSession(() => runNative(['back']));
 }
 
 // --- Focus Next (keyboard Next/Return button) ---
@@ -1247,7 +1169,7 @@ export function createDeviceFocusNextHandler(): (args: Record<string, never>) =>
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match) continue;
-      const pressResult = await runAgentDevice(['press', `@${match.ref}`]);
+      const pressResult = await runNative(['press', `@${match.ref}`]);
       if (pressResult.isError) continue; // Match found but tap failed — try next label
       try {
         const envelope = JSON.parse(pressResult.content[0].text) as { ok: true; data: unknown };

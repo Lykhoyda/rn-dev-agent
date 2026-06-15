@@ -1,11 +1,13 @@
 import { okResult, warnResult, withConnection } from '../utils.js';
-import { runAgentDevice, hasActiveSession } from '../agent-device-wrapper.js';
+import { hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
+import { fetchFindCandidates } from './device-interact.js';
 export function createProofStepHandler(getClient, deps = {}) {
     const hasSession = deps.hasSession ?? hasActiveSession;
     const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
+    const fetchCandidates = deps.fetchCandidates ?? ((text) => fetchFindCandidates(text, false));
     return withConnection(getClient, async (args, client) => {
         const result = {
             screenshotPath: '',
@@ -41,9 +43,9 @@ export function createProofStepHandler(getClient, deps = {}) {
             await new Promise(r => setTimeout(r, waitMs));
         }
         // Step 3: Verify element (optional)
-        if (args.verifyText && hasActiveSession()) {
-            const findResult = await runAgentDevice(['find', args.verifyText]);
-            if (findResult.isError) {
+        if (args.verifyText && hasSession()) {
+            const findResult = await fetchCandidates(args.verifyText);
+            if (!findResult.ok || findResult.candidates.length === 0) {
                 result.verified = false;
                 result.verifyDetail = `Text "${args.verifyText}" not found on screen`;
                 errors.push(result.verifyDetail);
@@ -53,7 +55,7 @@ export function createProofStepHandler(getClient, deps = {}) {
                 result.verifyDetail = `Found "${args.verifyText}"`;
             }
         }
-        else if (args.verifyText && !hasActiveSession()) {
+        else if (args.verifyText && !hasSession()) {
             // Requested a text verification but no device session is open — surface it
             // as a failure rather than leaving result.verified undefined (which reads
             // as "not failed" to callers).

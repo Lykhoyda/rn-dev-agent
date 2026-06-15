@@ -252,7 +252,11 @@ export type ToolErrorCode =
   // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
   | 'BUSY_FOREIGN_FLOW'
   // GH #191: native fill + retype + maestro all failed to produce the expected value.
-  | 'TEXT_ENTRY_UNVERIFIED';
+  | 'TEXT_ENTRY_UNVERIFIED'
+  // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
+  | 'NO_NATIVE_ROUTE'
+  // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
+  | 'RUNNER_DISABLED';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

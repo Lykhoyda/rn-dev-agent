@@ -1,22 +1,79 @@
 import { mkdirSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { runAgentDevice, getActiveSession } from '../agent-device-wrapper.js';
-import { failResult } from '../utils.js';
+import { runNative, getActiveSession } from '../agent-device-wrapper.js';
+import { failResult, okResult } from '../utils.js';
 import { resizeWithSips } from './device-screenshot-resize.js';
 import { tryRawScreenshot } from './device-screenshot-raw.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
-let runAgentDeviceFn = runAgentDevice;
+import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
+let runAgentDeviceFn = runNative;
 export function _setRunAgentDeviceForTest(fn) {
     runAgentDeviceFn = fn;
 }
 export function _resetRunAgentDeviceForTest() {
-    runAgentDeviceFn = runAgentDevice;
+    runAgentDeviceFn = runNative;
+}
+const execFileAsync = promisify(execFile);
+const defaultExec = (cmd, args) => execFileAsync(cmd, args);
+let execFn = defaultExec;
+export function _setDeviceListExecForTest(fn) {
+    execFn = fn;
+}
+export function _resetDeviceListExecForTest() {
+    execFn = defaultExec;
+}
+/**
+ * Parse `xcrun simctl list devices --json` output into a flat list of booted
+ * iOS simulators. Returns [] on any parse error so one platform's absence
+ * never breaks the other.
+ */
+export function parseSimctlDevicesAll(jsonText) {
+    try {
+        const parsed = JSON.parse(jsonText);
+        const runtimes = parsed?.devices;
+        if (!runtimes || typeof runtimes !== 'object')
+            return [];
+        const result = [];
+        for (const devices of Object.values(runtimes)) {
+            if (!Array.isArray(devices))
+                continue;
+            for (const d of devices) {
+                // Guard udid/name: beta Xcode runtimes occasionally emit a partial
+                // Booted entry; an undefined id would poison the UDID lock path.
+                if (d.state === 'Booted' && d.udid && d.name) {
+                    result.push({ platform: 'ios', id: d.udid, name: d.name, state: d.state });
+                }
+            }
+        }
+        return result;
+    }
+    catch {
+        return [];
+    }
 }
 export function createDeviceListHandler() {
-    return async () => runAgentDeviceFn(['devices'], { skipSession: true });
+    return async () => {
+        const [iosDevices, androidSerials] = await Promise.all([
+            execFn('xcrun', ['simctl', 'list', 'devices', '--json'])
+                .then(({ stdout }) => parseSimctlDevicesAll(stdout))
+                .catch(() => []),
+            execFn('adb', ['devices'])
+                .then(({ stdout }) => parseAdbDevicesSerials(stdout))
+                .catch(() => []),
+        ]);
+        const androidDevices = androidSerials.map((serial) => ({
+            platform: 'android',
+            id: serial,
+            name: serial,
+            state: 'device',
+        }));
+        return okResult({ devices: [...iosDevices, ...androidDevices] });
+    };
 }
 /**
  * Pure derivation of the output path for a screenshot call. Extracted so the

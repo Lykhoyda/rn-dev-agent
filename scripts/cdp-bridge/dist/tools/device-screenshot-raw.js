@@ -42,6 +42,47 @@ export function parseSimctlBootedUDID(jsonText) {
     }
     return null;
 }
+export function parseSimctlBootedAll(jsonText) {
+    let data;
+    try {
+        data = JSON.parse(jsonText);
+    }
+    catch {
+        return [];
+    }
+    const runtimes = data?.devices;
+    if (!runtimes || typeof runtimes !== 'object')
+        return [];
+    const udids = [];
+    for (const list of Object.values(runtimes)) {
+        if (!Array.isArray(list))
+            continue;
+        for (const device of list) {
+            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+                udids.push(device.udid);
+            }
+        }
+    }
+    return udids;
+}
+async function defaultSimctlBootedJson() {
+    const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
+        timeout: 5000,
+        maxBuffer: 1024 * 1024,
+    });
+    return stdout;
+}
+export async function resolveIosUdid(explicit, probe = defaultSimctlBootedJson) {
+    if (explicit)
+        return explicit;
+    try {
+        const all = parseSimctlBootedAll(await probe());
+        return all.length === 1 ? all[0] : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
 const EMU_LINE = /^(emulator-\d+)\s+device\b/;
 export function parseAdbDevicesEmu(stdout) {
     const lines = stdout.split('\n');

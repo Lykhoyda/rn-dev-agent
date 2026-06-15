@@ -1,5 +1,5 @@
-import { runAgentDevice } from '../agent-device-wrapper.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs } from './device-interact.js';
+import { runNative } from '../agent-device-wrapper.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -120,7 +120,7 @@ export function snapshotEnvelopeFailed(envelope: string | null | undefined): boo
 }
 
 async function resolveTestIDViaSnapshot(testID: string): Promise<{ ref: string | null; envelope: string | null; snapshotFailed: boolean }> {
-  const result = await runAgentDevice(['snapshot', '-i']);
+  const result = await runNative(['snapshot', '-i']);
   const envelope = result.content?.[0]?.text ?? null;
   const snapshotFailed = snapshotEnvelopeFailed(envelope);
   if (snapshotFailed) return { ref: null, envelope, snapshotFailed: true };
@@ -169,13 +169,19 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             },
           );
         }
-        if (step.tap) return runAgentDevice(['press', `@${ref}`]);
+        if (step.tap) return runNative(['press', `@${ref}`]);
         return okResult({ resolved: ref, testID: step.testID, snapshotEnvelopePreviewBytes: envelope?.length ?? 0 });
       }
       if (!step.text) return failResult('find requires text or testID');
-      const args = ['find', step.text];
-      if (step.tap) args.push('click');
-      return runAgentDevice(args);
+      const findResult = await fetchFindCandidates(step.text, false);
+      if (!findResult.ok) {
+        return failResult(`find: snapshot unavailable for "${step.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: step.text });
+      }
+      if (findResult.candidates.length === 0) {
+        return failResult(`No element matches "${step.text}"`, { code: 'NOT_FOUND', query: step.text });
+      }
+      if (step.tap) return pressCandidate(findResult.candidates[0], 'click');
+      return okResult({ ref: findResult.candidates[0].ref, label: findResult.candidates[0].label, testID: findResult.candidates[0].testID });
     }
     case 'press': {
       if (step.testID) {
@@ -192,11 +198,11 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             testID: step.testID,
           });
         }
-        return runAgentDevice(['press', `@${ref}`]);
+        return runNative(['press', `@${ref}`]);
       }
       if (!step.ref) return failResult('press requires ref or testID');
       const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runAgentDevice(['press', ref]);
+      return runNative(['press', ref]);
     }
     case 'fill': {
       if (!step.text) return failResult('fill requires text');
@@ -214,30 +220,30 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             testID: step.testID,
           });
         }
-        return runAgentDevice(['fill', `@${ref}`, step.text]);
+        return runNative(['fill', `@${ref}`, step.text]);
       }
       if (!step.ref) return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.');
       const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runAgentDevice(['fill', ref, step.text]);
+      return runNative(['fill', ref, step.text]);
     }
     case 'swipe': {
       if (!step.direction) return failResult('swipe requires direction');
-      return runAgentDevice(buildDirectionalSwipeCliArgs(step.direction, step.ms));
+      return runNative(buildDirectionalSwipeCliArgs(step.direction, step.ms));
     }
     case 'scroll': {
       if (!step.direction) return failResult('scroll requires direction');
       // Coordinate form — the raw ['scroll', direction] shape throws in the
       // iOS/Android arg builders and aborted the whole batch.
-      return runAgentDevice(buildDirectionalScrollCliArgs(step.direction));
+      return runNative(buildDirectionalScrollCliArgs(step.direction));
     }
     case 'back': {
-      return runAgentDevice(['back']);
+      return runNative(['back']);
     }
     case 'hideKeyboard': {
-      return runAgentDevice(['keyboard', 'dismiss']);
+      return runNative(['keyboard', 'dismiss']);
     }
     case 'snapshot': {
-      return runAgentDevice(['snapshot', '-i']);
+      return runNative(['snapshot', '-i']);
     }
     case 'screenshot': {
       // B121: route through the resize wrapper (B120 default maxWidth=800)
@@ -370,7 +376,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
     if (!finalSnapshot && !failedStep) {
       try {
-        const snapResult = await runAgentDevice(['snapshot', '-i']);
+        const snapResult = await runNative(['snapshot', '-i']);
         if (isOk(snapResult)) {
           finalSnapshot = extractData(snapResult);
         }
