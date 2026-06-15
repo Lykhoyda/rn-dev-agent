@@ -1,12 +1,12 @@
 ---
 command: doctor
-description: Diagnose installation health. Check Node, CDP bridge, rn-fast-runner (iOS), agent-device (Android), maestro-runner, simulators, Metro, CDP, injected helpers, ffmpeg, physical devices, plugin version, Vercel rules sync. Reports what's missing — does NOT modify your project.
+description: Diagnose installation health. Check Node, CDP bridge, rn-fast-runner (iOS), rn-android-runner (Android), maestro-runner, simulators, Metro, CDP, injected helpers, ffmpeg, physical devices, plugin version, Vercel rules sync. Reports what's missing — does NOT modify your project.
 argument-hint: 
 ---
 
-Run the environment-diagnostic checklist from the `rn-setup` skill. Walk all 15 prerequisite checks (Node.js version, CDP bridge dependencies, **rn-fast-runner build (iOS)**, **agent-device CLI (Android)**, maestro-runner, iOS simulator, Android emulator, Metro dev server, CDP connection, **injected `__RN_AGENT` helpers**, ffmpeg, physical-device prerequisites, **plugin version freshness**, **Vercel rules sync freshness**, **CDP auto-reconnect mode**) and surface install commands for any missing dependencies.
+Run the environment-diagnostic checklist from the `rn-setup` skill. Walk all 15 prerequisite checks (Node.js version, CDP bridge dependencies, **rn-fast-runner build (iOS)**, **rn-android-runner build/install (Android)**, maestro-runner, iOS simulator, Android emulator, Metro dev server, CDP connection, **injected `__RN_AGENT` helpers**, ffmpeg, physical-device prerequisites, **plugin version freshness**, **Vercel rules sync freshness**, **CDP auto-reconnect mode**) and surface install commands for any missing dependencies.
 
-iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (D1219, PR #164) — `agent-device` is Android-only after that change. Mark `agent-device` as N/A on iOS-only setups and `rn-fast-runner` as N/A on Android-only / non-macOS setups.
+iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (D1219, PR #164); Android device automation is owned by the in-tree `rn-android-runner` (UiAutomator instrumentation). These in-tree runners are the sole device backend — there is no external CLI to install. Mark `rn-android-runner` as N/A on iOS-only setups and `rn-fast-runner` as N/A on Android-only / non-macOS setups.
 
 **This command is read-only.** It diagnoses the current environment and recommends fixes. It does NOT modify any files in the user's project, inject documentation, or instrument source code.
 

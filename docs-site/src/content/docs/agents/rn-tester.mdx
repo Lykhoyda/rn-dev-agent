@@ -55,7 +55,7 @@ Executes the navigation plan from Step 2.7 using programmatic navigation, deep l
 ### Step 4: Execute and Verify
 
 The core test loop. For each step:
-1. **Act** using agent-device (`device_find`, `device_press`) or Maestro for persistent test files
+1. **Act** using the device tools (`device_find`, `device_press`) or Maestro for persistent test files
 2. **Wait** for UI to settle via `device_snapshot` or Maestro `assertVisible`
 3. **Verify UI** with screenshot + `cdp_component_tree` (filtered)
 4. **Verify Data** with `cdp_store_state` and `cdp_network_log`

@@ -37,7 +37,7 @@ Read React internals via Chrome DevTools Protocol over a WebSocket connection to
 
 ## Device Tools (14)
 
-Native interaction. iOS routes through the in-tree `rn-fast-runner` `/command` endpoint; Android routes through the `agent-device` CLI (3-tier daemon → fast-runner → CLI dispatch). Requires an open session (`device_snapshot action=open`).
+Native interaction. iOS routes through the in-tree `rn-fast-runner` `/command` endpoint; Android routes through the in-tree `rn-android-runner` (UiAutomator instrumentation). These in-tree runners are the sole device backend. Requires an open session (`device_snapshot action=open`).
 
 **Session:** `device_list` → `device_snapshot` (open/snapshot/close) → `device_screenshot`
 

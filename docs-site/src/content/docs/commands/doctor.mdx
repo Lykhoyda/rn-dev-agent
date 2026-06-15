@@ -21,7 +21,7 @@ A dozen prerequisites, presented as a single table:
 |---|-------|----------|---------------------------------------|
 | 1 | Node.js >= 22 LTS | Yes | No (user must install) |
 | 2 | CDP bridge dependencies | Yes | Yes |
-| 3 | agent-device CLI | Yes | Yes |
+| 3 | Device runner (iOS: rn-fast-runner / Android: rn-android-runner — in-tree) | One platform | Builds on first use / pre-build |
 | 4 | maestro-runner | Yes | Yes |
 | 5 | iOS Simulator booted | One platform | No |
 | 6 | Android Emulator running | One platform | No |
@@ -52,7 +52,7 @@ For every red row, `/doctor` prints the exact install command tailored to your e
 |------------------------|-----------------------|----------------------------------------|
 | Node.js                | OK (v22.15.0)         | —                                      |
 | CDP bridge             | OK                    | —                                      |
-| agent-device           | MISSING               | Run /rn-dev-agent:setup to install     |
+| rn-fast-runner (iOS)   | OK (built)            | —                                      |
 | maestro-runner         | OK (v1.0.9)           | —                                      |
 | iOS Simulator          | BOOTED (iPhone 16)    | —                                      |
 | Android emulator       | NOT RUNNING           | Boot one if you need Android coverage  |

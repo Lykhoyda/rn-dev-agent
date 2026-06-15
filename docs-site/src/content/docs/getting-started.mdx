@@ -12,7 +12,7 @@ description: Install and configure rn-dev-agent for your React Native project.
 | iOS Simulator or Android Emulator | At least one platform |
 | Metro dev server running | `npx expo start` or `npx react-native start` |
 
-**maestro-runner** and **agent-device** are auto-installed on first plugin load. If auto-install fails, run `/rn-dev-agent:setup` for guided installation with manual fallback instructions.
+**maestro-runner** is auto-installed on first plugin load. Device control ships in-tree — the `rn-fast-runner` (iOS) and `rn-android-runner` (Android) runners build/install on first use; no external CLI is required. If anything is missing, run `/rn-dev-agent:setup` for guided diagnostics with manual fallback instructions.
 
 ## Installation
 

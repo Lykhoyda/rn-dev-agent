@@ -284,7 +284,7 @@ end-to-end, not just renders:
 
 1. Use `device_find(text="<button text>", action="click")` or
    `device_press(ref="@<ref>")` to trigger the main user action.
-   Fallback: `cdp_interact(testID="<testID>", action="press")` if agent-device unavailable
+   Prefer `cdp_interact(testID="<testID>", action="press")` when a reliable testID exists (JS-level, deterministic)
 2. Wait 1-2 seconds for state to settle (or use `device_snapshot` to verify UI changed)
 3. Verify the expected side effect:
    - State change: call `cdp_store_state` to confirm
