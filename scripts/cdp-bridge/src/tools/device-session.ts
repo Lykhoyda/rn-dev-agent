@@ -10,6 +10,7 @@ import {
   getAdbSerial,
 } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial } from '../runners/rn-android-runner-client.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
@@ -37,11 +38,11 @@ const HEARTBEAT_MS = 30_000;
 let activeDeviceLock: DeviceLock | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-function acquireDeviceLockForSession(udid: string, appId: string): DeviceLockResult {
+function acquireDeviceLockForSession(platform: 'ios' | 'android', deviceId: string, appId: string): DeviceLockResult {
   // Single-owner: drop any prior lock + heartbeat first (release is null-safe)
   // so a re-open can't leak a timer or orphan a lock. (#202 review — blocker.)
   releaseDeviceLockForSession();
-  const lock = new DeviceLock({ udid, appId });
+  const lock = new DeviceLock({ platform, deviceId, appId });
   const result = lock.acquire();
   // Only manage a heartbeat for a REAL exclusive lock — a degraded (fs-error)
   // acquire is unmanaged, so there is nothing to refresh or release.
@@ -60,8 +61,9 @@ export function releaseDeviceLockForSession(): void {
 }
 
 export function deviceBusyMessage(deviceId: string, holder: DeviceLockBody): string {
+  const label = holder.platform === 'android' ? 'Emulator/device' : 'Simulator';
   return (
-    `Simulator ${deviceId} is already owned by another rn-dev-agent bridge ` +
+    `${label} ${deviceId} is already owned by another rn-dev-agent bridge ` +
     `(PID ${holder.pid}, project ${holder.projectRoot}` +
     `${holder.appId ? `, app ${holder.appId}` : ''}). ` +
     `Close that session or target a different simulator.`
@@ -227,29 +229,35 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           appId,
         });
 
-        // GH#202 Phase 1.5: claim exclusive ownership of THIS simulator across
-        // bridge processes. The UDID is only known now (post-open). On conflict
-        // another project's bridge owns the sim — tear our just-opened session
-        // back down and refuse, rather than fight for foreground.
-        if (platform === 'ios' && deviceId) {
-          const lockResult = acquireDeviceLockForSession(deviceId, appId);
+        // GH#202 Phase 1.5 (iOS) + Task 5 (Android): claim exclusive ownership
+        // of THIS device across bridge processes. On conflict another project's
+        // bridge owns it — tear our just-opened session back down and refuse.
+        // Android: deviceId is filtered through UDID_RE and is always undefined
+        // for adb serials like "emulator-5554", so we resolve the serial
+        // independently via `adb devices` rather than keying on deviceId.
+        const lockPlatform: 'ios' | 'android' = platform === 'android' ? 'android' : 'ios';
+        const lockDeviceId = lockPlatform === 'android'
+          ? await resolveAndroidSerial(deviceId)
+          : deviceId;
+        if (lockDeviceId) {
+          // TODO(phase2): acquire the lock BEFORE the open side-effect once 'open' is resolved via simctl/adb instead of agent-device — spec D-e.
+          const lockResult = acquireDeviceLockForSession(lockPlatform, lockDeviceId, appId);
           if (lockResult.status === 'conflict') {
             // Close FIRST — runAgentDevice derives `--session` from the active
             // session, so clearing before closing would close the wrong (or no)
             // session and leak the one we just opened (#202 review — blocker).
             await runAgentDevice(['close']).catch(() => { /* best-effort teardown */ });
             clearActiveSession();
-            stopFastRunner();
-            const h = lockResult.holder;
+            if (lockPlatform === 'ios') stopFastRunner(); else await stopAndroidRunner(lockDeviceId);
             return failResult(
-              deviceBusyMessage(deviceId, h),
-              { code: 'DEVICE_BUSY', holder: h },
+              deviceBusyMessage(lockDeviceId, lockResult.holder),
+              { code: 'DEVICE_BUSY', holder: lockResult.holder },
             );
           }
           if (lockResult.degraded) {
             logger.warn(
               'rn-device',
-              `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
+              `Device-ownership lock unavailable (fs error) for ${lockDeviceId} — ` +
               `cross-bridge contention protection is off this session.`,
             );
           }
@@ -362,6 +370,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         closeUnderlyingSession: () => runAgentDevice(['close']),
         clearActiveSession,
         stopFastRunner,
+        stopAndroidRunner,
         releaseDeviceLock: releaseDeviceLockForSession,
       });
     }

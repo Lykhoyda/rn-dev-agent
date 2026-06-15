@@ -33,7 +33,8 @@ export class DeviceLock {
     lockPath;
     acquired = false;
     pid;
-    udid;
+    platform;
+    deviceId;
     projectRoot;
     appId;
     version;
@@ -42,7 +43,8 @@ export class DeviceLock {
     staleMs;
     tmpDir;
     constructor(opts) {
-        this.udid = opts.udid;
+        this.platform = opts.platform;
+        this.deviceId = opts.deviceId;
         this.projectRoot = opts.projectRoot ?? (process.env.CLAUDE_USER_CWD ?? process.cwd());
         const uid = opts.uid ?? userInfo().uid;
         this.tmpDir = opts.tmpDir ?? tmpdir();
@@ -52,7 +54,7 @@ export class DeviceLock {
         this.clock = opts.clock ?? Date.now;
         this.processAlive = opts.processAlive ?? defaultProcessAlive;
         this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
-        this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-ios-${this.udid}.lock`);
+        this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
     }
     acquire() {
         try {
@@ -134,8 +136,8 @@ export class DeviceLock {
             const body = {
                 pid: this.pid,
                 projectRoot: this.projectRoot,
-                platform: 'ios',
-                udid: this.udid,
+                platform: this.platform,
+                deviceId: this.deviceId,
                 appId: this.appId,
                 startedAt: now,
                 lastHeartbeat: now,
@@ -153,8 +155,7 @@ export class DeviceLock {
             const parsed = JSON.parse(readFileSync(this.lockPath, 'utf8'));
             if (!isValidBody(parsed))
                 return null;
-            // A body for a different UDID on our path is foreign/corrupt → reclaimable.
-            if (parsed.udid !== this.udid)
+            if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
                 return null;
             return parsed;
         }
@@ -171,9 +172,9 @@ function isValidBody(o) {
         return false;
     const b = o;
     return (typeof b.pid === 'number' && Number.isFinite(b.pid) &&
-        typeof b.udid === 'string' && b.udid.length > 0 &&
+        (b.platform === 'ios' || b.platform === 'android') &&
+        typeof b.deviceId === 'string' && b.deviceId.length > 0 &&
         typeof b.projectRoot === 'string' &&
-        b.platform === 'ios' &&
         typeof b.startedAt === 'number' && Number.isFinite(b.startedAt) &&
         typeof b.lastHeartbeat === 'number' && Number.isFinite(b.lastHeartbeat));
 }

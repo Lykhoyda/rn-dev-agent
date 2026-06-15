@@ -9,6 +9,7 @@ import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
+import { findFreePort } from './free-port.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -21,7 +22,8 @@ const HEALTH_POLL_INTERVAL_MS = 150;
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 
 interface AndroidRunnerState {
-  port: number;
+  hostPort: number;   // 127.0.0.1 port the TS client connects to (probed; globally contended)
+  devicePort: number; // NanoHTTPD listener inside the emulator (fixed; emulator-namespaced)
   pid: number;
   deviceId?: string;
   bundleId?: string;
@@ -82,12 +84,16 @@ let fetchImpl: typeof fetch = globalThis.fetch;
 
 try {
   if (existsSync(STATE_FILE)) {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as AndroidRunnerState;
-    try {
-      process.kill(raw.pid, 0);
-      runnerState = raw;
-    } catch {
-      unlinkSync(STATE_FILE);
+    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as Partial<AndroidRunnerState>;
+    if (typeof raw.hostPort !== 'number' || typeof raw.devicePort !== 'number') {
+      unlinkSync(STATE_FILE); // pre-split state shape → ignore + clear
+    } else {
+      try {
+        process.kill(raw.pid!, 0);
+        runnerState = raw as AndroidRunnerState;
+      } catch {
+        unlinkSync(STATE_FILE);
+      }
     }
   }
 } catch {
@@ -102,10 +108,40 @@ export function _setAndroidRunnerStateForTest(state: AndroidRunnerState | null):
   runnerState = state;
 }
 
+export function parseAdbDevicesSerials(stdout: string): string[] {
+  return stdout.split('\n').slice(1)
+    .map((l) => l.trim())
+    .map((l) => /^(\S+)\s+device\b/.exec(l))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => m[1]);
+}
+
+export async function resolveAndroidSerial(explicit?: string): Promise<string | undefined> {
+  if (explicit) return explicit;
+  if (process.env.ANDROID_SERIAL) return process.env.ANDROID_SERIAL;
+  try {
+    const { stdout } = await execFileAsync('adb', ['devices']);
+    const serials = parseAdbDevicesSerials(stdout);
+    return serials.length === 1 ? serials[0] : undefined;
+  } catch { return undefined; }
+}
+
 function adbSerialArgs(deviceId?: string): string[] {
   if (deviceId) return ['-s', deviceId];
   if (process.env.ANDROID_SERIAL) return ['-s', process.env.ANDROID_SERIAL];
   return [];
+}
+
+export function buildAdbForwardArgs(deviceId: string | undefined, hostPort: number, devicePort: number): string[] {
+  return [...adbSerialArgs(deviceId), 'forward', `tcp:${hostPort}`, `tcp:${devicePort}`];
+}
+
+export function buildAdbForwardRemoveArgs(deviceId: string | undefined, hostPort: number): string[] {
+  return [...adbSerialArgs(deviceId), 'forward', '--remove', `tcp:${hostPort}`];
+}
+
+export function buildInstrumentPortArgs(devicePort: number): string[] {
+  return ['-e', 'RN_ANDROID_RUNNER_PORT', String(devicePort)];
 }
 
 export function isAndroidRunnerAvailable(): boolean {
@@ -168,25 +204,29 @@ export async function waitForAndroidRunnerHealth(
   return false;
 }
 
-export async function startAndroidRunner(deviceId?: string, bundleId?: string, port = DEFAULT_PORT): Promise<AndroidRunnerState> {
+export async function startAndroidRunner(deviceId?: string, bundleId?: string, devicePort = DEFAULT_PORT): Promise<AndroidRunnerState> {
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) return runnerState!;
 
-  const serial = adbSerialArgs(deviceId);
-  await execFileAsync('adb', [...serial, 'forward', `tcp:${port}`, `tcp:${port}`]);
+  let hostPort = await findFreePort(devicePort);
+  try {
+    await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
+  } catch {
+    // host port raced between probe and forward → re-probe once with any free port
+    hostPort = await findFreePort(0);
+    await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
+  }
 
   return new Promise((resolve, reject) => {
     let resolved = false;
 
     const child = spawn('adb', [
-      ...serial,
+      ...adbSerialArgs(deviceId),
       'shell',
       'am',
       'instrument',
       '-w',
       '-r',
-      '-e',
-      'RN_ANDROID_RUNNER_PORT',
-      String(port),
+      ...buildInstrumentPortArgs(devicePort),
       '-e',
       'class',
       MAIN_LOOP_CLASS,
@@ -209,7 +249,8 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, p
       if (resolved) return;
       resolved = true;
       const state: AndroidRunnerState = {
-        port,
+        hostPort,
+        devicePort,
         pid: child.pid!,
         ...(deviceId ? { deviceId } : {}),
         ...(bundleId ? { bundleId } : {}),
@@ -228,9 +269,14 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, p
 
     child.on('exit', (code) => {
       if (runnerProcess === child) {
+        const exitState = runnerState;
         runnerProcess = null;
         runnerState = null;
         try { unlinkSync(STATE_FILE); } catch { /* already removed */ }
+        if (typeof exitState?.hostPort === 'number') {
+          execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort))
+            .catch(() => { /* best-effort: must never throw from exit handler */ });
+        }
       }
       if (!resolved) {
         resolved = true;
@@ -240,7 +286,7 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, p
 
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
-    void waitForAndroidRunnerHealth(port).then((healthy) => {
+    void waitForAndroidRunnerHealth(hostPort).then((healthy) => {
       if (resolved) return;
       if (healthy) {
         finishReady();
@@ -248,18 +294,21 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, p
       }
       resolved = true;
       child.kill('SIGTERM');
-      reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${port})${diag ? `\n${diag.trim()}` : ''}`));
+      reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`));
     });
   });
 }
 
 export async function stopAndroidRunner(deviceId?: string): Promise<void> {
-  const serial = adbSerialArgs(deviceId ?? runnerState?.deviceId);
+  const stoppedState = runnerState;
   runnerProcess?.kill('SIGTERM');
   runnerProcess = null;
   runnerState = null;
   try { unlinkSync(STATE_FILE); } catch { /* already removed */ }
-  try { await execFileAsync('adb', [...serial, 'forward', '--remove', `tcp:${DEFAULT_PORT}`]); } catch { /* non-fatal */ }
+  if (typeof stoppedState?.hostPort === 'number') {
+    const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
+    try { await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort)); } catch { /* non-fatal */ }
+  }
 }
 
 async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
@@ -273,7 +322,7 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let resp: Response;
   try {
-    resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+    resp = await fetchImpl(`http://127.0.0.1:${state.hostPort}/command`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

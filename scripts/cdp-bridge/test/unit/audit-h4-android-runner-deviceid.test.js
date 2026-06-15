@@ -6,7 +6,7 @@ import { shouldReuseAndroidRunner } from '../../dist/runners/rn-android-runner-c
 // emulator-A must NOT be reused to drive emulator-B (its adb forward + port
 // still target A — every device_* would silently hit the wrong emulator).
 
-const stateFor = (deviceId) => ({ port: 22089, pid: 4242, deviceId, startedAt: 'now' });
+const stateFor = (deviceId) => ({ hostPort: 22089, devicePort: 22089, pid: 4242, deviceId, startedAt: 'now' });
 
 test('H4: same emulator → reuse', () => {
   assert.equal(shouldReuseAndroidRunner(stateFor('emulator-5554'), 'emulator-5554'), true);

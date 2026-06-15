@@ -36,12 +36,14 @@ export async function closeDeviceSession(deps) {
     if (!result.isError) {
         deps.clearActiveSession();
         deps.stopFastRunner();
+        await deps.stopAndroidRunner();
         deps.releaseDeviceLock();
         return result;
     }
     if (isBenignSessionGoneError(result)) {
         deps.clearActiveSession();
         deps.stopFastRunner();
+        await deps.stopAndroidRunner();
         deps.releaseDeviceLock();
         return okResult({
             closed: true,

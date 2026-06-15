@@ -6,6 +6,7 @@ export interface CloseDeviceSessionDeps {
   closeUnderlyingSession: () => Promise<ToolResult>;
   clearActiveSession: () => void;
   stopFastRunner: () => void;
+  stopAndroidRunner: () => Promise<void>;
   releaseDeviceLock: () => void;
 }
 
@@ -46,6 +47,7 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
   if (!result.isError) {
     deps.clearActiveSession();
     deps.stopFastRunner();
+    await deps.stopAndroidRunner();
     deps.releaseDeviceLock();
     return result;
   }
@@ -53,6 +55,7 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
   if (isBenignSessionGoneError(result)) {
     deps.clearActiveSession();
     deps.stopFastRunner();
+    await deps.stopAndroidRunner();
     deps.releaseDeviceLock();
     return okResult({
       closed: true,

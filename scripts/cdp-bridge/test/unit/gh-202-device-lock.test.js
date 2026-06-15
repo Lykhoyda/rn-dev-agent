@@ -14,13 +14,12 @@ function tmp() {
 
 function makeLock(dir, over = {}) {
   return new DeviceLock({
-    udid: UDID,
+    platform: over.platform ?? 'ios',
+    deviceId: over.deviceId ?? UDID,
     projectRoot: over.projectRoot ?? '/proj/a',
     appId: over.appId ?? 'com.example.app',
     pid: over.pid ?? 4242,
-    uid: 501,
-    tmpDir: dir,
-    version: '0-test',
+    uid: 501, tmpDir: dir, version: '0-test',
     clock: over.clock ?? (() => FIXED),
     processAlive: over.processAlive ?? (() => true),
     staleMs: over.staleMs ?? 90_000,
@@ -28,7 +27,7 @@ function makeLock(dir, over = {}) {
 }
 
 test('GH#202 isDeviceLockStale: stale when PID dead OR heartbeat too old, fresh otherwise', () => {
-  const body = { pid: 1, projectRoot: '/p', platform: 'ios', udid: UDID, startedAt: FIXED, lastHeartbeat: FIXED };
+  const body = { pid: 1, projectRoot: '/p', platform: 'ios', deviceId: UDID, startedAt: FIXED, lastHeartbeat: FIXED };
   assert.equal(isDeviceLockStale(body, FIXED, () => false, 90_000), true);            // dead PID
   assert.equal(isDeviceLockStale(body, FIXED + 91_000, () => true, 90_000), true);    // stale heartbeat
   assert.equal(isDeviceLockStale(body, FIXED + 1_000, () => true, 90_000), false);    // alive + fresh
@@ -43,7 +42,7 @@ test('GH#202 DeviceLock.acquire: clean state → acquired, writes body keyed on 
     assert.ok(lock.lockPath.includes(`device-501-ios-${UDID}`));
     assert.ok(existsSync(lock.lockPath));
     const body = JSON.parse(readFileSync(lock.lockPath, 'utf8'));
-    assert.equal(body.udid, UDID);
+    assert.equal(body.deviceId, UDID);
     assert.equal(body.pid, 4242);
     assert.equal(body.platform, 'ios');
     assert.equal(body.startedAt, FIXED);
@@ -58,7 +57,7 @@ test('GH#202 DeviceLock.acquire: conflict when a LIVE holder owns the UDID', () 
     const r = makeLock(dir, { pid: 2222, processAlive: () => true, clock: () => FIXED + 1_000 }).acquire();
     assert.equal(r.status, 'conflict');
     assert.equal(r.holder.pid, 1111);
-    assert.equal(r.holder.udid, UDID);
+    assert.equal(r.holder.deviceId, UDID);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -103,7 +102,7 @@ test('GH#202 DeviceLock.release: unlinks only when we are the owner', () => {
     assert.ok(!existsSync(owner.lockPath));
 
     writeFileSync(join(dir, `rn-dev-agent-device-501-ios-${UDID}.lock`),
-      JSON.stringify({ pid: 999, projectRoot: '/p', platform: 'ios', udid: UDID, startedAt: FIXED, lastHeartbeat: FIXED }), 'utf8');
+      JSON.stringify({ pid: 999, projectRoot: '/p', platform: 'ios', deviceId: UDID, startedAt: FIXED, lastHeartbeat: FIXED }), 'utf8');
     makeLock(dir, { pid: 8 }).release();   // never acquired → no-op
     assert.ok(existsSync(join(dir, `rn-dev-agent-device-501-ios-${UDID}.lock`)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -115,7 +114,7 @@ test('GH#202 DeviceLock.touch: does NOT resurrect a lock another bridge reclaime
     const owner = makeLock(dir, { pid: 7 });
     owner.acquire();
     writeFileSync(owner.lockPath,
-      JSON.stringify({ pid: 999, projectRoot: '/proj/b', platform: 'ios', udid: UDID, startedAt: 1, lastHeartbeat: 1 }), 'utf8');
+      JSON.stringify({ pid: 999, projectRoot: '/proj/b', platform: 'ios', deviceId: UDID, startedAt: 1, lastHeartbeat: 1 }), 'utf8');
     owner.touch();   // we no longer own it → must NOT overwrite
     assert.equal(JSON.parse(readFileSync(owner.lockPath, 'utf8')).pid, 999);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -125,8 +124,31 @@ test('GH#202 DeviceLock: a foreign/corrupt body is treated as reclaimable', () =
   const dir = tmp();
   try {
     const lockPath = join(dir, `rn-dev-agent-device-501-ios-${UDID}.lock`);
-    writeFileSync(lockPath, JSON.stringify({ pid: 1, projectRoot: '/p', platform: 'android', udid: UDID, startedAt: 1, lastHeartbeat: 9_999_999_999_999 }), 'utf8');
+    writeFileSync(lockPath, JSON.stringify({ pid: 1, projectRoot: '/p', platform: 'android', deviceId: UDID, startedAt: 1, lastHeartbeat: 9_999_999_999_999 }), 'utf8');
     const r = makeLock(dir, { pid: 2222, processAlive: () => true }).acquire();
     assert.equal(r.status, 'acquired');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('GH#202 DeviceLock: Android serial-scoped lock keys path + body on platform+serial', () => {
+  const dir = tmp();
+  try {
+    const r = makeLock(dir, { platform: 'android', deviceId: 'emulator-5554' }).acquire();
+    assert.equal(r.status, 'acquired');
+    const lock = makeLock(dir, { platform: 'android', deviceId: 'emulator-5554' });
+    assert.ok(lock.lockPath.includes('device-501-android-emulator-5554'));
+    const body = JSON.parse(readFileSync(lock.lockPath, 'utf8'));
+    assert.equal(body.platform, 'android');
+    assert.equal(body.deviceId, 'emulator-5554');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('GH#202 DeviceLock: same id on different platforms do NOT collide', () => {
+  const dir = tmp();
+  try {
+    const ios = makeLock(dir, { platform: 'ios', deviceId: 'shared-id', pid: 1 }).acquire();
+    const and = makeLock(dir, { platform: 'android', deviceId: 'shared-id', pid: 2 }).acquire();
+    assert.equal(ios.status, 'acquired');
+    assert.equal(and.status, 'acquired');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

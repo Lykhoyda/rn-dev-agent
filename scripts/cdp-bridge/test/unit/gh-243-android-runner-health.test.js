@@ -64,7 +64,8 @@ test('#243/B191 isAndroidConnectionFailure matches startAndroidRunner startup-fa
 
 test('#243 runAndroid returns RN_ANDROID_RUNNER_DOWN (not bare "fetch failed") on connection failure', async () => {
   _setAndroidRunnerStateForTest({
-    port: 22089,
+    hostPort: 22089,
+    devicePort: 22089,
     pid: process.pid, // alive → startAndroidRunner short-circuits, no real adb spawn
     deviceId: 'emulator-5554',
     bundleId: 'com.example',

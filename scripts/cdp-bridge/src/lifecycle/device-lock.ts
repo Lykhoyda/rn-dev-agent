@@ -10,8 +10,8 @@ const DEFAULT_STALE_MS = 90_000;
 export interface DeviceLockBody {
   pid: number;
   projectRoot: string;
-  platform: 'ios';
-  udid: string;
+  platform: 'ios' | 'android';
+  deviceId: string;  // iOS UDID or Android adb serial
   appId?: string;
   startedAt: number;
   lastHeartbeat: number;
@@ -32,7 +32,8 @@ export interface DeviceLockConflict { status: 'conflict'; lockPath: string; hold
 export type DeviceLockResult = DeviceLockAcquired | DeviceLockConflict;
 
 export interface DeviceLockOptions {
-  udid: string;
+  platform: 'ios' | 'android';
+  deviceId: string;
   projectRoot?: string;
   appId?: string;
   pid?: number;
@@ -75,7 +76,8 @@ export class DeviceLock {
   readonly lockPath: string;
   private acquired = false;
   private readonly pid: number;
-  private readonly udid: string;
+  private readonly platform: 'ios' | 'android';
+  private readonly deviceId: string;
   private readonly projectRoot: string;
   private readonly appId?: string;
   private readonly version?: string;
@@ -85,7 +87,8 @@ export class DeviceLock {
   private readonly tmpDir: string;
 
   constructor(opts: DeviceLockOptions) {
-    this.udid = opts.udid;
+    this.platform = opts.platform;
+    this.deviceId = opts.deviceId;
     this.projectRoot = opts.projectRoot ?? (process.env.CLAUDE_USER_CWD ?? process.cwd());
     const uid = opts.uid ?? userInfo().uid;
     this.tmpDir = opts.tmpDir ?? tmpdir();
@@ -95,7 +98,7 @@ export class DeviceLock {
     this.clock = opts.clock ?? Date.now;
     this.processAlive = opts.processAlive ?? defaultProcessAlive;
     this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
-    this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-ios-${this.udid}.lock`);
+    this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
   }
 
   acquire(): DeviceLockResult {
@@ -169,8 +172,8 @@ export class DeviceLock {
       const body: DeviceLockBody = {
         pid: this.pid,
         projectRoot: this.projectRoot,
-        platform: 'ios',
-        udid: this.udid,
+        platform: this.platform,
+        deviceId: this.deviceId,
         appId: this.appId,
         startedAt: now,
         lastHeartbeat: now,
@@ -187,8 +190,7 @@ export class DeviceLock {
     try {
       const parsed = JSON.parse(readFileSync(this.lockPath, 'utf8')) as unknown;
       if (!isValidBody(parsed)) return null;
-      // A body for a different UDID on our path is foreign/corrupt → reclaimable.
-      if (parsed.udid !== this.udid) return null;
+      if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform) return null;
       return parsed;
     } catch {
       return null;
@@ -205,9 +207,9 @@ function isValidBody(o: unknown): o is DeviceLockBody {
   const b = o as Record<string, unknown>;
   return (
     typeof b.pid === 'number' && Number.isFinite(b.pid) &&
-    typeof b.udid === 'string' && b.udid.length > 0 &&
+    (b.platform === 'ios' || b.platform === 'android') &&
+    typeof b.deviceId === 'string' && b.deviceId.length > 0 &&
     typeof b.projectRoot === 'string' &&
-    b.platform === 'ios' &&
     typeof b.startedAt === 'number' && Number.isFinite(b.startedAt) &&
     typeof b.lastHeartbeat === 'number' && Number.isFinite(b.lastHeartbeat)
   );

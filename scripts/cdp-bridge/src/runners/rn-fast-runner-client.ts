@@ -6,6 +6,7 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
+import { isPortFree } from './free-port.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -185,8 +186,10 @@ export function shouldReuseRunner(state: FastRunnerState | null, deviceId: strin
   return state !== null && state.deviceId === deviceId;
 }
 
-export function startFastRunner(deviceId: string, bundleId: string, port = DEFAULT_PORT): Promise<FastRunnerState> {
-  if (shouldReuseRunner(runnerState, deviceId)) return Promise.resolve(runnerState!);
+export async function startFastRunner(deviceId: string, bundleId: string, port?: number): Promise<FastRunnerState> {
+  if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
+
+  const desired = port ?? (await isPortFree(DEFAULT_PORT) ? DEFAULT_PORT : 0);
 
   return new Promise((resolve, reject) => {
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
@@ -210,7 +213,7 @@ export function startFastRunner(deviceId: string, bundleId: string, port = DEFAU
     const child = spawn('xcodebuild', args, {
       env: {
         ...process.env,
-        RN_FAST_RUNNER_PORT: String(port),
+        RN_FAST_RUNNER_PORT: String(desired),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

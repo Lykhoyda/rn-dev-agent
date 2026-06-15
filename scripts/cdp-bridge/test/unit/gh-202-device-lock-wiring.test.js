@@ -9,7 +9,7 @@ const sessionSrc = readFileSync(resolve(__dirname, '../../src/tools/device-sessi
 const indexSrc = readFileSync(resolve(__dirname, '../../src/index.ts'), 'utf8');
 
 test('GH#202 device-open acquires the UDID lock and refuses on conflict', () => {
-  assert.match(sessionSrc, /acquireDeviceLockForSession\(deviceId, appId\)/);
+  assert.match(sessionSrc, /acquireDeviceLockForSession\(lockPlatform, lockDeviceId, appId\)/);
   assert.match(sessionSrc, /DEVICE_BUSY/);
 });
 
@@ -37,4 +37,12 @@ test('GH#202 device-close releases the UDID lock', () => {
 
 test('GH#202 process exit releases the UDID lock', () => {
   assert.match(indexSrc, /releaseDeviceLockForSession/);
+});
+
+test('GH#202 Android open resolves the adb serial and acquires the device lock', () => {
+  assert.match(sessionSrc, /resolveAndroidSerial\(/);
+  assert.match(sessionSrc, /acquireDeviceLockForSession\(lockPlatform, lockDeviceId, appId\)/);
+});
+test('GH#202 Android conflict teardown stops the android runner with the locked serial', () => {
+  assert.match(sessionSrc, /stopAndroidRunner\(lockDeviceId\)/);
 });
