@@ -169,3 +169,25 @@ test('formatFailureHeadline: long parsed names stay bounded (no raw blowup)', ()
   const h = formatFailureHeadline(s, { timedOut: false, outputTruncated: false }, 'x');
   assert.ok(h.length < 300, `headline len ${h.length}`);
 });
+
+test('parseSteps: pathological whitespace lines do not catastrophically backtrack (ReDoS)', () => {
+  const start = process.hrtime.bigint();
+  assert.deepEqual(parseSteps('✓ ' + ' '.repeat(8000) + 'x'), []);     // leading whitespace run
+  assert.deepEqual(parseSteps('✓ step' + ' '.repeat(8000) + 'x'), []); // trailing whitespace run
+  assert.deepEqual(parseSteps('✗ ' + '\t'.repeat(8000) + 'y'), []);    // tabs
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  // Generous ceiling: the fixed (linear) parser runs in <1ms; a catastrophic-
+  // backtracking regression measures 30s+. 2000ms cleanly separates the two
+  // without flaking under CI/system load.
+  assert.ok(ms < 2000, `parseSteps took ${ms.toFixed(1)}ms — possible ReDoS`);
+});
+
+test('formatFailureHeadline: reason without a failed step → structured (raw-free) headline', () => {
+  const s = buildStepSummary("  ✓ launchApp (2.0s)\nElement with id 'missing' not found", { failed: true });
+  assert.equal(s.failedStep, null);
+  assert.deepEqual(s.reason, { kind: 'SELECTOR_NOT_FOUND', selector: 'missing' });
+  assert.equal(
+    formatFailureHeadline(s, { timedOut: false, outputTruncated: false }, 'raw fallback should not appear'),
+    'Maestro flow failed (SELECTOR_NOT_FOUND: missing)',
+  );
+});

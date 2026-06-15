@@ -24,9 +24,13 @@ export function stripAnsi(s: string): string {
 
 // `  {✓|✗} <name> (N.Ns)` — the trailing (N.Ns) is REQUIRED, which excludes the
 // `✗ rn-maestro-run 23.8s` summary line and the `N steps passing` count lines.
-// `.*?` is non-greedy + `$`-anchored so a duration-looking token inside the
-// selector value (`text="took (2.0s)"`) loses to the real trailing duration.
-const STEP_RE = /^([✓✗])\s+(.*?)\s*\(([\d.]+)s\)\s*$/;
+// The name is `\S.*\S|\S` (must start AND end non-whitespace). This keeps a
+// duration-looking token inside the selector value (`text="took (2.0s)"`) losing
+// to the real trailing `$`-anchored duration, AND removes the overlapping
+// whitespace quantifiers (`\s+(.*?)\s*`) that made the prior pattern
+// catastrophically backtrack (ReDoS) on a glyph + long-whitespace line — the
+// combined stdout+stderr carries untrusted multi-MB app logs (multi-LLM review).
+const STEP_RE = /^([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
 
 // Bound any text interpolated into results/headline so a pathological step name
 // or selector (e.g. a multi-KB inputText value) can't balloon the failure
@@ -144,6 +148,12 @@ export function formatFailureHeadline(
     const r = summary.reason;
     const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ''})` : '';
     return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
+  }
+  // No terminal ✗ step line (e.g. it was truncated) but a recognizable error
+  // string survived — prefer the structured, raw-free reason over the raw msg.
+  if (summary.reason) {
+    const r = summary.reason;
+    return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ''})`;
   }
   return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
