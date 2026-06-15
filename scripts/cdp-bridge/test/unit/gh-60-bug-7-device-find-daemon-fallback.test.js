@@ -48,42 +48,34 @@ Falling back to direct CLI`;
 });
 
 // ── Source-grep regression guards ───────────────────────────────────────
+// Task 7 (Phase 2): the legacy CLI daemon-timeout fallback path was deleted.
+// device_find now requires an in-tree runner (IN_TREE_RUNNER_REQUIRED) for the
+// non-exact path — there is no longer a ['find', text] dispatch to agent-device.
 
-test('source guard: device_find handler invokes fetchFindCandidates on daemon timeout', async () => {
+test('source guard: device_find handler no longer dispatches to CLI daemon (IN_TREE_RUNNER_REQUIRED)', async () => {
   const { readFileSync } = await import('node:fs');
   const { fileURLToPath } = await import('node:url');
   const { dirname, join } = await import('node:path');
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(join(__dirname, '../../dist/tools/device-interact.js'), 'utf-8');
-  // The new branch must call isDaemonTimeoutError + fetchFindCandidates.
-  assert.match(src, /isDaemonTimeoutError\(/);
-  assert.match(src, /snapshot_fallback_after_daemon_timeout/);
+  // The dead CLI fallback path is gone; the in-tree-runner gate must be present.
+  assert.match(src, /IN_TREE_RUNNER_REQUIRED/);
+  // No ['find', ...] literal should survive into the built output.
+  const findLiterals = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  assert.equal(findLiterals.length, 0, `Found ['find' literal in device-interact.js:\n${findLiterals.join('\n')}`);
 });
 
-test('source guard: NOT_FOUND envelope on daemon-timeout-with-zero-snapshot-matches surfaces hint', async () => {
-  const { readFileSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
-  const { dirname, join } = await import('node:path');
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const src = readFileSync(join(__dirname, '../../dist/tools/device-interact.js'), 'utf-8');
-  // The hint must mention cdp_interact as the suggested workaround.
-  assert.match(src, /Try cdp_interact with a testID/);
+test('source guard: isDaemonTimeoutError still exported (used by tests + future callers)', async () => {
+  const { isDaemonTimeoutError } = await import('../../dist/tools/device-interact.js');
+  assert.equal(typeof isDaemonTimeoutError, 'function');
 });
 
-test('source guard: ambiguous-match-after-recovery suggests daemon restart', async () => {
-  const { readFileSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
-  const { dirname, join } = await import('node:path');
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const src = readFileSync(join(__dirname, '../../dist/tools/device-interact.js'), 'utf-8');
-  assert.match(src, /restarting it|daemon restart/i);
+test('source guard: fetchFindCandidates is now exported from device-interact', async () => {
+  const { fetchFindCandidates } = await import('../../dist/tools/device-interact.js');
+  assert.equal(typeof fetchFindCandidates, 'function');
 });
 
-test('source guard: DAEMON_TIMEOUT failure code preserved when snapshot fallback also fails', async () => {
-  const { readFileSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
-  const { dirname, join } = await import('node:path');
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const src = readFileSync(join(__dirname, '../../dist/tools/device-interact.js'), 'utf-8');
-  assert.match(src, /code:\s*['"]DAEMON_TIMEOUT['"]|"DAEMON_TIMEOUT"/);
+test('source guard: pressCandidate is now exported from device-interact', async () => {
+  const { pressCandidate } = await import('../../dist/tools/device-interact.js');
+  assert.equal(typeof pressCandidate, 'function');
 });

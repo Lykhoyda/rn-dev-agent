@@ -1,6 +1,7 @@
 import { runAgentDevice as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { fetchFindCandidates, pressCandidate } from './device-interact.js';
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
 // agent-device CLI subprocess. Production behavior is identity-equivalent
@@ -11,6 +12,20 @@ export function _setRunAgentDeviceForTest(fn) {
 }
 export function _resetRunAgentDeviceForTest() {
     runAgentDeviceFn = _runAgentDeviceImpl;
+}
+let fetchCandidatesFn = fetchFindCandidates;
+let pressCandidateFn = pressCandidate;
+export function _setFetchCandidatesForTest(fn) {
+    fetchCandidatesFn = fn;
+}
+export function _resetFetchCandidatesForTest() {
+    fetchCandidatesFn = fetchFindCandidates;
+}
+export function _setPressCandidateForTest(fn) {
+    pressCandidateFn = fn;
+}
+export function _resetPressCandidateForTest() {
+    pressCandidateFn = pressCandidate;
 }
 // GH #136 test seam: same pattern as runAgentDeviceFn but for the
 // session-presence guard. Lets unit tests force the "session active"
@@ -136,8 +151,8 @@ export async function handleDevClientPicker() {
     // Step 1: Detect if the picker is showing
     for (const indicator of PICKER_INDICATORS) {
         try {
-            const result = await runAgentDeviceFn(['find', indicator]);
-            if (!result.isError) {
+            const findResult = await fetchCandidatesFn(indicator);
+            if (findResult.ok && findResult.candidates.length > 0) {
                 // Picker detected — try to tap a server entry
                 return await dismissPicker();
             }
@@ -197,10 +212,13 @@ export async function dismissPicker() {
     const snapshotText = snapshot.isError ? '' : (snapshot.content[0]?.text ?? '');
     const target = parseFirstServerEntry(snapshotText);
     if (target) {
-        const result = await runAgentDeviceFn(['find', target, 'click']);
-        if (!result.isError) {
-            await waitForBundle();
-            return { dismissed: true, reason: `Tapped server entry "${target}"` };
+        const findResult = await fetchCandidatesFn(target);
+        if (findResult.ok && findResult.candidates.length > 0) {
+            const pressResult = await pressCandidateFn(findResult.candidates[0], 'click');
+            if (!pressResult.isError) {
+                await waitForBundle();
+                return { dismissed: true, reason: `Tapped server entry "${target}"` };
+            }
         }
     }
     return {
@@ -225,8 +243,8 @@ export async function waitForBundle() {
         const elapsed = Date.now() - start;
         const interval = elapsed < 1_000 ? 100 : 500;
         await new Promise((r) => setTimeout(r, interval));
-        const check = await runAgentDeviceFn(['find', 'Development servers']);
-        if (check.isError)
+        const findResult = await fetchCandidatesFn('Development servers');
+        if (!findResult.ok || findResult.candidates.length === 0)
             return; // Picker gone — bundle loaded.
     }
 }
@@ -239,8 +257,8 @@ export async function isDevClientPickerShowing() {
         return false;
     for (const indicator of PICKER_INDICATORS) {
         try {
-            const result = await runAgentDeviceFn(['find', indicator]);
-            if (!result.isError)
+            const findResult = await fetchCandidatesFn(indicator);
+            if (findResult.ok && findResult.candidates.length > 0)
                 return true;
         }
         catch {
