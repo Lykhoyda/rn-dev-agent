@@ -1,8 +1,8 @@
 ---
 command: end-session
-description: Wrap up the work session — log decisions to DECISIONS.md, bugs to BUGS.md, findings + a dated narrative to ROADMAP.md (in the sibling rn-dev-agent-workspace), then run a git/changeset hygiene check. Appends only; never deletes or rewrites existing entries; never commits.
+description: Wrap up the work session — log decisions to DECISIONS.md, bugs to BUGS.md, findings + a dated narrative to ROADMAP.md (in the sibling rn-dev-agent-workspace), sync un-filed ROADMAP/BUGS follow-ups to GitHub issues, run Kano backlog refinement, then a git/changeset hygiene check. Docs are append-only and never committed; GitHub issue creation + labels happen only after maintainer confirmation.
 argument-hint: [optional focus or extra notes to weave in]
-allowed-tools: Bash, Read, Edit, Grep, Glob
+allowed-tools: Bash, Read, Edit, Grep, Glob, Skill
 ---
 
 # /end-session — session wrap-up
@@ -38,6 +38,11 @@ it does not replace your own reconstruction of the session.
    before writing and increment from there — do not reuse or guess.
 5. **Match the house format** of each doc exactly (see the templates below). Use today's
    date from `date +%F`, never a guessed date.
+6. **GitHub mutation is gated.** Creating issues (Step 4.5) and applying Kano labels
+   (Step 4.6) are the ONLY outward-facing writes this command makes, and they happen ONLY
+   after you present the proposed set and the maintainer confirms. Never auto-create issues
+   or relabel without that explicit yes. The "never commit" rule still governs the workspace
+   docs — those remain the maintainer's to commit.
 
 ## Procedure
 
@@ -123,6 +128,38 @@ entry's Forward block that are still open.>
 **Refs.** <Dxxxx/Bxxxx created this session, GH #, PR #.>
 ```
 
+### Step 4.5 — Sync un-filed follow-ups to GitHub issues (propose, then apply)
+
+The ROADMAP **Forward.** blocks and open `BUGS.md` entries accumulate "potential issues"
+that were described but never filed. Turn the genuinely-unfiled ones into GitHub issues —
+but **propose first, create only on the maintainer's yes** (this is outward mutation; Iron rule 6).
+
+1. **Collect candidates** from:
+   - the **Forward.** block you just wrote in Step 4, PLUS any still-open carried-forward
+     items from the previous entry's Forward block;
+   - open `BUGS.md` entries (`### B<n> … (Open …)`) that cite no GH issue number.
+2. **Dedup against what's already filed:** `gh issue list --state all --limit 200`. Drop any
+   candidate that (a) already cites a `#N` in the ROADMAP/BUGS text, or (b) matches an existing
+   issue's title/keywords. A duplicate is worse than not filing.
+3. **Draft** each remaining candidate: a clear title, a body quoting the ROADMAP/`Bxxxx`
+   context + this session's date, and suggested labels (`bug`/`enhancement`; a `kano:*`/`effort:*`
+   guess is optional — Step 4.6 finalizes labels).
+4. **Present the proposed issue set** (titles + one-line bodies + labels) and **WAIT** for the
+   maintainer to confirm / edit / drop. Create nothing before the yes.
+5. **On confirmation:** `gh issue create` each, capture the new `#`s, and **append those `#`s
+   into the ROADMAP Forward block** you wrote (so the doc records what got filed). On decline:
+   leave the drafts in the Step 6 report only.
+
+### Step 4.6 — Kano backlog refinement
+
+After the sync, refine the whole open backlog so the new issues are categorized too.
+**Invoke the `kano-backlog` skill** — do not re-implement Kano logic here; it is the single
+source of truth (categorizes every open issue as Must-be / Performance / Attractive /
+Indifferent / Reverse, applies `kano:*` + `priority:*` (+ `effort:*`) labels via `gh`, and
+recommends the single best next issue). Run it AFTER Step 4.5 so it sees the issues just
+created. Its label writes are GitHub mutation — gated by the skill's own flow; if it would
+relabel, surface the plan and apply on the maintainer's yes (Iron rule 6).
+
 ### Step 5 — Hygiene check (report, don't fix)
 - Uncommitted work: surface `git status --short` for **both** repos (the plugin repo and
   the workspace, including the docs you just wrote). **Separate three buckets explicitly:**
@@ -142,5 +179,7 @@ Print a compact report:
 - The hygiene flags (uncommitted files, missing changeset, branch state).
 - An explicit reminder that **nothing was committed** — list the exact files the
   maintainer should review and commit, in both repos.
+- **Backlog:** issues created this run (with `#`s), or proposed-but-declined; the Kano
+  next-pick recommendation from Step 4.6.
 
 Keep the final report short; the value is in the doc updates, not the recap.
