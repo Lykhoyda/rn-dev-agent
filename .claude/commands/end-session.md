@@ -153,7 +153,8 @@ but **propose first, create only on the maintainer's yes** (this is outward muta
 ### Step 4.6 — Kano backlog refinement
 
 After the sync, refine the whole open backlog so the new issues are categorized too.
-**Invoke the `kano-backlog` skill** — do not re-implement Kano logic here; it is the single
+**Invoke the `kano-backlog` skill** (vendored maintainer tooling at `.claude/skills/kano-backlog/`,
+so this command is self-contained on any checkout) — do not re-implement Kano logic here; it is the single
 source of truth (categorizes every open issue as Must-be / Performance / Attractive /
 Indifferent / Reverse, applies `kano:*` + `priority:*` (+ `effort:*`) labels via `gh`, and
 recommends the single best next issue). Run it AFTER Step 4.5 so it sees the issues just
