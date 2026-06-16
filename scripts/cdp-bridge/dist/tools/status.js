@@ -8,7 +8,8 @@ import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
-import { AppDetachedError } from '../cdp/discovery.js';
+import { AppDetachedError, enumerateMetroCandidates } from '../cdp/discovery.js';
+import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
@@ -17,6 +18,23 @@ import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 // helper versions that might emit new tokens we don't recognize yet.
 export function narrowArchitecture(raw) {
     return raw === 'new' || raw === 'old' ? raw : 'unknown';
+}
+/**
+ * GH #303: flag when the connected Metro is serving a DIFFERENT worktree than
+ * this session's project root — the silent "verifying the wrong bundle" trap.
+ * Uses pathMatchesRoot so a monorepo app subdir / symlinked path is not flagged.
+ * Fail-open: silent whenever either path is unresolved (never a false alarm).
+ */
+export function computeMetroMismatch(args) {
+    const { servingCwd, projectRoot, port } = args;
+    if (!servingCwd || !projectRoot || pathMatchesRoot(servingCwd, projectRoot)) {
+        return { mismatch: false };
+    }
+    return {
+        mismatch: true,
+        warning: `Connected Metro on :${port} is serving ${servingCwd}, but this session's project root is ${projectRoot} ` +
+            `— you may be verifying against a different worktree's bundle. Restart Metro in this worktree or pass metroPort.`,
+    };
 }
 const STATUS_PROBE_EXPRESSION = `
 (function() {
@@ -55,6 +73,18 @@ async function buildStatusResult(client) {
     const deviceSession = await getDeviceSessionHealth({
         detectForeign: async (udid) => (await detectIosExternalRunner(undefined, udid)) ? { detected: true } : null,
     });
+    // GH #303: worktree-disambiguation diagnostics — best-effort, fail-open.
+    const projectRoot = resolveBridgeProjectRoot() ?? undefined;
+    let candidates;
+    let servingCwd;
+    let metroTimings;
+    try {
+        const enriched = await enumerateMetroCandidates(client.metroPort, projectRoot);
+        servingCwd = enriched.servingCwd;
+        candidates = enriched.candidates; // omitted by the fast path when ≤1 Metro is up
+        metroTimings = enriched.timings_ms;
+    }
+    catch { /* fail-open: omit diagnostics */ }
     return {
         metro: {
             running: true,
@@ -63,6 +93,10 @@ async function buildStatusResult(client) {
             lastBuild: metroEvents?.lastBuild ?? null,
             buildErrors: metroEvents?.buildErrors ?? 0,
             eventsReason: metroEvents?.incompatibleReason ?? null,
+            candidates,
+            projectRoot,
+            servingCwd,
+            timings_ms: metroTimings,
         },
         cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null, bundleId: client.connectedTarget?.description ?? null },
         app: {
@@ -263,6 +297,15 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 && !status.app.hasRedBox
                 && status.app.errorCount === 0) {
                 return warnResult(status, 'CDP connected but app helpers not injected and no JS errors captured. The app may have crashed natively before __RN_AGENT loaded (e.g. missing native module, failed bundle fetch). Call cdp_native_errors to inspect the platform log.');
+            }
+            // GH #303: the connected Metro serves a different worktree than this session.
+            const mismatch = computeMetroMismatch({
+                servingCwd: status.metro.servingCwd ?? null,
+                projectRoot: status.metro.projectRoot,
+                port: status.metro.port,
+            });
+            if (mismatch.mismatch) {
+                return warnResult(status, mismatch.warning);
             }
             return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
         }
