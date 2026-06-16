@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
-import type { HermesTarget } from '../types.js';
+import type { HermesTarget, MetroCandidate } from '../types.js';
 import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
 
 /**
@@ -23,7 +23,7 @@ export class AppDetachedError extends Error {
     super(
       `Metro is up on port ${port}` +
       (runningPorts.length > 1 ? ` (also running: ${runningPorts.join(', ')})` : '') +
-      ` but no live Metro advertises a Hermes debug target — the app isn't attached ` +
+      ` but advertises 0 Hermes debug targets — the app isn't attached ` +
       `(it may be on the Expo dev launcher, backgrounded, or crashed). Relaunch the app, ` +
       `or call cdp_status to auto-relaunch and reconnect.`,
     );
@@ -490,4 +490,46 @@ export async function discoverForList(
   inferPlatforms(targets);
 
   return { port: chosen, targets };
+}
+
+/**
+ * GH #303: best-effort enumeration of live Metros for cdp_status diagnostics —
+ * decoupled from discover() so it works even on the already-connected path. Fast
+ * path (honors the spec's "single-Metro = one lsof"): when only the connected
+ * Metro is up, skip per-port fetchTargets + extra lsof and resolve just the
+ * connected port's cwd for the mismatch check, omitting the candidates array.
+ */
+export async function enumerateMetroCandidates(
+  connectedPort: number,
+  projectRoot: string | undefined,
+): Promise<{ candidates?: MetroCandidate[]; servingCwd: string | null; timings_ms: { probe: number; cwd: number } }> {
+  const t0 = performance.now();
+  const ports = [...new Set([connectedPort, ...DEFAULT_PORTS])];
+  const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
+  const tProbe = performance.now();
+
+  if (running.length <= 1) {
+    const servingCwd = cwdForPort(connectedPort);
+    return { servingCwd, timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe } };
+  }
+
+  const candidates: MetroCandidate[] = [];
+  let servingCwd: string | null = null;
+  for (const p of running) {
+    let attached = false;
+    try {
+      attached = filterValidTargets(await fetchTargets(p, DISCOVERY_TIMEOUT_MS)).length > 0;
+    } catch { /* treat as detached */ }
+    const cwd = cwdForPort(p);
+    if (p === connectedPort) servingCwd = cwd;
+    candidates.push({
+      port: p,
+      attached,
+      cwd,
+      isConnected: p === connectedPort,
+      matchesProjectRoot: pathMatchesRoot(cwd, projectRoot),
+    });
+  }
+  if (servingCwd === null) servingCwd = cwdForPort(connectedPort);
+  return { candidates, servingCwd, timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe } };
 }

@@ -69,6 +69,15 @@ export interface LogEntry {
 
 export type CDPClientState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
+/** GH #303: a candidate Metro found while resolving which port to drive. */
+export interface MetroCandidate {
+  port: number;
+  attached: boolean;
+  cwd: string | null;
+  isConnected: boolean;
+  matchesProjectRoot: boolean;
+}
+
 export interface StatusResult {
   metro: {
     running: boolean;
@@ -86,6 +95,11 @@ export interface StatusResult {
      * `eventsConnected` will be false and no events will ever arrive.
      */
     eventsReason?: 'expo-cli-incompatible' | null;
+    // GH #303: worktree disambiguation diagnostics.
+    candidates?: MetroCandidate[];
+    projectRoot?: string;
+    servingCwd?: string | null;
+    timings_ms?: { probe: number; cwd: number };
   };
   cdp: {
     connected: boolean;
