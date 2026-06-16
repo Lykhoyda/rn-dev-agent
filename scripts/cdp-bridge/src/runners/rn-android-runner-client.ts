@@ -10,6 +10,7 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
+import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,16 @@ const INSTRUMENTATION = 'dev.lykhoyda.rndevagent.androidrunner.test/androidx.tes
 const MAIN_LOOP_CLASS = 'dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop';
 const HEALTH_POLL_INTERVAL_MS = 150;
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
+
+// Self-install (parity with the iOS rn-fast-runner cold build): the in-tree runner
+// ships as a Gradle project; its APKs build/install on first use so there's no
+// external CLI to install (matches the /setup + /doctor docs).
+const RN_ANDROID_RUNNER_DIR = join(import.meta.dirname, '..', '..', '..', 'rn-android-runner');
+const GRADLEW = join(RN_ANDROID_RUNNER_DIR, 'gradlew');
+const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
+const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
+const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
+const ADB_INSTALL_TIMEOUT_MS = 120_000;
 
 interface AndroidRunnerState {
   hostPort: number;   // 127.0.0.1 port the TS client connects to (probed; globally contended)
@@ -144,6 +155,94 @@ export function buildInstrumentPortArgs(devicePort: number): string[] {
   return ['-e', 'RN_ANDROID_RUNNER_PORT', String(devicePort)];
 }
 
+export function buildAdbInstallArgs(deviceId: string | undefined, apkPath: string): string[] {
+  return [...adbSerialArgs(deviceId), 'install', '-r', apkPath];
+}
+
+export function buildGradleAssembleArgs(): string[] {
+  return [':app:assembleDebug', ':app:assembleDebugAndroidTest'];
+}
+
+/**
+ * True when `adb shell pm list instrumentation` names our exact `<pkg>/<runner>` id.
+ * Anchored to the full id (not the bare package) so a superstring package
+ * (`…androidrunner.testfoo`) or a `(target=…)` mention can't false-positive.
+ */
+export function isInstrumentationRegistered(pmListStdout: string, instrumentation: string): boolean {
+  const escaped = instrumentation.replace(/[.$*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|:)${escaped}(\\s|$)`, 'm').test(pmListStdout);
+}
+
+export type AndroidInstallAction = 'reuse' | 'install' | 'build-then-install';
+
+/** Decide how to provision the runner: reuse (already on device), install the prebuilt
+ *  APKs, or cold-build then install (fresh machine — mirrors the iOS cold xcodebuild). */
+export function resolveAndroidInstallAction(opts: {
+  instrumentationRegistered: boolean;
+  apksExist: boolean;
+}): AndroidInstallAction {
+  if (opts.instrumentationRegistered) return 'reuse';
+  if (opts.apksExist) return 'install';
+  return 'build-then-install';
+}
+
+/**
+ * Self-install the in-tree runner on first use (parity with rn-fast-runner's cold build):
+ * if the instrumentation isn't registered on the device, install the prebuilt APKs — and
+ * if those don't exist yet, cold-build them via Gradle first. Throws an actionable error
+ * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
+ */
+async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
+  // Fail fast if the target isn't online — never start a multi-minute cold build (or an
+  // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
+  try {
+    const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], { timeout: 5_000 });
+    if (stdout.trim() !== 'device') throw new Error(`adb state is "${stdout.trim()}"`);
+  } catch (err) {
+    throw new Error(
+      `rn-android-runner: target device not online (adb get-state) — boot the emulator / connect the device. ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  let pmOut = '';
+  try {
+    pmOut = (await execFileAsync('adb', [...adbSerialArgs(deviceId), 'shell', 'pm', 'list', 'instrumentation'])).stdout;
+  } catch {
+    // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
+  }
+  const action = resolveAndroidInstallAction({
+    instrumentationRegistered: isInstrumentationRegistered(pmOut, INSTRUMENTATION),
+    apksExist: existsSync(APK_APP) && existsSync(APK_TEST),
+  });
+  if (action === 'reuse') return;
+
+  if (action === 'build-then-install') {
+    try {
+      await execFileAsync(GRADLEW, buildGradleAssembleArgs(), {
+        cwd: RN_ANDROID_RUNNER_DIR,
+        timeout: GRADLE_BUILD_TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (err) {
+      throw new Error(
+        `rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). ` +
+        `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  try {
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), { timeout: ADB_INSTALL_TIMEOUT_MS });
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), { timeout: ADB_INSTALL_TIMEOUT_MS });
+  } catch (err) {
+    throw new Error(
+      `rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function isAndroidRunnerAvailable(): boolean {
   if (!runnerState) return false;
   try {
@@ -206,6 +305,10 @@ export async function waitForAndroidRunnerHealth(
 
 export async function startAndroidRunner(deviceId?: string, bundleId?: string, devicePort = DEFAULT_PORT): Promise<AndroidRunnerState> {
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) return runnerState!;
+
+  // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
+  // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
+  await ensureAndroidRunnerInstalled(deviceId);
 
   let hostPort = await findFreePort(devicePort);
   try {
