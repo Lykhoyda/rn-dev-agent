@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
 import type { HermesTarget } from '../types.js';
+import { pathMatchesRoot } from './metro-cwd.js';
 
 /**
  * GH #208 (RC2): thrown by `discover()` when Metro IS reachable but advertises
@@ -12,14 +13,23 @@ import type { HermesTarget } from '../types.js';
  */
 export class AppDetachedError extends Error {
   readonly port: number;
-  constructor(port: number) {
+  /**
+   * GH #303: all Metro ports found running at throw time. `.port` is preserved
+   * for back-compat/diagnostics only — recover-detached.ts relaunches by the
+   * active session's deviceId/appId and never reads it.
+   */
+  readonly runningPorts: number[];
+  constructor(port: number, runningPorts: number[] = [port]) {
     super(
-      `Metro is up on port ${port} but advertises 0 Hermes debug targets — the app isn't attached ` +
+      `Metro is up on port ${port}` +
+      (runningPorts.length > 1 ? ` (also running: ${runningPorts.join(', ')})` : '') +
+      ` but no live Metro advertises a Hermes debug target — the app isn't attached ` +
       `(it may be on the Expo dev launcher, backgrounded, or crashed). Relaunch the app, ` +
       `or call cdp_status to auto-relaunch and reconnect.`,
     );
     this.name = 'AppDetachedError';
     this.port = port;
+    this.runningPorts = runningPorts;
   }
 }
 
@@ -47,6 +57,33 @@ export async function discoverMetroPort(ports: number[], timeout: number): Promi
     }
   }
   return null;
+}
+
+/**
+ * GH #303: probe ALL candidate ports in parallel and return every one that is a
+ * running Metro (vs `discoverMetroPort` which short-circuits on the first). The
+ * caller then prefers a port with an attached Hermes target so a detached
+ * sibling-worktree Metro can't shadow a healthy one. Closed localhost ports
+ * refuse fast (no per-port timeout cost); only ports that accept but stall hit
+ * the timeout.
+ */
+export async function discoverAllMetroPorts(ports: number[], timeout: number): Promise<number[]> {
+  const checks = await Promise.all(
+    ports.map(async (p) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeout);
+      try {
+        const resp = await fetch(`http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
+        const text = await resp.text();
+        return text.includes('packager-status:running') ? p : null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
+  return checks.filter((p): p is number => p !== null);
 }
 
 export async function fetchTargets(port: number, timeout: number): Promise<HermesTarget[]> {
@@ -310,6 +347,71 @@ export function selectTarget(
   });
 
   return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
+}
+
+export interface AttachedPort {
+  port: number;
+  targets: HermesTarget[];
+}
+
+export interface SelectMetroPortCtx {
+  currentPort: number;
+  projectRoot?: string;
+  preferredBundleId?: string;
+  cwdForPort: (port: number) => string | null;
+}
+
+/**
+ * GH #303: pick the right Metro port among those running. Correctness first
+ * (only `attached` ports — those with a live Hermes target — are candidates),
+ * then worktree disambiguation. Pure + injectable (`cwdForPort`) for testing.
+ *
+ * Precedence when >1 port is attached:
+ *   1. projectRoot cwd-match — the Metro whose serving dir is (or contains / is
+ *      contained by) this bridge's project root. Most specific worktree signal.
+ *   2. preferredBundleId — exactly one attached port serves the preferred bundle.
+ *   3. sticky currentPort if attached, else lowest attached port + a warning.
+ */
+export function selectMetroPort(
+  attached: AttachedPort[],
+  runningPorts: number[],
+  ctx: SelectMetroPortCtx,
+): { port: number; warning?: string } {
+  if (attached.length === 0) {
+    throw new AppDetachedError(runningPorts[0] ?? ctx.currentPort, runningPorts);
+  }
+  if (attached.length === 1) {
+    return { port: attached[0].port };
+  }
+
+  // 1. projectRoot cwd-match (realpath-normalized, containment-aware).
+  if (ctx.projectRoot) {
+    const matches = attached.filter((a) => pathMatchesRoot(ctx.cwdForPort(a.port), ctx.projectRoot));
+    if (matches.length === 1) return { port: matches[0].port };
+  }
+
+  // 2. preferredBundleId port-level tie-break (exactly one attached port serves it).
+  if (ctx.preferredBundleId) {
+    const pref = ctx.preferredBundleId.toLowerCase();
+    const prefPorts = attached.filter((a) =>
+      a.targets.some((t) => (t.description ?? '').toLowerCase() === pref),
+    );
+    if (prefPorts.length === 1) return { port: prefPorts[0].port };
+  }
+
+  // 3. sticky currentPort if attached, else lowest attached port + disambiguation warning.
+  const attachedPortNums = attached.map((a) => a.port).sort((x, y) => x - y);
+  const chosen = attachedPortNums.includes(ctx.currentPort) ? ctx.currentPort : attachedPortNums[0];
+  const list = attached
+    .map((a) => {
+      const cwd = ctx.cwdForPort(a.port);
+      return `:${a.port}${cwd ? ` (${cwd})` : ''}`;
+    })
+    .join(', ');
+  return {
+    port: chosen,
+    warning: `Multiple live Metros with an attached app: ${list}. Picked :${chosen}. Pass metroPort explicitly to choose a different worktree.`,
+  };
 }
 
 export interface DiscoveryResult {
