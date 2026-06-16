@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
 import type { HermesTarget } from '../types.js';
-import { pathMatchesRoot } from './metro-cwd.js';
+import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
 
 /**
  * GH #208 (RC2): thrown by `discover()` when Metro IS reachable but advertises
@@ -40,32 +40,12 @@ export const DEFAULT_PORTS = [
   8081, 8082, 19000, 19006,
 ];
 
-export async function discoverMetroPort(ports: number[], timeout: number): Promise<number | null> {
-  for (const p of ports) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeout);
-    try {
-      const resp = await fetch(`http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
-      const text = await resp.text();
-      if (text.includes('packager-status:running')) {
-        return p;
-      }
-    } catch {
-      // Port not available, continue scanning
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  return null;
-}
-
 /**
  * GH #303: probe ALL candidate ports in parallel and return every one that is a
- * running Metro (vs `discoverMetroPort` which short-circuits on the first). The
- * caller then prefers a port with an attached Hermes target so a detached
- * sibling-worktree Metro can't shadow a healthy one. Closed localhost ports
- * refuse fast (no per-port timeout cost); only ports that accept but stall hit
- * the timeout.
+ * running Metro. The caller then prefers a port with an attached Hermes target
+ * so a detached sibling-worktree Metro can't shadow a healthy one. (Replaces the
+ * old first-match `discoverMetroPort`.) Closed localhost ports refuse fast (no
+ * per-port timeout cost); only ports that accept but stall hit the timeout.
  */
 export async function discoverAllMetroPorts(ports: number[], timeout: number): Promise<number[]> {
   const checks = await Promise.all(
@@ -435,32 +415,52 @@ export async function discover(
   if (filters.preferredBundleId) hints.push(`preferredBundleId=${filters.preferredBundleId}`);
   logger.debug('CDP', `Discovering Metro on ports: ${ports.join(', ')}${hints.length ? ` (${hints.join(', ')})` : ''}`);
 
-  const metroPort = await discoverMetroPort(ports, DISCOVERY_TIMEOUT_MS);
-  if (!metroPort) {
+  // GH #303: probe ALL candidate ports, then prefer one with an attached Hermes
+  // target so a detached sibling-worktree Metro can't shadow a healthy one.
+  const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
+  if (runningPorts.length === 0) {
     throw new Error(
       'Metro not found on ports ' + ports.join(', ') +
       '. Is the dev server running? Try: npx expo start or npx react-native start',
     );
   }
-  logger.info('CDP', `Metro found on port ${metroPort}`);
 
-  const raw = await fetchTargets(metroPort, DISCOVERY_TIMEOUT_MS * 2);
-  const validTargets = filterValidTargets(raw).filter(t => {
-    try {
-      const { hostname } = new URL(t.webSocketDebuggerUrl!);
-      return hostname === '127.0.0.1' || hostname === 'localhost';
-    } catch {
-      return false;
-    }
+  const perPort = await Promise.all(
+    runningPorts.map(async (p) => {
+      try {
+        const raw = await fetchTargets(p, DISCOVERY_TIMEOUT_MS * 2);
+        const valid = filterValidTargets(raw).filter(t => {
+          try {
+            const { hostname } = new URL(t.webSocketDebuggerUrl!);
+            return hostname === '127.0.0.1' || hostname === 'localhost';
+          } catch {
+            return false;
+          }
+        });
+        return { port: p, targets: valid };
+      } catch {
+        return { port: p, targets: [] as HermesTarget[] };
+      }
+    }),
+  );
+
+  const attached = perPort.filter((pp) => pp.targets.length > 0);
+  // selectMetroPort throws AppDetachedError when nothing is attached (preserving
+  // the existing catch in status.ts), carrying the full running-port list.
+  const { port: metroPort, warning: portWarning } = selectMetroPort(attached, runningPorts, {
+    currentPort,
+    projectRoot: resolveBridgeProjectRoot() ?? undefined,
+    preferredBundleId: filters.preferredBundleId,
+    cwdForPort: (p) => cwdForPort(p),
   });
+  logger.info('CDP', `Metro selected on port ${metroPort} (running: ${runningPorts.join(', ')})`);
 
-  if (validTargets.length === 0) {
-    throw new AppDetachedError(metroPort);
-  }
+  const validTargets = attached.find((pp) => pp.port === metroPort)!.targets;
 
   inferPlatforms(validTargets);
 
-  const { targets: sorted, warning } = selectTarget(validTargets, filters);
+  const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
+  const warning = [portWarning, selectWarning].filter(Boolean).join(' | ') || undefined;
 
   logger.debug('CDP', `Found ${sorted.length} valid target(s): ${sorted.map(t => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
 
@@ -472,14 +472,22 @@ export async function discoverForList(
   portHint?: number,
 ): Promise<{ port: number; targets: HermesTarget[] }> {
   const ports = [...new Set([portHint ?? currentPort, ...DEFAULT_PORTS])];
-  const metroPort = await discoverMetroPort(ports, DISCOVERY_TIMEOUT_MS);
-  if (!metroPort) {
+  // GH #303: prefer a running port that actually has targets over the first
+  // running one, so cdp_targets can't inspect a different Metro than discover()
+  // selected. No cwd auto-pick needed here — just attached-preference.
+  const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
+  if (running.length === 0) {
     throw new Error('Metro not found on ports ' + ports.join(', '));
   }
-
-  const raw = await fetchTargets(metroPort, DISCOVERY_TIMEOUT_MS * 2);
-  const targets = filterValidTargets(raw);
+  let chosen = running[0];
+  let targets: HermesTarget[] = [];
+  for (const p of running) {
+    try {
+      const valid = filterValidTargets(await fetchTargets(p, DISCOVERY_TIMEOUT_MS * 2));
+      if (valid.length > 0) { chosen = p; targets = valid; break; }
+    } catch { /* try next running port */ }
+  }
   inferPlatforms(targets);
 
-  return { port: metroPort, targets };
+  return { port: chosen, targets };
 }

@@ -62,3 +62,66 @@ test('selectMetroPort: sticky falls back to lowest attached when currentPort det
   );
   assert.equal(res.port, 8082);
 });
+
+test('discover: skips detached first port for attached second port', async () => {
+  const { discover } = await import('../../dist/cdp/discovery.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/status')) return { text: async () => 'packager-status:running' };
+    if (u.includes(':8082/json/list')) return { json: async () => [] }; // detached
+    if (u.includes(':8081/json/list')) return {
+      json: async () => [{
+        id: 'page-1', title: 'RN', vm: 'Hermes', description: 'com.app',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:8081/inspector/debug?page=1',
+      }],
+    };
+    return { json: async () => [], text: async () => '' };
+  };
+  try {
+    const res = await discover(8082, {}); // currentPort 8082 is the detached one
+    assert.equal(res.port, 8081, 'discovery chose the attached port, not the running-but-detached one');
+    assert.equal(res.targets.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('discover: all-detached still throws AppDetachedError', async () => {
+  const { discover, AppDetachedError } = await import('../../dist/cdp/discovery.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/status')) return { text: async () => 'packager-status:running' };
+    return { json: async () => [] };
+  };
+  try {
+    await assert.rejects(discover(8081, {}), (e) => e instanceof AppDetachedError);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('discoverForList: prefers a running port WITH targets over a detached one', async () => {
+  const { discoverForList } = await import('../../dist/cdp/discovery.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/status')) return { text: async () => 'packager-status:running' };
+    if (u.includes(':8082/json/list')) return { json: async () => [] };
+    if (u.includes(':8081/json/list')) return {
+      json: async () => [{
+        id: 'page-1', title: 'RN', vm: 'Hermes', description: 'com.app',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:8081/inspector/debug?page=1',
+      }],
+    };
+    return { json: async () => [], text: async () => '' };
+  };
+  try {
+    const res = await discoverForList(8082);
+    assert.equal(res.port, 8081);
+    assert.equal(res.targets.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
