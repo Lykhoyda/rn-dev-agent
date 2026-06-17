@@ -14,9 +14,14 @@ an unchanged screen to ~0.004 ms (in-memory filter), saving ~1.45 s per avoided
 find.
 
 Correctness is gated on a two-condition validity check, not just a TTL: the cache
-is invalidated by any screen-mutating verb (tap/press/fill/type/swipe/scroll/back/
-longpress/pinch/keyboard/drag) at the `runNative` dispatch choke point, AND it must
-be within the freshness budget. A tap that navigates therefore forces a fresh
-snapshot — a cache is never reused against a screen it no longer describes. Only the
-`device_find` handler opts in (`allowCache`); all other snapshot callers are
-unchanged.
+must be clean AND within the freshness budget. Invalidation is **fail-safe and
+centralized at the MCP tool boundary** (`trackedTool`): every tool call that is not
+on an explicit read allowlist marks the cache dirty — so JS-level mutations that
+bypass the native dispatch path (`cdp_interact`, `cdp_navigate`, the `fastSwipe`
+swipe/scroll path, `device_deeplink`, `cdp_dispatch`/`cdp_reload`/`maestro_run`, …)
+all invalidate it, and any future tool defaults to "invalidate" until proven a pure
+read. The native `runNative` choke point also marks dirty as defense-in-depth for
+direct (intra-composite) handler calls. A tap or navigation therefore forces a
+fresh snapshot — the cache is never reused against a screen it no longer describes.
+Only the `device_find` handler opts in (`allowCache`); all other snapshot callers
+are unchanged.
