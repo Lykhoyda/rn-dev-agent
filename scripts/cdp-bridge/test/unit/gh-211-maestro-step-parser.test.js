@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseSteps, stripAnsi, findFailedStep, lastObservedStep, summarizeReason, buildStepSummary,
-  classifyExecError, formatFailureHeadline,
+  classifyExecError, formatFailureHeadline, combineRunnerOutput,
 } from '../../dist/domain/maestro-step-parser.js';
 
 // Real maestro-runner format (same shape as the gh-263 fixtures).
@@ -200,4 +200,86 @@ test('parseSteps: caps returned steps to the most recent 1000 (tail kept, true i
   assert.equal(steps[steps.length - 1].name, 'tapOn: id="s1499"'); // tail kept
   assert.equal(steps[steps.length - 1].index, 1499);      // true index preserved
   assert.equal(steps[0].index, 500);                      // 1500 total → first kept index = 500 (gap = truncation signal)
+});
+
+// GH #312 / B211: MAX_FIELD bounds the step `name` but the `verb` (the name's
+// first token) was stored uncapped — a step-shaped line whose first token is a
+// multi-KB blob bloats the MCP response across up to 1000 steps. Cap the verb.
+test('parseSteps: a pathologically long verb (first token) is capped (B211)', () => {
+  const steps = parseSteps('  ✓ ' + 'x'.repeat(500) + ' (1.0s)');
+  assert.equal(steps.length, 1);
+  assert.ok(steps[0].verb.length <= 201, `verb len ${steps[0].verb.length}`);
+});
+
+// GH #312 / B212: real runner steps are indented (live renderer: 4 spaces;
+// nested runFlow sub-steps: 6+). The combined stdout+stderr carries untrusted
+// app logs — an UNINDENTED (column-0) line shaped `✓/✗ … (N.Ns)` must not be
+// mistaken for a step, or a benign/crafted log line poisons lastStep/failedStep.
+test('parseSteps: an unindented (column-0) app-log line is NOT a step (B212)', () => {
+  assert.deepEqual(parseSteps('✓ App started successfully (1.2s)'), []);
+  assert.deepEqual(parseSteps('✗ Background sync failed (3.4s)'), []);
+});
+
+// The anchor must require SOME indent, not an EXACT one — the live renderer
+// prints top-level steps at 4 spaces and nested runFlow sub-steps at 6+, so a
+// too-strict `^  ` (2-space) anchor would drop legit steps.
+test('parseSteps: real 4-space top-level + 6-space nested steps still parse (B212)', () => {
+  assert.equal(parseSteps('    ✓ launchApp (2.3s)')[0].verb, 'launchApp');
+  assert.equal(parseSteps('      ✓ tapOn: id="nested" (2.0s)')[0].name, 'tapOn: id="nested"');
+});
+
+// The poisoning vector spelled out: a crafted column-0 ✗ line appended to a
+// run's app logs must not become the terminal failedStep / lastStep.
+test('parseSteps: an unindented crafted ✗ line cannot poison failedStep/lastStep (B212)', () => {
+  const out = '    ✓ launchApp (2.3s)\n    ✓ tapOn: id="a" (2.8s)\n✗ fake step failed (9.9s)';
+  const s = buildStepSummary(out, { failed: true });
+  assert.equal(s.steps.length, 2);                  // only the two indented steps
+  assert.equal(s.lastStep.name, 'tapOn: id="a"');   // not the crafted line
+  assert.equal(s.failedStep, null);                 // the crafted column-0 ✗ is ignored
+});
+
+// The anchor must be HORIZONTAL whitespace only: JS `\s` also matches `\r`, `\v`,
+// `\f`, and NBSP, which are common at the start of terminal/progress/app-log
+// lines — admitting them would re-open the column-0 poisoning vector B212 closes.
+test('parseSteps: a CR/NBSP/VT-prefixed column-0 line is NOT a step (B212)', () => {
+  assert.deepEqual(parseSteps('\r✗ fake step failed (9.9s)'), []);
+  assert.deepEqual(parseSteps('\u00a0✓ App started (1.2s)'), []); // NBSP
+  assert.deepEqual(parseSteps('\v✓ App started (1.2s)'), []);     // vertical tab
+  const out = '    ✓ launchApp (2.3s)\n\r✗ fake step failed (9.9s)';
+  const s = buildStepSummary(out, { failed: true });
+  assert.equal(s.steps.length, 1);                 // only the real space-indented step
+  assert.equal(s.failedStep, null);                // CR-prefixed ✗ does not poison
+  assert.equal(s.lastStep.name, 'launchApp');
+});
+
+test('parseSteps: indented pathological whitespace line does not backtrack (B212 ReDoS guard)', () => {
+  const start = process.hrtime.bigint();
+  assert.deepEqual(parseSteps('    ✓ ' + ' '.repeat(8000) + 'x'), []);
+  assert.deepEqual(parseSteps('      ✗ step' + '\t'.repeat(8000) + 'y'), []);
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ms < 2000, `parseSteps took ${ms.toFixed(1)}ms — possible ReDoS`);
+});
+
+// GH #312: parseSteps anchors on the runner's leading indent (B212), so the
+// stdout+stderr combiner must NOT strip per-line indentation the way a blanket
+// .trim() did — else the FIRST step line (its indent eaten by the outer trim) is
+// dropped from meta.steps. combineRunnerOutput trims trailing whitespace + leading
+// BLANK LINES only, preserving the first content line's indent.
+test('combineRunnerOutput: preserves the first step line indent so it is not dropped (B212/#312)', () => {
+  const stdout = '  ✓ launchApp (2.3s)\n  ✓ tapOn: id="a" (2.8s)\n  ✗ tapOn: id="b" (12.7s)';
+  const s = buildStepSummary(combineRunnerOutput(stdout, ''), { failed: true });
+  assert.equal(s.steps.length, 3);              // launchApp NOT dropped
+  assert.equal(s.steps[0].name, 'launchApp');
+});
+
+test('combineRunnerOutput: strips leading blank lines + trailing whitespace, keeps indent', () => {
+  assert.equal(combineRunnerOutput('\n\n  ✓ launchApp (2.3s)\n', ''), '  ✓ launchApp (2.3s)');
+  assert.equal(combineRunnerOutput('  ✓ a (1.0s)', '  ✗ b (2.0s)'), '  ✓ a (1.0s)\n  ✗ b (2.0s)');
+});
+
+test('combineRunnerOutput: trailing-trim is linear on a huge non-whitespace-terminated blob (no ReDoS)', () => {
+  const start = process.hrtime.bigint();
+  combineRunnerOutput(' '.repeat(2_000_000) + 'x', '');
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ms < 500, `combineRunnerOutput took ${ms.toFixed(1)}ms — possible ReDoS`);
 });

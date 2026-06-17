@@ -38,6 +38,15 @@ test('parseTapLatencies: output with no tapOn lines → []', () => {
   assert.deepEqual(parseTapLatencies(''), []);
 });
 
+// GH #312 / B212: parseTapLatencies delegates to parseSteps, so the same trim
+// caveat applies — an UNINDENTED (column-0) tap-shaped app log must not become
+// a latency sample (it would skew the wedge median off untrusted output).
+test('parseTapLatencies: an unindented (column-0) tap-shaped app log is not a sample (B212)', () => {
+  assert.deepEqual(parseTapLatencies('✓ tapOn: id="x" (2.0s)\n✓ tapOn: id="y" (2.5s)'), []);
+  // \r-prefixed (common in terminal/progress output) must not skew the median either
+  assert.deepEqual(parseTapLatencies('\r✓ tapOn: id="x" (2.0s)\n\r✓ tapOn: id="y" (2.5s)'), []);
+});
+
 // Review finding #2: a non-tap step whose text VALUE contains "tapOn" must not
 // be counted (anchor on the step verb, not a substring match).
 test('parseTapLatencies: "tapOn" inside another step\'s text value is not a tap sample', () => {

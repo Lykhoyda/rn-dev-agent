@@ -11,18 +11,23 @@ const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
 export function stripAnsi(s) {
     return s.replace(ANSI_RE, '');
 }
-// `  {✓|✗} <name> (N.Ns)` — the trailing (N.Ns) is REQUIRED, which excludes the
-// `✗ rn-maestro-run 23.8s` summary line and the `N steps passing` count lines.
-// The name is `\S.*\S|\S` (must start AND end non-whitespace). This keeps a
-// duration-looking token inside the selector value (`text="took (2.0s)"`) losing
-// to the real trailing `$`-anchored duration, AND removes the overlapping
-// whitespace quantifiers (`\s+(.*?)\s*`) that made the prior pattern
-// catastrophically backtrack (ReDoS) on a glyph + long-whitespace line — the
-// combined stdout+stderr carries untrusted multi-MB app logs (multi-LLM review).
-const STEP_RE = /^([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+// `<indent>{✓|✗} <name> (N.Ns)` — the leading `[ \t]+` anchors on the runner's
+// line shape: real steps are indented with spaces (live renderer: 4 spaces,
+// nested runFlow sub-steps 6+), so an unindented (column-0) line shaped like a
+// step — an app log in the combined stdout+stderr — is rejected and can't poison
+// the parsed steps (B212). The anchor is HORIZONTAL whitespace only: `\s` would
+// also match `\r`/`\v`/`\f`/NBSP, which routinely lead terminal/progress/app-log
+// lines and would re-open the column-0 vector. The trailing (N.Ns) is REQUIRED,
+// which also excludes the `✗ rn-maestro-run 23.8s` summary and `N steps passing`
+// count lines. The name is `\S.*\S|\S` (must start AND end non-whitespace), which
+// keeps a duration-looking token inside the selector value (`text="took (2.0s)"`)
+// losing to the real trailing `$`-anchored duration; the non-overlapping
+// quantifiers (vs a `\s+(.*?)\s*` pattern) avoid catastrophic backtracking
+// (ReDoS) on the untrusted multi-MB combined output.
+const STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
 // Bound any text interpolated into results/headline so a pathological step name
 // or selector (e.g. a multi-KB inputText value) can't balloon the failure
-// message and defeat the sliced `output` field (codex-pair review).
+// message and defeat the sliced `output` field.
 const MAX_FIELD = 200;
 function cap(s) {
     return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + '…' : s;
@@ -32,17 +37,27 @@ function cap(s) {
 // slice. Keep the most recent steps — failures and partial-progress live at the
 // tail — with their true `index` preserved (a gap signals truncation).
 const MAX_STEPS = 1000;
+// Combine runner stdout+stderr for parsing WITHOUT destroying per-line leading
+// indentation. parseSteps anchors on the runner's space indent (B212), so a
+// blanket `.trim()` would strip the FIRST line's indent and drop the first step
+// (typically `launchApp`) from the result. Trailing whitespace uses native
+// `.trimEnd()` (linear — a `/\s+$/` regex is O(n²) on multi-MB non-whitespace-
+// terminated output); leading BLANK LINES are stripped with a start-anchored
+// `^[\r\n]+` that cannot backtrack and never touches a content line's indent.
+export function combineRunnerOutput(stdout, stderr) {
+    return (stdout + '\n' + stderr).replace(/^[\r\n]+/, '').trimEnd();
+}
 export function parseSteps(output) {
     if (!output || typeof output !== 'string')
         return [];
     const steps = [];
     let index = 0;
     for (const raw of stripAnsi(output).split('\n')) {
-        const m = STEP_RE.exec(raw.trim());
+        const m = STEP_RE.exec(raw);
         if (!m)
             continue;
-        const name = m[2].trim();
-        const verb = name.split(/\s+/)[0].replace(/:$/, '');
+        const name = m[2];
+        const verb = cap(name.split(/\s+/)[0].replace(/:$/, ''));
         if (verb === 'rn-maestro-run')
             continue; // belt-and-suspenders vs a future summary format
         const seconds = Number(m[3]);
@@ -61,7 +76,7 @@ export function parseSteps(output) {
 // The TERMINAL failed step: the last parsed step iff it failed. maestro-runner
 // stops at the first real failure, so the terminal ✗ is the last parsed step; a
 // transient ✗ that was retried-✓ before a later timeout is NOT reported, because
-// the last parsed step is then the recovery ✓ (codex-pair review).
+// the last parsed step is then the recovery ✓.
 export function findFailedStep(steps) {
     const last = steps.length ? steps[steps.length - 1] : null;
     return last && last.status === 'fail' ? last : null;

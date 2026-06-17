@@ -17,7 +17,7 @@ import {
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
-import { buildStepSummary, classifyExecError, formatFailureHeadline } from '../domain/maestro-step-parser.js';
+import { buildStepSummary, classifyExecError, combineRunnerOutput, formatFailureHeadline } from '../domain/maestro-step-parser.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
@@ -217,7 +217,9 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         { platform, deviceId: getActiveSession()?.deviceId },
       );
 
-      const output = (stdout + '\n' + stderr).trim();
+      // combineRunnerOutput (not .trim()) so the step parser's leading-indent
+      // anchor (B212) still sees the FIRST step line's indent — see GH #312.
+      const output = combineRunnerOutput(stdout, stderr);
       // Reaching here means the runner exited 0 — that exit code is the
       // authoritative pass signal (a real flow failure exits non-zero and is
       // handled in the catch below). The output scan is only a secondary guard,
@@ -271,7 +273,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       const errAny = err as { stdout?: unknown; stderr?: unknown };
       const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
       const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
-      const combined = (stdout + '\n' + stderr).trim();
+      const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
       const summary = buildStepSummary(combined, { failed: true });
       // Headline from structured data (raw-free); the raw err.message is the
