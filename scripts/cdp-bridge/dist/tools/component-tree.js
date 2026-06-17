@@ -5,6 +5,9 @@ export function createComponentTreeHandler(getClient) {
         const opts = { maxDepth: depth };
         if (args.filter !== undefined)
             opts.filter = args.filter;
+        // GH #321: salient digest — only actionable nodes (+ text), no props/state.
+        if (args.interactiveOnly === true)
+            opts.interactiveOnly = true;
         const result = await client.evaluate(`__RN_AGENT.getTree(${JSON.stringify(opts)})`);
         if (result.error) {
             return failResult(`Component tree error: ${result.error}`);

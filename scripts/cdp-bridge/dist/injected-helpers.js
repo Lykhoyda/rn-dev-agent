@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 25;
+export const HELPERS_VERSION = 26;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -340,6 +340,102 @@ export const INJECTED_HELPERS = `
       }
 
       return result;
+    }
+
+    // GH #321 (quick win #3): salient digest — a compact "what can I act on
+    // here?" list of ONLY actionable nodes (+ their text), dropping props /
+    // hookStates / nesting. Cuts the live-perception payload from ~thousands of
+    // tokens (full tree) to hundreds. BFS over every renderer root like the
+    // filter branch.
+    if (opts.interactiveOnly) {
+      var INTERACTIVE_NAMES = { Pressable: 1, TouchableOpacity: 1, TouchableHighlight: 1, TouchableWithoutFeedback: 1, TouchableNativeFeedback: 1, Button: 1, TextInput: 1, Switch: 1, Link: 1 };
+      var INTERACTIVE_ROLES = { button: 1, link: 1, switch: 1, checkbox: 1, radio: 1, menuitem: 1, tab: 1, togglebutton: 1, imagebutton: 1, search: 1, adjustable: 1 };
+      var HANDLER_PROPS = ['onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing', 'onClick'];
+
+      var isInteractiveFiber = function(fiber) {
+        var props = fiber.memoizedProps;
+        if (!props || typeof props !== 'object') return false;
+        var nm = getName(fiber);
+        if (nm && INTERACTIVE_NAMES[nm]) return true;
+        var role = props.accessibilityRole;
+        if (role && INTERACTIVE_ROLES[String(role).toLowerCase()]) return true;
+        for (var hi = 0; hi < HANDLER_PROPS.length; hi++) {
+          if (typeof props[HANDLER_PROPS[hi]] === 'function') return true;
+        }
+        return false;
+      };
+
+      var inferRole = function(nm, props) {
+        if (props && props.accessibilityRole) return String(props.accessibilityRole).toLowerCase();
+        if (nm === 'TextInput') return 'textinput';
+        if (nm === 'Switch') return 'switch';
+        if (nm === 'Link') return 'link';
+        if (nm === 'Button' || nm === 'Pressable' || (nm && nm.indexOf('Touchable') === 0)) return 'button';
+        if (props) {
+          if (typeof props.onChangeText === 'function') return 'textinput';
+          if (typeof props.onValueChange === 'function') return 'switch';
+        }
+        return 'button';
+      };
+
+      // Gather descendant text (capped), NOT recursing into nested interactive
+      // nodes (they each get their own entry).
+      var collectText = function(fiber, depth, acc) {
+        if (!fiber || depth > 8 || acc.s.length >= 120) return;
+        if (fiber.tag === 6 && typeof fiber.memoizedProps === 'string') {
+          var t = fiber.memoizedProps.trim();
+          if (t) acc.s += (acc.s ? ' ' : '') + t;
+          return;
+        }
+        var c = fiber.child;
+        while (c && acc.s.length < 120) {
+          if (!isInteractiveFiber(c)) collectText(c, depth + 1, acc);
+          c = c.sibling;
+        }
+      };
+
+      var salient = [];
+      var iRoots = findAllRootFibers();
+      var iBudget = Math.min(5000, 2000 * Math.max(1, iRoots.length));
+      var iQueue = [];
+      for (var iri = 0; iri < iRoots.length; iri++) iQueue.push(iRoots[iri].fiber);
+      var iSeen = new WeakSet();
+      var iScanned = 0;
+      var iStart = Date.now();
+      while (iQueue.length > 0 && iScanned < iBudget && (Date.now() - iStart) < 3000 && salient.length < 200) {
+        var ifiber = iQueue.shift();
+        if (!ifiber || iSeen.has(ifiber)) continue;
+        iSeen.add(ifiber);
+        iScanned++;
+        if (isInteractiveFiber(ifiber)) {
+          var iprops = ifiber.memoizedProps;
+          var entry = { role: inferRole(getName(ifiber), iprops) };
+          var itid = iprops.testID || iprops.nativeID;
+          if (itid) entry.testID = itid;
+          var acc = { s: '' };
+          collectText(ifiber, 0, acc);
+          if (acc.s) entry.text = acc.s.length > 120 ? acc.s.substring(0, 120) : acc.s;
+          else if (iprops.title) entry.text = String(iprops.title); // RN <Button title> has no child text fiber
+          if (iprops.accessibilityLabel) entry.label = String(iprops.accessibilityLabel);
+          if (iprops.placeholder) entry.placeholder = String(iprops.placeholder);
+          // surface on/off state for toggles so the agent need not re-read before deciding
+          if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
+          if (iprops.disabled === true || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
+          salient.push(entry);
+        }
+        var ich = ifiber.child;
+        while (ich) { iQueue.push(ich); ich = ich.sibling; }
+      }
+      // Signal truncation rather than silently dropping actionable nodes (a hit
+      // cap leaves the queue non-empty). Mirrors the filter branch's truncated
+      // flag — a clean-looking partial list would mislead the agent into
+      // "nothing more to tap here."
+      var iOut = { interactive: salient, totalNodes: iScanned, rootsSeeded: iRoots.length };
+      if (iQueue.length > 0) {
+        iOut.truncated = true;
+        iOut.hint = 'More interactive elements exist beyond the cap — scope with filter or device_scrollintoview.';
+      }
+      return safeStringify(iOut, 999999);
     }
 
     // For filtered queries: BFS to find matches, then build compact subtrees.

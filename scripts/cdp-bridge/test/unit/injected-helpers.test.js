@@ -317,6 +317,6 @@ test('M10: getAppInfo returns architecture=unknown when nativeFabricUIManager is
   assert.equal(info.architecture, 'unknown');
 });
 
-test('#250: helpers bundle version is 25 (bumped for handler-throw success:false)', () => {
-  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*25/);
+test('#321: helpers bundle version is 26 (bumped for getTree interactiveOnly salient digest)', () => {
+  assert.match(INJECTED_HELPERS, /__HELPERS_VERSION__\s*=\s*26/);
 });

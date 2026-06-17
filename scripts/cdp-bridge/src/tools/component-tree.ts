@@ -2,10 +2,12 @@ import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 
 export function createComponentTreeHandler(getClient: () => CDPClient) {
-  return withConnection(getClient, async (args: { filter?: string; depth: number }, client) => {
+  return withConnection(getClient, async (args: { filter?: string; depth: number; interactiveOnly?: boolean }, client) => {
     const depth = Math.min(Math.max(args.depth, 1), 12);
     const opts: Record<string, unknown> = { maxDepth: depth };
     if (args.filter !== undefined) opts.filter = args.filter;
+    // GH #321: salient digest — only actionable nodes (+ text), no props/state.
+    if (args.interactiveOnly === true) opts.interactiveOnly = true;
 
     const result = await client.evaluate(
       `__RN_AGENT.getTree(${JSON.stringify(opts)})`
