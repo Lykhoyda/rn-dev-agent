@@ -11,7 +11,7 @@ import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-w
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { loadAction, saveAction, actionWasEditedExternally, } from '../domain/action-store.js';
-import { extractAllTestIDs, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
+import { extractAllTestIDs, extractIdSelectors, detectTransportBlind, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
 import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
 import { resolveBundleId } from '../project-config.js';
@@ -202,6 +202,24 @@ export function createRepairActionHandler() {
                 hint: 'The screen may not have any rendered elements with testIDs (e.g. you are on a loading screen, splash, or dev-client picker). Navigate to the target screen first.',
             });
         }
+        // GH #317: transport-blindness guard. If the failed selector is BOTH used by
+        // the action AND present verbatim in OUR live snapshot, the element is
+        // rendered and rn-fast-runner can see it — Maestro/WDA reported "not visible"
+        // because it read an empty a11y tree (e.g. iOS 26.2 + bridgeless), NOT because
+        // the testID drifted. The body-membership check preserves the deliberate
+        // BAD_FILENAME "your hint is wrong" diagnostic (Issue #102 A3). Fire BEFORE
+        // attemptRepair, which filters the selector out of candidates and would
+        // otherwise mislead ("no confident replacement") or mis-patch it.
+        if (extractIdSelectors(action.body).includes(args.failedSelector) &&
+            detectTransportBlind(args.failedSelector, candidates)) {
+            return failResult(`cdp_repair_action: Maestro/WDA reported "${args.failedSelector}" not visible, but rn-fast-runner sees it (${candidates.length} testIDs in the live snapshot). This is transport-blindness, not testID drift — WDA reads an empty/partial accessibility tree on this runtime (e.g. iOS 26.2 + bridgeless, GH #317). Maestro-based replay is blocked here; drive the screen with device_* primitives (device_find/press/fill), which go through rn-fast-runner and work. rn-fast-runner-native action replay is tracked in #317 Phase 2.`, 'TRANSPORT_BLIND', {
+                actionId: args.actionId,
+                failedSelector: args.failedSelector,
+                snapshotTestIdCount: candidates.length,
+                candidatesSample: candidates.slice(0, 50),
+                hint: 'Verify with device_snapshot — it uses rn-fast-runner. If the element is present there, this is a WDA transport limitation, not your testID.',
+            });
+        }
         const result = attemptRepair(action, args.failedSelector, candidates, args.threshold ?? DEFAULT_REPAIR_THRESHOLD);
         if (result.kind === 'no-stale-selector') {
             // Issue #102 A3: this surfaces "the caller passed a failedSelector
@@ -219,7 +237,7 @@ export function createRepairActionHandler() {
             });
         }
         if (result.kind === 'no-match') {
-            return failResult(`cdp_repair_action: no confident replacement for "${args.failedSelector}". ${result.reason}`, 'TESTID_NOT_FOUND', {
+            return failResult(`cdp_repair_action: no confident replacement for "${args.failedSelector}". ${result.reason} If "${args.failedSelector}" is in fact correct and the screen renders, WDA may be transport-blind on this runtime (empty a11y tree; see GH #317) — confirm with device_snapshot, which uses rn-fast-runner.`, 'TESTID_NOT_FOUND', {
                 actionId: args.actionId,
                 failedSelector: args.failedSelector,
                 bestScore: result.bestScore,
