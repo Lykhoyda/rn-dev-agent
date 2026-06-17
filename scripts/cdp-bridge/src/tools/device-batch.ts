@@ -42,6 +42,48 @@ export interface BatchArgs {
    * are more valuable than the first-failure abort.
    */
   continueOnError?: boolean;
+  // GH #321 (quick win #4): shape of the batch's final UI payload.
+  //   salient (default): compact list of only actionable a11y nodes
+  //     (Button/TextField/Switch/etc) -- live-loop default, far fewer tokens.
+  //   full: the complete node list (legacy shape) -- when every node is needed.
+  //   none: skip the implicit trailing snapshot (~1,450 ms saved) for
+  //     action-only batches that verify via expect_*/cdp_store_state.
+  // An explicit snapshot step or screenshotOn=end still populates the payload;
+  // this only governs the IMPLICIT trailing snapshot and its shape.
+  finalSnapshot?: 'salient' | 'full' | 'none';
+}
+
+// GH #321: a11y node types that represent something the agent can act on. Used
+// to compact the batch's final payload to just the actionable surface.
+const INTERACTIVE_A11Y_TYPES = new Set<string>([
+  'Button', 'TextField', 'SecureTextField', 'TextView', 'Switch', 'Slider',
+  'Link', 'Cell', 'MenuItem', 'Tab', 'Stepper', 'SegmentedControl',
+  'SearchField', 'Toggle', 'CheckBox', 'RadioButton',
+]);
+
+/**
+ * GH #321: reduce a device_snapshot payload to only its actionable nodes, each
+ * compacted to { ref, type, label, identifier, hittable? }. Non-node payloads
+ * (e.g. a screenshot result) and falsy input pass through unchanged. Exported
+ * for unit tests; pure.
+ */
+export function salientizeSnapshotData(data: unknown): unknown {
+  if (!data || typeof data !== 'object') return data;
+  const d = data as { nodes?: Array<Record<string, unknown>> };
+  if (!Array.isArray(d.nodes)) return data; // not a node snapshot — leave as-is
+  const nodes: Array<Record<string, unknown>> = [];
+  for (const n of d.nodes) {
+    const type = typeof n.type === 'string' ? n.type : '';
+    if (!INTERACTIVE_A11Y_TYPES.has(type)) continue;
+    const entry: Record<string, unknown> = {};
+    if (n.ref) entry.ref = n.ref;
+    if (type) entry.type = type;
+    if (typeof n.label === 'string' && n.label) entry.label = n.label;
+    if (typeof n.identifier === 'string' && n.identifier) entry.identifier = n.identifier;
+    if (n.hittable === false) entry.hittable = false; // surface dead controls
+    nodes.push(entry);
+  }
+  return { nodes, salient: true, fullNodeCount: d.nodes.length };
 }
 
 /**
@@ -279,7 +321,7 @@ function extractData(result: ToolResult): unknown {
 
 export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false } = args;
+    const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient' } = args;
 
     if (!steps || steps.length === 0) {
       return failResult('steps array is required and must not be empty');
@@ -374,13 +416,23 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       } catch { /* best effort */ }
     }
 
-    if (!finalSnapshot && !failedStep) {
+    // GH #321: skip the implicit trailing snapshot when the caller doesn't want
+    // it (action-only batches that verify via expect_*/cdp_store_state) — saves a
+    // full ~1,450 ms snapshot round-trip.
+    if (!finalSnapshot && !failedStep && finalSnapshotMode !== 'none') {
       try {
         const snapResult = await runNative(['snapshot', '-i']);
         if (isOk(snapResult)) {
           finalSnapshot = extractData(snapResult);
         }
       } catch { /* best effort */ }
+    }
+
+    // GH #321: by default return only the actionable surface (compact salient
+    // digest). 'full' keeps the legacy complete node list. A node-shaped payload
+    // is required; a screenshot 'end' payload passes through untouched.
+    if (finalSnapshot && finalSnapshotMode === 'salient') {
+      finalSnapshot = salientizeSnapshotData(finalSnapshot);
     }
 
     const totalDuration = Date.now() - batchStart;

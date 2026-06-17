@@ -2,6 +2,45 @@ import { runNative } from '../agent-device-wrapper.js';
 import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
+// GH #321: a11y node types that represent something the agent can act on. Used
+// to compact the batch's final payload to just the actionable surface.
+const INTERACTIVE_A11Y_TYPES = new Set([
+    'Button', 'TextField', 'SecureTextField', 'TextView', 'Switch', 'Slider',
+    'Link', 'Cell', 'MenuItem', 'Tab', 'Stepper', 'SegmentedControl',
+    'SearchField', 'Toggle', 'CheckBox', 'RadioButton',
+]);
+/**
+ * GH #321: reduce a device_snapshot payload to only its actionable nodes, each
+ * compacted to { ref, type, label, identifier, hittable? }. Non-node payloads
+ * (e.g. a screenshot result) and falsy input pass through unchanged. Exported
+ * for unit tests; pure.
+ */
+export function salientizeSnapshotData(data) {
+    if (!data || typeof data !== 'object')
+        return data;
+    const d = data;
+    if (!Array.isArray(d.nodes))
+        return data; // not a node snapshot — leave as-is
+    const nodes = [];
+    for (const n of d.nodes) {
+        const type = typeof n.type === 'string' ? n.type : '';
+        if (!INTERACTIVE_A11Y_TYPES.has(type))
+            continue;
+        const entry = {};
+        if (n.ref)
+            entry.ref = n.ref;
+        if (type)
+            entry.type = type;
+        if (typeof n.label === 'string' && n.label)
+            entry.label = n.label;
+        if (typeof n.identifier === 'string' && n.identifier)
+            entry.identifier = n.identifier;
+        if (n.hittable === false)
+            entry.hittable = false; // surface dead controls
+        nodes.push(entry);
+    }
+    return { nodes, salient: true, fullNodeCount: d.nodes.length };
+}
 /**
  * Phase 125: snapshot-based testID resolution — single source of truth for
  * testID-keyed batch steps. Each call snapshots, returning the fresh ref so
@@ -208,7 +247,7 @@ function extractData(result) {
 }
 export function createDeviceBatchHandler() {
     return withSession(async (args) => {
-        const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false } = args;
+        const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient' } = args;
         if (!steps || steps.length === 0) {
             return failResult('steps array is required and must not be empty');
         }
@@ -297,7 +336,10 @@ export function createDeviceBatchHandler() {
             }
             catch { /* best effort */ }
         }
-        if (!finalSnapshot && !failedStep) {
+        // GH #321: skip the implicit trailing snapshot when the caller doesn't want
+        // it (action-only batches that verify via expect_*/cdp_store_state) — saves a
+        // full ~1,450 ms snapshot round-trip.
+        if (!finalSnapshot && !failedStep && finalSnapshotMode !== 'none') {
             try {
                 const snapResult = await runNative(['snapshot', '-i']);
                 if (isOk(snapResult)) {
@@ -305,6 +347,12 @@ export function createDeviceBatchHandler() {
                 }
             }
             catch { /* best effort */ }
+        }
+        // GH #321: by default return only the actionable surface (compact salient
+        // digest). 'full' keeps the legacy complete node list. A node-shaped payload
+        // is required; a screenshot 'end' payload passes through untouched.
+        if (finalSnapshot && finalSnapshotMode === 'salient') {
+            finalSnapshot = salientizeSnapshotData(finalSnapshot);
         }
         const totalDuration = Date.now() - batchStart;
         if (failedStep) {

@@ -901,6 +901,7 @@ trackedTool(
     delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
     screenshotOn: z.enum(['none', 'failure', 'end', 'each']).default('failure').describe('When to capture screenshots'),
     continueOnError: z.boolean().default(false).describe('When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort.'),
+    finalSnapshot: z.enum(['salient', 'full', 'none']).default('salient').describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
   },
   createDeviceBatchHandler(),
 );
