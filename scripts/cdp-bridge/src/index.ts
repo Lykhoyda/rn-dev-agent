@@ -282,10 +282,11 @@ trackedTool(
 
 trackedTool(
   'cdp_component_tree',
-  'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns.',
+  'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) — the cheapest way to perceive a novel screen for live interaction.',
   {
     filter: z.string().optional().describe('Case-insensitive substring match against component name, testID/nativeID, or accessibilityLabel (e.g. "CartBadge", "product-list", "Continue")'),
     depth: z.number().int().min(1).max(12).default(4).describe('Max depth (default 4, max 12)'),
+    interactiveOnly: z.boolean().optional().describe('Return a compact salient digest: only actionable nodes (Pressable/Button/TextInput/Switch/Link + accessibilityRole controls) with {testID, role, text, label}, dropping props/hookStates/nesting. Ignores filter/depth. Use to cheaply see what is tappable on the current screen.'),
   },
   createComponentTreeHandler(getClient),
 );

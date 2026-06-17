@@ -323,6 +323,9 @@ cost (a `device_snapshot` is a full XCUITest accessibility round-trip, measured 
    `expect_text`. Internal-state truth, ~hundreds of tokens, no snapshot.
 2. **Scoped CDP reads** — `cdp_store_state(path=…)`, `cdp_navigation_state`,
    `cdp_component_tree(filter=…, depth≤2)`. Source of truth, cheap.
+   To see *what's tappable* on a novel screen, prefer
+   `cdp_component_tree(interactiveOnly=true)` — a salient digest of only
+   actionable elements (testID/role/text), hundreds of tokens vs a full tree.
 3. **Full re-perception** — `device_snapshot` / `device_screenshot`. Use ONLY when
    you genuinely need fresh `@refs` to act next, or a cheap assertion failed and you
    must diagnose visually. Not the default confirm step.
