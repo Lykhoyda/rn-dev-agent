@@ -333,7 +333,12 @@ cost (a `device_snapshot` is a full XCUITest accessibility round-trip, measured 
 For EACH step in the flow:
 
 1. **Act**: Use agent-device for native interaction (preferred), or Maestro for
-   complex multi-step flows:
+   complex multi-step flows.
+
+   For a KNOWN multi-step sequence, prefer a single `device_batch` over N separate
+   tool calls — it executes all steps in ONE round-trip. Use `finalSnapshot:'none'`
+   when you'll verify via `expect_*`/`cdp_store_state` (skips a ~1,450 ms trailing
+   snapshot), or the default `'salient'` for a compact actionable-elements payload.
 
    **agent-device (preferred — no YAML, native touch):**
    ```
