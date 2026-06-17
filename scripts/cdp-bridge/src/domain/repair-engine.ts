@@ -132,6 +132,22 @@ function walkTree(node: SnapshotNodeTree, acc: Set<string>): void {
   }
 }
 
+/**
+ * GH #317 — transport-blindness detector. Returns true when the
+ * Maestro-reported failed selector is present VERBATIM in the live
+ * rn-fast-runner snapshot's testID list: the element IS rendered and our
+ * transport sees it, yet Maestro/WDA reported it "not visible" — i.e. WDA
+ * read an empty/partial a11y tree (e.g. iOS 26.2 + bridgeless), not a
+ * testID drift. A genuinely-renamed selector is absent from the snapshot,
+ * so this stays false and real drift still flows to attemptRepair.
+ *
+ * Pure function — exported for unit tests.
+ */
+export function detectTransportBlind(failedSelector: string, candidates: string[]): boolean {
+  if (!failedSelector) return false;
+  return candidates.includes(failedSelector);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Maestro YAML body — find + replace selectors
 // ─────────────────────────────────────────────────────────────────────────────
