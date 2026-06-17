@@ -49,6 +49,10 @@ jobs:
       - name: Changeset-guard unit test
         run: bash scripts/test/require-changeset.test.sh
 
+      # GH#316/B215: changeset package names must resolve to real workspace packages.
+      - name: Changeset-name validator unit test
+        run: bash scripts/test/validate-changeset-names.test.sh
+
       # GH#252/B196: SessionStart must stay bounded (hook timeout + curl time limits).
       - name: SessionStart bounded-startup guard
         run: bash scripts/test/session-start-bounded.test.sh
@@ -80,6 +84,11 @@ jobs:
         run: |
           git fetch origin "$BASE_REF_NAME"
           BASE_REF="origin/$BASE_REF_NAME" bash scripts/require-changeset.sh
+
+      # GH#316/B215: validate that every present changeset names a real workspace
+      # package, so a typo fails the PR instead of release.yml's `changeset version`.
+      - name: Validate changeset package names
+        run: bash scripts/validate-changeset-names.sh
 
   web-bundle:
     name: Web bundle freshness
