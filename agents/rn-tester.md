@@ -313,6 +313,20 @@ Verify: `cdp_navigation_state` confirms you're on the right screen.
 
 ### Step 4: Execute and Verify (The Core Loop)
 
+**Verification cost hierarchy (GH #321 — confirm the EFFECT, don't re-perceive the screen).**
+After an action, prove it worked with the CHEAPEST signal that demonstrates the
+effect — re-perceiving the whole screen after every step is the dominant per-step
+cost (a `device_snapshot` is a full XCUITest accessibility round-trip, measured at
+~1,450 ms on iOS; a screenshot spends image tokens). Prefer, in order:
+
+1. **State assertions** — `expect_route`, `expect_redux`, `expect_visible_by_testid`,
+   `expect_text`. Internal-state truth, ~hundreds of tokens, no snapshot.
+2. **Scoped CDP reads** — `cdp_store_state(path=…)`, `cdp_navigation_state`,
+   `cdp_component_tree(filter=…, depth≤2)`. Source of truth, cheap.
+3. **Full re-perception** — `device_snapshot` / `device_screenshot`. Use ONLY when
+   you genuinely need fresh `@refs` to act next, or a cheap assertion failed and you
+   must diagnose visually. Not the default confirm step.
+
 For EACH step in the flow:
 
 1. **Act**: Use agent-device for native interaction (preferred), or Maestro for

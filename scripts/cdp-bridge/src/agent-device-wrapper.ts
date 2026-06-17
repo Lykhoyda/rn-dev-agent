@@ -15,7 +15,7 @@ import {
 } from './runners/rn-fast-runner-client.js';
 import type { FastRunnerLiveness } from './runners/rn-fast-runner-client.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 
 /**
@@ -137,6 +137,14 @@ export function resetActiveSessionInMemoryForTest(): void {
   activeSession = null;
 }
 
+// Test-only: set the in-memory session pointer WITHOUT the on-disk write that
+// setActiveSession() performs. Tests that exercise platform-gated paths (e.g.
+// the GH #321 cached-find reuse) must not clobber a developer's live MCP
+// session file, which is a shared, uid-keyed path.
+export function setActiveSessionInMemoryForTest(info: SessionState): void {
+  activeSession = info;
+}
+
 export function hasActiveSession(): boolean {
   return activeSession !== null;
 }
@@ -145,18 +153,47 @@ export function hasActiveSession(): boolean {
 // Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
 interface CachedSnapshot {
   platform: string;
-  nodes: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean }[];
+  // Lossless: the full runner nodes are stored (rect/enabled included) so a
+  // cache-served device_find ranks and dedups identically to a fresh snapshot.
+  nodes: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean; enabled?: boolean; rect?: { x: number; y: number; width: number; height: number } }[];
   capturedAt: string;
+  capturedAtMs: number;
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
 
+// Live-sim speedup (GH #321): device_find reuses the snapshot it already
+// captured instead of re-snapshotting every call — but only while that snapshot
+// still faithfully describes the screen. A tap/navigation changes the screen, so
+// reuse is gated on TWO conditions: not dirtied by a mutating verb since capture,
+// AND within the TTL (coordinate-drift guard, mirrors MAX_REF_MAP_AGE_MS). The
+// dirty flag is the load-bearing correctness piece: a fresh-by-time but
+// stale-by-content cache would drive a wrong-element tap.
+let snapshotCacheDirty = true;
+
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
-  snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString() });
+  snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString(), capturedAtMs: Date.now() });
+  // A fresh snapshot is, by definition, a clean picture of the current screen.
+  snapshotCacheDirty = false;
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
   return snapshotCache.get(platform);
+}
+
+// Called at the runNative dispatch choke point on any screen-mutating verb
+// (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
+export function markSnapshotDirty(): void {
+  snapshotCacheDirty = true;
+}
+
+// True only when the cached snapshot is safe to reuse for targeting: present,
+// not invalidated by a mutating verb, and within the freshness budget.
+export function isSnapshotCacheValid(platform: string, maxAgeMs: number = MAX_REF_MAP_AGE_MS): boolean {
+  if (snapshotCacheDirty) return false;
+  const entry = snapshotCache.get(platform);
+  if (!entry) return false;
+  return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
 
 export function listCachedSnapshots(): string[] {
@@ -208,6 +245,23 @@ const RN_FAST_RUNNER_COMMANDS = new Set<string>([
   'keyboard',
   'swipe',
   'scroll',
+  'longpress',
+  'pinch',
+]);
+
+// GH #321: verbs that can change what's on screen, so a cached snapshot can no
+// longer be trusted for targeting after one runs. snapshot/screenshot are reads
+// and are deliberately absent.
+const SNAPSHOT_MUTATING_VERBS = new Set<string>([
+  'tap',
+  'press',
+  'fill',
+  'type',
+  'back',
+  'keyboard',
+  'swipe',
+  'scroll',
+  'drag',
   'longpress',
   'pinch',
 ]);
@@ -608,6 +662,15 @@ export async function runNative(
   if (!_testSeamFused) {
     _testSeamFused = true;
     _testSeamFuseBlownBy = cliArgs[0] ?? '<empty>';
+  }
+
+  // GH #321 (live-sim speedup): a screen-mutating verb invalidates the snapshot
+  // cache so a subsequent device_find re-snapshots instead of targeting against
+  // a now-stale picture of the screen. Marked here, at the single dispatch choke
+  // point, so it covers iOS and Android uniformly. snapshot/screenshot don't
+  // change the screen and are intentionally excluded.
+  if (SNAPSHOT_MUTATING_VERBS.has(cliArgs[0])) {
+    markSnapshotDirty();
   }
 
   // GH #105 iOS-MVP §3.1: iOS short-circuit. Every supported command goes

@@ -79,7 +79,7 @@ import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
 import { setForeignGateUdidProvider, foreignFlowGate } from './lifecycle/foreign-flow-gate.js';
-import { getActiveSession } from './agent-device-wrapper.js';
+import { getActiveSession, markSnapshotDirty } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -99,7 +99,7 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
-import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, buildLiveDeps } from './observability/live-device.js';
+import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, buildLiveDeps } from './observability/live-device.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
 
@@ -186,18 +186,22 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
     name,
     handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
   ) as (...args: unknown[]) => Promise<unknown>);
-  // Install the live-capture wrapper for any tool that COULD mutate (some only
-  // do for certain args, e.g. device_find action="click"), then make the actual
-  // decision per-call from the args (PR #296 review P2).
-  const wrapped = (liveEnabled && mayTriggerLiveCapture(name))
-    ? async (...a: unknown[]): Promise<unknown> => {
-        const result = await base(...a);
-        if (isStateMutating(name, a[0] as Record<string, unknown> | undefined)) {
-          void maybeCaptureLiveFrame(liveDeps);
-        }
-        return result;
-      }
-    : base;
+  // GH #321: the device_find snapshot-cache must be invalidated after ANY tool
+  // that could change the screen — including JS-level mutations that bypass the
+  // runNative choke point (cdp_interact, cdp_navigate, device_deeplink, the
+  // fastSwipe path, cdp_dispatch/reload/maestro_*). trackedTool is the one
+  // boundary every external call crosses, so the fail-safe invalidation lives
+  // here and runs regardless of liveEnabled. GH #206 live capture layers on top.
+  const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
+  const wrapped = async (...a: unknown[]): Promise<unknown> => {
+    const result = await base(...a);
+    const args = a[0] as Record<string, unknown> | undefined;
+    if (toolInvalidatesSnapshotCache(name, args)) markSnapshotDirty();
+    if (installLiveCapture && isStateMutating(name, args)) {
+      void maybeCaptureLiveFrame(liveDeps);
+    }
+    return result;
+  };
   server.tool(name, desc, schema, wrapped as typeof handler);
 }
 

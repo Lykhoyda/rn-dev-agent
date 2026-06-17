@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { withSession } from '../utils.js';
@@ -132,7 +132,19 @@ export type SnapshotFetchResult =
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
-async function fetchSnapshotNodes(): Promise<SnapshotFetchResult> {
+async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+  // GH #321 (live-sim speedup): serve device_find from the snapshot we already
+  // captured when it's still a faithful picture of the screen (clean + fresh),
+  // skipping a redundant runner round-trip. isSnapshotCacheValid() is false the
+  // moment any mutating verb runs, so we never target against a stale screen.
+  if (allowCache) {
+    const platform = getActiveSession()?.platform;
+    if (platform && isSnapshotCacheValid(platform)) {
+      const cached = getCachedSnapshot(platform);
+      if (cached) return { ok: true, nodes: cached.nodes };
+    }
+  }
+
   const first = await runNative(['snapshot', '-i']);
   const initialNodes = parseSnapshotEnvelope(first);
   if (initialNodes === null) return { ok: false, reason: 'fetch-failed' };
@@ -172,8 +184,8 @@ export type FindCandidatesResult =
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
-export async function fetchFindCandidates(query: string, exact = false): Promise<FindCandidatesResult> {
-  const snap = await fetchSnapshotNodes();
+export async function fetchFindCandidates(query: string, exact = false, allowCache = false): Promise<FindCandidatesResult> {
+  const snap = await fetchSnapshotNodes(allowCache);
   if (!snap.ok) return snap;
 
   const needle = query.toLowerCase();
@@ -241,7 +253,7 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
     // go straight to a snapshot-based client-side match so we never roll the dice
     // on agent-device's fuzzy matcher returning AMBIGUOUS_MATCH.
     if (args.exact === true || args.index !== undefined) {
-      const find = await fetchFindCandidates(args.text, args.exact === true);
+      const find = await fetchFindCandidates(args.text, args.exact === true, true);
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -292,7 +304,7 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
       activeSession?.platform === 'ios' ||
       (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
     if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false);
+      const find = await fetchFindCandidates(args.text, false, true);
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);

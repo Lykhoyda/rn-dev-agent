@@ -213,9 +213,16 @@ After identifying root cause:
 
 ### Step 6: Verify Recovery
 
+Confirm the fix by its EFFECT on internal state first; re-perceive the screen only
+when you need visual proof (GH #321 — a `device_snapshot` is a full XCUITest
+round-trip, ~1,450 ms; a screenshot spends image tokens). Cheap signals first:
+`expect_route`/`expect_redux`/`expect_text`, then scoped `cdp_store_state`/
+`cdp_navigation_state`/`cdp_error_log`, then a screenshot for the visual record.
+
 After the fix:
 1. `cdp_status` -- confirm no errors, RedBox gone
-2. Take a new screenshot and compare to Step 1
+2. Confirm the fixed state cheaply (`expect_*` / `cdp_store_state`); take a
+   screenshot to compare with Step 1 when a visual record is needed
 3. `cdp_error_log` -- confirm the error is cleared
 4. Re-run the failing user action with Maestro to confirm it works.
    Substitute placeholders with actual values from Step 0:

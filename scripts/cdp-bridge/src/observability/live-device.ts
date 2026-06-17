@@ -21,6 +21,43 @@ export function isStateMutating(tool: string, args?: Record<string, unknown>): b
 }
 
 /**
+ * GH #321: tools that NEVER change the on-screen UI, so a valid snapshot cache
+ * (used by device_find to skip a redundant ~1,450 ms snapshot) survives them.
+ * This is the allowlist for a FAIL-SAFE rule: any tool NOT listed here is treated
+ * as a potential mutation and invalidates the cache. A redundant snapshot is
+ * cheap; serving a stale snapshot after an unlisted mutation (cdp_dispatch,
+ * cdp_reload, maestro_run, cdp_evaluate, cdp_mmkv write, …) would be a
+ * wrong-element tap. New tools therefore default to "invalidate" until proven a
+ * pure read.
+ */
+const SNAPSHOT_CACHE_READS = new Set<string>([
+  // CDP / native introspection
+  'cdp_component_tree', 'cdp_component_state', 'cdp_store_state', 'cdp_network_log',
+  'cdp_network_body', 'cdp_console_log', 'cdp_error_log', 'cdp_native_errors',
+  'cdp_diagnostic_renderers', 'cdp_object_inspect', 'cdp_heap_usage', 'collect_logs',
+  'cdp_metro_events', 'cdp_wait_for_network',
+  // perception (the cache's producer + consumer)
+  'device_snapshot', 'device_screenshot',
+  // navigation reads (NOT cdp_navigate, which changes the screen)
+  'cdp_navigation_state', 'cdp_nav_graph',
+  // diagnostics / connection
+  'cdp_status', 'cdp_targets', 'device_list', 'observe',
+  // state assertions (verify-via-state — pure reads)
+  'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
+  'cross_platform_verify',
+]);
+
+/**
+ * GH #321: should this tool call invalidate the device_find snapshot cache?
+ * Fail-safe: invalidate unless the tool is a known read. `device_find` is a read
+ * UNLESS it taps (`action: 'click'`), mirroring isStateMutating's per-call rule.
+ */
+export function toolInvalidatesSnapshotCache(tool: string, args?: Record<string, unknown>): boolean {
+  if (tool === 'device_find') return args?.action === 'click';
+  return !SNAPSHOT_CACHE_READS.has(tool);
+}
+
+/**
  * Registration-time gate: could this tool EVER trigger a live capture (for
  * some args)? Used to decide whether to install the per-call wrapper at all.
  * Tools that can only mutate for certain args (device_find) must still be
