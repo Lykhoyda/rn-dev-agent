@@ -5,6 +5,9 @@ node_modules/
 !.claude/skills/
 .agents
 .idea
+
+# Project CLAUDE.md kept local-only (contains personal paths/username); not shared.
+/CLAUDE.md
 skills-lock.json
 reports
 .DS_Store
