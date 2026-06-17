@@ -23,7 +23,7 @@ A second, latent harm hides in the same case. `attemptRepair` first **removes th
 
 **repair-action guard only**, exact-present hard verdict + soft hint. One detection point, zero new device round-trips (reuses the snapshot repair already takes), fully unit-testable without iOS 26.2 hardware.
 
-1. **Hard verdict `TRANSPORT_BLIND`:** when the (normalized) failed selector is present **verbatim** in the rn-fast-runner snapshot's testID set — we see it, Maestro didn't — emit `TRANSPORT_BLIND` instead of attempting a no-op self-repair or reporting `TESTID_NOT_FOUND`. Unambiguous; near-zero false positives.
+1. **Hard verdict `TRANSPORT_BLIND`:** when the failed selector is *used by the action body* **and** present **verbatim** in the rn-fast-runner snapshot's testID set — we see it, Maestro didn't — emit `TRANSPORT_BLIND` instead of reporting `TESTID_NOT_FOUND`. Unambiguous; near-zero false positives. (The body-membership condition preserves the existing `BAD_FILENAME` "your hint is wrong" diagnostic: a hint not in the body but coincidentally on-screen must not be mislabeled transport-blind — plan-review finding #1.)
 2. **Soft hint:** on the existing no-confident-match path (selector absent, other candidates present), keep the `TESTID_NOT_FOUND` verdict but **append** a line naming transport-blindness as a possibility to verify with `device_snapshot`. Message-only; no verdict change.
 3. **`cdp_run_action` integration:** treat `TRANSPORT_BLIND` as a **terminal refusal** (no retry), record it in `autoRepair` telemetry as `refused / transport_blind`, and surface the diagnostic.
 

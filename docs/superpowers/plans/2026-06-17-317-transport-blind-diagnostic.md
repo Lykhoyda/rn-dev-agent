@@ -209,6 +209,30 @@ test('GH #317: empty snapshot (0 testIDs) stays TESTID_NOT_FOUND, not TRANSPORT_
   assert.equal(env.code, 'TESTID_NOT_FOUND');
   assert.match(env.error, /0 testIDs/);
 });
+
+test('GH #317: bad hint not in body but coincidentally in snapshot → BAD_FILENAME, not TRANSPORT_BLIND', async () => {
+  // The action body uses "submit_email_form"; the caller passes a WRONG hint
+  // that happens to be on the live screen. Body-membership precondition must
+  // keep the deliberate "your hint is wrong" diagnostic (Issue #102 A3).
+  project.seedAction(
+    'register-new-user-4',
+    fixtureYaml({ id: 'register-new-user-4', selectors: ['submit_email_form'] }),
+  );
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot(['header-home', 'btn-cancel']) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'register-new-user-4',
+    failedSelector: 'header-home', // present in snapshot, NOT in the action body
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'BAD_FILENAME');
+});
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -224,22 +248,29 @@ In `src/types.ts`, in the `ToolErrorCode` union, add after the `| 'RUNNER_LEAK'`
   | 'TRANSPORT_BLIND'          // GH #317: rn-fast-runner sees the selector but Maestro/WDA reported it not visible (empty a11y tree)
 ```
 
-- [ ] **Step 3b: Add the import in repair-action.ts**
+- [ ] **Step 3b: Add the imports in repair-action.ts**
 
-In `src/tools/repair-action.ts`, find the import from `'../domain/repair-engine.js'` (it already imports `extractAllTestIDs`, `attemptRepair`, `applyRepair`, `DEFAULT_REPAIR_THRESHOLD`) and add `detectTransportBlind` to that named-import list.
+In `src/tools/repair-action.ts`, find the import from `'../domain/repair-engine.js'` (it already imports `extractAllTestIDs`, `attemptRepair`, `applyRepair`, `DEFAULT_REPAIR_THRESHOLD`) and add `detectTransportBlind` **and** `extractIdSelectors` to that named-import list (the guard needs `extractIdSelectors` for the body-membership precondition — see Step 3c).
 
 - [ ] **Step 3c: Insert the guard before `attemptRepair`**
 
 In `src/tools/repair-action.ts`, between the end of the `if (candidates.length === 0) { ... }` block (~line 294) and `const result = attemptRepair(...)` (~line 296), insert:
 
 ```typescript
-    // GH #317: transport-blindness guard. If the failed selector is present
-    // verbatim in OUR snapshot, the element is rendered and rn-fast-runner can
-    // see it — Maestro/WDA reported "not visible" because it read an empty a11y
-    // tree (e.g. iOS 26.2 + bridgeless), NOT because the testID drifted. Fire
-    // BEFORE attemptRepair, which filters the selector out of candidates and
-    // would otherwise mislead ("no confident replacement") or mis-patch it.
-    if (detectTransportBlind(args.failedSelector, candidates)) {
+    // GH #317: transport-blindness guard. If the failed selector is BOTH used by
+    // the action AND present verbatim in OUR live snapshot, the element is
+    // rendered and rn-fast-runner can see it — Maestro/WDA reported "not visible"
+    // because it read an empty a11y tree (e.g. iOS 26.2 + bridgeless), NOT because
+    // the testID drifted. The body-membership check preserves the deliberate
+    // BAD_FILENAME "your hint is wrong" diagnostic (Issue #102 A3): a hint that
+    // is NOT in the action body but coincidentally on-screen must NOT be reported
+    // as transport-blind. Fire BEFORE attemptRepair, which filters the selector
+    // out of candidates and would otherwise mislead ("no confident replacement")
+    // or mis-patch it.
+    if (
+      extractIdSelectors(action.body).includes(args.failedSelector) &&
+      detectTransportBlind(args.failedSelector, candidates)
+    ) {
       return failResult(
         `cdp_repair_action: Maestro/WDA reported "${args.failedSelector}" not visible, but rn-fast-runner sees it (${candidates.length} testIDs in the live snapshot). This is transport-blindness, not testID drift — WDA reads an empty/partial accessibility tree on this runtime (e.g. iOS 26.2 + bridgeless, GH #317). Maestro-based replay is blocked here; drive the screen with device_* primitives (device_find/press/fill), which go through rn-fast-runner and work. rn-fast-runner-native action replay is tracked in #317 Phase 2.`,
         'TRANSPORT_BLIND',
@@ -368,6 +399,8 @@ In `src/tools/run-action.ts`, in the `if (!repairPatched) { ... }` block, the `r
 
 (`refusedReason` is already in scope from line 378. The message and `meta` stay as-is — the detailed transport-blind text flows through `repairEnv.error`.)
 
+**Meta contract (intentional):** the structured `meta` fields repair-action attaches (`snapshotTestIdCount`, `candidatesSample`, `hint`) are **repair-action-only** — `cdp_run_action` builds its own refusal `meta` (`{ actionId, autoRepair, repairError, firstAttemptOutput }`) and surfaces transport-blindness via the prose `repairEnv.error` + `code: 'TRANSPORT_BLIND'` + `refusedReason: 'TRANSPORT_BLIND'`. This matches how `RUNNER_LEAK`/`SNAPSHOT_FAILED` already behave; do not widen run-action's meta in this slice.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test test/unit/run-action-handler.test.js`
@@ -401,21 +434,22 @@ Expected: PASS — the entire `test/unit/**` suite green (prior baseline 2216 + 
 
 - [ ] **Step 2: Create the changeset**
 
-Inspect an existing changeset for the package name and bump convention:
+The changeset key MUST be `"rn-dev-agent-plugin"` — that is what every existing changeset uses (e.g. `.changeset/321-batch-salient-payload.md`). Do **not** use the cdp-bridge package name (`rn-dev-agent-cdp`) or the workspace name; the #316/B215 CI validator rejects keys that don't match a real published package, and `rn-dev-agent-plugin` is the one the release pipeline consumes.
 
-Run: `cat /Users/anton_personal/GitHub/claude-react-native-dev-plugin/.changeset/*.md | head -20`
+First confirm the convention:
 
-Create `.changeset/transport-blind-317.md` with the package-name key from that example (the cdp-bridge package), e.g.:
+Run: `head -5 /Users/anton_personal/GitHub/claude-react-native-dev-plugin/.changeset/321-batch-salient-payload.md`
+Expected: a frontmatter block keyed `"rn-dev-agent-plugin": patch`.
+
+Create `.changeset/transport-blind-317.md`:
 
 ```markdown
 ---
-"<cdp-bridge-package-name>": patch
+"rn-dev-agent-plugin": patch
 ---
 
 cdp_repair_action now reports TRANSPORT_BLIND when the failed Maestro selector is present in the live rn-fast-runner snapshot — the iOS 26.2 + bridgeless empty-a11y-tree case (GH #317) — instead of the misleading "no confident replacement". cdp_run_action surfaces it as a terminal refusal with refusedReason TRANSPORT_BLIND. Diagnostic-only; restoring replay on that runtime is Phase 2.
 ```
-
-(Use the exact package name(s) the repo's existing changesets reference. If the CI changeset-name validator from #316/B215 is present, double-check the key matches a real workspace package.)
 
 - [ ] **Step 3: Verify nothing else references the old behavior**
 
@@ -433,6 +467,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
+
+## Coverage & known limitation (from plan review)
+
+The hard verdict depends on the failed selector being present in the rn-fast-runner snapshot **at repair time**. Two cases:
+
+- **Normal route (primary #317 case):** the element persists, so the repair-time snapshot contains the selector → the guard fires. This is consistent with the reported symptom: the repro's *"no candidate scored at or above 0.6"* is exactly what `attemptRepair` produces when the selector **is** present — `repair-engine.ts:274` filters the selector out of `candidates` before scoring, so the real match is removed and nothing else clears 0.6. The message therefore implies presence, not absence. The hard verdict is **not** dead code for this case.
+- **Sheet-dismissed case (#317 secondary issue):** starting a Maestro/WDA session dismisses an open `react-native-actions-sheet`, so by repair time the element may be gone and the snapshot sparse → the guard stays silent and the **soft hint** (Task 2 Step 3d) is the fallback. Full coverage of this case requires rn-fast-runner-native replay (**Phase 2**), out of scope here.
+
+This is an accepted, documented limitation — the slice strictly improves the diagnostic (hard verdict where provable, soft hint otherwise) and never regresses behavior.
 
 ## Self-Review
 
