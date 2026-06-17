@@ -350,7 +350,7 @@ export const INJECTED_HELPERS = `
     if (opts.interactiveOnly) {
       var INTERACTIVE_NAMES = { Pressable: 1, TouchableOpacity: 1, TouchableHighlight: 1, TouchableWithoutFeedback: 1, TouchableNativeFeedback: 1, Button: 1, TextInput: 1, Switch: 1, Link: 1 };
       var INTERACTIVE_ROLES = { button: 1, link: 1, switch: 1, checkbox: 1, radio: 1, menuitem: 1, tab: 1, togglebutton: 1, imagebutton: 1, search: 1, adjustable: 1 };
-      var HANDLER_PROPS = ['onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing'];
+      var HANDLER_PROPS = ['onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing', 'onClick'];
 
       var isInteractiveFiber = function(fiber) {
         var props = fiber.memoizedProps;
@@ -415,15 +415,27 @@ export const INJECTED_HELPERS = `
           var acc = { s: '' };
           collectText(ifiber, 0, acc);
           if (acc.s) entry.text = acc.s.length > 120 ? acc.s.substring(0, 120) : acc.s;
+          else if (iprops.title) entry.text = String(iprops.title); // RN <Button title> has no child text fiber
           if (iprops.accessibilityLabel) entry.label = String(iprops.accessibilityLabel);
           if (iprops.placeholder) entry.placeholder = String(iprops.placeholder);
+          // surface on/off state for toggles so the agent need not re-read before deciding
+          if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
           if (iprops.disabled === true || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
           salient.push(entry);
         }
         var ich = ifiber.child;
         while (ich) { iQueue.push(ich); ich = ich.sibling; }
       }
-      return safeStringify({ interactive: salient, totalNodes: iScanned, rootsSeeded: iRoots.length }, 999999);
+      // Signal truncation rather than silently dropping actionable nodes (a hit
+      // cap leaves the queue non-empty). Mirrors the filter branch's truncated
+      // flag — a clean-looking partial list would mislead the agent into
+      // "nothing more to tap here."
+      var iOut = { interactive: salient, totalNodes: iScanned, rootsSeeded: iRoots.length };
+      if (iQueue.length > 0) {
+        iOut.truncated = true;
+        iOut.hint = 'More interactive elements exist beyond the cap — scope with filter or device_scrollintoview.';
+      }
+      return safeStringify(iOut, 999999);
     }
 
     // For filtered queries: BFS to find matches, then build compact subtrees.

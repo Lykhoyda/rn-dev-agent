@@ -83,3 +83,39 @@ test('interactiveOnly recognizes accessibilityRole=button without an onPress pro
   const ids = result.interactive.map((n) => n.testID);
   assert.ok(ids.includes('a11y-btn'), 'an explicit accessibilityRole=button is actionable');
 });
+
+// Review fixes (#324) — false-negative + usefulness gaps.
+
+test('interactiveOnly signals truncation instead of silently dropping (long screen)', () => {
+  let head = null, prev = null;
+  for (let i = 0; i < 250; i++) {
+    const node = el('Pressable', { onPress: () => {}, testID: 'btn-' + i }, txt('B' + i));
+    if (!head) head = node; else prev.sibling = node;
+    prev = node;
+  }
+  const sandbox = createSandbox(el('View', {}, head));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
+  assert.equal(result.interactive.length, 200, 'caps the list at 200');
+  assert.equal(result.truncated, true, 'must signal truncation so the agent knows more exist');
+});
+
+test('interactiveOnly detects host-level onClick handlers (string fiber.type, no name)', () => {
+  const host = { type: 'RCTView', memoizedProps: { onClick: () => {}, testID: 'host-click' }, child: null, sibling: null };
+  const sandbox = createSandbox(el('View', {}, host));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
+  assert.ok(result.interactive.some((n) => n.testID === 'host-click'), 'a host onClick element is actionable');
+});
+
+test('interactiveOnly captures a Button title prop when there is no child text', () => {
+  const sandbox = createSandbox(el('View', {}, el('Button', { onPress: () => {}, title: 'Confirm', testID: 'confirm-btn' })));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
+  const e = result.interactive.find((n) => n.testID === 'confirm-btn');
+  assert.equal(e.text, 'Confirm', 'title prop is the label when there is no child text');
+});
+
+test('interactiveOnly surfaces a Switch on/off value', () => {
+  const sandbox = createSandbox(el('View', {}, el('Switch', { onValueChange: () => {}, value: true, testID: 'sw' })));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
+  const e = result.interactive.find((n) => n.testID === 'sw');
+  assert.equal(e.value, true, 'switch state avoids an extra read before deciding to toggle');
+});
