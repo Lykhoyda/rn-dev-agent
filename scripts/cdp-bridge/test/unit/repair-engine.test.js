@@ -13,6 +13,7 @@ import {
   replaceIdSelector,
   attemptRepair,
   applyRepair,
+  detectTransportBlind,
 } from '../../dist/domain/repair-engine.js';
 import { freshRuntimeState } from '../../dist/domain/reusable-action.js';
 
@@ -394,4 +395,25 @@ test('Phase129 applyRepair: writes the patched body, not the original', () => {
   const repaired = applyRepair(action, result, fixedNow);
   assert.match(repaired.body, /id: "fab-create-task-btn"/);
   assert.doesNotMatch(repaired.body, /id: "fab-create-task"$/m);
+});
+
+// GH #317 — transport-blindness detector
+test('detectTransportBlind: failed selector present in snapshot → true (transport-blind)', () => {
+  assert.equal(detectTransportBlind('submit_email_form', ['submit_email_form', 'other-1']), true);
+});
+
+test('detectTransportBlind: failed selector absent, other candidates present → false (possible drift)', () => {
+  assert.equal(detectTransportBlind('submit_email_form', ['other-1', 'other-2']), false);
+});
+
+test('detectTransportBlind: empty candidate list → false', () => {
+  assert.equal(detectTransportBlind('submit_email_form', []), false);
+});
+
+test('detectTransportBlind: verbatim match is case-sensitive', () => {
+  assert.equal(detectTransportBlind('Submit', ['submit']), false);
+});
+
+test('detectTransportBlind: empty selector → false', () => {
+  assert.equal(detectTransportBlind('', ['submit_email_form']), false);
 });

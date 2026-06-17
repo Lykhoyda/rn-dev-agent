@@ -77,6 +77,11 @@ const REPAIR_NO_MATCH_ENV = {
   error: 'cdp_repair_action: no confident replacement for "fab-create-task"',
   code: 'TESTID_NOT_FOUND',
 };
+const REPAIR_TRANSPORT_BLIND_ENV = {
+  ok: false,
+  error: 'cdp_repair_action: Maestro/WDA reported "fab-create-task" not visible, but rn-fast-runner sees it (3 testIDs in the live snapshot). This is transport-blindness, not testID drift (GH #317).',
+  code: 'TRANSPORT_BLIND',
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation paths
@@ -266,6 +271,22 @@ test('run-action: repair refused (no fuzzy match) → autoRepair.refusedReason =
   assert.equal(result.isError, true);
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.meta.autoRepair.refusedReason, 'NO_MATCH');
+});
+
+test('GH #317: repair returns TRANSPORT_BLIND → refused, no retry, honest code', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+    repairAction: fakeRepairAction(REPAIR_TRANSPORT_BLIND_ENV),
+  });
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TRANSPORT_BLIND');
+  assert.equal(env.meta.autoRepair.outcome, 'refused');
+  assert.equal(env.meta.autoRepair.refusedReason, 'TRANSPORT_BLIND');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

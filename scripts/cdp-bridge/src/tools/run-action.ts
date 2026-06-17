@@ -171,6 +171,9 @@ function mapRefusedReason(repairCode: string | undefined, repairError: string): 
   // it with SNAPSHOT_FAILED so MTTR analytics surface it instead of hiding it
   // under INTERNAL_ERROR.
   if (repairCode === 'RUNNER_LEAK') return 'SNAPSHOT_FAILED';
+  // GH #317: rn-fast-runner saw the selector but Maestro/WDA could not. Surface
+  // it as its own reason (NOT INTERNAL_ERROR) so MTTR sees transport-blindness.
+  if (repairCode === 'TRANSPORT_BLIND') return 'TRANSPORT_BLIND';
   if (repairCode === 'TESTID_NOT_FOUND') return 'NO_MATCH';
   if (repairCode === 'STALE_TARGET') {
     if (/repair budget/i.test(repairError)) return 'BUDGET_EXHAUSTED';
@@ -396,7 +399,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
         return failResult(
           `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND; auto-repair refused (${refusedReason}): ${repairEnv.error ?? 'unknown'}`,
-          'TESTID_NOT_FOUND',
+          refusedReason === 'TRANSPORT_BLIND' ? 'TRANSPORT_BLIND' : 'TESTID_NOT_FOUND',
           {
             actionId: args.actionId,
             autoRepair,

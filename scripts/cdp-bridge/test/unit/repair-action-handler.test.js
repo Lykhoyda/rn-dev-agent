@@ -544,3 +544,100 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
   // not advertise a successful patch.
   assert.match(action.body, /id:\s+"fab-create-task"/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GH #317 — transport-blindness: rn-fast-runner sees the selector Maestro/WDA missed
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('GH #317: failed selector present in snapshot → TRANSPORT_BLIND, not no-match', async () => {
+  project.seedAction(
+    'register-new-user',
+    fixtureYaml({ id: 'register-new-user', selectors: ['submit_email_form'] }),
+  );
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot(['submit_email_form', 'header-home', 'btn-cancel']) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'register-new-user',
+    failedSelector: 'submit_email_form',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TRANSPORT_BLIND');
+  assert.equal(env.meta.actionId, 'register-new-user');
+  assert.equal(env.meta.snapshotTestIdCount, 3);
+  assert.equal(env.meta.failedSelector, 'submit_email_form');
+  assert.match(env.error, /transport-blindness/i);
+  assert.match(env.error, /rn-fast-runner sees it/i);
+});
+
+test('GH #317: selector absent + no confident match → TESTID_NOT_FOUND with transport-blind soft hint', async () => {
+  project.seedAction(
+    'register-new-user-2',
+    fixtureYaml({ id: 'register-new-user-2', selectors: ['submit_email_form'] }),
+  );
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot(['totally-unrelated-aaa', 'zzz-different-bbb']) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'register-new-user-2',
+    failedSelector: 'submit_email_form',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.match(env.error, /no confident replacement/i);
+  assert.match(env.error, /transport-blind/i);
+  assert.match(env.error, /GH #317/);
+});
+
+test('GH #317: empty snapshot (0 testIDs) stays TESTID_NOT_FOUND, not TRANSPORT_BLIND', async () => {
+  project.seedAction(
+    'register-new-user-3',
+    fixtureYaml({ id: 'register-new-user-3', selectors: ['submit_email_form'] }),
+  );
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot([]) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'register-new-user-3',
+    failedSelector: 'submit_email_form',
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.match(env.error, /0 testIDs/);
+});
+
+test('GH #317: bad hint not in body but coincidentally in snapshot → BAD_FILENAME, not TRANSPORT_BLIND', async () => {
+  project.seedAction(
+    'register-new-user-4',
+    fixtureYaml({ id: 'register-new-user-4', selectors: ['submit_email_form'] }),
+  );
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: fakeSnapshot(['header-home', 'btn-cancel']) }],
+  }));
+
+  const handler = createRepairActionHandler();
+  const result = await handler({
+    actionId: 'register-new-user-4',
+    failedSelector: 'header-home', // present in snapshot, NOT in the action body
+    projectRoot: project.root,
+  });
+
+  assert.equal(result.isError, true);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'BAD_FILENAME');
+});
