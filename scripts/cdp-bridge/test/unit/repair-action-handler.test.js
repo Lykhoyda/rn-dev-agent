@@ -568,6 +568,7 @@ test('GH #317: failed selector present in snapshot → TRANSPORT_BLIND, not no-m
   assert.equal(result.isError, true);
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.code, 'TRANSPORT_BLIND');
+  assert.equal(env.meta.actionId, 'register-new-user');
   assert.equal(env.meta.snapshotTestIdCount, 3);
   assert.equal(env.meta.failedSelector, 'submit_email_form');
   assert.match(env.error, /transport-blindness/i);
