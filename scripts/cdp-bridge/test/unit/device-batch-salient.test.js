@@ -27,12 +27,23 @@ const FULL = {
 
 // ── pure salientizer ────────────────────────────────────────────────────
 
-test('salientizeSnapshotData keeps only actionable a11y types', () => {
+test('salientizeSnapshotData keeps actionable types AND any identified (testID) node', () => {
   const out = salientizeSnapshotData(FULL);
   const types = out.nodes.map((n) => n.type).sort();
-  assert.deepEqual(types, ['Button', 'Switch', 'TextField']);
+  // Button/TextField/Switch by type; the Image is kept because it has an identifier.
+  assert.deepEqual(types, ['Button', 'Image', 'Switch', 'TextField']);
   assert.equal(out.salient, true);
   assert.equal(out.fullNodeCount, 6);
+});
+
+test('salientizeSnapshotData keeps a testID-bearing node even when its type is not interactive (fail-safe)', () => {
+  const data = { nodes: [
+    { ref: '@e0', type: 'Other', identifier: 'custom-pressable', label: 'Tap me', hittable: true },
+    { ref: '@e1', type: 'Other', label: 'decorative wrapper' }, // no testID, non-interactive -> dropped
+  ] };
+  const out = salientizeSnapshotData(data);
+  assert.deepEqual(out.nodes.map((n) => n.identifier), ['custom-pressable']);
+  assert.equal(out.nodes.length, 1, 'a custom Pressable surfacing as type Other is NOT dropped');
 });
 
 test('salientizeSnapshotData compacts entries (drops rect/enabled) but keeps ref/identifier', () => {

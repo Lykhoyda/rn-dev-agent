@@ -74,12 +74,16 @@ export function salientizeSnapshotData(data: unknown): unknown {
   const nodes: Array<Record<string, unknown>> = [];
   for (const n of d.nodes) {
     const type = typeof n.type === 'string' ? n.type : '';
-    if (!INTERACTIVE_A11Y_TYPES.has(type)) continue;
+    const identifier = typeof n.identifier === 'string' && n.identifier ? n.identifier : '';
+    // Fail-safe: keep a node if it's an interactive type OR carries a testID.
+    // A custom Pressable can surface as a11y type "Other" — dropping it on type
+    // alone would strand the agent ("nothing to tap here") on a real control.
+    if (!INTERACTIVE_A11Y_TYPES.has(type) && !identifier) continue;
     const entry: Record<string, unknown> = {};
     if (n.ref) entry.ref = n.ref;
     if (type) entry.type = type;
     if (typeof n.label === 'string' && n.label) entry.label = n.label;
-    if (typeof n.identifier === 'string' && n.identifier) entry.identifier = n.identifier;
+    if (identifier) entry.identifier = identifier;
     if (n.hittable === false) entry.hittable = false; // surface dead controls
     nodes.push(entry);
   }
