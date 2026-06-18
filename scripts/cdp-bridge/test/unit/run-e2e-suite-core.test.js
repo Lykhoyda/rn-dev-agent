@@ -182,7 +182,7 @@ test('param-needing test + config + maestro fail → secret value redacted in er
   }
 });
 
-test('empty suite → warn, NO record written', async () => {
+test('empty suite → verdict "empty" (not false-green), warn, NO record written', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
     const res = parse(
@@ -192,6 +192,7 @@ test('empty suite → warn, NO record written', async () => {
       ),
     );
     assert.equal(res.ok, true);
+    assert.equal(res.data.verdict, 'empty'); // not 'green' — a no-op suite must not read as pass
     assert.equal(res.data.totals.total, 0);
     assert.equal(loadIndex(root).length, 0); // no false-green record
   } finally {
