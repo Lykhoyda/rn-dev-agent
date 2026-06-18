@@ -78,6 +78,13 @@ test('resolveParams: test-level params override defaults', () => {
   }
 });
 
+test('resolveParams: excludes defaults not in required (no leak of unrelated params)', () => {
+  const config = { defaults: { params: { EMAIL: 'a@b.com', PASSWORD: 'secret' } } };
+  const result = resolveParams(config, 'login', ['EMAIL']);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.deepEqual(result.params, { EMAIL: 'a@b.com' });
+});
+
 test('resolveParams: absent param → missing', () => {
   const result = resolveParams({}, 'login', ['EMAIL']);
   assert.equal(result.ok, false);

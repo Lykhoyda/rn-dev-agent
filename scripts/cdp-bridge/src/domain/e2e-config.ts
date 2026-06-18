@@ -28,12 +28,11 @@ export function resolveParams(
   };
   const missing = required.filter((k) => !merged[k]);
   if (missing.length > 0) return { ok: false, missing };
+  // Return ONLY the params the action declares — never leak unrelated
+  // defaults (which may include secrets) into a test that doesn't use them.
   const params: Record<string, string> = {};
   for (const k of required) params[k] = merged[k] as string;
-  for (const k of Object.keys(merged)) {
-    if (!(k in params)) params[k] = merged[k] as string;
-  }
-  return { ok: true, params: merged };
+  return { ok: true, params };
 }
 
 export function secretValuesFor(config: E2eConfig, params: Record<string, string>): string[] {

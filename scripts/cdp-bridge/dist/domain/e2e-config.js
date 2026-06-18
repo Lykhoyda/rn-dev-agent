@@ -18,14 +18,12 @@ export function resolveParams(config, testId, required) {
     const missing = required.filter((k) => !merged[k]);
     if (missing.length > 0)
         return { ok: false, missing };
+    // Return ONLY the params the action declares — never leak unrelated
+    // defaults (which may include secrets) into a test that doesn't use them.
     const params = {};
     for (const k of required)
         params[k] = merged[k];
-    for (const k of Object.keys(merged)) {
-        if (!(k in params))
-            params[k] = merged[k];
-    }
-    return { ok: true, params: merged };
+    return { ok: true, params };
 }
 export function secretValuesFor(config, params) {
     const names = new Set(config.secretParams ?? []);
