@@ -24,7 +24,7 @@ test("GH#202 lock is acquired BEFORE setActiveSession (lock-first ordering)", ()
 test("GH#202 conflict path has no runAgentDevice close and no setActiveSession before DEVICE_BUSY", () => {
   // Verify the new lock-first shape: conflict returns DEVICE_BUSY immediately
   // with no preceding runAgentDevice(['close']) or setActiveSession.
-  assert.match(sessionSrc, /lockResult\.status === 'conflict'[\s\S]{0,300}DEVICE_BUSY/);
+  assert.match(sessionSrc, /lockResult\.status === ['"]conflict['"][\s\S]{0,300}DEVICE_BUSY/);
   // The old teardown pattern (runAgentDevice close → clearActiveSession → DEVICE_BUSY) must be gone.
   assert.doesNotMatch(
     sessionSrc,

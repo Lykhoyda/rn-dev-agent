@@ -36,7 +36,7 @@ test("RUNNER_DISABLED branch is gated on RN_ANDROID_RUNNER === '0'", () => {
   assert.match(
     src,
     /process\.env\.RN_ANDROID_RUNNER\s*===\s*['"]0['"]/,
-    "The RUNNER_DISABLED gate must check process.env.RN_ANDROID_RUNNER === '0'",
+    'The RUNNER_DISABLED gate must check process.env.RN_ANDROID_RUNNER === "0"',
   );
 });
 
@@ -45,7 +45,7 @@ test("RUNNER_DISABLED branch is scoped to Android platform and runner commands",
   assert.match(
     src,
     /targetPlatform\s*===\s*['"]android['"]/,
-    "The dispatcher must be platform-scoped to 'android'",
+    'The dispatcher must be platform-scoped to "android"',
   );
   assert.match(
     src,
@@ -55,10 +55,11 @@ test("RUNNER_DISABLED branch is scoped to Android platform and runner commands",
 });
 
 test("RUNNER_DISABLED branch appears BEFORE the enabled short-circuit (RN_ANDROID_RUNNER !== '0')", () => {
-  const disabledIdx = src.indexOf("RN_ANDROID_RUNNER === '0'");
-  const enabledIdx = src.indexOf("RN_ANDROID_RUNNER !== '0'");
-  assert.ok(disabledIdx !== -1, "Could not find RN_ANDROID_RUNNER === '0' gate");
-  assert.ok(enabledIdx !== -1, "Could not find RN_ANDROID_RUNNER !== '0' gate");
+  const normalized = src.replace(/'/g, '"');
+  const disabledIdx = normalized.indexOf('RN_ANDROID_RUNNER === "0"');
+  const enabledIdx = normalized.indexOf('RN_ANDROID_RUNNER !== "0"');
+  assert.ok(disabledIdx !== -1, 'Could not find RN_ANDROID_RUNNER === "0" gate');
+  assert.ok(enabledIdx !== -1, 'Could not find RN_ANDROID_RUNNER !== "0" gate');
   assert.ok(
     disabledIdx < enabledIdx,
     `RUNNER_DISABLED gate (pos ${disabledIdx}) must appear before the enabled gate (pos ${enabledIdx})`,

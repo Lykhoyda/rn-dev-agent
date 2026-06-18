@@ -348,7 +348,7 @@ test("source guard: device_reset_state tool registered in built index.js", async
   const { dirname, join } = await import("node:path");
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const indexSrc = readFileSync(join(__dirname, "../../dist/index.js"), "utf-8");
-  assert.match(indexSrc, /'device_reset_state'/);
+  assert.match(indexSrc, /['"]device_reset_state['"]/);
   assert.match(indexSrc, /createDeviceResetStateHandler/);
 });
 

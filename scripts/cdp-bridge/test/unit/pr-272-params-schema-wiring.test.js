@@ -16,9 +16,10 @@ const indexSrc = readFileSync(resolve(__dirname, "../../src/index.ts"), "utf8");
 
 /** Slice the trackedTool('<name>', ...) registration block out of index.ts. */
 function registrationBlock(toolName) {
-  const start = indexSrc.indexOf(`'${toolName}',`);
+  const normalized = indexSrc.replace(/'/g, '"');
+  const start = normalized.indexOf(`"${toolName}",`);
   assert.notEqual(start, -1, `registration for ${toolName} not found`);
-  const rest = indexSrc.slice(start);
+  const rest = normalized.slice(start);
   const next = rest.indexOf("trackedTool(", 1);
   return next === -1 ? rest : rest.slice(0, next);
 }
@@ -26,13 +27,13 @@ function registrationBlock(toolName) {
 test("PR#272 maestro_run registration exposes params as a string record", () => {
   assert.match(
     registrationBlock("maestro_run"),
-    /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/,
+    /params:\s*z[\s\S]{0,30}\.record\(z\.string\(\),\s*z\.string\(\)\)[\s\S]{0,30}\.optional\(\)/,
   );
 });
 
 test("PR#272 cdp_run_action registration exposes params as a string record", () => {
   assert.match(
     registrationBlock("cdp_run_action"),
-    /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/,
+    /params:\s*z[\s\S]{0,30}\.record\(z\.string\(\),\s*z\.string\(\)\)[\s\S]{0,30}\.optional\(\)/,
   );
 });

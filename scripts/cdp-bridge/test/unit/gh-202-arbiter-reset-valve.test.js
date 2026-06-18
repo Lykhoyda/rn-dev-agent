@@ -15,7 +15,7 @@ const instrSrc = readFileSync(
 test("GH#202 cdp_status exposes the arbiter reset escape hatch", () => {
   assert.match(statusSrc, /resetArbiter/);
   assert.match(statusSrc, /arbiter\.reset\(/);
-  assert.match(indexSrc, /resetArbiter:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(indexSrc, /resetArbiter:\s*z[\s\S]{0,30}\.boolean\(\)[\s\S]{0,30}\.optional\(\)/);
 });
 
 test("GH#202 a BUSY_FLOW_ACTIVE refusal is not classified as a hard FAIL", () => {

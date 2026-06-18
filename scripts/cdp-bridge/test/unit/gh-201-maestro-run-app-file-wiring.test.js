@@ -17,5 +17,5 @@ test("GH#201 maestro-run auto-resolves appFile for iOS clearState flows", () => 
 });
 
 test("GH#201 maestro_run exposes an appFile param", () => {
-  assert.match(indexSrc, /appFile:\s*z\.string\(\)\.optional\(\)/);
+  assert.match(indexSrc, /appFile:\s*z[\s\S]{0,30}\.string\(\)[\s\S]{0,30}\.optional\(\)/);
 });

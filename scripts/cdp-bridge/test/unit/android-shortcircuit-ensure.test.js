@@ -61,7 +61,7 @@ test("Android short-circuit exempts screenshot from runner ensure (adb fallback 
   // The screenshot exemption must appear inside the Android short-circuit block
   assert.match(
     source,
-    /cliArgs\[0\] !== 'screenshot'[\s\S]{0,600}startAndroidRunner|startAndroidRunner[\s\S]{0,600}cliArgs\[0\] !== 'screenshot'/,
+    /cliArgs\[0\] !== ['"]screenshot['"][\s\S]{0,600}startAndroidRunner|startAndroidRunner[\s\S]{0,600}cliArgs\[0\] !== ['"]screenshot['"]/,
     "wrapper must skip the ensure choke point for 'screenshot' (it has its own adb fallback)",
   );
 });
@@ -70,7 +70,7 @@ test("Android short-circuit still imports and calls runAndroid after ensure", ()
   // runAndroid must still be called (the ensure is additive, not a replacement)
   assert.match(
     source,
-    /const \{ runAndroid \} = await import\('\.\/runners\/rn-android-runner-client\.js'\)/,
+    /const \{ runAndroid \} = await import\(['"]\.\/runners\/rn-android-runner-client\.js['"]\)/,
     "runAndroid import must remain inside the Android short-circuit",
   );
 });

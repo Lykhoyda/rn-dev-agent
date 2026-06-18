@@ -10,7 +10,7 @@ const indexSrc = readFileSync(resolve(__dirname, "../../src/index.ts"), "utf8");
 test("GH#202 trackedTool composes arbiterWrap inside instrumentTool", () => {
   assert.match(
     indexSrc,
-    /import\s*\{[^}]*arbiterWrap[^}]*\}\s*from\s*'\.\/lifecycle\/device-arbiter\.js'/,
+    /import\s*\{[^}]*arbiterWrap[^}]*\}\s*from\s*['"]\.\/lifecycle\/device-arbiter\.js['"]/,
   );
   // arbiterWrap(name, handler) is composed before instrumentTool sees the handler
   assert.match(indexSrc, /instrumentTool\(\s*name\s*,\s*arbiterWrap\(\s*name\s*,/);
