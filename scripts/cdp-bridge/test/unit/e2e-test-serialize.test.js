@@ -19,6 +19,7 @@ const META = {
 test('serialize → parse round-trips lock fields and preserves the full executable flow', () => {
   const text = serializeLockedTest(META);
   const parsed = parseLockedTest(text, '/x/.rn-agent/e2e/add-to-cart.yaml');
+  assert.ok(parsed !== null, 'expected a parsed result');
   assert.equal(parsed.id, 'add-to-cart');
   assert.equal(parsed.sourceActionId, 'add-to-cart');
   assert.equal(parsed.lockedGitSha, 'abc1234');
@@ -39,4 +40,13 @@ test('parseLockedTest returns null when the lock header is missing', () => {
 
 test('e2ePathFor rejects path traversal', () => {
   assert.throws(() => e2ePathFor('/proj', '../escape'));
+});
+
+test('lockedGitSha null is handled in serialization', () => {
+  const metaWithNullSha = { ...META, lockedGitSha: null };
+  const serialized = serializeLockedTest(metaWithNullSha);
+  // Verify null is serialized as empty value (not included)
+  assert.match(serialized, /^# lockedGitSha:\s*$/m);
+  const parsed = parseLockedTest(serialized, '/x/y.yaml');
+  assert.ok(parsed !== null);
 });
