@@ -1,0 +1,6 @@
+# Mirror the CI lint-format gate locally: block the push if oxlint or oxfmt fails.
+# Run both so all problems surface in one attempt; fail if either did.
+status=0
+npm run lint || status=1
+npm run format:check || status=1
+exit $status
