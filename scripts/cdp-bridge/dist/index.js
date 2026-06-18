@@ -73,6 +73,12 @@ import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInva
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
+import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
+import { preflight, probeMetro } from './e2e/preflight.js';
+import { resolveIosUdid } from './tools/device-screenshot-raw.js';
+import { probeAppInstalled } from './cdp/app-installed-probe.js';
+import { findProjectRoot } from './nav-graph/storage.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
@@ -1454,6 +1460,37 @@ trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locke
     relock: z.boolean().optional().describe('Overwrite an existing locked test'),
     projectRoot: z.string().optional(),
 }, createLockE2eTestHandler());
+const e2ePreflight = async () => {
+    const session = getActiveSession();
+    const platform = session?.platform ?? 'ios';
+    const metroReachable = await probeMetro(getClient().metroPort);
+    let udid;
+    let appInstalled = null;
+    if (platform === 'android') {
+        udid = session?.deviceId ?? null;
+    }
+    else {
+        udid = (await resolveIosUdid(session?.deviceId)) ?? null;
+        appInstalled = udid && session?.appId ? await probeAppInstalled(udid, session.appId) : null;
+    }
+    return preflight({ platform, udid, appId: session?.appId, metroReachable, appInstalled });
+};
+const e2eReload = async () => {
+    if (!getClient().isConnected)
+        return false;
+    try {
+        const r = await createReloadHandler(getClient, setClient, createClient)({ full: true });
+        return JSON.parse(r.content[0].text)?.ok === true;
+    }
+    catch {
+        return false;
+    }
+};
+trackedTool('cdp_run_e2e_suite', 'Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.', {
+    pattern: z.string().optional().describe('Regex filter over locked-test ids'),
+    projectRoot: z.string().optional(),
+    deviceId: z.string().optional(),
+}, createRunE2eSuiteHandler({ preflightCheck: e2ePreflight, runReload: e2eReload }));
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.
@@ -1535,6 +1572,20 @@ async function main() {
     logger.info('MCP', 'StdioServerTransport created, connecting...');
     await server.connect(transport);
     logger.info('MCP', 'MCP server connected and ready');
+    {
+        const root = findProjectRoot();
+        if (root) {
+            const recovered = recoverInterruptedRequests(root, (pid) => { try {
+                process.kill(pid, 0);
+                return true;
+            }
+            catch {
+                return false;
+            } }, () => new Date());
+            if (recovered.length)
+                console.error(`[e2e] marked interrupted runs: ${recovered.join(', ')}`);
+        }
+    }
 }
 main().catch((err) => {
     logger.error('MCP', `Fatal error: ${err instanceof Error ? err.message : err}`);

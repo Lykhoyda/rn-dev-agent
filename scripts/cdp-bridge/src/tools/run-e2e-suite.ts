@@ -14,9 +14,10 @@ import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { okResult, warnResult } from '../utils.js';
+import { okResult, warnResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { SessionState } from '../types.js';
+import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES } from '../domain/e2e-run-request.js';
 
 export interface RunE2eSuiteArgs {
   pattern?: string;
@@ -153,4 +154,80 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
     newlyFailing: diffNewlyFailing(record, prevGreen),
     metroReloaded,
   });
+}
+
+const STALE_MS = 15 * 60_000;
+
+export interface RunE2eSuiteHandlerDeps extends RunE2eSuiteDeps {
+  isPidAlive?: (pid: number) => boolean;
+  preflightCheck?: () => Promise<{ ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string }>;
+}
+
+export function isRunActive(
+  projectRoot: string,
+  isPidAlive: (pid: number) => boolean,
+  now: () => Date,
+  staleMs: number = STALE_MS,
+): boolean {
+  const nowMs = now().getTime();
+  return listRequests(projectRoot).some((r) => {
+    if (TERMINAL_STATUSES.has(r.status)) return false;
+    if (!isPidAlive(r.pid)) return false;
+    const age = nowMs - new Date(r.updatedAt).getTime();
+    return Number.isFinite(age) && age < staleMs;
+  });
+}
+
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function createRunE2eSuiteHandler(deps: RunE2eSuiteHandlerDeps = {}) {
+  return async (args: RunE2eSuiteArgs): Promise<ToolResult> => {
+    const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
+    const isPidAlive = deps.isPidAlive ?? defaultPidAlive;
+    const now = deps.now ?? (() => new Date());
+    const preflightCheck = deps.preflightCheck ?? (async () => ({ ok: true as const }));
+
+    if (isRunActive(projectRoot, isPidAlive, now)) {
+      return failResult('An e2e run is already in progress', 'E2E_RUN_ACTIVE');
+    }
+
+    const rand = (): string => Math.random().toString(36).slice(2, 8);
+    const runId = (deps.makeRunId ?? makeRunId)(now, rand);
+    writeRequest(projectRoot, {
+      runId,
+      status: 'requested',
+      pid: process.pid,
+      createdAt: now().toISOString(),
+      updatedAt: now().toISOString(),
+      pattern: args.pattern,
+    });
+
+    const pre = await preflightCheck();
+    if (!pre.ok) {
+      updateRequest(projectRoot, runId, { status: 'failed', updatedAt: now().toISOString() });
+      return failResult(pre.detail, 'SETUP_ERROR');
+    }
+
+    updateRequest(projectRoot, runId, { status: 'running', updatedAt: now().toISOString() });
+    try {
+      const result = await runE2eSuiteCore(args, {
+        ...deps,
+        makeRunId: () => runId,
+        onProgress: (completed, total, lastTestId) =>
+          updateRequest(projectRoot, runId, { updatedAt: now().toISOString(), progress: { total, completed, lastTestId } }),
+      });
+      updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
+      return result;
+    } catch (err) {
+      updateRequest(projectRoot, runId, { status: 'failed', updatedAt: now().toISOString() });
+      return failResult(`e2e run crashed: ${err instanceof Error ? err.message : String(err)}`, 'E2E_RUN_CRASHED');
+    }
+  };
 }
