@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
+import { parseEnvelope, expectOk } from '../helpers/result-helpers.js';
 import { createStatusHandler } from '../../dist/tools/status.js';
 import { narrowArchitecture } from '../../dist/tools/status.js';
 import { createCpuProfileHandler, OLD_ARCH_PROFILER_HINT } from '../../dist/tools/profiling.js';

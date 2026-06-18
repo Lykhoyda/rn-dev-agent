@@ -11,7 +11,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { expectOk, expectFail, parseEnvelope } from '../helpers/result-helpers.js';
+import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
 import {
   createRecordTestStartHandler,
   createRecordTestStopHandler,

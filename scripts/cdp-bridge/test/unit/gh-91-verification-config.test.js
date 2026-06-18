@@ -207,7 +207,7 @@ test('loadVerificationConfig emits one stderr line on first load (observability)
   const root = makeProject(JSON.stringify({ verification: { successShapes: ['Foo$'], mutationMethods: ['POST', 'QUERY'] } }));
   const originalWrite = process.stderr.write.bind(process.stderr);
   const captured = [];
-  process.stderr.write = (chunk, ...rest) => {
+  process.stderr.write = (chunk, ..._rest) => {
     captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
     return true;
   };

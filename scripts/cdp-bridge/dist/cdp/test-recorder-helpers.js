@@ -65,7 +65,7 @@ export function extractActiveRouteForTest(state) {
             return null;
         }
     }
-    catch (e) { /* fall through */ }
+    catch { /* fall through */ }
     return null;
 }
 export const READ_EVENTS_JS = `JSON.stringify({

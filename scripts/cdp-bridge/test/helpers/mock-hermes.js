@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import WebSocket, { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws';
 
 /**
  * Minimal Hermes stand-in used by multiplexer and CDPClient proxy tests.

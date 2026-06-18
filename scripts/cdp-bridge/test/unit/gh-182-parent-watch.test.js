@@ -16,8 +16,8 @@ test('#182 parentWatchTick: parent CHANGED from initial (host died → reparente
 });
 
 test('#182 parentWatchTick: parent changed to a subreaper (not 1) → onOrphaned', () => {
-  let orphaned = 0, beat = 0;
-  parentWatchTick(() => 999, 4242, () => { orphaned++; }, () => { beat++; });
+  let orphaned = 0, _beat = 0;
+  parentWatchTick(() => 999, 4242, () => { orphaned++; }, () => { _beat++; });
   assert.equal(orphaned, 1, 'reparented to a subreaper (999 != initial 4242) → orphaned');
 });
 

@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const STORE_PATH = '../../dist/domain/action-store.js';
-const ACTION_PATH = '../../dist/domain/reusable-action.js';
+const _ACTION_PATH = '../../dist/domain/reusable-action.js';
 
 function makeProject() {
   const root = mkdtempSync(join(tmpdir(), 'gh113-'));

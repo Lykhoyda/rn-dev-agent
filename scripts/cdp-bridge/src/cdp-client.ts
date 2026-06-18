@@ -13,7 +13,7 @@ import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
 import type { Platform } from './cdp/timeout-config.js';
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
-import { discover, discoverForList } from './cdp/discovery.js';
+import { discoverForList } from './cdp/discovery.js';
 import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn } from './cdp/helper-expr.js';
 import {
   autoConnect as autoConnectFn,

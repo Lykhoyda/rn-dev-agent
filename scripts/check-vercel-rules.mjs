@@ -185,7 +185,7 @@ Other:
 
 function isCheckableFile(filePath) {
   if (!/\.(tsx|jsx|ts|js)$/.test(filePath)) return false;
-  if (/\.d\.ts$/.test(filePath)) return false;
+  if (filePath.endsWith('.d.ts')) return false;
   if (/(__tests__|\.test\.|\.spec\.|\.config\.)/.test(filePath)) return false;
   if (/node_modules|\/dist\/|\/build\/|\/\.git\/|\/\.next\//.test(filePath)) return false;
   return true;

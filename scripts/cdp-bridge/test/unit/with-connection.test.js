@@ -1,4 +1,4 @@
-import { test, mock, beforeEach } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { withConnection, okResult, failResult } from '../../dist/utils.js';
 import { resetActiveSessionInMemoryForTest } from '../../dist/agent-device-wrapper.js';

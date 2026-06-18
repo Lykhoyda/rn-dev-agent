@@ -52,7 +52,7 @@ if (!pluginEntry) {
   );
   process.exit(1);
 }
-const oldMarketplaceVersion = pluginEntry.version;
+const _oldMarketplaceVersion = pluginEntry.version;
 pluginEntry.version = newVersion;
 writeFileSync(marketplaceJsonPath, JSON.stringify(marketplace, null, 2) + '\n', 'utf-8');
 

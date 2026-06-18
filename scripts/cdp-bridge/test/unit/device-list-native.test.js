@@ -78,7 +78,7 @@ test('parseSimctlDevicesAll: returns [] on empty devices object', () => {
 // ── 2. createDeviceListHandler — injected exec ────────────────────────────────
 
 test('createDeviceListHandler: merges iOS booted + Android serials', async () => {
-  _setDeviceListExecForTest(async (cmd, args) => {
+  _setDeviceListExecForTest(async (cmd, _args) => {
     if (cmd === 'xcrun') return { stdout: SIMCTL_JSON };
     if (cmd === 'adb') return { stdout: ADB_OUTPUT };
     throw new Error(`Unexpected command: ${cmd}`);

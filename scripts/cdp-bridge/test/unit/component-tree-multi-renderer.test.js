@@ -9,9 +9,8 @@
 // multi-renderer-loop tokens so drift between the two copies fails loudly.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { findAllRootFibersForTest, INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

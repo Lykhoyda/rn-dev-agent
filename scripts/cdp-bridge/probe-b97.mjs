@@ -66,7 +66,7 @@ function clipboardPaste(text) {
 }
 
 // broadcast-based clipboard (fallback for older API)
-function clipboardPasteBroadcast(text) {
+function _clipboardPasteBroadcast(text) {
   const r1 = adbOk(['shell', 'am', 'broadcast', '-a', 'clipper.set', '-e', 'text', text]);
   if (!r1.ok) return r1;
   sh('sh', ['-c', 'sleep 0.3']);
@@ -109,7 +109,7 @@ const seqTests = [
 
 for (const tc of seqTests) {
   const r = runProbe(tc.label, () => inputText(tc.raw));
-  const ok = r.actual === tc.raw.replace(/%s/g, ' '); // only %s should become space
+  const _ok = r.actual === tc.raw.replace(/%s/g, ' '); // only %s should become space
   console.log(`  ${tc.label.padEnd(25)} raw=${JSON.stringify(tc.raw).padEnd(12)} → field=${JSON.stringify(r.actual).padEnd(12)} ${r.err ? `ERR: ${r.err.slice(0,30)}` : ''}`);
 }
 

@@ -412,11 +412,11 @@ test('cpu_profile: CDP path success with hot functions', async () => {
     startTime: 1000,
     endTime: 1500,
   };
-  let sendCallCount = 0;
+  let _sendCallCount = 0;
   const client = createMockClient({
     _profilerAvailable: true,
     send: async (method) => {
-      sendCallCount++;
+      _sendCallCount++;
       if (method === 'Profiler.stop') return { profile: mockProfile };
       return {};
     },
@@ -483,7 +483,7 @@ test('object_inspect: primitive result (no objectId)', async () => {
 
 test('object_inspect: object result with properties', async () => {
   const client = createMockClient({
-    send: async (method, params) => {
+    send: async (method, _params) => {
       if (method === 'Runtime.evaluate') {
         return {
           result: {

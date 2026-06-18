@@ -115,9 +115,9 @@ test('forceReconnect: passes { platform, bundleId } and NO targetId to autoConne
     }),
   });
 
-  let current = oldClient;
+  let _current = oldClient;
   const captured = captureClientState(oldClient);
-  await forceReconnect(oldClient, (c) => { current = c; }, () => newClient, captured);
+  await forceReconnect(oldClient, (c) => { _current = c; }, () => newClient, captured);
 
   const filters = newCalls.lastFilters;
   assert.equal(filters.platform, 'android');
@@ -247,9 +247,9 @@ test('forceReconnect: platform mismatch surfaces in result (recovered to wrong p
     }),
   });
 
-  let current = oldClient;
+  let _current = oldClient;
   const captured = captureClientState(oldClient);
-  const result = await forceReconnect(oldClient, (c) => { current = c; }, () => newClient, captured);
+  const result = await forceReconnect(oldClient, (c) => { _current = c; }, () => newClient, captured);
 
   assert.equal(result.ok, true);
   assert.equal(result.platformMatched, false, 'iOS captured but recovered onto Android');

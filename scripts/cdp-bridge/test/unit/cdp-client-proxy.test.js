@@ -281,7 +281,7 @@ test('B132: softReconnect wrapper suspends + resumes the proxy across reconnect'
 
   // First startProxy via the direct path — plants _proxyUrl + _proxyDesired=true.
   client._softReconnectDirect = async () => {};  // no-op reconnect
-  const originalUrl = await client.startProxy();
+  const _originalUrl = await client.startProxy();
   assert.ok(client._proxyDesired, '_proxyDesired set after successful startProxy');
 
   const firstMux = client._multiplexer;

@@ -73,7 +73,7 @@ test('repair-action: happy path patches stale selector with fuzzy match', async 
     fixtureYaml({ id: 'wizard-create-task', selectors: ['fab-create-task'] }),
   );
 
-  _setRunAgentDeviceForTest(async (cliArgs) => ({
+  _setRunAgentDeviceForTest(async (_cliArgs) => ({
     content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn', 'btn-cancel', 'header-home']) }],
   }));
 

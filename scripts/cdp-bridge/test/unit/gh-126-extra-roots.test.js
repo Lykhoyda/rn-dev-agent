@@ -228,7 +228,7 @@ test('iterateAllRoots: sparse array (holes) — holes treated as undefined and s
   const goodFiber = fiber({ displayName: 'GoodPortal' });
   const sandbox = makeSandbox({
     extraRoots: () => {
-      const arr = new Array(5);
+      const arr = Array.from({ length: 5 });
       arr[2] = { _reactInternals: goodFiber };
       return arr;
     },

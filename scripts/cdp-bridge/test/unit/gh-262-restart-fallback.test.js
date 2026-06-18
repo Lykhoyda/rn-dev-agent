@@ -213,7 +213,7 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
   const simctl = [];
   const handler = createRestartHandler(
     () => current,
-    (c) => {},
+    (_c) => {},
     () => plainClient,
     {
       getSession: () => null,

@@ -120,6 +120,7 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     // openAndroidDeeplink covers the shell-metachar layer, but a URL
     // containing a newline or control char would break out of the
     // quoted string entirely. Reject those at the boundary.
+    // oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars before passing URL to adb shell
     if (typeof args.url !== 'string' || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
       return failResult(
         `url contains control characters or newlines — refuse to pass to adb shell (Phase 134.2-followup)`,

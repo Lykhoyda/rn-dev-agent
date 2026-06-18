@@ -1,6 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, warnResult, withConnection } from '../utils.js';
 import { hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';

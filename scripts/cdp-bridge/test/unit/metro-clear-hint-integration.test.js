@@ -112,7 +112,7 @@ test('M11 network_log: no hint when empty but recent push (lastEventAt within wi
   // on connectedAt alone; if it returns a ts, hint-fire depends on max(connectedAt, lastPush).
   // Explicitly simulate "recent event observed" by spying on getLastPush.
   const originalGetLastPush = client.networkBufferManager.getLastPush.bind(client.networkBufferManager);
-  client.networkBufferManager.getLastPush = (key) => {
+  client.networkBufferManager.getLastPush = (_key) => {
     // Override: pretend we saw an event recently (now - 5s)
     return 1_000_000 + 115_000;
   };

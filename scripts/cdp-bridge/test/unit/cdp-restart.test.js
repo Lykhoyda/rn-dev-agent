@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRestartHandler, _resetRestartHandlerStateForTest } from '../../dist/tools/restart.js';
-import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
+import { expectOk } from '../helpers/result-helpers.js';
 
 // Reset module-scoped state (lastSeenBundleId cache, inflight guard) before
 // every test — these would otherwise leak across cases and produce

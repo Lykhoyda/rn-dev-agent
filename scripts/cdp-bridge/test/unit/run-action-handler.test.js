@@ -9,7 +9,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { loadAction } from '../../dist/domain/action-store.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
 let project;

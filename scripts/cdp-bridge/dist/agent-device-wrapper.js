@@ -36,28 +36,6 @@ function getSessionFilePath() {
 }
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
-function extractFlags(args) {
-    const positionals = [];
-    const flags = {};
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        if (arg.startsWith('--') && arg.length > 2) {
-            const key = arg.slice(2);
-            const next = args[i + 1];
-            if (next !== undefined && !next.startsWith('--')) {
-                flags[key] = next;
-                i++;
-            }
-            else {
-                flags[key] = true;
-            }
-        }
-        else {
-            positionals.push(arg);
-        }
-    }
-    return { positionals, flags };
-}
 let activeSession = null;
 // CDP-015: load session, refusing to follow symlinks (defends against the
 // classic /tmp/<predictable-name> -> arbitrary-write attack). On failure

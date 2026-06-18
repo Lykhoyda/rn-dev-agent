@@ -359,25 +359,6 @@ export function isDaemonTimeoutError(text: string): boolean {
   );
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
-function mergeMeta(result: ToolResult, extra: Record<string, unknown>): ToolResult {
-  if (result.isError) return result;
-  try {
-    const envelope = JSON.parse(result.content[0].text) as {
-      ok?: boolean;
-      data?: unknown;
-      meta?: Record<string, unknown>;
-    };
-    envelope.meta = { ...envelope.meta, ...extra };
-    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
-  } catch {
-    return result;
-  }
-}
-
 // B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
 // Common RN design-system pattern: outer Pressable with testID `${name}-pressable`
 // imperatively focuses an inner TextInput whose testID is `${name}`. When

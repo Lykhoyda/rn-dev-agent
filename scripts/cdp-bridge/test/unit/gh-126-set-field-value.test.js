@@ -117,7 +117,7 @@ test('setFieldValue: shouldValidate=false and shouldDirty=false pass through ver
 test('setFieldValue: numeric and boolean values pass through unchanged (no coercion)', () => {
   const calls = [];
   const formReturn = {
-    setValue(n, v, o) { calls.push({ v, type: typeof v }); },
+    setValue(n, v, _o) { calls.push({ v, type: typeof v }); },
     getValues() { return {}; },
     control: {},
   };

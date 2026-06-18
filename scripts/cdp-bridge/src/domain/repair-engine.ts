@@ -29,8 +29,8 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
   // Two-row dynamic programming for O(min(n,m)) memory.
-  let prev = new Array(b.length + 1);
-  let curr = new Array(b.length + 1);
+  let prev = Array.from<number>({ length: b.length + 1 });
+  let curr = Array.from<number>({ length: b.length + 1 });
   for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i;

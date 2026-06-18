@@ -12,7 +12,7 @@ export class RingBuffer<T, K = unknown> {
 
   constructor(capacity: number, options?: RingBufferOptions<T, K>) {
     this.capacity = capacity;
-    this.buffer = new Array(capacity);
+    this.buffer = Array.from({ length: capacity });
     this.indexKey = options?.indexKey;
     this.index = options?.indexKey ? new Map() : null;
   }
@@ -64,7 +64,7 @@ export class RingBuffer<T, K = unknown> {
   }
 
   clear(): void {
-    this.buffer = new Array(this.capacity);
+    this.buffer = Array.from({ length: this.capacity });
     this.cursor = 0;
     this.count = 0;
     this.index?.clear();

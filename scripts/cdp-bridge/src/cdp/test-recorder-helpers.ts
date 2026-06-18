@@ -61,7 +61,7 @@ export function extractActiveRouteForTest(state: unknown): string | null {
       }
       return null;
     }
-  } catch (e) { /* fall through */ }
+  } catch { /* fall through */ }
   return null;
 }
 

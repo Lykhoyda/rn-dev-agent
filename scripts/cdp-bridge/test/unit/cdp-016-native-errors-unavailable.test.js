@@ -13,7 +13,7 @@ function parseEnvelope(result) {
 
 test('CDP-016: handler surfaces NATIVE_LOG_UNAVAILABLE when readNativeErrors returns unavailable', async () => {
   // Force the handler to use a runner that throws (simulating xcrun missing).
-  const client = createMockClient({
+  const _client = createMockClient({
     _connectedTarget: {
       id: 'p1', title: 'iOS', vm: 'Hermes', description: 'com.x',
       platform: 'ios', webSocketDebuggerUrl: 'ws://x',

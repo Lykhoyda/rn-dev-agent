@@ -4,9 +4,8 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
 import type { SessionState } from './types.js';
-import { okResult, failResult } from './utils.js';
+import { failResult } from './utils.js';
 import {
-  isFastRunnerAvailable,
   startFastRunner,
   probeFastRunnerLiveness,
   reapStaleFastRunner,
@@ -49,27 +48,6 @@ function getSessionFilePath(): string {
 
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
-
-function extractFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
-  const positionals: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('--') && arg.length > 2) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positionals.push(arg);
-    }
-  }
-  return { positionals, flags };
-}
 
 let activeSession: SessionState | null = null;
 

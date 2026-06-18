@@ -135,7 +135,7 @@ test('cdp_run_action: when reaching maestro_run, the params are passed through',
   });
 
   const handler = createRunActionHandler({ maestroRun: fakeMaestroRun });
-  const result = await handler({
+  const _result = await handler({
     actionId: 'sample',
     projectRoot: root,
     platform: 'ios',

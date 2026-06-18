@@ -54,7 +54,7 @@ function extractTools(src) {
  * useful guidance. Flags only "obvious archaeological lore" the LLM never benefits
  * from. Use this set first; act on flagged tools, then re-measure.
  */
-function classifyLoose(desc, name) {
+function classifyLoose(desc, _name) {
   const flags = [];
   if (/\b[BD]\d{2,3}\b/.test(desc)) flags.push('decision-id');
   if (/\bPhase\s+\d+\b|\bM\d+[a-z]?\b/.test(desc)) flags.push('phase-ref');
@@ -75,7 +75,7 @@ function classifyLoose(desc, name) {
  *
  * Long-desc only fires when COMBINED with another flag — length alone ≠ bloat.
  */
-function classifyStrict(desc, name) {
+function classifyStrict(desc, _name) {
   const flags = [];
 
   if (/\b[BD]\d{2,3}\b/.test(desc)) flags.push('decision-id');

@@ -1,7 +1,6 @@
 // Verify PR-B picker logic against representative real-world snapshots.
 // Imports the freshly-compiled NEW dist (not the OLD one running in MCP).
 import {
-  parsePortPatternEntry,
   parseFirstServerEntry,
 } from '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/tools/dev-client-picker.js';
 

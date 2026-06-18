@@ -6,7 +6,7 @@
 // prefixes and only deletes files older than ORPHAN_MAX_AGE_MS.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync, existsSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
