@@ -74,6 +74,19 @@ export function skippedResult(testId: string, intent: string, reason: string): E
   };
 }
 
+export function unloadableResult(testId: string, reason: string): E2eFlowResult {
+  return {
+    testId,
+    intent: testId,
+    passed: false,
+    durationMs: 0,
+    classification: 'infra',
+    failureKind: 'UNLOADABLE',
+    infraAnnotation: reason,
+    errorExcerpt: null,
+  };
+}
+
 export function computeVerdict(
   results: Array<{ passed: boolean; classification: E2eResultClassification }>,
 ): E2eVerdict {

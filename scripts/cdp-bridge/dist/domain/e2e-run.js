@@ -35,6 +35,18 @@ export function skippedResult(testId, intent, reason) {
         infraAnnotation: reason,
     };
 }
+export function unloadableResult(testId, reason) {
+    return {
+        testId,
+        intent: testId,
+        passed: false,
+        durationMs: 0,
+        classification: 'infra',
+        failureKind: 'UNLOADABLE',
+        infraAnnotation: reason,
+        errorExcerpt: null,
+    };
+}
 export function computeVerdict(results) {
     return results.some((r) => !r.passed && r.classification !== 'skipped') ? 'red' : 'green';
 }

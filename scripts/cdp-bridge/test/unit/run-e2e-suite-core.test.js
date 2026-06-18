@@ -134,6 +134,31 @@ test('empty suite → warn, NO record written', async () => {
   }
 });
 
+test('load returns null → unloadable result, verdict red, totals.failed >= 1', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'suite-'));
+  try {
+    let maestroCalls = 0;
+    const load = (_root, id) => (id === 'corrupt' ? null : lockedFixture(id));
+    const deps = baseDeps(
+      ['ok', 'corrupt'],
+      () => {
+        maestroCalls++;
+        return passEnv();
+      },
+      load,
+    );
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
+    assert.equal(res.data.verdict, 'red');
+    assert.ok(res.data.totals.failed >= 1, 'expected at least one failed');
+    const corruptResult = res.data.results.find((r) => r.testId === 'corrupt');
+    assert.ok(corruptResult, 'corrupt result should be present');
+    assert.equal(corruptResult.failureKind, 'UNLOADABLE');
+    assert.equal(maestroCalls, 1, 'maestroRun called only for ok, not for corrupt');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('makeRunId is a path-safe slug', () => {
   assert.match(
     makeRunId(

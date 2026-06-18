@@ -1,5 +1,5 @@
 import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
-import { classifyFlowResult, skippedResult, computeVerdict, diffNewlyFailing, writeRunRecord, loadRunRecord, lastGreenRunId, } from '../domain/e2e-run.js';
+import { classifyFlowResult, skippedResult, unloadableResult, computeVerdict, diffNewlyFailing, writeRunRecord, loadRunRecord, lastGreenRunId, } from '../domain/e2e-run.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
@@ -71,8 +71,11 @@ export async function runE2eSuiteCore(args, deps = {}) {
     const results = [];
     for (const id of ids) {
         const locked = load(projectRoot, id);
-        if (!locked)
+        if (!locked) {
+            results.push(unloadableResult(id, 'locked test file is present but could not be parsed (corrupt or missing sentinel)'));
+            deps.onProgress?.(results.length, ids.length, id);
             continue;
+        }
         if (locked.params?.length) {
             results.push(skippedResult(id, locked.intent, 'needs params (unsupported in v1)'));
             deps.onProgress?.(results.length, ids.length, id);

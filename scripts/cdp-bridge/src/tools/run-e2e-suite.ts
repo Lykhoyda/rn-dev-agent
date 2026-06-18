@@ -2,6 +2,7 @@ import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
 import {
   classifyFlowResult,
   skippedResult,
+  unloadableResult,
   computeVerdict,
   diffNewlyFailing,
   writeRunRecord,
@@ -122,7 +123,16 @@ export async function runE2eSuiteCore(
   const results: E2eFlowResult[] = [];
   for (const id of ids) {
     const locked = load(projectRoot, id);
-    if (!locked) continue;
+    if (!locked) {
+      results.push(
+        unloadableResult(
+          id,
+          'locked test file is present but could not be parsed (corrupt or missing sentinel)',
+        ),
+      );
+      deps.onProgress?.(results.length, ids.length, id);
+      continue;
+    }
     if (locked.params?.length) {
       results.push(skippedResult(id, locked.intent, 'needs params (unsupported in v1)'));
       deps.onProgress?.(results.length, ids.length, id);

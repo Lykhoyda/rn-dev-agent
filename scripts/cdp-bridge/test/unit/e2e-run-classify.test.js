@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   classifyFlowResult,
   skippedResult,
+  unloadableResult,
   computeVerdict,
   diffNewlyFailing,
 } from '../../dist/domain/e2e-run.js';
@@ -52,6 +53,19 @@ test('skippedResult is neither pass nor fail for the verdict', () => {
 test('computeVerdict: any non-skipped failure → red', () => {
   assert.equal(computeVerdict([{ classification: 'pass', passed: true }]), 'green');
   assert.equal(computeVerdict([{ classification: 'infra', passed: false }]), 'red');
+});
+
+test('unloadableResult: passed=false, classification=infra, failureKind=UNLOADABLE', () => {
+  const r = unloadableResult('broken-test', 'corrupt sentinel');
+  assert.equal(r.passed, false);
+  assert.equal(r.classification, 'infra');
+  assert.equal(r.failureKind, 'UNLOADABLE');
+  assert.equal(r.testId, 'broken-test');
+  assert.equal(r.durationMs, 0);
+});
+
+test('computeVerdict: unloadableResult counts as red', () => {
+  assert.equal(computeVerdict([unloadableResult('x', 'r')]), 'red');
 });
 
 test('diffNewlyFailing ignores skipped + finds newly-broken', () => {
