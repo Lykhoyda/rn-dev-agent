@@ -12,7 +12,7 @@ const DETECT_EXPRESSION = `
 export async function detectBridge(client) {
     try {
         const result = await client.evaluate(DETECT_EXPRESSION);
-        if (result.value && typeof result.value === 'string') {
+        if (result.value && typeof result.value === "string") {
             return JSON.parse(result.value);
         }
     }

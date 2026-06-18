@@ -1,15 +1,15 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import type { CDPClient } from '../cdp-client.js';
-import type { ToolResult } from '../utils.js';
-import { okResult, failResult } from '../utils.js';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import type { CDPClient } from "../cdp-client.js";
+import type { ToolResult } from "../utils.js";
+import { okResult, failResult } from "../utils.js";
 
 const execFile = promisify(execFileCb);
 
 export interface NativeError {
   timestamp: string;
-  source: 'ios-simctl-log' | 'android-logcat';
-  level: 'error' | 'warn' | 'fatal';
+  source: "ios-simctl-log" | "android-logcat";
+  level: "error" | "warn" | "fatal";
   message: string;
 }
 
@@ -47,14 +47,14 @@ const ANDROID_NOISE_PATTERNS = [
  */
 export function parseIOSLog(stdout: string): NativeError[] {
   const entries: NativeError[] = [];
-  for (const line of stdout.split('\n')) {
-    if (!IOS_NOISE_PATTERNS.some(p => p.test(line))) continue;
+  for (const line of stdout.split("\n")) {
+    if (!IOS_NOISE_PATTERNS.some((p) => p.test(line))) continue;
     const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
     const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
     entries.push({
       timestamp,
-      source: 'ios-simctl-log',
-      level: /fatal|redbox|rctfatal/i.test(line) ? 'fatal' : 'error',
+      source: "ios-simctl-log",
+      level: /fatal|redbox|rctfatal/i.test(line) ? "fatal" : "error",
       message: line.trim(),
     });
   }
@@ -67,14 +67,14 @@ export function parseIOSLog(stdout: string): NativeError[] {
  */
 export function parseAndroidLog(stdout: string): NativeError[] {
   const entries: NativeError[] = [];
-  for (const line of stdout.split('\n')) {
-    if (!ANDROID_NOISE_PATTERNS.some(p => p.test(line))) continue;
+  for (const line of stdout.split("\n")) {
+    if (!ANDROID_NOISE_PATTERNS.some((p) => p.test(line))) continue;
     const tsMatch = line.match(/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
     const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
-    const level: 'error' | 'fatal' = /FATAL|F\//.test(line) ? 'fatal' : 'error';
+    const level: "error" | "fatal" = /FATAL|F\//.test(line) ? "fatal" : "error";
     entries.push({
       timestamp,
-      source: 'android-logcat',
+      source: "android-logcat",
       level,
       message: line.trim(),
     });
@@ -88,7 +88,7 @@ function dedupeByMessage(entries: NativeError[]): NativeError[] {
   // Drop the leading timestamp so "same error at different times" collapses.
   const TS_PREFIX = /^(?:\d{4}-)?\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\.\d+\s*/;
   for (const e of entries) {
-    const key = e.message.replace(TS_PREFIX, '').replace(/\s+/g, ' ').slice(0, 200);
+    const key = e.message.replace(TS_PREFIX, "").replace(/\s+/g, " ").slice(0, 200);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(e);
@@ -106,19 +106,19 @@ export interface ReadNativeErrorsOptions {
 
 async function defaultRunIOS(sinceSeconds: number): Promise<string> {
   const { stdout } = await execFile(
-    'xcrun',
+    "xcrun",
     [
-      'simctl',
-      'spawn',
-      'booted',
-      'log',
-      'show',
-      '--style',
-      'compact',
-      '--last',
+      "simctl",
+      "spawn",
+      "booted",
+      "log",
+      "show",
+      "--style",
+      "compact",
+      "--last",
       `${sinceSeconds}s`,
     ],
-    { timeout: 10_000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+    { timeout: 10_000, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
   );
   return stdout;
 }
@@ -128,9 +128,9 @@ async function defaultRunAndroid(sinceSeconds: number): Promise<string> {
   // filter by severity (E/F) and cap via -t lines proxy for "last N seconds"
   // (logcat doesn't have an explicit "last Ns" flag; ~100 lines/s is a safe upper bound).
   const { stdout } = await execFile(
-    'adb',
-    ['logcat', '-d', '-v', 'time', '-t', `${sinceSeconds * 100}`, '*:E'],
-    { timeout: 10_000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+    "adb",
+    ["logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"],
+    { timeout: 10_000, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
   );
   return stdout;
 }
@@ -146,19 +146,33 @@ export interface NativeErrorsResult {
   command: string;
 }
 
-export async function readNativeErrors(opts: ReadNativeErrorsOptions = {}): Promise<NativeErrorsResult> {
-  const platform = (opts.platform ?? 'ios').toLowerCase();
+export async function readNativeErrors(
+  opts: ReadNativeErrorsOptions = {},
+): Promise<NativeErrorsResult> {
+  const platform = (opts.platform ?? "ios").toLowerCase();
   const sinceSeconds = opts.sinceSeconds ?? 60;
   const limit = opts.limit ?? 10;
-  const command = platform === 'android' ? 'adb logcat' : 'xcrun simctl spawn ... log show';
+  const command = platform === "android" ? "adb logcat" : "xcrun simctl spawn ... log show";
 
   try {
-    if (platform === 'android') {
+    if (platform === "android") {
       const out = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
-      return { ok: true, entries: parseAndroidLog(out).slice(-limit), unavailable: false, error: '', command };
+      return {
+        ok: true,
+        entries: parseAndroidLog(out).slice(-limit),
+        unavailable: false,
+        error: "",
+        command,
+      };
     }
     const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
-    return { ok: true, entries: parseIOSLog(out).slice(-limit), unavailable: false, error: '', command };
+    return {
+      ok: true,
+      entries: parseIOSLog(out).slice(-limit),
+      unavailable: false,
+      error: "",
+      command,
+    };
   } catch (err) {
     // CDP-016: surface tool-unavailability as a structured failure. Returning
     // [] previously made "no native errors" indistinguishable from "the log
@@ -175,12 +189,14 @@ export async function readNativeErrors(opts: ReadNativeErrorsOptions = {}): Prom
 }
 
 export function createNativeErrorsHandler(getClient: () => CDPClient) {
-  return async (args: { platform?: string; sinceSeconds?: number; limit?: number }): Promise<ToolResult> => {
+  return async (args: {
+    platform?: string;
+    sinceSeconds?: number;
+    limit?: number;
+  }): Promise<ToolResult> => {
     const client = getClient();
     const platform =
-      args.platform
-      ?? (client.connectedTarget?.platform as string | undefined)
-      ?? 'ios';
+      args.platform ?? (client.connectedTarget?.platform as string | undefined) ?? "ios";
 
     try {
       const result = await readNativeErrors({
@@ -194,13 +210,14 @@ export function createNativeErrorsHandler(getClient: () => CDPClient) {
       if (result.unavailable) {
         return failResult(
           `Native log tool unavailable (${result.command}): ${result.error}`,
-          'NATIVE_LOG_UNAVAILABLE',
+          "NATIVE_LOG_UNAVAILABLE",
           {
             platform,
             command: result.command,
-            hint: platform === 'ios'
-              ? 'Verify Xcode command-line tools are installed (xcode-select --install) and a simulator is booted.'
-              : 'Verify the Android SDK is installed and adb is on PATH (e.g. via $ANDROID_HOME/platform-tools).',
+            hint:
+              platform === "ios"
+                ? "Verify Xcode command-line tools are installed (xcode-select --install) and a simulator is booted."
+                : "Verify the Android SDK is installed and adb is on PATH (e.g. via $ANDROID_HOME/platform-tools).",
           },
         );
       }
@@ -212,8 +229,8 @@ export function createNativeErrorsHandler(getClient: () => CDPClient) {
         entries,
         hint:
           entries.length === 0
-            ? 'No native errors found. If the app is broken but this returned empty, try increasing sinceSeconds (default 60).'
-            : 'Native errors captured. If these happened before __RN_AGENT injected, they explain why cdp_error_log/cdp_console_log look empty.',
+            ? "No native errors found. If the app is broken but this returned empty, try increasing sinceSeconds (default 60)."
+            : "Native errors captured. If these happened before __RN_AGENT injected, they explain why cdp_error_log/cdp_console_log look empty.",
       });
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err));

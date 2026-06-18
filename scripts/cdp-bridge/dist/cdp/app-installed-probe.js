@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 const execFile = promisify(execFileCb);
 const DEVICE_ERROR = /Invalid device|No devices/i;
 // Allowlist: `false` requires the documented app-missing signal — verified
@@ -21,11 +21,11 @@ function isAppMissingSignal(stderr) {
  */
 export async function probeAppInstalled(udid, appId, exec = execFile) {
     try {
-        await exec('xcrun', ['simctl', 'get_app_container', udid, appId, 'app'], { timeout: 5000 });
+        await exec("xcrun", ["simctl", "get_app_container", udid, appId, "app"], { timeout: 5000 });
         return true;
     }
     catch (e) {
-        const stderr = e.stderr ?? '';
+        const stderr = e.stderr ?? "";
         if (!stderr)
             return null;
         if (DEVICE_ERROR.test(stderr))
@@ -45,7 +45,7 @@ export function posixSingleQuote(s) {
 }
 export function buildNotInstalledAdvice(udid, appId, hint) {
     const base = `App ${appId} is not installed on simulator ${udid} — rebuild and install ` +
-        '(npx expo run:ios / pnpm ios).';
+        "(npx expo run:ios / pnpm ios).";
     if (!hint)
         return base;
     return (`${base} Or reinstall the snapshot taken at the last clearState, ` +

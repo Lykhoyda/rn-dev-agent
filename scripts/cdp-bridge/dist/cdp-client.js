@@ -1,20 +1,20 @@
-import WebSocket from 'ws';
-import { RingBuffer, makeDeviceKey } from './ring-buffer.js';
-import { getNetworkBufferManager } from './cdp/network-buffer-manager.js';
-import { MetroEventsClient } from './metro/events-client.js';
-import { CDPMultiplexer } from './cdp/multiplexer.js';
-import { detectBridge } from './bridge-detector.js';
-import { logger } from './logger.js';
-import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
-import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
-import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
-import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg } from './cdp/transport.js';
-import { wireEventHandlers, parseNetworkHookMessage as parseNetHook } from './cdp/event-handlers.js';
-import { discoverForList } from './cdp/discovery.js';
-import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn } from './cdp/helper-expr.js';
-import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
-import { resolveAutoConnect } from './project-config.js';
-import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
+import WebSocket from "ws";
+import { RingBuffer, makeDeviceKey } from "./ring-buffer.js";
+import { getNetworkBufferManager } from "./cdp/network-buffer-manager.js";
+import { MetroEventsClient } from "./metro/events-client.js";
+import { CDPMultiplexer } from "./cdp/multiplexer.js";
+import { detectBridge } from "./bridge-detector.js";
+import { logger } from "./logger.js";
+import { performSetup, reinjectHelpers as reinjectHelpersFn } from "./cdp/setup.js";
+import { resetState, setActiveFlag, clearActiveFlag, sleep } from "./cdp/state.js";
+import { defaultTimeout, timeoutForMethod } from "./cdp/timeout-config.js";
+import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from "./cdp/transport.js";
+import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from "./cdp/event-handlers.js";
+import { discoverForList } from "./cdp/discovery.js";
+import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from "./cdp/helper-expr.js";
+import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from "./cdp/connect.js";
+import { resolveAutoConnect } from "./project-config.js";
+import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from "./cdp/reconnection.js";
 export class CDPClient {
     ws = null;
     msgId = 0;
@@ -31,7 +31,7 @@ export class CDPClient {
     reconnecting = false;
     disposed = false;
     _helpersInjected = false;
-    _networkMode = 'none';
+    _networkMode = "none";
     _isPaused = false;
     _connectedTarget = null;
     // M11 / Phase 108: timestamp (ms) of the current CDP connection; null when disconnected.
@@ -39,7 +39,7 @@ export class CDPClient {
     // prolonged empty results. Reset alongside _connectedTarget via buildResettableState.
     _connectedAt = null;
     _timeNowFn;
-    _state = 'disconnected';
+    _state = "disconnected";
     _connectionGeneration = 0;
     _softReconnectRequested = false;
     _bgPollTimer = null;
@@ -81,36 +81,84 @@ export class CDPClient {
         this._networkBufferManager = getNetworkBufferManager();
         this._logBuffer = new RingBuffer(50);
     }
-    get state() { return this._state; }
-    get isConnected() { return !this.disposed && this._state === 'connected' && this.ws?.readyState === WebSocket.OPEN; }
-    get isPaused() { return this._isPaused; }
-    get helpersInjected() { return this._helpersInjected; }
-    get metroPort() { return this._port; }
-    get connectedTarget() { return this._connectedTarget; }
+    get state() {
+        return this._state;
+    }
+    get isConnected() {
+        return !this.disposed && this._state === "connected" && this.ws?.readyState === WebSocket.OPEN;
+    }
+    get isPaused() {
+        return this._isPaused;
+    }
+    get helpersInjected() {
+        return this._helpersInjected;
+    }
+    get metroPort() {
+        return this._port;
+    }
+    get connectedTarget() {
+        return this._connectedTarget;
+    }
     /** B132: whether DevTools attachment was requested. Survives soft reconnect (auto-resumes via afterReconnect). Lost on `disconnect()` — caller must re-run cdp_open_devtools after a force-recreate. */
-    get proxyDesired() { return this._proxyDesired; }
+    get proxyDesired() {
+        return this._proxyDesired;
+    }
     /** M11: timestamp of the current CDP connection (ms since epoch); null when disconnected. */
-    get connectedAt() { return this._connectedAt; }
+    get connectedAt() {
+        return this._connectedAt;
+    }
     /** M11: clock source for this client (injectable; defaults to Date.now). */
-    get now() { return this._timeNowFn; }
-    get networkMode() { return this._networkMode; }
-    get consoleBuffer() { return this._consoleBuffer; }
+    get now() {
+        return this._timeNowFn;
+    }
+    get networkMode() {
+        return this._networkMode;
+    }
+    get consoleBuffer() {
+        return this._consoleBuffer;
+    }
     /** M4 (D655): per-device buffer manager. Use `activeDeviceKey` for single-device queries, `'all'` for cross-device. */
-    get networkBufferManager() { return this._networkBufferManager; }
+    get networkBufferManager() {
+        return this._networkBufferManager;
+    }
     /** M4 (D655): the device key for the currently connected target. Used as the default scope for per-device buffer queries. */
-    get activeDeviceKey() { return makeDeviceKey(this._port, this._connectedTarget?.id); }
+    get activeDeviceKey() {
+        return makeDeviceKey(this._port, this._connectedTarget?.id);
+    }
     /** M5 (D656): Metro /events subscriber; null until first successful CDP setup attaches it. */
-    get metroEventsClient() { return this._metroEventsClient; }
-    get connectionGeneration() { return this._connectionGeneration; }
-    get bridgeDetected() { return this._bridgeDetected; }
-    get bridgeVersion() { return this._bridgeVersion; }
-    get logBuffer() { return this._logBuffer; }
-    get logDomainEnabled() { return this._logDomainEnabled; }
-    get profilerAvailable() { return this._profilerAvailable; }
-    get heapProfilerAvailable() { return this._heapProfilerAvailable; }
-    get scripts() { return this._scripts; }
+    get metroEventsClient() {
+        return this._metroEventsClient;
+    }
+    get connectionGeneration() {
+        return this._connectionGeneration;
+    }
+    get bridgeDetected() {
+        return this._bridgeDetected;
+    }
+    get bridgeVersion() {
+        return this._bridgeVersion;
+    }
+    get logBuffer() {
+        return this._logBuffer;
+    }
+    get logDomainEnabled() {
+        return this._logDomainEnabled;
+    }
+    get profilerAvailable() {
+        return this._profilerAvailable;
+    }
+    get heapProfilerAvailable() {
+        return this._heapProfilerAvailable;
+    }
+    get scripts() {
+        return this._scripts;
+    }
     get reconnectState() {
-        return { active: this.reconnecting, lastAttempt: this._lastReconnectAttempt, attemptCount: this._reconnectAttemptCount };
+        return {
+            active: this.reconnecting,
+            lastAttempt: this._lastReconnectAttempt,
+            attemptCount: this._reconnectAttemptCount,
+        };
     }
     /**
      * Resolved once per process — env/config don't change mid-session.
@@ -123,11 +171,17 @@ export class CDPClient {
         return this._autoConnectResolution;
     }
     /** M1b: URL the CDPClient routes through (null when connected directly). */
-    get proxyUrl() { return this._proxyUrl; }
+    get proxyUrl() {
+        return this._proxyUrl;
+    }
     /** M1b: true when the multiplexer is owned by this client and routing traffic. */
-    get isProxyActive() { return this._proxyUrl !== null; }
+    get isProxyActive() {
+        return this._proxyUrl !== null;
+    }
     /** M1b: the multiplexer instance (null when no proxy is active). */
-    get proxyMultiplexer() { return this._multiplexer; }
+    get proxyMultiplexer() {
+        return this._multiplexer;
+    }
     helperExpr(call) {
         return helperExprFn(call, this._bridgeDetected);
     }
@@ -141,12 +195,17 @@ export class CDPClient {
         this._helpersInjected = ok;
         if (ok) {
             setActiveFlag(this._port, this._connectedTarget);
-            detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; }).catch(() => { });
+            detectBridge(this)
+                .then((r) => {
+                this._bridgeDetected = r.present;
+                this._bridgeVersion = r.version;
+            })
+                .catch(() => { });
         }
         return ok;
     }
-    async autoConnect(portHint, filtersOrPlatform, intent = 'default') {
-        const filters = typeof filtersOrPlatform === 'string'
+    async autoConnect(portHint, filtersOrPlatform, intent = "default") {
+        const filters = typeof filtersOrPlatform === "string"
             ? { platform: filtersOrPlatform }
             : (filtersOrPlatform ?? {});
         return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
@@ -204,7 +263,7 @@ export class CDPClient {
     }
     async _doStartProxy(opts) {
         if (!this._connectedTarget) {
-            throw new Error('startProxy requires an active CDP connection — call autoConnect first');
+            throw new Error("startProxy requires an active CDP connection — call autoConnect first");
         }
         const hermesUrl = this._connectedTarget.webSocketDebuggerUrl;
         const multiplexer = new CDPMultiplexer({ hermesUrl, ...opts });
@@ -216,7 +275,7 @@ export class CDPClient {
         // in the path, the multiplexer rejects the WebSocket upgrade.
         // The token itself never appears in logs.
         this._proxyUrl = `ws://127.0.0.1:${port}/${multiplexer.token}`;
-        logger.info('CDP', `Proxy started on ws://127.0.0.1:${port}/<token>, soft-reconnecting current session`);
+        logger.info("CDP", `Proxy started on ws://127.0.0.1:${port}/<token>, soft-reconnecting current session`);
         try {
             // B132: call `_softReconnectDirect` instead of `this.softReconnect()`. The
             // wrapper would observe _proxyUrl just set above and try to suspend the
@@ -231,7 +290,9 @@ export class CDPClient {
             try {
                 await multiplexer.stop();
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
             this._multiplexer = null;
             this._proxyUrl = null;
             throw err;
@@ -253,7 +314,7 @@ export class CDPClient {
         this._proxyDesired = false;
         if (!this._proxyUrl)
             return;
-        logger.info('CDP', `Stopping proxy at ${this._proxyUrl}`);
+        logger.info("CDP", `Stopping proxy at ${this._proxyUrl}`);
         const mux = this._multiplexer;
         this._proxyUrl = null;
         this._multiplexer = null;
@@ -268,7 +329,9 @@ export class CDPClient {
                 try {
                     await mux.stop();
                 }
-                catch { /* best-effort */ }
+                catch {
+                    /* best-effort */
+                }
             }
         }
     }
@@ -291,7 +354,9 @@ export class CDPClient {
             try {
                 await mux.stop();
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
         }
     }
     /**
@@ -315,10 +380,10 @@ export class CDPClient {
             return;
         try {
             await this.startProxy();
-            logger.info('CDP', 'Proxy auto-resumed after reconnect');
+            logger.info("CDP", "Proxy auto-resumed after reconnect");
         }
         catch (err) {
-            logger.warn('CDP', `Proxy auto-resume failed — clearing desired flag. Run cdp_open_devtools to retry: ${err instanceof Error ? err.message : err}`);
+            logger.warn("CDP", `Proxy auto-resume failed — clearing desired flag. Run cdp_open_devtools to retry: ${err instanceof Error ? err.message : err}`);
             this._proxyDesired = false;
         }
     }
@@ -337,7 +402,9 @@ export class CDPClient {
             try {
                 this._metroEventsClient.stop();
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
             this._metroEventsClient = null;
         }
         // M1b: tear down multiplexer if one is active. This is the only reliable
@@ -346,7 +413,9 @@ export class CDPClient {
             try {
                 await this._multiplexer.stop();
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
             this._multiplexer = null;
             this._proxyUrl = null;
         }
@@ -360,7 +429,7 @@ export class CDPClient {
             }
             this.ws = null;
         }
-        this.rejectAllPending(new Error('Client disconnected'));
+        this.rejectAllPending(new Error("Client disconnected"));
     }
     get effectivePlatform() {
         return this._connectedTarget?.platform ?? null;
@@ -370,15 +439,15 @@ export class CDPClient {
             return this.evaluateAsync(expression);
         }
         const timeout = defaultTimeout(this.effectivePlatform);
-        const result = await this.sendWithTimeout('Runtime.evaluate', {
+        const result = (await this.sendWithTimeout("Runtime.evaluate", {
             expression,
             returnByValue: true,
-        }, timeout);
+        }, timeout));
         if (result?.exceptionDetails) {
             return {
                 error: result.exceptionDetails.text ??
                     result.exceptionDetails.exception?.description ??
-                    'Unknown evaluation error',
+                    "Unknown evaluation error",
             };
         }
         return { value: result?.result?.value };
@@ -388,7 +457,7 @@ export class CDPClient {
         // Values are JSON-serialized inside Hermes to handle non-serializable objects
         // A deferred cleanup timer ensures the slot is removed even if the caller times out
         const timeout = defaultTimeout(this.effectivePlatform);
-        const slot = '__rn_agent_async_' + (++this.slotId) + '_' + Date.now();
+        const slot = "__rn_agent_async_" + ++this.slotId + "_" + Date.now();
         const ASYNC_CLEANUP_MS = timeout * 2;
         const wrapper = `(function() {
       function safeVal(v) {
@@ -403,15 +472,15 @@ export class CDPClient {
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
     })()`;
-        const initResult = await this.sendWithTimeout('Runtime.evaluate', {
+        const initResult = (await this.sendWithTimeout("Runtime.evaluate", {
             expression: wrapper,
             returnByValue: true,
-        }, timeout);
+        }, timeout));
         if (initResult?.exceptionDetails) {
             return {
                 error: initResult.exceptionDetails.text ??
                     initResult.exceptionDetails.exception?.description ??
-                    'Unknown evaluation error',
+                    "Unknown evaluation error",
             };
         }
         // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
@@ -422,17 +491,17 @@ export class CDPClient {
             if (remaining < 500)
                 break;
             const pollTimeout = Math.min(remaining - 100, 1500);
-            const check = await this.sendWithTimeout('Runtime.evaluate', {
+            const check = (await this.sendWithTimeout("Runtime.evaluate", {
                 expression: `globalThis['${slot}']`,
                 returnByValue: true,
-            }, pollTimeout);
+            }, pollTimeout));
             const val = check?.result?.value;
-            if (val && typeof val === 'object') {
-                void this.sendWithTimeout('Runtime.evaluate', {
+            if (val && typeof val === "object") {
+                void this.sendWithTimeout("Runtime.evaluate", {
                     expression: `delete globalThis['${slot}']`,
                     returnByValue: true,
                 }, 1000).catch(() => { });
-                if ('e' in val)
+                if ("e" in val)
                     return { error: String(val.e) };
                 try {
                     return { value: JSON.parse(val.v) };
@@ -443,11 +512,11 @@ export class CDPClient {
             }
             await sleep(100);
         }
-        void this.sendWithTimeout('Runtime.evaluate', {
+        void this.sendWithTimeout("Runtime.evaluate", {
             expression: `delete globalThis['${slot}']`,
             returnByValue: true,
         }, 1000).catch(() => { });
-        return { error: 'Promise did not resolve within ' + timeout + 'ms' };
+        return { error: "Promise did not resolve within " + timeout + "ms" };
     }
     async send(method, params) {
         return this.sendWithTimeout(method, params, timeoutForMethod(method, this.effectivePlatform));
@@ -462,7 +531,9 @@ export class CDPClient {
         // M5 (D656): attach Metro /events subscriber on every setup. Idempotent for the
         // common reconnect case (start() is a no-op when already open). Fire-and-forget —
         // failure to connect events WS must not block CDP setup.
-        this.ensureMetroEventsClient().catch(() => { });
+        this.ensureMetroEventsClient().catch(() => {
+            /* MetroEventsClient handles its own reconnects */
+        });
         const result = await performSetup({
             send: (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)),
             evaluate: (expr) => this.evaluate(expr),
@@ -480,7 +551,13 @@ export class CDPClient {
         this._profilerAvailable = result.profilerAvailable;
         this._heapProfilerAvailable = result.heapProfilerAvailable;
         if (result.helpersInjected) {
-            detectBridge(this).then((r) => { this._bridgeDetected = r.present; this._bridgeVersion = r.version; logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`); }).catch(() => { });
+            detectBridge(this)
+                .then((r) => {
+                this._bridgeDetected = r.present;
+                this._bridgeVersion = r.version;
+                logger.debug("CDP", `Bridge detection: present=${r.present}, version=${r.version}`);
+            })
+                .catch(() => { });
         }
     }
     async ensureMetroEventsClient() {
@@ -499,7 +576,14 @@ export class CDPClient {
         await this._metroEventsClient.start();
     }
     setupEventHandlers() {
-        wireEventHandlers(this.eventHandlers, { console: this._consoleBuffer, network: this._networkBufferManager, log: this._logBuffer, scripts: this._scripts }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)), () => this._isPaused, (v) => { this._isPaused = v; }, () => this.activeDeviceKey);
+        wireEventHandlers(this.eventHandlers, {
+            console: this._consoleBuffer,
+            network: this._networkBufferManager,
+            log: this._logBuffer,
+            scripts: this._scripts,
+        }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)), () => this._isPaused, (v) => {
+            this._isPaused = v;
+        }, () => this.activeDeviceKey);
     }
     handleClose(code) {
         // B132: if the proxy is active when the upstream closes, suspend it BEFORE
@@ -528,9 +612,15 @@ export class CDPClient {
             isReconnecting: () => this.reconnecting,
             isConnected: () => this.isConnected,
             isSoftReconnectRequested: () => this._softReconnectRequested,
-            setReconnecting: (v) => { this.reconnecting = v; },
-            setSoftReconnectRequested: (v) => { this._softReconnectRequested = v; },
-            setState: (s) => { this._state = s; },
+            setReconnecting: (v) => {
+                this.reconnecting = v;
+            },
+            setSoftReconnectRequested: (v) => {
+                this._softReconnectRequested = v;
+            },
+            setState: (s) => {
+                this._state = s;
+            },
             setReconnectAttempt: (count, timestamp) => {
                 this._reconnectAttemptCount = count;
                 this._lastReconnectAttempt = timestamp;
@@ -538,7 +628,8 @@ export class CDPClient {
             closeWs: () => {
                 if (this.ws) {
                     this.ws.removeAllListeners();
-                    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+                    if (this.ws.readyState === WebSocket.OPEN ||
+                        this.ws.readyState === WebSocket.CONNECTING) {
                         this.ws.close();
                     }
                     this.ws = null;
@@ -548,7 +639,9 @@ export class CDPClient {
             discoverAndConnect: () => this.discoverAndConnect(),
             getResettableState: () => this.buildResettableState(),
             getPort: () => this._port,
-            setBgPollTimer: (timer) => { this._bgPollTimer = timer; },
+            setBgPollTimer: (timer) => {
+                this._bgPollTimer = timer;
+            },
             getBgPollTimer: () => this._bgPollTimer,
             // B132: after the exponential-backoff reconnect loop succeeds, rehydrate
             // the proxy if one was desired. This is the "auto-resume" half of the
@@ -564,16 +657,30 @@ export class CDPClient {
             isReconnecting: () => this.reconnecting,
             isSoftReconnectRequested: () => this._softReconnectRequested,
             getState: () => this._state,
-            setState: (s) => { this._state = s; },
+            setState: (s) => {
+                this._state = s;
+            },
             getPort: () => this._port,
-            setPort: (v) => { this._port = v; },
+            setPort: (v) => {
+                this._port = v;
+            },
             getConnectFilters: () => this._connectFilters,
-            setConnectFilters: (v) => { this._connectFilters = v; },
+            setConnectFilters: (v) => {
+                this._connectFilters = v;
+            },
             getWs: () => this.ws,
-            setWs: (ws) => { this.ws = ws; },
-            setHelpersInjected: (v) => { this._helpersInjected = v; },
-            setConnectedTarget: (t) => { this._connectedTarget = t; },
-            setConnectedAt: (ms) => { this._connectedAt = ms; },
+            setWs: (ws) => {
+                this.ws = ws;
+            },
+            setHelpersInjected: (v) => {
+                this._helpersInjected = v;
+            },
+            setConnectedTarget: (t) => {
+                this._connectedTarget = t;
+            },
+            setConnectedAt: (ms) => {
+                this._connectedAt = ms;
+            },
             now: () => this._timeNowFn(),
             incrementConnectionGeneration: () => ++this._connectionGeneration,
             evaluate: (expr) => this.evaluate(expr),
@@ -587,16 +694,36 @@ export class CDPClient {
     }
     buildResettableState() {
         return {
-            setState: (v) => { this._state = v; },
-            setHelpersInjected: (v) => { this._helpersInjected = v; },
-            setBridgeDetected: (v) => { this._bridgeDetected = v; },
-            setBridgeVersion: (v) => { this._bridgeVersion = v; },
-            setConnectedTarget: (v) => { this._connectedTarget = v; },
-            setConnectedAt: (v) => { this._connectedAt = v; },
-            setLogDomainEnabled: (v) => { this._logDomainEnabled = v; },
-            setProfilerAvailable: (v) => { this._profilerAvailable = v; },
-            setHeapProfilerAvailable: (v) => { this._heapProfilerAvailable = v; },
-            clearScripts: () => { this._scripts.clear(); },
+            setState: (v) => {
+                this._state = v;
+            },
+            setHelpersInjected: (v) => {
+                this._helpersInjected = v;
+            },
+            setBridgeDetected: (v) => {
+                this._bridgeDetected = v;
+            },
+            setBridgeVersion: (v) => {
+                this._bridgeVersion = v;
+            },
+            setConnectedTarget: (v) => {
+                this._connectedTarget = v;
+            },
+            setConnectedAt: (v) => {
+                this._connectedAt = v;
+            },
+            setLogDomainEnabled: (v) => {
+                this._logDomainEnabled = v;
+            },
+            setProfilerAvailable: (v) => {
+                this._profilerAvailable = v;
+            },
+            setHeapProfilerAvailable: (v) => {
+                this._heapProfilerAvailable = v;
+            },
+            clearScripts: () => {
+                this._scripts.clear();
+            },
         };
     }
     rejectAllPending(reason) {

@@ -19,7 +19,7 @@ export interface HermesTarget {
   webSocketDebuggerUrl: string;
   description?: string;
   type?: string;
-  platform?: 'ios' | 'android';
+  platform?: "ios" | "android";
   /**
    * Metro /json/list includes this field for RN 0.76+. It disambiguates
    * iOS vs Android when the same bundleId is installed on both (B131/D660).
@@ -67,7 +67,7 @@ export interface LogEntry {
   lineNumber?: number;
 }
 
-export type CDPClientState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+export type CDPClientState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
 /** GH #303: a candidate Metro found while resolving which port to drive. */
 export interface MetroCandidate {
@@ -85,7 +85,7 @@ export interface StatusResult {
     /** M5 (D656): true when the MetroEventsClient has an open WS to Metro's /events endpoint. */
     eventsConnected?: boolean;
     /** M5 (D656): most recent bundle build status + timestamp (null if no events seen yet). */
-    lastBuild?: { status: 'started' | 'done' | 'failed'; timestamp: string } | null;
+    lastBuild?: { status: "started" | "done" | "failed"; timestamp: string } | null;
     /** M5 (D656): count of bundle_build_failed events observed since MCP connected. */
     buildErrors?: number;
     /**
@@ -94,7 +94,7 @@ export interface StatusResult {
      * protocol at /events instead of Metro's reporter stream. When present,
      * `eventsConnected` will be false and no events will ever arrive.
      */
-    eventsReason?: 'expo-cli-incompatible' | null;
+    eventsReason?: "expo-cli-incompatible" | null;
     // GH #303: worktree disambiguation diagnostics.
     candidates?: MetroCandidate[];
     projectRoot?: string;
@@ -119,7 +119,7 @@ export interface StatusResult {
     isPaused: boolean;
     errorCount: number;
     /** M10 / Phase 110: RN architecture — 'new' (Fabric), 'old' (classic bridge), 'unknown' (probe failed or non-RN). Optional for older callers. */
-    architecture?: 'new' | 'old' | 'unknown';
+    architecture?: "new" | "old" | "unknown";
   };
   capabilities: {
     networkDomain: boolean;
@@ -155,7 +155,7 @@ export interface StatusResult {
   // keep in sync with AutoConnectResolution (project-config.ts)
   autoConnect?: {
     enabled: boolean;
-    source: 'env' | 'config' | 'default';
+    source: "env" | "config" | "default";
   };
   /** GH#264 Phase 5: supervision facts the supervisor sets via env at each worker spawn. */
   bridge?: {
@@ -173,7 +173,7 @@ export interface StatusResult {
    */
   deviceSession?: {
     sessionOpen: boolean;
-    rnFastRunner: 'alive' | 'stale' | 'dead';
+    rnFastRunner: "alive" | "stale" | "dead";
     appId?: string;
     deviceId?: string;
     foreignRunner?: { detected: true };
@@ -198,81 +198,81 @@ export interface EvaluateResult {
 }
 
 export type ToolErrorCode =
-  | 'STALE_TARGET'
-  | 'HELPERS_STALE'
-  | 'RECONNECT_TIMEOUT'
-  | 'APP_DETACHED'              // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
-  | 'APP_NOT_INSTALLED'         // GH #262: relaunch failed and get_app_container confirms the bundle is missing
-  | 'NOT_CONNECTED'
-  | 'HELPERS_NOT_INJECTED'
+  | "STALE_TARGET"
+  | "HELPERS_STALE"
+  | "RECONNECT_TIMEOUT"
+  | "APP_DETACHED" // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
+  | "APP_NOT_INSTALLED" // GH #262: relaunch failed and get_app_container confirms the bundle is missing
+  | "NOT_CONNECTED"
+  | "HELPERS_NOT_INJECTED"
   // M6 / Phase 112 (D669): cdp_record_test_* tool family.
-  | 'DEV_MODE_REQUIRED'
-  | 'EVAL_FAILED'
-  | 'BAD_RESPONSE'
-  | 'START_FAILED'
-  | 'NO_EVENTS'
-  | 'NOT_IMPLEMENTED'
-  | 'NOT_RECORDING'
-  | 'NO_PROJECT_ROOT'
-  | 'BAD_FILENAME'
-  | 'LOAD_FAILED'
-  | 'BAD_RECORDING'
+  | "DEV_MODE_REQUIRED"
+  | "EVAL_FAILED"
+  | "BAD_RESPONSE"
+  | "START_FAILED"
+  | "NO_EVENTS"
+  | "NOT_IMPLEMENTED"
+  | "NOT_RECORDING"
+  | "NO_PROJECT_ROOT"
+  | "BAD_FILENAME"
+  | "LOAD_FAILED"
+  | "BAD_RECORDING"
   // GH #60 Feature-c (D687): device_reset_state composite tool.
-  | 'DEVICE_RESET_INVALID_ARGS'
-  | 'DEVICE_RESET_STATE_PARTIAL'
-  | 'DEVICE_RESET_RECONNECT_FAILED'
-  | 'CDP_NOT_CONNECTED'
+  | "DEVICE_RESET_INVALID_ARGS"
+  | "DEVICE_RESET_STATE_PARTIAL"
+  | "DEVICE_RESET_RECONNECT_FAILED"
+  | "CDP_NOT_CONNECTED"
   // CDP tool review batch 2026-04-29.
-  | 'CDP_TARGET_APP_MISMATCH'   // CDP-003
-  | 'INVALID_PLATFORM'          // CDP-014
-  | 'PROFILER_UNAVAILABLE'      // CDP-007
-  | 'NATIVE_LOG_UNAVAILABLE'    // CDP-016
+  | "CDP_TARGET_APP_MISMATCH" // CDP-003
+  | "INVALID_PLATFORM" // CDP-014
+  | "PROFILER_UNAVAILABLE" // CDP-007
+  | "NATIVE_LOG_UNAVAILABLE" // CDP-016
   // D1206 Tier 2 Sprint A/B post-review batch 2026-04-30.
-  | 'TESTID_NOT_FOUND'          // device_batch testID-keyed step / expect_visible_by_testid
-  | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
-  | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
-  | 'RN_FAST_RUNNER_DOWN'       // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
-  | 'RN_ANDROID_RUNNER_DOWN'    // #243: rn-android-runner not reachable (cold-start race / can't bind port)
-  | 'SCREENSHOT_FAILED'         // rn-android-runner screenshot response missing pngBase64 payload
-  | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
-  | 'STORE_TRUNCATED'           // expect_redux when store payload exceeded safeStringify cap
+  | "TESTID_NOT_FOUND" // device_batch testID-keyed step / expect_visible_by_testid
+  | "ASSERTION_FAILED" // expect_redux / expect_route / expect_text / expect_visible_by_testid
+  | "SNAPSHOT_FAILED" // agent-device snapshot returned ok:false (distinct from "not present")
+  | "RN_FAST_RUNNER_DOWN" // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
+  | "RN_ANDROID_RUNNER_DOWN" // #243: rn-android-runner not reachable (cold-start race / can't bind port)
+  | "SCREENSHOT_FAILED" // rn-android-runner screenshot response missing pngBase64 payload
+  | "PATH_NOT_FOUND" // expect_redux when getStoreState surfaces __agent_error
+  | "STORE_TRUNCATED" // expect_redux when store payload exceeded safeStringify cap
   // Phase 134.2: appId / packageName validation at adb shell boundary.
-  | 'INVALID_APPID'             // device_permission
-  | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
-  | 'INVALID_PACKAGE_NAME'      // device_deeplink
-  | 'INVALID_BUNDLE_ID'         // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
+  | "INVALID_APPID" // device_permission
+  | "DEVICE_RESET_INVALID_APPID" // device_reset_state
+  | "INVALID_PACKAGE_NAME" // device_deeplink
+  | "INVALID_BUNDLE_ID" // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
   // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
-  | 'RUNNER_LEAK'
+  | "RUNNER_LEAK"
   // GH #317: rn-fast-runner sees the selector but Maestro/WDA reported it not visible (empty a11y tree).
-  | 'TRANSPORT_BLIND'
+  | "TRANSPORT_BLIND"
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
-  | 'STALE_REF'
+  | "STALE_REF"
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
-  | 'CROSS_PLATFORM_MISMATCH'
+  | "CROSS_PLATFORM_MISMATCH"
   // GH #184: cdp_status aborted fast because the Dev Client picker was blocking
   // the bundle (React unreachable on a non-Hermes target within the budget).
-  | 'PICKER_BLOCKING'
+  | "PICKER_BLOCKING"
   // GH #186: cdp_run_action replay hit structural route-drift (live route off
   // the action's expectedRouteSequence) — distinct from a stale selector.
-  | 'ROUTE_DRIFT'
+  | "ROUTE_DRIFT"
   // GH #136: cdp_dismiss_dev_client_picker called with no active device session.
-  | 'DEV_CLIENT_PICKER_NO_SESSION'
+  | "DEV_CLIENT_PICKER_NO_SESSION"
   // GH #202 Phase 2a: DeviceSessionArbiter refused an op because an exclusive
   // Maestro flow is in flight (or the requesting op is a flow and another op is
   // active). Refuse-fast, never queue.
-  | 'BUSY_FLOW_ACTIVE'
+  | "BUSY_FLOW_ACTIVE"
   // GH#186 Phase 6: a FOREIGN Maestro/XCUITest session holds the flow plane
   // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
-  | 'BUSY_FOREIGN_FLOW'
+  | "BUSY_FOREIGN_FLOW"
   // GH #191: native fill + retype + maestro all failed to produce the expected value.
-  | 'TEXT_ENTRY_UNVERIFIED'
+  | "TEXT_ENTRY_UNVERIFIED"
   // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
-  | 'NO_NATIVE_ROUTE'
+  | "NO_NATIVE_ROUTE"
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
-  | 'RUNNER_DISABLED';
+  | "RUNNER_DISABLED";
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;

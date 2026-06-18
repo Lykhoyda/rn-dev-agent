@@ -1,17 +1,17 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import type { CDPClient } from '../cdp-client.js';
-import { logger } from '../logger.js';
-import { okResult, failResult } from '../utils.js';
-import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { resolveBundleIdStrict } from '../project-config.js';
-import { getActiveSession } from '../agent-device-wrapper.js';
-import { probeAppInstalled, buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
-import type { SnapshotHint } from '../cdp/app-installed-probe.js';
-import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
-import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
-import { isValidBundleId } from '../domain/maestro-validator.js';
-import type { ToolResult } from '../utils.js';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import type { CDPClient } from "../cdp-client.js";
+import { logger } from "../logger.js";
+import { okResult, failResult } from "../utils.js";
+import { stopFastRunner as defaultStopFastRunner } from "../runners/rn-fast-runner-client.js";
+import { resolveBundleIdStrict } from "../project-config.js";
+import { getActiveSession } from "../agent-device-wrapper.js";
+import { probeAppInstalled, buildNotInstalledAdvice } from "../cdp/app-installed-probe.js";
+import type { SnapshotHint } from "../cdp/app-installed-probe.js";
+import { resetDetachedRecoveryCounter } from "../cdp/recover-detached.js";
+import { snapshotHintForBundleId } from "./resolve-ios-app-file.js";
+import { isValidBundleId } from "../domain/maestro-validator.js";
+import type { ToolResult } from "../utils.js";
 
 const defaultExecFile = promisify(execFileCb);
 
@@ -22,7 +22,11 @@ const defaultExecFile = promisify(execFileCb);
  * `execFile` + `stopFastRunner` are used.
  */
 export interface RestartHandlerDeps {
-  execFile?: (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ stdout: string; stderr: string }>;
+  execFile?: (
+    cmd: string,
+    args: string[],
+    opts?: { timeout?: number },
+  ) => Promise<{ stdout: string; stderr: string }>;
   stopFastRunner?: () => void;
   sleep?: (ms: number) => Promise<void>;
   /** GH #262 (#194 BUG 2 residual): strict per-platform app.json fallback. */
@@ -90,9 +94,9 @@ const SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9
  * anything else falls back to `'booted'` rather than shelling out with it.
  */
 function safeSimctlTarget(deviceId: string | undefined): string {
-  if (deviceId === 'booted') return 'booted';
+  if (deviceId === "booted") return "booted";
   if (deviceId && SIMULATOR_UDID_RE.test(deviceId)) return deviceId;
-  return 'booted';
+  return "booted";
 }
 
 /**
@@ -152,13 +156,20 @@ export function createRestartHandler(
 
   async function doRestart(args: RestartArgs): Promise<ToolResult> {
     try {
-      logger.info('MCP', `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
+      logger.info(
+        "MCP",
+        `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`,
+      );
       const oldClient = getClient();
       const preservedPort = oldClient.metroPort;
       // Capture the bundle id BEFORE we disconnect — the connectedTarget
       // is cleared on disconnect, and we need it to issue simctl commands.
       const observedBundleId = oldClient.connectedTarget?.description ?? null;
-      const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+      const targetPlatform = (
+        oldClient.connectedTarget?.platform ??
+        args.platform ??
+        "ios"
+      ).toLowerCase();
       // The cache write must happen on every restart (incl. soft) so a later
       // hardReset still has a bundleId after autoConnect clears connectedTarget.
       if (observedBundleId) lastSeenBundleIds.set(targetPlatform, observedBundleId);
@@ -171,7 +182,7 @@ export function createRestartHandler(
       // session/app.json I/O and must never fail on bundleId state.
       if (args.hardReset) {
         const session = getSessionFn();
-        const sessionMatches = !!session && (session.platform ?? 'ios') === targetPlatform;
+        const sessionMatches = !!session && (session.platform ?? "ios") === targetPlatform;
         // Resolution priority (GH #262 / #194 BUG 2): explicit arg > current
         // connectedTarget > active-session appId > cache > STRICT app.json.
         // The open device session is current user intent; the cache is
@@ -180,11 +191,12 @@ export function createRestartHandler(
         // bridge process has no cache, so without the fallbacks hardReset
         // silently degraded to a soft reset. STRICT: an Android package must
         // never be fed to iOS simctl.
-        bundleId = args.bundleId
-          ?? observedBundleId
-          ?? (sessionMatches ? session?.appId ?? null : null)
-          ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
-          ?? resolveBundleIdStrictFn(targetPlatform);
+        bundleId =
+          args.bundleId ??
+          observedBundleId ??
+          (sessionMatches ? (session?.appId ?? null) : null) ??
+          lastSeenBundleIds.get(targetPlatform) ??
+          resolveBundleIdStrictFn(targetPlatform);
         // simctl targets the session's simulator when one is open — 'booted' is
         // ambiguous with multiple booted sims. deviceId is persisted/untrusted,
         // so validate before it reaches argv (invalid → 'booted').
@@ -198,10 +210,10 @@ export function createRestartHandler(
           if (args.bundleId !== undefined) {
             return failResult(
               `cdp_restart: invalid bundleId argument "${String(args.bundleId).slice(0, 80)}" — expected reverse-DNS app id like com.example.app`,
-              'INVALID_BUNDLE_ID',
+              "INVALID_BUNDLE_ID",
             );
           }
-          hardResetSteps.push('skip-simctl:invalid-bundleId-from-cache-or-config');
+          hardResetSteps.push("skip-simctl:invalid-bundleId-from-cache-or-config");
           bundleId = null;
         }
 
@@ -210,23 +222,27 @@ export function createRestartHandler(
         // the test-app as backgrounded and pauses its JS thread.
         try {
           stopFastRunner();
-          hardResetSteps.push('stopFastRunner:ok');
+          hardResetSteps.push("stopFastRunner:ok");
         } catch (err) {
           hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
         }
 
         // Step 2-3: terminate + launch the target app. iOS only — the
         // android branch is a follow-up.
-        if (bundleId && targetPlatform === 'ios') {
+        if (bundleId && targetPlatform === "ios") {
           try {
-            await execFile('xcrun', ['simctl', 'terminate', targetUdid, bundleId], { timeout: 5000 });
+            await execFile("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+              timeout: 5000,
+            });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
           } catch (err) {
             // Non-fatal: app may already be dead. Log + continue.
-            hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
+            hardResetSteps.push(
+              `simctl terminate:warn(${err instanceof Error ? err.message : err})`,
+            );
           }
           try {
-            await execFile('xcrun', ['simctl', 'launch', targetUdid, bundleId], { timeout: 8000 });
+            await execFile("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8000 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -235,7 +251,11 @@ export function createRestartHandler(
             // Probe verdict null = unknown → keep the raw error (fail open).
             if ((await probeAppInstalledFn(targetUdid, bundleId)) === false) {
               let hint: SnapshotHint | null = null;
-              try { hint = snapshotHintFn(bundleId); } catch { /* best-effort */ }
+              try {
+                hint = snapshotHintFn(bundleId);
+              } catch {
+                /* best-effort */
+              }
               const advice = buildNotInstalledAdvice(targetUdid, bundleId, hint);
               // Record the step BEFORE returning so hardResetSteps in meta stays
               // complete, then return a typed failure: a confirmed-missing bundle
@@ -243,7 +263,7 @@ export function createRestartHandler(
               // out. The soft reset below cannot help — nothing connects to a
               // missing app — so we skip it and leave the existing client.
               hardResetSteps.push(`simctl launch:err(APP_NOT_INSTALLED — ${advice})`);
-              return failResult(advice, 'APP_NOT_INSTALLED', { hardResetSteps });
+              return failResult(advice, "APP_NOT_INSTALLED", { hardResetSteps });
             } else {
               // Fatal-ish: if launch fails, the soft reset below will likely
               // fail too. Still continue — caller sees the launch error in
@@ -255,7 +275,7 @@ export function createRestartHandler(
           // to connect. Empirically 2-3s is enough on iPhone 16 Pro sim.
           await sleep(3000);
         } else if (!bundleId) {
-          hardResetSteps.push('skip-simctl:no-bundleId-on-connectedTarget-or-cache');
+          hardResetSteps.push("skip-simctl:no-bundleId-on-connectedTarget-or-cache");
         } else {
           hardResetSteps.push(`skip-simctl:platform=${targetPlatform}-not-yet-supported`);
         }
@@ -265,7 +285,10 @@ export function createRestartHandler(
       try {
         await oldClient.disconnect();
       } catch (err) {
-        logger.warn('MCP', `cdp_restart: old client disconnect failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        logger.warn(
+          "MCP",
+          `cdp_restart: old client disconnect failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+        );
       }
 
       const newClient = createClient(args.metroPort ?? preservedPort);
@@ -280,12 +303,16 @@ export function createRestartHandler(
         // subsequent recovery cycle keeps a valid bundleId. (Codex #1.)
         const postConnectBundle = newClient.connectedTarget?.description;
         if (postConnectBundle) {
-          const postConnectPlatform = (newClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+          const postConnectPlatform = (
+            newClient.connectedTarget?.platform ??
+            args.platform ??
+            "ios"
+          ).toLowerCase();
           lastSeenBundleIds.set(postConnectPlatform, postConnectBundle);
         }
       } catch (err) {
         connectError = err instanceof Error ? err.message : String(err);
-        logger.warn('MCP', `cdp_restart: autoConnect failed (best-effort): ${connectError}`);
+        logger.warn("MCP", `cdp_restart: autoConnect failed (best-effort): ${connectError}`);
       }
 
       // GH #262: a successful manual hard reset is a working recovery — clear
@@ -315,8 +342,8 @@ export function createRestartHandler(
     if (inflightRestart) {
       return okResult({
         restarted: false,
-        reason: 'restart-in-progress',
-        hint: 'A cdp_restart is already running; await its completion and call again only if it failed.',
+        reason: "restart-in-progress",
+        hint: "A cdp_restart is already running; await its completion and call again only if it failed.",
       });
     }
     inflightRestart = doRestart(args).finally(() => {

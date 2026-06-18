@@ -15,15 +15,15 @@
 //
 // Fix: when setup falls back to the hook, it must Network.disable first so the
 // hook is the single capture source.
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { performSetup } from '../../dist/cdp/setup.js';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { performSetup } from "../../dist/cdp/setup.js";
 import {
   INJECTED_HELPERS,
   NETWORK_HOOK_SCRIPT,
   NETWORK_CB_BUFFERED_SCRIPT,
   REACT_READY_PROBE_JS,
-} from '../../dist/injected-helpers.js';
+} from "../../dist/injected-helpers.js";
 
 // Minimal performSetup harness. `send` records every CDP method; `evaluate`
 // answers the fixed expressions setup issues. `bufferGrowsOnProbe` controls
@@ -33,7 +33,7 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
   const sent = [];
   const send = async (method) => {
     sent.push(method);
-    if (method === 'Network.enable' && enableThrows) throw new Error('not supported');
+    if (method === "Network.enable" && enableThrows) throw new Error("not supported");
     return {};
   };
   let size = 0;
@@ -41,9 +41,10 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
     if (expr === REACT_READY_PROBE_JS) return { value: true };
     if (expr === INJECTED_HELPERS) return { value: undefined };
     if (expr === 'typeof globalThis.__RN_AGENT === "object"') return { value: true };
-    if (expr === NETWORK_HOOK_SCRIPT || expr === NETWORK_CB_BUFFERED_SCRIPT) return { value: undefined };
+    if (expr === NETWORK_HOOK_SCRIPT || expr === NETWORK_CB_BUFFERED_SCRIPT)
+      return { value: undefined };
     // probe fetch (`void fetch(...)`) — optionally simulate a delivered event.
-    if (typeof expr === 'string' && expr.includes('fetch(') && bufferGrowsOnProbe) size += 1;
+    if (typeof expr === "string" && expr.includes("fetch(") && bufferGrowsOnProbe) size += 1;
     return { value: undefined };
   };
   const networkManager = { size: () => size, push: () => {}, getByKey: () => undefined };
@@ -55,7 +56,7 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
       port: 8081,
       connectedTarget: null,
       networkManager,
-      getDeviceKey: () => 'k',
+      getDeviceKey: () => "k",
       setupEventHandlers: () => {},
       clearScripts: () => {},
       clearEventHandlers: () => {},
@@ -64,36 +65,39 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
   };
 }
 
-test('fallback to hook disables the CDP Network domain (the #214 double-capture fix)', async () => {
+test("fallback to hook disables the CDP Network domain (the #214 double-capture fix)", async () => {
   const h = makeHarness({ enableThrows: false, bufferGrowsOnProbe: false });
   const result = await performSetup(h.opts);
 
-  assert.equal(result.networkMode, 'hook', 'false-negative probe must fall back to hook');
-  assert.ok(h.sent.includes('Network.enable'), 'Network.enable was attempted');
+  assert.equal(result.networkMode, "hook", "false-negative probe must fall back to hook");
+  assert.ok(h.sent.includes("Network.enable"), "Network.enable was attempted");
   assert.ok(
-    h.sent.includes('Network.disable'),
-    `must disable the still-enabled CDP domain before hook capture — sent: ${h.sent.join(', ')}`,
+    h.sent.includes("Network.disable"),
+    `must disable the still-enabled CDP domain before hook capture — sent: ${h.sent.join(", ")}`,
   );
   // Ordering: the domain must be disabled, not re-enabled afterward.
   assert.ok(
-    h.sent.lastIndexOf('Network.disable') > h.sent.lastIndexOf('Network.enable'),
-    'Network.disable must come after the Network.enable it cancels',
+    h.sent.lastIndexOf("Network.disable") > h.sent.lastIndexOf("Network.enable"),
+    "Network.disable must come after the Network.enable it cancels",
   );
 });
 
-test('CDP mode (probe succeeds) keeps the domain — does NOT disable it', async () => {
+test("CDP mode (probe succeeds) keeps the domain — does NOT disable it", async () => {
   const h = makeHarness({ enableThrows: false, bufferGrowsOnProbe: true });
   const result = await performSetup(h.opts);
 
-  assert.equal(result.networkMode, 'cdp', 'a delivered probe event keeps CDP mode');
-  assert.ok(!h.sent.includes('Network.disable'), 'must not disable the domain that is the sole capture source');
+  assert.equal(result.networkMode, "cdp", "a delivered probe event keeps CDP mode");
+  assert.ok(
+    !h.sent.includes("Network.disable"),
+    "must not disable the domain that is the sole capture source",
+  );
 });
 
-test('Network.enable unsupported (genuine RN<0.83): reaches hook mode without crashing', async () => {
+test("Network.enable unsupported (genuine RN<0.83): reaches hook mode without crashing", async () => {
   const h = makeHarness({ enableThrows: true, bufferGrowsOnProbe: false });
   const result = await performSetup(h.opts);
 
-  assert.equal(result.networkMode, 'hook', 'enable threw → never cdp → hook fallback');
+  assert.equal(result.networkMode, "hook", "enable threw → never cdp → hook fallback");
   // The domain was never enabled, so a disable here is a harmless no-op; the
   // single-source contract is satisfied either way. No assertion on disable.
 });

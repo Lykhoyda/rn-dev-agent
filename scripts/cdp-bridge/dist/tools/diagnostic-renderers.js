@@ -5,7 +5,7 @@
 //
 // Read-only: makes no mutations. Surfaces the raw shape of
 // __REACT_DEVTOOLS_GLOBAL_HOOK__ in a single round-trip.
-import { okResult, failResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection } from "../utils.js";
 const DIAGNOSTIC_RENDERERS_JS = `(function(opts) {
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) {
@@ -148,8 +148,8 @@ export function createDiagnosticRenderersHandler(getClient) {
         if (result.error) {
             return failResult(`cdp_diagnostic_renderers: ${result.error}`);
         }
-        if (typeof result.value !== 'string') {
-            return failResult('cdp_diagnostic_renderers: hook probe returned non-string');
+        if (typeof result.value !== "string") {
+            return failResult("cdp_diagnostic_renderers: hook probe returned non-string");
         }
         try {
             const parsed = JSON.parse(result.value);

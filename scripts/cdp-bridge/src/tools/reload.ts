@@ -1,8 +1,10 @@
-import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import type { CDPClient } from "../cdp-client.js";
+import { okResult, failResult, warnResult, withConnection } from "../utils.js";
 
 let sessionReloadCount = 0;
-export function getSessionReloadCount(): number { return sessionReloadCount; }
+export function getSessionReloadCount(): number {
+  return sessionReloadCount;
+}
 
 const SOFT_RECONNECT_DEADLINE_MS = 30_000;
 const SOFT_RECONNECT_ATTEMPTS = 5;
@@ -11,7 +13,7 @@ const DISCONNECT_TIMEOUT_MS = 2_000;
 
 interface CapturedClientState {
   port: number;
-  platform: 'ios' | 'android' | undefined;
+  platform: "ios" | "android" | undefined;
   bundleId: string | undefined;
   proxyWasActive: boolean;
 }
@@ -51,7 +53,7 @@ export interface ForceReconnectResult {
   ok: boolean;
   reason?: string;
   platformMatched?: boolean;
-  finalPlatform?: 'ios' | 'android' | null;
+  finalPlatform?: "ios" | "android" | null;
 }
 
 export async function forceReconnect(
@@ -63,7 +65,7 @@ export async function forceReconnect(
   const swallow = (): undefined => undefined;
 
   const disconnectPromise = oldClient.disconnect().catch(swallow);
-  await raceWithTimeout(disconnectPromise, DISCONNECT_TIMEOUT_MS, 'disconnect').catch(swallow);
+  await raceWithTimeout(disconnectPromise, DISCONNECT_TIMEOUT_MS, "disconnect").catch(swallow);
 
   const newClient = createClient(captured.port);
   setClient(newClient);
@@ -77,7 +79,7 @@ export async function forceReconnect(
     await raceWithTimeout(
       newClient.autoConnect(captured.port, filters),
       FORCE_FALLBACK_TIMEOUT_MS,
-      'force_reconnect',
+      "force_reconnect",
     );
   } catch (err) {
     newClient.disconnect().catch(swallow);
@@ -98,15 +100,15 @@ export function createReloadHandler(
   return withConnection(getClient, async (_args: { full: boolean }, client) => {
     try {
       const result = await client.evaluate(
-        '(function() {' +
-        '  var ds = null;' +
-        '  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}' +
-        '  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}' +
-        '  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}' +
-        '  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }' +
-        '  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }' +
-        '  throw new Error("DevSettings not available — use Maestro or simctl to restart the app");' +
-        '})()'
+        "(function() {" +
+          "  var ds = null;" +
+          '  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}' +
+          '  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}' +
+          '  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}' +
+          '  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }' +
+          '  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }' +
+          '  throw new Error("DevSettings not available — use Maestro or simctl to restart the app");' +
+          "})()",
       );
       if (result.error) {
         return failResult(`Reload failed: ${result.error}`);
@@ -114,9 +116,9 @@ export function createReloadHandler(
     } catch (evalErr) {
       const msg = evalErr instanceof Error ? evalErr.message : String(evalErr);
       const isExpectedDisconnect =
-        msg.includes('WebSocket closed') ||
-        msg.includes('WebSocket not connected') ||
-        msg.includes('timeout');
+        msg.includes("WebSocket closed") ||
+        msg.includes("WebSocket not connected") ||
+        msg.includes("timeout");
       if (!isExpectedDisconnect) {
         return failResult(`Reload failed unexpectedly: ${msg}`);
       }
@@ -124,11 +126,11 @@ export function createReloadHandler(
 
     const wsDownDeadline = Date.now() + 3_000;
     while (client.isConnected && Date.now() < wsDownDeadline) {
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     let reconnected = false;
-    let lastReconnErr = '';
+    let lastReconnErr = "";
     let softAttemptsRun = 0;
     const reconnectDeadline = Date.now() + SOFT_RECONNECT_DEADLINE_MS;
     for (let attempt = 0; attempt < SOFT_RECONNECT_ATTEMPTS; attempt++) {
@@ -143,7 +145,7 @@ export function createReloadHandler(
           client.softReconnect(),
           new Promise<never>((_, reject) => {
             reconnTimer = setTimeout(
-              () => reject(new Error('softReconnect timeout')),
+              () => reject(new Error("softReconnect timeout")),
               Math.max(reconnectDeadline - Date.now(), 2000),
             );
           }),
@@ -153,7 +155,7 @@ export function createReloadHandler(
       } catch (reconnErr) {
         lastReconnErr = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
         if (attempt < SOFT_RECONNECT_ATTEMPTS - 1) {
-          await new Promise(r => setTimeout(r, 2000 + attempt * 1000));
+          await new Promise((r) => setTimeout(r, 2000 + attempt * 1000));
         }
       } finally {
         if (reconnTimer) clearTimeout(reconnTimer);
@@ -169,20 +171,20 @@ export function createReloadHandler(
         client = getClient();
         const notes: string[] = [];
         if (captured.proxyWasActive) {
-          notes.push('DevTools detached — run cdp_open_devtools to re-attach.');
+          notes.push("DevTools detached — run cdp_open_devtools to re-attach.");
         }
-        notes.push('Network/console buffers reset for new target.');
+        notes.push("Network/console buffers reset for new target.");
         forceMeta = {
-          recovered_via: 'force_reconnect',
+          recovered_via: "force_reconnect",
           proxy_was_active: captured.proxyWasActive,
-          note: notes.join(' '),
+          note: notes.join(" "),
         };
         if (!forceResult.platformMatched) {
-          forceMeta.warning = `Recovered onto ${forceResult.finalPlatform ?? 'unknown'} but pre-reload session was on ${captured.platform ?? 'unknown'}. Run cdp_connect platform: "${captured.platform}" force: true to re-bind.`;
+          forceMeta.warning = `Recovered onto ${forceResult.finalPlatform ?? "unknown"} but pre-reload session was on ${captured.platform ?? "unknown"}. Run cdp_connect platform: "${captured.platform}" force: true to re-bind.`;
         }
       } else {
         return okResult(
-          { reloaded: true, type: 'full', reconnected: false },
+          { reloaded: true, type: "full", reconnected: false },
           {
             meta: {
               warning: `Reload triggered but re-discovery failed after ${softAttemptsRun} soft attempts: ${lastReconnErr}; force_reconnect also failed (10s budget): ${forceResult.reason}`,
@@ -196,13 +198,18 @@ export function createReloadHandler(
 
     const helperDeadline = Date.now() + 12_000;
     while (!client.helpersInjected && Date.now() < helperDeadline) {
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 400));
     }
 
     if (!client.isConnected) {
       return okResult(
-        { reloaded: true, type: 'full', reconnected: false },
-        { meta: { warning: 'Reload triggered but connection dropped after re-discovery.', ...forceMeta } },
+        { reloaded: true, type: "full", reconnected: false },
+        {
+          meta: {
+            warning: "Reload triggered but connection dropped after re-discovery.",
+            ...forceMeta,
+          },
+        },
       );
     }
 
@@ -210,8 +217,8 @@ export function createReloadHandler(
       const injected = await client.reinjectHelpers(10_000);
       if (!injected) {
         return warnResult(
-          { reloaded: true, type: 'full', reconnected: true },
-          'Reload succeeded but helper injection failed. App may still be loading — retry cdp_status.',
+          { reloaded: true, type: "full", reconnected: true },
+          "Reload succeeded but helper injection failed. App may still be loading — retry cdp_status.",
           forceMeta,
         );
       }
@@ -219,7 +226,7 @@ export function createReloadHandler(
 
     sessionReloadCount++;
     return okResult(
-      { reloaded: true, type: 'full', reconnected: true },
+      { reloaded: true, type: "full", reconnected: true },
       Object.keys(forceMeta).length > 0 ? { meta: forceMeta } : undefined,
     );
   });

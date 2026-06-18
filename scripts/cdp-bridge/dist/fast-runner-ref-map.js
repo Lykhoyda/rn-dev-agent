@@ -16,7 +16,7 @@ export function updateRefMap(nodes) {
     lastUpdated = Date.now();
 }
 export function lookupRef(ref) {
-    const clean = ref.startsWith('@') ? ref.slice(1) : ref;
+    const clean = ref.startsWith("@") ? ref.slice(1) : ref;
     return refMap.get(clean) ?? null;
 }
 export function refCenter(ref) {
@@ -57,7 +57,7 @@ export function flattenXCUITree(tree) {
     const localRefMap = new Map();
     let counter = 0;
     const walk = (node) => {
-        if (!node || typeof node !== 'object')
+        if (!node || typeof node !== "object")
             return;
         if (node.frame) {
             const id = `e${counter}`;
@@ -70,7 +70,7 @@ export function flattenXCUITree(tree) {
             };
             const flat = {
                 ref: `@${id}`,
-                type: node.type ?? '',
+                type: node.type ?? "",
                 rect,
             };
             if (node.label !== undefined)
@@ -99,7 +99,7 @@ export function updateRefMapFromFlat(nodes) {
     for (const node of nodes) {
         if (!node.ref || !node.rect)
             continue;
-        const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+        const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
         const meta = { type: node.type };
         if (node.label !== undefined)
@@ -114,7 +114,7 @@ export function updateRefMapFromFlat(nodes) {
     lastUpdated = Date.now();
 }
 export function getCachedMetadata(ref) {
-    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    const key = ref.startsWith("@") ? ref.slice(1) : ref;
     return metadataMap.get(key) ?? null;
 }
 function metadataMatches(a, b) {
@@ -132,7 +132,7 @@ export function isRefStale(ref, newNodes) {
     const cached = getCachedMetadata(ref);
     if (!cached)
         return true;
-    const target = ref.startsWith('@') ? ref : `@${ref}`;
+    const target = ref.startsWith("@") ? ref : `@${ref}`;
     const fresh = newNodes.find((n) => n.ref === target);
     if (!fresh)
         return true;
@@ -154,7 +154,7 @@ export function flattenAndroidAccessibilityTree(nodes) {
     for (const node of nodes) {
         if (!node.ref || !node.rect)
             continue;
-        const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+        const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
         localRefMap.set(key, node.rect);
     }
     return { nodes, refMap: localRefMap };

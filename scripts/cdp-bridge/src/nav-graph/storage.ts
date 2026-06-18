@@ -1,6 +1,14 @@
-import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  renameSync,
+  readdirSync,
+  lstatSync,
+  mkdirSync,
+} from "node:fs";
+import { join, dirname } from "node:path";
+import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import type {
   NavGraph,
   NavGraphMeta,
@@ -14,19 +22,22 @@ import type {
   RawNavTopology,
   RawNavigator,
   RawRoute,
-} from './types.js';
+} from "./types.js";
 
-const RN_AGENT_DIR = '.rn-agent';
-const GRAPH_FILENAME = 'nav-graph.yaml';
-const LEGACY_GRAPH_FILENAME = '.rn-nav-graph.yaml';
+const RN_AGENT_DIR = ".rn-agent";
+const GRAPH_FILENAME = "nav-graph.yaml";
+const LEGACY_GRAPH_FILENAME = ".rn-nav-graph.yaml";
 
 function isRnProject(dir: string): boolean {
-  const pkgPath = join(dir, 'package.json');
+  const pkgPath = join(dir, "package.json");
   if (!existsSync(pkgPath)) return false;
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    return !!(deps['react-native'] || deps['expo']);
+    return !!(deps["react-native"] || deps["expo"]);
   } catch {
     return false;
   }
@@ -59,7 +70,7 @@ function scanForRnProject(rootDir: string, maxDepth: number): string | null {
   // Pass 1 at this level: check all direct children for an RN project.
   const subdirs: string[] = [];
   for (const name of entries) {
-    if (name.startsWith('.') || name === 'node_modules') continue;
+    if (name.startsWith(".") || name === "node_modules") continue;
     const full = join(rootDir, name);
     try {
       const stat = lstatSync(full);
@@ -96,7 +107,7 @@ function collectRnProjects(rootDir: string, maxDepth: number, out: string[]): vo
   entries.sort();
   const subdirs: string[] = [];
   for (const name of entries) {
-    if (name.startsWith('.') || name === 'node_modules') continue;
+    if (name.startsWith(".") || name === "node_modules") continue;
     const full = join(rootDir, name);
     try {
       const stat = lstatSync(full);
@@ -124,18 +135,18 @@ function collectRnProjects(rootDir: string, maxDepth: number, out: string[]): vo
 // bundleId-matching. They gracefully fall back to the current alphabetical
 // sibling pick.
 export function readProjectBundleId(projectRoot: string): string | null {
-  const appJsonPath = join(projectRoot, 'app.json');
+  const appJsonPath = join(projectRoot, "app.json");
   if (!existsSync(appJsonPath)) return null;
   try {
-    const raw = JSON.parse(readFileSync(appJsonPath, 'utf-8')) as {
+    const raw = JSON.parse(readFileSync(appJsonPath, "utf-8")) as {
       expo?: { ios?: { bundleIdentifier?: string }; android?: { package?: string } };
       ios?: { bundleIdentifier?: string };
       android?: { package?: string };
     };
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
-    if (typeof iosId === 'string' && iosId.length > 0) return iosId;
-    if (typeof androidId === 'string' && androidId.length > 0) return androidId;
+    if (typeof iosId === "string" && iosId.length > 0) return iosId;
+    if (typeof androidId === "string" && androidId.length > 0) return androidId;
     return null;
   } catch {
     return null;
@@ -171,10 +182,7 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
   // cascade hit matches it, return immediately. Otherwise remember the
   // first hit as a fallback for when no sibling matches either.
   let walkupHit: string | null = null;
-  const starts = [
-    process.env.CLAUDE_USER_CWD,
-    process.cwd(),
-  ].filter(Boolean) as string[];
+  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean) as string[];
 
   for (const start of starts) {
     if (isRnProject(start)) {
@@ -189,7 +197,7 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join(dir, '..');
+      const parent = join(dir, "..");
       if (parent === dir) break;
       dir = parent;
     }
@@ -201,7 +209,7 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
   // is provided, collect all candidates and prefer the match. Otherwise
   // stop at the first hit (legacy behavior).
   const cwd = process.cwd();
-  const parentOfCwd = join(cwd, '..');
+  const parentOfCwd = join(cwd, "..");
 
   if (targetBundleId) {
     const all: string[] = [];
@@ -227,10 +235,14 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
 
 function getProjectSlug(projectRoot: string): string {
   try {
-    const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8')) as { name?: string };
-    if (pkg.name && typeof pkg.name === 'string') return pkg.name;
-  } catch { /* fall through */ }
-  return projectRoot.split('/').pop() ?? 'unknown';
+    const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8")) as {
+      name?: string;
+    };
+    if (pkg.name && typeof pkg.name === "string") return pkg.name;
+  } catch {
+    /* fall through */
+  }
+  return projectRoot.split("/").pop() ?? "unknown";
 }
 
 export function getGraphPath(projectRoot: string): string {
@@ -249,7 +261,7 @@ export function readGraph(projectRoot: string): NavGraph | null {
       if (!existsSync(legacyPath)) return null;
       filePath = legacyPath;
     }
-    const raw = yamlParse(readFileSync(filePath, 'utf-8')) as { nav_graph?: NavGraph } | null;
+    const raw = yamlParse(readFileSync(filePath, "utf-8")) as { nav_graph?: NavGraph } | null;
     if (!raw || !raw.nav_graph) return null;
     hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
     return raw.nav_graph;
@@ -263,7 +275,7 @@ export function writeGraph(projectRoot: string, graph: NavGraph): string {
   mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml = yamlStringify({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync(tmpPath, yaml, 'utf-8');
+  writeFileSync(tmpPath, yaml, "utf-8");
   renameSync(tmpPath, filePath);
   return filePath;
 }
@@ -277,7 +289,7 @@ function buildScreen(raw: RawRoute, isActive: boolean): NavScreen {
   };
   if (raw.path) screen.path = raw.path;
   if (raw.params_schema && raw.params_schema.length > 0) {
-    screen.params_template = `{ ${raw.params_schema.join(', ')} }`;
+    screen.params_template = `{ ${raw.params_schema.join(", ")} }`;
   }
   if (raw.is_initial) screen.initial = true;
   if (raw.is_modal) screen.is_modal = true;
@@ -286,9 +298,7 @@ function buildScreen(raw: RawRoute, isActive: boolean): NavScreen {
 }
 
 function buildNavigator(raw: RawNavigator, activeScreenName: string | null): NavNavigator {
-  const screens = raw.routes.map(r =>
-    buildScreen(r, r.name === activeScreenName),
-  );
+  const screens = raw.routes.map((r) => buildScreen(r, r.name === activeScreenName));
   return {
     id: raw.id,
     kind: raw.kind,
@@ -322,7 +332,11 @@ function computeCoverage(navigators: NavNavigator[]): number {
   return total === 0 ? 0 : Math.round((visited / total) * 100);
 }
 
-export function buildGraph(raw: RawNavTopology, projectRoot: string, commitHash?: string): NavGraph {
+export function buildGraph(
+  raw: RawNavTopology,
+  projectRoot: string,
+  commitHash?: string,
+): NavGraph {
   const navigators: NavNavigator[] = [];
 
   for (const rawNav of raw.navigators) {
@@ -355,7 +369,11 @@ export interface MergeResult {
   removed_routes: string[];
 }
 
-export function mergeGraph(existing: NavGraph, raw: RawNavTopology, projectRoot: string): MergeResult {
+export function mergeGraph(
+  existing: NavGraph,
+  raw: RawNavTopology,
+  projectRoot: string,
+): MergeResult {
   const fresh = buildGraph(raw, projectRoot);
 
   const existingScreenMap = new Map<string, NavScreen>();
@@ -383,8 +401,8 @@ export function mergeGraph(existing: NavGraph, raw: RawNavTopology, projectRoot:
 
   const freshScreenNames = new Set(fresh.all_screens);
   const existingScreenNames = new Set(existing.all_screens);
-  const newRoutes = fresh.all_screens.filter(s => !existingScreenNames.has(s));
-  const removedRoutes = existing.all_screens.filter(s => !freshScreenNames.has(s));
+  const newRoutes = fresh.all_screens.filter((s) => !existingScreenNames.has(s));
+  const removedRoutes = existing.all_screens.filter((s) => !freshScreenNames.has(s));
 
   fresh.meta.created_at = existing.meta.created_at;
   fresh.meta.scan_count = existing.meta.scan_count + 1;
@@ -422,7 +440,7 @@ export function _resetStrikesForTest(): void {
 }
 
 export function hydrateStrikesFromGraph(graph: NavGraph, projectKey?: string): void {
-  const key = projectKey ?? graph.meta?.project_slug ?? '';
+  const key = projectKey ?? graph.meta?.project_slug ?? "";
   if (hydratedProjectKey === key) return;
   // Switched projects (or first hydrate): drop the previous project's strikes so
   // colliding screen+method keys across apps don't cross-contaminate.
@@ -441,8 +459,8 @@ export function hydrateStrikesFromGraph(graph: NavGraph, projectKey?: string): v
       }
 
       for (const [method, records] of byMethod) {
-        const sorted = records.sort((a, b) =>
-          new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime(),
+        const sorted = records.sort(
+          (a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime(),
         );
         let consecutive = 0;
         for (const rec of sorted) {
@@ -451,7 +469,9 @@ export function hydrateStrikesFromGraph(graph: NavGraph, projectKey?: string): v
         }
         if (consecutive >= STRIKE_THRESHOLD) {
           const lastFailure = sorted[0].recorded_at;
-          const coolUntil = new Date(new Date(lastFailure).getTime() + STRIKE_COOLDOWN_MS).toISOString();
+          const coolUntil = new Date(
+            new Date(lastFailure).getTime() + STRIKE_COOLDOWN_MS,
+          ).toISOString();
           strikeMap.set(strikeKey(screen.name, method), {
             screen: screen.name,
             method,
@@ -481,7 +501,7 @@ function updateStrike(screen: string, method: NavMethod, success: boolean): Stri
 
   if (success) {
     strikeMap.delete(key);
-    return { screen, method, consecutive_failures: 0, last_failure_at: '' };
+    return { screen, method, consecutive_failures: 0, last_failure_at: "" };
   }
 
   const now = new Date().toISOString();
@@ -517,8 +537,11 @@ export function recordNavigation(
 
   let targetScreen: NavScreen | null = null;
   for (const nav of graph.navigators) {
-    const found = nav.screens.find(s => s.name === input.screen);
-    if (found) { targetScreen = found; break; }
+    const found = nav.screens.find((s) => s.name === input.screen);
+    if (found) {
+      targetScreen = found;
+      break;
+    }
   }
   if (!targetScreen) return null;
 
@@ -551,16 +574,21 @@ export function recordNavigation(
     );
   }
 
-  const successRecords = (targetScreen.action_records ?? []).filter(r => r.success && r.latency_ms > 0);
-  targetScreen.avg_load_ms = successRecords.length > 0
-    ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
-    : undefined;
+  const successRecords = (targetScreen.action_records ?? []).filter(
+    (r) => r.success && r.latency_ms > 0,
+  );
+  targetScreen.avg_load_ms =
+    successRecords.length > 0
+      ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
+      : undefined;
 
   const strike = updateStrike(input.screen, input.method, input.success);
 
   try {
     writeGraph(projectRoot, graph);
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 
   return {
     screen: input.screen,
@@ -568,12 +596,14 @@ export function recordNavigation(
     success: input.success,
     new_reliability_score: targetScreen.reliability_score,
     new_visit_count: targetScreen.visit_count,
-    strike_status: strike.consecutive_failures > 0
-      ? {
-          consecutive_failures: strike.consecutive_failures,
-          cooled_down: !!strike.cooled_until && Date.now() < new Date(strike.cooled_until).getTime(),
-          cooled_until: strike.cooled_until,
-        }
-      : undefined,
+    strike_status:
+      strike.consecutive_failures > 0
+        ? {
+            consecutive_failures: strike.consecutive_failures,
+            cooled_down:
+              !!strike.cooled_until && Date.now() < new Date(strike.cooled_until).getTime(),
+            cooled_until: strike.cooled_until,
+          }
+        : undefined,
   };
 }

@@ -1,11 +1,11 @@
 /* rn-dev-agent docs — Precision Engineering theme (dark-only) */
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap");
 
 /* ─── Palette ─── */
 :root {
-  --sl-font: 'DM Sans', system-ui, sans-serif;
-  --sl-font-system-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sl-font: "DM Sans", system-ui, sans-serif;
+  --sl-font-system-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --sl-color-accent-low: #0d2d3a;
   --sl-color-accent: #38bdf8;
@@ -95,7 +95,9 @@ nav.sidebar .top-level > li + li {
 
 nav.sidebar a {
   border-radius: 5px;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 nav.sidebar a:hover {
@@ -105,7 +107,7 @@ nav.sidebar a:hover {
 /* Active link: bright sky-blue text on subtle teal wash, with a clear
    left rail. Overrides Starlight's default white-on-accent so the
    active item reads as "highlighted" instead of "inverted". */
-nav.sidebar a[aria-current='page'] {
+nav.sidebar a[aria-current="page"] {
   color: var(--sl-color-accent);
   background-color: var(--sl-color-accent-low);
   font-weight: 600;
@@ -171,7 +173,9 @@ nav.sidebar summary {
 .card {
   border-radius: 8px;
   border: 1px solid var(--sl-color-gray-5);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .card:hover {

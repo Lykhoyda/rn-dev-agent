@@ -30,8 +30,10 @@ declare global {
    * returns null in production so call-site code doesn't need a guard.
    */
   // eslint-disable-next-line no-var
-  var __RN_DEV_BRIDGE__: {
-    registerNavRef: (ref: unknown) => void;
-    registerStores: (stores: Record<string, unknown>) => void;
-  } | undefined;
+  var __RN_DEV_BRIDGE__:
+    | {
+        registerNavRef: (ref: unknown) => void;
+        registerStores: (stores: Record<string, unknown>) => void;
+      }
+    | undefined;
 }

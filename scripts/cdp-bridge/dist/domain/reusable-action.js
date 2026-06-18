@@ -61,10 +61,10 @@ export function appendRunRecord(state, record) {
     while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX)
         newHistory.shift();
     const totalRuns = state.stats.totalRuns + 1;
-    const successCount = state.stats.successCount + (record.status === 'pass' ? 1 : 0);
-    const failureCount = state.stats.failureCount + (record.status === 'fail' ? 1 : 0);
+    const successCount = state.stats.successCount + (record.status === "pass" ? 1 : 0);
+    const failureCount = state.stats.failureCount + (record.status === "fail" ? 1 : 0);
     // Recompute avg over successful records only.
-    const successDurations = newHistory.filter((r) => r.status === 'pass').map((r) => r.durationMs);
+    const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
     const avgDurationMs = successDurations.length
         ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length)
         : state.stats.avgDurationMs;
@@ -77,8 +77,8 @@ export function appendRunRecord(state, record) {
             successCount,
             failureCount,
             avgDurationMs,
-            lastSuccessAt: record.status === 'pass' ? record.timestamp : state.stats.lastSuccessAt,
-            lastFailureAt: record.status === 'fail' ? record.timestamp : state.stats.lastFailureAt,
+            lastSuccessAt: record.status === "pass" ? record.timestamp : state.stats.lastSuccessAt,
+            lastFailureAt: record.status === "fail" ? record.timestamp : state.stats.lastFailureAt,
         },
     };
 }
@@ -115,7 +115,7 @@ export function repairBudgetAvailable(state, now = () => new Date()) {
  * a self-repair's verification replay succeeds.
  */
 export function shouldAutoPromoteToActive(metadata, lastRun) {
-    return metadata.status === 'experimental' && lastRun?.status === 'pass';
+    return metadata.status === "experimental" && lastRun?.status === "pass";
 }
 /**
  * Demote `active → experimental` after a self-repair patches the body.
@@ -123,7 +123,7 @@ export function shouldAutoPromoteToActive(metadata, lastRun) {
  * again.
  */
 export function shouldDemoteAfterRepair(metadata) {
-    return metadata.status === 'active';
+    return metadata.status === "active";
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // M7 header parsing/serialization
@@ -138,13 +138,13 @@ export function shouldDemoteAfterRepair(metadata) {
  * `scripts/learned-actions.mjs` parseFlowMeta() so they stay in sync.
  */
 export function parseM7Header(yamlText, fallbackId) {
-    const lines = yamlText.split('\n');
+    const lines = yamlText.split("\n");
     const meta = {};
     let inComment = false;
     for (const line of lines) {
-        if (line.startsWith('#')) {
+        if (line.startsWith("#")) {
             inComment = true;
-            const stripped = line.replace(/^#\s?/, '').trim();
+            const stripped = line.replace(/^#\s?/, "").trim();
             if (!stripped)
                 continue;
             const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
@@ -152,26 +152,43 @@ export function parseM7Header(yamlText, fallbackId) {
                 continue;
             const key = kv[1];
             const raw = kv[2].trim();
-            if (key === 'tags') {
-                meta.tags = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+            if (key === "tags") {
+                meta.tags = raw
+                    .replace(/^\[|\]$/g, "")
+                    .split(",")
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
-            else if (key === 'mutates') {
+            else if (key === "mutates") {
                 meta.mutates = /^true$/i.test(raw);
             }
-            else if (key === 'params') {
-                meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+            else if (key === "params") {
+                meta.params = raw
+                    .replace(/^\[|\]$/g, "")
+                    .split(",")
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
-            else if (key === 'produces') {
+            else if (key === "produces") {
                 meta.produces = parseProducesMap(raw);
             }
-            else if (key === 'expectedRouteSequence') {
-                meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+            else if (key === "expectedRouteSequence") {
+                meta.expectedRouteSequence = raw
+                    .replace(/^\[|\]$/g, "")
+                    .split(",")
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
-            else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
+            else if (key === "id" ||
+                key === "intent" ||
+                key === "status" ||
+                key === "appId" ||
+                key === "createdAt" ||
+                key === "author") {
                 meta[key] = raw;
             }
         }
-        else if (inComment && line.trim() === '') {
+        else if (inComment && line.trim() === "") {
             // First blank line after a comment block — stop parsing header.
             if (Object.keys(meta).length > 0)
                 break;
@@ -184,7 +201,7 @@ export function parseM7Header(yamlText, fallbackId) {
     const intent = meta.intent;
     if (!id || !intent)
         return null;
-    const status = meta.status ?? 'experimental';
+    const status = meta.status ?? "experimental";
     return {
         id,
         intent,
@@ -209,11 +226,14 @@ export function parseM7Header(yamlText, fallbackId) {
  * inside values are not supported in v1.
  */
 function parseProducesMap(raw) {
-    const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+    const inner = raw
+        .trim()
+        .replace(/^\{|\}$/g, "")
+        .trim();
     if (!inner)
         return undefined;
     const result = {};
-    for (const part of inner.split(',')) {
+    for (const part of inner.split(",")) {
         const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
         if (!kv)
             continue;
@@ -226,7 +246,7 @@ function parseProducesMap(raw) {
             result[key] = Number(valueRaw);
         }
         else {
-            result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
+            result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
         }
     }
     return Object.keys(result).length ? result : undefined;
@@ -237,18 +257,18 @@ function parseProducesMap(raw) {
  */
 export function serializeM7Header(metadata) {
     const lines = [];
-    const stripNewlines = (s) => String(s).replace(/[\r\n]+/g, ' ');
+    const stripNewlines = (s) => String(s).replace(/[\r\n]+/g, " ");
     lines.push(`# id: ${stripNewlines(metadata.id)}`);
     lines.push(`# intent: ${stripNewlines(metadata.intent)}`);
     if (metadata.tags && metadata.tags.length) {
-        lines.push(`# tags: [${metadata.tags.map(stripNewlines).join(', ')}]`);
+        lines.push(`# tags: [${metadata.tags.map(stripNewlines).join(", ")}]`);
     }
-    if (typeof metadata.mutates === 'boolean') {
+    if (typeof metadata.mutates === "boolean") {
         lines.push(`# mutates: ${metadata.mutates}`);
     }
     lines.push(`# status: ${stripNewlines(metadata.status)}`);
     if (metadata.params && metadata.params.length) {
-        lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);
+        lines.push(`# params: [${metadata.params.map(stripNewlines).join(", ")}]`);
     }
     if (metadata.appId)
         lines.push(`# appId: ${stripNewlines(metadata.appId)}`);
@@ -261,13 +281,13 @@ export function serializeM7Header(metadata) {
             .sort()
             .map((k) => {
             const v = metadata.produces[k];
-            const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+            const formatted = typeof v === "string" ? stripNewlines(v) : String(v);
             return `${k}: ${formatted}`;
         });
-        lines.push(`# produces: { ${pairs.join(', ')} }`);
+        lines.push(`# produces: { ${pairs.join(", ")} }`);
     }
     if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
-        lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`);
+        lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(", ")}]`);
     }
-    return lines.join('\n');
+    return lines.join("\n");
 }

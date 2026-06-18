@@ -13,18 +13,15 @@
 // recorder. Keeping emission explicit means the agent has to make the
 // classification decision (which is the right place for it).
 
-import { existsSync } from 'node:fs';
-import { okResult, failResult } from '../utils.js';
-import type { ToolResult } from '../utils.js';
-import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
-import { generateMaestro } from './test-recorder-generators.js';
-import {
-  type ActionLifecycle,
-  freshRuntimeState,
-} from '../domain/reusable-action.js';
-import { actionPathFor } from '../domain/action-store.js';
-import { sidecarPathFor } from '../domain/sidecar-io.js';
-import { atomicWriter } from '../domain/atomic-writer.js';
+import { existsSync } from "node:fs";
+import { okResult, failResult } from "../utils.js";
+import type { ToolResult } from "../utils.js";
+import { getStoredEvents, getRecordingStartRoute } from "./test-recorder.js";
+import { generateMaestro } from "./test-recorder-generators.js";
+import { type ActionLifecycle, freshRuntimeState } from "../domain/reusable-action.js";
+import { actionPathFor } from "../domain/action-store.js";
+import { sidecarPathFor } from "../domain/sidecar-io.js";
+import { atomicWriter } from "../domain/atomic-writer.js";
 
 export interface SaveAsActionArgs {
   /**
@@ -86,25 +83,31 @@ export interface SaveAsActionArgs {
 
 export function createSaveAsActionHandler() {
   return async (args: SaveAsActionArgs): Promise<ToolResult> => {
-    if (!args.id || typeof args.id !== 'string') {
-      return failResult('cdp_record_test_save_as_action requires id (lower-case kebab-case slug)', 'BAD_FILENAME');
+    if (!args.id || typeof args.id !== "string") {
+      return failResult(
+        "cdp_record_test_save_as_action requires id (lower-case kebab-case slug)",
+        "BAD_FILENAME",
+      );
     }
-    if (!args.intent || typeof args.intent !== 'string') {
-      return failResult('cdp_record_test_save_as_action requires intent (one-line goal)', 'BAD_FILENAME');
+    if (!args.intent || typeof args.intent !== "string") {
+      return failResult(
+        "cdp_record_test_save_as_action requires intent (one-line goal)",
+        "BAD_FILENAME",
+      );
     }
     // Light validation on id shape — refuse path traversal and
     // weird shells in the filename. Lower-case kebab-case + digits.
     if (!/^[a-z0-9][a-z0-9-]*$/.test(args.id)) {
       return failResult(
         `cdp_record_test_save_as_action: id "${args.id}" must be lower-case kebab-case (a-z, 0-9, hyphen). Slashes, dots, uppercase, and underscores are rejected to prevent path traversal and to keep filenames stable across OSes.`,
-        'BAD_FILENAME',
+        "BAD_FILENAME",
       );
     }
     const events = getStoredEvents();
     if (!events || events.length === 0) {
       return failResult(
-        'No recorded events to save — call cdp_record_test_start, interact, then cdp_record_test_stop before save_as_action',
-        'NO_EVENTS',
+        "No recorded events to save — call cdp_record_test_start, interact, then cdp_record_test_stop before save_as_action",
+        "NO_EVENTS",
       );
     }
 
@@ -118,16 +121,16 @@ export function createSaveAsActionHandler() {
     if (preexisted && !args.overwrite) {
       return failResult(
         `cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`,
-        'BAD_FILENAME',
+        "BAD_FILENAME",
         {
           actionId: args.id,
           filePath,
-          hint: 'Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten.',
+          hint: "Existing actions should be repaired (cdp_repair_action) or extended in place, not silently overwritten.",
         },
       );
     }
 
-    const status: ActionLifecycle = args.status ?? 'experimental';
+    const status: ActionLifecycle = args.status ?? "experimental";
     const startRoute = getRecordingStartRoute() ?? undefined;
 
     // generateMaestro emits the appId top section + M7 header + body

@@ -11,6 +11,8 @@
     "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
     "release-cdp-bridge": "cd scripts/cdp-bridge && npm publish",
     "test": "cd scripts/cdp-bridge && npm test",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix"
   },
@@ -20,7 +22,7 @@
     "oxlint": "^1.70.0"
   },
   "overrides": {
-    "ip-address": ">=10.1.1",
-    "hono": ">=4.12.18"
+    "hono": ">=4.12.18",
+    "ip-address": ">=10.1.1"
   }
 }

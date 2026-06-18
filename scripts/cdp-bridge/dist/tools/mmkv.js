@@ -1,4 +1,4 @@
-import { okResult, failResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection } from "../utils.js";
 /**
  * Pure builder — returns a JS expression that, when evaluated in Hermes,
  * performs the MMKV action and returns a JSON-stringified result.
@@ -12,25 +12,24 @@ import { okResult, failResult, withConnection } from '../utils.js';
  * this readable and matches the style of injected-helpers.ts.
  */
 export function buildMmkvExpression(args) {
-    const instanceId = args.instanceId ?? 'mmkv.default';
-    const valueType = args.type ?? 'string';
+    const instanceId = args.instanceId ?? "mmkv.default";
+    const valueType = args.type ?? "string";
     let actionBody;
     switch (args.action) {
-        case 'get': {
-            if (typeof args.key !== 'string' || args.key.length === 0) {
+        case "get": {
+            if (typeof args.key !== "string" || args.key.length === 0) {
                 return `JSON.stringify({ __agent_error: 'get requires non-empty key' })`;
             }
             // GH #209: `getBoolean` — the spelling on BOTH the Nitro hybrid object
             // (MMKV.nitro.ts) and the JS wrapper class. The previous `getBool`
             // existed on neither; type=boolean reads were broken since the tool
             // shipped.
-            const getMethod = valueType === 'number' ? 'getNumber' :
-                valueType === 'boolean' ? 'getBoolean' : 'getString';
+            const getMethod = valueType === "number" ? "getNumber" : valueType === "boolean" ? "getBoolean" : "getString";
             actionBody = `var v = mmkv.${getMethod}(${JSON.stringify(args.key)}); return JSON.stringify({ value: v === undefined ? null : v });`;
             break;
         }
-        case 'set': {
-            if (typeof args.key !== 'string' || args.key.length === 0) {
+        case "set": {
+            if (typeof args.key !== "string" || args.key.length === 0) {
                 return `JSON.stringify({ __agent_error: 'set requires non-empty key' })`;
             }
             if (args.value === undefined || args.value === null) {
@@ -39,11 +38,11 @@ export function buildMmkvExpression(args) {
             // MMKV's `set` is overloaded by JS-side type inference; pass the
             // raw literal cast to the requested type.
             let valueLiteral;
-            if (valueType === 'number') {
+            if (valueType === "number") {
                 valueLiteral = String(Number(args.value));
             }
-            else if (valueType === 'boolean') {
-                valueLiteral = args.value === true || args.value === 'true' ? 'true' : 'false';
+            else if (valueType === "boolean") {
+                valueLiteral = args.value === true || args.value === "true" ? "true" : "false";
             }
             else {
                 valueLiteral = JSON.stringify(String(args.value));
@@ -51,8 +50,8 @@ export function buildMmkvExpression(args) {
             actionBody = `mmkv.set(${JSON.stringify(args.key)}, ${valueLiteral}); return JSON.stringify({ ok: true });`;
             break;
         }
-        case 'delete': {
-            if (typeof args.key !== 'string' || args.key.length === 0) {
+        case "delete": {
+            if (typeof args.key !== "string" || args.key.length === 0) {
                 return `JSON.stringify({ __agent_error: 'delete requires non-empty key' })`;
             }
             // GH #209: the raw Nitro hybrid object (v4 / 3.0-beta line) exposes
@@ -65,18 +64,18 @@ export function buildMmkvExpression(args) {
       return JSON.stringify({ ok: true });`;
             break;
         }
-        case 'has': {
-            if (typeof args.key !== 'string' || args.key.length === 0) {
+        case "has": {
+            if (typeof args.key !== "string" || args.key.length === 0) {
                 return `JSON.stringify({ __agent_error: 'has requires non-empty key' })`;
             }
             actionBody = `var present = mmkv.contains(${JSON.stringify(args.key)}); return JSON.stringify({ present: !!present });`;
             break;
         }
-        case 'keys': {
+        case "keys": {
             actionBody = `var ks = mmkv.getAllKeys(); return JSON.stringify({ keys: ks || [] });`;
             break;
         }
-        case 'clear': {
+        case "clear": {
             actionBody = `mmkv.clearAll(); return JSON.stringify({ cleared: true });`;
             break;
         }
@@ -114,8 +113,8 @@ export function createMmkvHandler(getClient) {
         if (result.error) {
             return failResult(`MMKV evaluate error: ${result.error}`);
         }
-        if (typeof result.value !== 'string') {
-            return failResult('Unexpected response from MMKV expression (not a string)');
+        if (typeof result.value !== "string") {
+            return failResult("Unexpected response from MMKV expression (not a string)");
         }
         let parsed;
         try {
@@ -124,9 +123,9 @@ export function createMmkvHandler(getClient) {
         catch {
             return failResult(`Could not parse MMKV response: ${result.value.slice(0, 200)}`);
         }
-        if (parsed !== null && typeof parsed === 'object') {
+        if (parsed !== null && typeof parsed === "object") {
             const obj = parsed;
-            if ('__agent_error' in obj) {
+            if ("__agent_error" in obj) {
                 return failResult(String(obj.__agent_error));
             }
         }

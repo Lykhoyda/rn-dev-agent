@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 
 const execFile = promisify(execFileCb);
 
@@ -41,10 +41,10 @@ export async function probeAppInstalled(
   exec: Exec = execFile as unknown as Exec,
 ): Promise<boolean | null> {
   try {
-    await exec('xcrun', ['simctl', 'get_app_container', udid, appId, 'app'], { timeout: 5000 });
+    await exec("xcrun", ["simctl", "get_app_container", udid, appId, "app"], { timeout: 5000 });
     return true;
   } catch (e) {
-    const stderr = (e as { stderr?: string }).stderr ?? '';
+    const stderr = (e as { stderr?: string }).stderr ?? "";
     if (!stderr) return null;
     if (DEVICE_ERROR.test(stderr)) return null;
     if (isAppMissingSignal(stderr)) return false;
@@ -68,7 +68,7 @@ export function buildNotInstalledAdvice(
 ): string {
   const base =
     `App ${appId} is not installed on simulator ${udid} — rebuild and install ` +
-    '(npx expo run:ios / pnpm ios).';
+    "(npx expo run:ios / pnpm ios).";
   if (!hint) return base;
   return (
     `${base} Or reinstall the snapshot taken at the last clearState, ` +

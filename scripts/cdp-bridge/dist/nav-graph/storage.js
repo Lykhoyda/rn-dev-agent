@@ -1,17 +1,17 @@
-import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
-const RN_AGENT_DIR = '.rn-agent';
-const GRAPH_FILENAME = 'nav-graph.yaml';
-const LEGACY_GRAPH_FILENAME = '.rn-nav-graph.yaml';
+import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync, } from "node:fs";
+import { join, dirname } from "node:path";
+import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+const RN_AGENT_DIR = ".rn-agent";
+const GRAPH_FILENAME = "nav-graph.yaml";
+const LEGACY_GRAPH_FILENAME = ".rn-nav-graph.yaml";
 function isRnProject(dir) {
-    const pkgPath = join(dir, 'package.json');
+    const pkgPath = join(dir, "package.json");
     if (!existsSync(pkgPath))
         return false;
     try {
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        return !!(deps['react-native'] || deps['expo']);
+        return !!(deps["react-native"] || deps["expo"]);
     }
     catch {
         return false;
@@ -45,7 +45,7 @@ function scanForRnProject(rootDir, maxDepth) {
     // Pass 1 at this level: check all direct children for an RN project.
     const subdirs = [];
     for (const name of entries) {
-        if (name.startsWith('.') || name === 'node_modules')
+        if (name.startsWith(".") || name === "node_modules")
             continue;
         const full = join(rootDir, name);
         try {
@@ -87,7 +87,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
     entries.sort();
     const subdirs = [];
     for (const name of entries) {
-        if (name.startsWith('.') || name === 'node_modules')
+        if (name.startsWith(".") || name === "node_modules")
             continue;
         const full = join(rootDir, name);
         try {
@@ -119,16 +119,16 @@ function collectRnProjects(rootDir, maxDepth, out) {
 // bundleId-matching. They gracefully fall back to the current alphabetical
 // sibling pick.
 export function readProjectBundleId(projectRoot) {
-    const appJsonPath = join(projectRoot, 'app.json');
+    const appJsonPath = join(projectRoot, "app.json");
     if (!existsSync(appJsonPath))
         return null;
     try {
-        const raw = JSON.parse(readFileSync(appJsonPath, 'utf-8'));
+        const raw = JSON.parse(readFileSync(appJsonPath, "utf-8"));
         const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
         const androidId = raw.expo?.android?.package ?? raw.android?.package;
-        if (typeof iosId === 'string' && iosId.length > 0)
+        if (typeof iosId === "string" && iosId.length > 0)
             return iosId;
-        if (typeof androidId === 'string' && androidId.length > 0)
+        if (typeof androidId === "string" && androidId.length > 0)
             return androidId;
         return null;
     }
@@ -151,10 +151,7 @@ export function findProjectRoot(opts = {}) {
     // cascade hit matches it, return immediately. Otherwise remember the
     // first hit as a fallback for when no sibling matches either.
     let walkupHit = null;
-    const starts = [
-        process.env.CLAUDE_USER_CWD,
-        process.cwd(),
-    ].filter(Boolean);
+    const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
     for (const start of starts) {
         if (isRnProject(start)) {
             if (targetBundleId && readProjectBundleId(start) === targetBundleId)
@@ -170,7 +167,7 @@ export function findProjectRoot(opts = {}) {
                 walkupHit = walkupHit ?? dir;
                 break;
             }
-            const parent = join(dir, '..');
+            const parent = join(dir, "..");
             if (parent === dir)
                 break;
             dir = parent;
@@ -182,7 +179,7 @@ export function findProjectRoot(opts = {}) {
     // is provided, collect all candidates and prefer the match. Otherwise
     // stop at the first hit (legacy behavior).
     const cwd = process.cwd();
-    const parentOfCwd = join(cwd, '..');
+    const parentOfCwd = join(cwd, "..");
     if (targetBundleId) {
         const all = [];
         collectRnProjects(cwd, 0, all);
@@ -210,12 +207,14 @@ export function findProjectRoot(opts = {}) {
 }
 function getProjectSlug(projectRoot) {
     try {
-        const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8'));
-        if (pkg.name && typeof pkg.name === 'string')
+        const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8"));
+        if (pkg.name && typeof pkg.name === "string")
             return pkg.name;
     }
-    catch { /* fall through */ }
-    return projectRoot.split('/').pop() ?? 'unknown';
+    catch {
+        /* fall through */
+    }
+    return projectRoot.split("/").pop() ?? "unknown";
 }
 export function getGraphPath(projectRoot) {
     return join(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
@@ -233,7 +232,7 @@ export function readGraph(projectRoot) {
                 return null;
             filePath = legacyPath;
         }
-        const raw = yamlParse(readFileSync(filePath, 'utf-8'));
+        const raw = yamlParse(readFileSync(filePath, "utf-8"));
         if (!raw || !raw.nav_graph)
             return null;
         hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
@@ -248,7 +247,7 @@ export function writeGraph(projectRoot, graph) {
     mkdirSync(dirname(filePath), { recursive: true });
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     const yaml = yamlStringify({ nav_graph: graph }, { lineWidth: 120 });
-    writeFileSync(tmpPath, yaml, 'utf-8');
+    writeFileSync(tmpPath, yaml, "utf-8");
     renameSync(tmpPath, filePath);
     return filePath;
 }
@@ -262,7 +261,7 @@ function buildScreen(raw, isActive) {
     if (raw.path)
         screen.path = raw.path;
     if (raw.params_schema && raw.params_schema.length > 0) {
-        screen.params_template = `{ ${raw.params_schema.join(', ')} }`;
+        screen.params_template = `{ ${raw.params_schema.join(", ")} }`;
     }
     if (raw.is_initial)
         screen.initial = true;
@@ -273,7 +272,7 @@ function buildScreen(raw, isActive) {
     return screen;
 }
 function buildNavigator(raw, activeScreenName) {
-    const screens = raw.routes.map(r => buildScreen(r, r.name === activeScreenName));
+    const screens = raw.routes.map((r) => buildScreen(r, r.name === activeScreenName));
     return {
         id: raw.id,
         kind: raw.kind,
@@ -354,8 +353,8 @@ export function mergeGraph(existing, raw, projectRoot) {
     }
     const freshScreenNames = new Set(fresh.all_screens);
     const existingScreenNames = new Set(existing.all_screens);
-    const newRoutes = fresh.all_screens.filter(s => !existingScreenNames.has(s));
-    const removedRoutes = existing.all_screens.filter(s => !freshScreenNames.has(s));
+    const newRoutes = fresh.all_screens.filter((s) => !existingScreenNames.has(s));
+    const removedRoutes = existing.all_screens.filter((s) => !freshScreenNames.has(s));
     fresh.meta.created_at = existing.meta.created_at;
     fresh.meta.scan_count = existing.meta.scan_count + 1;
     if (!fresh.meta.scanned_at_commit && existing.meta.scanned_at_commit) {
@@ -385,7 +384,7 @@ export function _resetStrikesForTest() {
     hydratedProjectKey = null;
 }
 export function hydrateStrikesFromGraph(graph, projectKey) {
-    const key = projectKey ?? graph.meta?.project_slug ?? '';
+    const key = projectKey ?? graph.meta?.project_slug ?? "";
     if (hydratedProjectKey === key)
         return;
     // Switched projects (or first hydrate): drop the previous project's strikes so
@@ -440,7 +439,7 @@ function updateStrike(screen, method, success) {
     const existing = strikeMap.get(key);
     if (success) {
         strikeMap.delete(key);
-        return { screen, method, consecutive_failures: 0, last_failure_at: '' };
+        return { screen, method, consecutive_failures: 0, last_failure_at: "" };
     }
     const now = new Date().toISOString();
     if (existing) {
@@ -470,7 +469,7 @@ export function recordNavigation(projectRoot, input) {
         return null;
     let targetScreen = null;
     for (const nav of graph.navigators) {
-        const found = nav.screens.find(s => s.name === input.screen);
+        const found = nav.screens.find((s) => s.name === input.screen);
         if (found) {
             targetScreen = found;
             break;
@@ -499,15 +498,18 @@ export function recordNavigation(projectRoot, input) {
     else {
         targetScreen.reliability_score = Math.max(targetScreen.reliability_score + RELIABILITY_FAILURE_DELTA, 0);
     }
-    const successRecords = (targetScreen.action_records ?? []).filter(r => r.success && r.latency_ms > 0);
-    targetScreen.avg_load_ms = successRecords.length > 0
-        ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
-        : undefined;
+    const successRecords = (targetScreen.action_records ?? []).filter((r) => r.success && r.latency_ms > 0);
+    targetScreen.avg_load_ms =
+        successRecords.length > 0
+            ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
+            : undefined;
     const strike = updateStrike(input.screen, input.method, input.success);
     try {
         writeGraph(projectRoot, graph);
     }
-    catch { /* best effort */ }
+    catch {
+        /* best effort */
+    }
     return {
         screen: input.screen,
         method: input.method,

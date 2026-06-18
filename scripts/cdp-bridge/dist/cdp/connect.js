@@ -1,17 +1,17 @@
-import WebSocket from 'ws';
-import { logger } from '../logger.js';
-import { metroOrigin } from '../ws-origin.js';
-import { resolveBundleId } from '../project-config.js';
-import { discover } from './discovery.js';
-import { sleep } from './state.js';
-import { CDP_TIMEOUT_FAST } from './timeout-config.js';
-import { probeReactReachable } from './setup.js';
+import WebSocket from "ws";
+import { logger } from "../logger.js";
+import { metroOrigin } from "../ws-origin.js";
+import { resolveBundleId } from "../project-config.js";
+import { discover } from "./discovery.js";
+import { sleep } from "./state.js";
+import { CDP_TIMEOUT_FAST } from "./timeout-config.js";
+import { probeReactReachable } from "./setup.js";
 // Budget for the status-scoped React-reachability probe. Generous enough to
 // clear a normal Bridgeless reload (React ready in <~2s) but far below setup()'s
 // 30s waitForReact, so cdp_status fails fast instead of hanging when the Dev
 // Client picker blocks the bundle. Env-overridable for tuning/tests.
 const PICKER_PROBE_BUDGET_MS = (() => {
-    const n = parseInt(process.env.RN_PICKER_PROBE_BUDGET_MS ?? '', 10);
+    const n = parseInt(process.env.RN_PICKER_PROBE_BUDGET_MS ?? "", 10);
     return Number.isFinite(n) && n > 0 ? n : 5000;
 })();
 /**
@@ -27,7 +27,7 @@ export class PickerBlockingBundleError extends Error {
         super(`Dev Client picker appears to be blocking the bundle: React was not reachable on target ` +
             `"${target.title}" (vm=${target.vm}). If the Expo "Development servers" picker is showing on ` +
             `the simulator, select your Metro server, then retry cdp_status. (If the bundle is still building, just retry.)`);
-        this.name = 'PickerBlockingBundleError';
+        this.name = "PickerBlockingBundleError";
         this.target = target;
     }
 }
@@ -37,26 +37,26 @@ export class PickerBlockingBundleError extends Error {
  * first-build keeps the full waitForReact budget rather than being aborted.
  */
 export function shouldRunPickerProbe(intent, target) {
-    return intent === 'status' && target.vm !== 'Hermes';
+    return intent === "status" && target.vm !== "Hermes";
 }
-export async function autoConnect(ctx, portHint, filters, intent = 'default') {
-    if (ctx.getState() === 'connecting' || ctx.isReconnecting()) {
-        throw new Error('Already connecting to Metro...');
+export async function autoConnect(ctx, portHint, filters, intent = "default") {
+    if (ctx.getState() === "connecting" || ctx.isReconnecting()) {
+        throw new Error("Already connecting to Metro...");
     }
     if (ctx.isDisposed()) {
-        throw new Error('Client is disposed. Create a new CDPClient instance.');
+        throw new Error("Client is disposed. Create a new CDPClient instance.");
     }
     const effective = { ...filters };
     if (!effective.platform) {
         const envPlatform = process.env.RN_PREFERRED_PLATFORM;
-        if (envPlatform && envPlatform !== 'auto')
+        if (envPlatform && envPlatform !== "auto")
             effective.platform = envPlatform;
     }
     // B111 (D643): auto-populate preferredBundleId from project-config so the
     // smart auto-selection in selectTarget fires for callers that didn't pass
     // explicit filters. resolveBundleId returns null when no app.json — graceful no-op.
     if (!effective.preferredBundleId) {
-        const resolved = resolveBundleId(effective.platform ?? 'ios');
+        const resolved = resolveBundleId(effective.platform ?? "ios");
         if (resolved)
             effective.preferredBundleId = resolved;
     }
@@ -68,9 +68,9 @@ export async function discoverAndConnect(ctx, portHint, filters,
 discoverFn = discover, 
 // GH #184: connect intent threaded to connectToTarget. Kept last so existing
 // callers (and tests passing discoverFn as the 4th arg) are unaffected.
-intent = 'default') {
+intent = "default") {
     if (ctx.isDisposed()) {
-        throw new Error('Client is disposed. Create a new CDPClient instance.');
+        throw new Error("Client is disposed. Create a new CDPClient instance.");
     }
     if (portHint)
         ctx.setPort(portHint);
@@ -79,7 +79,7 @@ intent = 'default') {
     // so the previously-set targetId/bundleId/preferredBundleId survive the reload.
     if (filters !== undefined)
         ctx.setConnectFilters(filters);
-    ctx.setState('connecting');
+    ctx.setState("connecting");
     const mergedFilters = ctx.getConnectFilters();
     const filtersForDiscover = {
         platform: mergedFilters.platform,
@@ -92,7 +92,7 @@ intent = 'default') {
         result = await discoverFn(ctx.getPort(), filtersForDiscover);
     }
     catch (err) {
-        ctx.setState('disconnected');
+        ctx.setState("disconnected");
         throw err;
     }
     const { port: metroPort, targets: sorted, warning: selectionWarning } = result;
@@ -101,8 +101,8 @@ intent = 'default') {
     // mismatch — surface that as a connect error rather than crashing on the
     // candidate loop's connectedTarget! non-null assertion below.
     if (sorted.length === 0) {
-        ctx.setState('disconnected');
-        throw new Error(selectionWarning ?? 'No matching CDP targets found.');
+        ctx.setState("disconnected");
+        throw new Error(selectionWarning ?? "No matching CDP targets found.");
     }
     let connectedTarget = null;
     for (let idx = 0; idx < sorted.length; idx++) {
@@ -118,19 +118,19 @@ intent = 'default') {
             console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
             if (!isLast) {
                 closeAndResetWs(ctx);
-                ctx.setState('disconnected');
+                ctx.setState("disconnected");
                 ctx.setHelpersInjected(false);
                 ctx.setConnectedTarget(null);
                 continue;
             }
-            console.error('CDP: no target with __DEV__=true found, using last available target');
+            console.error("CDP: no target with __DEV__=true found, using last available target");
             connectedTarget = candidate;
         }
         catch (err) {
             // GH #184: picker-blocking affects the whole bundle — every other
             // candidate is the same stale C++ target, so don't waste a probe on each.
             if (err instanceof PickerBlockingBundleError) {
-                ctx.setState('disconnected');
+                ctx.setState("disconnected");
                 throw err;
             }
             if (!isLast)
@@ -139,7 +139,7 @@ intent = 'default') {
         }
     }
     const generation = ctx.incrementConnectionGeneration();
-    logger.info('CDP', `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation}`);
+    logger.info("CDP", `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation}`);
     // GH #59 #5: persist the resolved platform into _connectFilters when the
     // caller didn't pin one explicitly. Without this, softReconnect after
     // cdp_reload has nothing to filter on and may pick the wrong simulator
@@ -184,25 +184,25 @@ export function formatConnectFailureMessage(retries, attempts, bundleHint, lastE
     const allHandshakesSucceeded = attempts.length > 0 && attempts.every((a) => a.handshakeOk);
     const anyProbeTimeout = attempts.some((a) => a.probeTimedOut);
     if (allHandshakesSucceeded && anyProbeTimeout) {
-        const bid = bundleHint ?? '<bundleId>';
+        const bid = bundleHint ?? "<bundleId>";
         return (`CDP probe timeout after ${retries} attempts: WebSocket handshake succeeded but Runtime.evaluate('1+1') consistently timed out — JS thread paused. ` +
             `The target app is most likely backgrounded. ` +
             `Recovery: call cdp_restart with hardReset=true (kills the fast-runner, terminates+relaunches ${bid}, reconnects — no /reload-plugins required). ` +
             `Or manually: xcrun simctl terminate booted ${bid} && xcrun simctl launch booted ${bid} (iOS), or restart the app from the launcher (Android).`);
     }
-    const hint = lastErrorMessage?.includes('1006')
-        ? ' Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools.'
-        : '';
+    const hint = lastErrorMessage?.includes("1006")
+        ? " Another debugger may be connected — close React Native DevTools, Flipper, or Chrome DevTools."
+        : "";
     return `Failed to connect after ${retries} attempts.${hint}`;
 }
-async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
+async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     let lastError = null;
     // GH #105 / B154: track per-attempt outcome (handshake ok vs probe timeout).
     // Fed into formatConnectFailureMessage at the end.
     const attempts = [];
     for (let i = 0; i < retries; i++) {
         if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) {
-            throw new Error('Client disposed or preempted during connection');
+            throw new Error("Client disposed or preempted during connection");
         }
         let handshakeOk = false;
         let probeTimedOut = false;
@@ -212,20 +212,20 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
             const proxyUrl = ctx.getProxyUrl();
             const url = proxyUrl ?? target.webSocketDebuggerUrl;
             if (proxyUrl) {
-                logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
+                logger.info("CDP", `Routing via multiplexer proxy: ${proxyUrl}`);
             }
             await connectWs(ctx, url);
             handshakeOk = true;
             // D594: Early stale-target detection — quick probe before full setup
             try {
-                await ctx.sendWithTimeout('Runtime.evaluate', {
-                    expression: '1+1',
+                await ctx.sendWithTimeout("Runtime.evaluate", {
+                    expression: "1+1",
                     returnByValue: true,
                 }, CDP_TIMEOUT_FAST);
             }
             catch {
                 probeTimedOut = true;
-                throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
+                throw new Error("Target failed pre-flight probe (1+1) — likely a dead JS context");
             }
             ctx.setConnectedTarget(target);
             // M11: stamp connection time so cdp_console_log / cdp_network_log can reason
@@ -250,21 +250,21 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
             if (err instanceof PickerBlockingBundleError) {
                 closeAndResetWs(ctx);
                 ctx.setConnectedTarget(null);
-                ctx.setState('disconnected');
+                ctx.setState("disconnected");
                 throw err;
             }
             lastError = err instanceof Error ? err : new Error(String(err));
             attempts.push({ handshakeOk, probeTimedOut });
             closeAndResetWs(ctx);
-            if (lastError.message.includes('refused')) {
-                ctx.setState('disconnected');
-                throw new Error('CDP connection refused. Is Metro running and the app loaded?');
+            if (lastError.message.includes("refused")) {
+                ctx.setState("disconnected");
+                throw new Error("CDP connection refused. Is Metro running and the app loaded?");
             }
             if (i < retries - 1)
                 await sleep(2000);
         }
     }
-    ctx.setState('disconnected');
+    ctx.setState("disconnected");
     throw new Error(formatConnectFailureMessage(retries, attempts, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
@@ -285,34 +285,38 @@ function connectWs(ctx, url) {
             try {
                 ws.terminate();
             }
-            catch { /* already gone */ }
-            reject(new Error('WebSocket connect timed out'));
+            catch {
+                /* already gone */
+            }
+            reject(new Error("WebSocket connect timed out"));
         }, 7000);
-        ws.on('open', () => {
+        ws.on("open", () => {
             settled = true;
             clearTimeout(guard);
             ctx.setWs(ws);
-            ctx.setState('connected');
+            ctx.setState("connected");
             resolve();
         });
-        ws.on('error', (err) => {
+        ws.on("error", (err) => {
             if (!settled) {
                 settled = true;
                 clearTimeout(guard);
                 try {
                     ws.terminate();
                 }
-                catch { /* already closing */ }
+                catch {
+                    /* already closing */
+                }
                 reject(err);
             }
             else {
-                console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
+                console.error("CDP WebSocket error:", err instanceof Error ? err.message : err);
             }
         });
-        ws.on('message', (data) => {
+        ws.on("message", (data) => {
             ctx.handleMessage(data);
         });
-        ws.on('close', (code) => {
+        ws.on("close", (code) => {
             if (!settled) {
                 settled = true;
                 clearTimeout(guard);

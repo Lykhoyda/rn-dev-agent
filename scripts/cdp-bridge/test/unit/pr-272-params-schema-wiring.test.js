@@ -1,11 +1,11 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const indexSrc = readFileSync(resolve(__dirname, '../../src/index.ts'), 'utf8');
+const indexSrc = readFileSync(resolve(__dirname, "../../src/index.ts"), "utf8");
 
 // PR #272 review (Codex P2): both handlers accept `params` (GH #116 — forwarded
 // as -e KEY=VALUE on first attempt AND post-repair retry), but the MCP zod
@@ -19,14 +19,20 @@ function registrationBlock(toolName) {
   const start = indexSrc.indexOf(`'${toolName}',`);
   assert.notEqual(start, -1, `registration for ${toolName} not found`);
   const rest = indexSrc.slice(start);
-  const next = rest.indexOf('trackedTool(', 1);
+  const next = rest.indexOf("trackedTool(", 1);
   return next === -1 ? rest : rest.slice(0, next);
 }
 
-test('PR#272 maestro_run registration exposes params as a string record', () => {
-  assert.match(registrationBlock('maestro_run'), /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/);
+test("PR#272 maestro_run registration exposes params as a string record", () => {
+  assert.match(
+    registrationBlock("maestro_run"),
+    /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/,
+  );
 });
 
-test('PR#272 cdp_run_action registration exposes params as a string record', () => {
-  assert.match(registrationBlock('cdp_run_action'), /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/);
+test("PR#272 cdp_run_action registration exposes params as a string record", () => {
+  assert.match(
+    registrationBlock("cdp_run_action"),
+    /params:\s*z\.record\(z\.string\(\), z\.string\(\)\)\.optional\(\)/,
+  );
 });

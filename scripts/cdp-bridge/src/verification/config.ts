@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { findProjectRoot } from '../nav-graph/storage.js';
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { findProjectRoot } from "../nav-graph/storage.js";
 
 // GH #91 acceptance criterion #3: per-project override for the mutation-absence
 // detector. Reads `.rn-agent/config.json` once per project root and caches
@@ -70,7 +70,7 @@ function compileShapes(raw: unknown): RegExp | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const valid: string[] = [];
   for (const entry of raw) {
-    if (typeof entry !== 'string' || entry.length === 0) continue;
+    if (typeof entry !== "string" || entry.length === 0) continue;
     if (entry.length > MAX_PATTERN_LENGTH) continue;
     try {
       // eslint-disable-next-line no-new
@@ -82,7 +82,7 @@ function compileShapes(raw: unknown): RegExp | null {
   }
   if (valid.length === 0) return null;
   try {
-    return new RegExp(valid.map((s) => `(?:${s})`).join('|'), 'i');
+    return new RegExp(valid.map((s) => `(?:${s})`).join("|"), "i");
   } catch (e) {
     // Gemini multi-review conf 88: a single pattern with named groups or
     // backrefs can validate standalone but break the OR-combined compile
@@ -91,7 +91,7 @@ function compileShapes(raw: unknown): RegExp | null {
     // signal — a debugging dead-end. One line of stderr fixes that.
     process.stderr.write(
       `[verification] combined successShapes regex compile failed (${(e as Error).message}); ` +
-      `using built-in default. Check for named groups or backrefs in your patterns.\n`,
+        `using built-in default. Check for named groups or backrefs in your patterns.\n`,
     );
     return null;
   }
@@ -101,7 +101,7 @@ function parseMethods(raw: unknown): Set<string> | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const out = new Set<string>();
   for (const entry of raw) {
-    if (typeof entry !== 'string') continue;
+    if (typeof entry !== "string") continue;
     const trimmed = entry.trim().toUpperCase();
     if (trimmed.length > 0) out.add(trimmed);
   }
@@ -113,20 +113,20 @@ export function loadVerificationConfig(projectRoot: string | null): Verification
   const cached = cache.get(projectRoot);
   if (cached) return cached;
 
-  const path = join(projectRoot, '.rn-agent', 'config.json');
+  const path = join(projectRoot, ".rn-agent", "config.json");
   if (!existsSync(path)) {
     cache.set(projectRoot, DEFAULTS);
     return DEFAULTS;
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf-8'));
+    raw = JSON.parse(readFileSync(path, "utf-8"));
   } catch {
     cache.set(projectRoot, DEFAULTS);
     return DEFAULTS;
   }
   const verification = (raw as { verification?: unknown })?.verification;
-  if (!verification || typeof verification !== 'object') {
+  if (!verification || typeof verification !== "object") {
     cache.set(projectRoot, DEFAULTS);
     return DEFAULTS;
   }

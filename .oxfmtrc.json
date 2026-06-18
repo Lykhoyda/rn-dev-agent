@@ -1,0 +1,13 @@
+{
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "WebDriverAgent/",
+    ".claude/worktrees/",
+    ".astro/",
+    ".superpowers/",
+    ".remember/",
+    "*.md",
+    "*.mdx"
+  ]
+}

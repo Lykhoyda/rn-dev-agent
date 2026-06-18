@@ -5,12 +5,12 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { parseM7Header, serializeM7Header, } from './reusable-action.js';
-import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
-import { atomicWriter } from './atomic-writer.js';
-import { assertValidActionId, assertWithinDir } from './path-safety.js';
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { parseM7Header, serializeM7Header, } from "./reusable-action.js";
+import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from "./sidecar-io.js";
+import { atomicWriter } from "./atomic-writer.js";
+import { assertValidActionId, assertWithinDir } from "./path-safety.js";
 /**
  * Resolve the canonical YAML path for an action id under a project root.
  * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
@@ -24,8 +24,8 @@ import { assertValidActionId, assertWithinDir } from './path-safety.js';
  * regex (e.g. a new caller that forgets to validate).
  */
 export function actionPathFor(projectRoot, actionId) {
-    assertValidActionId(actionId, 'actionPathFor');
-    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+    assertValidActionId(actionId, "actionPathFor");
+    const actionsDir = join(projectRoot, ".rn-agent", "actions");
     const fileName = `${actionId}.yaml`;
     assertWithinDir(fileName, actionsDir);
     return join(actionsDir, fileName);
@@ -51,10 +51,10 @@ export function actionPathFor(projectRoot, actionId) {
  * Pure function — exported for unit tests.
  */
 export function splitYaml(text) {
-    const allLines = text.split('\n');
+    const allLines = text.split("\n");
     let separatorIdx = -1;
     for (let i = 0; i < allLines.length; i++) {
-        if (allLines[i].trim() === '---') {
+        if (allLines[i].trim() === "---") {
             separatorIdx = i;
             break;
         }
@@ -75,16 +75,16 @@ export function splitYaml(text) {
         let inBody = false;
         let seenAnyContent = false;
         for (const line of allLines) {
-            if (!inBody && !seenAnyContent && line.trim() === '') {
+            if (!inBody && !seenAnyContent && line.trim() === "") {
                 // Leading blank — skip; don't add to either bucket. Preserves
                 // exact round-trip for files that start with blank lines.
                 continue;
             }
-            if (!inBody && line.startsWith('#')) {
+            if (!inBody && line.startsWith("#")) {
                 seenAnyContent = true;
                 headerLines.push(line);
             }
-            else if (!inBody && line.trim() === '' && headerLines.length > 0) {
+            else if (!inBody && line.trim() === "" && headerLines.length > 0) {
                 // First blank after the header — flip to body and capture this
                 // blank as the header/body separator.
                 inBody = true;
@@ -96,9 +96,9 @@ export function splitYaml(text) {
                 bodyLines.push(line);
             }
         }
-        return { topSection: '', headerLines, bodyLines };
+        return { topSection: "", headerLines, bodyLines };
     }
-    const topSection = allLines.slice(0, separatorIdx).join('\n');
+    const topSection = allLines.slice(0, separatorIdx).join("\n");
     const afterSep = allLines.slice(separatorIdx + 1);
     // Header = leading `#` comment block (allowing blank lines within); body
     // = everything from the first non-comment, non-blank line onward.
@@ -106,7 +106,7 @@ export function splitYaml(text) {
     const bodyLines = [];
     let stillHeader = true;
     for (const line of afterSep) {
-        if (stillHeader && (line.startsWith('#') || line.trim() === '')) {
+        if (stillHeader && (line.startsWith("#") || line.trim() === "")) {
             headerLines.push(line);
         }
         else {
@@ -123,13 +123,13 @@ export function joinYaml(parts) {
     const out = [];
     if (parts.topSection) {
         out.push(parts.topSection);
-        out.push('---');
+        out.push("---");
     }
     for (const h of parts.headerLines)
         out.push(h);
     for (const b of parts.bodyLines)
         out.push(b);
-    return out.join('\n');
+    return out.join("\n");
 }
 /**
  * Load a ReusableAction from disk by id, under the given project root.
@@ -140,7 +140,7 @@ export function loadAction(projectRoot, actionId) {
     const filePath = actionPathFor(projectRoot, actionId);
     if (!existsSync(filePath))
         return null;
-    const text = readFileSync(filePath, 'utf8');
+    const text = readFileSync(filePath, "utf8");
     const metadata = parseM7Header(text, actionId);
     if (!metadata)
         return null;
@@ -148,7 +148,7 @@ export function loadAction(projectRoot, actionId) {
     const state = loadOrInitSidecar(filePath);
     return {
         metadata,
-        body: bodyLines.join('\n'),
+        body: bodyLines.join("\n"),
         filePath,
         state,
     };
@@ -177,7 +177,7 @@ export class SaveActionPreconditionError extends Error {
             `must invoke actionWasEditedExternally() first and abort on true ` +
             `(or use saveActionWithCAS for atomic detection). GH #113 contract ` +
             `enforcement.`);
-        this.name = 'SaveActionPreconditionError';
+        this.name = "SaveActionPreconditionError";
     }
 }
 export function saveAction(action) {
@@ -194,9 +194,9 @@ export function saveAction(action) {
         throw new SaveActionPreconditionError(action.filePath);
     }
     // Read existing top section so we don't lose the `appId:` line.
-    let topSection = '';
+    let topSection = "";
     if (existsSync(action.filePath)) {
-        const existing = readFileSync(action.filePath, 'utf8');
+        const existing = readFileSync(action.filePath, "utf8");
         topSection = splitYaml(existing).topSection;
     }
     // If the action specifies an appId in metadata but the topSection
@@ -205,8 +205,8 @@ export function saveAction(action) {
     if (!topSection && action.metadata.appId) {
         topSection = `appId: ${action.metadata.appId}`;
     }
-    const headerLines = serializeM7Header(action.metadata).split('\n');
-    const bodyLines = action.body.split('\n');
+    const headerLines = serializeM7Header(action.metadata).split("\n");
+    const bodyLines = action.body.split("\n");
     const yamlText = joinYaml({ topSection, headerLines, bodyLines });
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter owns
     // `lastSeenMtimeMs` correctness — even on partial failure, the
@@ -292,7 +292,7 @@ export function saveActionWithCAS(action) {
     // against the in-memory snapshot.
     if (existsSync(sidecarPath)) {
         try {
-            const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+            const onDisk = JSON.parse(readFileSync(sidecarPath, "utf8"));
             const diskMtimeMs = onDisk.lastSeenMtimeMs ?? 0;
             const expectedMtimeMs = action.state.lastSeenMtimeMs;
             // CAS skip on first save (action loaded with a placeholder zero
@@ -300,7 +300,7 @@ export function saveActionWithCAS(action) {
             // existing sidecar). In that case there's nothing to conflict
             // against — proceed to write.
             if (expectedMtimeMs > 0 && diskMtimeMs > expectedMtimeMs) {
-                return { ok: false, conflict: 'EXTERNAL_WRITE', diskMtimeMs, expectedMtimeMs };
+                return { ok: false, conflict: "EXTERNAL_WRITE", diskMtimeMs, expectedMtimeMs };
             }
         }
         catch {

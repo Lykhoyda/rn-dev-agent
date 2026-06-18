@@ -1,18 +1,18 @@
-import { mkdirSync } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import type { CDPClient } from '../cdp-client.js';
-import { runNative, getActiveSession } from '../agent-device-wrapper.js';
-import { failResult, okResult } from '../utils.js';
-import type { ToolResult } from '../utils.js';
-import { resizeWithSips, type ResizeResult, type ResizeOpts } from './device-screenshot-resize.js';
-import { tryRawScreenshot } from './device-screenshot-raw.js';
-import { arbiter } from '../lifecycle/device-arbiter.js';
-import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
-import { pathHasTraversal } from '../domain/path-safety.js';
-import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
+import { mkdirSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import type { CDPClient } from "../cdp-client.js";
+import { runNative, getActiveSession } from "../agent-device-wrapper.js";
+import { failResult, okResult } from "../utils.js";
+import type { ToolResult } from "../utils.js";
+import { resizeWithSips, type ResizeResult, type ResizeOpts } from "./device-screenshot-resize.js";
+import { tryRawScreenshot } from "./device-screenshot-raw.js";
+import { arbiter } from "../lifecycle/device-arbiter.js";
+import { foreignFlowGate } from "../lifecycle/foreign-flow-gate.js";
+import { pathHasTraversal } from "../domain/path-safety.js";
+import { parseAdbDevicesSerials } from "../runners/rn-android-runner-client.js";
 
 // ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
 type RunAgentDeviceFn = typeof runNative;
@@ -47,19 +47,23 @@ export function _resetDeviceListExecForTest(): void {
  * iOS simulators. Returns [] on any parse error so one platform's absence
  * never breaks the other.
  */
-export function parseSimctlDevicesAll(jsonText: string): Array<{ platform: 'ios'; id: string; name: string; state: string }> {
+export function parseSimctlDevicesAll(
+  jsonText: string,
+): Array<{ platform: "ios"; id: string; name: string; state: string }> {
   try {
-    const parsed = JSON.parse(jsonText) as { devices?: Record<string, Array<{ udid: string; name: string; state: string }>> };
+    const parsed = JSON.parse(jsonText) as {
+      devices?: Record<string, Array<{ udid: string; name: string; state: string }>>;
+    };
     const runtimes = parsed?.devices;
-    if (!runtimes || typeof runtimes !== 'object') return [];
-    const result: Array<{ platform: 'ios'; id: string; name: string; state: string }> = [];
+    if (!runtimes || typeof runtimes !== "object") return [];
+    const result: Array<{ platform: "ios"; id: string; name: string; state: string }> = [];
     for (const devices of Object.values(runtimes)) {
       if (!Array.isArray(devices)) continue;
       for (const d of devices) {
         // Guard udid/name: beta Xcode runtimes occasionally emit a partial
         // Booted entry; an undefined id would poison the UDID lock path.
-        if (d.state === 'Booted' && d.udid && d.name) {
-          result.push({ platform: 'ios', id: d.udid, name: d.name, state: d.state });
+        if (d.state === "Booted" && d.udid && d.name) {
+          result.push({ platform: "ios", id: d.udid, name: d.name, state: d.state });
         }
       }
     }
@@ -72,19 +76,19 @@ export function parseSimctlDevicesAll(jsonText: string): Array<{ platform: 'ios'
 export function createDeviceListHandler(): (args: Record<string, never>) => Promise<ToolResult> {
   return async () => {
     const [iosDevices, androidSerials] = await Promise.all([
-      execFn('xcrun', ['simctl', 'list', 'devices', '--json'])
+      execFn("xcrun", ["simctl", "list", "devices", "--json"])
         .then(({ stdout }) => parseSimctlDevicesAll(stdout))
         .catch(() => []),
-      execFn('adb', ['devices'])
+      execFn("adb", ["devices"])
         .then(({ stdout }) => parseAdbDevicesSerials(stdout))
         .catch(() => []),
     ]);
 
     const androidDevices = androidSerials.map((serial) => ({
-      platform: 'android' as const,
+      platform: "android" as const,
       id: serial,
       name: serial,
-      state: 'device',
+      state: "device",
     }));
 
     return okResult({ devices: [...iosDevices, ...androidDevices] });
@@ -117,14 +121,14 @@ export function deriveScreenshotPath(
   // location. Expand a leading `~/` here so every consumer (mkdir,
   // advisories, all capture tiers) sees the same real path; refuse the
   // unexpandable forms (`~user/...`, bare `~`) instead of mislanding.
-  if (args.path?.startsWith('~')) {
-    if (args.path.startsWith('~/')) return join(homedir(), args.path.slice(2));
+  if (args.path?.startsWith("~")) {
+    if (args.path.startsWith("~/")) return join(homedir(), args.path.slice(2));
     throw new TildeScreenshotPathError(
       `Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`,
     );
   }
   if (args.path) return args.path;
-  const ext = args.format === 'jpeg' ? 'jpg' : args.format === 'png' ? 'png' : 'jpg';
+  const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   // Add a short random suffix so two parallel calls in the same ms can't
   // clobber each other's output. deepsec MEDIUM: predictable /tmp files
   // allow cross-run races. `rand` is injectable for tests.
@@ -153,14 +157,14 @@ export function ensureScreenshotDir(path: string): { ok: true } | { ok: false; e
 class PathTraversalScreenshotError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'PathTraversalScreenshotError';
+    this.name = "PathTraversalScreenshotError";
   }
 }
 
 class TildeScreenshotPathError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'TildeScreenshotPathError';
+    this.name = "TildeScreenshotPathError";
   }
 }
 
@@ -177,7 +181,7 @@ export function buildScreenshotArgs(
   now: () => number = Date.now,
   rand: () => number = Math.random,
 ): string[] {
-  return ['screenshot', '--out', deriveScreenshotPath(args, now, rand)];
+  return ["screenshot", "--out", deriveScreenshotPath(args, now, rand)];
 }
 
 /**
@@ -189,19 +193,28 @@ export function buildScreenshotArgs(
  */
 export function resolveScreenshotPath(result: ToolResult, fallback: string): string {
   try {
-    const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: { path?: unknown } };
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: { path?: unknown };
+    };
     const candidate = envelope?.data?.path;
-    if (typeof candidate === 'string' && candidate.startsWith('/')) {
+    if (typeof candidate === "string" && candidate.startsWith("/")) {
       return candidate;
     }
-  } catch { /* malformed envelope — use fallback */ }
+  } catch {
+    /* malformed envelope — use fallback */
+  }
   return fallback;
 }
 
 export function wrapResultWithResize(result: ToolResult, resize: ResizeResult): ToolResult {
   if (result.isError) return result;
   try {
-    const envelope = JSON.parse(result.content[0].text) as { ok?: boolean; data?: { path?: unknown } & Record<string, unknown>; meta?: Record<string, unknown> };
+    const envelope = JSON.parse(result.content[0].text) as {
+      ok?: boolean;
+      data?: { path?: unknown } & Record<string, unknown>;
+      meta?: Record<string, unknown>;
+    };
     const resizeMeta: Record<string, unknown> = { resized: resize.resized };
     if (resize.resized) {
       if (resize.originalDims) resizeMeta.fromDims = resize.originalDims;
@@ -218,7 +231,7 @@ export function wrapResultWithResize(result: ToolResult, resize: ResizeResult): 
     if (envelope.data && resize.resized) {
       envelope.data.path = resize.path;
     }
-    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(envelope) }] };
   } catch {
     return result;
   }
@@ -238,7 +251,7 @@ export function wrapResultWithResize(result: ToolResult, resize: ResizeResult): 
  * caller (and the skill prose that frames the result) can react without
  * the call itself failing.
  */
-export type ScreenshotAdvisoryCode = 'EPHEMERAL_PATH' | 'FULL_RESOLUTION';
+export type ScreenshotAdvisoryCode = "EPHEMERAL_PATH" | "FULL_RESOLUTION";
 
 export interface ScreenshotAdvisory {
   code: ScreenshotAdvisoryCode;
@@ -250,9 +263,9 @@ export function computeScreenshotAdvisories(
   requestedPath: string,
 ): ScreenshotAdvisory[] {
   const out: ScreenshotAdvisory[] = [];
-  if (requestedPath.startsWith('/tmp/') || requestedPath.startsWith('/var/folders/')) {
+  if (requestedPath.startsWith("/tmp/") || requestedPath.startsWith("/var/folders/")) {
     out.push({
-      code: 'EPHEMERAL_PATH',
+      code: "EPHEMERAL_PATH",
       message:
         `Screenshot saved to an ephemeral path (${requestedPath}). The OS may clean it without warning, so it is not safe for PR artifacts or longer-running sessions. ` +
         'Pass path="docs/proof/<feature-slug>/<NN>-<step>.jpg" for deliverables, or path="docs/diag/<YYYY-MM-DD>/<NN>-<symptom>.jpg" for debug captures.',
@@ -260,10 +273,10 @@ export function computeScreenshotAdvisories(
   }
   if (args.maxWidth === 0) {
     out.push({
-      code: 'FULL_RESOLUTION',
+      code: "FULL_RESOLUTION",
       message:
-        'maxWidth=0 disables auto-downscaling — capturing at full native resolution. iPhone 15/17 Pro JPEGs can be 1.5-2.5MB, which is expensive in LLM context. ' +
-        'Default 800px preserves label readability and visual confirmation. Use maxWidth=0 only for visual-diff or design-review captures.',
+        "maxWidth=0 disables auto-downscaling — capturing at full native resolution. iPhone 15/17 Pro JPEGs can be 1.5-2.5MB, which is expensive in LLM context. " +
+        "Default 800px preserves label readability and visual confirmation. Use maxWidth=0 only for visual-diff or design-review captures.",
     });
   }
   return out;
@@ -281,7 +294,7 @@ export function wrapResultWithAdvisories(
       meta?: Record<string, unknown>;
     };
     envelope.meta = { ...envelope.meta, advisories };
-    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(envelope) }] };
   } catch {
     return result;
   }
@@ -290,7 +303,7 @@ export function wrapResultWithAdvisories(
 export interface ScreenshotArgs {
   path?: string;
   format?: string;
-  platform?: 'ios' | 'android' | null;
+  platform?: "ios" | "android" | null;
   /**
    * GH #136 PR-A internal signal: did the caller pass `platform` explicitly,
    * or was it inferred from the connected CDP target? Only explicit calls
@@ -309,9 +322,12 @@ export interface ScreenshotArgs {
  *   unleased and crash the flow, A3).
  * - no flow → 'runner' (rn-fast-runner primary; its own simctl fallback fires on error).
  */
-export function chooseScreenshotPath(input: { flowActive: boolean; platform: 'ios' | 'android' | null }): 'simctl' | 'runner' | 'fail' {
-  if (input.flowActive) return input.platform ? 'simctl' : 'fail';
-  return 'runner';
+export function chooseScreenshotPath(input: {
+  flowActive: boolean;
+  platform: "ios" | "android" | null;
+}): "simctl" | "runner" | "fail" {
+  if (input.flowActive) return input.platform ? "simctl" : "fail";
+  return "runner";
 }
 
 /**
@@ -323,9 +339,7 @@ export function chooseScreenshotPath(input: { flowActive: boolean; platform: 'io
  * previously applied only to direct `device_screenshot` calls; batch and
  * proof flows produced raw native-resolution images.
  */
-export async function captureAndResizeScreenshot(
-  args: ScreenshotArgs,
-): Promise<ToolResult> {
+export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<ToolResult> {
   const requestedPath = deriveScreenshotPath(args);
   // Pin the path explicitly so the post-resize step targets the same file
   // regardless of which dispatch tier (fast-runner / daemon / CLI) responded.
@@ -337,8 +351,8 @@ export async function captureAndResizeScreenshot(
   if (!targetDir.ok) {
     return failResult(
       `device_screenshot: target directory for "${requestedPath}" does not exist and could not be created (${targetDir.error}). The device is not at fault — fix the output path and retry.`,
-      'SCREENSHOT_FAILED',
-      { reason: 'target-dir-unavailable', path: requestedPath },
+      "SCREENSHOT_FAILED",
+      { reason: "target-dir-unavailable", path: requestedPath },
     );
   }
   // GH #136 PR-B: when `platform:` is explicit, hard-fail instead of falling
@@ -349,36 +363,55 @@ export async function captureAndResizeScreenshot(
   // the user-reported regression: an OOM-unstable emulator leaves
   // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmu
   // skips it, the fallback fires, iOS screen is returned.
-  const rawResultOk = (path: string, platform: 'ios' | 'android'): ToolResult => ({
-    content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: { path, via: platform === 'android' ? 'adb' : 'simctl' } }) }],
+  const rawResultOk = (path: string, platform: "ios" | "android"): ToolResult => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          ok: true,
+          data: { path, via: platform === "android" ? "adb" : "simctl" },
+        }),
+      },
+    ],
   });
-  const rawResultFail = (platform: 'ios' | 'android', reason: string): ToolResult => {
-    const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
-    const hint = reason === 'no-device'
-      ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
-      : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
-    return failResult(`device_screenshot platform=${platform} failed: ${hint}`, 'SCREENSHOT_FAILED', { platform, reason });
+  const rawResultFail = (platform: "ios" | "android", reason: string): ToolResult => {
+    const cli = platform === "ios" ? "xcrun simctl" : "adb";
+    const hint =
+      reason === "no-device"
+        ? `No booted ${platform === "ios" ? "iOS Simulator" : "Android emulator"} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
+        : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
+    return failResult(
+      `device_screenshot platform=${platform} failed: ${hint}`,
+      "SCREENSHOT_FAILED",
+      { platform, reason },
+    );
   };
 
   let result: ToolResult | undefined;
   // GH#186: a foreign flow routes pixels to simctl exactly like a local one.
   // lastActive is never falsely-false here: device_screenshot is an
   // interaction tool, so arbiterWrap ran gate.check() before this handler.
-  const route = chooseScreenshotPath({ flowActive: arbiter.flowActive || foreignFlowGate.lastActive, platform: args.platform ?? null });
+  const route = chooseScreenshotPath({
+    flowActive: arbiter.flowActive || foreignFlowGate.lastActive,
+    platform: args.platform ?? null,
+  });
 
   // A3: a Maestro flow owns the device and no platform could be resolved to simctl on →
   // refuse rather than touch the XCUITest runner (which would crash the flow).
-  if (route === 'fail') {
+  if (route === "fail") {
     return failResult(
-      'device_screenshot: a Maestro flow owns the device and the platform could not be resolved for a simctl fallback. Pass platform=ios|android, or retry after the flow completes.',
-      'SCREENSHOT_FAILED',
+      "device_screenshot: a Maestro flow owns the device and the platform could not be resolved for a simctl fallback. Pass platform=ios|android, or retry after the flow completes.",
+      "SCREENSHOT_FAILED",
       { flowActive: true },
     );
   }
 
   // simctl path: a flow owns the device (raw-ONLY — never fall through to the runner, A3),
   // OR the existing GH#136 explicit-platform disambiguation (no flow). Both hard-fail on error.
-  if ((route === 'simctl' || args.platformExplicit) && (args.platform === 'ios' || args.platform === 'android')) {
+  if (
+    (route === "simctl" || args.platformExplicit) &&
+    (args.platform === "ios" || args.platform === "android")
+  ) {
     const raw = await tryRawScreenshot(args.platform, requestedPath);
     if (raw.ok) result = rawResultOk(raw.path, args.platform);
     else return rawResultFail(args.platform, raw.reason);
@@ -389,11 +422,13 @@ export async function captureAndResizeScreenshot(
     // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
     // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
     try {
-      result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+      result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), {
+        platform: args.platform ?? null,
+      });
     } catch (err) {
-      result = failResult(err instanceof Error ? err.message : String(err), 'SCREENSHOT_FAILED');
+      result = failResult(err instanceof Error ? err.message : String(err), "SCREENSHOT_FAILED");
     }
-    if (result.isError && (args.platform === 'ios' || args.platform === 'android')) {
+    if (result.isError && (args.platform === "ios" || args.platform === "android")) {
       const raw = await tryRawScreenshot(args.platform, requestedPath);
       if (raw.ok) result = rawResultOk(raw.path, args.platform);
     }
@@ -426,12 +461,12 @@ export function createDeviceScreenshotHandler(
   getClient?: () => CDPClient,
 ): (args: ScreenshotArgs) => Promise<ToolResult> {
   return async (args) => {
-    const platformExplicit = args.platform === 'ios' || args.platform === 'android';
-    const platform: 'ios' | 'android' | null =
-      args.platform
-      ?? (getClient?.()?.connectedTarget?.platform as 'ios' | 'android' | undefined)
-      ?? (getActiveSession()?.platform as 'ios' | 'android' | undefined)  // A3: so a flow-active capture has a platform
-      ?? null;
+    const platformExplicit = args.platform === "ios" || args.platform === "android";
+    const platform: "ios" | "android" | null =
+      args.platform ??
+      (getClient?.()?.connectedTarget?.platform as "ios" | "android" | undefined) ??
+      (getActiveSession()?.platform as "ios" | "android" | undefined) ?? // A3: so a flow-active capture has a platform
+      null;
     return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
   };
 }

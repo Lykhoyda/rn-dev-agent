@@ -1,29 +1,35 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { shouldReuseAndroidRunner } from '../../dist/runners/rn-android-runner-client.js';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { shouldReuseAndroidRunner } from "../../dist/runners/rn-android-runner-client.js";
 
 // Audit H4: parity with iOS shouldReuseRunner. A live Android runner bound to
 // emulator-A must NOT be reused to drive emulator-B (its adb forward + port
 // still target A — every device_* would silently hit the wrong emulator).
 
-const stateFor = (deviceId) => ({ hostPort: 22089, devicePort: 22089, pid: 4242, deviceId, startedAt: 'now' });
-
-test('H4: same emulator → reuse', () => {
-  assert.equal(shouldReuseAndroidRunner(stateFor('emulator-5554'), 'emulator-5554'), true);
+const stateFor = (deviceId) => ({
+  hostPort: 22089,
+  devicePort: 22089,
+  pid: 4242,
+  deviceId,
+  startedAt: "now",
 });
 
-test('H4: different emulator → do NOT reuse (the wrong-device bug)', () => {
-  assert.equal(shouldReuseAndroidRunner(stateFor('emulator-5554'), 'emulator-5556'), false);
+test("H4: same emulator → reuse", () => {
+  assert.equal(shouldReuseAndroidRunner(stateFor("emulator-5554"), "emulator-5554"), true);
 });
 
-test('H4: no live runner → cannot reuse', () => {
-  assert.equal(shouldReuseAndroidRunner(null, 'emulator-5554'), false);
+test("H4: different emulator → do NOT reuse (the wrong-device bug)", () => {
+  assert.equal(shouldReuseAndroidRunner(stateFor("emulator-5554"), "emulator-5556"), false);
 });
 
-test('H4: no target requested (single-device flow) → any live runner is acceptable', () => {
-  assert.equal(shouldReuseAndroidRunner(stateFor('emulator-5554'), undefined), true);
+test("H4: no live runner → cannot reuse", () => {
+  assert.equal(shouldReuseAndroidRunner(null, "emulator-5554"), false);
 });
 
-test('H4: runner with no recorded device + a specific target requested → do not reuse', () => {
-  assert.equal(shouldReuseAndroidRunner(stateFor(undefined), 'emulator-5556'), false);
+test("H4: no target requested (single-device flow) → any live runner is acceptable", () => {
+  assert.equal(shouldReuseAndroidRunner(stateFor("emulator-5554"), undefined), true);
+});
+
+test("H4: runner with no recorded device + a specific target requested → do not reuse", () => {
+  assert.equal(shouldReuseAndroidRunner(stateFor(undefined), "emulator-5556"), false);
 });

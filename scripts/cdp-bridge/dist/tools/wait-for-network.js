@@ -1,5 +1,5 @@
-import { okResult, withConnection } from '../utils.js';
-import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
+import { okResult, withConnection } from "../utils.js";
+import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const CANDIDATES_CAP = 10;
@@ -65,7 +65,12 @@ export function createWaitForNetworkHandler(getClient) {
         const existing = client.networkBufferManager.filter(scope, predicate);
         const found = existing.find(isComplete);
         if (found) {
-            return okResult({ matched: true, mutation: found, network_log_since: existing, device: scope });
+            return okResult({
+                matched: true,
+                mutation: found,
+                network_log_since: existing,
+                device: scope,
+            });
         }
         // Phase 2: poll the buffer until a completed match arrives or deadline.
         // Buffer entries are mutated in-place by Network.responseReceived
@@ -97,7 +102,12 @@ export function createWaitForNetworkHandler(getClient) {
             const matches = client.networkBufferManager.filter(scope, predicate);
             const hit = matches.find(isComplete);
             if (hit) {
-                return okResult({ matched: true, mutation: hit, network_log_since: matches, device: scope });
+                return okResult({
+                    matched: true,
+                    mutation: hit,
+                    network_log_since: matches,
+                    device: scope,
+                });
             }
         }
         // Timeout: surface up to CANDIDATES_CAP matched entries (completed or

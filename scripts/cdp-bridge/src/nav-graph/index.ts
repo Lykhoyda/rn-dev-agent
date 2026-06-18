@@ -21,9 +21,9 @@ export type {
   PlaybookEntry,
   SelfHealResult,
   GoResult,
-} from './types.js';
+} from "./types.js";
 
-export type { MergeResult } from './storage.js';
+export type { MergeResult } from "./storage.js";
 
 export {
   findProjectRoot,
@@ -36,14 +36,14 @@ export {
   isMethodCooledDown,
   getStrikeStatus,
   hydrateStrikesFromGraph,
-} from './storage.js';
+} from "./storage.js";
 
 export {
   findRouteInGraph,
   listAllRoutes,
   getNavigatorSubtree,
   buildNavigationPlan,
-} from './query.js';
+} from "./query.js";
 
 export {
   checkStaleness,
@@ -52,4 +52,4 @@ export {
   getPlaybookForContext,
   buildSelfHealAdvice,
   stampGraphWithCommit,
-} from './self-heal.js';
+} from "./self-heal.js";

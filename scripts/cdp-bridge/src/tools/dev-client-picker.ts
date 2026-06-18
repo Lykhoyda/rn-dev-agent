@@ -1,9 +1,13 @@
-import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
-import { detectPlatform } from './platform-utils.js';
-import { okResult, failResult, warnResult } from '../utils.js';
-import type { ToolResult } from '../utils.js';
-import { fetchFindCandidates, pressCandidate } from './device-interact.js';
-import type { FindCandidate } from './device-interact.js';
+import {
+  runNative as _runAgentDeviceImpl,
+  hasActiveSession,
+  getActiveSession,
+} from "../agent-device-wrapper.js";
+import { detectPlatform } from "./platform-utils.js";
+import { okResult, failResult, warnResult } from "../utils.js";
+import type { ToolResult } from "../utils.js";
+import { fetchFindCandidates, pressCandidate } from "./device-interact.js";
+import type { FindCandidate } from "./device-interact.js";
 
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
@@ -62,10 +66,7 @@ export function _resetHasSessionForTest(): void {
  *   - null if no active device session (silent skip)
  */
 
-const PICKER_INDICATORS = [
-  'Development servers',
-  'DEVELOPMENT SERVERS',
-];
+const PICKER_INDICATORS = ["Development servers", "DEVELOPMENT SERVERS"];
 
 export interface PickerResult {
   dismissed: boolean;
@@ -76,7 +77,7 @@ export interface PickerOutcome {
   dismissed: boolean;
   reason: string;
   skipped?: boolean;
-  platform?: 'ios' | 'android' | null;
+  platform?: "ios" | "android" | null;
 }
 
 // GH #136: structural matcher for dev-client picker rows. The picker shows
@@ -101,7 +102,7 @@ function looksLikeNetworkHost(host: string): boolean {
 }
 
 export function parsePortPatternEntry(text: string | null | undefined): string | null {
-  if (typeof text !== 'string' || text.length === 0) return null;
+  if (typeof text !== "string" || text.length === 0) return null;
   for (const match of text.matchAll(PORT_PATTERN)) {
     const host = match[1];
     const portNum = Number.parseInt(match[2], 10);
@@ -121,10 +122,10 @@ export function parsePortPatternEntry(text: string | null | undefined): string |
 // vs `Enter URL Manually`). HEADER_PATTERNS already use case-insensitive
 // regex; this brings the footer check in line with that convention.
 const FOOTER_ROWS = new Set([
-  'enter url manually',
-  'fetch development servers',
-  'development servers',
-  'connect to a development build',
+  "enter url manually",
+  "fetch development servers",
+  "development servers",
+  "connect to a development build",
 ]);
 
 const HEADER_PATTERNS = [/development servers/i];
@@ -145,14 +146,17 @@ const HEADER_PATTERNS = [/development servers/i];
  * null when the snapshot doesn't look like a dev-client picker at all.
  */
 export function parseFirstServerEntry(snapshot: string | null | undefined): string | null {
-  if (typeof snapshot !== 'string' || snapshot.length === 0) return null;
+  if (typeof snapshot !== "string" || snapshot.length === 0) return null;
 
-  const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
-  const literalIps = new Set(['localhost', '127.0.0.1', '10.0.2.2']);
+  const lines = snapshot
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const literalIps = new Set(["localhost", "127.0.0.1", "10.0.2.2"]);
   for (const line of lines) {
     if (literalIps.has(line)) return line;
-    if (line.includes(':')) {
-      const head = line.split(':', 1)[0];
+    if (line.includes(":")) {
+      const head = line.split(":", 1)[0];
       if (literalIps.has(head)) return line;
     }
   }
@@ -184,7 +188,7 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
     }
   }
 
-  return { dismissed: false, reason: 'Dev Client picker not detected' };
+  return { dismissed: false, reason: "Dev Client picker not detected" };
 }
 
 /**
@@ -195,26 +199,30 @@ export async function handleDevClientPicker(): Promise<PickerResult | null> {
  * device session, so the MCP tool can surface a NO_SESSION error.
  */
 export async function clearDevClientPickerIfPresent(
-  platform?: 'ios' | 'android',
+  platform?: "ios" | "android",
 ): Promise<PickerOutcome | null> {
   // SessionState.platform is typed `string | undefined`, so narrow it to the
   // valid platforms before it can short-circuit the detectPlatform() fallback.
   const sessionPlatform = getActiveSession()?.platform;
-  const resolved = platform ?? (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ?? (await detectPlatform());
-  if (resolved === 'ios') {
+  const resolved =
+    platform ??
+    (sessionPlatform === "ios" || sessionPlatform === "android" ? sessionPlatform : undefined) ??
+    (await detectPlatform());
+  if (resolved === "ios") {
     return {
       dismissed: false,
       skipped: true,
-      platform: 'ios',
-      reason: 'iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.',
+      platform: "ios",
+      reason:
+        "iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.",
     };
   }
-  if (resolved !== 'android') {
-    return { dismissed: false, platform: null, reason: 'No iOS/Android device detected.' };
+  if (resolved !== "android") {
+    return { dismissed: false, platform: null, reason: "No iOS/Android device detected." };
   }
   const res = await handleDevClientPicker();
   if (res === null) return null;
-  return { ...res, platform: 'android' };
+  return { ...res, platform: "android" };
 }
 
 /**
@@ -232,17 +240,20 @@ export async function dismissPicker(): Promise<PickerResult> {
   // before tapOn could fire.
   const stillShowing = await isDevClientPickerShowing();
   if (!stillShowing) {
-    return { dismissed: true, reason: 'Dev Client picker auto-advanced before tap' };
+    return { dismissed: true, reason: "Dev Client picker auto-advanced before tap" };
   }
 
-  const snapshot = await runAgentDeviceFn(['snapshot', '-i']);
-  const snapshotText = snapshot.isError ? '' : (snapshot.content[0]?.text ?? '');
+  const snapshot = await runAgentDeviceFn(["snapshot", "-i"]);
+  const snapshotText = snapshot.isError ? "" : (snapshot.content[0]?.text ?? "");
   const target = parseFirstServerEntry(snapshotText);
 
   if (target) {
     const findResult = await fetchCandidatesFn(target);
     if (findResult.ok && findResult.candidates.length > 0) {
-      const pressResult = await pressCandidateFn(findResult.candidates[0] as FindCandidate, 'click');
+      const pressResult = await pressCandidateFn(
+        findResult.candidates[0] as FindCandidate,
+        "click",
+      );
       if (!pressResult.isError) {
         await waitForBundle();
         return { dismissed: true, reason: `Tapped server entry "${target}"` };
@@ -252,7 +263,8 @@ export async function dismissPicker(): Promise<PickerResult> {
 
   return {
     dismissed: false,
-    reason: 'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
+    reason:
+      "Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.",
   };
 }
 
@@ -273,7 +285,7 @@ export async function waitForBundle(): Promise<void> {
     const elapsed = Date.now() - start;
     const interval = elapsed < 1_000 ? 100 : 500;
     await new Promise((r) => setTimeout(r, interval));
-    const findResult = await fetchCandidatesFn('Development servers');
+    const findResult = await fetchCandidatesFn("Development servers");
     if (!findResult.ok || findResult.candidates.length === 0) return; // Picker gone — bundle loaded.
   }
 }
@@ -297,9 +309,9 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
   return false;
 }
 
-export function createDismissDevClientPickerHandler(): (
-  args: { platform?: 'ios' | 'android' },
-) => Promise<ToolResult> {
+export function createDismissDevClientPickerHandler(): (args: {
+  platform?: "ios" | "android";
+}) => Promise<ToolResult> {
   return async (args) => {
     const t0 = Date.now();
     const outcome = await clearDevClientPickerIfPresent(args.platform);
@@ -308,7 +320,7 @@ export function createDismissDevClientPickerHandler(): (
     if (outcome === null) {
       return failResult(
         'No device session open. Call device_snapshot action="open" first.',
-        'DEV_CLIENT_PICKER_NO_SESSION',
+        "DEV_CLIENT_PICKER_NO_SESSION",
         meta,
       );
     }
@@ -316,11 +328,17 @@ export function createDismissDevClientPickerHandler(): (
       return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
     }
     if (outcome.dismissed) {
-      return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+      return okResult(
+        { dismissed: true, reason: outcome.reason, platform: outcome.platform },
+        { meta },
+      );
     }
-    if (outcome.reason.toLowerCase().includes('could not find')) {
+    if (outcome.reason.toLowerCase().includes("could not find")) {
       return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
     }
-    return okResult({ dismissed: false, reason: outcome.reason, platform: outcome.platform }, { meta });
+    return okResult(
+      { dismissed: false, reason: outcome.reason, platform: outcome.platform },
+      { meta },
+    );
   };
 }

@@ -1,13 +1,13 @@
-import { okResult, withConnection } from '../utils.js';
-import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from './metro-clear-hint.js';
-import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
+import { okResult, withConnection } from "../utils.js";
+import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from "./metro-clear-hint.js";
+import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
 export function createNetworkLogHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const scope = args.device ?? client.activeDeviceKey;
         // Drain targets the active device; `scope` only filters the read — intentionally decoupled.
         await drainNetworkHookBuffer(client);
         if (args.clear) {
-            client.networkBufferManager.clear(scope === 'all' ? undefined : scope);
+            client.networkBufferManager.clear(scope === "all" ? undefined : scope);
             return okResult({ cleared: true, device: scope });
         }
         const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
@@ -41,11 +41,15 @@ export function createNetworkLogHandler(getClient) {
         // otherwise truncated could never be true on the unfiltered path.
         const totalMatches = hasFilters
             ? matches.length
-            : (scope === 'all' ? client.networkBufferManager.totalSize : client.networkBufferManager.size(scope));
+            : scope === "all"
+                ? client.networkBufferManager.totalSize
+                : client.networkBufferManager.size(scope);
         const sliced = matches.length > limit ? matches.slice(-limit) : matches;
         const truncated = totalMatches > sliced.length;
-        const lastEventAt = scope === 'all' ? null : client.networkBufferManager.getLastPush(scope);
-        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now }, sliced.length === 0) ? METRO_CLEAR_HINT_TEXT : undefined;
+        const lastEventAt = scope === "all" ? null : client.networkBufferManager.getLastPush(scope);
+        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now }, sliced.length === 0)
+            ? METRO_CLEAR_HINT_TEXT
+            : undefined;
         const resultOpts = hint ? { meta: { hint } } : undefined;
         return okResult({
             mode: client.networkMode,

@@ -1,4 +1,4 @@
-import { RingBuffer, DeviceBufferManager, makeDeviceKey } from '../../dist/ring-buffer.js';
+import { RingBuffer, DeviceBufferManager, makeDeviceKey } from "../../dist/ring-buffer.js";
 
 /**
  * Creates a mock CDPClient that satisfies the interface used by tool handlers
@@ -19,26 +19,64 @@ export function createMockClient(overrides = {}) {
 
   const client = {
     // --- State getters ---
-    get isConnected() { return client._isConnected; },
-    get helpersInjected() { return client._helpersInjected; },
-    get isPaused() { return client._isPaused; },
-    get state() { return client._isConnected ? 'connected' : 'disconnected'; },
-    get metroPort() { return client._metroPort; },
-    get connectedTarget() { return client._connectedTarget; },
-    get networkMode() { return client._networkMode; },
-    get bridgeDetected() { return client._bridgeDetected; },
-    get bridgeVersion() { return client._bridgeVersion; },
-    get logDomainEnabled() { return client._logDomainEnabled; },
-    get profilerAvailable() { return client._profilerAvailable; },
-    get heapProfilerAvailable() { return client._heapProfilerAvailable; },
-    get scripts() { return client._scripts; },
-    get connectionGeneration() { return client._connectionGeneration; },
-    get consoleBuffer() { return consoleBuffer; },
-    get networkBufferManager() { return networkBufferManager; },
-    get activeDeviceKey() { return makeDeviceKey(client._metroPort, client._connectedTarget?.id); },
+    get isConnected() {
+      return client._isConnected;
+    },
+    get helpersInjected() {
+      return client._helpersInjected;
+    },
+    get isPaused() {
+      return client._isPaused;
+    },
+    get state() {
+      return client._isConnected ? "connected" : "disconnected";
+    },
+    get metroPort() {
+      return client._metroPort;
+    },
+    get connectedTarget() {
+      return client._connectedTarget;
+    },
+    get networkMode() {
+      return client._networkMode;
+    },
+    get bridgeDetected() {
+      return client._bridgeDetected;
+    },
+    get bridgeVersion() {
+      return client._bridgeVersion;
+    },
+    get logDomainEnabled() {
+      return client._logDomainEnabled;
+    },
+    get profilerAvailable() {
+      return client._profilerAvailable;
+    },
+    get heapProfilerAvailable() {
+      return client._heapProfilerAvailable;
+    },
+    get scripts() {
+      return client._scripts;
+    },
+    get connectionGeneration() {
+      return client._connectionGeneration;
+    },
+    get consoleBuffer() {
+      return consoleBuffer;
+    },
+    get networkBufferManager() {
+      return networkBufferManager;
+    },
+    get activeDeviceKey() {
+      return makeDeviceKey(client._metroPort, client._connectedTarget?.id);
+    },
     /** M5: mock client defaults to null; tests can override with a stub. */
-    get metroEventsClient() { return client._metroEventsClient; },
-    get logBuffer() { return logBuffer; },
+    get metroEventsClient() {
+      return client._metroEventsClient;
+    },
+    get logBuffer() {
+      return logBuffer;
+    },
     get reconnectState() {
       return { active: false, lastAttempt: null, attemptCount: 0 };
     },
@@ -46,12 +84,22 @@ export function createMockClient(overrides = {}) {
       return client._autoConnectState;
     },
     /** M1b: proxy getters — default "no proxy active", override via _proxyUrl/_proxyMultiplexer. */
-    get proxyUrl() { return client._proxyUrl; },
-    get isProxyActive() { return client._proxyUrl !== null; },
-    get proxyMultiplexer() { return client._proxyMultiplexer; },
+    get proxyUrl() {
+      return client._proxyUrl;
+    },
+    get isProxyActive() {
+      return client._proxyUrl !== null;
+    },
+    get proxyMultiplexer() {
+      return client._proxyMultiplexer;
+    },
     /** M11: connection timestamp + injectable clock. Override _connectedAt / _timeNowFn. */
-    get connectedAt() { return client._connectedAt; },
-    get now() { return client._timeNowFn; },
+    get connectedAt() {
+      return client._connectedAt;
+    },
+    get now() {
+      return client._timeNowFn;
+    },
 
     // --- Mutable state (set in overrides or mutated in tests) ---
     _isConnected: true,
@@ -59,13 +107,13 @@ export function createMockClient(overrides = {}) {
     _isPaused: false,
     _metroPort: 8081,
     _connectedTarget: {
-      id: 'page1',
-      title: 'React Native (Hermes)',
-      vm: 'Hermes',
-      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
-      platform: 'ios',
+      id: "page1",
+      title: "React Native (Hermes)",
+      vm: "Hermes",
+      webSocketDebuggerUrl: "ws://127.0.0.1:8081/debugger/page1",
+      platform: "ios",
     },
-    _networkMode: 'cdp',
+    _networkMode: "cdp",
     _metroEventsClient: null,
     _proxyUrl: null,
     _proxyMultiplexer: null,
@@ -76,7 +124,7 @@ export function createMockClient(overrides = {}) {
     _heapProfilerAvailable: true,
     _scripts: new Map(),
     _connectionGeneration: 1,
-    _autoConnectState: { enabled: true, source: 'default' },
+    _autoConnectState: { enabled: true, source: "default" },
     // M11 defaults: connectedAt=1_000_000 and timeNowFn returning 1_000_000
     // means "just connected, 0ms elapsed" — hint should NOT fire by default.
     // Tests that want the hint to fire override _timeNowFn to a later value.
@@ -96,7 +144,7 @@ export function createMockClient(overrides = {}) {
     async autoConnect(_port, _platform) {
       client._isConnected = true;
       client._helpersInjected = true;
-      return 'connected';
+      return "connected";
     },
 
     async disconnect() {
@@ -115,9 +163,14 @@ export function createMockClient(overrides = {}) {
       // mock multiplexer now exposes a `token` field so open-devtools.ts can
       // build the token-bearing DevTools URL.
       if (client._proxyUrl) return client._proxyUrl;
-      const mockToken = 'mock-test-token-AbCdEf1234567890_dashOk';
+      const mockToken = "mock-test-token-AbCdEf1234567890_dashOk";
       client._proxyUrl = `ws://127.0.0.1:45678/${mockToken}`;
-      client._proxyMultiplexer = { port: 45678, token: mockToken, isRunning: true, consumerCount: 0 };
+      client._proxyMultiplexer = {
+        port: 45678,
+        token: mockToken,
+        isRunning: true,
+        consumerCount: 0,
+      };
       return client._proxyUrl;
     },
 
@@ -136,9 +189,7 @@ export function createMockClient(overrides = {}) {
     },
 
     helperExpr(call) {
-      return client._bridgeDetected
-        ? `__RN_DEV_BRIDGE__.${call}`
-        : `__RN_AGENT.${call}`;
+      return client._bridgeDetected ? `__RN_DEV_BRIDGE__.${call}` : `__RN_AGENT.${call}`;
     },
 
     bridgeWithFallback(call) {

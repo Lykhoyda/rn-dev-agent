@@ -1,7 +1,7 @@
 {
   "name": "rn-dev-agent-docs",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "generate": "node scripts/generate-tool-docs.mjs && node scripts/generate-bp-docs.mjs",
     "dev": "npm run generate && astro dev",
@@ -13,7 +13,9 @@
     "astro": "^6.0.1",
     "sharp": "^0.34.2"
   },
-  "overrides": { "esbuild": "^0.28.1" },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  },
   "engines": {
     "node": ">=22"
   }

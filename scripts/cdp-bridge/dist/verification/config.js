@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { findProjectRoot } from '../nav-graph/storage.js';
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { findProjectRoot } from "../nav-graph/storage.js";
 // GH #91 acceptance criterion #3: per-project override for the mutation-absence
 // detector. Reads `.rn-agent/config.json` once per project root and caches
 // the result for the lifetime of the cdp-bridge process. Defaults are
@@ -57,7 +57,7 @@ function compileShapes(raw) {
         return null;
     const valid = [];
     for (const entry of raw) {
-        if (typeof entry !== 'string' || entry.length === 0)
+        if (typeof entry !== "string" || entry.length === 0)
             continue;
         if (entry.length > MAX_PATTERN_LENGTH)
             continue;
@@ -73,7 +73,7 @@ function compileShapes(raw) {
     if (valid.length === 0)
         return null;
     try {
-        return new RegExp(valid.map((s) => `(?:${s})`).join('|'), 'i');
+        return new RegExp(valid.map((s) => `(?:${s})`).join("|"), "i");
     }
     catch (e) {
         // Gemini multi-review conf 88: a single pattern with named groups or
@@ -91,7 +91,7 @@ function parseMethods(raw) {
         return null;
     const out = new Set();
     for (const entry of raw) {
-        if (typeof entry !== 'string')
+        if (typeof entry !== "string")
             continue;
         const trimmed = entry.trim().toUpperCase();
         if (trimmed.length > 0)
@@ -105,21 +105,21 @@ export function loadVerificationConfig(projectRoot) {
     const cached = cache.get(projectRoot);
     if (cached)
         return cached;
-    const path = join(projectRoot, '.rn-agent', 'config.json');
+    const path = join(projectRoot, ".rn-agent", "config.json");
     if (!existsSync(path)) {
         cache.set(projectRoot, DEFAULTS);
         return DEFAULTS;
     }
     let raw;
     try {
-        raw = JSON.parse(readFileSync(path, 'utf-8'));
+        raw = JSON.parse(readFileSync(path, "utf-8"));
     }
     catch {
         cache.set(projectRoot, DEFAULTS);
         return DEFAULTS;
     }
     const verification = raw?.verification;
-    if (!verification || typeof verification !== 'object') {
+    if (!verification || typeof verification !== "object") {
         cache.set(projectRoot, DEFAULTS);
         return DEFAULTS;
     }

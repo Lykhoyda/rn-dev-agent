@@ -55,9 +55,7 @@
   "mcpServers": {
     "cdp": {
       "command": "node",
-      "args": [
-        "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/supervisor.js"
-      ]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/supervisor.js"]
     }
   }
 }

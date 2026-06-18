@@ -12,11 +12,11 @@
 // during interactive walks and (eventually) embedded in Maestro flows
 // via runScript: shell-out to the future CLI surface.
 
-import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, withConnection, withSession } from '../utils.js';
-import type { ToolResult } from '../utils.js';
-import { runNative } from '../agent-device-wrapper.js';
-import { findRefByTestID, snapshotEnvelopeFailed } from './device-batch.js';
+import type { CDPClient } from "../cdp-client.js";
+import { okResult, failResult, withConnection, withSession } from "../utils.js";
+import type { ToolResult } from "../utils.js";
+import { runNative } from "../agent-device-wrapper.js";
+import { findRefByTestID, snapshotEnvelopeFailed } from "./device-batch.js";
 
 /**
  * Phase 128 (post-review #1): unwrap the {type, state} envelope produced
@@ -29,9 +29,9 @@ import { findRefByTestID, snapshotEnvelopeFailed } from './device-batch.js';
 export function unwrapStoreEnvelope(value: unknown): unknown {
   if (
     value !== null &&
-    typeof value === 'object' &&
-    'type' in (value as Record<string, unknown>) &&
-    'state' in (value as Record<string, unknown>)
+    typeof value === "object" &&
+    "type" in (value as Record<string, unknown>) &&
+    "state" in (value as Record<string, unknown>)
   ) {
     return (value as { state: unknown }).state;
   }
@@ -50,7 +50,7 @@ export function unwrapStoreEnvelope(value: unknown): unknown {
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;
-  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false;
@@ -89,10 +89,12 @@ export function evaluateReduxAssertions(
   assertions: ReduxAssertions,
 ): { matched: true } | { matched: false; failure: AssertionFailure } {
   // exists is the implicit default if nothing else is asserted.
-  const ops = Object.keys(assertions).filter((k) => assertions[k as keyof ReduxAssertions] !== undefined);
+  const ops = Object.keys(assertions).filter(
+    (k) => assertions[k as keyof ReduxAssertions] !== undefined,
+  );
   if (ops.length === 0) {
     if (actual === undefined || actual === null) {
-      return { matched: false, failure: { op: 'exists', expected: true, actual } };
+      return { matched: false, failure: { op: "exists", expected: true, actual } };
     }
     return { matched: true };
   }
@@ -100,32 +102,38 @@ export function evaluateReduxAssertions(
     const expected = assertions[op];
     let pass = false;
     switch (op) {
-      case 'equals':
+      case "equals":
         pass = deepEqual(actual, expected);
         break;
-      case 'exists':
-        pass = expected ? actual !== undefined && actual !== null : actual === undefined || actual === null;
+      case "exists":
+        pass = expected
+          ? actual !== undefined && actual !== null
+          : actual === undefined || actual === null;
         break;
-      case 'notExists':
-        pass = expected ? actual === undefined || actual === null : actual !== undefined && actual !== null;
+      case "notExists":
+        pass = expected
+          ? actual === undefined || actual === null
+          : actual !== undefined && actual !== null;
         break;
-      case 'length':
-        pass = (Array.isArray(actual) || typeof actual === 'string') && (actual as { length: number }).length === expected;
+      case "length":
+        pass =
+          (Array.isArray(actual) || typeof actual === "string") &&
+          (actual as { length: number }).length === expected;
         break;
-      case 'contains':
+      case "contains":
         pass = Array.isArray(actual) && actual.some((x) => deepEqual(x, expected));
         break;
-      case 'gt':
-        pass = typeof actual === 'number' && actual > (expected as number);
+      case "gt":
+        pass = typeof actual === "number" && actual > (expected as number);
         break;
-      case 'lt':
-        pass = typeof actual === 'number' && actual < (expected as number);
+      case "lt":
+        pass = typeof actual === "number" && actual < (expected as number);
         break;
-      case 'gte':
-        pass = typeof actual === 'number' && actual >= (expected as number);
+      case "gte":
+        pass = typeof actual === "number" && actual >= (expected as number);
         break;
-      case 'lte':
-        pass = typeof actual === 'number' && actual <= (expected as number);
+      case "lte":
+        pass = typeof actual === "number" && actual <= (expected as number);
         break;
     }
     if (!pass) return { matched: false, failure: { op, expected, actual } };
@@ -140,7 +148,7 @@ export interface RouteAssertions {
 }
 
 export interface RouteFailure {
-  field: 'name' | 'params' | 'inStack';
+  field: "name" | "params" | "inStack";
   expected: unknown;
   actual: unknown;
 }
@@ -162,13 +170,13 @@ export function extractStack(navState: {
   const out = new Set<string>();
   // Simplified shape: stack is array of strings.
   if (Array.isArray(navState.stack)) {
-    for (const n of navState.stack) if (typeof n === 'string') out.add(n);
+    for (const n of navState.stack) if (typeof n === "string") out.add(n);
   }
   // Raw shape: routes is array of {name}.
   if (Array.isArray(navState.routes)) {
     for (const r of navState.routes) {
       const name = (r as { name?: unknown })?.name;
-      if (typeof name === 'string') out.add(name);
+      if (typeof name === "string") out.add(name);
     }
   }
   // Walk nested nav stacks if present (Expo Router nests).
@@ -179,23 +187,38 @@ export function extractStack(navState: {
 }
 
 export function evaluateRouteAssertions(
-  navState: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }>; stack?: unknown; nested?: unknown },
+  navState: {
+    routeName?: string;
+    params?: unknown;
+    routes?: Array<{ name?: string }>;
+    stack?: unknown;
+    nested?: unknown;
+  },
   assertions: RouteAssertions,
 ): { matched: true } | { matched: false; failure: RouteFailure } {
   if (assertions.name !== undefined) {
     if (navState.routeName !== assertions.name) {
-      return { matched: false, failure: { field: 'name', expected: assertions.name, actual: navState.routeName } };
+      return {
+        matched: false,
+        failure: { field: "name", expected: assertions.name, actual: navState.routeName },
+      };
     }
   }
   if (assertions.paramsEquals !== undefined) {
     if (!deepEqual(navState.params, assertions.paramsEquals)) {
-      return { matched: false, failure: { field: 'params', expected: assertions.paramsEquals, actual: navState.params } };
+      return {
+        matched: false,
+        failure: { field: "params", expected: assertions.paramsEquals, actual: navState.params },
+      };
     }
   }
   if (assertions.inStack !== undefined) {
     const stack = extractStack(navState as Parameters<typeof extractStack>[0]);
     if (!stack.includes(assertions.inStack)) {
-      return { matched: false, failure: { field: 'inStack', expected: assertions.inStack, actual: stack } };
+      return {
+        matched: false,
+        failure: { field: "inStack", expected: assertions.inStack, actual: stack },
+      };
     }
   }
   return { matched: true };
@@ -240,7 +263,7 @@ export interface ExpectReduxArgs {
 
 export function createExpectReduxHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: ExpectReduxArgs, client) => {
-    if (!args.path || typeof args.path !== 'string') {
+    if (!args.path || typeof args.path !== "string") {
       return failResult('expect_redux requires a path (e.g. "cart.items")');
     }
     const assertions: ReduxAssertions = {
@@ -255,45 +278,74 @@ export function createExpectReduxHandler(getClient: () => CDPClient) {
       lte: args.lte,
     };
     const pathArg = JSON.stringify(args.path);
-    const typeArg = args.storeType ? JSON.stringify(args.storeType) : 'undefined';
+    const typeArg = args.storeType ? JSON.stringify(args.storeType) : "undefined";
     const expression = client.bridgeWithFallback(`getStoreState(${pathArg}, ${typeArg})`);
 
     type Probe =
-      | { kind: 'matched'; actual: unknown }
-      | { kind: 'mismatched'; actual: unknown; eval: ReturnType<typeof evaluateReduxAssertions> }
-      | { kind: 'eval-failed'; reason: string }
-      | { kind: 'path-not-found'; agentError: string; availableKeys?: unknown; hints?: string[] }
-      | { kind: 'truncated'; previewSize?: unknown };
+      | { kind: "matched"; actual: unknown }
+      | { kind: "mismatched"; actual: unknown; eval: ReturnType<typeof evaluateReduxAssertions> }
+      | { kind: "eval-failed"; reason: string }
+      | { kind: "path-not-found"; agentError: string; availableKeys?: unknown; hints?: string[] }
+      | { kind: "truncated"; previewSize?: unknown };
 
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
       const result = await client.evaluate(expression);
-      if (result.error || typeof result.value !== 'string') {
-        return { matched: false, result: { kind: 'eval-failed', reason: result.error ?? 'No string response from getStoreState' } };
+      if (result.error || typeof result.value !== "string") {
+        return {
+          matched: false,
+          result: {
+            kind: "eval-failed",
+            reason: result.error ?? "No string response from getStoreState",
+          },
+        };
       }
       let raw: unknown = undefined;
       try {
         raw = JSON.parse(result.value);
       } catch {
-        return { matched: false, result: { kind: 'eval-failed', reason: 'getStoreState returned non-JSON' } };
+        return {
+          matched: false,
+          result: { kind: "eval-failed", reason: "getStoreState returned non-JSON" },
+        };
       }
       // Phase 128 (post-review #8): truncation surfaces with the user's
       // original op preserved so the failure shape is accurate.
-      if (raw !== null && typeof raw === 'object' && '__agent_truncated' in (raw as Record<string, unknown>)) {
-        return { matched: false, result: { kind: 'truncated', previewSize: (raw as { originalLength?: unknown }).originalLength } };
-      }
-      // Phase 128 (post-review #7): surface __agent_error from getStoreState
-      // (path not found, no store mounted) as a distinct failure code.
-      if (raw !== null && typeof raw === 'object' && '__agent_error' in (raw as Record<string, unknown>)) {
-        const obj = raw as { __agent_error?: unknown; availableKeys?: unknown; hint?: unknown; hint2?: unknown; hint3?: unknown };
-        const hints: string[] = [];
-        if (typeof obj.hint === 'string') hints.push(obj.hint);
-        if (typeof obj.hint2 === 'string') hints.push(obj.hint2);
-        if (typeof obj.hint3 === 'string') hints.push(obj.hint3);
+      if (
+        raw !== null &&
+        typeof raw === "object" &&
+        "__agent_truncated" in (raw as Record<string, unknown>)
+      ) {
         return {
           matched: false,
           result: {
-            kind: 'path-not-found',
-            agentError: typeof obj.__agent_error === 'string' ? obj.__agent_error : 'unknown error',
+            kind: "truncated",
+            previewSize: (raw as { originalLength?: unknown }).originalLength,
+          },
+        };
+      }
+      // Phase 128 (post-review #7): surface __agent_error from getStoreState
+      // (path not found, no store mounted) as a distinct failure code.
+      if (
+        raw !== null &&
+        typeof raw === "object" &&
+        "__agent_error" in (raw as Record<string, unknown>)
+      ) {
+        const obj = raw as {
+          __agent_error?: unknown;
+          availableKeys?: unknown;
+          hint?: unknown;
+          hint2?: unknown;
+          hint3?: unknown;
+        };
+        const hints: string[] = [];
+        if (typeof obj.hint === "string") hints.push(obj.hint);
+        if (typeof obj.hint2 === "string") hints.push(obj.hint2);
+        if (typeof obj.hint3 === "string") hints.push(obj.hint3);
+        return {
+          matched: false,
+          result: {
+            kind: "path-not-found",
+            agentError: typeof obj.__agent_error === "string" ? obj.__agent_error : "unknown error",
             availableKeys: obj.availableKeys,
             hints: hints.length ? hints : undefined,
           },
@@ -303,39 +355,39 @@ export function createExpectReduxHandler(getClient: () => CDPClient) {
       // getStoreState before asserting against operators.
       const actual = unwrapStoreEnvelope(raw);
       const ev = evaluateReduxAssertions(actual, assertions);
-      if (ev.matched) return { matched: true, result: { kind: 'matched', actual } };
-      return { matched: false, result: { kind: 'mismatched', actual, eval: ev } };
+      if (ev.matched) return { matched: true, result: { kind: "matched", actual } };
+      return { matched: false, result: { kind: "mismatched", actual, eval: ev } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
     const result = polled.result;
 
-    if (result.kind === 'matched') {
+    if (result.kind === "matched") {
       return okResult({ matched: true, path: args.path, actual: result.actual });
     }
-    if (result.kind === 'eval-failed') {
-      return failResult(`expect_redux: store evaluator failed: ${result.reason}`, 'EVAL_FAILED', {
+    if (result.kind === "eval-failed") {
+      return failResult(`expect_redux: store evaluator failed: ${result.reason}`, "EVAL_FAILED", {
         path: args.path,
       });
     }
-    if (result.kind === 'path-not-found') {
+    if (result.kind === "path-not-found") {
       return failResult(
         `expect_redux: path "${args.path}" not found — ${result.agentError}`,
-        'PATH_NOT_FOUND',
+        "PATH_NOT_FOUND",
         {
           path: args.path,
           availableKeys: result.availableKeys,
           hints: result.hints,
-          hint: 'Call cdp_store_state with no path to inspect the full store shape, then narrow.',
+          hint: "Call cdp_store_state with no path to inspect the full store shape, then narrow.",
         },
       );
     }
-    if (result.kind === 'truncated') {
+    if (result.kind === "truncated") {
       // Phase 128 (post-review #8): preserve the user's intended op so
       // the failure shape is meaningful even when the payload was clipped.
       return failResult(
         `expect_redux: store payload at "${args.path}" exceeded the 30KB safe-stringify cap; assertion not evaluated`,
-        'STORE_TRUNCATED',
+        "STORE_TRUNCATED",
         {
           path: args.path,
           requestedAssertions: assertions,
@@ -346,14 +398,14 @@ export function createExpectReduxHandler(getClient: () => CDPClient) {
     }
     // Mismatched (assertion failure proper).
     return failResult(
-      `expect_redux assertion failed at ${args.path}: ${result.eval.matched ? '' : result.eval.failure.op}`,
-      'ASSERTION_FAILED',
+      `expect_redux assertion failed at ${args.path}: ${result.eval.matched ? "" : result.eval.failure.op}`,
+      "ASSERTION_FAILED",
       {
         path: args.path,
         actual: result.actual,
         expected: result.eval.matched ? undefined : result.eval.failure.expected,
         op: result.eval.matched ? undefined : result.eval.failure.op,
-        hint: 'If state is async (post-mutation), pass timeoutMs (e.g. 1000) to retry. If the path is wrong, call cdp_store_state without operators to inspect the shape.',
+        hint: "If state is async (post-mutation), pass timeoutMs (e.g. 1000) to retry. If the path is wrong, call cdp_store_state without operators to inspect the shape.",
       },
     );
   });
@@ -373,19 +425,40 @@ export interface ExpectRouteArgs {
 export function createExpectRouteHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: ExpectRouteArgs, client) => {
     if (args.name === undefined && args.paramsEquals === undefined && args.inStack === undefined) {
-      return failResult('expect_route requires at least one of: name, paramsEquals, inStack');
+      return failResult("expect_route requires at least one of: name, paramsEquals, inStack");
     }
 
-    const probe = async (): Promise<{ matched: boolean; result: { navState: unknown; eval: ReturnType<typeof evaluateRouteAssertions> } }> => {
-      const result = await client.evaluate(client.helperExpr('getNavState()'));
-      if (result.error || typeof result.value !== 'string') {
-        return { matched: false, result: { navState: { error: result.error ?? 'no nav state' }, eval: { matched: false, failure: { field: 'name', expected: args.name, actual: undefined } } } };
+    const probe = async (): Promise<{
+      matched: boolean;
+      result: { navState: unknown; eval: ReturnType<typeof evaluateRouteAssertions> };
+    }> => {
+      const result = await client.evaluate(client.helperExpr("getNavState()"));
+      if (result.error || typeof result.value !== "string") {
+        return {
+          matched: false,
+          result: {
+            navState: { error: result.error ?? "no nav state" },
+            eval: {
+              matched: false,
+              failure: { field: "name", expected: args.name, actual: undefined },
+            },
+          },
+        };
       }
       let parsed: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }> };
       try {
         parsed = JSON.parse(result.value);
       } catch {
-        return { matched: false, result: { navState: { error: 'malformed nav state' }, eval: { matched: false, failure: { field: 'name', expected: args.name, actual: undefined } } } };
+        return {
+          matched: false,
+          result: {
+            navState: { error: "malformed nav state" },
+            eval: {
+              matched: false,
+              failure: { field: "name", expected: args.name, actual: undefined },
+            },
+          },
+        };
       }
       const ev = evaluateRouteAssertions(parsed, args);
       return { matched: ev.matched, result: { navState: parsed, eval: ev } };
@@ -397,17 +470,13 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
     if (ev.matched) {
       return okResult({ matched: true, navState });
     }
-    return failResult(
-      `expect_route assertion failed: ${ev.failure.field}`,
-      'ASSERTION_FAILED',
-      {
-        field: ev.failure.field,
-        actual: ev.failure.actual,
-        expected: ev.failure.expected,
-        navState,
-        hint: 'Call cdp_navigation_state directly to inspect the full route tree. If a navigation animation is in flight, pass timeoutMs (e.g. 1000) to retry.',
-      },
-    );
+    return failResult(`expect_route assertion failed: ${ev.failure.field}`, "ASSERTION_FAILED", {
+      field: ev.failure.field,
+      actual: ev.failure.actual,
+      expected: ev.failure.expected,
+      navState,
+      hint: "Call cdp_navigation_state directly to inspect the full route tree. If a navigation animation is in flight, pass timeoutMs (e.g. 1000) to retry.",
+    });
   });
 }
 
@@ -417,41 +486,41 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
 
 export interface ExpectVisibleByTestIDArgs {
   testID: string;
-  exists?: boolean;       // default true
+  exists?: boolean; // default true
   timeoutMs?: number;
 }
 
 export function createExpectVisibleByTestIDHandler() {
   return withSession(async (args: ExpectVisibleByTestIDArgs): Promise<ToolResult> => {
-    if (!args.testID || typeof args.testID !== 'string') {
-      return failResult('expect_visible_by_testid requires testID');
+    if (!args.testID || typeof args.testID !== "string") {
+      return failResult("expect_visible_by_testid requires testID");
     }
     const expectVisible = args.exists !== false; // default true
 
     type Probe =
-      | { kind: 'snapshot-failed'; envelope: string }
-      | { kind: 'resolved'; ref: string | null };
+      | { kind: "snapshot-failed"; envelope: string }
+      | { kind: "resolved"; ref: string | null };
 
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
-      const result = await runNative(['snapshot', '-i']);
-      const envelope = result.content?.[0]?.text ?? '';
+      const result = await runNative(["snapshot", "-i"]);
+      const envelope = result.content?.[0]?.text ?? "";
       // Phase 128 (post-review #5): peek ok flag BEFORE computing
       // visibility — distinguishes infrastructure failure from "not present"
       // so we can't silent-pass an exists:false assertion when the snapshot
       // call actually failed.
       if (snapshotEnvelopeFailed(envelope)) {
-        return { matched: false, result: { kind: 'snapshot-failed', envelope } };
+        return { matched: false, result: { kind: "snapshot-failed", envelope } };
       }
       const ref = findRefByTestID(envelope, args.testID);
       const visible = ref !== null;
-      return { matched: visible === expectVisible, result: { kind: 'resolved', ref } };
+      return { matched: visible === expectVisible, result: { kind: "resolved", ref } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
-    if (polled.result.kind === 'snapshot-failed') {
+    if (polled.result.kind === "snapshot-failed") {
       return failResult(
         `expect_visible_by_testid: snapshot failed while resolving testID "${args.testID}" — agent-device unreachable, daemon crashed, or snapshot timed out`,
-        'SNAPSHOT_FAILED',
+        "SNAPSHOT_FAILED",
         {
           testID: args.testID,
           envelope: polled.result.envelope.slice(0, 500),
@@ -466,16 +535,16 @@ export function createExpectVisibleByTestIDHandler() {
       return okResult({ matched: true, testID: args.testID, visible, ref: ref ?? null });
     }
     return failResult(
-      `expect_visible_by_testid: testID "${args.testID}" was ${visible ? 'visible' : 'NOT visible'}; expected ${expectVisible ? 'visible' : 'NOT visible'}`,
-      'ASSERTION_FAILED',
+      `expect_visible_by_testid: testID "${args.testID}" was ${visible ? "visible" : "NOT visible"}; expected ${expectVisible ? "visible" : "NOT visible"}`,
+      "ASSERTION_FAILED",
       {
         testID: args.testID,
         actualVisible: visible,
         expectedVisible: expectVisible,
         ref,
         hint: visible
-          ? 'Element IS on screen but you expected it absent. Possible: stale modal, overlay not yet dismissed.'
-          : 'Element is NOT on screen. Possible: animation in flight, mounted later, scrolled out of view. Pass timeoutMs (e.g. 2000) to retry, or call device_snapshot to see what IS rendered.',
+          ? "Element IS on screen but you expected it absent. Possible: stale modal, overlay not yet dismissed."
+          : "Element is NOT on screen. Possible: animation in flight, mounted later, scrolled out of view. Pass timeoutMs (e.g. 2000) to retry, or call device_snapshot to see what IS rendered.",
       },
     );
   });
@@ -487,22 +556,25 @@ export function createExpectVisibleByTestIDHandler() {
 
 export interface ExpectTextArgs {
   text: string;
-  exact?: boolean;        // default false (substring)
-  exists?: boolean;       // default true
+  exact?: boolean; // default false (substring)
+  exists?: boolean; // default true
   timeoutMs?: number;
 }
 
 export function findRefsByText(snapshotEnvelope: string, text: string, exact: boolean): string[] {
   try {
-    const env = JSON.parse(snapshotEnvelope) as { ok?: boolean; data?: { nodes?: Array<{ ref?: string; label?: string }> } };
+    const env = JSON.parse(snapshotEnvelope) as {
+      ok?: boolean;
+      data?: { nodes?: Array<{ ref?: string; label?: string }> };
+    };
     if (!env.ok) return [];
     const nodes = env.data?.nodes ?? [];
     const matches = nodes.filter((n) => {
-      if (typeof n.label !== 'string') return false;
+      if (typeof n.label !== "string") return false;
       if (exact) return n.label === text;
       return n.label.includes(text);
     });
-    return matches.map((n) => n.ref).filter((r): r is string => typeof r === 'string');
+    return matches.map((n) => n.ref).filter((r): r is string => typeof r === "string");
   } catch {
     return [];
   }
@@ -510,34 +582,34 @@ export function findRefsByText(snapshotEnvelope: string, text: string, exact: bo
 
 export function createExpectTextHandler() {
   return withSession(async (args: ExpectTextArgs): Promise<ToolResult> => {
-    if (!args.text || typeof args.text !== 'string') {
-      return failResult('expect_text requires text');
+    if (!args.text || typeof args.text !== "string") {
+      return failResult("expect_text requires text");
     }
     const expectVisible = args.exists !== false;
     const exact = args.exact === true;
 
     type Probe =
-      | { kind: 'snapshot-failed'; envelope: string }
-      | { kind: 'resolved'; refs: string[] };
+      | { kind: "snapshot-failed"; envelope: string }
+      | { kind: "resolved"; refs: string[] };
 
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
-      const result = await runNative(['snapshot', '-i']);
-      const envelope = result.content?.[0]?.text ?? '';
+      const result = await runNative(["snapshot", "-i"]);
+      const envelope = result.content?.[0]?.text ?? "";
       // Phase 128 (post-review #5): same snapshot-failure peek as
       // expect_visible_by_testid. exists:false would otherwise silent-pass.
       if (snapshotEnvelopeFailed(envelope)) {
-        return { matched: false, result: { kind: 'snapshot-failed', envelope } };
+        return { matched: false, result: { kind: "snapshot-failed", envelope } };
       }
       const refs = findRefsByText(envelope, args.text, exact);
       const visible = refs.length > 0;
-      return { matched: visible === expectVisible, result: { kind: 'resolved', refs } };
+      return { matched: visible === expectVisible, result: { kind: "resolved", refs } };
     };
 
     const polled = await pollUntil(probe, args.timeoutMs ?? 0);
-    if (polled.result.kind === 'snapshot-failed') {
+    if (polled.result.kind === "snapshot-failed") {
       return failResult(
         `expect_text: snapshot failed while searching for "${args.text}" — agent-device unreachable, daemon crashed, or snapshot timed out`,
-        'SNAPSHOT_FAILED',
+        "SNAPSHOT_FAILED",
         {
           text: args.text,
           envelope: polled.result.envelope.slice(0, 500),
@@ -552,8 +624,8 @@ export function createExpectTextHandler() {
       return okResult({ matched: true, text: args.text, exact, visible, refs });
     }
     return failResult(
-      `expect_text: text "${args.text}" was ${visible ? 'visible' : 'NOT visible'}; expected ${expectVisible ? 'visible' : 'NOT visible'}`,
-      'ASSERTION_FAILED',
+      `expect_text: text "${args.text}" was ${visible ? "visible" : "NOT visible"}; expected ${expectVisible ? "visible" : "NOT visible"}`,
+      "ASSERTION_FAILED",
       {
         text: args.text,
         exact,
@@ -561,8 +633,8 @@ export function createExpectTextHandler() {
         expectedVisible: expectVisible,
         refs,
         hint: visible
-          ? 'Text IS on screen but you expected it absent.'
-          : 'Text is NOT on screen. Try exact=false for substring match, or device_snapshot to see what labels are rendered.',
+          ? "Text IS on screen but you expected it absent."
+          : "Text is NOT on screen. Try exact=false for substring match, or device_snapshot to see what labels are rendered.",
       },
     );
   });

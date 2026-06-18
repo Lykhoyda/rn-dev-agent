@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { findProjectRoot } from './nav-graph/storage.js';
-import { logger } from './logger.js';
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { findProjectRoot } from "./nav-graph/storage.js";
+import { logger } from "./logger.js";
 
 interface AppConfig {
   expo?: {
@@ -18,15 +18,15 @@ interface AppConfig {
  * Returns the platform-appropriate ID, or falls back cross-platform.
  */
 export function readAppId(projectRoot: string, platform: string): string | null {
-  for (const filename of ['app.json', 'app.config.json']) {
+  for (const filename of ["app.json", "app.config.json"]) {
     const p = join(projectRoot, filename);
     if (!existsSync(p)) continue;
     try {
-      const raw = JSON.parse(readFileSync(p, 'utf-8')) as AppConfig;
+      const raw = JSON.parse(readFileSync(p, "utf-8")) as AppConfig;
       const expo = raw.expo ?? raw;
-      const iosBundleId = (expo as AppConfig['expo'])?.ios?.bundleIdentifier;
-      const androidPkg = (expo as AppConfig['expo'])?.android?.package;
-      if (platform === 'android') return androidPkg ?? iosBundleId ?? null;
+      const iosBundleId = (expo as AppConfig["expo"])?.ios?.bundleIdentifier;
+      const androidPkg = (expo as AppConfig["expo"])?.android?.package;
+      if (platform === "android") return androidPkg ?? iosBundleId ?? null;
       return iosBundleId ?? androidPkg ?? null;
     } catch {
       continue;
@@ -51,13 +51,13 @@ export function resolveBundleId(platform: string): string | null {
  * diagnosis (an Android package fed to iOS simctl "is not installed").
  */
 export function readAppIdStrict(projectRoot: string, platform: string): string | null {
-  for (const filename of ['app.json', 'app.config.json']) {
+  for (const filename of ["app.json", "app.config.json"]) {
     const p = join(projectRoot, filename);
     if (!existsSync(p)) continue;
     try {
-      const raw = JSON.parse(readFileSync(p, 'utf-8')) as AppConfig;
-      const expo = (raw.expo ?? raw) as AppConfig['expo'];
-      if (platform === 'android') return expo?.android?.package ?? null;
+      const raw = JSON.parse(readFileSync(p, "utf-8")) as AppConfig;
+      const expo = (raw.expo ?? raw) as AppConfig["expo"];
+      if (platform === "android") return expo?.android?.package ?? null;
       return expo?.ios?.bundleIdentifier ?? null;
     } catch {
       continue;
@@ -78,11 +78,11 @@ export function resolveBundleIdStrict(platform: string): string | null {
 export function readExpoSlug(): string | null {
   const projectRoot = findProjectRoot();
   if (!projectRoot) return null;
-  for (const filename of ['app.json', 'app.config.json']) {
+  for (const filename of ["app.json", "app.config.json"]) {
     const p = join(projectRoot, filename);
     if (!existsSync(p)) continue;
     try {
-      const raw = JSON.parse(readFileSync(p, 'utf-8')) as AppConfig;
+      const raw = JSON.parse(readFileSync(p, "utf-8")) as AppConfig;
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -100,14 +100,17 @@ let warnedBadConfig = false;
 export function readRnAgentConfig(projectRoot?: string | null): RnAgentConfig | null {
   const root = projectRoot ?? findProjectRoot();
   if (!root) return null;
-  const p = join(root, '.rn-agent', 'config.json');
+  const p = join(root, ".rn-agent", "config.json");
   if (!existsSync(p)) return null;
   try {
-    return JSON.parse(readFileSync(p, 'utf-8')) as RnAgentConfig;
+    return JSON.parse(readFileSync(p, "utf-8")) as RnAgentConfig;
   } catch (err) {
     if (!warnedBadConfig) {
       warnedBadConfig = true;
-      logger.warn('CONFIG', `.rn-agent/config.json is unreadable — ignoring it: ${err instanceof Error ? err.message : err}`);
+      logger.warn(
+        "CONFIG",
+        `.rn-agent/config.json is unreadable — ignoring it: ${err instanceof Error ? err.message : err}`,
+      );
     }
     return null;
   }
@@ -115,21 +118,23 @@ export function readRnAgentConfig(projectRoot?: string | null): RnAgentConfig | 
 
 export interface AutoConnectResolution {
   enabled: boolean;
-  source: 'env' | 'config' | 'default';
+  source: "env" | "config" | "default";
 }
 
-export function resolveAutoConnect(deps: {
-  env?: string;
-  readConfig?: () => RnAgentConfig | null;
-} = {}): AutoConnectResolution {
+export function resolveAutoConnect(
+  deps: {
+    env?: string;
+    readConfig?: () => RnAgentConfig | null;
+  } = {},
+): AutoConnectResolution {
   // Present-but-undefined `env` means "treat as unset, do NOT fall back to
   // process.env" (test seam). Only an absent key reads process.env.RN_CDP_AUTOCONNECT.
-  const envRaw = 'env' in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
-  if (envRaw === '0' || envRaw === 'false') return { enabled: false, source: 'env' };
-  if (envRaw === '1' || envRaw === 'true') return { enabled: true, source: 'env' };
+  const envRaw = "env" in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;
+  if (envRaw === "0" || envRaw === "false") return { enabled: false, source: "env" };
+  if (envRaw === "1" || envRaw === "true") return { enabled: true, source: "env" };
   const cfg = (deps.readConfig ?? readRnAgentConfig)();
-  if (typeof cfg?.cdp?.autoConnect === 'boolean') {
-    return { enabled: cfg.cdp.autoConnect, source: 'config' };
+  if (typeof cfg?.cdp?.autoConnect === "boolean") {
+    return { enabled: cfg.cdp.autoConnect, source: "config" };
   }
-  return { enabled: true, source: 'default' };
+  return { enabled: true, source: "default" };
 }

@@ -1,7 +1,7 @@
 // src/observability/live-device.ts
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { classifyFamily } from './events.js';
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { classifyFamily } from "./events.js";
 
 /**
  * GH #206: does THIS tool call change on-screen state (→ trigger a live
@@ -15,8 +15,8 @@ import { classifyFamily } from './events.js';
  * tool's args (PR #296 review P2).
  */
 export function isStateMutating(tool: string, args?: Record<string, unknown>): boolean {
-  if (classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate') return true;
-  if (tool === 'device_find' && args?.action === 'click') return true;
+  if (classifyFamily(tool) === "interaction" || tool === "cdp_navigate") return true;
+  if (tool === "device_find" && args?.action === "click") return true;
   return false;
 }
 
@@ -32,19 +32,37 @@ export function isStateMutating(tool: string, args?: Record<string, unknown>): b
  */
 const SNAPSHOT_CACHE_READS = new Set<string>([
   // CDP / native introspection
-  'cdp_component_tree', 'cdp_component_state', 'cdp_store_state', 'cdp_network_log',
-  'cdp_network_body', 'cdp_console_log', 'cdp_error_log', 'cdp_native_errors',
-  'cdp_diagnostic_renderers', 'cdp_object_inspect', 'cdp_heap_usage', 'collect_logs',
-  'cdp_metro_events', 'cdp_wait_for_network',
+  "cdp_component_tree",
+  "cdp_component_state",
+  "cdp_store_state",
+  "cdp_network_log",
+  "cdp_network_body",
+  "cdp_console_log",
+  "cdp_error_log",
+  "cdp_native_errors",
+  "cdp_diagnostic_renderers",
+  "cdp_object_inspect",
+  "cdp_heap_usage",
+  "collect_logs",
+  "cdp_metro_events",
+  "cdp_wait_for_network",
   // perception (the cache's producer + consumer)
-  'device_snapshot', 'device_screenshot',
+  "device_snapshot",
+  "device_screenshot",
   // navigation reads (NOT cdp_navigate, which changes the screen)
-  'cdp_navigation_state', 'cdp_nav_graph',
+  "cdp_navigation_state",
+  "cdp_nav_graph",
   // diagnostics / connection
-  'cdp_status', 'cdp_targets', 'device_list', 'observe',
+  "cdp_status",
+  "cdp_targets",
+  "device_list",
+  "observe",
   // state assertions (verify-via-state — pure reads)
-  'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
-  'cross_platform_verify',
+  "expect_redux",
+  "expect_route",
+  "expect_visible_by_testid",
+  "expect_text",
+  "cross_platform_verify",
 ]);
 
 /**
@@ -52,8 +70,11 @@ const SNAPSHOT_CACHE_READS = new Set<string>([
  * Fail-safe: invalidate unless the tool is a known read. `device_find` is a read
  * UNLESS it taps (`action: 'click'`), mirroring isStateMutating's per-call rule.
  */
-export function toolInvalidatesSnapshotCache(tool: string, args?: Record<string, unknown>): boolean {
-  if (tool === 'device_find') return args?.action === 'click';
+export function toolInvalidatesSnapshotCache(
+  tool: string,
+  args?: Record<string, unknown>,
+): boolean {
+  if (tool === "device_find") return args?.action === "click";
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 
@@ -64,14 +85,19 @@ export function toolInvalidatesSnapshotCache(tool: string, args?: Record<string,
  * wrapped so the per-call `isStateMutating(tool, args)` check can run.
  */
 export function mayTriggerLiveCapture(tool: string): boolean {
-  return classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find';
+  return (
+    classifyFamily(tool) === "interaction" || tool === "cdp_navigate" || tool === "device_find"
+  );
 }
 
 export interface LiveCaptureDeps {
   hasObservers: () => boolean;
   isFlowActive: () => boolean;
-  getPlatform: () => 'ios' | 'android' | null;
-  captureScreenshot: (platform: 'ios' | 'android', path: string) => Promise<{ ok: true; path: string } | { ok: false }>;
+  getPlatform: () => "ios" | "android" | null;
+  captureScreenshot: (
+    platform: "ios" | "android",
+    path: string,
+  ) => Promise<{ ok: true; path: string } | { ok: false }>;
   readRoute: () => Promise<string | null>;
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
   pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => void;
@@ -82,19 +108,30 @@ let inFlight = false;
 let pending = false;
 
 /** Test-only: reset the single-flight latches between cases. */
-export function _resetLiveCaptureForTest(): void { inFlight = false; pending = false; }
+export function _resetLiveCaptureForTest(): void {
+  inFlight = false;
+  pending = false;
+}
 
 export async function maybeCaptureLiveFrame(deps: LiveCaptureDeps): Promise<void> {
   try {
     if (!deps.hasObservers() || deps.isFlowActive()) return;
-    if (inFlight) { pending = true; return; }
+    if (inFlight) {
+      pending = true;
+      return;
+    }
     inFlight = true;
-  } catch { return; }
+  } catch {
+    return;
+  }
   try {
     await runCapture(deps);
   } finally {
     inFlight = false;
-    if (pending) { pending = false; void maybeCaptureLiveFrame(deps); }
+    if (pending) {
+      pending = false;
+      void maybeCaptureLiveFrame(deps);
+    }
   }
 }
 
@@ -108,26 +145,30 @@ async function runCapture(deps: LiveCaptureDeps): Promise<void> {
       const bytes = deps.readShotFile(shot.path);
       if (bytes) frame.shot = bytes;
     }
-  } catch { /* screenshot best-effort */ }
+  } catch {
+    /* screenshot best-effort */
+  }
   try {
     const route = await deps.readRoute();
     if (route) frame.route = route;
-  } catch { /* route best-effort */ }
+  } catch {
+    /* route best-effort */
+  }
   if (frame.shot || frame.route) deps.pushLive(frame);
 }
 
 interface BuildLiveDepsInput {
-  recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps['pushLive'] };
+  recorder: { hasSubscribers: () => boolean; pushLive: LiveCaptureDeps["pushLive"] };
   isFlowActive: () => boolean;
   getActiveSession: () => { platform?: string } | null;
   getClient: () => { isConnected: boolean; connectedTarget: { platform?: string } | null };
-  captureScreenshot: LiveCaptureDeps['captureScreenshot'];
+  captureScreenshot: LiveCaptureDeps["captureScreenshot"];
   readRoute: (client: unknown) => Promise<string | null>;
-  readShotFile: LiveCaptureDeps['readShotFile'];
+  readShotFile: LiveCaptureDeps["readShotFile"];
 }
 
-function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
-  return p === 'ios' || p === 'android' ? p : null;
+function asDevicePlatform(p: string | undefined): "ios" | "android" | null {
+  return p === "ios" || p === "android" ? p : null;
 }
 
 export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {

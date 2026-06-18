@@ -5,12 +5,9 @@
 // schema validation happens here so corrupted files surface a clear
 // error rather than crashing downstream consumers.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import {
-  type ActionRuntimeState,
-  freshRuntimeState,
-} from './reusable-action.js';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { type ActionRuntimeState, freshRuntimeState } from "./reusable-action.js";
 
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath: string): string {
@@ -28,9 +25,9 @@ export function sidecarPathFor(yamlFilePath: string): string {
   // misbehave. Explicit `[/\\]` split is platform-agnostic at the source.
   const dir = dirname(yamlFilePath);
   const parent = dirname(dir);
-  const filename = yamlFilePath.replace(/\.ya?ml$/i, '.state.json');
+  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
   const base = filename.split(/[\\/]/).pop()!;
-  return join(parent, 'state', base);
+  return join(parent, "state", base);
 }
 
 /**
@@ -45,24 +42,28 @@ export function loadOrInitSidecar(
   const path = sidecarPathFor(yamlFilePath);
   if (existsSync(path)) {
     try {
-      const text = readFileSync(path, 'utf8');
+      const text = readFileSync(path, "utf8");
       const parsed = JSON.parse(text) as ActionRuntimeState;
       // Minimal schema validation — required scalars present.
       if (
         parsed &&
         parsed.schemaVersion === 1 &&
-        typeof parsed.revision === 'number' &&
-        typeof parsed.updatedAt === 'string' &&
+        typeof parsed.revision === "number" &&
+        typeof parsed.updatedAt === "string" &&
         Array.isArray(parsed.runHistory) &&
         Array.isArray(parsed.repairHistory) &&
-        typeof parsed.stats === 'object'
+        typeof parsed.stats === "object"
       ) {
         // A sidecar missing lastSeenMtimeMs (e.g. written before the field
         // existed) would silently disable the human-edit guard, since
         // yamlEditedSinceLastSeen compares against undefined. Re-seed just that
         // field from the YAML's mtime — preserves run/repair history.
-        if (typeof parsed.lastSeenMtimeMs !== 'number') {
-          try { parsed.lastSeenMtimeMs = statSync(yamlFilePath).mtimeMs; } catch { parsed.lastSeenMtimeMs = 0; }
+        if (typeof parsed.lastSeenMtimeMs !== "number") {
+          try {
+            parsed.lastSeenMtimeMs = statSync(yamlFilePath).mtimeMs;
+          } catch {
+            parsed.lastSeenMtimeMs = 0;
+          }
         }
         return parsed;
       }
@@ -74,7 +75,11 @@ export function loadOrInitSidecar(
   // No sidecar yet — seed with YAML's mtime so the first auto-repair
   // attempt won't think a human edited it since "last seen".
   let mtimeMs = 0;
-  try { mtimeMs = statSync(yamlFilePath).mtimeMs; } catch { /* ignore */ }
+  try {
+    mtimeMs = statSync(yamlFilePath).mtimeMs;
+  } catch {
+    /* ignore */
+  }
   return freshRuntimeState(now, mtimeMs);
 }
 
@@ -83,14 +88,11 @@ export function loadOrInitSidecar(
  * Always writes to the path derived from the YAML's location, never
  * accepts an explicit override — keeps the on-disk shape stable.
  */
-export function saveSidecar(
-  yamlFilePath: string,
-  state: ActionRuntimeState,
-): { path: string } {
+export function saveSidecar(yamlFilePath: string, state: ActionRuntimeState): { path: string } {
   const path = sidecarPathFor(yamlFilePath);
   const parentDir = dirname(path);
   if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf8");
   return { path };
 }
 
@@ -99,10 +101,7 @@ export function saveSidecar(
  * `lastSeenMtimeMs`. Used by self-repair to abort before clobbering
  * a human edit.
  */
-export function yamlEditedSinceLastSeen(
-  yamlFilePath: string,
-  state: ActionRuntimeState,
-): boolean {
+export function yamlEditedSinceLastSeen(yamlFilePath: string, state: ActionRuntimeState): boolean {
   try {
     const current = statSync(yamlFilePath).mtimeMs;
     return current > state.lastSeenMtimeMs;

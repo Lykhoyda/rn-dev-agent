@@ -75,15 +75,18 @@ export class RingBuffer<T, K = unknown> {
   }
 }
 
-export const NO_DEVICE_KEY = 'noport-notarget';
+export const NO_DEVICE_KEY = "noport-notarget";
 
 /**
  * Build a stable device key from (metroPort, targetId) for `DeviceBufferManager`.
  * Falls back to a sentinel string when either is null, so events captured before
  * a target is selected still have a valid bucket.
  */
-export function makeDeviceKey(port: number | null | undefined, targetId: string | null | undefined): string {
-  return `${port ?? 'noport'}-${targetId ?? 'notarget'}`;
+export function makeDeviceKey(
+  port: number | null | undefined,
+  targetId: string | null | undefined,
+): string {
+  return `${port ?? "noport"}-${targetId ?? "notarget"}`;
 }
 
 export interface DeviceBufferOptions<T, K> extends RingBufferOptions<T, K> {
@@ -135,7 +138,10 @@ export class DeviceBufferManager<T, K = unknown> {
       if (this.buffers.size >= this.opts.maxDevices) {
         this.evictOldest();
       }
-      buf = new RingBuffer<T, K>(this.opts.capacityPerDevice, this.opts.indexKey ? { indexKey: this.opts.indexKey } : undefined);
+      buf = new RingBuffer<T, K>(
+        this.opts.capacityPerDevice,
+        this.opts.indexKey ? { indexKey: this.opts.indexKey } : undefined,
+      );
       this.buffers.set(deviceKey, buf);
     }
     buf.push(item);
@@ -148,8 +154,8 @@ export class DeviceBufferManager<T, K = unknown> {
    * (passed at construction) for deterministic ordering; without it, items are
    * returned in per-device insertion order and then concatenated.
    */
-  getLast(deviceKey: string | 'all', n: number): T[] {
-    if (deviceKey !== 'all') {
+  getLast(deviceKey: string | "all", n: number): T[] {
+    if (deviceKey !== "all") {
       return this.buffers.get(deviceKey)?.getLast(n) ?? [];
     }
     const merged: T[] = [];
@@ -163,8 +169,8 @@ export class DeviceBufferManager<T, K = unknown> {
   }
 
   /** Filter items (single device or `'all'`) by `predicate`. */
-  filter(deviceKey: string | 'all', predicate: (item: T) => boolean): T[] {
-    if (deviceKey !== 'all') {
+  filter(deviceKey: string | "all", predicate: (item: T) => boolean): T[] {
+    if (deviceKey !== "all") {
       return this.buffers.get(deviceKey)?.filter(predicate) ?? [];
     }
     const merged: T[] = [];
@@ -182,8 +188,8 @@ export class DeviceBufferManager<T, K = unknown> {
    * since callers use unique ids (e.g. network request IDs) collisions are expected
    * to be extremely rare, but still first-hit wins.
    */
-  getByKey(deviceKey: string | 'all', key: K): T | undefined {
-    if (deviceKey !== 'all') {
+  getByKey(deviceKey: string | "all", key: K): T | undefined {
+    if (deviceKey !== "all") {
       return this.buffers.get(deviceKey)?.getByKey(key);
     }
     for (const buf of this.buffers.values()) {

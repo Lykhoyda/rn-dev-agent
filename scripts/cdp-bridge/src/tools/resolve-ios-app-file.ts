@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
-import type { SnapshotHint } from '../cdp/app-installed-probe.js';
+import { execFileSync } from "node:child_process";
+import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, basename } from "node:path";
+import type { SnapshotHint } from "../cdp/app-installed-probe.js";
 
 /**
  * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
@@ -11,8 +11,7 @@ import type { SnapshotHint } from '../cdp/app-installed-probe.js';
  *   - the standalone `- clearState` command (in the validator allowlist)
  */
 export function flowUsesClearState(flowText: string): boolean {
-  return /clearState:\s*true\b/.test(flowText)
-    || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 
 export interface ResolveAppFileDeps {
@@ -36,12 +35,12 @@ function defaultSnapshotApp(appPath: string): string | null {
     // clearState flow would accumulate full .app copies in $TMPDIR until OS
     // reaping (PR #276 review). Concurrent same-app flows can't race: the
     // arbiter makes the flow plane exclusive.
-    const destDir = join(tmpdir(), 'rn-appfile-snapshots');
+    const destDir = join(tmpdir(), "rn-appfile-snapshots");
     const dest = join(destDir, basename(appPath));
     rmSync(dest, { recursive: true, force: true });
     mkdirSync(destDir, { recursive: true });
     try {
-      execFileSync('cp', ['-Rc', appPath, dest], { timeout: 30_000, stdio: 'ignore' });
+      execFileSync("cp", ["-Rc", appPath, dest], { timeout: 30_000, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -71,9 +70,7 @@ export function resolveIosAppFile(bundleId: string, deps: ResolveAppFileDeps = {
   return null;
 }
 
-export type AppFileResolution =
-  | { ok: true; appFile?: string }
-  | { ok: false; error: string };
+export type AppFileResolution = { ok: true; appFile?: string } | { ok: false; error: string };
 
 /**
  * GH#201: decide the `--app-file` value for a single flow. Returns the explicit
@@ -84,20 +81,20 @@ export type AppFileResolution =
  * uninstall-without-reinstall failure #201 fixed.
  */
 export function resolveAppFileForClearState(
-  platform: 'ios' | 'android',
+  platform: "ios" | "android",
   flowText: string,
   headerAppId: string | undefined,
   explicitAppFile?: string,
   deps?: ResolveAppFileDeps,
 ): AppFileResolution {
   if (explicitAppFile) return { ok: true, appFile: explicitAppFile };
-  if (platform !== 'ios' || !flowUsesClearState(flowText)) return { ok: true };
+  if (platform !== "ios" || !flowUsesClearState(flowText)) return { ok: true };
   if (!headerAppId) {
     return {
       ok: false,
       error:
-        'Flow uses clearState on iOS but no appId is known to locate the .app. ' +
-        'Add `appId:` to the flow header or pass appFile=<path-to-.app>.',
+        "Flow uses clearState on iOS but no appId is known to locate the .app. " +
+        "Add `appId:` to the flow header or pass appFile=<path-to-.app>.",
     };
   }
   const appFile = resolveIosAppFile(headerAppId, deps) ?? undefined;
@@ -106,7 +103,7 @@ export function resolveAppFileForClearState(
       ok: false,
       error:
         `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. ` +
-        'Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).',
+        "Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).",
     };
   }
   return { ok: true, appFile };
@@ -114,11 +111,10 @@ export function resolveAppFileForClearState(
 
 function defaultGetAppContainer(bundleId: string): string | null {
   try {
-    const out = execFileSync(
-      'xcrun',
-      ['simctl', 'get_app_container', 'booted', bundleId, 'app'],
-      { encoding: 'utf8', timeout: 5_000 },
-    ).trim();
+    const out = execFileSync("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
     return out || null;
   } catch {
     return null;
@@ -144,10 +140,10 @@ const SNAPSHOT_SCAN_BUDGET_MS = 3000;
 const PLUTIL_TIMEOUT_MS = 2000;
 
 function defaultListSnapshots(): string[] {
-  const dir = join(tmpdir(), 'rn-appfile-snapshots');
+  const dir = join(tmpdir(), "rn-appfile-snapshots");
   try {
     return readdirSync(dir)
-      .filter((name) => name.endsWith('.app'))
+      .filter((name) => name.endsWith(".app"))
       .map((name) => join(dir, name));
   } catch {
     return [];
@@ -157,9 +153,9 @@ function defaultListSnapshots(): string[] {
 function defaultReadBundleId(appPath: string, timeoutMs: number): string | null {
   try {
     const out = execFileSync(
-      'plutil',
-      ['-extract', 'CFBundleIdentifier', 'raw', join(appPath, 'Info.plist')],
-      { timeout: timeoutMs, encoding: 'utf8' },
+      "plutil",
+      ["-extract", "CFBundleIdentifier", "raw", join(appPath, "Info.plist")],
+      { timeout: timeoutMs, encoding: "utf8" },
     );
     return out.trim() || null;
   } catch {

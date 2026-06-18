@@ -1,16 +1,16 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { parseSimctlListapps } from '../cdp/discovery.js';
-const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
-const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parseSimctlListapps } from "../cdp/discovery.js";
+const DAEMON_JSON = join(homedir(), ".agent-device", "daemon.json");
+const DAEMON_LOCK = join(homedir(), ".agent-device", "daemon.lock");
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 // GH#202 Phase 4: the legacy upstream runner ships as two installed apps.
 export const LEGACY_BUNDLE_IDS = [
-    'com.callstack.agentdevice.runner',
-    'com.callstack.agentdevice.runner.uitests.xctrunner',
+    "com.callstack.agentdevice.runner",
+    "com.callstack.agentdevice.runner.uitests.xctrunner",
 ];
 /**
  * GH#202 Phase 4: filter `installed` to only the known legacy bundle IDs.
@@ -41,7 +41,10 @@ export async function eradicateLegacyRunnerApps(udid, deps) {
     // A booted simulator always carries built-in system apps; zero parsed ids
     // means the listapps format changed (parse failure), not a clean device.
     if (installed.size === 0) {
-        return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
+        return {
+            removedApps,
+            warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`],
+        };
     }
     for (const id of selectInstalledLegacyApps(installed)) {
         try {
@@ -63,10 +66,10 @@ export async function eradicateLegacyRunnerApps(udid, deps) {
  */
 export function selectLegacyRunnerPids(psOutput, udid) {
     const pids = [];
-    for (const line of psOutput.split('\n')) {
-        if (!line.includes('AgentDeviceRunner'))
+    for (const line of psOutput.split("\n")) {
+        if (!line.includes("AgentDeviceRunner"))
             continue;
-        if (line.includes('RnFastRunner'))
+        if (line.includes("RnFastRunner"))
             continue;
         if (!udid || !line.includes(udid))
             continue;
@@ -88,7 +91,7 @@ function defaultDeps() {
         // caller's try/catch, which records a warning. Swallowing it here and
         // returning '' made single-runner enforcement degrade to a silent no-op
         // with no operator signal — exactly when the machine is busy.
-        listProcesses: () => execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
+        listProcesses: () => execFileSync("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3_000 }),
         kill: (pid, signal) => process.kill(pid, signal),
         isAlive: (pid) => {
             try {
@@ -101,8 +104,8 @@ function defaultDeps() {
         },
         readDaemonPid: () => {
             try {
-                const parsed = JSON.parse(readFileSync(DAEMON_JSON, 'utf8'));
-                return typeof parsed.pid === 'number' ? parsed.pid : null;
+                const parsed = JSON.parse(readFileSync(DAEMON_JSON, "utf8"));
+                return typeof parsed.pid === "number" ? parsed.pid : null;
             }
             catch {
                 return null;
@@ -111,9 +114,17 @@ function defaultDeps() {
         fileExists: (path) => existsSync(path),
         removeFile: (path) => unlinkSync(path),
         delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        listApps: (udid) => execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] }),
+        listApps: (udid) => execFileSync("xcrun", ["simctl", "listapps", udid], {
+            encoding: "utf8",
+            timeout: 5_000,
+            stdio: ["ignore", "pipe", "ignore"],
+        }),
         uninstallApp: (udid, bundleId) => {
-            execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+            execFileSync("xcrun", ["simctl", "uninstall", udid, bundleId], {
+                encoding: "utf8",
+                timeout: 10_000,
+                stdio: ["ignore", "pipe", "ignore"],
+            });
         },
     };
 }
@@ -134,7 +145,7 @@ export async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
     const warnings = [];
     if (opts.udid) {
         const t = Date.now();
-        let psOut = '';
+        let psOut = "";
         try {
             psOut = deps.listProcesses();
         }
@@ -143,10 +154,10 @@ export async function ensureSingleRunner(opts = {}, deps = defaultDeps()) {
         }
         for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
             try {
-                deps.kill(pid, 'SIGTERM');
+                deps.kill(pid, "SIGTERM");
                 await deps.delay(SIGKILL_GRACE_MS);
                 if (deps.isAlive(pid))
-                    deps.kill(pid, 'SIGKILL');
+                    deps.kill(pid, "SIGKILL");
                 killedPids.push(pid);
             }
             catch (err) {

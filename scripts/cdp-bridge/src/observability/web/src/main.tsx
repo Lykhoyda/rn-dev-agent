@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createRoot } from 'react-dom/client';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
 
-type Family = 'interaction' | 'introspection' | 'navigation' | 'lifecycle' | 'testing' | 'other';
+type Family = "interaction" | "introspection" | "navigation" | "lifecycle" | "testing" | "other";
 
 interface AgentEvent {
   seq: number;
@@ -22,12 +22,12 @@ const MAX_EVENTS = 500;
 const RENDER_ROWS = 250;
 
 const FAMILY_COLOR: Record<Family, string> = {
-  interaction: '#7aa2f7',
-  introspection: '#9ece6a',
-  navigation: '#e0af68',
-  lifecycle: '#bb9af7',
-  testing: '#f7768e',
-  other: '#787c99',
+  interaction: "#7aa2f7",
+  introspection: "#9ece6a",
+  navigation: "#e0af68",
+  lifecycle: "#bb9af7",
+  testing: "#f7768e",
+  other: "#787c99",
 };
 
 function latestByTool(events: AgentEvent[], tools: string[]): AgentEvent | undefined {
@@ -58,23 +58,23 @@ function routeOf(ev: AgentEvent | undefined): string | undefined {
     | { routeName?: string; nested?: { routeName?: string; nested?: { routeName?: string } } }
     | undefined;
   const cand = p?.nested?.nested?.routeName ?? p?.nested?.routeName ?? p?.routeName;
-  return typeof cand === 'string' ? cand : undefined;
+  return typeof cand === "string" ? cand : undefined;
 }
 
 function appOf(events: AgentEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const a = events[i].args as { appId?: unknown; bundleId?: unknown; bundle?: unknown };
     const id = a.appId ?? a.bundleId ?? a.bundle;
-    if (typeof id === 'string' && id) return id;
+    if (typeof id === "string" && id) return id;
   }
   return undefined;
 }
 
 function App(): JSX.Element {
   const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [conn, setConn] = useState<'connecting' | 'open' | 'error'>('connecting');
+  const [conn, setConn] = useState<"connecting" | "open" | "error">("connecting");
   const [selected, setSelected] = useState<number | null>(null);
-  const [tab, setTab] = useState<'route' | 'store' | 'tree'>('route');
+  const [tab, setTab] = useState<"route" | "store" | "tree">("route");
   const [liveShotSeq, setLiveShotSeq] = useState<number | null>(null);
   const [liveRoute, setLiveRoute] = useState<string | null>(null);
   const maxSeqRef = useRef(0);
@@ -82,7 +82,9 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const merge = (incoming: AgentEvent[]): void => {
-      const fresh = incoming.filter((e) => e && typeof e.seq === 'number' && e.seq > maxSeqRef.current);
+      const fresh = incoming.filter(
+        (e) => e && typeof e.seq === "number" && e.seq > maxSeqRef.current,
+      );
       if (fresh.length === 0) return;
       for (const e of fresh) if (e.seq > maxSeqRef.current) maxSeqRef.current = e.seq;
       setEvents((prev) => {
@@ -91,9 +93,9 @@ function App(): JSX.Element {
       });
     };
 
-    const es = new EventSource('/api/stream');
-    es.onopen = () => setConn('open');
-    es.onerror = () => setConn('error');
+    const es = new EventSource("/api/stream");
+    es.onopen = () => setConn("open");
+    es.onerror = () => setConn("error");
     es.onmessage = (msg) => {
       let parsed: unknown;
       try {
@@ -101,19 +103,26 @@ function App(): JSX.Element {
       } catch {
         return;
       }
-      const type = (parsed && typeof parsed === 'object') ? (parsed as { type?: string }).type : undefined;
+      const type =
+        parsed && typeof parsed === "object" ? (parsed as { type?: string }).type : undefined;
       // The server sends this right before it stops. Close the EventSource so
       // the browser does NOT auto-reconnect (which would hammer the dead port,
       // or silently reattach to a different session reusing the same port).
-      if (type === 'shutdown') { es.close(); setConn('error'); setLiveShotSeq(null); setLiveRoute(null); return; }
-      if (type === 'live') {
-        const p = parsed as { shotSeq?: number; route?: string };
-        if (typeof p.shotSeq === 'number') setLiveShotSeq(p.shotSeq);
-        if (typeof p.route === 'string') setLiveRoute(p.route);
+      if (type === "shutdown") {
+        es.close();
+        setConn("error");
+        setLiveShotSeq(null);
+        setLiveRoute(null);
         return;
       }
-      if (type === 'snapshot') {
-        merge(((parsed as { events?: AgentEvent[] }).events) ?? []);
+      if (type === "live") {
+        const p = parsed as { shotSeq?: number; route?: string };
+        if (typeof p.shotSeq === "number") setLiveShotSeq(p.shotSeq);
+        if (typeof p.route === "string") setLiveRoute(p.route);
+        return;
+      }
+      if (type === "snapshot") {
+        merge((parsed as { events?: AgentEvent[] }).events ?? []);
       } else {
         merge([parsed as AgentEvent]);
       }
@@ -134,18 +143,21 @@ function App(): JSX.Element {
     [events],
   );
 
-  const navEv = latestByTool(events, ['cdp_navigation_state']) ?? latestByFamily(events, 'navigation');
-  const storeEv = latestByTool(events, ['cdp_store_state']);
-  const treeEv = latestByTool(events, ['cdp_component_tree']);
+  const navEv =
+    latestByTool(events, ["cdp_navigation_state"]) ?? latestByFamily(events, "navigation");
+  const storeEv = latestByTool(events, ["cdp_store_state"]);
+  const treeEv = latestByTool(events, ["cdp_component_tree"]);
   const shotEv = useMemo(
     () =>
-      [...events].reverse().find((e) => e.family === 'introspection' && e.tool === 'device_screenshot'),
+      [...events]
+        .reverse()
+        .find((e) => e.family === "introspection" && e.tool === "device_screenshot"),
     [events],
   );
   const route = routeOf(navEv);
   const app = appOf(events);
 
-  const tabEv = tab === 'route' ? navEv : tab === 'store' ? storeEv : treeEv;
+  const tabEv = tab === "route" ? navEv : tab === "store" ? storeEv : treeEv;
 
   return (
     <div className="app">
@@ -153,7 +165,7 @@ function App(): JSX.Element {
         <span className={`dot ${conn}`} />
         <strong>{conn}</strong>
         <span className="sep">events {events.length}</span>
-        <span className="sep">route {liveRoute ?? route ?? '—'}</span>
+        <span className="sep">route {liveRoute ?? route ?? "—"}</span>
         {app && <span className="sep">app {app}</span>}
       </div>
       <div className="panes">
@@ -163,7 +175,7 @@ function App(): JSX.Element {
             {visibleRows.map((e) => (
               <div key={e.seq}>
                 <div
-                  className={`row ${selected === e.seq ? 'sel' : ''}`}
+                  className={`row ${selected === e.seq ? "sel" : ""}`}
                   onClick={() => setSelected(selected === e.seq ? null : e.seq)}
                 >
                   <span className="fam" style={{ background: FAMILY_COLOR[e.family] }}>
@@ -172,7 +184,7 @@ function App(): JSX.Element {
                   <span className="tool">{e.tool}</span>
                   <span className="summ">{e.summary}</span>
                   {e.ghost && <span className="ghost">ghost</span>}
-                  <span className={`ok ${e.ok ? 'pass' : 'fail'}`}>{e.ok ? '✓' : '✗'}</span>
+                  <span className={`ok ${e.ok ? "pass" : "fail"}`}>{e.ok ? "✓" : "✗"}</span>
                   {e.durationMs != null && <span className="dur">{e.durationMs}ms</span>}
                 </div>
                 {selected === e.seq && (
@@ -187,7 +199,7 @@ function App(): JSX.Element {
                     )}
                     {e.payload !== undefined && (
                       <>
-                        <div className="dlabel">payload{e.truncated ? ' (truncated)' : ''}</div>
+                        <div className="dlabel">payload{e.truncated ? " (truncated)" : ""}</div>
                         <pre>{pretty(e.payload)}</pre>
                       </>
                     )}
@@ -212,14 +224,14 @@ function App(): JSX.Element {
         </div>
         <div className="pane right">
           <div className="tabs">
-            {(['route', 'store', 'tree'] as const).map((t) => (
-              <button key={t} className={tab === t ? 'tab on' : 'tab'} onClick={() => setTab(t)}>
+            {(["route", "store", "tree"] as const).map((t) => (
+              <button key={t} className={tab === t ? "tab on" : "tab"} onClick={() => setTab(t)}>
                 {t}
               </button>
             ))}
           </div>
           <div className="state">
-            {tab === 'route' && liveRoute && (
+            {tab === "route" && liveRoute && (
               <div className="liveroute">live route: {liveRoute}</div>
             )}
             {tabEv ? (
@@ -227,7 +239,7 @@ function App(): JSX.Element {
                 {tabEv.truncated && <div className="trunc">payload truncated</div>}
                 <pre>{pretty(tabEv.payload)}</pre>
               </>
-            ) : tab === 'route' && liveRoute ? null : (
+            ) : tab === "route" && liveRoute ? null : (
               <div className="empty">no {tab} captured yet</div>
             )}
           </div>
@@ -289,8 +301,8 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .empty { color: #565f89; padding: 12px; }
 `;
 
-const style = document.createElement('style');
+const style = document.createElement("style");
 style.textContent = CSS;
 document.head.appendChild(style);
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById("root")!).render(<App />);

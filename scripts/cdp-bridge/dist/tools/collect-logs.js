@@ -1,10 +1,10 @@
-import { spawn } from 'node:child_process';
-import { okResult, failResult, warnResult } from '../utils.js';
+import { spawn } from "node:child_process";
+import { okResult, failResult, warnResult } from "../utils.js";
 function normalizeTimestamp(ts) {
     if (!ts)
         return new Date().toISOString();
     try {
-        return new Date(ts.replace(' ', 'T').replace(/\+0000$/, 'Z')).toISOString();
+        return new Date(ts.replace(" ", "T").replace(/\+0000$/, "Z")).toISOString();
     }
     catch {
         return new Date().toISOString();
@@ -16,7 +16,7 @@ async function collectJsConsole(client, level, limit) {
             ? `__RN_DEV_BRIDGE__.getConsole(${JSON.stringify({ level, limit })})`
             : `__RN_AGENT.getConsole(${JSON.stringify({ level, limit })})`;
         const result = await client.evaluate(getExpr);
-        if (result.error || typeof result.value !== 'string')
+        if (result.error || typeof result.value !== "string")
             return [];
         let parsed;
         try {
@@ -29,17 +29,20 @@ async function collectJsConsole(client, level, limit) {
         if (Array.isArray(parsed)) {
             raw = parsed;
         }
-        else if (parsed && typeof parsed === 'object' && 'entries' in parsed && Array.isArray(parsed.entries)) {
+        else if (parsed &&
+            typeof parsed === "object" &&
+            "entries" in parsed &&
+            Array.isArray(parsed.entries)) {
             raw = parsed.entries;
         }
         else {
             return [];
         }
-        return raw.map(e => ({
-            source: 'js_console',
-            level: e.level ?? 'log',
-            text: e.message ?? e.text ?? '',
-            timestamp: normalizeTimestamp(typeof e.timestamp === 'number' ? new Date(e.timestamp).toISOString() : e.timestamp),
+        return raw.map((e) => ({
+            source: "js_console",
+            level: e.level ?? "log",
+            text: e.message ?? e.text ?? "",
+            timestamp: normalizeTimestamp(typeof e.timestamp === "number" ? new Date(e.timestamp).toISOString() : e.timestamp),
         }));
     }
     catch {
@@ -57,14 +60,10 @@ function collectNativeIos(durationMs, signal) {
         let settled = false;
         let proc;
         try {
-            proc = spawn('xcrun', [
-                'simctl', 'spawn', 'booted', 'log', 'stream',
-                '--style', 'ndjson',
-                '--level', 'debug',
-            ], { stdio: ['ignore', 'pipe', 'pipe'] });
+            proc = spawn("xcrun", ["simctl", "spawn", "booted", "log", "stream", "--style", "ndjson", "--level", "debug"], { stdio: ["ignore", "pipe", "pipe"] });
         }
         catch (err) {
-            reject(err instanceof Error ? err : new Error('Failed to spawn xcrun'));
+            reject(err instanceof Error ? err : new Error("Failed to spawn xcrun"));
             return;
         }
         const killMs = durationMs > 0 ? durationMs : 100;
@@ -74,43 +73,46 @@ function collectNativeIos(durationMs, signal) {
                 return;
             killed = true;
             killedByUs = true;
-            proc.kill('SIGTERM');
-            sigkillTimer = setTimeout(() => proc.kill('SIGKILL'), SIGKILL_GRACE_MS);
+            proc.kill("SIGTERM");
+            sigkillTimer = setTimeout(() => proc.kill("SIGKILL"), SIGKILL_GRACE_MS);
         };
         const timeout = setTimeout(kill, killMs);
-        const onAbort = () => { clearTimeout(timeout); kill(); };
-        signal.addEventListener('abort', onAbort, { once: true });
+        const onAbort = () => {
+            clearTimeout(timeout);
+            kill();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
         if (signal.aborted) {
             clearTimeout(timeout);
             kill();
         }
-        let stderrBuf = '';
-        proc.stderr.on('data', (chunk) => {
+        let stderrBuf = "";
+        proc.stderr.on("data", (chunk) => {
             if (killed || settled)
                 return;
-            stderrBuf += chunk.toString('utf8');
+            stderrBuf += chunk.toString("utf8");
         });
-        let buf = '';
-        proc.stdout.on('data', (chunk) => {
+        let buf = "";
+        proc.stdout.on("data", (chunk) => {
             if (killed || settled)
                 return;
-            buf += chunk.toString('utf8');
-            const lines = buf.split('\n');
-            buf = lines.pop() ?? '';
+            buf += chunk.toString("utf8");
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
             for (const line of lines) {
                 const entry = parseIosNdjson(line);
                 if (entry)
                     entries.push(entry);
             }
         });
-        proc.on('close', (code) => {
+        proc.on("close", (code) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(timeout);
             if (sigkillTimer)
                 clearTimeout(sigkillTimer);
-            signal.removeEventListener('abort', onAbort);
+            signal.removeEventListener("abort", onAbort);
             if (buf.trim()) {
                 const entry = parseIosNdjson(buf);
                 if (entry)
@@ -123,19 +125,21 @@ function collectNativeIos(durationMs, signal) {
                 resolve(entries);
             }
         });
-        proc.on('error', (err) => {
+        proc.on("error", (err) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(timeout);
             if (sigkillTimer)
                 clearTimeout(sigkillTimer);
-            signal.removeEventListener('abort', onAbort);
+            signal.removeEventListener("abort", onAbort);
             killed = true;
             try {
-                proc.kill('SIGKILL');
+                proc.kill("SIGKILL");
             }
-            catch { /* process may not exist */ }
+            catch {
+                /* process may not exist */
+            }
             reject(err);
         });
     });
@@ -145,15 +149,19 @@ function parseIosNdjson(line) {
         return null;
     try {
         const obj = JSON.parse(line);
-        const ts = normalizeTimestamp(typeof obj.timestamp === 'string' ? obj.timestamp : undefined);
-        const messageType = String(obj.messageType ?? 'Default');
+        const ts = normalizeTimestamp(typeof obj.timestamp === "string" ? obj.timestamp : undefined);
+        const messageType = String(obj.messageType ?? "Default");
         const levelMap = {
-            Default: 'log', Info: 'info', Debug: 'debug', Error: 'error', Fault: 'error',
+            Default: "log",
+            Info: "info",
+            Debug: "debug",
+            Error: "error",
+            Fault: "error",
         };
         return {
-            source: 'native_ios',
-            level: levelMap[messageType] ?? 'log',
-            text: String(obj.eventMessage ?? ''),
+            source: "native_ios",
+            level: levelMap[messageType] ?? "log",
+            text: String(obj.eventMessage ?? ""),
             timestamp: ts,
         };
     }
@@ -173,13 +181,21 @@ function collectNativeAndroid(durationMs, signal) {
         let settled = false;
         let proc;
         try {
-            proc = spawn('adb', [
-                'logcat', '-v', 'threadtime', '-T', '1',
-                '-s', 'ReactNative:V', 'ReactNativeJS:V', 'AndroidRuntime:E', 'DEBUG:V',
-            ], { stdio: ['ignore', 'pipe', 'pipe'] });
+            proc = spawn("adb", [
+                "logcat",
+                "-v",
+                "threadtime",
+                "-T",
+                "1",
+                "-s",
+                "ReactNative:V",
+                "ReactNativeJS:V",
+                "AndroidRuntime:E",
+                "DEBUG:V",
+            ], { stdio: ["ignore", "pipe", "pipe"] });
         }
         catch (err) {
-            reject(err instanceof Error ? err : new Error('Failed to spawn adb'));
+            reject(err instanceof Error ? err : new Error("Failed to spawn adb"));
             return;
         }
         let sigkillTimer;
@@ -188,43 +204,46 @@ function collectNativeAndroid(durationMs, signal) {
                 return;
             killed = true;
             killedByUs = true;
-            proc.kill('SIGTERM');
-            sigkillTimer = setTimeout(() => proc.kill('SIGKILL'), SIGKILL_GRACE_MS);
+            proc.kill("SIGTERM");
+            sigkillTimer = setTimeout(() => proc.kill("SIGKILL"), SIGKILL_GRACE_MS);
         };
         const timeout = setTimeout(kill, killMs);
-        const onAbort = () => { clearTimeout(timeout); kill(); };
-        signal.addEventListener('abort', onAbort, { once: true });
+        const onAbort = () => {
+            clearTimeout(timeout);
+            kill();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
         if (signal.aborted) {
             clearTimeout(timeout);
             kill();
         }
-        let stderrBuf = '';
-        proc.stderr.on('data', (chunk) => {
+        let stderrBuf = "";
+        proc.stderr.on("data", (chunk) => {
             if (killed || settled)
                 return;
-            stderrBuf += chunk.toString('utf8');
+            stderrBuf += chunk.toString("utf8");
         });
-        let buf = '';
-        proc.stdout.on('data', (chunk) => {
+        let buf = "";
+        proc.stdout.on("data", (chunk) => {
             if (killed || settled)
                 return;
-            buf += chunk.toString('utf8');
-            const lines = buf.split('\n');
-            buf = lines.pop() ?? '';
+            buf += chunk.toString("utf8");
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
             for (const line of lines) {
                 const entry = parseLogcatLine(line, year);
                 if (entry)
                     entries.push(entry);
             }
         });
-        proc.on('close', (code) => {
+        proc.on("close", (code) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(timeout);
             if (sigkillTimer)
                 clearTimeout(sigkillTimer);
-            signal.removeEventListener('abort', onAbort);
+            signal.removeEventListener("abort", onAbort);
             if (buf.trim()) {
                 const entry = parseLogcatLine(buf, year);
                 if (entry)
@@ -237,26 +256,34 @@ function collectNativeAndroid(durationMs, signal) {
                 resolve(entries);
             }
         });
-        proc.on('error', (err) => {
+        proc.on("error", (err) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(timeout);
             if (sigkillTimer)
                 clearTimeout(sigkillTimer);
-            signal.removeEventListener('abort', onAbort);
+            signal.removeEventListener("abort", onAbort);
             killed = true;
             try {
-                proc.kill('SIGKILL');
+                proc.kill("SIGKILL");
             }
-            catch { /* process may not exist */ }
+            catch {
+                /* process may not exist */
+            }
             reject(err);
         });
     });
 }
 const LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
 const ANDROID_LEVEL_MAP = {
-    V: 'debug', D: 'debug', I: 'info', W: 'warn', E: 'error', F: 'error', S: 'log',
+    V: "debug",
+    D: "debug",
+    I: "info",
+    W: "warn",
+    E: "error",
+    F: "error",
+    S: "log",
 };
 export function parseLogcatLine(line, year) {
     const m = LOGCAT_RE.exec(line);
@@ -270,8 +297,8 @@ export function parseLogcatLine(line, year) {
     // cross-source merge-sort ordering.
     const utcDate = new Date(`${year}-${date}T${time}`);
     return {
-        source: 'native_android',
-        level: ANDROID_LEVEL_MAP[priority] ?? 'log',
+        source: "native_android",
+        level: ANDROID_LEVEL_MAP[priority] ?? "log",
         text: message,
         timestamp: utcDate.toISOString(),
         pid: parseInt(pidStr, 10),
@@ -281,7 +308,7 @@ export function parseLogcatLine(line, year) {
 function matchesFilters(entry, filter, logLevel) {
     if (filter && !entry.text.toLowerCase().includes(filter.toLowerCase()))
         return false;
-    if (logLevel && logLevel !== 'all' && entry.level !== logLevel)
+    if (logLevel && logLevel !== "all" && entry.level !== logLevel)
         return false;
     return true;
 }
@@ -294,52 +321,62 @@ export function createCollectLogsHandler(getClient) {
         try {
             for (const source of args.sources) {
                 switch (source) {
-                    case 'js_console': {
+                    case "js_console": {
                         const client = getClient();
                         if (client.isConnected && client.helpersInjected) {
                             promises.push({
                                 source,
-                                promise: collectJsConsole(client, args.logLevel ?? 'all', 200),
+                                promise: collectJsConsole(client, args.logLevel ?? "all", 200),
                             });
                         }
                         else if (client.isConnected) {
-                            errors.js_console = 'CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.';
+                            errors.js_console =
+                                "CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.";
                         }
                         else {
-                            errors.js_console = 'CDP not connected — skipped. Call cdp_status first to connect.';
+                            errors.js_console = "CDP not connected — skipped. Call cdp_status first to connect.";
                         }
                         break;
                     }
-                    case 'native_ios':
-                        promises.push({ source, promise: collectNativeIos(args.durationMs, controller.signal) });
+                    case "native_ios":
+                        promises.push({
+                            source,
+                            promise: collectNativeIos(args.durationMs, controller.signal),
+                        });
                         break;
-                    case 'native_android':
-                        promises.push({ source, promise: collectNativeAndroid(args.durationMs, controller.signal) });
+                    case "native_android":
+                        promises.push({
+                            source,
+                            promise: collectNativeAndroid(args.durationMs, controller.signal),
+                        });
                         break;
                 }
             }
             if (promises.length === 0) {
                 if (Object.keys(errors).length > 0) {
-                    const msg = Object.entries(errors).map(([s, e]) => `${s}: ${e}`).join('; ');
+                    const msg = Object.entries(errors)
+                        .map(([s, e]) => `${s}: ${e}`)
+                        .join("; ");
                     return failResult(`All sources unavailable: ${msg}`);
                 }
-                return failResult('No valid sources specified');
+                return failResult("No valid sources specified");
             }
-            const settled = await Promise.allSettled(promises.map(p => p.promise));
+            const settled = await Promise.allSettled(promises.map((p) => p.promise));
             let allEntries = [];
             for (let i = 0; i < settled.length; i++) {
                 const result = settled[i];
-                if (result.status === 'fulfilled') {
+                if (result.status === "fulfilled") {
                     allEntries.push(...result.value);
                 }
                 else {
                     const src = promises[i].source;
-                    errors[src] = result.reason instanceof Error ? result.reason.message : String(result.reason);
+                    errors[src] =
+                        result.reason instanceof Error ? result.reason.message : String(result.reason);
                 }
             }
             allEntries = allEntries
-                .filter(e => matchesFilters(e, args.filter, args.logLevel))
-                .sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
+                .filter((e) => matchesFilters(e, args.filter, args.logLevel))
+                .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
             const totalBeforeLimit = allEntries.length;
             if (allEntries.length > args.limit) {
                 allEntries = allEntries.slice(-args.limit);
@@ -354,11 +391,13 @@ export function createCollectLogsHandler(getClient) {
             };
             const hasErrors = Object.keys(errors).length > 0;
             if (hasErrors && allEntries.length === 0) {
-                const msg = Object.entries(errors).map(([s, e]) => `${s}: ${e}`).join('; ');
+                const msg = Object.entries(errors)
+                    .map(([s, e]) => `${s}: ${e}`)
+                    .join("; ");
                 return failResult(`All collectors failed: ${msg}`);
             }
             if (hasErrors) {
-                return warnResult(data, 'Some sources failed', { errors });
+                return warnResult(data, "Some sources failed", { errors });
             }
             return okResult(data);
         }

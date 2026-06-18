@@ -1,13 +1,13 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import type { CDPClient } from '../cdp-client.js';
-import { getActiveSession } from '../agent-device-wrapper.js';
-import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { arbiter } from '../lifecycle/device-arbiter.js';
-import { probeFreshness } from './recovery.js';
-import { probeAppInstalled } from './app-installed-probe.js';
-import type { SnapshotHint } from './app-installed-probe.js';
-import { isValidBundleId } from '../domain/maestro-validator.js';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import type { CDPClient } from "../cdp-client.js";
+import { getActiveSession } from "../agent-device-wrapper.js";
+import { stopFastRunner as defaultStopFastRunner } from "../runners/rn-fast-runner-client.js";
+import { arbiter } from "../lifecycle/device-arbiter.js";
+import { probeFreshness } from "./recovery.js";
+import { probeAppInstalled } from "./app-installed-probe.js";
+import type { SnapshotHint } from "./app-installed-probe.js";
+import { isValidBundleId } from "../domain/maestro-validator.js";
 
 const execFile = promisify(execFileCb);
 const DEFAULT_MAX_PER_SESSION = 3;
@@ -17,14 +17,14 @@ const RELAUNCH_SETTLE_MS = 1200;
 const SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
 export type DetachedReason =
-  | 'recovered'
-  | 'still-detached'
-  | 'app-not-installed'
-  | 'no-session'
-  | 'flow-active'
-  | 'opted-out'
-  | 'unsupported-platform'
-  | 'budget-exhausted';
+  | "recovered"
+  | "still-detached"
+  | "app-not-installed"
+  | "no-session"
+  | "flow-active"
+  | "opted-out"
+  | "unsupported-platform"
+  | "budget-exhausted";
 
 export interface DetachedRecoveryResult {
   recovered: boolean;
@@ -54,7 +54,11 @@ export function resetDetachedRecoveryCounter(): void {
   confirmedNotInstalled = null;
 }
 
-type Exec = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ stdout: string; stderr: string }>;
+type Exec = (
+  cmd: string,
+  args: string[],
+  opts?: { timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>;
 
 /**
  * GH #208 (RC3): cold-restart the target app on the booted simulator — terminate
@@ -73,11 +77,11 @@ export async function defaultRelaunchApp(
   exec: Exec = execFile as unknown as Exec,
 ): Promise<void> {
   try {
-    await exec('xcrun', ['simctl', 'terminate', udid, appId], { timeout: 10_000 });
+    await exec("xcrun", ["simctl", "terminate", udid, appId], { timeout: 10_000 });
   } catch {
     // App wasn't running (the detached case) — terminate is a no-op; proceed to launch.
   }
-  await exec('xcrun', ['simctl', 'launch', udid, appId], { timeout: 10_000 });
+  await exec("xcrun", ["simctl", "launch", udid, appId], { timeout: 10_000 });
 }
 
 export interface RecoverDetachedDeps {
@@ -135,21 +139,21 @@ async function recoverDetachedInner(
 ): Promise<DetachedRecoveryResult> {
   const max = deps.maxPerSession ?? DEFAULT_MAX_PER_SESSION;
   const isFlowActive = deps.isFlowActive ?? (() => arbiter.snapshot.flowLeaseHeldBy !== null);
-  const isOptedOut = deps.isOptedOut ?? (() => process.env.RN_AUTO_RELAUNCH_ON_DETACH === '0');
+  const isOptedOut = deps.isOptedOut ?? (() => process.env.RN_AUTO_RELAUNCH_ON_DETACH === "0");
 
   // No-op early returns — these must NOT consume the budget.
   if (isOptedOut()) {
-    return { recovered: false, reason: 'opted-out', attempt: attempts };
+    return { recovered: false, reason: "opted-out", attempt: attempts };
   }
   if (isFlowActive()) {
-    return { recovered: false, reason: 'flow-active', attempt: attempts };
+    return { recovered: false, reason: "flow-active", attempt: attempts };
   }
   const session = (deps.getSession ?? getActiveSession)();
   if (!session?.deviceId || !session?.appId) {
-    return { recovered: false, reason: 'no-session', attempt: attempts };
+    return { recovered: false, reason: "no-session", attempt: attempts };
   }
-  if ((session.platform ?? 'ios') !== 'ios') {
-    return { recovered: false, reason: 'unsupported-platform', attempt: attempts };
+  if ((session.platform ?? "ios") !== "ios") {
+    return { recovered: false, reason: "unsupported-platform", attempt: attempts };
   }
 
   const udid = session.deviceId;
@@ -158,26 +162,32 @@ async function recoverDetachedInner(
   // GH #262 (codex-pair): session values come from a file on disk — validate
   // before they reach simctl argv. An unusable session is the same as none.
   if (!SIMULATOR_UDID_RE.test(udid) || !isValidBundleId(appId)) {
-    return { recovered: false, reason: 'no-session', attempt: attempts };
+    return { recovered: false, reason: "no-session", attempt: attempts };
   }
 
   const isAppInstalled = deps.isAppInstalled ?? probeAppInstalled;
   const buildHint = (): SnapshotHint | undefined => {
     if (!deps.snapshotHint) return undefined;
-    try { return deps.snapshotHint(appId) ?? undefined; } catch { return undefined; }
+    try {
+      return deps.snapshotHint(appId) ?? undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   // GH #262: a previously CONFIRMED missing bundle short-circuits the whole
   // attempt — but a cheap re-probe first, so a user reinstall self-heals.
-  if (confirmedNotInstalled
-      && confirmedNotInstalled.udid === udid
-      && confirmedNotInstalled.appId === appId) {
+  if (
+    confirmedNotInstalled &&
+    confirmedNotInstalled.udid === udid &&
+    confirmedNotInstalled.appId === appId
+  ) {
     const verdict = await isAppInstalled(udid, appId);
     if (verdict === false) {
       const snapshotHint = buildHint();
       return {
         recovered: false,
-        reason: 'app-not-installed',
+        reason: "app-not-installed",
         attempt: attempts,
         udid,
         appId,
@@ -201,14 +211,14 @@ async function recoverDetachedInner(
       const snapshotHint = buildHint();
       return {
         recovered: false,
-        reason: 'app-not-installed',
+        reason: "app-not-installed",
         attempt: attempts,
         udid,
         appId,
         ...(snapshotHint ? { snapshotHint } : {}),
       };
     }
-    return { recovered: false, reason: 'budget-exhausted', attempt: attempts };
+    return { recovered: false, reason: "budget-exhausted", attempt: attempts };
   }
 
   // A real, side-effecting attempt.
@@ -240,7 +250,7 @@ async function recoverDetachedInner(
       const snapshotHint = buildHint();
       return {
         recovered: false,
-        reason: 'app-not-installed',
+        reason: "app-not-installed",
         attempt,
         error: relaunchError,
         udid,
@@ -250,11 +260,20 @@ async function recoverDetachedInner(
     }
   }
   await sleep(RELAUNCH_SETTLE_MS);
-  try { await reconnect(); } catch { /* best-effort; the liveness probe is the verdict */ }
+  try {
+    await reconnect();
+  } catch {
+    /* best-effort; the liveness probe is the verdict */
+  }
 
   if (await probeAlive()) {
     attempts = 0; // success bounds CONSECUTIVE detaches, not lifetime
-    return { recovered: true, reason: 'recovered', attempt };
+    return { recovered: true, reason: "recovered", attempt };
   }
-  return { recovered: false, reason: 'still-detached', attempt, ...(relaunchError ? { error: relaunchError } : {}) };
+  return {
+    recovered: false,
+    reason: "still-detached",
+    attempt,
+    ...(relaunchError ? { error: relaunchError } : {}),
+  };
 }

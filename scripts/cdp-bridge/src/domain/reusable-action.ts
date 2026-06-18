@@ -25,7 +25,7 @@
  *                                 (re-validation needed before re-promotion)
  *   * → deprecated                manual archival; do NOT auto-route or replay
  */
-export type ActionLifecycle = 'experimental' | 'active' | 'deprecated';
+export type ActionLifecycle = "experimental" | "active" | "deprecated";
 
 /**
  * Failure codes returned by /run-action. Drives the recovery path:
@@ -37,16 +37,16 @@ export type ActionLifecycle = 'experimental' | 'active' | 'deprecated';
  *   UNKNOWN              → un-classified Maestro error (surface raw stderr)
  */
 export type ActionFailureCode =
-  | 'SELECTOR_NOT_FOUND'
+  | "SELECTOR_NOT_FOUND"
   // GH #186: the live route diverged from the action's expectedRouteSequence
   // (a screen was inserted/changed) — structural drift, distinct from selector
   // churn, so it must NOT trigger fuzzy selector repair.
-  | 'ROUTE_DRIFT'
-  | 'STATE_MISMATCH'
-  | 'MUTATE_PRECONDITION_FAILED'
-  | 'ENV_UNREACHABLE'
-  | 'TIMEOUT'
-  | 'UNKNOWN';
+  | "ROUTE_DRIFT"
+  | "STATE_MISMATCH"
+  | "MUTATE_PRECONDITION_FAILED"
+  | "ENV_UNREACHABLE"
+  | "TIMEOUT"
+  | "UNKNOWN";
 
 /**
  * Author of the action — drives diff-noise expectations and trust.
@@ -54,7 +54,7 @@ export type ActionFailureCode =
  *   human     — hand-authored YAML
  *   imported  — landed via /rn-agent-import (foreign provenance)
  */
-export type ActionAuthor = 'auto' | 'human' | 'imported';
+export type ActionAuthor = "auto" | "human" | "imported";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // M7 metadata — IMMUTABLE contract, lives in the YAML header
@@ -153,27 +153,27 @@ export interface M7Metadata {
 
 /** Why an auto-repair was refused (when `autoRepair.outcome === 'refused'`). */
 export type AutoRepairRefusedReason =
-  | 'BUDGET_EXHAUSTED'
-  | 'EXTERNAL_EDIT'
-  | 'NO_MATCH'
-  | 'SNAPSHOT_FAILED'
-  | 'NOT_REPAIRABLE_KIND'
+  | "BUDGET_EXHAUSTED"
+  | "EXTERNAL_EDIT"
+  | "NO_MATCH"
+  | "SNAPSHOT_FAILED"
+  | "NOT_REPAIRABLE_KIND"
   // GH #186: refused because the failure was structural route-drift, not a
   // stale selector — fuzzy repair would be wrong here.
-  | 'ROUTE_DRIFT'
+  | "ROUTE_DRIFT"
   // PR #115 multi-LLM review: distinguish user-driven opt-outs from
   // genuine refusals so MTTR analysis (#105) can see "user disabled
   // repair" as operationally healthy vs. budget/edit/match refusals.
-  | 'USER_DISABLED'
+  | "USER_DISABLED"
   // GH #317: rn-fast-runner saw the selector but Maestro/WDA reported it not
   // visible (empty a11y tree). A transport limitation, not testID drift —
   // repair is correctly refused and replay is blocked on this runtime.
-  | 'TRANSPORT_BLIND'
+  | "TRANSPORT_BLIND"
   // Internal/unexpected: parseEnvelope failed, repair-action returned
   // an unmapped error code, or the orchestrator hit a defensive path.
   // Keep separate from NO_MATCH so MTTR doesn't conflate transport
   // bugs with "screen state legitimately doesn't have the testID".
-  | 'INTERNAL_ERROR';
+  | "INTERNAL_ERROR";
 
 /**
  * Phase-level timing breakdown for an auto-repair attempt. Issue #120:
@@ -201,7 +201,7 @@ export interface AutoRepairOutcome {
   /** Did the orchestrator reach the repair step at all? */
   attempted: boolean;
   /** What happened: passed / failed / refused (skipped / never tried). */
-  outcome: 'passed' | 'failed' | 'refused' | 'skipped';
+  outcome: "passed" | "failed" | "refused" | "skipped";
   /** Populated when outcome === 'refused' or 'skipped'. */
   refusedReason?: AutoRepairRefusedReason;
   /**
@@ -243,12 +243,12 @@ export interface AutoRepairOutcome {
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
 export interface RunRecord {
-  timestamp: string;          // ISO
+  timestamp: string; // ISO
   durationMs: number;
-  status: 'pass' | 'fail';
+  status: "pass" | "fail";
   failureCode?: ActionFailureCode;
-  failureDetail?: string;     // raw stderr summary, max ~500 chars
-  trigger: 'agent' | 'ci' | 'human';
+  failureDetail?: string; // raw stderr summary, max ~500 chars
+  trigger: "agent" | "ci" | "human";
   /**
    * Populated by `cdp_run_action` when auto-repair was either attempted
    * or considered. Absent on plain `maestro_run` calls outside the
@@ -317,8 +317,8 @@ export interface ActionRuntimeState {
  */
 export interface ReusableAction {
   metadata: M7Metadata;
-  body: string;            // raw YAML body, post-header
-  filePath: string;        // absolute path to the .yaml
+  body: string; // raw YAML body, post-header
+  filePath: string; // absolute path to the .yaml
   state: ActionRuntimeState;
 }
 
@@ -348,7 +348,10 @@ export const HISTORY_LIMITS = {
  * Build an empty runtime state for a brand-new action. Caller passes the
  * file's mtime so subsequent edits-vs-self-repair detection works.
  */
-export function freshRuntimeState(now: () => Date = () => new Date(), mtimeMs: number = 0): ActionRuntimeState {
+export function freshRuntimeState(
+  now: () => Date = () => new Date(),
+  mtimeMs: number = 0,
+): ActionRuntimeState {
   const ts = now().toISOString();
   return {
     schemaVersion: 1,
@@ -375,11 +378,11 @@ export function appendRunRecord(state: ActionRuntimeState, record: RunRecord): A
   while (newHistory.length > HISTORY_LIMITS.RUN_HISTORY_MAX) newHistory.shift();
 
   const totalRuns = state.stats.totalRuns + 1;
-  const successCount = state.stats.successCount + (record.status === 'pass' ? 1 : 0);
-  const failureCount = state.stats.failureCount + (record.status === 'fail' ? 1 : 0);
+  const successCount = state.stats.successCount + (record.status === "pass" ? 1 : 0);
+  const failureCount = state.stats.failureCount + (record.status === "fail" ? 1 : 0);
 
   // Recompute avg over successful records only.
-  const successDurations = newHistory.filter((r) => r.status === 'pass').map((r) => r.durationMs);
+  const successDurations = newHistory.filter((r) => r.status === "pass").map((r) => r.durationMs);
   const avgDurationMs = successDurations.length
     ? Math.round(successDurations.reduce((s, n) => s + n, 0) / successDurations.length)
     : state.stats.avgDurationMs;
@@ -393,8 +396,8 @@ export function appendRunRecord(state: ActionRuntimeState, record: RunRecord): A
       successCount,
       failureCount,
       avgDurationMs,
-      lastSuccessAt: record.status === 'pass' ? record.timestamp : state.stats.lastSuccessAt,
-      lastFailureAt: record.status === 'fail' ? record.timestamp : state.stats.lastFailureAt,
+      lastSuccessAt: record.status === "pass" ? record.timestamp : state.stats.lastSuccessAt,
+      lastFailureAt: record.status === "fail" ? record.timestamp : state.stats.lastFailureAt,
     },
   };
 }
@@ -404,7 +407,10 @@ export function appendRunRecord(state: ActionRuntimeState, record: RunRecord): A
  * Caller is responsible for actually patching the YAML body separately
  * — this only updates the runtime state.
  */
-export function appendRepairRecord(state: ActionRuntimeState, record: RepairRecord): ActionRuntimeState {
+export function appendRepairRecord(
+  state: ActionRuntimeState,
+  record: RepairRecord,
+): ActionRuntimeState {
   const newHistory = [...state.repairHistory, record];
   while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX) newHistory.shift();
   return {
@@ -419,12 +425,18 @@ export function appendRepairRecord(state: ActionRuntimeState, record: RepairReco
  * Check whether a self-repair attempt is within the rolling-24h budget.
  * Pure function — `now` is injectable for tests.
  */
-export function recentRepairCount(state: ActionRuntimeState, now: () => Date = () => new Date()): number {
+export function recentRepairCount(
+  state: ActionRuntimeState,
+  now: () => Date = () => new Date(),
+): number {
   const cutoff = now().getTime() - 24 * 60 * 60 * 1000;
   return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
 }
 
-export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date = () => new Date()): boolean {
+export function repairBudgetAvailable(
+  state: ActionRuntimeState,
+  now: () => Date = () => new Date(),
+): boolean {
   return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
 }
 
@@ -433,8 +445,11 @@ export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date
  * Used by /run-action when an experimental flow passes; also used after
  * a self-repair's verification replay succeeds.
  */
-export function shouldAutoPromoteToActive(metadata: M7Metadata, lastRun: RunRecord | undefined): boolean {
-  return metadata.status === 'experimental' && lastRun?.status === 'pass';
+export function shouldAutoPromoteToActive(
+  metadata: M7Metadata,
+  lastRun: RunRecord | undefined,
+): boolean {
+  return metadata.status === "experimental" && lastRun?.status === "pass";
 }
 
 /**
@@ -443,7 +458,7 @@ export function shouldAutoPromoteToActive(metadata: M7Metadata, lastRun: RunReco
  * again.
  */
 export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
-  return metadata.status === 'active';
+  return metadata.status === "active";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,32 +475,51 @@ export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
  * `scripts/learned-actions.mjs` parseFlowMeta() so they stay in sync.
  */
 export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata | null {
-  const lines = yamlText.split('\n');
+  const lines = yamlText.split("\n");
   const meta: Record<string, unknown> = {};
   let inComment = false;
   for (const line of lines) {
-    if (line.startsWith('#')) {
+    if (line.startsWith("#")) {
       inComment = true;
-      const stripped = line.replace(/^#\s?/, '').trim();
+      const stripped = line.replace(/^#\s?/, "").trim();
       if (!stripped) continue;
       const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
       if (!kv) continue;
       const key = kv[1];
       const raw = kv[2].trim();
-      if (key === 'tags') {
-        meta.tags = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
-      } else if (key === 'mutates') {
+      if (key === "tags") {
+        meta.tags = raw
+          .replace(/^\[|\]$/g, "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else if (key === "mutates") {
         meta.mutates = /^true$/i.test(raw);
-      } else if (key === 'params') {
-        meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
-      } else if (key === 'produces') {
+      } else if (key === "params") {
+        meta.params = raw
+          .replace(/^\[|\]$/g, "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else if (key === "produces") {
         meta.produces = parseProducesMap(raw);
-      } else if (key === 'expectedRouteSequence') {
-        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
-      } else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
+      } else if (key === "expectedRouteSequence") {
+        meta.expectedRouteSequence = raw
+          .replace(/^\[|\]$/g, "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else if (
+        key === "id" ||
+        key === "intent" ||
+        key === "status" ||
+        key === "appId" ||
+        key === "createdAt" ||
+        key === "author"
+      ) {
         meta[key] = raw;
       }
-    } else if (inComment && line.trim() === '') {
+    } else if (inComment && line.trim() === "") {
       // First blank line after a comment block — stop parsing header.
       if (Object.keys(meta).length > 0) break;
     } else if (inComment) {
@@ -495,7 +529,7 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
   const id = (meta.id as string) ?? fallbackId;
   const intent = meta.intent as string | undefined;
   if (!id || !intent) return null;
-  const status = (meta.status as ActionLifecycle | undefined) ?? 'experimental';
+  const status = (meta.status as ActionLifecycle | undefined) ?? "experimental";
   return {
     id,
     intent,
@@ -521,10 +555,13 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
  * inside values are not supported in v1.
  */
 function parseProducesMap(raw: string): Record<string, string | number | boolean> | undefined {
-  const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+  const inner = raw
+    .trim()
+    .replace(/^\{|\}$/g, "")
+    .trim();
   if (!inner) return undefined;
   const result: Record<string, string | number | boolean> = {};
-  for (const part of inner.split(',')) {
+  for (const part of inner.split(",")) {
     const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
     if (!kv) continue;
     const key = kv[1];
@@ -534,7 +571,7 @@ function parseProducesMap(raw: string): Record<string, string | number | boolean
     } else if (/^-?\d+(\.\d+)?$/.test(valueRaw)) {
       result[key] = Number(valueRaw);
     } else {
-      result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
+      result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
     }
   }
   return Object.keys(result).length ? result : undefined;
@@ -546,18 +583,18 @@ function parseProducesMap(raw: string): Record<string, string | number | boolean
  */
 export function serializeM7Header(metadata: M7Metadata): string {
   const lines: string[] = [];
-  const stripNewlines = (s: string) => String(s).replace(/[\r\n]+/g, ' ');
+  const stripNewlines = (s: string) => String(s).replace(/[\r\n]+/g, " ");
   lines.push(`# id: ${stripNewlines(metadata.id)}`);
   lines.push(`# intent: ${stripNewlines(metadata.intent)}`);
   if (metadata.tags && metadata.tags.length) {
-    lines.push(`# tags: [${metadata.tags.map(stripNewlines).join(', ')}]`);
+    lines.push(`# tags: [${metadata.tags.map(stripNewlines).join(", ")}]`);
   }
-  if (typeof metadata.mutates === 'boolean') {
+  if (typeof metadata.mutates === "boolean") {
     lines.push(`# mutates: ${metadata.mutates}`);
   }
   lines.push(`# status: ${stripNewlines(metadata.status)}`);
   if (metadata.params && metadata.params.length) {
-    lines.push(`# params: [${metadata.params.map(stripNewlines).join(', ')}]`);
+    lines.push(`# params: [${metadata.params.map(stripNewlines).join(", ")}]`);
   }
   if (metadata.appId) lines.push(`# appId: ${stripNewlines(metadata.appId)}`);
   if (metadata.createdAt) lines.push(`# createdAt: ${stripNewlines(metadata.createdAt)}`);
@@ -567,13 +604,15 @@ export function serializeM7Header(metadata: M7Metadata): string {
       .sort()
       .map((k) => {
         const v = metadata.produces![k];
-        const formatted = typeof v === 'string' ? stripNewlines(v) : String(v);
+        const formatted = typeof v === "string" ? stripNewlines(v) : String(v);
         return `${k}: ${formatted}`;
       });
-    lines.push(`# produces: { ${pairs.join(', ')} }`);
+    lines.push(`# produces: { ${pairs.join(", ")} }`);
   }
   if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
-    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`);
+    lines.push(
+      `# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(", ")}]`,
+    );
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }

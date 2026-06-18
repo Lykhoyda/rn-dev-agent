@@ -1,6 +1,6 @@
-import { logger } from '../logger.js';
-import { resetState, clearActiveFlag, sleep } from './state.js';
-import type { ResettableState } from './state.js';
+import { logger } from "../logger.js";
+import { resetState, clearActiveFlag, sleep } from "./state.js";
+import type { ResettableState } from "./state.js";
 
 const RECONNECT_ATTEMPTS = 30;
 
@@ -91,30 +91,34 @@ export function handleClose(ctx: ReconnectContext, code: number): void {
   if (ctx.isDisposed() || ctx.isReconnecting()) return;
 
   if (isPassive(ctx)) {
-    ctx.setState('disconnected');
+    ctx.setState("disconnected");
     clearActiveFlag();
-    logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
+    logger.info("CDP", `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
     console.error(
-      'CDP: connection closed (code ' + code + '). Auto-reconnect is disabled ' +
-      '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
-      'the bridge will reconnect on the next CDP tool call. ' +
-      'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.',
+      "CDP: connection closed (code " +
+        code +
+        "). Auto-reconnect is disabled " +
+        "(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — " +
+        "the bridge will reconnect on the next CDP tool call. " +
+        "Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.",
     );
     return;
   }
 
-  logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
+  logger.info("CDP", `WebSocket closed (code ${code}), starting reconnect`);
   if (code === 1006) {
-    console.error('CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...');
+    console.error(
+      "CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...",
+    );
   } else {
-    console.error('CDP: connection closed (code ' + code + '). Reconnecting...');
+    console.error("CDP: connection closed (code " + code + "). Reconnecting...");
   }
 
   ctx.setReconnecting(true);
-  ctx.setState('reconnecting');
+  ctx.setState("reconnecting");
 
   reconnect(ctx).catch((err) => {
-    console.error('CDP: reconnect failed:', err instanceof Error ? err.message : err);
+    console.error("CDP: reconnect failed:", err instanceof Error ? err.message : err);
     ctx.setReconnecting(false);
   });
 }
@@ -150,7 +154,7 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
   for (let i = 0; i < RECONNECT_ATTEMPTS; i++) {
     const delayMs = computeReconnectDelay(i);
     if (delayMs > 0) {
-      logger.info('CDP', `reconnect attempt ${i + 1}/${RECONNECT_ATTEMPTS} in ${delayMs}ms`);
+      logger.info("CDP", `reconnect attempt ${i + 1}/${RECONNECT_ATTEMPTS} in ${delayMs}ms`);
       const completed = await interruptibleSleep(delayMs, ctx);
       if (!completed) {
         ctx.setReconnecting(false);
@@ -166,12 +170,15 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
     try {
       await ctx.discoverAndConnect();
       ctx.setReconnecting(false);
-      console.error('CDP: reconnected successfully');
+      console.error("CDP: reconnected successfully");
       if (ctx.afterReconnect) {
         try {
           await ctx.afterReconnect();
         } catch (err) {
-          logger.warn('CDP', `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`);
+          logger.warn(
+            "CDP",
+            `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`,
+          );
         }
       }
       return;
@@ -180,15 +187,17 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
     }
   }
   ctx.setReconnecting(false);
-  ctx.setState('disconnected');
+  ctx.setState("disconnected");
   clearActiveFlag();
-  console.error('CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...');
+  console.error(
+    "CDP: reconnect failed after " + RECONNECT_ATTEMPTS + " attempts. Starting background poll...",
+  );
   startBackgroundPoll(ctx);
 }
 
 export async function softReconnect(ctx: ReconnectContext): Promise<string> {
-  if (ctx.isDisposed()) throw new Error('Client is disposed');
-  logger.info('CDP', 'softReconnect initiated');
+  if (ctx.isDisposed()) throw new Error("Client is disposed");
+  logger.info("CDP", "softReconnect initiated");
 
   if (ctx.isReconnecting()) {
     ctx.setSoftReconnectRequested(true);
@@ -203,7 +212,7 @@ export async function softReconnect(ctx: ReconnectContext): Promise<string> {
   try {
     resetState(ctx.getResettableState());
     ctx.closeWs();
-    ctx.rejectAllPending(new Error('Stale target — re-discovering'));
+    ctx.rejectAllPending(new Error("Stale target — re-discovering"));
     const result = await ctx.discoverAndConnect();
     ctx.setReconnecting(false);
     return result;
@@ -216,31 +225,35 @@ export async function softReconnect(ctx: ReconnectContext): Promise<string> {
 export function startBackgroundPoll(ctx: ReconnectContext): void {
   if (ctx.getBgPollTimer() || ctx.isDisposed()) return;
   if (isPassive(ctx)) return;
-  ctx.setBgPollTimer(setInterval(async () => {
-    if (isPassive(ctx)) {
-      stopBackgroundPoll(ctx);
-      return;
-    }
-    if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
-      stopBackgroundPoll(ctx);
-      return;
-    }
-    try {
-      const res = await fetch(`http://127.0.0.1:${ctx.getPort()}/status`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      const text = await res.text();
-      if (text === 'packager-status:running') {
-        console.error('CDP: Metro detected via background poll. Reconnecting...');
+  ctx.setBgPollTimer(
+    setInterval(async () => {
+      if (isPassive(ctx)) {
         stopBackgroundPoll(ctx);
-        ctx.setReconnecting(true);
-        ctx.setState('reconnecting');
-        reconnect(ctx).catch(() => { ctx.setReconnecting(false); });
+        return;
       }
-    } catch {
-      // Metro not available yet — keep polling
-    }
-  }, 5000));
+      if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
+        stopBackgroundPoll(ctx);
+        return;
+      }
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.getPort()}/status`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        const text = await res.text();
+        if (text === "packager-status:running") {
+          console.error("CDP: Metro detected via background poll. Reconnecting...");
+          stopBackgroundPoll(ctx);
+          ctx.setReconnecting(true);
+          ctx.setState("reconnecting");
+          reconnect(ctx).catch(() => {
+            ctx.setReconnecting(false);
+          });
+        }
+      } catch {
+        // Metro not available yet — keep polling
+      }
+    }, 5000),
+  );
 }
 
 export function stopBackgroundPoll(ctx: ReconnectContext): void {

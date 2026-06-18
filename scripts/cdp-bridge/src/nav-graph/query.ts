@@ -7,8 +7,8 @@ import type {
   NavigationPlan,
   NavigationPrerequisite,
   NavMethod,
-} from './types.js';
-import { isMethodCooledDown } from './storage.js';
+} from "./types.js";
+import { isMethodCooledDown } from "./storage.js";
 
 export interface RouteLocation {
   navigator_id: string;
@@ -20,7 +20,7 @@ export interface RouteLocation {
 export function findRouteInGraph(graph: NavGraph, routeName: string): RouteLocation | null {
   const candidates: Array<{ nav: NavNavigator; screen: NavScreen }> = [];
   for (const nav of graph.navigators) {
-    const screen = nav.screens.find(s => s.name === routeName);
+    const screen = nav.screens.find((s) => s.name === routeName);
     if (screen) candidates.push({ nav, screen });
   }
   if (candidates.length === 0) return null;
@@ -47,13 +47,13 @@ function buildNavigatorPath(graph: NavGraph, navigatorId: string): string[] {
     if (visited.has(currentId)) break;
     visited.add(currentId);
 
-    const nav = graph.navigators.find(n => n.id === currentId);
+    const nav = graph.navigators.find((n) => n.id === currentId);
     if (!nav) break;
 
     if (nav.parent_screen) {
       path.unshift(nav.parent_screen);
-      const parentNav = graph.navigators.find(n =>
-        n.screens.some(s => s.name === nav.parent_screen),
+      const parentNav = graph.navigators.find((n) =>
+        n.screens.some((s) => s.name === nav.parent_screen),
       );
       currentId = parentNav?.id;
     } else {
@@ -68,7 +68,8 @@ export function listAllRoutes(graph: NavGraph): Array<{
   navigator_kind: NavigatorKind;
   route: NavScreen;
 }> {
-  const results: Array<{ navigator_id: string; navigator_kind: NavigatorKind; route: NavScreen }> = [];
+  const results: Array<{ navigator_id: string; navigator_kind: NavigatorKind; route: NavScreen }> =
+    [];
   for (const nav of graph.navigators) {
     for (const screen of nav.screens) {
       results.push({
@@ -83,21 +84,21 @@ export function listAllRoutes(graph: NavGraph): Array<{
 
 export function getNavigatorSubtree(graph: NavGraph, rootId: string): NavNavigator[] {
   const result: NavNavigator[] = [];
-  const root = graph.navigators.find(n => n.id === rootId);
+  const root = graph.navigators.find((n) => n.id === rootId);
   if (!root) return result;
 
   const seen = new Set<string>([root.id]);
   result.push(root);
-  const queue = root.screens.map(s => s.name);
+  const queue = root.screens.map((s) => s.name);
 
   while (queue.length > 0) {
     const screenName = queue.shift()!;
-    const childNavs = graph.navigators.filter(n => n.parent_screen === screenName);
+    const childNavs = graph.navigators.filter((n) => n.parent_screen === screenName);
     for (const child of childNavs) {
       if (seen.has(child.id)) continue;
       seen.add(child.id);
       result.push(child);
-      queue.push(...child.screens.map(s => s.name));
+      queue.push(...child.screens.map((s) => s.name));
     }
   }
   return result;
@@ -105,15 +106,16 @@ export function getNavigatorSubtree(graph: NavGraph, rootId: string): NavNavigat
 
 // --- Phase B: Navigation Planning ---
 
-const AUTH_SCREEN_PATTERNS = /\b(login|signin|sign.?in|welcome|register|signup|sign.?up|auth|landing|onboarding)\b/i;
+const AUTH_SCREEN_PATTERNS =
+  /\b(login|signin|sign.?in|welcome|register|signup|sign.?up|auth|landing|onboarding)\b/i;
 
 function findNavigatorForScreen(graph: NavGraph, screenName: string): NavNavigator | null {
-  return graph.navigators.find(n => n.screens.some(s => s.name === screenName)) ?? null;
+  return graph.navigators.find((n) => n.screens.some((s) => s.name === screenName)) ?? null;
 }
 
 function getActiveScreenChain(graph: NavGraph): string[] {
   const chain: string[] = [];
-  let nav: NavNavigator | undefined = graph.navigators.find(n => !n.parent_screen);
+  let nav: NavNavigator | undefined = graph.navigators.find((n) => !n.parent_screen);
   if (!nav) return chain;
 
   const visited = new Set<string>();
@@ -121,7 +123,7 @@ function getActiveScreenChain(graph: NavGraph): string[] {
     visited.add(nav.id);
     if (nav.active_screen) {
       chain.push(nav.active_screen);
-      nav = graph.navigators.find(n => n.parent_screen === nav!.active_screen);
+      nav = graph.navigators.find((n) => n.parent_screen === nav!.active_screen);
     } else {
       break;
     }
@@ -129,20 +131,24 @@ function getActiveScreenChain(graph: NavGraph): string[] {
   return chain;
 }
 
-function actionForKind(kind: NavigatorKind): NavigationStep['action'] {
+function actionForKind(kind: NavigatorKind): NavigationStep["action"] {
   switch (kind) {
-    case 'tab': return 'switch_tab';
-    case 'drawer': return 'open_drawer';
-    case 'stack':
-    case 'native-stack': return 'navigate';
-    default: return 'navigate';
+    case "tab":
+      return "switch_tab";
+    case "drawer":
+      return "open_drawer";
+    case "stack":
+    case "native-stack":
+      return "navigate";
+    default:
+      return "navigate";
   }
 }
 
 function computeStepReliability(screen: NavScreen, kind: NavigatorKind): number {
   const base = screen.reliability_score;
-  if (kind === 'tab') return Math.min(base + 10, 100);
-  if (kind === 'stack' || kind === 'native-stack') return base;
+  if (kind === "tab") return Math.min(base + 10, 100);
+  if (kind === "stack" || kind === "native-stack") return base;
   return Math.max(base - 5, 0);
 }
 
@@ -154,9 +160,9 @@ function detectPrerequisites(graph: NavGraph, targetScreen: string): NavigationP
   for (const screenInPath of location.path) {
     if (AUTH_SCREEN_PATTERNS.test(screenInPath)) {
       prereqs.push({
-        type: 'auth',
+        type: "auth",
         description: `Path passes through auth screen "${screenInPath}" — login may be required`,
-        check_tool: 'cdp_navigation_state',
+        check_tool: "cdp_navigation_state",
       });
       break;
     }
@@ -168,10 +174,10 @@ function detectPrerequisites(graph: NavGraph, targetScreen: string): NavigationP
   // permission prerequisite.
   if (screen.params_template && /\bpermissions?\b/i.test(screen.params_template)) {
     prereqs.push({
-      type: 'permission',
+      type: "permission",
       description: `Screen "${targetScreen}" may require permissions (params: ${screen.params_template})`,
-      check_tool: 'device_permission',
-      check_args: { action: 'query' },
+      check_tool: "device_permission",
+      check_args: { action: "query" },
     });
   }
 
@@ -199,7 +205,7 @@ export function buildNavigationPlan(
       total_steps: 0,
       estimated_reliability: 100,
       prerequisites: [],
-      preferred_method: 'programmatic',
+      preferred_method: "programmatic",
       deep_link_available: !!targetDeepLink,
       deep_link_path: targetDeepLink,
     };
@@ -226,7 +232,7 @@ export function buildNavigationPlan(
     const nav = findNavigatorForScreen(graph, screenName);
     if (!nav) continue;
 
-    const screen = nav.screens.find(s => s.name === screenName);
+    const screen = nav.screens.find((s) => s.name === screenName);
     if (!screen) continue;
 
     steps.push({
@@ -234,12 +240,12 @@ export function buildNavigationPlan(
       target_screen: screenName,
       navigator_id: nav.id,
       navigator_kind: nav.kind,
-      method: 'programmatic',
+      method: "programmatic",
       note: screen.params_template
         ? `Navigate to "${screenName}" (requires params: ${screen.params_template})`
-        : nav.kind === 'tab'
+        : nav.kind === "tab"
           ? `Switch to "${screenName}" tab`
-          : nav.kind === 'drawer'
+          : nav.kind === "drawer"
             ? `Open drawer, select "${screenName}"`
             : `Navigate to "${screenName}"`,
     });
@@ -251,7 +257,7 @@ export function buildNavigationPlan(
       target_screen: targetScreen,
       navigator_id: targetNav.id,
       navigator_kind: targetNav.kind,
-      method: 'programmatic',
+      method: "programmatic",
       note: `Navigate to "${targetScreen}"`,
     });
   }
@@ -259,11 +265,11 @@ export function buildNavigationPlan(
   const deepLinkAvailable = !!targetDeepLink;
   if (deepLinkAvailable && steps.length > 1) {
     steps.unshift({
-      action: 'deep_link',
+      action: "deep_link",
       target_screen: targetScreen,
       navigator_id: targetNav.id,
       navigator_kind: targetNav.kind,
-      method: 'deep_link',
+      method: "deep_link",
       deep_link_path: targetLocation.screen.path,
       note: `Alternative: deep link to "${targetLocation.screen.path}" (may trigger Dev Client picker)`,
     });
@@ -271,34 +277,33 @@ export function buildNavigationPlan(
 
   for (const step of steps) {
     if (isMethodCooledDown(step.target_screen, step.method)) {
-      step.note = `[COOLED DOWN] ${step.note ?? ''} — method failed 2+ times recently, consider alternative`;
+      step.note = `[COOLED DOWN] ${step.note ?? ""} — method failed 2+ times recently, consider alternative`;
     }
   }
 
   let reliability = 100;
-  const programmaticSteps = steps.filter(s => s.method === 'programmatic');
+  const programmaticSteps = steps.filter((s) => s.method === "programmatic");
   for (const step of programmaticSteps) {
-    const nav = graph.navigators.find(n => n.id === step.navigator_id);
-    const screen = nav?.screens.find(s => s.name === step.target_screen);
+    const nav = graph.navigators.find((n) => n.id === step.navigator_id);
+    const screen = nav?.screens.find((s) => s.name === step.target_screen);
     if (screen && nav) {
       reliability = Math.min(reliability, computeStepReliability(screen, nav.kind));
     }
   }
 
-  const hasCooledProgrammatic = programmaticSteps.some(s =>
+  const hasCooledProgrammatic = programmaticSteps.some((s) =>
     isMethodCooledDown(s.target_screen, s.method),
   );
 
   const prerequisites = detectPrerequisites(graph, targetScreen);
 
-  let preferredMethod: NavMethod = deepLinkAvailable && programmaticSteps.length >= 2
-    ? 'deep_link'
-    : 'programmatic';
+  let preferredMethod: NavMethod =
+    deepLinkAvailable && programmaticSteps.length >= 2 ? "deep_link" : "programmatic";
   if (hasCooledProgrammatic) {
-    if (deepLinkAvailable && !isMethodCooledDown(targetScreen, 'deep_link')) {
-      preferredMethod = 'deep_link';
-    } else if (!isMethodCooledDown(targetScreen, 'ui_interaction')) {
-      preferredMethod = 'ui_interaction';
+    if (deepLinkAvailable && !isMethodCooledDown(targetScreen, "deep_link")) {
+      preferredMethod = "deep_link";
+    } else if (!isMethodCooledDown(targetScreen, "ui_interaction")) {
+      preferredMethod = "ui_interaction";
     }
   }
 

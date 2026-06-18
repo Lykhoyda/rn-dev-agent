@@ -6,14 +6,8 @@
     "platform": "both",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "props",
-      "architecture"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "props", "architecture"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/architecture-avoid-boolean-props.md",
@@ -26,14 +20,8 @@
     "platform": "both",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "compound-components",
-      "architecture"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "compound-components", "architecture"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/architecture-compound-components.md",
@@ -46,14 +34,8 @@
     "platform": "both",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "children",
-      "render-props"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "children", "render-props"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/patterns-children-over-render-props.md",
@@ -66,14 +48,8 @@
     "platform": "both",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "variants",
-      "architecture"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "variants", "architecture"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/patterns-explicit-variants.md",
@@ -86,15 +62,8 @@
     "platform": "both",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "react19",
-      "refs",
-      "context",
-      "hooks"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["react19", "refs", "context", "hooks"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/react19-no-forwardref.md",
@@ -107,16 +76,8 @@
     "platform": "both",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "context",
-      "state",
-      "typescript",
-      "dependency-injection"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "context", "state", "typescript", "dependency-injection"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/state-context-interface.md",
@@ -129,14 +90,8 @@
     "platform": "both",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "state",
-      "architecture"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "state", "architecture"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/state-decouple-implementation.md",
@@ -149,15 +104,8 @@
     "platform": "both",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "composition",
-      "state",
-      "context",
-      "providers"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["composition", "state", "context", "providers"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/composition-patterns/rules/state-lift-state.md",
@@ -170,16 +118,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "advanced",
-      "hooks",
-      "useEffectEvent",
-      "dependencies",
-      "effects"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["advanced", "hooks", "useEffectEvent", "dependencies", "effects"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/advanced-effect-event-deps.md",
@@ -192,16 +132,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "advanced",
-      "hooks",
-      "refs",
-      "event-handlers",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["advanced", "hooks", "refs", "event-handlers", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/advanced-event-handler-refs.md",
@@ -214,15 +146,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "initialization",
-      "useEffect",
-      "app-startup",
-      "side-effects"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["initialization", "useEffect", "app-startup", "side-effects"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/advanced-init-once.md",
@@ -235,16 +160,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "advanced",
-      "hooks",
-      "useEffectEvent",
-      "refs",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["advanced", "hooks", "useEffectEvent", "refs", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/advanced-use-latest.md",
@@ -257,15 +174,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "api-routes",
-      "server-actions",
-      "waterfalls",
-      "parallelization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["api-routes", "server-actions", "waterfalls", "parallelization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-api-routes.md",
@@ -278,16 +188,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "async",
-      "await",
-      "feature-flags",
-      "short-circuit",
-      "conditional"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["async", "await", "feature-flags", "short-circuit", "conditional"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-cheap-condition-before-await.md",
@@ -300,15 +202,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "async",
-      "await",
-      "conditional",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["async", "await", "conditional", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-defer-await.md",
@@ -321,15 +216,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "async",
-      "parallelization",
-      "dependencies",
-      "better-all"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["async", "parallelization", "dependencies", "better-all"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-dependencies.md",
@@ -342,15 +230,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "async",
-      "parallelization",
-      "promises",
-      "waterfalls"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["async", "parallelization", "promises", "waterfalls"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-parallel.md",
@@ -363,15 +244,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "async",
-      "suspense",
-      "streaming",
-      "layout-shift"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["async", "suspense", "streaming", "layout-shift"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/async-suspense-boundaries.md",
@@ -384,18 +258,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "nextjs",
-      "vite",
-      "webpack",
-      "rollup",
-      "esbuild",
-      "path"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "nextjs", "vite", "webpack", "rollup", "esbuild", "path"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-analyzable-paths.md",
@@ -408,16 +272,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "imports",
-      "tree-shaking",
-      "barrel-files",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "imports", "tree-shaking", "barrel-files", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-barrel-imports.md",
@@ -430,14 +286,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "conditional-loading",
-      "lazy-loading"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "conditional-loading", "lazy-loading"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-conditional.md",
@@ -450,15 +300,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "third-party",
-      "analytics",
-      "defer"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "third-party", "analytics", "defer"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-defer-third-party.md",
@@ -471,15 +314,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "dynamic-import",
-      "code-splitting",
-      "next-dynamic"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "dynamic-import", "code-splitting", "next-dynamic"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-dynamic-imports.md",
@@ -492,15 +328,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "bundle",
-      "preload",
-      "user-intent",
-      "hover"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["bundle", "preload", "user-intent", "hover"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/bundle-preload.md",
@@ -513,15 +342,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "client",
-      "swr",
-      "event-listeners",
-      "subscription"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["client", "swr", "event-listeners", "subscription"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/client-event-listeners.md",
@@ -534,16 +356,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "client",
-      "localStorage",
-      "storage",
-      "versioning",
-      "data-minimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["client", "localStorage", "storage", "versioning", "data-minimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/client-localstorage-schema.md",
@@ -556,17 +370,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "client",
-      "event-listeners",
-      "scrolling",
-      "performance",
-      "touch",
-      "wheel"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["client", "event-listeners", "scrolling", "performance", "touch", "wheel"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/client-passive-event-listeners.md",
@@ -579,15 +384,8 @@
     "platform": "web",
     "severity": "MEDIUM-HIGH",
     "confidence": 80,
-    "triggers": [
-      "client",
-      "swr",
-      "deduplication",
-      "data-fetching"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["client", "swr", "deduplication", "data-fetching"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/client-swr-dedup.md",
@@ -600,17 +398,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "dom",
-      "css",
-      "performance",
-      "reflow",
-      "layout-thrashing"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "dom", "css", "performance", "reflow", "layout-thrashing"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-batch-dom-css.md",
@@ -623,15 +412,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "cache",
-      "memoization",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "cache", "memoization", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-cache-function-results.md",
@@ -644,15 +426,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "loops",
-      "optimization",
-      "caching"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "loops", "optimization", "caching"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-cache-property-access.md",
@@ -665,16 +440,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "localStorage",
-      "storage",
-      "caching",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "localStorage", "storage", "caching", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-cache-storage.md",
@@ -687,15 +454,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "arrays",
-      "loops",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "arrays", "loops", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-combine-iterations.md",
@@ -708,15 +468,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "functions",
-      "optimization",
-      "early-return"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "functions", "optimization", "early-return"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-early-exit.md",
@@ -729,16 +482,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "arrays",
-      "flatMap",
-      "filter",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "arrays", "flatMap", "filter", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-flatmap-filter.md",
@@ -751,15 +496,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "regexp",
-      "optimization",
-      "memoization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "regexp", "optimization", "memoization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-hoist-regexp.md",
@@ -772,16 +510,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "map",
-      "indexing",
-      "optimization",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "map", "indexing", "optimization", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-index-maps.md",
@@ -794,16 +524,8 @@
     "platform": "web",
     "severity": "MEDIUM-HIGH",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "arrays",
-      "performance",
-      "optimization",
-      "comparison"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "arrays", "performance", "optimization", "comparison"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-length-check-first.md",
@@ -816,16 +538,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "arrays",
-      "performance",
-      "sorting",
-      "algorithms"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "arrays", "performance", "sorting", "algorithms"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-min-max-loop.md",
@@ -838,16 +552,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "performance",
-      "idle",
-      "scheduling",
-      "analytics"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "performance", "idle", "scheduling", "analytics"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-request-idle-callback.md",
@@ -860,16 +566,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "set",
-      "map",
-      "data-structures",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "set", "map", "data-structures", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-set-map-lookups.md",
@@ -882,17 +580,8 @@
     "platform": "web",
     "severity": "MEDIUM-HIGH",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "arrays",
-      "immutability",
-      "react",
-      "state",
-      "mutation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "arrays", "immutability", "react", "state", "mutation"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/js-tosorted-immutable.md",
@@ -905,15 +594,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "activity",
-      "visibility",
-      "state-preservation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "activity", "visibility", "state-preservation"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-activity.md",
@@ -926,16 +608,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "svg",
-      "css",
-      "animation",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "svg", "css", "animation", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-animate-svg-wrapper.md",
@@ -948,15 +622,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "conditional",
-      "jsx",
-      "falsy-values"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "conditional", "jsx", "falsy-values"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-conditional-render.md",
@@ -969,15 +636,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "css",
-      "content-visibility",
-      "long-lists"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "css", "content-visibility", "long-lists"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-content-visibility.md",
@@ -990,15 +650,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "jsx",
-      "static",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "jsx", "static", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-hoist-jsx.md",
@@ -1011,16 +664,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "ssr",
-      "hydration",
-      "localStorage",
-      "flicker"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "ssr", "hydration", "localStorage", "flicker"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-hydration-no-flicker.md",
@@ -1033,15 +678,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "hydration",
-      "ssr",
-      "nextjs"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "hydration", "ssr", "nextjs"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-hydration-suppress-warning.md",
@@ -1054,16 +692,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "preload",
-      "preconnect",
-      "prefetch",
-      "resource-hints"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "preload", "preconnect", "prefetch", "resource-hints"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-resource-hints.md",
@@ -1076,16 +706,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "script",
-      "defer",
-      "async",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "script", "defer", "async", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-script-defer-async.md",
@@ -1098,15 +720,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "svg",
-      "optimization",
-      "svgo"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "svg", "optimization", "svgo"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-svg-precision.md",
@@ -1119,16 +734,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "transitions",
-      "useTransition",
-      "loading",
-      "state"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "transitions", "useTransition", "loading", "state"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rendering-usetransition-loading.md",
@@ -1141,15 +748,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "searchParams",
-      "localStorage",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "searchParams", "localStorage", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-defer-reads.md",
@@ -1162,15 +762,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useEffect",
-      "dependencies",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useEffect", "dependencies", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-dependencies.md",
@@ -1183,15 +776,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "derived-state",
-      "useEffect",
-      "state"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "derived-state", "useEffect", "state"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-derived-state-no-effect.md",
@@ -1204,15 +790,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "derived-state",
-      "media-query",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "derived-state", "media-query", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-derived-state.md",
@@ -1225,17 +804,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "react",
-      "hooks",
-      "useState",
-      "useCallback",
-      "callbacks",
-      "closures"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["react", "hooks", "useState", "useCallback", "callbacks", "closures"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-functional-setstate.md",
@@ -1248,16 +818,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "react",
-      "hooks",
-      "useState",
-      "performance",
-      "initialization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["react", "hooks", "useState", "performance", "initialization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-lazy-state-init.md",
@@ -1270,14 +832,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "memo",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "memo", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-memo-with-default-value.md",
@@ -1290,15 +846,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "memo",
-      "useMemo",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "memo", "useMemo", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-memo.md",
@@ -1311,16 +860,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useEffect",
-      "events",
-      "side-effects",
-      "dependencies"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useEffect", "events", "side-effects", "dependencies"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-move-effect-to-event.md",
@@ -1333,15 +874,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "components",
-      "remount",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "components", "remount", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-no-inline-components.md",
@@ -1354,14 +888,8 @@
     "platform": "web",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useMemo",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useMemo", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-simple-expression-in-memo.md",
@@ -1374,16 +902,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useMemo",
-      "useEffect",
-      "dependencies",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useMemo", "useEffect", "dependencies", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-split-combined-hooks.md",
@@ -1396,15 +916,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "transitions",
-      "startTransition",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "transitions", "startTransition", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-transitions.md",
@@ -1417,15 +930,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useDeferredValue",
-      "optimization",
-      "concurrent"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useDeferredValue", "optimization", "concurrent"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-use-deferred-value.md",
@@ -1438,15 +944,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "useref",
-      "state",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "useref", "state", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/rerender-use-ref-transient-values.md",
@@ -1459,16 +958,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "async",
-      "logging",
-      "analytics",
-      "side-effects"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "async", "logging", "analytics", "side-effects"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-after-nonblocking.md",
@@ -1481,16 +972,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "server-actions",
-      "authentication",
-      "security",
-      "authorization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "server-actions", "authentication", "security", "authorization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-auth-actions.md",
@@ -1503,15 +986,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "cache",
-      "lru",
-      "cross-request"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "cache", "lru", "cross-request"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-cache-lru.md",
@@ -1524,15 +1000,8 @@
     "platform": "web",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "cache",
-      "react-cache",
-      "deduplication"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "cache", "react-cache", "deduplication"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-cache-react.md",
@@ -1545,16 +1014,8 @@
     "platform": "web",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "rsc",
-      "serialization",
-      "props",
-      "client-components"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "rsc", "serialization", "props", "client-components"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-dedup-props.md",
@@ -1567,17 +1028,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "io",
-      "performance",
-      "next.js",
-      "route-handlers",
-      "og-image"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "io", "performance", "next.js", "route-handlers", "og-image"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-hoist-static-io.md",
@@ -1590,17 +1042,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "rsc",
-      "ssr",
-      "concurrency",
-      "security",
-      "state"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "rsc", "ssr", "concurrency", "security", "state"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-no-shared-module-state.md",
@@ -1613,15 +1056,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "rsc",
-      "parallel-fetching",
-      "composition"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "rsc", "parallel-fetching", "composition"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-parallel-fetching.md",
@@ -1634,15 +1070,8 @@
     "platform": "web",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "rsc",
-      "parallel-fetching",
-      "promise-chaining"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "rsc", "parallel-fetching", "promise-chaining"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-parallel-nested-fetching.md",
@@ -1655,15 +1084,8 @@
     "platform": "web",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "server",
-      "rsc",
-      "serialization",
-      "props"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["server", "rsc", "serialization", "props"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-best-practices/rules/server-serialization.md",
@@ -1676,14 +1098,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "animation",
-      "reanimated",
-      "derived-value"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["animation", "reanimated", "derived-value"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/animation-derived-value.md",
@@ -1696,15 +1112,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "animation",
-      "gestures",
-      "press",
-      "reanimated"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["animation", "gestures", "press", "reanimated"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/animation-gesture-detector-press.md",
@@ -1717,16 +1126,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "animation",
-      "performance",
-      "reanimated",
-      "transform",
-      "opacity"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["animation", "performance", "reanimated", "transform", "opacity"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/animation-gpu-properties.md",
@@ -1739,14 +1140,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "design-system",
-      "components",
-      "composition"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["design-system", "components", "composition"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/design-system-compound-components.md",
@@ -1759,15 +1154,8 @@
     "platform": "RN",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "fonts",
-      "expo",
-      "performance",
-      "config-plugin"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["fonts", "expo", "performance", "config-plugin"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/fonts-config-plugin.md",
@@ -1780,14 +1168,8 @@
     "platform": "RN",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "imports",
-      "architecture",
-      "design-system"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["imports", "architecture", "design-system"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/imports-design-system-folder.md",
@@ -1800,15 +1182,8 @@
     "platform": "RN",
     "severity": "LOW-MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "javascript",
-      "intl",
-      "optimization",
-      "memoization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["javascript", "intl", "optimization", "memoization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/js-hoist-intl.md",
@@ -1821,13 +1196,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "tag1",
-      "tag2"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["tag1", "tag2"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-callbacks.md",
@@ -1840,15 +1210,8 @@
     "platform": "RN",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "performance",
-      "flatlist",
-      "virtualization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "performance", "flatlist", "virtualization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-function-references.md",
@@ -1861,15 +1224,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "images",
-      "performance",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "images", "performance", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-images.md",
@@ -1882,16 +1238,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "performance",
-      "flatlist",
-      "virtualization",
-      "memo"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "performance", "flatlist", "virtualization", "memo"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": "no-inline-renderitem-literals",
     "checkable": true,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-inline-objects.md",
@@ -1904,15 +1252,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "performance",
-      "virtualization",
-      "hooks"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "performance", "virtualization", "hooks"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-item-expensive.md",
@@ -1925,15 +1266,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "performance",
-      "memo",
-      "primitives"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "performance", "memo", "primitives"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-item-memo.md",
@@ -1946,16 +1280,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "list",
-      "performance",
-      "recycling",
-      "heterogeneous",
-      "LegendList"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["list", "performance", "recycling", "heterogeneous", "LegendList"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-item-types.md",
@@ -1968,15 +1294,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "lists",
-      "performance",
-      "virtualization",
-      "scrollview"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["lists", "performance", "virtualization", "scrollview"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-virtualize.md",
@@ -1989,15 +1308,8 @@
     "platform": "RN",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "monorepo",
-      "native",
-      "autolinking",
-      "installation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["monorepo", "native", "autolinking", "installation"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/monorepo-native-deps-in-app.md",
@@ -2010,14 +1322,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "monorepo",
-      "dependencies",
-      "installation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["monorepo", "dependencies", "installation"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/monorepo-single-dependency-versions.md",
@@ -2030,16 +1336,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "navigation",
-      "react-navigation",
-      "expo-router",
-      "native-stack",
-      "tabs"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["navigation", "react-navigation", "expo-router", "native-stack", "tabs"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/navigation-native-navigators.md",
@@ -2052,15 +1350,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "rerender",
-      "hooks",
-      "performance",
-      "react-compiler"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rerender", "hooks", "performance", "react-compiler"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/react-compiler-destructure-functions.md",
@@ -2073,14 +1364,8 @@
     "platform": "RN",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "reanimated",
-      "react-compiler",
-      "shared-values"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["reanimated", "react-compiler", "shared-values"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/react-compiler-reanimated-shared-values.md",
@@ -2093,15 +1378,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "state",
-      "hooks",
-      "useState",
-      "callbacks"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["state", "hooks", "useState", "callbacks"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/react-state-dispatcher.md",
@@ -2114,16 +1392,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "state",
-      "hooks",
-      "derived-state",
-      "props",
-      "initialState"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["state", "hooks", "derived-state", "props", "initialState"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/react-state-fallback.md",
@@ -2136,15 +1406,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "state",
-      "derived-state",
-      "hooks",
-      "optimization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["state", "derived-state", "hooks", "optimization"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/react-state-minimize.md",
@@ -2157,15 +1420,8 @@
     "platform": "RN",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "conditional",
-      "jsx",
-      "crash"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "conditional", "jsx", "crash"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": "no-falsy-jsx-and",
     "checkable": true,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md",
@@ -2178,14 +1434,8 @@
     "platform": "RN",
     "severity": "CRITICAL",
     "confidence": 80,
-    "triggers": [
-      "rendering",
-      "text",
-      "core"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["rendering", "text", "core"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-text-in-text-component.md",
@@ -2198,15 +1448,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "scroll",
-      "performance",
-      "reanimated",
-      "useRef"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["scroll", "performance", "reanimated", "useRef"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/scroll-position-no-state.md",
@@ -2219,15 +1462,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "state",
-      "derived-state",
-      "reanimated",
-      "hooks"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["state", "derived-state", "reanimated", "hooks"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/state-ground-truth.md",
@@ -2240,15 +1476,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "images",
-      "performance",
-      "expo-image",
-      "ui"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["images", "performance", "expo-image", "ui"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-expo-image.md",
@@ -2261,16 +1490,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "images",
-      "gallery",
-      "lightbox",
-      "expo-image",
-      "ui"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["images", "gallery", "lightbox", "expo-image", "ui"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-image-gallery.md",
@@ -2283,15 +1504,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "layout",
-      "measurement",
-      "onLayout",
-      "useLayoutEffect"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["layout", "measurement", "onLayout", "useLayoutEffect"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-measure-views.md",
@@ -2304,16 +1518,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "user-interface",
-      "menus",
-      "context-menus",
-      "zeego",
-      "accessibility"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["user-interface", "menus", "context-menus", "zeego", "accessibility"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-menus.md",
@@ -2326,15 +1532,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 80,
-    "triggers": [
-      "modals",
-      "bottom-sheet",
-      "native",
-      "react-navigation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["modals", "bottom-sheet", "native", "react-navigation"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-native-modals.md",
@@ -2347,15 +1546,8 @@
     "platform": "RN",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "ui",
-      "pressable",
-      "touchable",
-      "gestures"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["ui", "pressable", "touchable", "gestures"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": "no-touchable-new-code",
     "checkable": true,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-pressable.md",
@@ -2368,14 +1560,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "safe-area",
-      "scrollview",
-      "layout"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["safe-area", "scrollview", "layout"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-safe-area-scroll.md",
@@ -2388,15 +1574,8 @@
     "platform": "RN",
     "severity": "LOW",
     "confidence": 80,
-    "triggers": [
-      "scrollview",
-      "layout",
-      "contentInset",
-      "performance"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["scrollview", "layout", "contentInset", "performance"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-scrollview-content-inset.md",
@@ -2409,16 +1588,8 @@
     "platform": "RN",
     "severity": "MEDIUM",
     "confidence": 80,
-    "triggers": [
-      "styling",
-      "css",
-      "layout",
-      "shadows",
-      "gradients"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx,ts,js}"
-    ],
+    "triggers": ["styling", "css", "layout", "shadows", "gradients"],
+    "fileGlobs": ["**/*.{tsx,jsx,ts,js}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-styling.md",
@@ -2439,9 +1610,7 @@
       "modal",
       "overlay"
     ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx}"
-    ],
+    "fileGlobs": ["**/*.{tsx,jsx}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/navigation-transparent-modal.md",
@@ -2454,15 +1623,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 95,
-    "triggers": [
-      "react-query",
-      "tanstack",
-      "cache",
-      "state"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx}"
-    ],
+    "triggers": ["react-query", "tanstack", "cache", "state"],
+    "fileGlobs": ["**/*.{tsx,jsx}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/query-cache-reactive.md",
@@ -2475,15 +1637,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 95,
-    "triggers": [
-      "reanimated",
-      "lists",
-      "performance",
-      "animation"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx}"
-    ],
+    "triggers": ["reanimated", "lists", "performance", "animation"],
+    "fileGlobs": ["**/*.{tsx,jsx}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/reanimated-in-lists.md",
@@ -2496,16 +1651,8 @@
     "platform": "RN",
     "severity": "HIGH",
     "confidence": 95,
-    "triggers": [
-      "lists",
-      "performance",
-      "hooks",
-      "theme",
-      "memoization"
-    ],
-    "fileGlobs": [
-      "**/*.{tsx,jsx}"
-    ],
+    "triggers": ["lists", "performance", "hooks", "theme", "memoization"],
+    "fileGlobs": ["**/*.{tsx,jsx}"],
     "checkerRule": null,
     "checkable": false,
     "upstream_path": "skills/rn-best-practices/references/rn-dev-agent/theme-memoization-lists.md",

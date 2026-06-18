@@ -1,7 +1,7 @@
 // src/observability/live-device.ts
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { classifyFamily } from './events.js';
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { classifyFamily } from "./events.js";
 /**
  * GH #206: does THIS tool call change on-screen state (→ trigger a live
  * /observe refresh)? Derived from events.ts families — all INTERACTION-family
@@ -14,9 +14,9 @@ import { classifyFamily } from './events.js';
  * tool's args (PR #296 review P2).
  */
 export function isStateMutating(tool, args) {
-    if (classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate')
+    if (classifyFamily(tool) === "interaction" || tool === "cdp_navigate")
         return true;
-    if (tool === 'device_find' && args?.action === 'click')
+    if (tool === "device_find" && args?.action === "click")
         return true;
     return false;
 }
@@ -32,19 +32,37 @@ export function isStateMutating(tool, args) {
  */
 const SNAPSHOT_CACHE_READS = new Set([
     // CDP / native introspection
-    'cdp_component_tree', 'cdp_component_state', 'cdp_store_state', 'cdp_network_log',
-    'cdp_network_body', 'cdp_console_log', 'cdp_error_log', 'cdp_native_errors',
-    'cdp_diagnostic_renderers', 'cdp_object_inspect', 'cdp_heap_usage', 'collect_logs',
-    'cdp_metro_events', 'cdp_wait_for_network',
+    "cdp_component_tree",
+    "cdp_component_state",
+    "cdp_store_state",
+    "cdp_network_log",
+    "cdp_network_body",
+    "cdp_console_log",
+    "cdp_error_log",
+    "cdp_native_errors",
+    "cdp_diagnostic_renderers",
+    "cdp_object_inspect",
+    "cdp_heap_usage",
+    "collect_logs",
+    "cdp_metro_events",
+    "cdp_wait_for_network",
     // perception (the cache's producer + consumer)
-    'device_snapshot', 'device_screenshot',
+    "device_snapshot",
+    "device_screenshot",
     // navigation reads (NOT cdp_navigate, which changes the screen)
-    'cdp_navigation_state', 'cdp_nav_graph',
+    "cdp_navigation_state",
+    "cdp_nav_graph",
     // diagnostics / connection
-    'cdp_status', 'cdp_targets', 'device_list', 'observe',
+    "cdp_status",
+    "cdp_targets",
+    "device_list",
+    "observe",
     // state assertions (verify-via-state — pure reads)
-    'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
-    'cross_platform_verify',
+    "expect_redux",
+    "expect_route",
+    "expect_visible_by_testid",
+    "expect_text",
+    "cross_platform_verify",
 ]);
 /**
  * GH #321: should this tool call invalidate the device_find snapshot cache?
@@ -52,8 +70,8 @@ const SNAPSHOT_CACHE_READS = new Set([
  * UNLESS it taps (`action: 'click'`), mirroring isStateMutating's per-call rule.
  */
 export function toolInvalidatesSnapshotCache(tool, args) {
-    if (tool === 'device_find')
-        return args?.action === 'click';
+    if (tool === "device_find")
+        return args?.action === "click";
     return !SNAPSHOT_CACHE_READS.has(tool);
 }
 /**
@@ -63,12 +81,15 @@ export function toolInvalidatesSnapshotCache(tool, args) {
  * wrapped so the per-call `isStateMutating(tool, args)` check can run.
  */
 export function mayTriggerLiveCapture(tool) {
-    return classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find';
+    return (classifyFamily(tool) === "interaction" || tool === "cdp_navigate" || tool === "device_find");
 }
 let inFlight = false;
 let pending = false;
 /** Test-only: reset the single-flight latches between cases. */
-export function _resetLiveCaptureForTest() { inFlight = false; pending = false; }
+export function _resetLiveCaptureForTest() {
+    inFlight = false;
+    pending = false;
+}
 export async function maybeCaptureLiveFrame(deps) {
     try {
         if (!deps.hasObservers() || deps.isFlowActive())
@@ -106,18 +127,22 @@ async function runCapture(deps) {
                 frame.shot = bytes;
         }
     }
-    catch { /* screenshot best-effort */ }
+    catch {
+        /* screenshot best-effort */
+    }
     try {
         const route = await deps.readRoute();
         if (route)
             frame.route = route;
     }
-    catch { /* route best-effort */ }
+    catch {
+        /* route best-effort */
+    }
     if (frame.shot || frame.route)
         deps.pushLive(frame);
 }
 function asDevicePlatform(p) {
-    return p === 'ios' || p === 'android' ? p : null;
+    return p === "ios" || p === "android" ? p : null;
 }
 export function buildLiveDeps(input) {
     return {

@@ -1,9 +1,9 @@
-import WebSocket from 'ws';
-import { metroOrigin } from '../ws-origin.js';
+import WebSocket from "ws";
+import { metroOrigin } from "../ws-origin.js";
 
-import { logger } from '../logger.js';
-import { computeReconnectDelay } from '../cdp/reconnection.js';
-import { RingBuffer } from '../ring-buffer.js';
+import { logger } from "../logger.js";
+import { computeReconnectDelay } from "../cdp/reconnection.js";
+import { RingBuffer } from "../ring-buffer.js";
 
 /**
  * Metro `/events` WebSocket subscriber (M5 / Phase 90 Tier 2).
@@ -56,18 +56,18 @@ export function detectExpoManifestResponse(body: string): boolean {
   // Short-circuit on non-JSON — bare Metro may return an empty body or
   // an upgrade-required message, neither of which should trip this.
   const trimmed = body.trim();
-  if (!trimmed || trimmed[0] !== '{') return false;
+  if (!trimmed || trimmed[0] !== "{") return false;
 
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     // The two most distinctive Expo-manifest keys. `runtimeVersion` is
     // specific to Expo (bare RN doesn't have it); `launchAsset` with a
     // `url` field is the Expo bundle-serving protocol.
-    const hasRuntimeVersion = typeof parsed.runtimeVersion === 'string';
+    const hasRuntimeVersion = typeof parsed.runtimeVersion === "string";
     const hasLaunchAsset =
-      typeof parsed.launchAsset === 'object' &&
+      typeof parsed.launchAsset === "object" &&
       parsed.launchAsset !== null &&
-      typeof (parsed.launchAsset as { url?: unknown }).url === 'string';
+      typeof (parsed.launchAsset as { url?: unknown }).url === "string";
     return hasRuntimeVersion || hasLaunchAsset;
   } catch {
     return false; // not JSON — probably a bare-Metro response, let WS try
@@ -97,24 +97,24 @@ export interface MetroEventsClientOptions {
   skipIncompatibilityProbe?: boolean;
 }
 
-export type BuildStatus = 'started' | 'done' | 'failed';
+export type BuildStatus = "started" | "done" | "failed";
 
 /**
  * B129 (D658): reasons the /events stream is unusable on the current Metro.
  * Surfaced via `incompatibleReason` getter so `cdp_status.metro` + the
  * cdp_metro_events tool can explain why no events flow.
  */
-export type IncompatibleReason = 'expo-cli-incompatible';
+export type IncompatibleReason = "expo-cli-incompatible";
 
-type State = 'stopped' | 'connecting' | 'open' | 'reconnecting' | 'incompatible';
+type State = "stopped" | "connecting" | "open" | "reconnecting" | "incompatible";
 
 export class MetroEventsClient {
-  private readonly opts: Required<Omit<MetroEventsClientOptions, 'onEvent' | 'fetchFn'>> & {
+  private readonly opts: Required<Omit<MetroEventsClientOptions, "onEvent" | "fetchFn">> & {
     onEvent?: (event: MetroEvent) => void;
     fetchFn?: typeof fetch;
   };
   private ws: WebSocket | null = null;
-  private state: State = 'stopped';
+  private state: State = "stopped";
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private _lastBuild: { status: BuildStatus; timestamp: string } | null = null;
@@ -127,10 +127,10 @@ export class MetroEventsClient {
 
   constructor(options: MetroEventsClientOptions) {
     this.opts = {
-      host: options.host ?? '127.0.0.1',
+      host: options.host ?? "127.0.0.1",
       port: options.port,
       bufferCapacity: options.bufferCapacity ?? 100,
-      logTag: options.logTag ?? 'Metro.events',
+      logTag: options.logTag ?? "Metro.events",
       maxReconnectAttempts: options.maxReconnectAttempts ?? 0,
       skipIncompatibilityProbe: options.skipIncompatibilityProbe ?? false,
       onEvent: options.onEvent,
@@ -140,7 +140,7 @@ export class MetroEventsClient {
   }
 
   get isConnected(): boolean {
-    return this.state === 'open';
+    return this.state === "open";
   }
 
   /**
@@ -177,8 +177,8 @@ export class MetroEventsClient {
    * timer would fire after our successful open and create a second WebSocket).
    */
   async start(): Promise<void> {
-    if (this.state === 'open' || this.state === 'connecting') return;
-    if (this.state === 'incompatible') return; // B129: don't retry incompatible endpoints
+    if (this.state === "open" || this.state === "connecting") return;
+    if (this.state === "incompatible") return; // B129: don't retry incompatible endpoints
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -193,7 +193,7 @@ export class MetroEventsClient {
       const reason = await this.probeIncompatibility();
       if (reason) {
         this._incompatibleReason = reason;
-        this.state = 'incompatible';
+        this.state = "incompatible";
         logger.info(this.opts.logTag, `events endpoint incompatible (${reason}) — not opening WS`);
         return;
       }
@@ -209,7 +209,7 @@ export class MetroEventsClient {
    * connection failures will retry via existing reconnect logic).
    */
   private async probeIncompatibility(): Promise<IncompatibleReason | null> {
-    const fetchFn = this.opts.fetchFn ?? (typeof fetch === 'function' ? fetch : null);
+    const fetchFn = this.opts.fetchFn ?? (typeof fetch === "function" ? fetch : null);
     if (!fetchFn) return null; // no fetch in runtime; skip probe rather than fail
 
     try {
@@ -220,7 +220,7 @@ export class MetroEventsClient {
         const resp = await fetchFn(url, { signal: ctrl.signal });
         if (!resp.ok) return null; // non-200 — probably bare Metro or unreachable; let WS attempt
         const text = await resp.text();
-        return detectExpoManifestResponse(text) ? 'expo-cli-incompatible' : null;
+        return detectExpoManifestResponse(text) ? "expo-cli-incompatible" : null;
       } finally {
         clearTimeout(timer);
       }
@@ -253,14 +253,24 @@ export class MetroEventsClient {
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      try { this.ws.removeAllListeners(); } catch { /* ignore */ }
+      try {
+        this.ws.removeAllListeners();
+      } catch {
+        /* ignore */
+      }
       // Swallow the handshake-abort error that fires on close() against a
       // CONNECTING socket. No-op on already-OPEN or already-CLOSED sockets.
-      this.ws.on('error', () => { /* post-stop error: swallow */ });
-      try { this.ws.close(1000, 'client stopping'); } catch { /* ignore */ }
+      this.ws.on("error", () => {
+        /* post-stop error: swallow */
+      });
+      try {
+        this.ws.close(1000, "client stopping");
+      } catch {
+        /* ignore */
+      }
       this.ws = null;
     }
-    this.state = 'stopped';
+    this.state = "stopped";
     this.reconnectAttempt = 0;
     // B129/D658 multi-review follow-up (L1): also clear the incompatibility
     // flag so `stop()` + `start()` on the same instance re-probes. The
@@ -276,7 +286,7 @@ export class MetroEventsClient {
   }
 
   private async connectOnce(): Promise<void> {
-    this.state = 'connecting';
+    this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
 
     return new Promise<void>((resolve) => {
@@ -292,12 +302,12 @@ export class MetroEventsClient {
       // effectively doubled.  The guard also covers the win-race between happy-path
       // open and a stray late `close` (which shouldn't happen in practice but
       // costs us nothing to defend against).
-      let outcome: 'open' | 'failed' | null = null;
+      let outcome: "open" | "failed" | null = null;
 
       const onOpen = (): void => {
         if (outcome !== null) return;
-        outcome = 'open';
-        this.state = 'open';
+        outcome = "open";
+        this.state = "open";
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
         resolve();
@@ -305,16 +315,16 @@ export class MetroEventsClient {
 
       const onFail = (reason: string): void => {
         if (outcome !== null) return;
-        outcome = 'failed';
+        outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
         resolve();
       };
 
-      ws.once('open', onOpen);
-      ws.once('error', (err) => onFail(err instanceof Error ? err.message : String(err)));
-      ws.on('message', (data) => this.onMessage(data));
-      ws.on('close', (code) => {
+      ws.once("open", onOpen);
+      ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
+      ws.on("message", (data) => this.onMessage(data));
+      ws.on("close", (code) => {
         // If the connection never opened, treat close as a connection failure.
         // Otherwise, route to the long-lived close handler (schedules reconnect
         // via its own path — which is also guarded by scheduleReconnect's
@@ -333,13 +343,13 @@ export class MetroEventsClient {
     try {
       parsed = JSON.parse(data.toString());
     } catch {
-      logger.debug(this.opts.logTag, 'dropped non-JSON event message');
+      logger.debug(this.opts.logTag, "dropped non-JSON event message");
       return;
     }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
 
     const raw = parsed as Record<string, unknown>;
-    const type = typeof raw.type === 'string' ? raw.type : 'unknown';
+    const type = typeof raw.type === "string" ? raw.type : "unknown";
 
     const event: MetroEvent = {
       type,
@@ -349,12 +359,12 @@ export class MetroEventsClient {
     this.events.push(event);
 
     // Update convenience accessors for build state — these power cdp_status.metro
-    if (type === 'bundle_build_started') {
-      this._lastBuild = { status: 'started', timestamp: event.timestamp };
-    } else if (type === 'bundle_build_done') {
-      this._lastBuild = { status: 'done', timestamp: event.timestamp };
-    } else if (type === 'bundle_build_failed') {
-      this._lastBuild = { status: 'failed', timestamp: event.timestamp };
+    if (type === "bundle_build_started") {
+      this._lastBuild = { status: "started", timestamp: event.timestamp };
+    } else if (type === "bundle_build_done") {
+      this._lastBuild = { status: "done", timestamp: event.timestamp };
+    } else if (type === "bundle_build_failed") {
+      this._lastBuild = { status: "failed", timestamp: event.timestamp };
       this._buildErrors++;
     }
 
@@ -362,14 +372,14 @@ export class MetroEventsClient {
   }
 
   private onClose(code: number): void {
-    if (this.state === 'stopped') return;
+    if (this.state === "stopped") return;
     this.ws = null;
     logger.debug(this.opts.logTag, `ws closed (code=${code})`);
     this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
-    if (this.state === 'stopped') return;
+    if (this.state === "stopped") return;
     // Defense-in-depth against duplicate schedules. The connectOnce `outcome` flag
     // handles the initial-connect error+close race; this handles any other duplicate
     // pathway (e.g. stop()+start() reusing the instance while a timer is mid-flight).
@@ -377,17 +387,23 @@ export class MetroEventsClient {
 
     this.reconnectAttempt++;
 
-    if (this.opts.maxReconnectAttempts > 0 && this.reconnectAttempt > this.opts.maxReconnectAttempts) {
-      logger.warn(this.opts.logTag, `max reconnect attempts (${this.opts.maxReconnectAttempts}) exceeded, giving up`);
-      this.state = 'stopped';
+    if (
+      this.opts.maxReconnectAttempts > 0 &&
+      this.reconnectAttempt > this.opts.maxReconnectAttempts
+    ) {
+      logger.warn(
+        this.opts.logTag,
+        `max reconnect attempts (${this.opts.maxReconnectAttempts}) exceeded, giving up`,
+      );
+      this.state = "stopped";
       return;
     }
 
-    this.state = 'reconnecting';
+    this.state = "reconnecting";
     const delayMs = computeReconnectDelay(this.reconnectAttempt);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.state === 'stopped') return;
+      if (this.state === "stopped") return;
       void this.connectOnce();
     }, delayMs);
   }

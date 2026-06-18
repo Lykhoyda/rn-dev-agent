@@ -1,8 +1,8 @@
-import type { CDPClient } from '../cdp-client.js';
-import { getActiveSession } from '../agent-device-wrapper.js';
-import { handleDevClientPicker } from './dev-client-picker.js';
-import { resolveBundleId } from '../project-config.js';
-import { terminateApp, launchApp } from './app-lifecycle.js';
+import type { CDPClient } from "../cdp-client.js";
+import { getActiveSession } from "../agent-device-wrapper.js";
+import { handleDevClientPicker } from "./dev-client-picker.js";
+import { resolveBundleId } from "../project-config.js";
+import { terminateApp, launchApp } from "./app-lifecycle.js";
 
 export interface StartupReplayResult {
   arrived: boolean;
@@ -15,7 +15,10 @@ export interface StartupReplayResult {
   error?: string;
 }
 
-export async function waitForNavigationReady(client: CDPClient, timeoutMs = 12_000): Promise<boolean> {
+export async function waitForNavigationReady(
+  client: CDPClient,
+  timeoutMs = 12_000,
+): Promise<boolean> {
   const checkExpr = `(function() {
     var ref = globalThis.__NAV_REF__;
     if (ref && typeof ref.getRootState === 'function') {
@@ -30,8 +33,10 @@ export async function waitForNavigationReady(client: CDPClient, timeoutMs = 12_0
     try {
       const result = await client.evaluate(checkExpr);
       if (result.value === true) return true;
-    } catch { /* CDP may briefly disconnect during cold start */ }
-    await new Promise(r => setTimeout(r, 500));
+    } catch {
+      /* CDP may briefly disconnect during cold start */
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
@@ -47,9 +52,12 @@ export async function launchAndNavigate(
   const platform = opts.platform ?? session?.platform;
   if (!platform) {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
       latency_ms: Date.now() - startTime,
-      error: 'Cannot determine platform. Open a device session first or pass platform explicitly.',
+      error: "Cannot determine platform. Open a device session first or pass platform explicitly.",
     };
   }
 
@@ -60,15 +68,16 @@ export async function launchAndNavigate(
   // killed and replaced by the project's default app on startup replay.
   const sessionAppId = session?.appId ?? null;
   const targetAppId = client.connectedTarget?.description ?? null;
-  const bundleId = opts.bundleId
-    ?? sessionAppId
-    ?? targetAppId
-    ?? resolveBundleId(platform);
+  const bundleId = opts.bundleId ?? sessionAppId ?? targetAppId ?? resolveBundleId(platform);
   if (!bundleId) {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
       latency_ms: Date.now() - startTime,
-      error: 'Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.',
+      error:
+        "Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.",
     };
   }
 
@@ -76,18 +85,23 @@ export async function launchAndNavigate(
   let reconnectAttempts = 0;
 
   try {
-    await terminateApp(bundleId, platform as 'ios' | 'android').catch(() => { /* idempotent */ });
-    await launchApp(bundleId, platform as 'ios' | 'android');
+    await terminateApp(bundleId, platform as "ios" | "android").catch(() => {
+      /* idempotent */
+    });
+    await launchApp(bundleId, platform as "ios" | "android");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
       latency_ms: Date.now() - startTime,
       error: `App launch failed: ${msg.slice(0, 200)}`,
     };
   }
 
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise((r) => setTimeout(r, 1000));
 
   const pickerResult = await handleDevClientPicker();
   if (pickerResult?.dismissed) {
@@ -102,46 +116,58 @@ export async function launchAndNavigate(
       reconnected = true;
       break;
     } catch {
-      if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
   if (!reconnected) {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-      latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: 'CDP reconnection failed after app launch. Metro may not be running.',
+      error: "CDP reconnection failed after app launch. Metro may not be running.",
     };
   }
 
   const helperDeadline = Date.now() + 15_000;
   while (!client.helpersInjected && Date.now() < helperDeadline) {
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500));
   }
   if (!client.helpersInjected) {
     await client.reinjectHelpers();
   }
   if (!client.helpersInjected) {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-      latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: 'Helpers not injected after app launch. App may still be loading.',
+      error: "Helpers not injected after app launch. App may still be loading.",
     };
   }
 
   const navReady = await waitForNavigationReady(client, 12_000);
   if (!navReady) {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-      latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: '__NAV_REF__ not ready after 12s. NavigationContainer may not have rendered.',
+      error: "__NAV_REF__ not ready after 12s. NavigationContainer may not have rendered.",
     };
   }
 
-  const paramsArg = params ? JSON.stringify(params) : 'undefined';
+  const paramsArg = params ? JSON.stringify(params) : "undefined";
   const navExpr = `
     (function() {
       var navResult = __RN_AGENT.navigateTo(${JSON.stringify(screen)}, ${paramsArg});
@@ -165,12 +191,16 @@ export async function launchAndNavigate(
   `;
 
   const navResult = await client.evaluate(navExpr);
-  if (navResult.error || typeof navResult.value !== 'string') {
+  if (navResult.error || typeof navResult.value !== "string") {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-      latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: `Navigation evaluate failed: ${navResult.error ?? 'unexpected response'}`,
+      error: `Navigation evaluate failed: ${navResult.error ?? "unexpected response"}`,
     };
   }
 
@@ -183,8 +213,12 @@ export async function launchAndNavigate(
 
     if (parsed.error) {
       return {
-        arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-        latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+        arrived: false,
+        screen,
+        current_screen: null,
+        method: "startup_replay_failed",
+        latency_ms: Date.now() - startTime,
+        picker_dismissed: pickerDismissed,
         reconnect_attempts: reconnectAttempts,
         error: `navigateTo error: ${parsed.error}`,
       };
@@ -194,17 +228,21 @@ export async function launchAndNavigate(
       arrived: parsed.arrived ?? false,
       screen,
       current_screen: parsed.current_screen ?? null,
-      method: 'startup_replay',
+      method: "startup_replay",
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
     };
   } catch {
     return {
-      arrived: false, screen, current_screen: null, method: 'startup_replay_failed',
-      latency_ms: Date.now() - startTime, picker_dismissed: pickerDismissed,
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: 'Failed to parse navigation result',
+      error: "Failed to parse navigation result",
     };
   }
 }

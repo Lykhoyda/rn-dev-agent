@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { okResult, failResult } from '../utils.js';
-import { findProjectRoot } from '../nav-graph/storage.js';
-import { buildMaestroFlow, isValidBundleId, MaestroValidationError } from '../domain/maestro-validator.js';
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { okResult, failResult } from "../utils.js";
+import { findProjectRoot } from "../nav-graph/storage.js";
+import { buildMaestroFlow, isValidBundleId, MaestroValidationError, } from "../domain/maestro-validator.js";
 /**
  * Phase 134.1 (deepsec CRITICAL #3): every step is now produced as a
  * structured object that flows through `buildMaestroFlow` for serialization,
@@ -16,17 +16,17 @@ import { buildMaestroFlow, isValidBundleId, MaestroValidationError } from '../do
  * directions if loaded from JSON without runtime validation.
  */
 function stepToMaestroCommands(step) {
-    const ALLOWED_DIRECTIONS = new Set(['up', 'down', 'left', 'right']);
+    const ALLOWED_DIRECTIONS = new Set(["up", "down", "left", "right"]);
     switch (step.action) {
-        case 'launch':
+        case "launch":
             return [{ launchApp: null }];
-        case 'tap':
+        case "tap":
             if (step.testID)
                 return [{ tapOn: { id: step.testID } }];
             if (step.text)
                 return [{ tapOn: step.text }];
             return [];
-        case 'fill':
+        case "fill":
             if (step.testID && step.input !== undefined) {
                 return [{ tapOn: { id: step.testID } }, { inputText: step.input }];
             }
@@ -34,30 +34,30 @@ function stepToMaestroCommands(step) {
                 return [{ tapOn: step.text }, { inputText: step.input }];
             }
             return [];
-        case 'assert':
+        case "assert":
             if (step.testID)
                 return [{ assertVisible: { id: step.testID } }];
             if (step.text)
                 return [{ assertVisible: step.text }];
             return [];
-        case 'scroll':
+        case "scroll":
             return [{ scroll: null }];
-        case 'swipe': {
+        case "swipe": {
             const dir = step.direction;
             if (dir && ALLOWED_DIRECTIONS.has(dir)) {
                 return [{ swipe: { direction: dir.toUpperCase() } }];
             }
-            return [{ swipe: { direction: 'UP' } }];
+            return [{ swipe: { direction: "UP" } }];
         }
-        case 'navigate':
+        case "navigate":
             if (step.url)
                 return [{ openLink: step.url }];
             return [];
-        case 'back':
-            return [{ pressKey: 'back' }];
-        case 'wait':
+        case "back":
+            return [{ pressKey: "back" }];
+        case "wait":
             if (step.waitMs && step.waitMs > 0) {
-                return [{ extendedWaitUntil: { visible: '.*', timeout: step.waitMs } }];
+                return [{ extendedWaitUntil: { visible: ".*", timeout: step.waitMs } }];
             }
             return [];
         default:
@@ -67,17 +67,17 @@ function stepToMaestroCommands(step) {
 export function createMaestroGenerateHandler() {
     return async (args) => {
         if (!args.name || !args.steps?.length) {
-            return failResult('Provide a flow name and at least one step.');
+            return failResult("Provide a flow name and at least one step.");
         }
         const root = findProjectRoot();
-        const outputDir = args.outputDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
+        const outputDir = args.outputDir ?? (root ? join(root, ".rn-agent", "actions") : null);
         if (!outputDir) {
-            return failResult('Cannot determine project root. Pass outputDir explicitly.');
+            return failResult("Cannot determine project root. Pass outputDir explicitly.");
         }
         if (!existsSync(outputDir)) {
             mkdirSync(outputDir, { recursive: true });
         }
-        const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+        const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
         const fileName = `${sanitizedName}.yaml`;
         const filePath = join(outputDir, fileName);
         if (args.appId !== undefined && !isValidBundleId(args.appId)) {
@@ -99,7 +99,7 @@ export function createMaestroGenerateHandler() {
             }
             throw err;
         }
-        writeFileSync(filePath, content, 'utf-8');
+        writeFileSync(filePath, content, "utf-8");
         return okResult({
             generated: true,
             path: filePath,

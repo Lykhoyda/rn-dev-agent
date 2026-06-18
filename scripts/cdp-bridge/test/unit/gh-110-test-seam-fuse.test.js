@@ -5,14 +5,14 @@
 // could call reset is the same code that could leak the override). Each
 // scenario therefore runs in a freshly-spawned Node subprocess so the
 // fuse state is isolated.
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MOD_ABS_PATH = resolve(__dirname, '../../dist/agent-device-wrapper.js');
+const MOD_ABS_PATH = resolve(__dirname, "../../dist/agent-device-wrapper.js");
 
 function runScenario(scenarioCode) {
   // Use the modern dynamic-import form to avoid CJS/ESM confusion.
@@ -27,14 +27,14 @@ function runScenario(scenarioCode) {
       }
     })().catch(e => { console.log('SCENARIO_REJECTED:' + (e && e.message ? e.message : String(e))); process.exit(1); });
   `;
-  const result = spawnSync('node', ['--input-type=module', '-e', wrapped], {
-    encoding: 'utf-8',
+  const result = spawnSync("node", ["--input-type=module", "-e", wrapped], {
+    encoding: "utf-8",
     timeout: 20_000,
   });
-  return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', status: result.status };
+  return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status };
 }
 
-test('fuse: override fn is honored when set before any production dispatch', () => {
+test("fuse: override fn is honored when set before any production dispatch", () => {
   const { stdout } = runScenario(`
     let captured = null;
     mod._setRunAgentDeviceForTest(async (args, opts) => {
@@ -48,7 +48,7 @@ test('fuse: override fn is honored when set before any production dispatch', () 
   assert.match(stdout, /SCENARIO_OK/, `expected SCENARIO_OK, got: ${stdout}`);
 });
 
-test('fuse: setting override to null re-enables production tier as long as fuse has not blown', () => {
+test("fuse: setting override to null re-enables production tier as long as fuse has not blown", () => {
   const { stdout } = runScenario(`
     let called = 0;
     mod._setRunAgentDeviceForTest(async () => { called++; return { content: [{ type: 'text', text: '{"ok":true}' }] }; });
@@ -66,7 +66,7 @@ test('fuse: setting override to null re-enables production tier as long as fuse 
   assert.match(stdout, /SCENARIO_OK/, `expected SCENARIO_OK, got: ${stdout}`);
 });
 
-test('fuse: a production runAgentDevice call (no override) blows the fuse', () => {
+test("fuse: a production runAgentDevice call (no override) blows the fuse", () => {
   // The production tiers will fail (no booted device / fast-runner) but
   // the fuse must still be sealed regardless of the dispatch outcome.
   const { stdout } = runScenario(`
@@ -93,7 +93,7 @@ test('fuse: a production runAgentDevice call (no override) blows the fuse', () =
   assert.match(stdout, /SCENARIO_OK/, `expected SCENARIO_OK, got: ${stdout}`);
 });
 
-test('fuse: error message includes GH #110 reference and remediation hint', () => {
+test("fuse: error message includes GH #110 reference and remediation hint", () => {
   const { stdout, stderr, status } = runScenario(`
     // Production tier may throw (no booted device in test env) — that's
     // fine, the fuse must still seal. Use list-devices because it dodges
@@ -110,10 +110,14 @@ test('fuse: error message includes GH #110 reference and remediation hint', () =
     }
     if (!threw) throw new Error('expected fuse to throw on re-arm');
   `);
-  assert.match(stdout, /GOOD_ERROR[\s\S]*SCENARIO_OK/, `expected GOOD_ERROR then SCENARIO_OK\nstdout: ${stdout}\nstderr: ${stderr}\nstatus: ${status}`);
+  assert.match(
+    stdout,
+    /GOOD_ERROR[\s\S]*SCENARIO_OK/,
+    `expected GOOD_ERROR then SCENARIO_OK\nstdout: ${stdout}\nstderr: ${stderr}\nstatus: ${status}`,
+  );
 });
 
-test('fuse: setting null to clear override does not block when fuse has NOT blown', () => {
+test("fuse: setting null to clear override does not block when fuse has NOT blown", () => {
   // Edge: install an override, run it, then clear it back to null
   // BEFORE any production dispatch. This is the normal afterEach
   // cleanup case — must not throw.

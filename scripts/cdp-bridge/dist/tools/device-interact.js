@@ -1,15 +1,15 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid } from '../agent-device-wrapper.js';
-import { isFastRunnerAvailable, fastSwipe, stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
-import { withSession } from '../utils.js';
-import { okResult, failResult, createStepTimer } from '../utils.js';
-import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
-import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
-import { reopenSessionForRecovery } from './device-session.js';
-import { getCachedMetadata, isRefMapFresh } from '../fast-runner-ref-map.js';
-import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype } from './fill-verify.js';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, } from "../agent-device-wrapper.js";
+import { isFastRunnerAvailable, fastSwipe, stopFastRunner, } from "../runners/rn-fast-runner-client.js";
+import { stopAndroidRunner } from "../runners/rn-android-runner-client.js";
+import { withSession } from "../utils.js";
+import { okResult, failResult, createStepTimer } from "../utils.js";
+import { runMaestroInline, yamlEscape } from "../maestro-invoke.js";
+import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from "./runner-leak-recovery.js";
+import { reopenSessionForRecovery } from "./device-session.js";
+import { getCachedMetadata, isRefMapFresh } from "../fast-runner-ref-map.js";
+import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype, } from "./fill-verify.js";
 const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
 const ANDROID_FILL_MAX_SAFE_LEN = 30;
@@ -111,10 +111,10 @@ async function fetchSnapshotNodes(allowCache = false) {
                 return { ok: true, nodes: cached.nodes };
         }
     }
-    const first = await runNative(['snapshot', '-i']);
+    const first = await runNative(["snapshot", "-i"]);
     const initialNodes = parseSnapshotEnvelope(first);
     if (initialNodes === null)
-        return { ok: false, reason: 'fetch-failed' };
+        return { ok: false, reason: "fetch-failed" };
     if (!isAgentDeviceRunnerSentinel(initialNodes)) {
         const platform = getActiveSession()?.platform;
         if (platform)
@@ -123,17 +123,22 @@ async function fetchSnapshotNodes(allowCache = false) {
     }
     const session = getActiveSession();
     const recovery = await recoverFromRunnerLeak({ platform: session?.platform, appId: session?.appId, sessionName: session?.name }, {
-        closeSession: async () => { clearActiveSession(); stopFastRunner(); await stopAndroidRunner(); return okResult({ closed: true }); },
+        closeSession: async () => {
+            clearActiveSession();
+            stopFastRunner();
+            await stopAndroidRunner();
+            return okResult({ closed: true });
+        },
         openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
-        resnapshot: () => runNative(['snapshot', '-i']),
+        resnapshot: () => runNative(["snapshot", "-i"]),
         parseNodes: parseSnapshotEnvelope,
     });
     if (!recovery.recovered) {
-        return { ok: false, reason: 'runner-leak-unrecovered', recoveryReason: recovery.reason };
+        return { ok: false, reason: "runner-leak-unrecovered", recoveryReason: recovery.reason };
     }
     const recoveredNodes = parseSnapshotEnvelope(recovery.result);
     if (recoveredNodes === null)
-        return { ok: false, reason: 'fetch-failed' };
+        return { ok: false, reason: "fetch-failed" };
     const platform = getActiveSession()?.platform;
     if (platform)
         cacheSnapshot(platform, recoveredNodes);
@@ -145,8 +150,8 @@ export async function fetchFindCandidates(query, exact = false, allowCache = fal
         return snap;
     const needle = query.toLowerCase();
     const matched = snap.nodes.filter((n) => {
-        const label = n.label ?? '';
-        const id = n.identifier ?? '';
+        const label = n.label ?? "";
+        const id = n.identifier ?? "";
         if (exact)
             return label === query || id === query;
         return label.toLowerCase().includes(needle) || id.toLowerCase().includes(needle);
@@ -160,17 +165,17 @@ export async function fetchFindCandidates(query, exact = false, allowCache = fal
     return { ok: true, candidates, recoveredTier: snap.recoveredTier };
 }
 function runnerLeakFailResult(query, recoveryReason) {
-    const queryHint = query ? ` (while resolving "${query}")` : '';
+    const queryHint = query ? ` (while resolving "${query}")` : "";
     return failResult(`device_find/snapshot returned AgentDeviceRunner's own UI tree instead of the target app${queryHint} (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.`, {
-        code: 'RUNNER_LEAK',
+        code: "RUNNER_LEAK",
         recoveryReason,
-        hint: 'Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context — re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35.',
+        hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context — re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35.",
     });
 }
 export async function pressCandidate(candidate, action) {
-    const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
-    if (action === 'click') {
-        return runNative(['press', ref]);
+    const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
+    if (action === "click") {
+        return runNative(["press", ref]);
     }
     return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -182,8 +187,8 @@ function tagPressIfRecovered(result, tier) {
         return result;
     try {
         const envelope = JSON.parse(result.content[0].text);
-        envelope.meta = { ...envelope.meta, recovered: 'agent-device-runner-leak', recoveryTier: tier };
-        return { content: [{ type: 'text', text: JSON.stringify(envelope) }] };
+        envelope.meta = { ...envelope.meta, recovered: "agent-device-runner-leak", recoveryTier: tier };
+        return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
     }
     catch {
         return result;
@@ -197,21 +202,24 @@ export function createDeviceFindHandler() {
         if (args.exact === true || args.index !== undefined) {
             const find = await fetchFindCandidates(args.text, args.exact === true, true);
             if (!find.ok) {
-                if (find.reason === 'runner-leak-unrecovered') {
+                if (find.reason === "runner-leak-unrecovered") {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
                 }
                 // Snapshot failed and caller has strict requirements — do NOT fall through
                 // to the fuzzy agent-device path because it cannot honor exact/index. Fail
                 // cleanly so the caller knows exact/index semantics aren't reachable.
-                return failResult(`Snapshot unavailable — cannot resolve ${args.exact ? 'exact' : 'index-based'} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: 'SNAPSHOT_UNAVAILABLE', query: args.text });
+                return failResult(`Snapshot unavailable — cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
             }
             const { candidates, recoveredTier } = find;
             if (candidates.length === 0) {
-                return failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, { code: 'NOT_FOUND', query: args.text });
+                return failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
+                    code: "NOT_FOUND",
+                    query: args.text,
+                });
             }
             if (args.index !== undefined) {
                 if (args.index < 0 || args.index >= candidates.length) {
-                    return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: 'INDEX_OUT_OF_RANGE', count: candidates.length, candidates });
+                    return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
                 }
                 return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action), recoveredTier);
             }
@@ -219,7 +227,12 @@ export function createDeviceFindHandler() {
             if (candidates.length === 1) {
                 return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
             }
-            return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, { code: 'AMBIGUOUS_MATCH', query: args.text, candidates, hint: 'Add index: N to pick one.' });
+            return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
+                code: "AMBIGUOUS_MATCH",
+                query: args.text,
+                candidates,
+                hint: "Add index: N to pick one.",
+            });
         }
         // GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: route
         // non-exact text finds through the snapshot-based orchestrator on iOS
@@ -229,15 +242,18 @@ export function createDeviceFindHandler() {
         // runNative + fetchFindCandidates keeps us on the platform-aware
         // short-circuit.
         const activeSession = getActiveSession();
-        const usesInTreeRunner = activeSession?.platform === 'ios' ||
-            (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
+        const usesInTreeRunner = activeSession?.platform === "ios" ||
+            (activeSession?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0");
         if (usesInTreeRunner) {
             const find = await fetchFindCandidates(args.text, false, true);
             if (!find.ok) {
-                if (find.reason === 'runner-leak-unrecovered') {
+                if (find.reason === "runner-leak-unrecovered") {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
                 }
-                return failResult(`Snapshot unavailable — cannot resolve "${args.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: args.text });
+                return failResult(`Snapshot unavailable — cannot resolve "${args.text}"`, {
+                    code: "SNAPSHOT_UNAVAILABLE",
+                    query: args.text,
+                });
             }
             const { candidates, recoveredTier } = find;
             // Surface recoveredTier on every outcome (not just the single-match press)
@@ -245,20 +261,27 @@ export function createDeviceFindHandler() {
             // AMBIGUOUS.
             const recoveredMeta = recoveredTier ? { recoveredTier } : {};
             if (candidates.length === 0) {
-                return failResult(`No element matches "${args.text}"`, { code: 'NOT_FOUND', query: args.text, ...recoveredMeta });
+                return failResult(`No element matches "${args.text}"`, {
+                    code: "NOT_FOUND",
+                    query: args.text,
+                    ...recoveredMeta,
+                });
             }
             if (candidates.length === 1) {
                 return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
             }
             return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
-                code: 'AMBIGUOUS_MATCH',
+                code: "AMBIGUOUS_MATCH",
                 query: args.text,
                 candidates,
                 ...recoveredMeta,
                 hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
             });
         }
-        return failResult(`device_find requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession?.platform ?? 'none'}.`, { code: 'IN_TREE_RUNNER_REQUIRED', platform: activeSession?.platform ?? null });
+        return failResult(`device_find requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession?.platform ?? "none"}.`, {
+            code: "IN_TREE_RUNNER_REQUIRED",
+            platform: activeSession?.platform ?? null,
+        });
     });
 }
 // GH #60 Bug 7: agent-device + Maestro emit a few different timeout strings
@@ -270,8 +293,8 @@ export function isDaemonTimeoutError(text) {
     if (!text)
         return false;
     const t = text.toLowerCase();
-    return (t.includes('daemon timeout') ||
-        t.includes('daemon error: daemon') ||
+    return (t.includes("daemon timeout") ||
+        t.includes("daemon error: daemon") ||
         /\bdaemon\b.*\btimed?\s?out\b/.test(t));
 }
 // B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
@@ -288,12 +311,12 @@ export function isDaemonTimeoutError(text) {
 //      AND whose type is one of TextField, SecureTextField, or TextView.
 //
 // Returns the resolved ref (with leading `@`) or null if no match.
-const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
-const PRESSABLE_SUFFIX = '-pressable';
+const TEXT_INPUT_TYPES = new Set(["TextField", "SecureTextField", "TextView", "EditText"]);
+const PRESSABLE_SUFFIX = "-pressable";
 export function findInputForPressable(nodes, pressableRef) {
     if (!nodes)
         return null;
-    const cleanRef = pressableRef.replace(/^@/, '');
+    const cleanRef = pressableRef.replace(/^@/, "");
     const pressableNode = nodes.find((n) => n.ref === cleanRef);
     if (!pressableNode?.identifier?.endsWith(PRESSABLE_SUFFIX))
         return null;
@@ -305,14 +328,14 @@ export function findInputForPressable(nodes, pressableRef) {
 }
 export function createDevicePressHandler() {
     return withSession(async (args) => {
-        const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-        const cliArgs = ['press', ref];
+        const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
+        const cliArgs = ["press", ref];
         if (args.doubleTap)
-            cliArgs.push('--double-tap');
+            cliArgs.push("--double-tap");
         if (args.count && args.count > 1)
-            cliArgs.push('--count', String(args.count));
+            cliArgs.push("--count", String(args.count));
         if (args.holdMs && args.holdMs > 0)
-            cliArgs.push('--hold-ms', String(args.holdMs));
+            cliArgs.push("--hold-ms", String(args.holdMs));
         const result = await runNative(cliArgs);
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
@@ -323,17 +346,17 @@ export function createDevicePressHandler() {
 export function createDeviceLongPressHandler() {
     return withSession((args) => {
         if (args.ref) {
-            const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-            const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
+            const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
+            const cliArgs = ["press", ref, "--hold-ms", String(args.durationMs ?? 1000)];
             return runNative(cliArgs);
         }
         if (args.x != null && args.y != null) {
-            const cliArgs = ['longpress', String(args.x), String(args.y)];
+            const cliArgs = ["longpress", String(args.x), String(args.y)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
             return runNative(cliArgs);
         }
-        return Promise.resolve(failResult('Provide either ref or x+y coordinates'));
+        return Promise.resolve(failResult("Provide either ref or x+y coordinates"));
     });
 }
 // Splits a chunk into segments where no segment, after space→%s encoding,
@@ -344,14 +367,14 @@ export function createDeviceLongPressHandler() {
 // ensure % and s from user text never appear adjacent in the same `input
 // text` call: send % alone, then s... in the next call.
 export function splitChunkAroundPercentS(chunk) {
-    const parts = chunk.split('%s');
+    const parts = chunk.split("%s");
     if (parts.length === 1)
         return [chunk];
     const segments = [];
     for (let i = 0; i < parts.length; i++) {
         if (i > 0) {
-            segments.push('%');
-            const rest = 's' + parts[i];
+            segments.push("%");
+            const rest = "s" + parts[i];
             if (rest.length > 0)
                 segments.push(rest);
         }
@@ -369,10 +392,8 @@ export function splitChunkAroundPercentS(chunk) {
 // shell metacharacter expansion ($, `, &, |, <, >, etc.); embedded single
 // quotes are escaped via the POSIX `'\''` dance.
 export function buildAdbInputTextArgv(chunk) {
-    const escaped = chunk
-        .replace(/ /g, '%s')
-        .replace(/'/g, "'\\''");
-    return ['shell', 'input', 'text', `'${escaped}'`];
+    const escaped = chunk.replace(/ /g, "%s").replace(/'/g, "'\\''");
+    return ["shell", "input", "text", `'${escaped}'`];
 }
 const ANDROID_INPUT_CHUNK_SIZE = 10;
 async function androidClipboardFill(text) {
@@ -383,10 +404,10 @@ async function androidClipboardFill(text) {
             const segments = splitChunkAroundPercentS(chunk);
             for (const seg of segments) {
                 const argvTail = buildAdbInputTextArgv(seg);
-                await execFile('adb', [...serial, ...argvTail], { timeout: 10000 });
+                await execFile("adb", [...serial, ...argvTail], { timeout: 10000 });
             }
         }
-        return okResult({ filled: true, method: 'adb-chunked-input', length: text.length });
+        return okResult({ filled: true, method: "adb-chunked-input", length: text.length });
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -395,7 +416,7 @@ async function androidClipboardFill(text) {
 }
 function isAndroidSession() {
     const session = getActiveSession();
-    if (session?.platform === 'android')
+    if (session?.platform === "android")
         return true;
     if (session?.platform)
         return false;
@@ -406,7 +427,7 @@ const NO_FOCUSED_INPUT_RE = /no focused text input|no focused element|element is
 function isNoFocusedInputError(result) {
     if (!result.isError)
         return false;
-    const text = result.content?.[0]?.text ?? '';
+    const text = result.content?.[0]?.text ?? "";
     return NO_FOCUSED_INPUT_RE.test(text);
 }
 function sleep(ms) {
@@ -422,21 +443,32 @@ function cdpClientOrNull(getClient) {
     }
 }
 function jsVerifyMeta(outcome) {
-    return outcome === 'verified-exact' ? 'exact' : outcome === 'verified-transformed' ? 'transformed' : 'unverifiable';
+    return outcome === "verified-exact"
+        ? "exact"
+        : outcome === "verified-transformed"
+            ? "transformed"
+            : "unverifiable";
 }
 async function maestroFillFallback(ref, text, platform, clearFirst = false) {
-    const escapedRef = yamlEscape(ref.replace(/^@/, ''));
+    const escapedRef = yamlEscape(ref.replace(/^@/, ""));
     const escapedText = yamlEscape(text);
     // When reached from the #191 verify-escalation, the field already holds the
     // corrupted text, so inputText alone would append. eraseText first so the
     // fallback can actually recover (multi-review M3).
-    const clearStep = clearFirst ? '\n- eraseText' : '';
+    const clearStep = clearFirst ? "\n- eraseText" : "";
     const yaml = `- tapOn:\n    id: "${escapedRef}"${clearStep}\n- inputText: "${escapedText}"`;
-    const result = await runMaestroInline(yaml, { platform, slug: 'fill-fallback', timeoutMs: 30_000 });
+    const result = await runMaestroInline(yaml, {
+        platform,
+        slug: "fill-fallback",
+        timeoutMs: 30_000,
+    });
     if (result.passed) {
-        return okResult({ filled: true, method: 'maestro', length: text.length }, { meta: { fallbackUsed: 'maestro' } });
+        return okResult({ filled: true, method: "maestro", length: text.length }, { meta: { fallbackUsed: "maestro" } });
     }
-    return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, { code: 'FILL_FAILED', tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'] });
+    return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, {
+        code: "FILL_FAILED",
+        tried: ["primary", "retap", platform === "android" ? "adb" : "maestro"],
+    });
 }
 const MAX_NATIVE_RETYPE = 2;
 // `settleAnchor` is the value the read polls AWAY from (to detect a debounced
@@ -447,29 +479,34 @@ const MAX_NATIVE_RETYPE = 2;
 // retype, defeating the #191 fix (multi-review L4). So attempt 0 passes prior=null.
 async function nativeSettle(client, testID, text, settleAnchor, stabilityPrior) {
     if (!client || !testID)
-        return { outcome: 'unverifiable', value: null };
+        return { outcome: "unverifiable", value: null };
     const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, text, settleAnchor);
     return {
-        outcome: classifyFillVerification({ text, valueAfter: settled.value, priorValueAfter: stabilityPrior, controlled: settled.controlled }),
+        outcome: classifyFillVerification({
+            text,
+            valueAfter: settled.value,
+            priorValueAfter: stabilityPrior,
+            controlled: settled.controlled,
+        }),
         value: settled.value,
     };
 }
 async function readValueBefore(client, testID) {
     if (!client || !testID)
         return null;
-    const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, ' __rn_never__', null);
+    const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, " __rn_never__", null);
     return settled.value;
 }
 export function createDeviceFillHandler(getClient) {
     return withSession(async (args) => {
-        const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
+        const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
         const androidSession = isAndroidSession();
-        const needsAndroidWorkaround = androidSession && (args.text.length > ANDROID_FILL_MAX_SAFE_LEN ||
-            ANDROID_UNSAFE_CHARS.test(args.text));
+        const needsAndroidWorkaround = androidSession &&
+            (args.text.length > ANDROID_FILL_MAX_SAFE_LEN || ANDROID_UNSAFE_CHARS.test(args.text));
         // Android workaround path: press + chunked adb input. Short-circuits — no fallback
         // chain needed because the Android path is already a fallback for agent-device fill.
         if (needsAndroidWorkaround) {
-            const pressResult = await runNative(['press', ref]);
+            const pressResult = await runNative(["press", ref]);
             if (pressResult.isError)
                 return pressResult;
             await sleep(300);
@@ -482,29 +519,43 @@ export function createDeviceFillHandler(getClient) {
         // and stays ungated. Never returns the field's value (could be a password) — the
         // `verify` classification conveys success without echoing the text (multi-review BLOCKER).
         const client = cdpClientOrNull(getClient);
-        const cachedIdentifier = isRefMapFresh() ? getCachedMetadata(ref.replace(/^@/, ''))?.identifier : undefined;
-        const jsTestId = client ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
+        const cachedIdentifier = isRefMapFresh()
+            ? getCachedMetadata(ref.replace(/^@/, ""))?.identifier
+            : undefined;
+        const jsTestId = client
+            ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier })
+            : null;
         if (client && jsTestId) {
             const tJs = Date.now();
             const js = await attemptJsFill({ evaluate: (e) => client.evaluate(e) }, jsTestId, args.text);
-            if (js.handled && js.outcome && js.outcome !== 'corrupted') {
-                return okResult({ filled: true, method: 'js-onChangeText', length: args.text.length }, { meta: { textEntryPath: 'js', verify: jsVerifyMeta(js.outcome), handler: js.handler,
-                        timings_ms: { jsType: Date.now() - tJs } } });
+            if (js.handled && js.outcome && js.outcome !== "corrupted") {
+                return okResult({ filled: true, method: "js-onChangeText", length: args.text.length }, {
+                    meta: {
+                        textEntryPath: "js",
+                        verify: jsVerifyMeta(js.outcome),
+                        handler: js.handler,
+                        timings_ms: { jsType: Date.now() - tJs },
+                    },
+                });
             }
             // Fall-through (no handler, or JS fired but corrupted). If a handler DID fire on a
             // controlled input, clear the value it set via onChangeText('') so the native
             // re-type below doesn't double-apply onto debounced/partial JS text (multi-review H2).
             if (js.handled && js.controlled) {
                 try {
-                    await client.evaluate('__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID: jsTestId, text: '' }) + ')');
+                    await client.evaluate("__RN_AGENT.interact(" +
+                        JSON.stringify({ action: "typeText", testID: jsTestId, text: "" }) +
+                        ")");
                 }
-                catch { /* best-effort clear */ }
+                catch {
+                    /* best-effort clear */
+                }
             }
         }
         const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
         // press+fill+press+fill flows where the previous call left focus on a different field.
-        const preTap = await runNative(['press', ref]);
+        const preTap = await runNative(["press", ref]);
         if (preTap.isError) {
             // If we can't even tap the element, fall straight through to fill — it may still
             // work via the fast-runner coordinate path, and we want its error message, not ours.
@@ -512,7 +563,7 @@ export function createDeviceFillHandler(getClient) {
         else {
             await sleep(focusWaitMs);
         }
-        const primary = await runNative(['fill', ref, args.text]);
+        const primary = await runNative(["fill", ref, args.text]);
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -525,23 +576,46 @@ export function createDeviceFillHandler(getClient) {
                 for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
                     const { outcome, value } = await nativeSettle(client, jsTestId, args.text, settleAnchor, stabilityPrior);
                     const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
-                    if (decision.action === 'accept') {
-                        return okResult({ filled: true, method: 'native', length: args.text.length }, { meta: { textEntryPath: attempt === 0 ? 'native' : 'native-retype', verify: jsVerifyMeta(outcome), retypes: attempt, timings_ms: { nativeType: Date.now() - tNative } } });
+                    if (decision.action === "accept") {
+                        return okResult({ filled: true, method: "native", length: args.text.length }, {
+                            meta: {
+                                textEntryPath: attempt === 0 ? "native" : "native-retype",
+                                verify: jsVerifyMeta(outcome),
+                                retypes: attempt,
+                                timings_ms: { nativeType: Date.now() - tNative },
+                            },
+                        });
                     }
-                    if (decision.action === 'escalate')
+                    if (decision.action === "escalate")
                         break;
                     settleAnchor = value;
                     stabilityPrior = value;
-                    await runNative(['fill', ref, args.text, '--clear-first', '--delay-ms', String(decision.delayMs)]);
+                    await runNative([
+                        "fill",
+                        ref,
+                        args.text,
+                        "--clear-first",
+                        "--delay-ms",
+                        String(decision.delayMs),
+                    ]);
                 }
-                const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
+                const maestro = await maestroFillFallback(ref, args.text, "ios", true);
                 if (!maestro.isError) {
                     const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
-                    if (outcome !== 'corrupted') {
-                        return okResult({ filled: true, method: 'maestro', length: args.text.length }, { meta: { textEntryPath: 'maestro', verify: jsVerifyMeta(outcome), timings_ms: { nativeType: Date.now() - tNative } } });
+                    if (outcome !== "corrupted") {
+                        return okResult({ filled: true, method: "maestro", length: args.text.length }, {
+                            meta: {
+                                textEntryPath: "maestro",
+                                verify: jsVerifyMeta(outcome),
+                                timings_ms: { nativeType: Date.now() - tNative },
+                            },
+                        });
                     }
                 }
-                return failResult('Text entry could not be verified after retype + maestro fallback', 'TEXT_ENTRY_UNVERIFIED', { expectedLength: args.text.length, pathsTried: ['js', 'native', 'native-retype', 'maestro'] });
+                return failResult("Text entry could not be verified after retype + maestro fallback", "TEXT_ENTRY_UNVERIFIED", {
+                    expectedLength: args.text.length,
+                    pathsTried: ["js", "native", "native-retype", "maestro"],
+                });
             }
             return primary;
         }
@@ -559,14 +633,16 @@ export function createDeviceFillHandler(getClient) {
         if (snap.ok) {
             const resolvedRef = findInputForPressable(snap.nodes, ref);
             if (resolvedRef && resolvedRef !== ref) {
-                const innerTap = await runNative(['press', resolvedRef]);
+                const innerTap = await runNative(["press", resolvedRef]);
                 if (!innerTap.isError) {
                     await sleep(focusWaitMs);
-                    const resolved = await runNative(['fill', resolvedRef, args.text]);
+                    const resolved = await runNative(["fill", resolvedRef, args.text]);
                     if (!resolved.isError) {
                         try {
                             const envelope = JSON.parse(resolved.content[0].text);
-                            return okResult(envelope.data, { meta: { fallbackUsed: 'pressable-resolution', resolvedRef } });
+                            return okResult(envelope.data, {
+                                meta: { fallbackUsed: "pressable-resolution", resolvedRef },
+                            });
                         }
                         catch {
                             return resolved;
@@ -577,15 +653,15 @@ export function createDeviceFillHandler(getClient) {
         }
         // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
         // to propagate focus from a wrapping Pressable to the inner TextInput.
-        const retryTap = await runNative(['press', ref]);
+        const retryTap = await runNative(["press", ref]);
         if (!retryTap.isError) {
             await sleep(300);
-            const retry = await runNative(['fill', ref, args.text]);
+            const retry = await runNative(["fill", ref, args.text]);
             if (!retry.isError) {
                 // Re-wrap the okResult to attach the fallback marker.
                 try {
                     const envelope = JSON.parse(retry.content[0].text);
-                    return okResult(envelope.data, { meta: { fallbackUsed: 'retap' } });
+                    return okResult(envelope.data, { meta: { fallbackUsed: "retap" } });
                 }
                 catch {
                     return retry;
@@ -598,7 +674,7 @@ export function createDeviceFillHandler(getClient) {
             if (!adbResult.isError) {
                 try {
                     const envelope = JSON.parse(adbResult.content[0].text);
-                    return okResult(envelope.data, { meta: { fallbackUsed: 'adb' } });
+                    return okResult(envelope.data, { meta: { fallbackUsed: "adb" } });
                 }
                 catch {
                     return adbResult;
@@ -606,7 +682,7 @@ export function createDeviceFillHandler(getClient) {
             }
         }
         // Fallback 3: Maestro inputText (iOS, or Android if adb fallback also failed).
-        const platform = androidSession ? 'android' : 'ios';
+        const platform = androidSession ? "android" : "ios";
         return maestroFillFallback(ref, args.text, platform);
     });
 }
@@ -622,11 +698,15 @@ function computeSwipeFromDirection(direction, screen) {
     const dx = Math.round(screen.width * SWIPE_FRACTION);
     switch (direction) {
         // "swipe down" means finger moves from top to bottom (pull-to-refresh gesture)
-        case 'down': return { x1: cx, y1: cy - dy, x2: cx, y2: cy + dy };
+        case "down":
+            return { x1: cx, y1: cy - dy, x2: cx, y2: cy + dy };
         // "swipe up" means finger moves from bottom to top
-        case 'up': return { x1: cx, y1: cy + dy, x2: cx, y2: cy - dy };
-        case 'left': return { x1: cx + dx, y1: cy, x2: cx - dx, y2: cy };
-        case 'right': return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
+        case "up":
+            return { x1: cx, y1: cy + dy, x2: cx, y2: cy - dy };
+        case "left":
+            return { x1: cx + dx, y1: cy, x2: cx - dx, y2: cy };
+        case "right":
+            return { x1: cx - dx, y1: cy, x2: cx + dx, y2: cy };
     }
 }
 // Shared by the standalone swipe handler and device_batch so a batched
@@ -635,7 +715,14 @@ export function buildDirectionalSwipeCliArgs(direction, durationMs) {
     const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const coords = computeSwipeFromDirection(direction, screen);
     const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
-    return ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
+    return [
+        "swipe",
+        String(coords.x1),
+        String(coords.y1),
+        String(coords.x2),
+        String(coords.y2),
+        String(duration),
+    ];
 }
 // Scroll direction → finger gesture is INVERTED vs swipe ("scroll down" = content
 // moves up = finger moves up) and scaled by `amount` (0..1). Centred half-spans
@@ -646,10 +733,14 @@ function computeScrollFromDirection(direction, amount, screen) {
     const dy = Math.round(screen.height * SWIPE_FRACTION * amount);
     const dx = Math.round(screen.width * SWIPE_FRACTION * amount);
     switch (direction) {
-        case 'down': return { x1: cx, y1: cy + Math.round(dy / 2), x2: cx, y2: cy - Math.round(dy / 2) };
-        case 'up': return { x1: cx, y1: cy - Math.round(dy / 2), x2: cx, y2: cy + Math.round(dy / 2) };
-        case 'left': return { x1: cx + Math.round(dx / 2), y1: cy, x2: cx - Math.round(dx / 2), y2: cy };
-        case 'right': return { x1: cx - Math.round(dx / 2), y1: cy, x2: cx + Math.round(dx / 2), y2: cy };
+        case "down":
+            return { x1: cx, y1: cy + Math.round(dy / 2), x2: cx, y2: cy - Math.round(dy / 2) };
+        case "up":
+            return { x1: cx, y1: cy - Math.round(dy / 2), x2: cx, y2: cy + Math.round(dy / 2) };
+        case "left":
+            return { x1: cx + Math.round(dx / 2), y1: cy, x2: cx - Math.round(dx / 2), y2: cy };
+        case "right":
+            return { x1: cx - Math.round(dx / 2), y1: cy, x2: cx + Math.round(dx / 2), y2: cy };
     }
 }
 // Shared by the standalone scroll handler's daemon fallthrough and device_batch
@@ -663,13 +754,20 @@ export function buildDirectionalScrollCliArgs(direction, amount, durationMs) {
     const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
     const coords = computeScrollFromDirection(direction, clamped, screen);
     const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
-    return ['scroll', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
+    return [
+        "scroll",
+        String(coords.x1),
+        String(coords.y1),
+        String(coords.x2),
+        String(coords.y2),
+        String(duration),
+    ];
 }
 export function exactModeRejectionMessage(reason) {
-    if (reason === 'count-pattern-incompatible') {
-        return 'exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.';
+    if (reason === "count-pattern-incompatible") {
+        return "exact: true is incompatible with count/pattern (those route through agent-device daemon which enforces safe-normalized timing). Drop count/pattern or drop exact.";
     }
-    return 'exact: true requires fast-runner (iOS only, session must be open). Fast-runner unavailable — open a device session via device_snapshot action=open, then retry.';
+    return "exact: true requires fast-runner (iOS only, session must be open). Fast-runner unavailable — open a device session via device_snapshot action=open, then retry.";
 }
 export function createDeviceSwipeHandler() {
     return withSession(async (args) => {
@@ -682,10 +780,16 @@ export function createDeviceSwipeHandler() {
         // of silently degrading to a 60ms-capped daemon swipe.
         if (args.exact === true) {
             if (args.count || args.pattern) {
-                return failResult(exactModeRejectionMessage('count-pattern-incompatible'), { code: 'EXACT_INCOMPATIBLE', hint: 'count and pattern only work via agent-device daemon, which enforces safe-normalized timing. Drop one to proceed.' });
+                return failResult(exactModeRejectionMessage("count-pattern-incompatible"), {
+                    code: "EXACT_INCOMPATIBLE",
+                    hint: "count and pattern only work via agent-device daemon, which enforces safe-normalized timing. Drop one to proceed.",
+                });
             }
             if (!isFastRunnerAvailable()) {
-                return failResult(exactModeRejectionMessage('fast-runner-unavailable'), { code: 'EXACT_REQUIRES_FAST_RUNNER', hint: 'fast-runner is the only path that respects user-supplied durationMs verbatim. Open a device session first.' });
+                return failResult(exactModeRejectionMessage("fast-runner-unavailable"), {
+                    code: "EXACT_REQUIRES_FAST_RUNNER",
+                    hint: "fast-runner is the only path that respects user-supplied durationMs verbatim. Open a device session first.",
+                });
             }
         }
         if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
@@ -693,26 +797,33 @@ export function createDeviceSwipeHandler() {
                 try {
                     const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs);
                     if (resp.ok) {
-                        return okResult({ x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, durationMs: args.durationMs, method: 'fast-runner' });
+                        return okResult({
+                            x1: args.x1,
+                            y1: args.y1,
+                            x2: args.x2,
+                            y2: args.y2,
+                            durationMs: args.durationMs,
+                            method: "fast-runner",
+                        });
                     }
                     if (args.exact === true) {
-                        return failResult('fast-runner swipe call failed and exact: true forbids daemon fallback', { code: 'EXACT_FAST_RUNNER_FAILED' });
+                        return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
                     }
                 }
                 catch (err) {
                     if (args.exact === true) {
-                        return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: 'EXACT_FAST_RUNNER_FAILED' });
+                        return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
                     }
                     /* fall through */
                 }
             }
-            const cliArgs = ['swipe', String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
+            const cliArgs = ["swipe", String(args.x1), String(args.y1), String(args.x2), String(args.y2)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
             if (args.count && args.count > 1)
-                cliArgs.push('--count', String(args.count));
+                cliArgs.push("--count", String(args.count));
             if (args.pattern)
-                cliArgs.push('--pattern', args.pattern);
+                cliArgs.push("--pattern", args.pattern);
             return runNative(cliArgs);
         }
         if (args.direction) {
@@ -724,27 +835,39 @@ export function createDeviceSwipeHandler() {
                 try {
                     const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration);
                     if (resp.ok) {
-                        return okResult({ direction: args.direction, durationMs: duration, method: 'fast-runner', ...coords });
+                        return okResult({
+                            direction: args.direction,
+                            durationMs: duration,
+                            method: "fast-runner",
+                            ...coords,
+                        });
                     }
                     if (args.exact === true) {
-                        return failResult('fast-runner swipe call failed and exact: true forbids daemon fallback', { code: 'EXACT_FAST_RUNNER_FAILED' });
+                        return failResult("fast-runner swipe call failed and exact: true forbids daemon fallback", { code: "EXACT_FAST_RUNNER_FAILED" });
                     }
                 }
                 catch (err) {
                     if (args.exact === true) {
-                        return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: 'EXACT_FAST_RUNNER_FAILED' });
+                        return failResult(`fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`, { code: "EXACT_FAST_RUNNER_FAILED" });
                     }
                     /* fall through */
                 }
             }
-            const cliArgs = ['swipe', String(coords.x1), String(coords.y1), String(coords.x2), String(coords.y2), String(duration)];
+            const cliArgs = [
+                "swipe",
+                String(coords.x1),
+                String(coords.y1),
+                String(coords.x2),
+                String(coords.y2),
+                String(duration),
+            ];
             if (args.count && args.count > 1)
-                cliArgs.push('--count', String(args.count));
+                cliArgs.push("--count", String(args.count));
             if (args.pattern)
-                cliArgs.push('--pattern', args.pattern);
+                cliArgs.push("--pattern", args.pattern);
             return runNative(cliArgs);
         }
-        return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
+        return failResult("Provide either direction or x1,y1,x2,y2 coordinates");
     });
 }
 export function createDeviceScrollHandler() {
@@ -763,7 +886,15 @@ export function createDeviceScrollHandler() {
             try {
                 const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);
                 if (resp.ok) {
-                    return okResult({ direction: args.direction, amount: args.amount ?? 0.5, method: 'fast-runner', x1, y1, x2, y2 });
+                    return okResult({
+                        direction: args.direction,
+                        amount: args.amount ?? 0.5,
+                        method: "fast-runner",
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                    });
                 }
                 // Fall through to daemon on fast-runner failure
             }
@@ -780,7 +911,7 @@ export function createDeviceScrollHandler() {
 export function createDeviceScrollIntoViewHandler() {
     return withSession(async (args) => {
         if (!args.ref && !args.text) {
-            return failResult('Provide either text or ref to scroll into view');
+            return failResult("Provide either text or ref to scroll into view");
         }
         // GH #105 iOS-MVP follow-up: the Swift runner has no `scrollintoview`
         // command; this is TS-orchestrated on iOS (snapshot → find → swipe loop).
@@ -793,12 +924,12 @@ export function createDeviceScrollIntoViewHandler() {
         // and routing through it re-spawns the legacy runner that fights us
         // for focus / UIAutomator.
         const session = getActiveSession();
-        const usesInTreeRunner = session?.platform === 'ios' ||
-            (session?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
+        const usesInTreeRunner = session?.platform === "ios" ||
+            (session?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0");
         if (usesInTreeRunner) {
             return scrollIntoViewWithRunner(args);
         }
-        return failResult(`device_scrollintoview requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${session?.platform ?? 'none'}.`, { code: 'IN_TREE_RUNNER_REQUIRED', platform: session?.platform ?? null });
+        return failResult(`device_scrollintoview requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${session?.platform ?? "none"}.`, { code: "IN_TREE_RUNNER_REQUIRED", platform: session?.platform ?? null });
     });
 }
 /**
@@ -815,21 +946,22 @@ async function scrollIntoViewWithRunner(args) {
     const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const screenRect = { x: 0, y: 0, width: screen.width, height: screen.height };
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-        const snapRes = await runNative(['snapshot', '-i']);
-        timer.mark('snapshot');
+        const snapRes = await runNative(["snapshot", "-i"]);
+        timer.mark("snapshot");
         if (snapRes.isError) {
-            return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? 'unknown'}`, { code: 'SNAPSHOT_UNAVAILABLE' });
+            return failResult(`scrollintoview: snapshot failed at iteration ${i}: ${snapRes.content?.[0]?.text ?? "unknown"}`, { code: "SNAPSHOT_UNAVAILABLE" });
         }
         let nodes = [];
         try {
-            const envelope = JSON.parse(snapRes.content?.[0]?.text ?? '{}');
+            const envelope = JSON.parse(snapRes.content?.[0]?.text ?? "{}");
             nodes = envelope.data?.nodes ?? [];
         }
         catch {
             return failResult(`scrollintoview: failed to parse snapshot envelope at iteration ${i}`);
         }
         const target = args.ref
-            ? nodes.find((n) => n.ref === (args.ref.startsWith('@') ? args.ref : `@${args.ref}`)) ?? null
+            ? (nodes.find((n) => n.ref === (args.ref.startsWith("@") ? args.ref : `@${args.ref}`)) ??
+                null)
             : findInLatestSnapshot(nodes, args.text);
         if (!target) {
             // Element not in snapshot at all; can't decide direction. Probably needs
@@ -837,9 +969,9 @@ async function scrollIntoViewWithRunner(args) {
             // and retry — common case is reaching a below-fold element.
             if (i === 0) {
                 const fallbackDir = decideScrollDirection({ x: 0, y: screen.height * 2, width: 1, height: 1 }, screenRect);
-                const coords = computeSwipeFromDirection(fallbackDir ?? 'down', screen);
+                const coords = computeSwipeFromDirection(fallbackDir ?? "down", screen);
                 await runNative([
-                    'swipe',
+                    "swipe",
                     String(coords.x1),
                     String(coords.y1),
                     String(coords.x2),
@@ -848,7 +980,7 @@ async function scrollIntoViewWithRunner(args) {
                 ]);
                 continue;
             }
-            return failResult(`scrollintoview: element "${args.ref ?? args.text}" not found after ${i} swipe iteration(s)`, { code: 'NOT_FOUND', iterations: i });
+            return failResult(`scrollintoview: element "${args.ref ?? args.text}" not found after ${i} swipe iteration(s)`, { code: "NOT_FOUND", iterations: i });
         }
         if (!target.rect) {
             return failResult(`scrollintoview: target has no rect — cannot decide direction`);
@@ -859,28 +991,28 @@ async function scrollIntoViewWithRunner(args) {
                 ref: target.ref,
                 rect: target.rect,
                 iterations: i,
-                method: 'runner-orchestrator',
+                method: "runner-orchestrator",
             }, { meta: { timings_ms: timer.timings() } });
         }
         const coords = computeSwipeFromDirection(direction, screen);
         const swipeResp = await runNative([
-            'swipe',
+            "swipe",
             String(coords.x1),
             String(coords.y1),
             String(coords.x2),
             String(coords.y2),
             String(DEFAULT_SWIPE_DURATION_MS),
         ]);
-        timer.mark('swipe');
+        timer.mark("swipe");
         if (swipeResp.isError) {
-            return failResult(`scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? 'unknown'}`);
+            return failResult(`scrollintoview: swipe failed at iteration ${i}: ${swipeResp.content?.[0]?.text ?? "unknown"}`);
         }
     }
-    return failResult(`scrollintoview: target "${args.ref ?? args.text}" did not enter viewport after ${MAX_ITERATIONS} swipe iterations`, { code: 'SCROLL_EXHAUSTED', iterations: MAX_ITERATIONS });
+    return failResult(`scrollintoview: target "${args.ref ?? args.text}" did not enter viewport after ${MAX_ITERATIONS} swipe iterations`, { code: "SCROLL_EXHAUSTED", iterations: MAX_ITERATIONS });
 }
 export function createDevicePinchHandler() {
     return withSession((args) => {
-        const cliArgs = ['pinch', String(args.scale)];
+        const cliArgs = ["pinch", String(args.scale)];
         if (args.x != null && args.y != null) {
             cliArgs.push(String(args.x), String(args.y));
         }
@@ -889,14 +1021,14 @@ export function createDevicePinchHandler() {
 }
 // --- Back ---
 export function createDeviceBackHandler() {
-    return withSession(() => runNative(['back']));
+    return withSession(() => runNative(["back"]));
 }
 // --- Focus Next (keyboard Next/Return button) ---
 // Label priority order: "Go" and "Done" first because they are less likely to
 // appear on in-app navigation buttons than "Next", reducing false-positive taps
 // on wizard/form navigation buttons. Callers with a visible in-app "Next" button
 // should use device_press on the next input @ref directly instead of this tool.
-const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
+const NEXT_KEY_LABELS = ["Go", "Done", "Return", "Next"];
 export function createDeviceFocusNextHandler() {
     return withSession(async () => {
         // Single snapshot + local scan beats iterating agent-device find calls.
@@ -905,24 +1037,24 @@ export function createDeviceFocusNextHandler() {
         // query races keyboard animations less than four sequential queries.
         const snap = await fetchSnapshotNodes();
         if (!snap.ok) {
-            if (snap.reason === 'runner-leak-unrecovered') {
+            if (snap.reason === "runner-leak-unrecovered") {
                 return runnerLeakFailResult(undefined, snap.recoveryReason);
             }
-            return failResult('Snapshot unavailable — cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.', { code: 'SNAPSHOT_UNAVAILABLE' });
+            return failResult("Snapshot unavailable — cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
         }
         const { nodes, recoveredTier } = snap;
         for (const label of NEXT_KEY_LABELS) {
             const match = nodes.find((n) => n.label === label);
             if (!match)
                 continue;
-            const pressResult = await runNative(['press', `@${match.ref}`]);
+            const pressResult = await runNative(["press", `@${match.ref}`]);
             if (pressResult.isError)
                 continue; // Match found but tap failed — try next label
             try {
                 const envelope = JSON.parse(pressResult.content[0].text);
                 const meta = { keyUsed: label, ref: match.ref };
                 if (recoveredTier) {
-                    meta.recovered = 'agent-device-runner-leak';
+                    meta.recovered = "agent-device-runner-leak";
                     meta.recoveryTier = recoveredTier;
                 }
                 return okResult(envelope.data, { meta });
@@ -931,8 +1063,8 @@ export function createDeviceFocusNextHandler() {
                 return pressResult;
             }
         }
-        return failResult(`No keyboard ${NEXT_KEY_LABELS.join('/')} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(', ')}`, {
-            code: 'KEYBOARD_NEXT_NOT_FOUND',
+        return failResult(`No keyboard ${NEXT_KEY_LABELS.join("/")} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(", ")}`, {
+            code: "KEYBOARD_NEXT_NOT_FOUND",
             hint: 'Keyboard may be dismissed, or the field may be the last in the form. If an in-app "Next" button is visible, prefer device_press on the next input @ref directly.',
         });
     });
@@ -970,22 +1102,19 @@ export function isInViewport(element, screen) {
     const elBottom = element.y + element.height;
     const screenRight = screen.x + screen.width;
     const screenBottom = screen.y + screen.height;
-    return (element.x < screenRight &&
-        elRight > screen.x &&
-        element.y < screenBottom &&
-        elBottom > screen.y);
+    return (element.x < screenRight && elRight > screen.x && element.y < screenBottom && elBottom > screen.y);
 }
 /** Choose a swipe direction that should bring `element` into the screen. Returns null when already visible. */
 export function decideScrollDirection(element, screen) {
     if (isInViewport(element, screen))
         return null;
     if (element.y >= screen.y + screen.height)
-        return 'up';
+        return "up";
     if (element.y + element.height <= screen.y)
-        return 'down';
+        return "down";
     if (element.x >= screen.x + screen.width)
-        return 'left';
+        return "left";
     if (element.x + element.width <= screen.x)
-        return 'right';
+        return "right";
     return null;
 }

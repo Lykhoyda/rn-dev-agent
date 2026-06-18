@@ -1,7 +1,7 @@
-import { applyNetworkHookEntry } from './event-handlers.js';
-import { logger } from '../logger.js';
-import type { DeviceBufferManager } from '../ring-buffer.js';
-import type { NetworkEntry } from '../types.js';
+import { applyNetworkHookEntry } from "./event-handlers.js";
+import { logger } from "../logger.js";
+import type { DeviceBufferManager } from "../ring-buffer.js";
+import type { NetworkEntry } from "../types.js";
 
 const DRAIN_EXPR = `(function(){
   var b = globalThis.__RN_AGENT_NET_BUF__ || [];
@@ -10,7 +10,7 @@ const DRAIN_EXPR = `(function(){
 })()`;
 
 interface DrainableClient {
-  networkMode: 'cdp' | 'hook' | 'none';
+  networkMode: "cdp" | "hook" | "none";
   activeDeviceKey: string;
   networkBufferManager: DeviceBufferManager<NetworkEntry, string>;
   evaluate: (expr: string) => Promise<{ value?: unknown; error?: string }>;
@@ -35,16 +35,17 @@ interface DrainableClient {
  * already buffered. Returns the number of entries applied.
  */
 export async function drainNetworkHookBuffer(client: DrainableClient): Promise<number> {
-  if (client.networkMode !== 'hook') return 0;
+  if (client.networkMode !== "hook") return 0;
   try {
     const result = await client.evaluate(DRAIN_EXPR);
-    if (result.error || typeof result.value !== 'string') return 0;
+    if (result.error || typeof result.value !== "string") return 0;
     const entries = JSON.parse(result.value) as Array<{ t?: unknown; d?: unknown; ts?: unknown }>;
     if (!Array.isArray(entries)) return 0;
     let applied = 0;
     for (const e of entries) {
-      if (!e || typeof e.t !== 'string' || !e.d || typeof (e.d as { id?: unknown }).id !== 'string') continue;
-      const atMs = typeof e.ts === 'number' ? e.ts : undefined;
+      if (!e || typeof e.t !== "string" || !e.d || typeof (e.d as { id?: unknown }).id !== "string")
+        continue;
+      const atMs = typeof e.ts === "number" ? e.ts : undefined;
       applyNetworkHookEntry(
         e.t,
         e.d as { id: string; method?: string; url?: string; status?: number; duration_ms?: number },
@@ -56,7 +57,10 @@ export async function drainNetworkHookBuffer(client: DrainableClient): Promise<n
     }
     return applied;
   } catch (err) {
-    logger.warn('CDP', `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`);
+    logger.warn(
+      "CDP",
+      `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`,
+    );
     return 0;
   }
 }

@@ -1,18 +1,18 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { parseSimctlListapps } from '../cdp/discovery.js';
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parseSimctlListapps } from "../cdp/discovery.js";
 
-const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
-const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
+const DAEMON_JSON = join(homedir(), ".agent-device", "daemon.json");
+const DAEMON_LOCK = join(homedir(), ".agent-device", "daemon.lock");
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 
 // GH#202 Phase 4: the legacy upstream runner ships as two installed apps.
 export const LEGACY_BUNDLE_IDS = [
-  'com.callstack.agentdevice.runner',
-  'com.callstack.agentdevice.runner.uitests.xctrunner',
+  "com.callstack.agentdevice.runner",
+  "com.callstack.agentdevice.runner.uitests.xctrunner",
 ] as const;
 
 /**
@@ -39,7 +39,7 @@ export interface EradicateLegacyAppsResult {
 // (body is sync execFileSync).
 export async function eradicateLegacyRunnerApps(
   udid: string,
-  deps: Pick<EnsureSingleRunnerDeps, 'listApps' | 'uninstallApp'>,
+  deps: Pick<EnsureSingleRunnerDeps, "listApps" | "uninstallApp">,
 ): Promise<EradicateLegacyAppsResult> {
   const removedApps: string[] = [];
   const warnings: string[] = [];
@@ -52,7 +52,10 @@ export async function eradicateLegacyRunnerApps(
   // A booted simulator always carries built-in system apps; zero parsed ids
   // means the listapps format changed (parse failure), not a clean device.
   if (installed.size === 0) {
-    return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
+    return {
+      removedApps,
+      warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`],
+    };
   }
   for (const id of selectInstalledLegacyApps(installed)) {
     try {
@@ -76,9 +79,9 @@ export async function eradicateLegacyRunnerApps(
  */
 export function selectLegacyRunnerPids(psOutput: string, udid: string): number[] {
   const pids: number[] = [];
-  for (const line of psOutput.split('\n')) {
-    if (!line.includes('AgentDeviceRunner')) continue;
-    if (line.includes('RnFastRunner')) continue;
+  for (const line of psOutput.split("\n")) {
+    if (!line.includes("AgentDeviceRunner")) continue;
+    if (line.includes("RnFastRunner")) continue;
     if (!udid || !line.includes(udid)) continue;
     const m = line.trim().match(/^(\d+)\b/);
     if (m) pids.push(Number(m[1]));
@@ -122,15 +125,20 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
     listProcesses: () =>
-      execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
+      execFileSync("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3_000 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
-      try { process.kill(pid, 0); return true; } catch { return false; }
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
     },
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync(DAEMON_JSON, 'utf8')) as { pid?: unknown };
-        return typeof parsed.pid === 'number' ? parsed.pid : null;
+        const parsed = JSON.parse(readFileSync(DAEMON_JSON, "utf8")) as { pid?: unknown };
+        return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
       }
@@ -139,9 +147,17 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     removeFile: (path) => unlinkSync(path),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     listApps: (udid) =>
-      execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] }),
+      execFileSync("xcrun", ["simctl", "listapps", udid], {
+        encoding: "utf8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync("xcrun", ["simctl", "uninstall", udid, bundleId], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
     },
   };
 }
@@ -167,13 +183,17 @@ export async function ensureSingleRunner(
 
   if (opts.udid) {
     const t = Date.now();
-    let psOut = '';
-    try { psOut = deps.listProcesses(); } catch (err) { warnings.push(`ps failed: ${msg(err)}`); }
+    let psOut = "";
+    try {
+      psOut = deps.listProcesses();
+    } catch (err) {
+      warnings.push(`ps failed: ${msg(err)}`);
+    }
     for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
       try {
-        deps.kill(pid, 'SIGTERM');
+        deps.kill(pid, "SIGTERM");
         await deps.delay(SIGKILL_GRACE_MS);
-        if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
+        if (deps.isAlive(pid)) deps.kill(pid, "SIGKILL");
         killedPids.push(pid);
       } catch (err) {
         warnings.push(`kill ${pid} failed: ${msg(err)}`);
@@ -195,15 +215,25 @@ export async function ensureSingleRunner(
   const tFiles = Date.now();
   if (DAEMON_FILES.some((f) => deps.fileExists(f))) {
     let daemonPid: number | null = null;
-    try { daemonPid = deps.readDaemonPid(); } catch { daemonPid = null; }
+    try {
+      daemonPid = deps.readDaemonPid();
+    } catch {
+      daemonPid = null;
+    }
     if (shouldRemoveDaemonFiles(daemonPid, deps.isAlive)) {
       for (const f of DAEMON_FILES) {
         if (!deps.fileExists(f)) continue;
-        try { deps.removeFile(f); removedFiles.push(f); }
-        catch (err) { warnings.push(`rm ${f} failed: ${msg(err)}`); }
+        try {
+          deps.removeFile(f);
+          removedFiles.push(f);
+        } catch (err) {
+          warnings.push(`rm ${f} failed: ${msg(err)}`);
+        }
       }
     } else {
-      warnings.push(`Left ${DAEMON_JSON} in place — daemon PID ${daemonPid} is alive (may belong to another project).`);
+      warnings.push(
+        `Left ${DAEMON_JSON} in place — daemon PID ${daemonPid} is alive (may belong to another project).`,
+      );
     }
   }
   timings.fileCleanup = Date.now() - tFiles;

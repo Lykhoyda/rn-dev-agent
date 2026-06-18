@@ -1,6 +1,6 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { statSync } from 'node:fs';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { statSync } from "node:fs";
 const execFile = promisify(execFileCb);
 /**
  * B120 / GH #36: defaults validated against a live iPhone 17 Pro screenshot
@@ -31,7 +31,7 @@ async function checkSipsAvailable(deps) {
         return sipsAvailable;
     const runner = deps.exec ?? execFile;
     try {
-        await runner('sips', ['--version'], { timeout: 1500 });
+        await runner("sips", ["--version"], { timeout: 1500 });
         sipsAvailable = true;
     }
     catch {
@@ -57,7 +57,10 @@ export function parseSipsDimensions(stdout) {
 async function getDimensions(path, deps) {
     const runner = deps.exec ?? execFile;
     try {
-        const { stdout } = await runner('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', path], { timeout: 5000, encoding: 'utf8' });
+        const { stdout } = await runner("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
+            timeout: 5000,
+            encoding: "utf8",
+        });
         return parseSipsDimensions(stdout);
     }
     catch {
@@ -65,7 +68,7 @@ async function getDimensions(path, deps) {
     }
 }
 export function buildSipsResizeArgs(path, maxWidth, quality) {
-    const args = ['--resampleWidth', String(maxWidth)];
+    const args = ["--resampleWidth", String(maxWidth)];
     // B121 follow-up: when the requested path has a .jpg/.jpeg extension we MUST
     // emit `-s format jpeg`. Without it, sips preserves the input format — and
     // the fast-runner path produces PNG bytes (XCUIScreen.screenshot.pngRepresentation)
@@ -75,9 +78,9 @@ export function buildSipsResizeArgs(path, maxWidth, quality) {
     // when input is already JPEG (daemon path), so it's safe to apply unconditionally
     // for .jpg/.jpeg outputs.
     if (/\.jpe?g$/i.test(path)) {
-        args.push('-s', 'format', 'jpeg');
+        args.push("-s", "format", "jpeg");
         if (quality !== undefined) {
-            args.push('-s', 'formatOptions', String(quality));
+            args.push("-s", "formatOptions", String(quality));
         }
     }
     args.push(path);
@@ -92,27 +95,27 @@ export function buildSipsResizeArgs(path, maxWidth, quality) {
 export async function resizeWithSips(path, opts = {}, deps = {}) {
     const maxWidth = opts.maxWidth ?? DEFAULT_MAX_WIDTH;
     if (maxWidth <= 0) {
-        return { resized: false, path, reason: 'maxWidth-zero' };
+        return { resized: false, path, reason: "maxWidth-zero" };
     }
     if (!(await checkSipsAvailable(deps))) {
-        return { resized: false, path, reason: 'sips-unavailable' };
+        return { resized: false, path, reason: "sips-unavailable" };
     }
     const originalDims = await getDimensions(path, deps);
     if (!originalDims) {
-        return { resized: false, path, reason: 'no-dimensions' };
+        return { resized: false, path, reason: "no-dimensions" };
     }
     if (originalDims.width <= maxWidth) {
-        return { resized: false, path, reason: 'already-smaller', originalDims };
+        return { resized: false, path, reason: "already-smaller", originalDims };
     }
     const fileSize = deps.fileSize ?? defaultFileSize;
     const originalBytes = fileSize(path);
     const runner = deps.exec ?? execFile;
     const quality = opts.quality ?? DEFAULT_QUALITY;
     try {
-        await runner('sips', buildSipsResizeArgs(path, maxWidth, quality), { timeout: 10_000 });
+        await runner("sips", buildSipsResizeArgs(path, maxWidth, quality), { timeout: 10_000 });
     }
     catch {
-        return { resized: false, path, reason: 'sips-failed', originalDims, originalBytes };
+        return { resized: false, path, reason: "sips-failed", originalDims, originalBytes };
     }
     const newDims = await getDimensions(path, deps);
     const newBytes = fileSize(path);

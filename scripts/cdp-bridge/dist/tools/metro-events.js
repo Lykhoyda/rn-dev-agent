@@ -1,4 +1,4 @@
-import { okResult, withConnection } from '../utils.js';
+import { okResult, withConnection } from "../utils.js";
 /**
  * cdp_metro_events — M5 / Phase 90 Tier 2.
  *
@@ -17,20 +17,20 @@ export function createMetroEventsHandler(getClient) {
                 count: 0,
                 lastBuild: null,
                 buildErrors: 0,
-                hint: 'Metro events client has not started. This should attach automatically when CDP connects. If you see this, the events WS may have failed to open (port mismatch, Metro not serving /events on this version).',
+                hint: "Metro events client has not started. This should attach automatically when CDP connects. If you see this, the events WS may have failed to open (port mismatch, Metro not serving /events on this version).",
             });
         }
         // B129 (D658): if the endpoint was detected as incompatible during probe,
         // surface that instead of silently returning empty events forever.
-        if (metroEvents.incompatibleReason === 'expo-cli-incompatible') {
+        if (metroEvents.incompatibleReason === "expo-cli-incompatible") {
             return okResult({
                 eventsConnected: false,
-                eventsReason: 'expo-cli-incompatible',
+                eventsReason: "expo-cli-incompatible",
                 lastBuild: null,
                 buildErrors: 0,
                 count: 0,
                 events: [],
-                hint: 'Metro /events endpoint is serving the Expo manifest protocol, not Metro\'s reporter stream. This is expected on Expo-managed projects — bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream.',
+                hint: "Metro /events endpoint is serving the Expo manifest protocol, not Metro's reporter stream. This is expected on Expo-managed projects — bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream.",
             });
         }
         if (args.clearErrors) {

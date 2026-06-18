@@ -1,15 +1,15 @@
 // Phase 2 Task 9: RN_ANDROID_RUNNER=0 must produce an explicit RUNNER_DISABLED
 // error (not fall through to NO_NATIVE_ROUTE). Source-regex asserts over the
 // TS source so the gate is enforced at the dispatch level, not just in docs.
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(__dirname, '../../src/agent-device-wrapper.ts'), 'utf-8');
-const typesSrc = readFileSync(join(__dirname, '../../src/types.ts'), 'utf-8');
+const src = readFileSync(join(__dirname, "../../src/agent-device-wrapper.ts"), "utf-8");
+const typesSrc = readFileSync(join(__dirname, "../../src/types.ts"), "utf-8");
 
 // ── RUNNER_DISABLED must be in the ToolErrorCode union ──────────────────────
 

@@ -1,5 +1,5 @@
-import type { CDPClient } from '../cdp-client.js';
-import type { EvaluateResult } from '../types.js';
+import type { CDPClient } from "../cdp-client.js";
+import type { EvaluateResult } from "../types.js";
 
 const FRESHNESS_PROBE_MS = 2000;
 const STALE_RETRY_DELAY_MS = 500;
@@ -13,7 +13,9 @@ const STALE_RETRY_PROBE_MS = 3000;
 // 47s catch-path recovery into a fast pre-handler one. Process-scoped boolean —
 // a single MCP serves one device at a time, so no per-client keying is needed.
 let cdpStale = false;
-export function markCdpStale(): void { cdpStale = true; }
+export function markCdpStale(): void {
+  cdpStale = true;
+}
 /** Read-and-clear: returns whether the stale flag was set, resetting it. */
 export function consumeCdpStale(): boolean {
   const was = cdpStale;
@@ -39,16 +41,20 @@ export async function probeFreshness(
     // If the timeout wins the race, this evaluate() promise is orphaned; attach
     // a no-op catch so a later rejection (e.g. a mid-probe WebSocket close)
     // can't surface as an unhandledRejection and crash the MCP process.
-    const evalPromise = client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v');
-    evalPromise.catch(() => { /* swallowed if the timeout already settled the race */ });
+    const evalPromise = client.evaluate(
+      'typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v',
+    );
+    evalPromise.catch(() => {
+      /* swallowed if the timeout already settled the race */
+    });
     const result = await Promise.race([
       evalPromise,
       new Promise<EvaluateResult>((resolve) => {
-        probeTimer = setTimeout(() => resolve({ error: 'timeout' }), timeoutMs);
+        probeTimer = setTimeout(() => resolve({ error: "timeout" }), timeoutMs);
       }),
     ]);
     if (probeTimer) clearTimeout(probeTimer);
-    if (result.error || typeof result.value !== 'number') {
+    if (result.error || typeof result.value !== "number") {
       return { fresh: false, version: null, probed: true };
     }
     return { fresh: true, version: result.value, probed: true };
@@ -60,13 +66,13 @@ export async function probeFreshness(
 
 export interface StaleRecoveryResult {
   recovered: boolean;
-  reason: 'fresh' | 'not-stale' | 'reconnected' | 'reconnect-failed' | 'probe-failed';
+  reason: "fresh" | "not-stale" | "reconnected" | "reconnect-failed" | "probe-failed";
   error?: string;
 }
 
 export async function recoverFromStaleTarget(client: CDPClient): Promise<StaleRecoveryResult> {
   if (!client.isConnected) {
-    return { recovered: false, reason: 'probe-failed', error: 'Client not connected' };
+    return { recovered: false, reason: "probe-failed", error: "Client not connected" };
   }
 
   let probe = await probeDev(client, FRESHNESS_PROBE_MS);
@@ -80,15 +86,15 @@ export async function recoverFromStaleTarget(client: CDPClient): Promise<StaleRe
   }
 
   if (!isStale) {
-    return { recovered: false, reason: 'not-stale' };
+    return { recovered: false, reason: "not-stale" };
   }
 
   try {
     await client.softReconnect();
-    return { recovered: true, reason: 'reconnected' };
+    return { recovered: true, reason: "reconnected" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { recovered: false, reason: 'reconnect-failed', error: msg };
+    return { recovered: false, reason: "reconnect-failed", error: msg };
   }
 }
 
@@ -101,17 +107,19 @@ async function probeDev(
     // No-op catch on the orphaned promise if the timeout wins the race (see
     // probeFreshness) — prevents an unhandledRejection on a mid-probe WS close.
     const evalPromise = client.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
-    evalPromise.catch(() => { /* swallowed if the timeout already settled the race */ });
+    evalPromise.catch(() => {
+      /* swallowed if the timeout already settled the race */
+    });
     const result = await Promise.race([
       evalPromise,
       new Promise<EvaluateResult>((resolve) => {
-        timer = setTimeout(() => resolve({ error: 'probe timeout' }), timeoutMs);
+        timer = setTimeout(() => resolve({ error: "probe timeout" }), timeoutMs);
       }),
     ]);
     if (timer) clearTimeout(timer);
     return {
       ok: result.error === undefined && result.value === true,
-      timedOut: result.error === 'probe timeout',
+      timedOut: result.error === "probe timeout",
     };
   } catch {
     if (timer) clearTimeout(timer);
@@ -120,5 +128,5 @@ async function probeDev(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }

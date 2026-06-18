@@ -7,7 +7,7 @@
  */
 export function parseEnvelope(result) {
   const text = result.content?.[0]?.text;
-  if (!text) throw new Error('ToolResult has no content');
+  if (!text) throw new Error("ToolResult has no content");
   return JSON.parse(text);
 }
 
@@ -18,7 +18,7 @@ export function parseEnvelope(result) {
 export function expectOk(result) {
   const env = parseEnvelope(result);
   if (!env.ok) throw new Error(`Expected ok:true but got error: ${env.error}`);
-  if (result.isError) throw new Error('ToolResult has isError flag set on an ok response');
+  if (result.isError) throw new Error("ToolResult has isError flag set on an ok response");
   return env.data;
 }
 
@@ -29,7 +29,7 @@ export function expectOk(result) {
 export function expectFail(result) {
   const env = parseEnvelope(result);
   if (env.ok) throw new Error(`Expected ok:false but got ok:true`);
-  if (!result.isError) throw new Error('ToolResult missing isError flag on a fail response');
+  if (!result.isError) throw new Error("ToolResult missing isError flag on a fail response");
   return env.error;
 }
 
@@ -40,6 +40,6 @@ export function expectFail(result) {
 export function expectWarn(result) {
   const env = parseEnvelope(result);
   if (!env.ok) throw new Error(`Expected ok:true (warn) but got error: ${env.error}`);
-  if (!env.meta?.warning) throw new Error('Expected meta.warning to be set');
+  if (!env.meta?.warning) throw new Error("Expected meta.warning to be set");
   return { data: env.data, warning: env.meta.warning };
 }

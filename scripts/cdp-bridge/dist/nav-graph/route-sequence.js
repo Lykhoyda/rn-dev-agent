@@ -9,7 +9,7 @@ export function validateRouteSequenceAgainstGraph(graph, expected) {
     if (missing.length > 0) {
         return {
             ok: false,
-            reason: `action expects screen(s) the nav graph no longer has: ${missing.join(', ')}`,
+            reason: `action expects screen(s) the nav graph no longer has: ${missing.join(", ")}`,
             missing,
         };
     }
@@ -25,7 +25,7 @@ export function classifyRouteDriftAfterFailure(input) {
         return {
             isDrift: true,
             liveRoute,
-            reason: `live route "${liveRoute}" is not in the action's expected sequence [${expectedSequence.join(' → ')}] — an unexpected screen appeared (structural drift, not a stale selector)`,
+            reason: `live route "${liveRoute}" is not in the action's expected sequence [${expectedSequence.join(" → ")}] — an unexpected screen appeared (structural drift, not a stale selector)`,
         };
     }
     return { isDrift: false, liveRoute };

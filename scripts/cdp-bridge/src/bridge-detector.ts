@@ -1,4 +1,4 @@
-import type { CDPClient } from './cdp-client.js';
+import type { CDPClient } from "./cdp-client.js";
 
 export interface BridgePresence {
   present: boolean;
@@ -20,7 +20,7 @@ const DETECT_EXPRESSION = `
 export async function detectBridge(client: CDPClient): Promise<BridgePresence> {
   try {
     const result = await client.evaluate(DETECT_EXPRESSION);
-    if (result.value && typeof result.value === 'string') {
+    if (result.value && typeof result.value === "string") {
       return JSON.parse(result.value) as BridgePresence;
     }
   } catch {

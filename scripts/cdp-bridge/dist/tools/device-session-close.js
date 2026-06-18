@@ -1,4 +1,4 @@
-import { okResult } from '../utils.js';
+import { okResult } from "../utils.js";
 /**
  * GH#244: after a Maestro flow tears down the runner/daemon (the #237 slot-release),
  * the in-memory session survives but the agent-device session that `close` routes
@@ -13,7 +13,7 @@ import { okResult } from '../utils.js';
 export function isBenignSessionGoneError(result) {
     if (!result.isError)
         return false;
-    const text = result.content?.[0]?.text ?? '';
+    const text = result.content?.[0]?.text ?? "";
     let envelope;
     try {
         envelope = JSON.parse(text);
@@ -24,13 +24,13 @@ export function isBenignSessionGoneError(result) {
         // because its raw text mentions the phrase.
         return false;
     }
-    if ((envelope.meta?.code ?? envelope.code) === 'SESSION_NOT_FOUND')
+    if ((envelope.meta?.code ?? envelope.code) === "SESSION_NOT_FOUND")
         return true;
-    return /no active session|session not found/i.test(envelope.error ?? '');
+    return /no active session|session not found/i.test(envelope.error ?? "");
 }
 export async function closeDeviceSession(deps) {
     if (!deps.hasActiveSession()) {
-        return okResult({ closed: true, message: 'No active session to close' });
+        return okResult({ closed: true, message: "No active session to close" });
     }
     const result = await deps.closeUnderlyingSession();
     if (!result.isError) {
@@ -48,7 +48,7 @@ export async function closeDeviceSession(deps) {
         return okResult({
             closed: true,
             sessionAlreadyGone: true,
-            message: 'Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.',
+            message: "Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.",
         });
     }
     return result;

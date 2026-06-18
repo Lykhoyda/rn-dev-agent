@@ -1,4 +1,4 @@
-import { attachVerificationWarning } from './envelope.js';
+import { attachVerificationWarning } from "./envelope.js";
 // GH #61 Option B.1 / D689: deep-link depth heuristic. The IX-2950 narrative
 // in #61 was the agent reaching a "policy added" success sheet via a deep
 // link with 3 path segments AND ending in a success-state word
@@ -24,7 +24,7 @@ const DEPTH_THRESHOLD = 3;
  *   /wallet/policy-details/abc/true           → segments=4, exceeds=true (path-only OK)
  */
 export function analyzeDeepLinkUrl(url) {
-    if (typeof url !== 'string' || url.length === 0) {
+    if (typeof url !== "string" || url.length === 0) {
         return { segments: 0, endsWithSuccessWord: false, exceedsThreshold: false };
     }
     // Strip scheme, query, and fragment. Count ALL remaining segments — for
@@ -36,18 +36,18 @@ export function analyzeDeepLinkUrl(url) {
     // the same rule applies — example.com counts as a segment, but in practice
     // legitimate https deep links rarely deep-link past 3 segments either.
     let path = url;
-    const hashIdx = path.indexOf('#');
+    const hashIdx = path.indexOf("#");
     if (hashIdx >= 0)
         path = path.slice(0, hashIdx);
-    const qIdx = path.indexOf('?');
+    const qIdx = path.indexOf("?");
     if (qIdx >= 0)
         path = path.slice(0, qIdx);
     const schemeMatch = path.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:(\/\/)?/);
     if (schemeMatch) {
         path = path.slice(schemeMatch[0].length);
     }
-    const segments = path.split('/').filter((seg) => seg.length > 0);
-    const last = segments.length > 0 ? segments[segments.length - 1] : '';
+    const segments = path.split("/").filter((seg) => seg.length > 0);
+    const last = segments.length > 0 ? segments[segments.length - 1] : "";
     const endsWithSuccessWord = SUCCESS_SUFFIX_REGEX.test(last);
     const exceedsThreshold = segments.length >= DEPTH_THRESHOLD;
     return { segments: segments.length, endsWithSuccessWord, exceedsThreshold };
@@ -65,24 +65,24 @@ export function annotateDeepLinkDepth(result, ctx) {
     if (!analysis.exceedsThreshold && !analysis.endsWithSuccessWord)
         return result;
     const trigger = analysis.exceedsThreshold && analysis.endsWithSuccessWord
-        ? 'depth_and_success_suffix'
+        ? "depth_and_success_suffix"
         : analysis.exceedsThreshold
-            ? 'depth'
-            : 'success_suffix';
+            ? "depth"
+            : "success_suffix";
     const reasons = [];
     if (analysis.exceedsThreshold) {
         reasons.push(`${analysis.segments} path segments (threshold: ${DEPTH_THRESHOLD}+)`);
     }
     if (analysis.endsWithSuccessWord) {
-        reasons.push('ends with a success-state word');
+        reasons.push("ends with a success-state word");
     }
-    const hint = `Deep link "${ctx.url}" matches a bypass-shape pattern (${reasons.join('; ')}). ` +
+    const hint = `Deep link "${ctx.url}" matches a bypass-shape pattern (${reasons.join("; ")}). ` +
         `If this is meant to verify a user-flow, the tap-through path was likely skipped — the user does not ` +
         `manually navigate 3+ levels deep, and only post-mutation success screens use these route names. ` +
         `Use cdp_navigate sparingly here; prefer device_press + cdp_interact to drive the actual flow.`;
     const warning = {
-        code: 'DEEP_LINK_DEPTH',
-        source: 'device_deeplink',
+        code: "DEEP_LINK_DEPTH",
+        source: "device_deeplink",
         url: ctx.url,
         segments: analysis.segments,
         ends_with_success_word: analysis.endsWithSuccessWord,

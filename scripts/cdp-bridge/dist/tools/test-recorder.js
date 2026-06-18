@@ -4,12 +4,12 @@
 // and produce replayable test code via test-recorder-generators. State is
 // module-level (storedEvents) — MCP is single-client-per-process so we don't
 // need per-session isolation.
-import { okResult, failResult, withConnection } from '../utils.js';
-import { findProjectRoot } from '../nav-graph/storage.js';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { DEV_CHECK_JS, START_RECORDING_JS, STOP_RECORDING_JS, buildAnnotationJs, } from '../cdp/test-recorder-helpers.js';
-import { generateMaestro, generateDetox, } from './test-recorder-generators.js';
+import { okResult, failResult, withConnection } from "../utils.js";
+import { findProjectRoot } from "../nav-graph/storage.js";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { DEV_CHECK_JS, START_RECORDING_JS, STOP_RECORDING_JS, buildAnnotationJs, } from "../cdp/test-recorder-helpers.js";
+import { generateMaestro, generateDetox } from "./test-recorder-generators.js";
 // --- Module state ---
 // Shared across the 7 tool handlers — reset on start, written on stop, read by
 // generate / save. Test-only setters exposed at the bottom of this file for
@@ -33,16 +33,16 @@ export function deduplicateEvents(events) {
     const out = [];
     for (let i = 0; i < events.length; i++) {
         const ev = events[i];
-        if (ev.type === 'type') {
+        if (ev.type === "type") {
             const next = events[i + 1];
-            if (next?.type === 'type' &&
+            if (next?.type === "type" &&
                 next.testID === ev.testID) {
                 continue;
             }
         }
-        if (ev.type === 'tap') {
+        if (ev.type === "tap") {
             const last = out[out.length - 1];
-            if (last?.type === 'tap' &&
+            if (last?.type === "tap" &&
                 last.testID === ev.testID &&
                 ev.t - last.t < 100) {
                 continue;
@@ -53,13 +53,13 @@ export function deduplicateEvents(events) {
     return out;
 }
 export function sanitizeFilename(name) {
-    return name.replace(/\.json$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return name.replace(/\.json$/i, "").replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 export function getRecordingsDir(rootResolver = findProjectRoot) {
     const root = rootResolver();
     if (!root)
         return null;
-    return join(root, '.rn-agent', 'recordings');
+    return join(root, ".rn-agent", "recordings");
 }
 // B144: resolver factory that threads a bundleId into findProjectRoot so
 // save/load/list land in the correct project when the plugin CWD has
@@ -80,15 +80,13 @@ export function getRecordingsDir(rootResolver = findProjectRoot) {
 //                       recording dir?" When the user has reconnected to a
 //                       different app, we want its recordings, not the
 //                       last-captured one's.
-export function _makeRecordingRootResolverForTest(getClient, mode = 'save') {
+export function _makeRecordingRootResolverForTest(getClient, mode = "save") {
     return makeRecordingRootResolver(getClient, mode);
 }
-function makeRecordingRootResolver(getClient, mode = 'save') {
+function makeRecordingRootResolver(getClient, mode = "save") {
     return () => {
         const liveBundleId = getClient?.().connectedTarget?.description ?? null;
-        const bundleId = mode === 'save'
-            ? (recordingBundleId ?? liveBundleId)
-            : (liveBundleId ?? recordingBundleId);
+        const bundleId = mode === "save" ? (recordingBundleId ?? liveBundleId) : (liveBundleId ?? recordingBundleId);
         if (bundleId)
             return findProjectRoot({ bundleId });
         return findProjectRoot();
@@ -104,28 +102,28 @@ async function probeDev(client) {
     const r = (await client.evaluate(DEV_CHECK_JS));
     return r.value === true;
 }
-const DEV_REQUIRED_MSG = 'Recording requires __DEV__=true — release builds pre-freeze props at bundle time and cannot be intercepted';
+const DEV_REQUIRED_MSG = "Recording requires __DEV__=true — release builds pre-freeze props at bundle time and cannot be intercepted";
 export function createRecordTestStartHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         if (!(await probeDev(client))) {
-            return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
+            return failResult(DEV_REQUIRED_MSG, "DEV_MODE_REQUIRED");
         }
         const result = (await client.evaluate(START_RECORDING_JS));
         if (result.error) {
-            return failResult(`Failed to start recording: ${result.error}`, 'EVAL_FAILED');
+            return failResult(`Failed to start recording: ${result.error}`, "EVAL_FAILED");
         }
-        if (typeof result.value !== 'string') {
-            return failResult('Unexpected response from START_RECORDING_JS — expected JSON string', 'BAD_RESPONSE');
+        if (typeof result.value !== "string") {
+            return failResult("Unexpected response from START_RECORDING_JS — expected JSON string", "BAD_RESPONSE");
         }
         let parsed;
         try {
             parsed = JSON.parse(result.value);
         }
         catch {
-            return failResult(`Invalid JSON from start: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+            return failResult(`Invalid JSON from start: ${String(result.value).slice(0, 200)}`, "BAD_RESPONSE");
         }
         if (!parsed.ok) {
-            return failResult(parsed.error ?? 'start failed', 'START_FAILED');
+            return failResult(parsed.error ?? "start failed", "START_FAILED");
         }
         storedEvents = null;
         recordingTruncated = false;
@@ -145,17 +143,17 @@ export function createRecordTestStopHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         const result = (await client.evaluate(STOP_RECORDING_JS));
         if (result.error) {
-            return failResult(`Failed to stop recording: ${result.error}`, 'EVAL_FAILED');
+            return failResult(`Failed to stop recording: ${result.error}`, "EVAL_FAILED");
         }
-        if (typeof result.value !== 'string') {
-            return failResult('Unexpected response from STOP_RECORDING_JS — expected JSON string', 'BAD_RESPONSE');
+        if (typeof result.value !== "string") {
+            return failResult("Unexpected response from STOP_RECORDING_JS — expected JSON string", "BAD_RESPONSE");
         }
         let parsed;
         try {
             parsed = JSON.parse(result.value);
         }
         catch {
-            return failResult(`Invalid JSON from stop: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+            return failResult(`Invalid JSON from stop: ${String(result.value).slice(0, 200)}`, "BAD_RESPONSE");
         }
         const raw = Array.isArray(parsed.events) ? parsed.events : [];
         storedEvents = deduplicateEvents(raw);
@@ -171,10 +169,10 @@ export function createRecordTestStopHandler(getClient) {
 export function createRecordTestGenerateHandler() {
     return async (args) => {
         if (!storedEvents || storedEvents.length === 0) {
-            return failResult('No recorded events — call cdp_record_test_start, interact, then cdp_record_test_stop first', 'NO_EVENTS');
+            return failResult("No recorded events — call cdp_record_test_start, interact, then cdp_record_test_stop first", "NO_EVENTS");
         }
-        if (args.format === 'appium') {
-            return failResult('Appium generator not implemented in M6 — file a GitHub issue if needed', 'NOT_IMPLEMENTED');
+        if (args.format === "appium") {
+            return failResult("Appium generator not implemented in M6 — file a GitHub issue if needed", "NOT_IMPLEMENTED");
         }
         // D1204 follow-up close-out (Phase 130): forward the M7 metadata
         // fields so the emitted YAML carries the full reusable-action header
@@ -189,10 +187,15 @@ export function createRecordTestGenerateHandler() {
             mutates: args.mutates,
             status: args.status,
         };
-        const text = args.format === 'maestro'
+        const text = args.format === "maestro"
             ? generateMaestro(storedEvents, opts)
             : generateDetox(storedEvents, opts);
-        return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
+        return okResult({
+            format: args.format,
+            eventCount: storedEvents.length,
+            text,
+            startRoute: recordingStartRoute,
+        });
     };
 }
 /**
@@ -215,24 +218,24 @@ export function getRecordingStartRoute() {
 export function createRecordTestAnnotateHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         if (!(await probeDev(client))) {
-            return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
+            return failResult(DEV_REQUIRED_MSG, "DEV_MODE_REQUIRED");
         }
         const result = (await client.evaluate(buildAnnotationJs(args.note)));
         if (result.error) {
-            return failResult(`Failed to annotate: ${result.error}`, 'EVAL_FAILED');
+            return failResult(`Failed to annotate: ${result.error}`, "EVAL_FAILED");
         }
-        if (typeof result.value !== 'string') {
-            return failResult('Unexpected response from annotate — expected JSON string', 'BAD_RESPONSE');
+        if (typeof result.value !== "string") {
+            return failResult("Unexpected response from annotate — expected JSON string", "BAD_RESPONSE");
         }
         let parsed;
         try {
             parsed = JSON.parse(result.value);
         }
         catch {
-            return failResult(`Invalid JSON from annotate: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+            return failResult(`Invalid JSON from annotate: ${String(result.value).slice(0, 200)}`, "BAD_RESPONSE");
         }
         if (!parsed.ok) {
-            return failResult(parsed.error ?? 'Annotation failed', 'NOT_RECORDING');
+            return failResult(parsed.error ?? "Annotation failed", "NOT_RECORDING");
         }
         return okResult({ annotated: true });
     });
@@ -240,20 +243,20 @@ export function createRecordTestAnnotateHandler(getClient) {
 export function createRecordTestSaveHandler(getClient) {
     return async (args) => {
         if (!storedEvents) {
-            return failResult('No events to save — stop a recording first', 'NO_EVENTS');
+            return failResult("No events to save — stop a recording first", "NO_EVENTS");
         }
-        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'save'));
+        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, "save"));
         if (!dir) {
-            return failResult('Could not resolve project root (no package.json ancestor). Set RN_PROJECT_ROOT env var.', 'NO_PROJECT_ROOT');
+            return failResult("Could not resolve project root (no package.json ancestor). Set RN_PROJECT_ROOT env var.", "NO_PROJECT_ROOT");
         }
         await mkdir(dir, { recursive: true });
         const safe = sanitizeFilename(args.filename);
         if (!safe) {
-            return failResult('Filename is empty after sanitization', 'BAD_FILENAME');
+            return failResult("Filename is empty after sanitization", "BAD_FILENAME");
         }
         const filePath = join(dir, `${safe}.json`);
         const payload = { savedAt: new Date().toISOString(), events: storedEvents };
-        await writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+        await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
         return okResult({
             saved: true,
             path: filePath,
@@ -264,29 +267,29 @@ export function createRecordTestSaveHandler(getClient) {
 }
 export function createRecordTestLoadHandler(getClient) {
     return async (args) => {
-        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
+        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, "load-list"));
         if (!dir) {
-            return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
+            return failResult("Could not resolve project root", "NO_PROJECT_ROOT");
         }
         const safe = sanitizeFilename(args.filename);
         if (!safe) {
-            return failResult('Filename is empty after sanitization', 'BAD_FILENAME');
+            return failResult("Filename is empty after sanitization", "BAD_FILENAME");
         }
         const filePath = join(dir, `${safe}.json`);
         let raw;
         try {
-            raw = await readFile(filePath, 'utf8');
+            raw = await readFile(filePath, "utf8");
         }
         catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            return failResult(`Could not load ${filePath}: ${msg}`, 'LOAD_FAILED');
+            return failResult(`Could not load ${filePath}: ${msg}`, "LOAD_FAILED");
         }
         let parsed;
         try {
             parsed = JSON.parse(raw);
         }
         catch {
-            return failResult(`Recording file is not valid JSON: ${filePath}`, 'BAD_RECORDING');
+            return failResult(`Recording file is not valid JSON: ${filePath}`, "BAD_RECORDING");
         }
         storedEvents = Array.isArray(parsed.events) ? parsed.events : [];
         recordingTruncated = false;
@@ -301,9 +304,9 @@ export function createRecordTestLoadHandler(getClient) {
 }
 export function createRecordTestListHandler(getClient) {
     return async () => {
-        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
+        const dir = getRecordingsDir(makeRecordingRootResolver(getClient, "load-list"));
         if (!dir) {
-            return failResult('Could not resolve project root', 'NO_PROJECT_ROOT');
+            return failResult("Could not resolve project root", "NO_PROJECT_ROOT");
         }
         let files;
         try {
@@ -313,8 +316,8 @@ export function createRecordTestListHandler(getClient) {
             return okResult({ dir, files: [] });
         }
         const recordings = files
-            .filter((f) => f.endsWith('.json'))
-            .map((f) => f.replace(/\.json$/, ''))
+            .filter((f) => f.endsWith(".json"))
+            .map((f) => f.replace(/\.json$/, ""))
             .sort();
         return okResult({ dir, files: recordings });
     };

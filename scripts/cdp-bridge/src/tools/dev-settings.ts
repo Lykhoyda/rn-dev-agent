@@ -1,7 +1,12 @@
-import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import type { CDPClient } from "../cdp-client.js";
+import { okResult, failResult, warnResult, withConnection } from "../utils.js";
 
-type DevAction = 'reload' | 'toggleInspector' | 'togglePerfMonitor' | 'dismissRedBox' | 'disableDevMenu';
+type DevAction =
+  | "reload"
+  | "toggleInspector"
+  | "togglePerfMonitor"
+  | "dismissRedBox"
+  | "disableDevMenu";
 
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
@@ -44,7 +49,7 @@ export function createDevSettingsHandler(getClient: () => CDPClient) {
       if (result.error) {
         return failResult(`Dev settings error: ${result.error}`);
       }
-      if (result.value === 'no_method_available') {
+      if (result.value === "no_method_available") {
         return warnResult(
           { action: args.action, executed: false },
           `${args.action} not available — all fallback approaches failed.`,
@@ -52,11 +57,12 @@ export function createDevSettingsHandler(getClient: () => CDPClient) {
       }
     } catch (evalErr) {
       const msg = evalErr instanceof Error ? evalErr.message : String(evalErr);
-      const isDisconnect = msg.includes('WebSocket closed') || msg.includes('WebSocket not connected');
-      if (args.action === 'reload' && isDisconnect) {
+      const isDisconnect =
+        msg.includes("WebSocket closed") || msg.includes("WebSocket not connected");
+      if (args.action === "reload" && isDisconnect) {
         return okResult(
           { action: args.action, executed: true },
-          { meta: { note: 'Connection will close — use cdp_status to reconnect.' } },
+          { meta: { note: "Connection will close — use cdp_status to reconnect." } },
         );
       }
       throw evalErr;

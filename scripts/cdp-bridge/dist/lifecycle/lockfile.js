@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
-import { tmpdir, userInfo } from 'node:os';
-import { join, resolve } from 'node:path';
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync, } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join, resolve } from "node:path";
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_PROCESS_NAME_NEEDLE = 'cdp-bridge';
+const DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 // GH #182: heartbeat-staleness window. A healthy bridge refreshes lastHeartbeat
 // well within this (index.ts touches every ~30s); a wedged bridge stops, so its
 // lock becomes reclaimable. Matches device-lock.ts's 90s.
@@ -31,9 +31,9 @@ function defaultProcessAlive(pid) {
  */
 export function defaultProcessName(pid) {
     try {
-        const out = execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
+        const out = execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
             timeout: 1000,
         });
         return out.trim() || null;
@@ -50,9 +50,9 @@ export function defaultProcessName(pid) {
  */
 export function defaultProcessParent(pid) {
     try {
-        const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
+        const out = execFileSync("ps", ["-p", String(pid), "-o", "ppid="], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
             timeout: 1000,
         });
         const ppid = parseInt(out.trim(), 10);
@@ -72,10 +72,10 @@ export function defaultProcessParent(pid) {
  * holder as reparented (livePpid !== 0) and stole its lock.
  */
 export function defaultSelfPpid() {
-    return typeof process.ppid === 'number' ? process.ppid : 0;
+    return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-    return createHash('md5').update(resolve(projectRoot)).digest('hex').slice(0, 8);
+    return createHash("md5").update(resolve(projectRoot)).digest("hex").slice(0, 8);
 }
 /**
  * Single-instance gate for the MCP subprocess (M3 / Phase 90 Tier 1).
@@ -110,7 +110,7 @@ export class Lockfile {
             uid,
             tmpDir,
             pid: opts.pid ?? process.pid,
-            version: opts.version ?? '',
+            version: opts.version ?? "",
             clock: opts.clock ?? Date.now,
             processAlive: opts.processAlive ?? defaultProcessAlive,
             processName: opts.processName ?? defaultProcessName,
@@ -132,11 +132,11 @@ export class Lockfile {
         try {
             this.writeLock();
             this.acquired = true;
-            return { status: 'acquired', lockPath: this.lockPath };
+            return { status: "acquired", lockPath: this.lockPath };
         }
         catch (err) {
             if (!isEexist(err)) {
-                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+                return { status: "acquired", lockPath: this.lockPath, degraded: true };
             }
         }
         const existing = this.readExisting();
@@ -150,32 +150,36 @@ export class Lockfile {
         // created a fresh lock in the gap.
         const before = this.readExisting();
         if (before &&
-            (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) &&
+            (existing === null ||
+                before.pid !== existing.pid ||
+                before.startedAt !== existing.startedAt) &&
             this.isLockLive(before)) {
             return this.conflictOf(before);
         }
         try {
             unlinkSync(this.lockPath);
         }
-        catch { /* already gone */ }
+        catch {
+            /* already gone */
+        }
         try {
             this.writeLock();
             this.acquired = true;
-            return { status: 'acquired', lockPath: this.lockPath };
+            return { status: "acquired", lockPath: this.lockPath };
         }
         catch (err) {
             if (!isEexist(err)) {
-                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+                return { status: "acquired", lockPath: this.lockPath, degraded: true };
             }
             const raced = this.readExisting();
             return raced
                 ? this.conflictOf(raced)
-                : { status: 'acquired', lockPath: this.lockPath, degraded: true };
+                : { status: "acquired", lockPath: this.lockPath, degraded: true };
         }
     }
     conflictOf(body) {
         return {
-            status: 'conflict',
+            status: "conflict",
             lockPath: this.lockPath,
             pid: body.pid,
             projectRoot: body.projectRoot,
@@ -218,7 +222,7 @@ export class Lockfile {
             return false; // usurped → caller should exit
         body.lastHeartbeat = this.opts.clock();
         try {
-            writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+            writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
         }
         catch {
             // Best-effort: a failed heartbeat just means the lock may look stale sooner.
@@ -229,7 +233,7 @@ export class Lockfile {
         if (!existsSync(this.lockPath))
             return null;
         try {
-            const raw = readFileSync(this.lockPath, 'utf8');
+            const raw = readFileSync(this.lockPath, "utf8");
             const parsed = JSON.parse(raw);
             if (!isValidLockBody(parsed))
                 return null;
@@ -258,7 +262,7 @@ export class Lockfile {
         // A null live lookup fails safe (treated as live, never reclaimed).
         const livePpid = this.opts.processParent(body.pid);
         if (livePpid !== null) {
-            if (typeof body.ppid === 'number') {
+            if (typeof body.ppid === "number") {
                 if (livePpid !== body.ppid)
                     return false; // parent changed → orphaned
             }
@@ -272,7 +276,7 @@ export class Lockfile {
         // GH #182: a live owner whose heartbeat went stale is wedged (event loop blocked,
         // no longer refreshing) — reclaim. Skipped for pre-0.39 locks with no
         // lastHeartbeat (they fall back to the mtime check above).
-        if (typeof body.lastHeartbeat === 'number' &&
+        if (typeof body.lastHeartbeat === "number" &&
             this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
             return false;
         }
@@ -301,7 +305,7 @@ export class Lockfile {
             mkdirSync(dir, { recursive: true });
         }
         // GH#251: atomic exclusive create — throws EEXIST if another bridge won the race.
-        const fd = openSync(this.lockPath, 'wx');
+        const fd = openSync(this.lockPath, "wx");
         try {
             writeSync(fd, JSON.stringify(body, null, 2));
         }
@@ -311,15 +315,15 @@ export class Lockfile {
     }
 }
 function isEexist(err) {
-    return typeof err === 'object' && err !== null && err.code === 'EEXIST';
+    return typeof err === "object" && err !== null && err.code === "EEXIST";
 }
 function isValidLockBody(obj) {
-    if (typeof obj !== 'object' || obj === null)
+    if (typeof obj !== "object" || obj === null)
         return false;
     const o = obj;
-    return (typeof o.pid === 'number' &&
-        typeof o.projectRoot === 'string' &&
-        typeof o.startedAt === 'number');
+    return (typeof o.pid === "number" &&
+        typeof o.projectRoot === "string" &&
+        typeof o.startedAt === "number");
 }
 export function formatLockConflictMessage(conflict) {
     const ageSec = Math.floor(conflict.ageMs / 1000);
@@ -342,5 +346,5 @@ export function formatLockConflictMessage(conflict) {
         ``,
         `Running two MCPs in the same project causes missed events and state flicker.`,
         `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`,
-    ].join('\n');
+    ].join("\n");
 }

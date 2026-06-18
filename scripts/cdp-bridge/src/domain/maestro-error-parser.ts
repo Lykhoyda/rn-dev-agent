@@ -20,10 +20,15 @@
 // can decide whether to surface it verbatim or escalate to the user.
 
 export type MaestroFailure =
-  | { kind: 'SELECTOR_NOT_FOUND'; selectorKind: 'id' | 'text' | 'unknown'; selector: string; raw: string }
-  | { kind: 'TIMEOUT'; selector: string | null; raw: string }
-  | { kind: 'ASSERTION_FAILED'; selector: string | null; raw: string }
-  | { kind: 'UNKNOWN'; raw: string };
+  | {
+      kind: "SELECTOR_NOT_FOUND";
+      selectorKind: "id" | "text" | "unknown";
+      selector: string;
+      raw: string;
+    }
+  | { kind: "TIMEOUT"; selector: string | null; raw: string }
+  | { kind: "ASSERTION_FAILED"; selector: string | null; raw: string }
+  | { kind: "UNKNOWN"; raw: string };
 
 interface Pattern {
   re: RegExp;
@@ -47,41 +52,46 @@ interface Pattern {
 const PATTERNS: Pattern[] = [
   {
     re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw }),
   },
   {
     re: /Element with text (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw }),
   },
   // maestro-runner 1.0.x shape — issue #105.
   // "Element not found: id='X'" or "Element not found: text='X'".
   {
     re: /Element not found:\s*id=(['"])((?:(?!\1).)+)\1/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw }),
   },
   {
     re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw }),
   },
   {
     re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'unknown', selector: m[2], raw }),
+    build: (m, raw) => ({
+      kind: "SELECTOR_NOT_FOUND",
+      selectorKind: "unknown",
+      selector: m[2],
+      raw,
+    }),
   },
   {
     re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,
-    build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw }),
   },
   {
     re: /Timed out waiting for element (['"])((?:(?!\1).)+)\1/i,
-    build: (m, raw) => ({ kind: 'TIMEOUT', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "TIMEOUT", selector: m[2], raw }),
   },
   {
     re: /Assertion failed: (['"])((?:(?!\1).)+)\1 (?:is )?not visible/i,
-    build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw }),
   },
   {
     re: /Element (['"])((?:(?!\1).)+)\1 is not visible/i,
-    build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
+    build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw }),
   },
 ];
 
@@ -110,10 +120,10 @@ const PATTERNS: Pattern[] = [
  * Returns `UNKNOWN` if no pattern matches at all.
  */
 export function parseMaestroFailure(output: string): MaestroFailure {
-  if (!output || typeof output !== 'string') {
-    return { kind: 'UNKNOWN', raw: '' };
+  if (!output || typeof output !== "string") {
+    return { kind: "UNKNOWN", raw: "" };
   }
-  const lines = output.split('\n');
+  const lines = output.split("\n");
   for (const { re, build } of PATTERNS) {
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i];
@@ -128,7 +138,7 @@ export function parseMaestroFailure(output: string): MaestroFailure {
     const m = output.match(re);
     if (m) return build(m as RegExpExecArray, output);
   }
-  return { kind: 'UNKNOWN', raw: output };
+  return { kind: "UNKNOWN", raw: output };
 }
 
 /**
@@ -137,7 +147,7 @@ export function parseMaestroFailure(output: string): MaestroFailure {
  * stated phase-1 contract).
  */
 export function isAutoRepairable(failure: MaestroFailure): boolean {
-  return failure.kind === 'SELECTOR_NOT_FOUND';
+  return failure.kind === "SELECTOR_NOT_FOUND";
 }
 
 /**

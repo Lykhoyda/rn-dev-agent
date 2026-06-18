@@ -1,9 +1,9 @@
-import { createServer } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { Buffer } from 'node:buffer';
-import WebSocket, { WebSocketServer } from 'ws';
-import { metroOrigin } from '../ws-origin.js';
-import { logger } from '../logger.js';
+import { createServer } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { Buffer } from "node:buffer";
+import WebSocket, { WebSocketServer } from "ws";
+import { metroOrigin } from "../ws-origin.js";
+import { logger } from "../logger.js";
 /**
  * Phase 134.4 (deepsec HIGH): generate a per-multiplexer capability
  * token that consumers must include in the WebSocket upgrade path.
@@ -11,7 +11,7 @@ import { logger } from '../logger.js';
  * logged, never exposed in error messages.
  */
 export function generateCapabilityToken() {
-    return randomBytes(32).toString('base64url');
+    return randomBytes(32).toString("base64url");
 }
 /**
  * Pure verification helper. Returns true iff the request path is
@@ -21,11 +21,11 @@ export function generateCapabilityToken() {
  * empty expectedToken (never accept an unauthenticated multiplexer).
  */
 export function verifyConsumerPath(reqUrl, expectedToken) {
-    if (typeof expectedToken !== 'string' || expectedToken.length === 0)
+    if (typeof expectedToken !== "string" || expectedToken.length === 0)
         return false;
-    if (typeof reqUrl !== 'string' || reqUrl.length === 0)
+    if (typeof reqUrl !== "string" || reqUrl.length === 0)
         return false;
-    if (!reqUrl.startsWith('/'))
+    if (!reqUrl.startsWith("/"))
         return false;
     const submitted = reqUrl.slice(1);
     if (submitted.length !== expectedToken.length)
@@ -48,7 +48,7 @@ export class CDPMultiplexer {
     upstreamSeq = 1;
     routingTable = new Map();
     hermesBuffer = [];
-    state = 'stopped';
+    state = "stopped";
     boundPort = null;
     /**
      * Phase 134.4: per-instance capability token. Required in the
@@ -57,14 +57,16 @@ export class CDPMultiplexer {
      */
     capabilityToken = generateCapabilityToken();
     /** Phase 134.4: the capability token for this multiplexer instance. */
-    get token() { return this.capabilityToken; }
+    get token() {
+        return this.capabilityToken;
+    }
     routingSweeper = null;
     constructor(opts) {
         this.opts = {
             hermesUrl: opts.hermesUrl,
-            host: opts.host ?? '127.0.0.1',
+            host: opts.host ?? "127.0.0.1",
             port: opts.port ?? 0,
-            logTag: opts.logTag ?? 'CDP.proxy',
+            logTag: opts.logTag ?? "CDP.proxy",
             hermesBufferMaxSize: opts.hermesBufferMaxSize ?? HERMES_BUFFER_MAX_DEFAULT,
             routingTimeoutMs: opts.routingTimeoutMs ?? ROUTING_TIMEOUT_MS_DEFAULT,
         };
@@ -73,7 +75,7 @@ export class CDPMultiplexer {
         return this.boundPort;
     }
     get isRunning() {
-        return this.state === 'running';
+        return this.state === "running";
     }
     get consumerCount() {
         return this.consumers.size;
@@ -87,32 +89,32 @@ export class CDPMultiplexer {
         return this.hermesBuffer.length;
     }
     async start() {
-        if (this.state !== 'stopped') {
+        if (this.state !== "stopped") {
             throw new Error(`CDPMultiplexer cannot start from state '${this.state}'`);
         }
-        this.state = 'starting';
+        this.state = "starting";
         try {
             const port = await this.startConsumerServer();
             await this.connectHermes();
             this.startRoutingSweeper();
-            this.state = 'running';
+            this.state = "running";
             logger.info(this.opts.logTag, `multiplexer running on ${this.opts.host}:${port}`);
             return port;
         }
         catch (err) {
-            this.state = 'stopping';
+            this.state = "stopping";
             await this.cleanup();
-            this.state = 'stopped';
+            this.state = "stopped";
             throw err;
         }
     }
     async stop() {
-        if (this.state === 'stopped' || this.state === 'stopping')
+        if (this.state === "stopped" || this.state === "stopping")
             return;
-        this.state = 'stopping';
+        this.state = "stopping";
         await this.cleanup();
-        this.state = 'stopped';
-        logger.info(this.opts.logTag, 'multiplexer stopped');
+        this.state = "stopped";
+        logger.info(this.opts.logTag, "multiplexer stopped");
     }
     startConsumerServer() {
         return new Promise((resolve, reject) => {
@@ -131,19 +133,19 @@ export class CDPMultiplexer {
                         callback(true);
                         return;
                     }
-                    logger.warn(this.opts.logTag, 'rejected upgrade: missing or invalid capability token');
-                    callback(false, 401, 'Unauthorized');
+                    logger.warn(this.opts.logTag, "rejected upgrade: missing or invalid capability token");
+                    callback(false, 401, "Unauthorized");
                 },
             });
-            this.wss.on('connection', (ws) => this.onConsumerConnect(ws));
-            this.wss.on('error', (err) => {
+            this.wss.on("connection", (ws) => this.onConsumerConnect(ws));
+            this.wss.on("error", (err) => {
                 logger.warn(this.opts.logTag, `WebSocketServer error: ${err instanceof Error ? err.message : err}`);
             });
-            this.httpServer.once('error', reject);
+            this.httpServer.once("error", reject);
             this.httpServer.listen(this.opts.port, this.opts.host, () => {
                 const addr = this.httpServer?.address();
                 if (!addr) {
-                    reject(new Error('httpServer.address() returned null after listen'));
+                    reject(new Error("httpServer.address() returned null after listen"));
                     return;
                 }
                 this.boundPort = addr.port;
@@ -158,7 +160,7 @@ export class CDPMultiplexer {
             });
             this.hermesWs = ws;
             const onOpen = () => {
-                ws.off('error', onError);
+                ws.off("error", onError);
                 for (const msg of this.hermesBuffer)
                     ws.send(msg);
                 this.hermesBuffer = [];
@@ -166,14 +168,14 @@ export class CDPMultiplexer {
                 resolve();
             };
             const onError = (err) => {
-                ws.off('open', onOpen);
+                ws.off("open", onOpen);
                 reject(err);
             };
-            ws.once('open', onOpen);
-            ws.once('error', onError);
-            ws.on('message', (data) => this.onHermesMessage(data));
-            ws.on('close', (code, reason) => this.onHermesClose(code, reason.toString()));
-            ws.on('error', (err) => {
+            ws.once("open", onOpen);
+            ws.once("error", onError);
+            ws.on("message", (data) => this.onHermesMessage(data));
+            ws.on("close", (code, reason) => this.onHermesClose(code, reason.toString()));
+            ws.on("error", (err) => {
                 logger.warn(this.opts.logTag, `upstream WS error: ${err.message}`);
             });
         });
@@ -182,8 +184,8 @@ export class CDPMultiplexer {
         const consumerId = this.nextConsumerId++;
         this.consumers.set(consumerId, ws);
         logger.info(this.opts.logTag, `consumer ${consumerId} connected (total: ${this.consumers.size})`);
-        ws.on('message', (data) => this.onConsumerMessage(consumerId, data));
-        ws.on('close', () => {
+        ws.on("message", (data) => this.onConsumerMessage(consumerId, data));
+        ws.on("close", () => {
             this.consumers.delete(consumerId);
             for (const [upstreamId, entry] of this.routingTable) {
                 if (entry.consumerId === consumerId)
@@ -191,7 +193,7 @@ export class CDPMultiplexer {
             }
             logger.info(this.opts.logTag, `consumer ${consumerId} disconnected (remaining: ${this.consumers.size})`);
         });
-        ws.on('error', (err) => {
+        ws.on("error", (err) => {
             logger.warn(this.opts.logTag, `consumer ${consumerId} WS error: ${err.message}`);
         });
     }
@@ -205,12 +207,12 @@ export class CDPMultiplexer {
             logger.warn(this.opts.logTag, `consumer ${consumerId} sent non-JSON, dropping`);
             return;
         }
-        if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) {
+        if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
             logger.warn(this.opts.logTag, `consumer ${consumerId} sent non-object, dropping`);
             return;
         }
         const m = msg;
-        const consumerOriginalId = typeof m.id === 'number' ? m.id : null;
+        const consumerOriginalId = typeof m.id === "number" ? m.id : null;
         if (consumerOriginalId !== null) {
             const upstreamId = this.upstreamSeq++;
             this.routingTable.set(upstreamId, { consumerId, consumerOriginalId, createdAt: Date.now() });
@@ -225,15 +227,15 @@ export class CDPMultiplexer {
             msg = JSON.parse(raw);
         }
         catch {
-            logger.warn(this.opts.logTag, 'upstream sent non-JSON, dropping');
+            logger.warn(this.opts.logTag, "upstream sent non-JSON, dropping");
             return;
         }
-        if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) {
-            logger.warn(this.opts.logTag, 'upstream sent non-object, dropping');
+        if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
+            logger.warn(this.opts.logTag, "upstream sent non-object, dropping");
             return;
         }
         const m = msg;
-        const upstreamId = typeof m.id === 'number' ? m.id : null;
+        const upstreamId = typeof m.id === "number" ? m.id : null;
         if (upstreamId === null) {
             this.broadcastToConsumers(raw);
             return;
@@ -257,16 +259,18 @@ export class CDPMultiplexer {
         logger.warn(this.opts.logTag, `upstream Hermes closed (code=${code}, reason='${reason}')`);
         for (const ws of this.consumers.values()) {
             try {
-                ws.close(1011, 'upstream closed');
+                ws.close(1011, "upstream closed");
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
         }
         this.consumers.clear();
         this.routingTable.clear();
     }
     sendToHermes(rawMessage) {
         if (!this.hermesWs) {
-            logger.warn(this.opts.logTag, 'sendToHermes called with no upstream WS');
+            logger.warn(this.opts.logTag, "sendToHermes called with no upstream WS");
             return;
         }
         if (this.hermesWs.readyState === WebSocket.CONNECTING) {
@@ -315,7 +319,9 @@ export class CDPMultiplexer {
                 try {
                     ws.send(rawMessage);
                 }
-                catch { /* one consumer failing should not abort the others */ }
+                catch {
+                    /* one consumer failing should not abort the others */
+                }
             }
         }
     }
@@ -323,16 +329,20 @@ export class CDPMultiplexer {
         this.stopRoutingSweeper();
         if (this.hermesWs) {
             try {
-                this.hermesWs.close(1000, 'proxy stopping');
+                this.hermesWs.close(1000, "proxy stopping");
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
             this.hermesWs = null;
         }
         for (const ws of this.consumers.values()) {
             try {
-                ws.close(1001, 'proxy stopping');
+                ws.close(1001, "proxy stopping");
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
         }
         this.consumers.clear();
         this.routingTable.clear();
@@ -341,7 +351,9 @@ export class CDPMultiplexer {
             try {
                 this.wss.close();
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
             this.wss = null;
         }
         if (this.httpServer) {
@@ -359,15 +371,15 @@ export class CDPMultiplexer {
 export function parseRNVersion(raw) {
     if (raw === null || raw === undefined)
         return null;
-    if (typeof raw === 'string') {
+    if (typeof raw === "string") {
         const match = /^(\d+)\.(\d+)\.(\d+)/.exec(raw);
         if (!match)
             return null;
         return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
     }
-    if (typeof raw === 'object') {
+    if (typeof raw === "object") {
         const v = raw;
-        if (typeof v.major === 'number' && typeof v.minor === 'number' && typeof v.patch === 'number') {
+        if (typeof v.major === "number" && typeof v.minor === "number" && typeof v.patch === "number") {
             return { major: v.major, minor: v.minor, patch: v.patch };
         }
     }

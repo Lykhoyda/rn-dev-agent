@@ -1,17 +1,23 @@
 import {
-  existsSync, mkdirSync, openSync, writeSync, closeSync,
-  readFileSync, unlinkSync, writeFileSync,
-} from 'node:fs';
-import { tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+  existsSync,
+  mkdirSync,
+  openSync,
+  writeSync,
+  closeSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_STALE_MS = 90_000;
 
 export interface DeviceLockBody {
   pid: number;
   projectRoot: string;
-  platform: 'ios' | 'android';
-  deviceId: string;  // iOS UDID or Android adb serial
+  platform: "ios" | "android";
+  deviceId: string; // iOS UDID or Android adb serial
   appId?: string;
   startedAt: number;
   lastHeartbeat: number;
@@ -19,7 +25,7 @@ export interface DeviceLockBody {
 }
 
 export interface DeviceLockAcquired {
-  status: 'acquired';
+  status: "acquired";
   lockPath: string;
   /**
    * True when the lock could NOT be persisted (fs error). The session proceeds
@@ -28,11 +34,15 @@ export interface DeviceLockAcquired {
    */
   degraded?: boolean;
 }
-export interface DeviceLockConflict { status: 'conflict'; lockPath: string; holder: DeviceLockBody }
+export interface DeviceLockConflict {
+  status: "conflict";
+  lockPath: string;
+  holder: DeviceLockBody;
+}
 export type DeviceLockResult = DeviceLockAcquired | DeviceLockConflict;
 
 export interface DeviceLockOptions {
-  platform: 'ios' | 'android';
+  platform: "ios" | "android";
   deviceId: string;
   projectRoot?: string;
   appId?: string;
@@ -46,7 +56,12 @@ export interface DeviceLockOptions {
 }
 
 function defaultProcessAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -76,7 +91,7 @@ export class DeviceLock {
   readonly lockPath: string;
   private acquired = false;
   private readonly pid: number;
-  private readonly platform: 'ios' | 'android';
+  private readonly platform: "ios" | "android";
   private readonly deviceId: string;
   private readonly projectRoot: string;
   private readonly appId?: string;
@@ -89,7 +104,7 @@ export class DeviceLock {
   constructor(opts: DeviceLockOptions) {
     this.platform = opts.platform;
     this.deviceId = opts.deviceId;
-    this.projectRoot = opts.projectRoot ?? (process.env.CLAUDE_USER_CWD ?? process.cwd());
+    this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
     const uid = opts.uid ?? userInfo().uid;
     this.tmpDir = opts.tmpDir ?? tmpdir();
     this.pid = opts.pid ?? process.pid;
@@ -98,24 +113,27 @@ export class DeviceLock {
     this.clock = opts.clock ?? Date.now;
     this.processAlive = opts.processAlive ?? defaultProcessAlive;
     this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
-    this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
+    this.lockPath = join(
+      this.tmpDir,
+      `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`,
+    );
   }
 
   acquire(): DeviceLockResult {
     try {
       this.create();
-      return { status: 'acquired', lockPath: this.lockPath };
+      return { status: "acquired", lockPath: this.lockPath };
     } catch (err) {
       if (!isEexist(err)) {
         // Infra error (not ownership contention) → fail-open, UNMANAGED.
         // `acquired` stays false so touch()/release() no-op; the caller is
         // told via `degraded` that cross-bridge protection is off this session.
-        return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+        return { status: "acquired", lockPath: this.lockPath, degraded: true };
       }
     }
     const holder = this.readExisting();
     if (holder && !isDeviceLockStale(holder, this.clock(), this.processAlive, this.staleMs)) {
-      return { status: 'conflict', lockPath: this.lockPath, holder };
+      return { status: "conflict", lockPath: this.lockPath, holder };
     }
     // Stale/dead/unreadable holder → reclaim. Narrow the steal-a-fresh-lock
     // window: re-read immediately before unlink and bail if a DIFFERENT,
@@ -128,20 +146,24 @@ export class DeviceLock {
       (holder === null || before.pid !== holder.pid || before.startedAt !== holder.startedAt) &&
       !isDeviceLockStale(before, this.clock(), this.processAlive, this.staleMs)
     ) {
-      return { status: 'conflict', lockPath: this.lockPath, holder: before };
+      return { status: "conflict", lockPath: this.lockPath, holder: before };
     }
-    try { unlinkSync(this.lockPath); } catch { /* already gone */ }
+    try {
+      unlinkSync(this.lockPath);
+    } catch {
+      /* already gone */
+    }
     try {
       this.create();
-      return { status: 'acquired', lockPath: this.lockPath };
+      return { status: "acquired", lockPath: this.lockPath };
     } catch (err) {
       if (!isEexist(err)) {
-        return { status: 'acquired', lockPath: this.lockPath, degraded: true };
+        return { status: "acquired", lockPath: this.lockPath, degraded: true };
       }
       const raced = this.readExisting();
       return raced
-        ? { status: 'conflict', lockPath: this.lockPath, holder: raced }
-        : { status: 'acquired', lockPath: this.lockPath, degraded: true };
+        ? { status: "conflict", lockPath: this.lockPath, holder: raced }
+        : { status: "acquired", lockPath: this.lockPath, degraded: true };
     }
   }
 
@@ -152,7 +174,11 @@ export class DeviceLock {
     // overwrite and resurrect a lock we no longer hold.
     if (!holder || holder.pid !== this.pid) return;
     holder.lastHeartbeat = this.clock();
-    try { writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), 'utf8'); } catch { /* best-effort */ }
+    try {
+      writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
+    } catch {
+      /* best-effort */
+    }
   }
 
   release(): void {
@@ -160,13 +186,15 @@ export class DeviceLock {
     try {
       const holder = this.readExisting();
       if (holder?.pid === this.pid) unlinkSync(this.lockPath);
-    } catch { /* release must never fail shutdown */ }
+    } catch {
+      /* release must never fail shutdown */
+    }
     this.acquired = false;
   }
 
   private create(): void {
     if (!existsSync(this.tmpDir)) mkdirSync(this.tmpDir, { recursive: true });
-    const fd = openSync(this.lockPath, 'wx'); // atomic exclusive create — throws EEXIST if present
+    const fd = openSync(this.lockPath, "wx"); // atomic exclusive create — throws EEXIST if present
     try {
       const now = this.clock();
       const body: DeviceLockBody = {
@@ -188,7 +216,7 @@ export class DeviceLock {
 
   private readExisting(): DeviceLockBody | null {
     try {
-      const parsed = JSON.parse(readFileSync(this.lockPath, 'utf8')) as unknown;
+      const parsed = JSON.parse(readFileSync(this.lockPath, "utf8")) as unknown;
       if (!isValidBody(parsed)) return null;
       if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform) return null;
       return parsed;
@@ -199,18 +227,22 @@ export class DeviceLock {
 }
 
 function isEexist(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EEXIST';
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "EEXIST";
 }
 
 function isValidBody(o: unknown): o is DeviceLockBody {
-  if (typeof o !== 'object' || o === null) return false;
+  if (typeof o !== "object" || o === null) return false;
   const b = o as Record<string, unknown>;
   return (
-    typeof b.pid === 'number' && Number.isFinite(b.pid) &&
-    (b.platform === 'ios' || b.platform === 'android') &&
-    typeof b.deviceId === 'string' && b.deviceId.length > 0 &&
-    typeof b.projectRoot === 'string' &&
-    typeof b.startedAt === 'number' && Number.isFinite(b.startedAt) &&
-    typeof b.lastHeartbeat === 'number' && Number.isFinite(b.lastHeartbeat)
+    typeof b.pid === "number" &&
+    Number.isFinite(b.pid) &&
+    (b.platform === "ios" || b.platform === "android") &&
+    typeof b.deviceId === "string" &&
+    b.deviceId.length > 0 &&
+    typeof b.projectRoot === "string" &&
+    typeof b.startedAt === "number" &&
+    Number.isFinite(b.startedAt) &&
+    typeof b.lastHeartbeat === "number" &&
+    Number.isFinite(b.lastHeartbeat)
   );
 }

@@ -1,5 +1,5 @@
-import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
-import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
+import { detectIosExternalRunner } from "../runners/external-runner-detect.js";
+import type { IosExternalRunnerWarning } from "../runners/external-runner-detect.js";
 
 export interface ForeignCheckResult {
   active: boolean;
@@ -98,6 +98,6 @@ export function foreignGateUdid(): string | null {
  * `RN_IOS_FOREIGN_WARN` stays as a deprecated alias so existing opt-outs
  * keep working (documented as ALSO disabling the refusal). */
 export function foreignGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.RN_IOS_FOREIGN_GUARD !== undefined) return env.RN_IOS_FOREIGN_GUARD !== '0';
-  return env.RN_IOS_FOREIGN_WARN !== '0';
+  if (env.RN_IOS_FOREIGN_GUARD !== undefined) return env.RN_IOS_FOREIGN_GUARD !== "0";
+  return env.RN_IOS_FOREIGN_WARN !== "0";
 }

@@ -1,8 +1,8 @@
-import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-const HOST = '127.0.0.1';
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+const HOST = "127.0.0.1";
 const __dir = dirname(fileURLToPath(import.meta.url));
 export class ObservabilityServer {
     recorder;
@@ -26,7 +26,7 @@ export class ObservabilityServer {
             this.port = await listen(server, preferredPort ?? 0);
         }
         catch (e) {
-            if (e.code === 'EADDRINUSE' && preferredPort) {
+            if (e.code === "EADDRINUSE" && preferredPort) {
                 this.port = await listen(server, 0);
             }
             else {
@@ -48,7 +48,9 @@ export class ObservabilityServer {
                 res.write('data: {"type":"shutdown"}\n\n');
                 res.end();
             }
-            catch { /* already closed */ }
+            catch {
+                /* already closed */
+            }
         }
         this.streams.clear();
         if (s) {
@@ -56,25 +58,31 @@ export class ObservabilityServer {
             await new Promise((r) => s.close(() => r()));
         }
     }
-    url() { return `http://${HOST}:${this.port}`; }
+    url() {
+        return `http://${HOST}:${this.port}`;
+    }
     handle(req, res) {
         if (!this.guard(req, res))
             return;
-        const url = req.url ?? '/';
-        if (url === '/api/stream')
+        const url = req.url ?? "/";
+        if (url === "/api/stream")
             return this.stream(res);
         const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
         if (shot)
             return this.screenshot(Number(shot[1]), res);
         if (/^\/api\/live-screenshot\/\d+$/.test(url))
             return this.liveScreenshot(res);
-        if (url === '/')
+        if (url === "/")
             return this.index(res);
         res.writeHead(404);
         res.end();
     }
     stream(res) {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+        res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+        });
         res.flushHeaders?.();
         res.socket?.setTimeout(0);
         const write = (ev) => {
@@ -88,7 +96,7 @@ export class ObservabilityServer {
         this.streams.add(res);
         const { snapshot, detach } = this.recorder.attach((ev) => {
             // Recorder.clear() emits a terminal sentinel — end the stream cleanly.
-            if (ev.type === 'cleared') {
+            if (ev.type === "cleared") {
                 detach();
                 res.end();
                 return;
@@ -98,23 +106,33 @@ export class ObservabilityServer {
                 res.end();
             }
         });
-        write({ type: 'snapshot', events: snapshot });
-        const hb = setInterval(() => { try {
-            res.write(': hb\n\n');
-        }
-        catch { /* closed */ } }, 15_000);
+        write({ type: "snapshot", events: snapshot });
+        const hb = setInterval(() => {
+            try {
+                res.write(": hb\n\n");
+            }
+            catch {
+                /* closed */
+            }
+        }, 15_000);
         hb.unref?.();
-        res.on('close', () => { clearInterval(hb); detach(); this.streams.delete(res); });
+        res.on("close", () => {
+            clearInterval(hb);
+            detach();
+            this.streams.delete(res);
+        });
     }
     guard(req, res) {
-        const host = (req.headers.host ?? '').toLowerCase();
-        const okHost = host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`
-            || host === '127.0.0.1' || host === 'localhost';
-        const site = req.headers['sec-fetch-site'];
-        const okSite = site === undefined || site === 'same-origin' || site === 'none';
+        const host = (req.headers.host ?? "").toLowerCase();
+        const okHost = host === `127.0.0.1:${this.port}` ||
+            host === `localhost:${this.port}` ||
+            host === "127.0.0.1" ||
+            host === "localhost";
+        const site = req.headers["sec-fetch-site"];
+        const okSite = site === undefined || site === "same-origin" || site === "none";
         if (!okHost || !okSite) {
             res.writeHead(403);
-            res.end('forbidden');
+            res.end("forbidden");
             return false;
         }
         return true;
@@ -126,7 +144,7 @@ export class ObservabilityServer {
             res.end();
             return;
         }
-        res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+        res.writeHead(200, { "Content-Type": shot.contentType, "Cache-Control": "no-store" });
         res.end(shot.buf);
     }
     liveScreenshot(res) {
@@ -138,31 +156,34 @@ export class ObservabilityServer {
             res.end();
             return;
         }
-        res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+        res.writeHead(200, { "Content-Type": shot.contentType, "Cache-Control": "no-store" });
         res.end(shot.buf);
     }
     index(res) {
         try {
             // __dir is dist/observability/; the SPA bundle ships at
             // dist/observability/web-dist/index.html (vite outDir).
-            const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            const html = readFileSync(join(__dir, "web-dist", "index.html"), "utf8");
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
             res.end(html);
         }
         catch {
             res.writeHead(503);
-            res.end('SPA bundle not built — run npm run build:web');
+            res.end("SPA bundle not built — run npm run build:web");
         }
     }
 }
 function listen(server, port) {
     return new Promise((resolve, reject) => {
-        const onErr = (e) => { server.removeListener('error', onErr); reject(e); };
-        server.once('error', onErr);
+        const onErr = (e) => {
+            server.removeListener("error", onErr);
+            reject(e);
+        };
+        server.once("error", onErr);
         server.listen(port, HOST, () => {
-            server.removeListener('error', onErr);
+            server.removeListener("error", onErr);
             const addr = server.address();
-            resolve(typeof addr === 'object' && addr ? addr.port : port);
+            resolve(typeof addr === "object" && addr ? addr.port : port);
         });
     });
 }

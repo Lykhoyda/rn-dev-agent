@@ -1,9 +1,9 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { okResult, failResult } from '../utils.js';
-import type { ToolResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
-import { isValidBundleId } from '../domain/maestro-validator.js';
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { okResult, failResult } from "../utils.js";
+import type { ToolResult } from "../utils.js";
+import { detectPlatform } from "./platform-utils.js";
+import { isValidBundleId } from "../domain/maestro-validator.js";
 
 const execFileAsync = promisify(execFile);
 const EXEC_TIMEOUT = 10_000;
@@ -13,53 +13,57 @@ const EXEC_TIMEOUT = 10_000;
 // ANDROID_PERMISSIONS values are always `android.permission.X` so dot-only
 // escaping was safe in practice — but defense in depth is cheap.
 function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const IOS_PERMISSIONS: Record<string, string> = {
-  notifications: 'notifications',
-  camera: 'camera',
-  microphone: 'microphone',
-  location: 'location',
-  'location-always': 'location-always',
-  photos: 'photos',
-  contacts: 'contacts',
-  calendar: 'calendars',
-  reminders: 'reminders',
-  all: 'all',
+  notifications: "notifications",
+  camera: "camera",
+  microphone: "microphone",
+  location: "location",
+  "location-always": "location-always",
+  photos: "photos",
+  contacts: "contacts",
+  calendar: "calendars",
+  reminders: "reminders",
+  all: "all",
 };
 
 const ANDROID_PERMISSIONS: Record<string, string> = {
-  notifications: 'android.permission.POST_NOTIFICATIONS',
-  camera: 'android.permission.CAMERA',
-  microphone: 'android.permission.RECORD_AUDIO',
-  location: 'android.permission.ACCESS_FINE_LOCATION',
-  'location-always': 'android.permission.ACCESS_BACKGROUND_LOCATION',
-  photos: 'android.permission.READ_MEDIA_IMAGES',
-  contacts: 'android.permission.READ_CONTACTS',
-  calendar: 'android.permission.READ_CALENDAR',
-  storage: 'android.permission.READ_EXTERNAL_STORAGE',
+  notifications: "android.permission.POST_NOTIFICATIONS",
+  camera: "android.permission.CAMERA",
+  microphone: "android.permission.RECORD_AUDIO",
+  location: "android.permission.ACCESS_FINE_LOCATION",
+  "location-always": "android.permission.ACCESS_BACKGROUND_LOCATION",
+  photos: "android.permission.READ_MEDIA_IMAGES",
+  contacts: "android.permission.READ_CONTACTS",
+  calendar: "android.permission.READ_CALENDAR",
+  storage: "android.permission.READ_EXTERNAL_STORAGE",
 };
 
 interface PermissionArgs {
-  action: 'grant' | 'revoke' | 'reset' | 'query';
+  action: "grant" | "revoke" | "reset" | "query";
   permission: string;
   appId: string;
   platform?: string;
 }
 
-async function iosPermission(action: string, permission: string, appId: string): Promise<ToolResult> {
+async function iosPermission(
+  action: string,
+  permission: string,
+  appId: string,
+): Promise<ToolResult> {
   const iosKey = IOS_PERMISSIONS[permission];
   if (!iosKey) {
-    const valid = Object.keys(IOS_PERMISSIONS).join(', ');
+    const valid = Object.keys(IOS_PERMISSIONS).join(", ");
     return failResult(`Unknown iOS permission: "${permission}". Valid: ${valid}`);
   }
 
   try {
-    const args = ['simctl', 'privacy', 'booted', action, iosKey, appId];
-    const { stdout, stderr } = await execFileAsync('xcrun', args, { timeout: EXEC_TIMEOUT });
+    const args = ["simctl", "privacy", "booted", action, iosKey, appId];
+    const { stdout, stderr } = await execFileAsync("xcrun", args, { timeout: EXEC_TIMEOUT });
     return okResult({
-      platform: 'ios',
+      platform: "ios",
       action,
       permission: iosKey,
       appId,
@@ -71,11 +75,17 @@ async function iosPermission(action: string, permission: string, appId: string):
   }
 }
 
-async function androidPermission(action: string, permission: string, appId: string): Promise<ToolResult> {
-  if (action === 'reset') {
+async function androidPermission(
+  action: string,
+  permission: string,
+  appId: string,
+): Promise<ToolResult> {
+  if (action === "reset") {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], { timeout: EXEC_TIMEOUT });
-      return okResult({ platform: 'android', action: 'reset', appId, output: stdout.trim() });
+      const { stdout } = await execFileAsync("adb", ["shell", "pm", "reset-permissions", appId], {
+        timeout: EXEC_TIMEOUT,
+      });
+      return okResult({ platform: "android", action: "reset", appId, output: stdout.trim() });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return failResult(`adb pm reset-permissions failed: ${msg}`);
@@ -84,15 +94,19 @@ async function androidPermission(action: string, permission: string, appId: stri
 
   const androidKey = ANDROID_PERMISSIONS[permission];
   if (!androidKey) {
-    const valid = Object.keys(ANDROID_PERMISSIONS).join(', ');
+    const valid = Object.keys(ANDROID_PERMISSIONS).join(", ");
     return failResult(`Unknown Android permission: "${permission}". Valid: ${valid}`);
   }
 
-  const adbAction = action === 'grant' ? 'grant' : 'revoke';
+  const adbAction = action === "grant" ? "grant" : "revoke";
   try {
-    const { stdout, stderr } = await execFileAsync('adb', ['shell', 'pm', adbAction, appId, androidKey], { timeout: EXEC_TIMEOUT });
+    const { stdout, stderr } = await execFileAsync(
+      "adb",
+      ["shell", "pm", adbAction, appId, androidKey],
+      { timeout: EXEC_TIMEOUT },
+    );
     return okResult({
-      platform: 'android',
+      platform: "android",
       action: adbAction,
       permission: androidKey,
       appId,
@@ -105,24 +119,26 @@ async function androidPermission(action: string, permission: string, appId: stri
 }
 
 async function androidQueryPermission(permission: string, appId: string): Promise<ToolResult> {
-  if (permission === 'all') {
+  if (permission === "all") {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
-      if (stdout.includes('Unable to find package')) {
+      const { stdout } = await execFileAsync("adb", ["shell", "dumpsys", "package", appId], {
+        timeout: EXEC_TIMEOUT,
+      });
+      if (stdout.includes("Unable to find package")) {
         return failResult(`Package "${appId}" not installed on device`);
       }
       const grantedPerms: string[] = [];
       const deniedPerms: string[] = [];
 
       for (const [key, androidKey] of Object.entries(ANDROID_PERMISSIONS)) {
-        const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, 'i');
+        const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, "i");
         const match = stdout.match(re);
         if (match) {
-          (match[1] === 'true' ? grantedPerms : deniedPerms).push(key);
+          (match[1] === "true" ? grantedPerms : deniedPerms).push(key);
         }
       }
 
-      return okResult({ platform: 'android', appId, granted: grantedPerms, denied: deniedPerms });
+      return okResult({ platform: "android", appId, granted: grantedPerms, denied: deniedPerms });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return failResult(`adb dumpsys failed: ${msg}`);
@@ -131,35 +147,37 @@ async function androidQueryPermission(permission: string, appId: string): Promis
 
   const androidKey = ANDROID_PERMISSIONS[permission];
   if (!androidKey) {
-    const valid = Object.keys(ANDROID_PERMISSIONS).join(', ');
+    const valid = Object.keys(ANDROID_PERMISSIONS).join(", ");
     return failResult(`Unknown Android permission: "${permission}". Valid: ${valid}`);
   }
 
   try {
-    const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
-    if (stdout.includes('Unable to find package')) {
+    const { stdout } = await execFileAsync("adb", ["shell", "dumpsys", "package", appId], {
+      timeout: EXEC_TIMEOUT,
+    });
+    if (stdout.includes("Unable to find package")) {
       return failResult(`Package "${appId}" not installed on device`);
     }
-    const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, 'i');
+    const re = new RegExp(`${escapeRegex(androidKey)}:.*granted=(true|false)`, "i");
     const match = stdout.match(re);
 
     if (match) {
       return okResult({
-        platform: 'android',
+        platform: "android",
         permission,
         android_permission: androidKey,
         appId,
-        state: match[1] === 'true' ? 'granted' : 'denied',
+        state: match[1] === "true" ? "granted" : "denied",
       });
     }
 
     return okResult({
-      platform: 'android',
+      platform: "android",
       permission,
       android_permission: androidKey,
       appId,
-      state: 'not_declared',
-      note: 'Permission not found in app manifest. The app may not declare this permission.',
+      state: "not_declared",
+      note: "Permission not found in app manifest. The app may not declare this permission.",
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -168,31 +186,31 @@ async function androidQueryPermission(permission: string, appId: string): Promis
 }
 
 async function iosQueryPermission(permission: string, appId: string): Promise<ToolResult> {
-  if (permission !== 'all' && !IOS_PERMISSIONS[permission]) {
-    const valid = Object.keys(IOS_PERMISSIONS).join(', ');
+  if (permission !== "all" && !IOS_PERMISSIONS[permission]) {
+    const valid = Object.keys(IOS_PERMISSIONS).join(", ");
     return failResult(`Unknown iOS permission: "${permission}". Valid: ${valid}`);
   }
   return okResult({
-    platform: 'ios',
+    platform: "ios",
     permission,
     appId,
-    state: 'unknown',
-    note: 'iOS Simulator does not support permission state queries via CLI. Use device_permission action=reset to restore ask-again state.',
+    state: "unknown",
+    note: "iOS Simulator does not support permission state queries via CLI. Use device_permission action=reset to restore ask-again state.",
   });
 }
 
 export function createDevicePermissionHandler(): (args: PermissionArgs) => Promise<ToolResult> {
   return async (args) => {
-    const platform = args.platform ?? await detectPlatform();
-    if (!platform) return failResult('No iOS simulator or Android device detected');
+    const platform = args.platform ?? (await detectPlatform());
+    if (!platform) return failResult("No iOS simulator or Android device detected");
 
     // CDP-014: validate platform value before routing. Previously a typo
     // such as "andriod" fell through to the Android branch and could
     // mutate adb-side permissions on a wrong-platform misroute.
-    if (platform !== 'ios' && platform !== 'android') {
+    if (platform !== "ios" && platform !== "android") {
       return failResult(
         `Invalid platform "${platform}". Supported values: "ios", "android".`,
-        'INVALID_PLATFORM',
+        "INVALID_PLATFORM",
       );
     }
 
@@ -205,17 +223,17 @@ export function createDevicePermissionHandler(): (args: PermissionArgs) => Promi
     if (!isValidBundleId(args.appId)) {
       return failResult(
         `Invalid appId "${String(args.appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`,
-        'INVALID_APPID',
+        "INVALID_APPID",
       );
     }
 
-    if (args.action === 'query') {
-      return platform === 'ios'
+    if (args.action === "query") {
+      return platform === "ios"
         ? iosQueryPermission(args.permission, args.appId)
         : androidQueryPermission(args.permission, args.appId);
     }
 
-    if (platform === 'ios') return iosPermission(args.action, args.permission, args.appId);
+    if (platform === "ios") return iosPermission(args.action, args.permission, args.appId);
     return androidPermission(args.action, args.permission, args.appId);
   };
 }

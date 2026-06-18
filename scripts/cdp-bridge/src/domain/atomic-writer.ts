@@ -43,9 +43,9 @@ import {
   existsSync,
   unlinkSync,
   readdirSync,
-} from 'node:fs';
-import { dirname, basename } from 'node:path';
-import type { ActionRuntimeState } from './reusable-action.js';
+} from "node:fs";
+import { dirname, basename } from "node:path";
+import type { ActionRuntimeState } from "./reusable-action.js";
 
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
@@ -137,7 +137,7 @@ function pairWriteImpl(
     ...state,
     lastSeenMtimeMs: projectedMtimeMs,
   };
-  atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
+  atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n");
   atomicWriter._rename(sidecarTmp, sidecarPath);
 
   // Step 3+4: YAML, atomic rename.
@@ -168,7 +168,7 @@ function pairWriteImpl(
     ...state,
     lastSeenMtimeMs: finalMtimeMs,
   };
-  atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n');
+  atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n");
   atomicWriter._rename(sidecarTmp, sidecarPath);
 
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
@@ -210,7 +210,9 @@ function cleanupOrphans(yamlPath: string, sidecarPath: string): void {
         const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
         if (now - mtimeMs < ORPHAN_MAX_AGE_MS) continue; // fresh — likely a concurrent writer's
         atomicWriter._unlink(orphanPath);
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
   }
 }
@@ -222,7 +224,7 @@ function cleanupOrphans(yamlPath: string, sidecarPath: string): void {
 export const atomicWriter = {
   /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
   _writeFile(path: string, content: string): void {
-    writeFileSync(path, content, 'utf8');
+    writeFileSync(path, content, "utf8");
   },
   /** Underlying `fs.renameSync(from, to)`. */
   _rename(from: string, to: string): void {

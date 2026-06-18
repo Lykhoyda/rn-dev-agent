@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 const execFile = promisify(execFileCb);
 /**
  * LIVE-VALIDATE (#191): best-known NSGlobalDomain (`-g`) keys that disable the
@@ -8,12 +8,12 @@ const execFile = promisify(execFileCb);
  * intentionally EXCLUDED — it alters app behavior, not the predictive bar.
  */
 export const IOS_KEYBOARD_PREF_KEYS = [
-    ['KeyboardAutocorrection', '-bool', 'false'],
-    ['KeyboardPrediction', '-bool', 'false'],
-    ['KeyboardShowPredictionBar', '-bool', 'false'],
+    ["KeyboardAutocorrection", "-bool", "false"],
+    ["KeyboardPrediction", "-bool", "false"],
+    ["KeyboardShowPredictionBar", "-bool", "false"],
 ];
 function defaultDeps() {
-    return { run: (args) => execFile('xcrun', args, { timeout: 5_000 }) };
+    return { run: (args) => execFile("xcrun", args, { timeout: 5_000 }) };
 }
 /** Best-effort, fail-open, scoped to `udid`. Never throws. */
 export async function suppressIOSAutocorrect(udid, deps = defaultDeps()) {
@@ -24,7 +24,7 @@ export async function suppressIOSAutocorrect(udid, deps = defaultDeps()) {
     const t = Date.now();
     for (const [key, type, value] of IOS_KEYBOARD_PREF_KEYS) {
         try {
-            await deps.run(['simctl', 'spawn', udid, 'defaults', 'write', '-g', key, type, value]);
+            await deps.run(["simctl", "spawn", udid, "defaults", "write", "-g", key, type, value]);
         }
         catch (err) {
             warnings.push(`defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`);
