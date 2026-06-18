@@ -2,15 +2,18 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { isPostAllowed } from './e2e-csrf.js';
 const HOST = '127.0.0.1';
 const __dir = dirname(fileURLToPath(import.meta.url));
 export class ObservabilityServer {
     recorder;
+    e2e;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder) {
+    constructor(recorder, e2e) {
         this.recorder = recorder;
+        this.e2e = e2e;
     }
     async start(preferredPort) {
         if (this.server)
@@ -72,6 +75,13 @@ export class ObservabilityServer {
             return this.screenshot(Number(shot[1]), res);
         if (/^\/api\/live-screenshot\/\d+$/.test(url))
             return this.liveScreenshot(res);
+        if (url === '/api/e2e/run')
+            return void this.e2eRun(req, res);
+        if (url === '/api/e2e/runs')
+            return void this.e2eListRuns(res);
+        const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
+        if (runById)
+            return void this.e2eLoadRun(runById[1], res);
         if (url === '/')
             return this.index(res);
         res.writeHead(404);
@@ -163,13 +173,96 @@ export class ObservabilityServer {
         try {
             // __dir is dist/observability/; the SPA bundle ships at
             // dist/observability/web-dist/index.html (vite outDir).
-            const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
+            let html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
+            if (this.e2e) {
+                html = html.replace('</head>', `<script>window.__E2E_CSRF__='${this.e2e.token}'</script></head>`);
+            }
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(html);
         }
         catch {
             res.writeHead(503);
             res.end('SPA bundle not built — run npm run build:web');
+        }
+    }
+    json(res, status, obj) {
+        const body = JSON.stringify(obj);
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(body);
+    }
+    async e2eRun(req, res) {
+        if (!this.e2e) {
+            this.json(res, 501, { error: 'e2e not configured' });
+            return;
+        }
+        if (req.method?.toUpperCase() === 'GET') {
+            this.json(res, 405, { error: 'method not allowed' });
+            return;
+        }
+        const check = isPostAllowed({ method: req.method, headers: req.headers }, this.e2e.token);
+        if (!check.ok) {
+            this.json(res, check.status, { error: check.reason });
+            return;
+        }
+        let body = '';
+        await new Promise((resolve, reject) => {
+            let bytes = 0;
+            req.on('data', (chunk) => {
+                bytes += chunk.length;
+                if (bytes > 65536) {
+                    req.destroy();
+                    reject(new Error('body too large'));
+                    return;
+                }
+                body += chunk.toString();
+            });
+            req.on('end', resolve);
+            req.on('error', reject);
+        });
+        let parsed = {};
+        try {
+            parsed = JSON.parse(body);
+        }
+        catch {
+            this.json(res, 400, { error: 'invalid json body' });
+            return;
+        }
+        try {
+            const result = await this.e2e.triggerRun(parsed.pattern);
+            this.json(res, 200, result);
+        }
+        catch (err) {
+            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+    async e2eListRuns(res) {
+        if (!this.e2e) {
+            this.json(res, 501, { error: 'e2e not configured' });
+            return;
+        }
+        try {
+            const runs = await this.e2e.listRuns();
+            this.json(res, 200, runs);
+        }
+        catch (err) {
+            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+    async e2eLoadRun(id, res) {
+        if (!this.e2e) {
+            this.json(res, 501, { error: 'e2e not configured' });
+            return;
+        }
+        try {
+            const run = await this.e2e.loadRun(id);
+            if (run === null) {
+                this.json(res, 404, { error: 'run not found' });
+                return;
+            }
+            this.json(res, 200, run);
+        }
+        catch (err) {
+            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
     }
 }
