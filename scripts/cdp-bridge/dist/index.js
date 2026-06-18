@@ -1575,13 +1575,15 @@ async function main() {
     {
         const root = findProjectRoot();
         if (root) {
-            const recovered = recoverInterruptedRequests(root, (pid) => { try {
-                process.kill(pid, 0);
-                return true;
-            }
-            catch {
-                return false;
-            } }, () => new Date());
+            const recovered = recoverInterruptedRequests(root, (pid) => {
+                try {
+                    process.kill(pid, 0);
+                    return true;
+                }
+                catch {
+                    return false;
+                }
+            }, () => new Date());
             if (recovered.length)
                 console.error(`[e2e] marked interrupted runs: ${recovered.join(', ')}`);
         }

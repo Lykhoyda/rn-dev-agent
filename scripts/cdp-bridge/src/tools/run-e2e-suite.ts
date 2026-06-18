@@ -17,7 +17,12 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, warnResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { SessionState } from '../types.js';
-import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES } from '../domain/e2e-run-request.js';
+import {
+  writeRequest,
+  updateRequest,
+  listRequests,
+  TERMINAL_STATUSES,
+} from '../domain/e2e-run-request.js';
 
 export interface RunE2eSuiteArgs {
   pattern?: string;
@@ -68,7 +73,10 @@ function filterByPattern(ids: string[], pattern?: string): string[] {
   }
 }
 
-export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDeps = {}): Promise<ToolResult> {
+export async function runE2eSuiteCore(
+  args: RunE2eSuiteArgs,
+  deps: RunE2eSuiteDeps = {},
+): Promise<ToolResult> {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const discover = deps.discover ?? discoverLockedTests;
   const load = deps.load ?? loadLockedTest;
@@ -82,7 +90,13 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
   const ids = filterByPattern(discover(projectRoot), args.pattern);
   if (ids.length === 0) {
     return warnResult(
-      { runId: null, verdict: 'green', totals: { total: 0, passed: 0, failed: 0, skipped: 0 }, results: [], newlyFailing: [] },
+      {
+        runId: null,
+        verdict: 'green',
+        totals: { total: 0, passed: 0, failed: 0, skipped: 0 },
+        results: [],
+        newlyFailing: [],
+      },
       'No locked e2e tests found — lock one with cdp_lock_e2e_test',
       { code: 'NO_E2E_TESTS' },
     );
@@ -115,9 +129,20 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
       continue;
     }
     const t0 = now().getTime();
-    const result = await maestroRun({ flowPath: locked.filePath, platform: platform as 'ios' | 'android' });
+    const result = await maestroRun({
+      flowPath: locked.filePath,
+      platform: platform as 'ios' | 'android',
+    });
     const { passed, output } = readMaestro(result);
-    results.push(classifyFlowResult({ testId: id, intent: locked.intent, passed, durationMs: now().getTime() - t0, output }));
+    results.push(
+      classifyFlowResult({
+        testId: id,
+        intent: locked.intent,
+        passed,
+        durationMs: now().getTime() - t0,
+        output,
+      }),
+    );
     deps.onProgress?.(results.length, ids.length, id);
   }
 
@@ -221,13 +246,19 @@ export function createRunE2eSuiteHandler(deps: RunE2eSuiteHandlerDeps = {}) {
         ...deps,
         makeRunId: () => runId,
         onProgress: (completed, total, lastTestId) =>
-          updateRequest(projectRoot, runId, { updatedAt: now().toISOString(), progress: { total, completed, lastTestId } }),
+          updateRequest(projectRoot, runId, {
+            updatedAt: now().toISOString(),
+            progress: { total, completed, lastTestId },
+          }),
       });
       updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
       return result;
     } catch (err) {
       updateRequest(projectRoot, runId, { status: 'failed', updatedAt: now().toISOString() });
-      return failResult(`e2e run crashed: ${err instanceof Error ? err.message : String(err)}`, 'E2E_RUN_CRASHED');
+      return failResult(
+        `e2e run crashed: ${err instanceof Error ? err.message : String(err)}`,
+        'E2E_RUN_CRASHED',
+      );
     }
   };
 }

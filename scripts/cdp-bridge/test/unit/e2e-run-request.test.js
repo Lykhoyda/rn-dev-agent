@@ -14,7 +14,13 @@ import {
 
 const NOW = () => new Date('2026-06-18T00:00:00Z');
 function req(runId, status, pid) {
-  return { runId, status, pid, createdAt: '2026-06-18T00:00:00Z', updatedAt: '2026-06-18T00:00:00Z' };
+  return {
+    runId,
+    status,
+    pid,
+    createdAt: '2026-06-18T00:00:00Z',
+    updatedAt: '2026-06-18T00:00:00Z',
+  };
 }
 
 test('write → update → load reflects status + progress transitions', () => {
@@ -58,9 +64,7 @@ test('listRequests and recoverInterruptedRequests tolerate invalid/corrupt filen
     assert.equal(results.length, 1);
     assert.equal(results[0].runId, 'valid-run');
     // recoverInterruptedRequests must also not throw
-    assert.doesNotThrow(() =>
-      recoverInterruptedRequests(root, () => false, NOW),
-    );
+    assert.doesNotThrow(() => recoverInterruptedRequests(root, () => false, NOW));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

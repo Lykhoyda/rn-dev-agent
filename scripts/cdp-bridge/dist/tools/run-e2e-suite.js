@@ -5,7 +5,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, warnResult, failResult } from '../utils.js';
-import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES } from '../domain/e2e-run-request.js';
+import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES, } from '../domain/e2e-run-request.js';
 export function makeRunId(now, rand) {
     return `run-${now().toISOString().replace(/[:.]/g, '-')}-${rand()}`;
 }
@@ -44,7 +44,13 @@ export async function runE2eSuiteCore(args, deps = {}) {
     const rand = () => Math.random().toString(36).slice(2, 8);
     const ids = filterByPattern(discover(projectRoot), args.pattern);
     if (ids.length === 0) {
-        return warnResult({ runId: null, verdict: 'green', totals: { total: 0, passed: 0, failed: 0, skipped: 0 }, results: [], newlyFailing: [] }, 'No locked e2e tests found — lock one with cdp_lock_e2e_test', { code: 'NO_E2E_TESTS' });
+        return warnResult({
+            runId: null,
+            verdict: 'green',
+            totals: { total: 0, passed: 0, failed: 0, skipped: 0 },
+            results: [],
+            newlyFailing: [],
+        }, 'No locked e2e tests found — lock one with cdp_lock_e2e_test', { code: 'NO_E2E_TESTS' });
     }
     const runId = mkRunId(now, rand);
     const startedAt = now().toISOString();
@@ -73,9 +79,18 @@ export async function runE2eSuiteCore(args, deps = {}) {
             continue;
         }
         const t0 = now().getTime();
-        const result = await maestroRun({ flowPath: locked.filePath, platform: platform });
+        const result = await maestroRun({
+            flowPath: locked.filePath,
+            platform: platform,
+        });
         const { passed, output } = readMaestro(result);
-        results.push(classifyFlowResult({ testId: id, intent: locked.intent, passed, durationMs: now().getTime() - t0, output }));
+        results.push(classifyFlowResult({
+            testId: id,
+            intent: locked.intent,
+            passed,
+            durationMs: now().getTime() - t0,
+            output,
+        }));
         deps.onProgress?.(results.length, ids.length, id);
     }
     const verdict = computeVerdict(results);
@@ -161,7 +176,10 @@ export function createRunE2eSuiteHandler(deps = {}) {
             const result = await runE2eSuiteCore(args, {
                 ...deps,
                 makeRunId: () => runId,
-                onProgress: (completed, total, lastTestId) => updateRequest(projectRoot, runId, { updatedAt: now().toISOString(), progress: { total, completed, lastTestId } }),
+                onProgress: (completed, total, lastTestId) => updateRequest(projectRoot, runId, {
+                    updatedAt: now().toISOString(),
+                    progress: { total, completed, lastTestId },
+                }),
             });
             updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
             return result;

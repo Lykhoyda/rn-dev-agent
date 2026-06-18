@@ -81,7 +81,9 @@ export function computeVerdict(
 }
 
 export function diffNewlyFailing(
-  current: { results: Array<{ testId: string; passed: boolean; classification: E2eResultClassification }> },
+  current: {
+    results: Array<{ testId: string; passed: boolean; classification: E2eResultClassification }>;
+  },
   previousGreen: { results: Array<{ testId: string; passed: boolean }> } | null,
 ): string[] {
   const wasPassing = new Set(
@@ -138,7 +140,10 @@ export function writeRunRecord(projectRoot: string, rec: E2eRunRecord): void {
     verdict: rec.verdict,
     totals: rec.totals,
   };
-  const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
+  const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(
+    0,
+    INDEX_MAX,
+  );
   writeJsonAtomic(join(dir, 'index.json'), next);
 }
 

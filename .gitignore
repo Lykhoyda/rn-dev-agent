@@ -36,3 +36,6 @@ scripts/rn-fast-runner/**/DerivedData/
 # driven against booted devices, e.g. eval/live-gate-gh253.mjs; not shipped)
 scripts/cdp-bridge/eval/
 .brainstorm-tmp/
+
+# E2E regression run records (machine state); locked tests under .rn-agent/e2e/ stay tracked
+.rn-agent/state/e2e-runs/

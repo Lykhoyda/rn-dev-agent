@@ -41,7 +41,10 @@ function readPassed(result: ToolResult): { passed: boolean; output: string } {
   }
 }
 
-export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDeps = {}): Promise<ToolResult> {
+export async function lockE2eTestCore(
+  args: LockE2eTestArgs,
+  deps: LockE2eTestDeps = {},
+): Promise<ToolResult> {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
   const readFile = deps.readActionFile ?? ((p: string) => readFileSync(p, 'utf8'));
@@ -61,7 +64,10 @@ export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDe
   }
 
   if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
-    return failResult(`'${args.actionId}' is already locked — pass relock:true to re-lock`, 'ALREADY_LOCKED');
+    return failResult(
+      `'${args.actionId}' is already locked — pass relock:true to re-lock`,
+      'ALREADY_LOCKED',
+    );
   }
 
   const session = getSession();

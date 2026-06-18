@@ -12,13 +12,25 @@ export type PreflightResult = { ok: true } | { ok: false; code: 'SETUP_ERROR'; d
 
 export function preflight(input: PreflightInput): PreflightResult {
   if (!input.metroReachable) {
-    return { ok: false, code: 'SETUP_ERROR', detail: 'Metro is not reachable — start it (npx expo start).' };
+    return {
+      ok: false,
+      code: 'SETUP_ERROR',
+      detail: 'Metro is not reachable — start it (npx expo start).',
+    };
   }
   if (!input.udid) {
-    return { ok: false, code: 'SETUP_ERROR', detail: 'No single booted device resolved — boot exactly one simulator/emulator.' };
+    return {
+      ok: false,
+      code: 'SETUP_ERROR',
+      detail: 'No single booted device resolved — boot exactly one simulator/emulator.',
+    };
   }
   if (input.appInstalled === false) {
-    return { ok: false, code: 'SETUP_ERROR', detail: `App ${input.appId ?? ''} is not installed on ${input.udid}.` };
+    return {
+      ok: false,
+      code: 'SETUP_ERROR',
+      detail: `App ${input.appId ?? ''} is not installed on ${input.udid}.`,
+    };
   }
   return { ok: true };
 }

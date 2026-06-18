@@ -1,5 +1,12 @@
 import { dirname, join } from 'node:path';
-import { mkdirSync, writeFileSync, renameSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 
@@ -125,7 +132,12 @@ export function parseLockedTest(text: string, filePath: string): LockedE2eTest |
     lockedGitSha: field('lockedGitSha') ?? null,
     sourceContentHash: field('sourceContentHash') ?? '',
     status: 'locked',
-    params: paramsRaw ? paramsRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    params: paramsRaw
+      ? paramsRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined,
     appId: field('appId'),
     flow,
     filePath,
