@@ -2256,7 +2256,12 @@ setObserveE2eDeps({
     const L = arbiter.tryAcquire('flow', `observe-run-action:${actionId}`);
     if (!L.ok) return { ok: false as const, error: 'device busy' };
     try {
-      const result = await runActionHandler({ actionId, params, trigger: 'human' });
+      const result = await runActionHandler({
+        actionId,
+        params,
+        platform: (getActiveSession()?.platform ?? 'ios') as 'ios' | 'android',
+        trigger: 'human',
+      });
       const text = result.content?.[0]?.text ?? '';
       return { ok: true as const, output: text };
     } catch (e: unknown) {

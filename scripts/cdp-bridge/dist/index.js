@@ -1545,7 +1545,12 @@ setObserveE2eDeps({
         if (!L.ok)
             return { ok: false, error: 'device busy' };
         try {
-            const result = await runActionHandler({ actionId, params, trigger: 'human' });
+            const result = await runActionHandler({
+                actionId,
+                params,
+                platform: (getActiveSession()?.platform ?? 'ios'),
+                trigger: 'human',
+            });
             const text = result.content?.[0]?.text ?? '';
             return { ok: true, output: text };
         }
