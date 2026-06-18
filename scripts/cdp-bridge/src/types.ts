@@ -272,7 +272,16 @@ export type ToolErrorCode =
   // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
   | 'NO_NATIVE_ROUTE'
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
-  | 'RUNNER_DISABLED';
+  | 'RUNNER_DISABLED'
+  // E2E regression runner (2026-06-18)
+  | 'NOT_FOUND'
+  | 'ALREADY_LOCKED'
+  | 'STRICT_RUN_FAILED'
+  | 'PARAMS_UNSUPPORTED'
+  | 'SETUP_ERROR'
+  | 'NO_E2E_TESTS'
+  | 'E2E_RUN_ACTIVE'
+  | 'E2E_RUN_CRASHED';
 
 export interface ResultEnvelope<T = unknown> {
   ok: boolean;
