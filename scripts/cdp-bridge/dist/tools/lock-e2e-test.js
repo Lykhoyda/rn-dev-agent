@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { loadAction } from '../domain/action-store.js';
 import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
+import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
@@ -29,18 +30,33 @@ export async function lockE2eTestCore(args, deps = {}) {
     const action = load(projectRoot, args.actionId);
     if (!action)
         return failResult(`Action '${args.actionId}' not found`, 'NOT_FOUND');
+    const loadCfg = deps.loadConfig ?? loadE2eConfig;
+    let resolvedParams;
     if (action.metadata.params?.length) {
-        return failResult(`'${args.actionId}' needs params (${action.metadata.params.join(', ')}). Param-needing tests are not supported in v1 — a params source (.rn-agent/e2e.config.json) lands in a later phase.`, 'PARAMS_UNSUPPORTED');
+        const config = loadCfg(projectRoot);
+        const resolved = resolveParams(config, args.actionId, action.metadata.params);
+        if (!resolved.ok) {
+            return failResult(`missing param values for ${resolved.missing.join(', ')} — add them to .rn-agent/e2e.config.json (tests.${args.actionId}.params or defaults.params)`, 'MISSING_PARAMS');
+        }
+        resolvedParams = resolved.params;
     }
     if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
         return failResult(`'${args.actionId}' is already locked — pass relock:true to re-lock`, 'ALREADY_LOCKED');
     }
     const session = getSession();
     const platform = session?.platform ?? undefined;
-    const result = await maestroRun({ flowPath: action.filePath, platform });
+    const runArgs = { flowPath: action.filePath, platform };
+    if (resolvedParams)
+        runArgs['params'] = resolvedParams;
+    const result = await maestroRun(runArgs);
     const { passed, output } = readPassed(result);
     if (!passed) {
-        return failResult(`'${args.actionId}' did not pass a strict run — repair it until it passes, then lock`, 'STRICT_RUN_FAILED', { output: output.slice(0, 500) });
+        let failOutput = output.slice(0, 500);
+        if (resolvedParams) {
+            const config = loadCfg(projectRoot);
+            failOutput = redactSecrets(failOutput, secretValuesFor(config, resolvedParams));
+        }
+        return failResult(`'${args.actionId}' did not pass a strict run — repair it until it passes, then lock`, 'STRICT_RUN_FAILED', { output: failOutput });
     }
     const git = getGit(projectRoot);
     const locked = freezeLockedTest(projectRoot, {

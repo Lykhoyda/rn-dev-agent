@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
 
+function writeConfig(root, cfg) {
+  const dir = join(root, '.rn-agent');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'e2e.config.json'), JSON.stringify(cfg), 'utf8');
+}
+
 function parse(r) {
   return JSON.parse(r.content[0].text);
 }
@@ -88,7 +94,7 @@ test('strict fail → refuses, no file written', async () => {
   }
 });
 
-test('param-needing action → refused PARAMS_UNSUPPORTED (no maestro run)', async () => {
+test('param-needing action + no config → MISSING_PARAMS (no maestro run)', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lock-'));
   try {
     seedAction(root, 'login', 'EMAIL');
@@ -102,8 +108,99 @@ test('param-needing action → refused PARAMS_UNSUPPORTED (no maestro run)', asy
         }),
       ),
     );
-    assert.equal(res.code, 'PARAMS_UNSUPPORTED');
+    assert.equal(res.code, 'MISSING_PARAMS');
+    assert.ok(res.error.includes('EMAIL'), 'error should mention missing param name');
     assert.equal(called, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('param-needing action + config with values → frozen (maestroRun receives params)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-'));
+  try {
+    seedAction(root, 'login', 'EMAIL');
+    writeConfig(root, { defaults: { params: { EMAIL: 'test@example.com' } } });
+    let capturedArgs = null;
+    const res = parse(
+      await lockE2eTestCore(
+        { actionId: 'login', projectRoot: root },
+        {
+          ...deps(async (args) => {
+            capturedArgs = args;
+            return okMaestro();
+          }),
+          loadConfig: () => ({ defaults: { params: { EMAIL: 'test@example.com' } } }),
+        },
+      ),
+    );
+    assert.equal(res.ok, true);
+    assert.equal(res.data.locked, true);
+    assert.ok(capturedArgs !== null, 'maestroRun should have been called');
+    assert.deepEqual(capturedArgs.params, { EMAIL: 'test@example.com' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('param-needing action + config missing value → MISSING_PARAMS listing the name', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-'));
+  try {
+    seedAction(root, 'login', 'EMAIL PASSWORD');
+    let called = false;
+    const res = parse(
+      await lockE2eTestCore(
+        { actionId: 'login', projectRoot: root },
+        {
+          ...deps(async () => {
+            called = true;
+            return okMaestro();
+          }),
+          loadConfig: () => ({ defaults: { params: { EMAIL: 'a@b.com' } } }),
+        },
+      ),
+    );
+    assert.equal(res.code, 'MISSING_PARAMS');
+    assert.ok(res.error.includes('PASSWORD'), 'error should list the missing param');
+    assert.equal(called, false, 'maestroRun must not be called');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('param action + maestro fail with secret value → secret redacted in meta', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-'));
+  try {
+    seedAction(root, 'login', 'PASSWORD');
+    const secretValue = 'hunter2';
+    const res = parse(
+      await lockE2eTestCore(
+        { actionId: 'login', projectRoot: root },
+        {
+          ...deps(async () => ({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ok: false,
+                  error: `auth failed: password=${secretValue}`,
+                  meta: { output: `auth failed: password=${secretValue}` },
+                }),
+              },
+            ],
+            isError: true,
+          })),
+          loadConfig: () => ({
+            defaults: { params: { PASSWORD: secretValue } },
+            secretParams: ['PASSWORD'],
+          }),
+        },
+      ),
+    );
+    assert.equal(res.code, 'STRICT_RUN_FAILED');
+    const output = res.meta?.output ?? '';
+    assert.ok(!output.includes(secretValue), 'secret value must not appear in meta.output');
+    assert.ok(output.includes('***'), 'redacted placeholder must appear');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
