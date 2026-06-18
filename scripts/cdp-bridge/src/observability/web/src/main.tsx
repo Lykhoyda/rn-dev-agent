@@ -471,8 +471,15 @@ function App(): JSX.Element {
                 </span>
               )}
               {verdict && (
-                <span className={`reg-verdict ${verdict === 'green' ? 'pass' : 'fail'}`}>
-                  {verdict === 'green' ? 'PASS' : 'FAIL'}
+                <span
+                  className={`reg-verdict ${verdict === 'green' ? 'pass' : verdict === 'empty' ? 'none' : 'fail'}`}
+                >
+                  {verdict === 'green' ? 'PASS' : verdict === 'empty' ? 'NO TESTS' : 'FAIL'}
+                </span>
+              )}
+              {verdict === 'empty' && (
+                <span className="reg-empty-hint">
+                  No locked tests — lock one with cdp_lock_e2e_test
                 </span>
               )}
             </div>
@@ -527,8 +534,20 @@ function App(): JSX.Element {
                     <tr key={h.runId}>
                       <td className="reg-testid">{h.runId}</td>
                       <td>{new Date(h.finishedAt).toLocaleTimeString()}</td>
-                      <td className={h.verdict === 'green' ? 'reg-pass' : 'reg-fail'}>
-                        {h.verdict === 'green' ? 'PASS' : 'FAIL'}
+                      <td
+                        className={
+                          h.verdict === 'green'
+                            ? 'reg-pass'
+                            : h.verdict === 'empty'
+                              ? 'reg-none'
+                              : 'reg-fail'
+                        }
+                      >
+                        {h.verdict === 'green'
+                          ? 'PASS'
+                          : h.verdict === 'empty'
+                            ? 'NO TESTS'
+                            : 'FAIL'}
                       </td>
                       <td>
                         {h.totals.passed}/{h.totals.failed}/{h.totals.skipped}
@@ -606,6 +625,9 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .reg-verdict { font-weight: 700; border-radius: 4px; padding: 3px 10px; font-size: 13px; }
 .reg-verdict.pass { background: #1a2d1a; color: #9ece6a; border: 1px solid #9ece6a; }
 .reg-verdict.fail { background: #2d1a1a; color: #f7768e; border: 1px solid #f7768e; }
+.reg-verdict.none { background: #1f2335; color: #787c99; border: 1px solid #565f89; }
+.reg-empty-hint { color: #787c99; font-size: 12px; font-style: italic; }
+.reg-none { color: #787c99; font-weight: 600; }
 .reg-results { overflow: auto; }
 .reg-history { background: #16161e; border: 1px solid #2a2b3d; border-radius: 6px; overflow: auto; }
 .reg-table { width: 100%; border-collapse: collapse; font-size: 12px; }

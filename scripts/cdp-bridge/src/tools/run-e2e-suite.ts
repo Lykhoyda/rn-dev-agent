@@ -101,7 +101,7 @@ export async function runE2eSuiteCore(
     return warnResult(
       {
         runId: null,
-        verdict: 'green',
+        verdict: 'empty',
         totals: { total: 0, passed: 0, failed: 0, skipped: 0 },
         results: [],
         newlyFailing: [],

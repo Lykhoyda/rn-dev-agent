@@ -2212,11 +2212,17 @@ trackedTool(
 
 const e2eCsrfToken = makeCsrfToken();
 
+// Resolve the project root of the connected app by its bundleId so a stray
+// sibling RN repo can't hijack findProjectRoot()'s heuristic scan (which would
+// empty the Regression actions list and make the suite discover zero tests).
+const projectRootFor = (): string =>
+  findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
+
 const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
   const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
   if (!L.ok) return { ok: false, error: 'a flow is already running', code: L.code };
   try {
-    const r = await e2eSuiteHandler({ pattern });
+    const r = await e2eSuiteHandler({ pattern, projectRoot: projectRootFor() });
     const env = JSON.parse(r.content[0].text) as {
       ok?: boolean;
       data?: { runId?: string | null; verdict?: string | null };
@@ -2231,8 +2237,6 @@ const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
     arbiter.release(L.lease);
   }
 };
-
-const projectRootFor = (): string => findProjectRoot() ?? process.cwd();
 
 const runActionHandler = createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) });
 

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from '
 import { parseMaestroFailure } from './maestro-error-parser.js';
 import { assertValidActionId } from './path-safety.js';
 
-export type E2eVerdict = 'green' | 'red' | 'setup_error';
+export type E2eVerdict = 'green' | 'red' | 'setup_error' | 'empty';
 export type E2eResultClassification = 'pass' | 'regression' | 'infra' | 'skipped';
 
 export interface E2eFlowResult {
