@@ -49,9 +49,14 @@ export function listRequests(projectRoot) {
     for (const f of readdirSync(dir)) {
         if (!f.endsWith('.json'))
             continue;
-        const r = loadRequest(projectRoot, f.replace(/\.json$/, ''));
-        if (r)
-            out.push(r);
+        try {
+            const r = loadRequest(projectRoot, f.replace(/\.json$/, ''));
+            if (r)
+                out.push(r);
+        }
+        catch {
+            // skip invalid / corrupt entries
+        }
     }
     return out;
 }

@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import {
   writeRequest,
   updateRequest,
   loadRequest,
+  listRequests,
   recoverInterruptedRequests,
 } from '../../dist/domain/e2e-run-request.js';
 
@@ -39,6 +41,26 @@ test('recover marks running-with-dead-pid interrupted; leaves live + terminal al
     assert.equal(loadRequest(root, 'dead').status, 'interrupted');
     assert.equal(loadRequest(root, 'live').status, 'running');
     assert.equal(loadRequest(root, 'done').status, 'done');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listRequests and recoverInterruptedRequests tolerate invalid/corrupt filenames', () => {
+  const root = mkdtempSync(join(tmpdir(), 'e2e-req-'));
+  try {
+    writeRequest(root, req('valid-run', 'running', 99999));
+    // Drop a file whose stem contains a space — assertValidActionId will throw on it
+    const reqsDir = join(root, '.rn-agent', 'state', 'e2e-runs', 'requests');
+    writeFileSync(join(reqsDir, 'bad id.json'), '{}', 'utf8');
+    // Must not throw; must return only the valid entry
+    const results = listRequests(root);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].runId, 'valid-run');
+    // recoverInterruptedRequests must also not throw
+    assert.doesNotThrow(() =>
+      recoverInterruptedRequests(root, () => false, NOW),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
