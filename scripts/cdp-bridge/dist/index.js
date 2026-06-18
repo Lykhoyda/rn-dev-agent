@@ -1551,6 +1551,7 @@ setObserveE2eDeps({
             const result = await runActionHandler({
                 actionId,
                 params,
+                projectRoot: root,
                 platform: (getActiveSession()?.platform ?? 'ios'),
                 trigger: 'human',
             });
