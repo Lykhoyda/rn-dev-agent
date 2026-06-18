@@ -54,11 +54,14 @@ test('selector failure (real maestro string) → red + regression', async () => 
 test('param-needing locked test → skipped, not counted as failed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
+    let maestroCalls = 0;
     const load = (_root, id) => lockedFixture(id, id === 'paid' ? ['EMAIL'] : undefined);
-    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(['free', 'paid'], () => passEnv(), load)));
+    const deps = baseDeps(['free', 'paid'], () => { maestroCalls++; return passEnv(); }, load);
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
     assert.equal(res.data.verdict, 'green');
     assert.equal(res.data.totals.skipped, 1);
     assert.equal(res.data.results.find((r) => r.testId === 'paid').classification, 'skipped');
+    assert.equal(maestroCalls, 1, 'maestroRun called only for free, not for paid');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
