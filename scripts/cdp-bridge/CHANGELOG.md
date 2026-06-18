@@ -1,5 +1,11 @@
 # rn-dev-agent-cdp
 
+## 0.45.8
+
+### Patch Changes
+
+- 7731024: chore: adopt oxlint + oxfmt as the lint/format layer, format the codebase (code only — prose docs excluded), and add a blocking CI lint-format gate.
+
 ## 0.45.7
 
 ### Patch Changes
