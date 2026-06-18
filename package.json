@@ -11,10 +11,10 @@
     "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
     "release-cdp-bridge": "cd scripts/cdp-bridge && npm publish",
     "test": "cd scripts/cdp-bridge && npm test",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",
@@ -22,7 +22,7 @@
     "oxlint": "^1.70.0"
   },
   "overrides": {
-    "hono": ">=4.12.18",
-    "ip-address": ">=10.1.1"
+    "ip-address": ">=10.1.1",
+    "hono": ">=4.12.18"
   }
 }

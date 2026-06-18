@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs-site/**"
-      - "scripts/cdp-bridge/src/**"
-      - "agents/*.md"
-      - "commands/*.md"
-      - "skills/**"
-      - "CHANGELOG.md"
-      - ".github/workflows/deploy-docs.yml"
+      - 'docs-site/**'
+      - 'scripts/cdp-bridge/src/**'
+      - 'agents/*.md'
+      - 'commands/*.md'
+      - 'skills/**'
+      - 'CHANGELOG.md'
+      - '.github/workflows/deploy-docs.yml'
 
 # Phase 134.5 (deepsec MEDIUM): least-privilege permissions. The deploy
 # job is the ONLY step that needs `pages: write` + `id-token: write`.
@@ -29,12 +29,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 — Phase 134.5 SHA pin
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0 — Phase 134.5 SHA pin
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: '22'
+          cache: 'npm'
           cache-dependency-path: docs-site/package-lock.json
 
       - name: Install docs dependencies
@@ -45,7 +45,7 @@ jobs:
         working-directory: docs-site
         run: npm run build
 
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0 — Phase 134.5 SHA pin
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0 — Phase 134.5 SHA pin
         with:
           path: docs-site/dist
 
@@ -59,5 +59,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0 — Phase 134.5 SHA pin
+      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5.0.0 — Phase 134.5 SHA pin
         id: deployment

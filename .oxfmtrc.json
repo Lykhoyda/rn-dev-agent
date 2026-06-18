@@ -8,6 +8,11 @@
     ".superpowers/",
     ".remember/",
     "*.md",
-    "*.mdx"
+    "*.mdx",
+    "*.json",
+    "*.yml",
+    "*.yaml",
+    "*.toml",
+    "*.html"
   ]
 }

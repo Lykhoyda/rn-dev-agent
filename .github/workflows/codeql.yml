@@ -20,11 +20,11 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
   schedule:
-    - cron: "20 12 * * 4"
+    - cron: '20 12 * * 4'
 
 jobs:
   # Fast (ubuntu, ~30s) pre-flight: does the slow macOS Swift analysis need to run?
@@ -102,7 +102,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Initialize CodeQL
         if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
