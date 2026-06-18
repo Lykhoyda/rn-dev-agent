@@ -20,16 +20,22 @@ function runnerDispatch(platform) {
 test('GH#201 maestro-runner buildArgs injects --app-file before --platform when given', () => {
   const d = runnerDispatch('ios');
   assert.equal(d.runner, 'maestro-runner');
-  assert.deepEqual(
-    d.buildArgs('ios', '/tmp/flow.yaml', '/DerivedData/MyApp.app'),
-    ['--app-file', '/DerivedData/MyApp.app', '--platform', 'ios', 'test', '/tmp/flow.yaml'],
-  );
+  assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml', '/DerivedData/MyApp.app'), [
+    '--app-file',
+    '/DerivedData/MyApp.app',
+    '--platform',
+    'ios',
+    'test',
+    '/tmp/flow.yaml',
+  ]);
 });
 
 test('GH#201 maestro-runner buildArgs unchanged when appFile omitted', () => {
   const d = runnerDispatch('ios');
-  assert.deepEqual(
-    d.buildArgs('ios', '/tmp/flow.yaml'),
-    ['--platform', 'ios', 'test', '/tmp/flow.yaml'],
-  );
+  assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml'), [
+    '--platform',
+    'ios',
+    'test',
+    '/tmp/flow.yaml',
+  ]);
 });

@@ -1,13 +1,26 @@
 import { runNative } from '../agent-device-wrapper.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate } from './device-interact.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate, } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 // GH #321: a11y node types that represent something the agent can act on. Used
 // to compact the batch's final payload to just the actionable surface.
 const INTERACTIVE_A11Y_TYPES = new Set([
-    'Button', 'TextField', 'SecureTextField', 'TextView', 'Switch', 'Slider',
-    'Link', 'Cell', 'MenuItem', 'Tab', 'Stepper', 'SegmentedControl',
-    'SearchField', 'Toggle', 'CheckBox', 'RadioButton',
+    'Button',
+    'TextField',
+    'SecureTextField',
+    'TextView',
+    'Switch',
+    'Slider',
+    'Link',
+    'Cell',
+    'MenuItem',
+    'Tab',
+    'Stepper',
+    'SegmentedControl',
+    'SearchField',
+    'Toggle',
+    'CheckBox',
+    'RadioButton',
 ]);
 /**
  * GH #321: reduce a device_snapshot payload to only its actionable nodes, each
@@ -119,7 +132,7 @@ async function resolveTestIDViaSnapshot(testID) {
     return { ref: findRefByTestID(envelope, testID), envelope, snapshotFailed: false };
 }
 function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
+    return new Promise((r) => setTimeout(r, ms));
 }
 async function executeStep(step) {
     switch (step.action) {
@@ -144,20 +157,34 @@ async function executeStep(step) {
                 }
                 if (step.tap)
                     return runNative(['press', `@${ref}`]);
-                return okResult({ resolved: ref, testID: step.testID, snapshotEnvelopePreviewBytes: envelope?.length ?? 0 });
+                return okResult({
+                    resolved: ref,
+                    testID: step.testID,
+                    snapshotEnvelopePreviewBytes: envelope?.length ?? 0,
+                });
             }
             if (!step.text)
                 return failResult('find requires text or testID');
             const findResult = await fetchFindCandidates(step.text, false);
             if (!findResult.ok) {
-                return failResult(`find: snapshot unavailable for "${step.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: step.text });
+                return failResult(`find: snapshot unavailable for "${step.text}"`, {
+                    code: 'SNAPSHOT_UNAVAILABLE',
+                    query: step.text,
+                });
             }
             if (findResult.candidates.length === 0) {
-                return failResult(`No element matches "${step.text}"`, { code: 'NOT_FOUND', query: step.text });
+                return failResult(`No element matches "${step.text}"`, {
+                    code: 'NOT_FOUND',
+                    query: step.text,
+                });
             }
             if (step.tap)
                 return pressCandidate(findResult.candidates[0], 'click');
-            return okResult({ ref: findResult.candidates[0].ref, label: findResult.candidates[0].label, testID: findResult.candidates[0].testID });
+            return okResult({
+                ref: findResult.candidates[0].ref,
+                label: findResult.candidates[0].label,
+                testID: findResult.candidates[0].testID,
+            });
         }
         case 'press': {
             if (step.testID) {
@@ -251,7 +278,7 @@ function extractData(result) {
 }
 export function createDeviceBatchHandler() {
     return withSession(async (args) => {
-        const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient' } = args;
+        const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient', } = args;
         if (!steps || steps.length === 0) {
             return failResult('steps array is required and must not be empty');
         }
@@ -290,7 +317,9 @@ export function createDeviceBatchHandler() {
                     const parsed = JSON.parse(result.content[0].text);
                     stepResult.error = parsed.error;
                 }
-                catch { /* ignore */ }
+                catch {
+                    /* ignore */
+                }
             }
             if (step.action === 'snapshot' && success) {
                 finalSnapshot = extractData(result);
@@ -307,7 +336,9 @@ export function createDeviceBatchHandler() {
                             stepResult.data = extractData(ssResult);
                         }
                     }
-                    catch { /* best effort */ }
+                    catch {
+                        /* best effort */
+                    }
                 }
                 if (continueOnError) {
                     // Phase 125: record the failure and proceed. failedStep stays null
@@ -324,7 +355,9 @@ export function createDeviceBatchHandler() {
                 try {
                     await captureAndResizeScreenshot({});
                 }
-                catch { /* ignore */ }
+                catch {
+                    /* ignore */
+                }
             }
             if (i < steps.length - 1 && step.action !== 'wait' && delayMs > 0) {
                 await sleep(delayMs);
@@ -338,7 +371,9 @@ export function createDeviceBatchHandler() {
                     finalSnapshot = extractData(ssResult);
                 }
             }
-            catch { /* best effort */ }
+            catch {
+                /* best effort */
+            }
         }
         // GH #321: skip the implicit trailing snapshot when the caller doesn't want
         // it (action-only batches that verify via expect_*/cdp_store_state) — saves a
@@ -350,7 +385,9 @@ export function createDeviceBatchHandler() {
                     finalSnapshot = extractData(snapResult);
                 }
             }
-            catch { /* best effort */ }
+            catch {
+                /* best effort */
+            }
         }
         // GH #321: by default return only the actionable surface (compact salient
         // digest). 'full' keeps the legacy complete node list. A node-shaped payload

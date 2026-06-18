@@ -48,7 +48,9 @@ export class ObservabilityServer {
                 res.write('data: {"type":"shutdown"}\n\n');
                 res.end();
             }
-            catch { /* already closed */ }
+            catch {
+                /* already closed */
+            }
         }
         this.streams.clear();
         if (s) {
@@ -56,7 +58,9 @@ export class ObservabilityServer {
             await new Promise((r) => s.close(() => r()));
         }
     }
-    url() { return `http://${HOST}:${this.port}`; }
+    url() {
+        return `http://${HOST}:${this.port}`;
+    }
     handle(req, res) {
         if (!this.guard(req, res))
             return;
@@ -74,7 +78,11 @@ export class ObservabilityServer {
         res.end();
     }
     stream(res) {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+        });
         res.flushHeaders?.();
         res.socket?.setTimeout(0);
         const write = (ev) => {
@@ -99,17 +107,27 @@ export class ObservabilityServer {
             }
         });
         write({ type: 'snapshot', events: snapshot });
-        const hb = setInterval(() => { try {
-            res.write(': hb\n\n');
-        }
-        catch { /* closed */ } }, 15_000);
+        const hb = setInterval(() => {
+            try {
+                res.write(': hb\n\n');
+            }
+            catch {
+                /* closed */
+            }
+        }, 15_000);
         hb.unref?.();
-        res.on('close', () => { clearInterval(hb); detach(); this.streams.delete(res); });
+        res.on('close', () => {
+            clearInterval(hb);
+            detach();
+            this.streams.delete(res);
+        });
     }
     guard(req, res) {
         const host = (req.headers.host ?? '').toLowerCase();
-        const okHost = host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`
-            || host === '127.0.0.1' || host === 'localhost';
+        const okHost = host === `127.0.0.1:${this.port}` ||
+            host === `localhost:${this.port}` ||
+            host === '127.0.0.1' ||
+            host === 'localhost';
         const site = req.headers['sec-fetch-site'];
         const okSite = site === undefined || site === 'same-origin' || site === 'none';
         if (!okHost || !okSite) {
@@ -157,7 +175,10 @@ export class ObservabilityServer {
 }
 function listen(server, port) {
     return new Promise((resolve, reject) => {
-        const onErr = (e) => { server.removeListener('error', onErr); reject(e); };
+        const onErr = (e) => {
+            server.removeListener('error', onErr);
+            reject(e);
+        };
         server.once('error', onErr);
         server.listen(port, HOST, () => {
             server.removeListener('error', onErr);

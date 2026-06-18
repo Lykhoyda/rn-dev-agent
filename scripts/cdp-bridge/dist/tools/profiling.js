@@ -14,7 +14,9 @@ async function safeProbeArchitecture(client) {
         if (typeof result.value !== 'string')
             return 'unknown';
         const info = JSON.parse(result.value);
-        return info.architecture === 'new' || info.architecture === 'old' ? info.architecture : 'unknown';
+        return info.architecture === 'new' || info.architecture === 'old'
+            ? info.architecture
+            : 'unknown';
     }
     catch {
         return 'unknown';
@@ -23,13 +25,15 @@ async function safeProbeArchitecture(client) {
 export function createHeapUsageHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
         try {
-            const result = await client.send('Runtime.getHeapUsage', undefined);
+            const result = (await client.send('Runtime.getHeapUsage', undefined));
             return okResult({
                 usedMB: Number(((result.usedSize ?? 0) / 1024 / 1024).toFixed(2)),
                 totalMB: Number(((result.totalSize ?? 0) / 1024 / 1024).toFixed(2)),
                 usedBytes: result.usedSize ?? 0,
                 totalBytes: result.totalSize ?? 0,
-                utilization: result.totalSize ? Number(((result.usedSize ?? 0) / result.totalSize * 100).toFixed(1)) : 0,
+                utilization: result.totalSize
+                    ? Number((((result.usedSize ?? 0) / result.totalSize) * 100).toFixed(1))
+                    : 0,
             });
         }
         catch (err) {
@@ -53,29 +57,29 @@ export function createCpuProfileHandler(getClient) {
             const arch = await safeProbeArchitecture(client);
             const archHint = arch === 'old' ? OLD_ARCH_PROFILER_HINT : null;
             return failResult('CPU profiling unavailable: CDP Profiler domain is not exposed by this Hermes target. ' +
-                'No JS-based fallback is provided because sampling the sampler\'s own stack produced ' +
+                "No JS-based fallback is provided because sampling the sampler's own stack produced " +
                 'misleading hotFunctions (CDP-007).', 'PROFILER_UNAVAILABLE', {
                 architecture: arch,
-                hint: archHint
-                    ?? 'For memory analysis use cdp_heap_usage. For diagnostics use cdp_console_log/cdp_error_log. ' +
+                hint: archHint ??
+                    'For memory analysis use cdp_heap_usage. For diagnostics use cdp_console_log/cdp_error_log. ' +
                         'Profiler domain availability varies across React Native + Hermes versions.',
             });
         }
         try {
             await client.send('Profiler.enable', undefined);
             await client.send('Profiler.start', undefined);
-            await new Promise(r => setTimeout(r, duration));
-            const result = await client.send('Profiler.stop', undefined);
+            await new Promise((r) => setTimeout(r, duration));
+            const result = (await client.send('Profiler.stop', undefined));
             await client.send('Profiler.disable', undefined);
             const profile = result.profile;
             if (!profile?.nodes) {
                 return failResult('Profiler returned empty profile');
             }
             const hotFunctions = profile.nodes
-                .filter(n => (n.hitCount ?? 0) > 0)
+                .filter((n) => (n.hitCount ?? 0) > 0)
                 .sort((a, b) => (b.hitCount ?? 0) - (a.hitCount ?? 0))
                 .slice(0, 20)
-                .map(n => ({
+                .map((n) => ({
                 name: n.callFrame.functionName || '(anonymous)',
                 url: n.callFrame.url,
                 line: n.callFrame.lineNumber,
@@ -93,7 +97,9 @@ export function createCpuProfileHandler(getClient) {
             try {
                 await client.send('Profiler.disable', undefined);
             }
-            catch { /* cleanup */ }
+            catch {
+                /* cleanup */
+            }
             const base = `CPU profiling failed: ${err instanceof Error ? err.message : err}`;
             // M10: advisory hint when the cause is likely Old Architecture.
             const arch = await safeProbeArchitecture(client);

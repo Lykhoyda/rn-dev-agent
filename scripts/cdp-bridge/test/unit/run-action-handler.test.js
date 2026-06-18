@@ -9,7 +9,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { loadAction } from '../../dist/domain/action-store.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
 let project;
@@ -47,14 +46,27 @@ function fakeRepairAction(envelope) {
   });
 }
 
-const PASS_ENV = { ok: true, data: { passed: true, output: 'Flow passed', flowFile: 'x', platform: 'ios' } };
+const PASS_ENV = {
+  ok: true,
+  data: { passed: true, output: 'Flow passed', flowFile: 'x', platform: 'ios' },
+};
 const FAIL_SELECTOR_ENV = {
   ok: false,
-  data: { passed: false, output: "Element with id 'fab-create-task' not found", flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: false,
+    output: "Element with id 'fab-create-task' not found",
+    flowFile: 'x',
+    platform: 'ios',
+  },
 };
 const FAIL_TIMEOUT_ENV = {
   ok: false,
-  data: { passed: false, output: "Timed out waiting for element with id 'spinner-done'", flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: false,
+    output: "Timed out waiting for element with id 'spinner-done'",
+    flowFile: 'x',
+    platform: 'ios',
+  },
 };
 const REPAIR_PATCHED_ENV = {
   ok: true,
@@ -79,7 +91,8 @@ const REPAIR_NO_MATCH_ENV = {
 };
 const REPAIR_TRANSPORT_BLIND_ENV = {
   ok: false,
-  error: 'cdp_repair_action: Maestro/WDA reported "fab-create-task" not visible, but rn-fast-runner sees it (3 testIDs in the live snapshot). This is transport-blindness, not testID drift (GH #317).',
+  error:
+    'cdp_repair_action: Maestro/WDA reported "fab-create-task" not visible, but rn-fast-runner sees it (3 testIDs in the live snapshot). This is transport-blindness, not testID drift (GH #317).',
   code: 'TRANSPORT_BLIND',
 };
 
@@ -182,9 +195,10 @@ test('run-action: SELECTOR_NOT_FOUND → repair patched → retry passes; RunRec
   assert.ok(env.data.autoRepair.phases.retryMs >= 0);
   // Sanity: total of phase durations should not exceed the orchestration's
   // wall-clock total (within ~10ms slack for arithmetic + JSON serialization).
-  const phaseSum = env.data.autoRepair.phases.firstAttemptMs
-    + env.data.autoRepair.phases.repairMs
-    + env.data.autoRepair.phases.retryMs;
+  const phaseSum =
+    env.data.autoRepair.phases.firstAttemptMs +
+    env.data.autoRepair.phases.repairMs +
+    env.data.autoRepair.phases.retryMs;
   assert.ok(
     phaseSum <= env.data.durationMs + 50,
     `phase sum ${phaseSum} should be ≤ total ${env.data.durationMs} (+50ms slack)`,
@@ -338,7 +352,11 @@ test('run-action: maestroRun throwing during first attempt is caught + RunRecord
 
   // Should NOT throw — should return a structured failResult.
   const result = await handler({ actionId: 'demo', projectRoot: project.root });
-  assert.equal(result.isError, true, 'expected failResult, got envelope: ' + result.content[0].text);
+  assert.equal(
+    result.isError,
+    true,
+    'expected failResult, got envelope: ' + result.content[0].text,
+  );
 
   const env = JSON.parse(result.content[0].text);
   assert.match(env.error, /SIMULATED_TIMEOUT/);
@@ -503,8 +521,14 @@ test('run-action #120: phase timings isolate slow repair from fast first-attempt
     `repairMs ${phases.repairMs} should be at least ${SLOW_REPAIR_MS - 10}`,
   );
   // First-attempt and retry should be much faster than the repair phase.
-  assert.ok(phases.firstAttemptMs < SLOW_REPAIR_MS, `firstAttemptMs ${phases.firstAttemptMs} should be far below ${SLOW_REPAIR_MS}`);
-  assert.ok(phases.retryMs < SLOW_REPAIR_MS, `retryMs ${phases.retryMs} should be far below ${SLOW_REPAIR_MS}`);
+  assert.ok(
+    phases.firstAttemptMs < SLOW_REPAIR_MS,
+    `firstAttemptMs ${phases.firstAttemptMs} should be far below ${SLOW_REPAIR_MS}`,
+  );
+  assert.ok(
+    phases.retryMs < SLOW_REPAIR_MS,
+    `retryMs ${phases.retryMs} should be far below ${SLOW_REPAIR_MS}`,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

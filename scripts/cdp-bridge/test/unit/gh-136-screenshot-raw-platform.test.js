@@ -115,7 +115,10 @@ test('tryRawScreenshot(ios): resolver returns UDID, capturer succeeds → envelo
   const captures = [];
   _setForTest({
     iosResolver: async () => 'DEF-UDID',
-    iosCapturer: async (udid, path) => { captures.push({ udid, path }); return true; },
+    iosCapturer: async (udid, path) => {
+      captures.push({ udid, path });
+      return true;
+    },
   });
   try {
     const result = await tryRawScreenshot('ios', '/tmp/shot.jpg');
@@ -132,7 +135,10 @@ test('tryRawScreenshot(ios): resolver returns null → ok:false with reason no-d
   let capturerCalled = false;
   _setForTest({
     iosResolver: async () => null,
-    iosCapturer: async () => { capturerCalled = true; return true; },
+    iosCapturer: async () => {
+      capturerCalled = true;
+      return true;
+    },
   });
   try {
     const result = await tryRawScreenshot('ios', '/tmp/shot.jpg');
@@ -164,7 +170,10 @@ test('tryRawScreenshot(android): resolver returns emu-id, capturer succeeds → 
   const captures = [];
   _setForTest({
     androidResolver: async () => 'emulator-5556',
-    androidCapturer: async (emuId, path) => { captures.push({ emuId, path }); return true; },
+    androidCapturer: async (emuId, path) => {
+      captures.push({ emuId, path });
+      return true;
+    },
   });
   try {
     const result = await tryRawScreenshot('android', '/tmp/shot.png');
@@ -238,7 +247,10 @@ test('captureAndResizeScreenshot: platformExplicit + android resolved → raw pa
   });
   raw._setForTest({
     androidResolver: async () => 'emulator-5556',
-    androidCapturer: async (id, p) => { captures.push({ id, p }); return true; },
+    androidCapturer: async (id, p) => {
+      captures.push({ id, p });
+      return true;
+    },
   });
   try {
     const result = await captureAndResizeScreenshot({
@@ -247,7 +259,11 @@ test('captureAndResizeScreenshot: platformExplicit + android resolved → raw pa
       path: '/tmp/raw-android.png',
       maxWidth: 0,
     });
-    assert.equal(runAgentDeviceCalled, false, 'runAgentDevice should NOT have been called for android explicit path');
+    assert.equal(
+      runAgentDeviceCalled,
+      false,
+      'runAgentDevice should NOT have been called for android explicit path',
+    );
     assert.deepEqual(captures, [{ id: 'emulator-5556', p: '/tmp/raw-android.png' }]);
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, true);
@@ -269,7 +285,11 @@ test('captureAndResizeScreenshot: platformExplicit + resolver miss → hard-fail
   let runAgentDeviceCalled = false;
   _setRunAgentDeviceForTest(async () => {
     runAgentDeviceCalled = true;
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) },
+      ],
+    };
   });
   raw._setForTest({
     androidResolver: async () => null, // no booted Android emulator
@@ -281,7 +301,11 @@ test('captureAndResizeScreenshot: platformExplicit + resolver miss → hard-fail
       path: '/tmp/shot.png',
       maxWidth: 0,
     });
-    assert.equal(runAgentDeviceCalled, false, 'runAgentDevice MUST NOT be the fallback when platform is explicit');
+    assert.equal(
+      runAgentDeviceCalled,
+      false,
+      'runAgentDevice MUST NOT be the fallback when platform is explicit',
+    );
     assert.equal(result.isError, true);
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.ok, false);
@@ -307,7 +331,11 @@ test('captureAndResizeScreenshot: platformExplicit + capture fails → hard-fail
   let runAgentDeviceCalled = false;
   _setRunAgentDeviceForTest(async () => {
     runAgentDeviceCalled = true;
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/wrong.jpg' } }) },
+      ],
+    };
   });
   raw._setForTest({
     iosResolver: async () => 'UDID-IOS',
@@ -341,10 +369,15 @@ test('captureAndResizeScreenshot: platformExplicit=false → uses runAgentDevice
   let resolverCalled = false;
   _setRunAgentDeviceForTest(async () => {
     runAgentDeviceCalled = true;
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/x.jpg' } }) }] };
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/x.jpg' } }) }],
+    };
   });
   raw._setForTest({
-    iosResolver: async () => { resolverCalled = true; return 'X'; },
+    iosResolver: async () => {
+      resolverCalled = true;
+      return 'X';
+    },
   });
   try {
     // No platformExplicit field (or false) — even with platform set,
@@ -356,7 +389,11 @@ test('captureAndResizeScreenshot: platformExplicit=false → uses runAgentDevice
       maxWidth: 0,
     });
     assert.equal(runAgentDeviceCalled, true);
-    assert.equal(resolverCalled, false, 'resolver MUST NOT be called when platformExplicit is falsy');
+    assert.equal(
+      resolverCalled,
+      false,
+      'resolver MUST NOT be called when platformExplicit is falsy',
+    );
   } finally {
     _resetRunAgentDeviceForTest();
     raw._resetForTest();
@@ -367,7 +404,10 @@ test('captureAndResizeScreenshot: raw path still gets EPHEMERAL_PATH advisory fo
   const raw = await import(RAW_MOD);
   const dl = await import(DEVICE_LIST_MOD);
   const { captureAndResizeScreenshot, _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest } = dl;
-  _setRunAgentDeviceForTest(async () => ({ content: [{ type: 'text', text: '{}' }], isError: true }));
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: '{}' }],
+    isError: true,
+  }));
   raw._setForTest({
     iosResolver: async () => 'UDID',
     iosCapturer: async () => true,
@@ -381,7 +421,10 @@ test('captureAndResizeScreenshot: raw path still gets EPHEMERAL_PATH advisory fo
     });
     const envelope = JSON.parse(result.content[0].text);
     const codes = (envelope.meta?.advisories ?? []).map((a) => a.code);
-    assert.ok(codes.includes('EPHEMERAL_PATH'), `expected EPHEMERAL_PATH advisory, got ${JSON.stringify(codes)}`);
+    assert.ok(
+      codes.includes('EPHEMERAL_PATH'),
+      `expected EPHEMERAL_PATH advisory, got ${JSON.stringify(codes)}`,
+    );
   } finally {
     _resetRunAgentDeviceForTest();
     raw._resetForTest();

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
+import { parseEnvelope, expectOk } from '../helpers/result-helpers.js';
 import { createStatusHandler } from '../../dist/tools/status.js';
 import { narrowArchitecture } from '../../dist/tools/status.js';
 import { createCpuProfileHandler, OLD_ARCH_PROFILER_HINT } from '../../dist/tools/profiling.js';
@@ -41,18 +41,30 @@ function buildStatusProbeResult(appInfo) {
 
 test('M10 status: app.architecture="new" when probe returns new', async () => {
   const client = createMockClient({
-    evaluate: async () => ({ value: buildStatusProbeResult({ __DEV__: true, architecture: 'new' }) }),
+    evaluate: async () => ({
+      value: buildStatusProbeResult({ __DEV__: true, architecture: 'new' }),
+    }),
   });
-  const handler = createStatusHandler(() => client, () => {}, () => client);
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
   const data = expectOk(await handler({}));
   assert.equal(data.app.architecture, 'new');
 });
 
 test('M10 status: app.architecture="old" when probe returns old', async () => {
   const client = createMockClient({
-    evaluate: async () => ({ value: buildStatusProbeResult({ __DEV__: true, architecture: 'old' }) }),
+    evaluate: async () => ({
+      value: buildStatusProbeResult({ __DEV__: true, architecture: 'old' }),
+    }),
   });
-  const handler = createStatusHandler(() => client, () => {}, () => client);
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
   const data = expectOk(await handler({}));
   assert.equal(data.app.architecture, 'old');
 });
@@ -61,16 +73,26 @@ test('M10 status: app.architecture="unknown" when probe omits the field', async 
   const client = createMockClient({
     evaluate: async () => ({ value: buildStatusProbeResult({ __DEV__: true }) }),
   });
-  const handler = createStatusHandler(() => client, () => {}, () => client);
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
   const data = expectOk(await handler({}));
   assert.equal(data.app.architecture, 'unknown');
 });
 
 test('M10 status: unexpected architecture string is narrowed to "unknown"', async () => {
   const client = createMockClient({
-    evaluate: async () => ({ value: buildStatusProbeResult({ __DEV__: true, architecture: 'bridgeless-interop' }) }),
+    evaluate: async () => ({
+      value: buildStatusProbeResult({ __DEV__: true, architecture: 'bridgeless-interop' }),
+    }),
   });
-  const handler = createStatusHandler(() => client, () => {}, () => client);
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
   const data = expectOk(await handler({}));
   assert.equal(data.app.architecture, 'unknown');
 });
@@ -95,7 +117,9 @@ test('M10 profiler: failure on old architecture includes meta.hint', async () =>
       }
       return { value: 13 };
     },
-    get profilerAvailable() { return true; },
+    get profilerAvailable() {
+      return true;
+    },
   });
   const handler = createCpuProfileHandler(() => client);
   const result = await handler({ durationMs: 500 });
@@ -123,7 +147,9 @@ test('M10 profiler: failure on new architecture omits meta.hint', async () => {
       }
       return { value: 13 };
     },
-    get profilerAvailable() { return true; },
+    get profilerAvailable() {
+      return true;
+    },
   });
   const handler = createCpuProfileHandler(() => client);
   const result = await handler({ durationMs: 500 });
@@ -145,7 +171,9 @@ test('M10 profiler: failure when safeProbeArchitecture itself throws — no hint
       if (expr.includes('getAppInfo')) throw new Error('evaluate broken');
       return { value: 13 };
     },
-    get profilerAvailable() { return true; },
+    get profilerAvailable() {
+      return true;
+    },
   });
   const handler = createCpuProfileHandler(() => client);
   const result = await handler({ durationMs: 500 });

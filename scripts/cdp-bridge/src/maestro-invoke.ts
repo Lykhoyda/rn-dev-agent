@@ -118,7 +118,12 @@ export async function runMaestroInline(
   // GH#201 parity with maestro_run: resolve --app-file so an iOS clearState flow
   // run through this inline path (device_fill/picker/dialog fallbacks) can
   // reinstall the app instead of failing after uninstall.
-  const appFileResolution = resolveAppFileForClearState(opts.platform, content, headerAppId, undefined);
+  const appFileResolution = resolveAppFileForClearState(
+    opts.platform,
+    content,
+    headerAppId,
+    undefined,
+  );
   if (!appFileResolution.ok) {
     return { passed: false, output: '', flowFile, error: appFileResolution.error };
   }
@@ -148,7 +153,12 @@ export async function runMaestroInline(
     const capturedOutput = ((errObj.stdout ?? '') + '\n' + (errObj.stderr ?? '')).trim();
     if (errObj.killed) {
       // Timeout — always a hard error, caller should treat as runner failure.
-      return { passed: false, output: capturedOutput, flowFile, error: `Maestro timed out after ${timeout}ms` };
+      return {
+        passed: false,
+        output: capturedOutput,
+        flowFile,
+        error: `Maestro timed out after ${timeout}ms`,
+      };
     }
     if (capturedOutput) {
       return { passed: false, output: capturedOutput, flowFile };

@@ -25,7 +25,10 @@ test('uses test-without-building when the test product is already built', () => 
 test('falls back to a cold build+test when no test product exists yet (fresh machine)', () => {
   const args = resolveRunnerXcodebuildArgs({ ...BASE, hasBuiltTestProduct: false });
   assert.equal(args[0], 'test');
-  assert.ok(!args.includes('test-without-building'), 'must not use test-without-building without artifacts');
+  assert.ok(
+    !args.includes('test-without-building'),
+    'must not use test-without-building without artifacts',
+  );
   assert.ok(args.includes('-project'));
   assert.ok(args.includes('-scheme'));
   assert.ok(args.includes('RnFastRunner'));

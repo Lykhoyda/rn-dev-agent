@@ -73,8 +73,10 @@ test('repair-action: happy path patches stale selector with fuzzy match', async 
     fixtureYaml({ id: 'wizard-create-task', selectors: ['fab-create-task'] }),
   );
 
-  _setRunAgentDeviceForTest(async (cliArgs) => ({
-    content: [{ type: 'text', text: fakeSnapshot(['fab-create-task-btn', 'btn-cancel', 'header-home']) }],
+  _setRunAgentDeviceForTest(async (_cliArgs) => ({
+    content: [
+      { type: 'text', text: fakeSnapshot(['fab-create-task-btn', 'btn-cancel', 'header-home']) },
+    ],
   }));
 
   const handler = createRepairActionHandler();
@@ -146,7 +148,7 @@ test('GH #253: android session → snapshot dispatched with platform android', a
     capturedOpts?.platform,
     'android',
     `snapshot must dispatch with the session platform; got ${capturedOpts?.platform} — ` +
-    `a hardcoded 'ios' routes the snapshot through the iOS short-circuit on an emulator`,
+      `a hardcoded 'ios' routes the snapshot through the iOS short-circuit on an emulator`,
   );
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.data.patched, true, 'repair itself must still succeed on android');
@@ -319,10 +321,7 @@ test('repair-action: refuses when 24h repair budget is exhausted (3 recent repai
 });
 
 test('repair-action: SNAPSHOT_FAILED when agent-device snapshot returns ok:false', async () => {
-  project.seedAction(
-    'snap-fail',
-    fixtureYaml({ id: 'snap-fail', selectors: ['fab-create-task'] }),
-  );
+  project.seedAction('snap-fail', fixtureYaml({ id: 'snap-fail', selectors: ['fab-create-task'] }));
 
   _setRunAgentDeviceForTest(async () => ({
     content: [{ type: 'text', text: failedSnapshot() }],
@@ -404,10 +403,7 @@ test('repair-action: snapshot is Agent Device Runner sentinel → RUNNER_LEAK (B
 });
 
 test('repair-action: no candidate clears threshold → TESTID_NOT_FOUND', async () => {
-  project.seedAction(
-    'no-match',
-    fixtureYaml({ id: 'no-match', selectors: ['fab-create-task'] }),
-  );
+  project.seedAction('no-match', fixtureYaml({ id: 'no-match', selectors: ['fab-create-task'] }));
 
   // All candidates are wildly different — none clears the default 0.6 threshold.
   _setRunAgentDeviceForTest(async () => ({
@@ -431,10 +427,7 @@ test('repair-action: no candidate clears threshold → TESTID_NOT_FOUND', async 
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('repair-action: dryRun returns diff without writing to disk', async () => {
-  project.seedAction(
-    'dry-run',
-    fixtureYaml({ id: 'dry-run', selectors: ['fab-create-task'] }),
-  );
+  project.seedAction('dry-run', fixtureYaml({ id: 'dry-run', selectors: ['fab-create-task'] }));
 
   const yamlBefore = project.readYaml('dry-run');
   const sidecarBefore = JSON.parse(JSON.stringify(project.readSidecar('dry-run')));
@@ -461,7 +454,11 @@ test('repair-action: dryRun returns diff without writing to disk', async () => {
 
   // Files unchanged.
   assert.equal(project.readYaml('dry-run'), yamlBefore, 'YAML must be untouched in dryRun');
-  assert.deepEqual(project.readSidecar('dry-run'), sidecarBefore, 'sidecar must be untouched in dryRun');
+  assert.deepEqual(
+    project.readSidecar('dry-run'),
+    sidecarBefore,
+    'sidecar must be untouched in dryRun',
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -536,8 +533,8 @@ test('repair-action: when YAML write fails after sidecar succeeds, no false-posi
   assert.ok(
     action.state.lastSeenMtimeMs > originalMtimeMs,
     `sidecar-first ordering must overwrite the sidecar with a future mtime ` +
-    `before failing on the YAML write; got ${action.state.lastSeenMtimeMs} ` +
-    `vs original ${originalMtimeMs}`,
+      `before failing on the YAML write; got ${action.state.lastSeenMtimeMs} ` +
+      `vs original ${originalMtimeMs}`,
   );
 
   // The YAML body should still be the ORIGINAL — partial failure must
@@ -555,7 +552,9 @@ test('GH #317: failed selector present in snapshot → TRANSPORT_BLIND, not no-m
     fixtureYaml({ id: 'register-new-user', selectors: ['submit_email_form'] }),
   );
   _setRunAgentDeviceForTest(async () => ({
-    content: [{ type: 'text', text: fakeSnapshot(['submit_email_form', 'header-home', 'btn-cancel']) }],
+    content: [
+      { type: 'text', text: fakeSnapshot(['submit_email_form', 'header-home', 'btn-cancel']) },
+    ],
   }));
 
   const handler = createRepairActionHandler();

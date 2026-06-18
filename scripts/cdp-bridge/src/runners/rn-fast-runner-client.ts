@@ -33,9 +33,7 @@ const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast
 // xcodebuild streams stdout in arbitrary-sized chunks, so the parser
 // holds a small buffer + a `seenReady` flag and walks complete lines.
 
-export type ReadySignalResult =
-  | { ready: true; port: number }
-  | { error: string };
+export type ReadySignalResult = { ready: true; port: number } | { error: string };
 
 export interface ReadySignalParser {
   /**
@@ -101,9 +99,16 @@ let runnerState: FastRunnerState | null = null;
 try {
   if (existsSync(STATE_FILE)) {
     const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as FastRunnerState;
-    try { process.kill(raw.pid, 0); runnerState = raw; } catch { unlinkSync(STATE_FILE); }
+    try {
+      process.kill(raw.pid, 0);
+      runnerState = raw;
+    } catch {
+      unlinkSync(STATE_FILE);
+    }
   }
-} catch { /* start fresh */ }
+} catch {
+  /* start fresh */
+}
 
 export function getFastRunnerState(): FastRunnerState | null {
   return runnerState;
@@ -120,9 +125,18 @@ export function _setRunnerStateForTest(state: FastRunnerState | null): void {
 
 export function isFastRunnerAvailable(): boolean {
   if (!runnerState) return false;
-  try { process.kill(runnerState.pid, 0); return true; } catch { /* process dead */ }
+  try {
+    process.kill(runnerState.pid, 0);
+    return true;
+  } catch {
+    /* process dead */
+  }
   runnerState = null;
-  try { unlinkSync(STATE_FILE); } catch { /* ignore */ }
+  try {
+    unlinkSync(STATE_FILE);
+  } catch {
+    /* ignore */
+  }
   return false;
 }
 
@@ -150,10 +164,14 @@ export function resolveRunnerXcodebuildArgs(opts: RunnerXcodebuildArgsOptions): 
   const action = opts.hasBuiltTestProduct ? 'test-without-building' : 'test';
   return [
     action,
-    '-project', opts.projectPath,
-    '-scheme', opts.scheme,
-    '-destination', `platform=iOS Simulator,id=${opts.deviceId}`,
-    '-derivedDataPath', opts.derivedDataPath,
+    '-project',
+    opts.projectPath,
+    '-scheme',
+    opts.scheme,
+    '-destination',
+    `platform=iOS Simulator,id=${opts.deviceId}`,
+    '-derivedDataPath',
+    opts.derivedDataPath,
     `-only-testing:${opts.onlyTesting}`,
   ];
 }
@@ -186,10 +204,14 @@ export function shouldReuseRunner(state: FastRunnerState | null, deviceId: strin
   return state !== null && state.deviceId === deviceId;
 }
 
-export async function startFastRunner(deviceId: string, bundleId: string, port?: number): Promise<FastRunnerState> {
+export async function startFastRunner(
+  deviceId: string,
+  bundleId: string,
+  port?: number,
+): Promise<FastRunnerState> {
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
 
-  const desired = port ?? (await isPortFree(DEFAULT_PORT) ? DEFAULT_PORT : 0);
+  const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
 
   return new Promise((resolve, reject) => {
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
@@ -225,7 +247,9 @@ export async function startFastRunner(deviceId: string, bundleId: string, port?:
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       const phase = built ? '' : ' (cold build — first run compiles the runner)';
-      reject(new Error(`Fast runner did not become ready within ${readyTimeoutMs / 1000}s${phase}`));
+      reject(
+        new Error(`Fast runner did not become ready within ${readyTimeoutMs / 1000}s${phase}`),
+      );
     }, readyTimeoutMs);
 
     const handleChunk = (chunk: string): void => {
@@ -246,7 +270,11 @@ export async function startFastRunner(deviceId: string, bundleId: string, port?:
         startedAt: new Date().toISOString(),
       };
       runnerState = state;
-      try { writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8'); } catch { /* ignore */ }
+      try {
+        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+      } catch {
+        /* ignore */
+      }
       resolve(state);
     };
 
@@ -254,7 +282,9 @@ export async function startFastRunner(deviceId: string, bundleId: string, port?:
     child.stdout!.on('data', handleChunk);
 
     child.stderr!.setEncoding('utf-8');
-    child.stderr!.on('data', () => { /* xcodebuild is noisy — ignore stderr */ });
+    child.stderr!.on('data', () => {
+      /* xcodebuild is noisy — ignore stderr */
+    });
 
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -269,7 +299,11 @@ export async function startFastRunner(deviceId: string, bundleId: string, port?:
       if (runnerProcess === child) {
         runnerProcess = null;
         runnerState = null;
-        try { unlinkSync(STATE_FILE); } catch { /* ignore */ }
+        try {
+          unlinkSync(STATE_FILE);
+        } catch {
+          /* ignore */
+        }
       }
       clearTimeout(timer);
       reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
@@ -282,10 +316,18 @@ export function stopFastRunner(): void {
     runnerProcess.kill('SIGTERM');
     runnerProcess = null;
   } else if (runnerState?.pid) {
-    try { process.kill(runnerState.pid, 'SIGTERM'); } catch { /* already dead */ }
+    try {
+      process.kill(runnerState.pid, 'SIGTERM');
+    } catch {
+      /* already dead */
+    }
   }
   runnerState = null;
-  try { unlinkSync(STATE_FILE); } catch { /* ignore */ }
+  try {
+    unlinkSync(STATE_FILE);
+  } catch {
+    /* ignore */
+  }
 }
 
 // --- Legacy helper kept for device-interact.ts swipe path ---
@@ -306,7 +348,13 @@ interface FastRunnerResponse {
   [key: string]: unknown;
 }
 
-export async function fastSwipe(x1: number, y1: number, x2: number, y2: number, durationMs?: number): Promise<FastRunnerResponse> {
+export async function fastSwipe(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  durationMs?: number,
+): Promise<FastRunnerResponse> {
   const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
   if (durationMs != null) body.durationMs = durationMs;
   const resp = await postCommand(body);
@@ -385,7 +433,12 @@ export interface ReapDeps {
 }
 
 function defaultProcessAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpProbeResult> {
@@ -400,7 +453,7 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     if (!res.ok) return { ok: false, status: res.status };
     let bodyOk: boolean | undefined;
     try {
-      const body = await res.json() as { ok?: boolean };
+      const body = (await res.json()) as { ok?: boolean };
       bodyOk = body.ok === true;
     } catch {
       bodyOk = false;
@@ -418,10 +471,16 @@ function clearStateFile(): void {
   // eventually self-heal, but during the window a concurrent stopFastRunner
   // could signal an already-dead process. Clearing here is defensive.
   runnerProcess = null;
-  try { unlinkSync(STATE_FILE); } catch { /* already gone */ }
+  try {
+    unlinkSync(STATE_FILE);
+  } catch {
+    /* already gone */
+  }
 }
 
-export async function probeFastRunnerLiveness(deps: LivenessProbeDeps = {}): Promise<FastRunnerLiveness> {
+export async function probeFastRunnerLiveness(
+  deps: LivenessProbeDeps = {},
+): Promise<FastRunnerLiveness> {
   const getState = deps.getState ?? (() => runnerState);
   const processAlive = deps.processAlive ?? defaultProcessAlive;
   const httpProbe = deps.httpProbe ?? defaultHttpProbe;
@@ -449,17 +508,25 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
   const processAlive = deps.processAlive ?? defaultProcessAlive;
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep = deps.sleep ?? ((ms) => new Promise(r => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFile;
   const graceMs = deps.graceMs ?? 500;
 
   const state = getState();
   if (!state) return;
 
-  try { sendSignal(state.pid, 'SIGTERM'); } catch { /* already dead */ }
+  try {
+    sendSignal(state.pid, 'SIGTERM');
+  } catch {
+    /* already dead */
+  }
   await sleep(graceMs);
   if (processAlive(state.pid)) {
-    try { sendSignal(state.pid, 'SIGKILL'); } catch { /* race: died between checks */ }
+    try {
+      sendSignal(state.pid, 'SIGKILL');
+    } catch {
+      /* race: died between checks */
+    }
   }
   clearState();
 }
@@ -561,7 +628,9 @@ function commandTimeoutMs(command: unknown): number {
 async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
   const state = runnerState;
   if (!state) {
-    throw new Error('rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).');
+    throw new Error(
+      'rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).',
+    );
   }
   const controller = new AbortController();
   const timeoutMs = commandTimeoutMs(body.command);

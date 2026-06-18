@@ -10,8 +10,11 @@ import { createMockClient } from '../helpers/mock-cdp-client.js';
 test('CDP-003: target description containing appId → matches', () => {
   const client = createMockClient({
     _connectedTarget: {
-      id: 'p1', title: 'React Native (Hermes)', vm: 'Hermes',
-      description: 'com.requested.app', platform: 'ios',
+      id: 'p1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      description: 'com.requested.app',
+      platform: 'ios',
       webSocketDebuggerUrl: 'ws://x',
     },
   });
@@ -21,20 +24,29 @@ test('CDP-003: target description containing appId → matches', () => {
 test('CDP-003: target description with different appId → does NOT match', () => {
   const client = createMockClient({
     _connectedTarget: {
-      id: 'p1', title: 'React Native (Hermes)', vm: 'Hermes',
-      description: 'com.actual.app', platform: 'ios',
+      id: 'p1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      description: 'com.actual.app',
+      platform: 'ios',
       webSocketDebuggerUrl: 'ws://x',
     },
   });
-  assert.equal(cdpTargetMatchesApp(client, 'com.requested.app'), false,
-    'must reject when target description does not contain requested appId');
+  assert.equal(
+    cdpTargetMatchesApp(client, 'com.requested.app'),
+    false,
+    'must reject when target description does not contain requested appId',
+  );
 });
 
 test('CDP-003: case-insensitive match', () => {
   const client = createMockClient({
     _connectedTarget: {
-      id: 'p1', title: 'COM.MIXED.CASE', vm: 'Hermes',
-      description: '', platform: 'ios',
+      id: 'p1',
+      title: 'COM.MIXED.CASE',
+      vm: 'Hermes',
+      description: '',
+      platform: 'ios',
       webSocketDebuggerUrl: 'ws://x',
     },
   });
@@ -54,10 +66,17 @@ test('CDP-003: null target → does not match', () => {
 test('CDP-003: empty description AND empty title → does not match', () => {
   const client = createMockClient({
     _connectedTarget: {
-      id: 'p1', title: '', vm: 'Hermes', description: '', platform: 'ios',
+      id: 'p1',
+      title: '',
+      vm: 'Hermes',
+      description: '',
+      platform: 'ios',
       webSocketDebuggerUrl: 'ws://x',
     },
   });
-  assert.equal(cdpTargetMatchesApp(client, 'com.anything'), false,
-    'empty haystack must default to false rather than vacuously matching');
+  assert.equal(
+    cdpTargetMatchesApp(client, 'com.anything'),
+    false,
+    'empty haystack must default to false rather than vacuously matching',
+  );
 });

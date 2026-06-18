@@ -23,7 +23,9 @@ function makeMockClient(opts = {}) {
 
 function envelope(data, meta) {
   return {
-    content: [{ type: 'text', text: JSON.stringify({ ok: true, data, ...(meta ? { meta } : {}) }) }],
+    content: [
+      { type: 'text', text: JSON.stringify({ ok: true, data, ...(meta ? { meta } : {}) }) },
+    ],
   };
 }
 
@@ -56,7 +58,15 @@ test('normalizeRouteName: strips path segments for Expo Router routes', async ()
 
 test('isSuccessShape: matches React Navigation success-style names', async () => {
   const { isSuccessShape } = await import(MOD_PATH);
-  for (const name of ['OrderSuccess', 'AddPolicySuccess', 'PaymentDone', 'TaskAdded', 'JobComplete', 'PaymentCompleted', 'OrderConfirmation']) {
+  for (const name of [
+    'OrderSuccess',
+    'AddPolicySuccess',
+    'PaymentDone',
+    'TaskAdded',
+    'JobComplete',
+    'PaymentCompleted',
+    'OrderConfirmation',
+  ]) {
     assert.equal(isSuccessShape(name), true, `${name} should match success shape`);
   }
 });
@@ -144,9 +154,7 @@ test('countWindowedMutations: FRESH pending entries (status undefined, < 2s old)
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const ago = (sec) => new Date(now - sec * 1000).toISOString();
   const client = makeMockClient({
-    entries: [
-      { method: 'POST', url: '/api/orders', timestamp: ago(0.3), status: undefined },
-    ],
+    entries: [{ method: 'POST', url: '/api/orders', timestamp: ago(0.3), status: undefined }],
   });
   const { inWindow } = countWindowedMutations(client, 5_000, now);
   assert.equal(inWindow, 1, 'fresh pending mutation should count');
@@ -162,9 +170,7 @@ test('countWindowedMutations: STALE pending entries (>2s old) do NOT count (Gemi
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const ago = (sec) => new Date(now - sec * 1000).toISOString();
   const client = makeMockClient({
-    entries: [
-      { method: 'POST', url: '/api/orders', timestamp: ago(3.5), status: undefined },
-    ],
+    entries: [{ method: 'POST', url: '/api/orders', timestamp: ago(3.5), status: undefined }],
   });
   const { inWindow } = countWindowedMutations(client, 5_000, now);
   assert.equal(inWindow, 0, 'stale pending must not silence the detector');
@@ -176,9 +182,7 @@ test('countWindowedMutations: freshness boundary (exactly 2s) counts as success'
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const at = (sec) => new Date(now - sec * 1000).toISOString();
   const client = makeMockClient({
-    entries: [
-      { method: 'POST', url: '/api/orders', timestamp: at(2), status: undefined },
-    ],
+    entries: [{ method: 'POST', url: '/api/orders', timestamp: at(2), status: undefined }],
   });
   const { inWindow } = countWindowedMutations(client, 5_000, now);
   assert.equal(inWindow, 1, 'exactly 2s old pending mutation should still count');
@@ -189,9 +193,7 @@ test('countWindowedMutations: reports last_mutation_age_ms when window is empty'
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const ago = (sec) => new Date(now - sec * 1000).toISOString();
   const client = makeMockClient({
-    entries: [
-      { method: 'POST', url: '/api/old', timestamp: ago(7.3), status: 201 },
-    ],
+    entries: [{ method: 'POST', url: '/api/old', timestamp: ago(7.3), status: 201 }],
   });
   const { inWindow, lastMutationAgeMs } = countWindowedMutations(client, 5_000, now);
   assert.equal(inWindow, 0);
@@ -214,7 +216,9 @@ test('annotateMutationAbsence: first observation primes, never warns', async () 
   _resetForTests();
   const client = makeMockClient(); // no mutations
   const result = annotateMutationAbsence(envelope({ ok: true }), {
-    client, screenName: 'OrderSuccess', source: 'cdp_navigate',
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
   });
   const env = parse(result);
   assert.equal(env.meta?.verification_warning, undefined, 'first observation must not warn');
@@ -225,9 +229,17 @@ test('annotateMutationAbsence: same-screen second observation does not warn', as
   _resetForTests();
   const client = makeMockClient();
   // Prime
-  annotateMutationAbsence(envelope({}), { client, screenName: 'OrderSuccess', source: 'cdp_navigate' });
+  annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+  });
   // Second observation, same screen, no transition.
-  const r2 = annotateMutationAbsence(envelope({}), { client, screenName: 'OrderSuccess', source: 'cdp_navigation_state' });
+  const r2 = annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigation_state',
+  });
   assert.equal(parse(r2).meta?.verification_warning, undefined);
 });
 
@@ -236,10 +248,16 @@ test('annotateMutationAbsence: transition to success shape with no mutation -> w
   _resetForTests();
   const client = makeMockClient(); // no mutations
   // Prime on a non-success screen
-  annotateMutationAbsence(envelope({}), { client, screenName: 'CheckoutFlow', source: 'cdp_navigation_state' });
+  annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'CheckoutFlow',
+    source: 'cdp_navigation_state',
+  });
   // Transition to OrderSuccess
   const result = annotateMutationAbsence(envelope({ navigated: true }), {
-    client, screenName: 'OrderSuccess', source: 'cdp_navigate',
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
   });
   const env = parse(result);
   assert.ok(env.meta?.verification_warning, 'should warn on transition to success shape');
@@ -258,7 +276,9 @@ test('annotateMutationAbsence: transition to non-success screen does NOT warn', 
   const client = makeMockClient();
   annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
   const result = annotateMutationAbsence(envelope({}), {
-    client, screenName: 'CartScreen', source: 'cdp_navigate',
+    client,
+    screenName: 'CartScreen',
+    source: 'cdp_navigate',
   });
   assert.equal(parse(result).meta?.verification_warning, undefined);
 });
@@ -269,16 +289,33 @@ test('annotateMutationAbsence: success transition WITH in-window mutation does N
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const client = makeMockClient({
     entries: [
-      { method: 'POST', url: '/api/orders', timestamp: new Date(now - 1500).toISOString(), status: 201 },
+      {
+        method: 'POST',
+        url: '/api/orders',
+        timestamp: new Date(now - 1500).toISOString(),
+        status: 201,
+      },
     ],
   });
   // Prime
-  annotateMutationAbsence(envelope({}), { client, screenName: 'CheckoutFlow', source: 'cdp_navigate', now: () => now });
+  annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'CheckoutFlow',
+    source: 'cdp_navigate',
+    now: () => now,
+  });
   // Transition with mutation in window
   const result = annotateMutationAbsence(envelope({}), {
-    client, screenName: 'OrderSuccess', source: 'cdp_navigate', now: () => now,
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+    now: () => now,
   });
-  assert.equal(parse(result).meta?.verification_warning, undefined, 'real flow should not be flagged');
+  assert.equal(
+    parse(result).meta?.verification_warning,
+    undefined,
+    'real flow should not be flagged',
+  );
 });
 
 test('annotateMutationAbsence: emits last_mutation_age_ms diagnostic when out-of-window mutation exists', async () => {
@@ -287,12 +324,25 @@ test('annotateMutationAbsence: emits last_mutation_age_ms diagnostic when out-of
   const now = Date.parse('2026-04-28T12:00:00.000Z');
   const client = makeMockClient({
     entries: [
-      { method: 'POST', url: '/api/orders', timestamp: new Date(now - 7500).toISOString(), status: 201 },
+      {
+        method: 'POST',
+        url: '/api/orders',
+        timestamp: new Date(now - 7500).toISOString(),
+        status: 201,
+      },
     ],
   });
-  annotateMutationAbsence(envelope({}), { client, screenName: 'CheckoutFlow', source: 'cdp_navigate', now: () => now });
+  annotateMutationAbsence(envelope({}), {
+    client,
+    screenName: 'CheckoutFlow',
+    source: 'cdp_navigate',
+    now: () => now,
+  });
   const result = annotateMutationAbsence(envelope({}), {
-    client, screenName: 'OrderSuccess', source: 'cdp_navigate', now: () => now,
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+    now: () => now,
   });
   const w = parse(result).meta.verification_warning;
   assert.equal(w.last_mutation_age_ms, 7500);
@@ -307,7 +357,11 @@ test('annotateMutationAbsence: skips on isError result', async () => {
     content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'fail' }) }],
     isError: true,
   };
-  const result = annotateMutationAbsence(errorResult, { client, screenName: 'OrderSuccess', source: 'cdp_navigate' });
+  const result = annotateMutationAbsence(errorResult, {
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+  });
   assert.equal(result, errorResult, 'isError results pass through unchanged');
 });
 
@@ -317,12 +371,28 @@ test('annotateMutationAbsence: per-device state isolation', async () => {
   const ios = makeMockClient({ deviceKey: '8081-ios-1' });
   const android = makeMockClient({ deviceKey: '8081-android-1' });
   // Prime both on different screens
-  annotateMutationAbsence(envelope({}), { client: ios, screenName: 'Home', source: 'cdp_navigate' });
-  annotateMutationAbsence(envelope({}), { client: android, screenName: 'Home', source: 'cdp_navigate' });
+  annotateMutationAbsence(envelope({}), {
+    client: ios,
+    screenName: 'Home',
+    source: 'cdp_navigate',
+  });
+  annotateMutationAbsence(envelope({}), {
+    client: android,
+    screenName: 'Home',
+    source: 'cdp_navigate',
+  });
   // iOS transitions to success → warns
-  const iosResult = annotateMutationAbsence(envelope({}), { client: ios, screenName: 'OrderSuccess', source: 'cdp_navigate' });
+  const iosResult = annotateMutationAbsence(envelope({}), {
+    client: ios,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+  });
   // Android stays on Home — same observation, no transition, no warning
-  const androidResult = annotateMutationAbsence(envelope({}), { client: android, screenName: 'Home', source: 'cdp_navigate' });
+  const androidResult = annotateMutationAbsence(envelope({}), {
+    client: android,
+    screenName: 'Home',
+    source: 'cdp_navigate',
+  });
   assert.ok(parse(iosResult).meta?.verification_warning);
   assert.equal(parse(androidResult).meta?.verification_warning, undefined);
 });
@@ -335,7 +405,11 @@ test('annotateMutationAbsence: preserves existing meta fields', async () => {
   annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
   // Observation with pre-existing meta
   const r = envelope({}, { recovered_via: 'force_reconnect' });
-  const result = annotateMutationAbsence(r, { client, screenName: 'OrderSuccess', source: 'cdp_navigate' });
+  const result = annotateMutationAbsence(r, {
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+  });
   const env = parse(result);
   assert.equal(env.meta.recovered_via, 'force_reconnect', 'pre-existing meta preserved');
   assert.equal(env.meta.verification_warning.code, 'MUTATION_ABSENCE');
@@ -348,7 +422,11 @@ test('annotateMutationAbsence: malformed envelope passes through unchanged', asy
   const malformed = { content: [{ type: 'text', text: 'not json' }] };
   // Prime + transition
   annotateMutationAbsence(envelope({}), { client, screenName: 'Home', source: 'cdp_navigate' });
-  const result = annotateMutationAbsence(malformed, { client, screenName: 'OrderSuccess', source: 'cdp_navigate' });
+  const result = annotateMutationAbsence(malformed, {
+    client,
+    screenName: 'OrderSuccess',
+    source: 'cdp_navigate',
+  });
   assert.equal(result, malformed);
 });
 
@@ -361,7 +439,10 @@ test('source guard: cdp_navigate handler invokes annotateMutationAbsence', async
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(join(__dirname, '../../dist/index.js'), 'utf-8');
   // The cdp_navigate inline handler must annotate.
-  assert.match(src, /annotateMutationAbsence\(okResult\(parsed\),\s*\{[\s\S]*?source:\s*['"]cdp_navigate['"]/);
+  assert.match(
+    src,
+    /annotateMutationAbsence\(okResult\(parsed\),\s*\{[\s\S]*?source:\s*['"]cdp_navigate['"]/,
+  );
 });
 
 test('source guard: cdp_navigation_state handler invokes annotateMutationAbsence', async () => {
@@ -427,12 +508,13 @@ test('override: mutationMethods extends recognized methods (QUERY silences warni
   _resetForTests();
   const now = 1_700_000_000_000;
   const client = makeMockClient({
-    entries: [
-      { method: 'QUERY', status: 200, timestamp: new Date(now - 1_000).toISOString() },
-    ],
+    entries: [{ method: 'QUERY', status: 200, timestamp: new Date(now - 1_000).toISOString() }],
   });
   annotateMutationAbsence(envelope({}), {
-    client, screenName: 'Home', source: 'cdp_navigate', now: () => now,
+    client,
+    screenName: 'Home',
+    source: 'cdp_navigate',
+    now: () => now,
   });
   const result = annotateMutationAbsence(envelope({}), {
     client,
@@ -451,12 +533,13 @@ test('override: mutationMethods narrowed set still fires warning when nothing ma
   _resetForTests();
   const now = 1_700_000_000_000;
   const client = makeMockClient({
-    entries: [
-      { method: 'POST', status: 200, timestamp: new Date(now - 1_000).toISOString() },
-    ],
+    entries: [{ method: 'POST', status: 200, timestamp: new Date(now - 1_000).toISOString() }],
   });
   annotateMutationAbsence(envelope({}), {
-    client, screenName: 'Home', source: 'cdp_navigate', now: () => now,
+    client,
+    screenName: 'Home',
+    source: 'cdp_navigate',
+    now: () => now,
   });
   // Override drops POST from the mutation set → POST is no longer a "real" mutation
   const result = annotateMutationAbsence(envelope({}), {

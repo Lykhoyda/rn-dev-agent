@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeReconnectDelay, interruptibleSleep, reconnect } from '../../dist/cdp/reconnection.js';
+import {
+  computeReconnectDelay,
+  interruptibleSleep,
+  reconnect,
+} from '../../dist/cdp/reconnection.js';
 
 // Minimal mock ReconnectContext — interruptibleSleep only touches isDisposed / isSoftReconnectRequested
 function makeMockCtx(overrides = {}) {
@@ -17,7 +21,9 @@ function makeMockCtx(overrides = {}) {
       // Unused by interruptibleSleep — stubs kept minimal
       isReconnecting: () => false,
       setReconnecting: () => {},
-      setSoftReconnectRequested: (v) => { state.softReconnectRequested = v; },
+      setSoftReconnectRequested: (v) => {
+        state.softReconnectRequested = v;
+      },
       setState: () => {},
       setReconnectAttempt: () => {},
       closeWs: () => {},
@@ -42,7 +48,11 @@ function makeMockCtx(overrides = {}) {
 
 test('computeReconnectDelay: attempt 0 returns 0 (hot-reload happy path, never jittered)', () => {
   assert.equal(computeReconnectDelay(0), 0);
-  assert.equal(computeReconnectDelay(0, { jitterMs: 10_000 }), 0, 'jitter does not apply to attempt 0');
+  assert.equal(
+    computeReconnectDelay(0, { jitterMs: 10_000 }),
+    0,
+    'jitter does not apply to attempt 0',
+  );
   assert.equal(computeReconnectDelay(-1), 0, 'negative attempts clamp to 0');
 });
 
@@ -137,7 +147,9 @@ test('interruptibleSleep: exits within one slice when softReconnect requested mi
   const { state, ctx } = makeMockCtx();
   const sliceMs = 100;
   // Flip the flag after 150ms — between slice 1 and slice 2 of a 1000ms sleep
-  setTimeout(() => { state.softReconnectRequested = true; }, 150);
+  setTimeout(() => {
+    state.softReconnectRequested = true;
+  }, 150);
 
   const start = Date.now();
   const completed = await interruptibleSleep(1000, ctx, sliceMs);
@@ -152,7 +164,9 @@ test('interruptibleSleep: exits within one slice when softReconnect requested mi
 test('interruptibleSleep: exits within one slice when disposed mid-sleep', async () => {
   const { state, ctx } = makeMockCtx();
   const sliceMs = 100;
-  setTimeout(() => { state.disposed = true; }, 150);
+  setTimeout(() => {
+    state.disposed = true;
+  }, 150);
 
   const start = Date.now();
   const completed = await interruptibleSleep(1000, ctx, sliceMs);
@@ -183,14 +197,19 @@ test('interruptibleSleep: honors D653 worst case — 30s sleep preempted within 
   // latency <= 500ms. We shrink the numbers to keep the test fast but preserve
   // the proportion (30s:500ms = 60:1).
   const { state, ctx } = makeMockCtx();
-  setTimeout(() => { state.softReconnectRequested = true; }, 40);
+  setTimeout(() => {
+    state.softReconnectRequested = true;
+  }, 40);
 
   const start = Date.now();
   const completed = await interruptibleSleep(3000, ctx, 50); // 60:1 ratio like prod
   const elapsed = Date.now() - start;
 
   assert.equal(completed, false, 'preempted');
-  assert.ok(elapsed < 150, `prod-equivalent preemption should be <500ms/prod scaled ~100ms test, got ${elapsed}`);
+  assert.ok(
+    elapsed < 150,
+    `prod-equivalent preemption should be <500ms/prod scaled ~100ms test, got ${elapsed}`,
+  );
 });
 
 test('computeReconnectDelay: cumulative delay over 30 attempts vs old linear (reduction proof)', () => {
@@ -238,10 +257,18 @@ function makeReconnectCtx({ succeedOnAttempt = 0, afterReconnect } = {}) {
     isDisposed: () => state.disposed,
     isSoftReconnectRequested: () => state.softReconnectRequested,
     isReconnecting: () => state.reconnecting,
-    setReconnecting: (v) => { state.reconnecting = v; },
-    setSoftReconnectRequested: (v) => { state.softReconnectRequested = v; },
-    setState: (s) => { state.state = s; },
-    setReconnectAttempt: (count, ts) => { state.attempts.push({ count, ts }); },
+    setReconnecting: (v) => {
+      state.reconnecting = v;
+    },
+    setSoftReconnectRequested: (v) => {
+      state.softReconnectRequested = v;
+    },
+    setState: (s) => {
+      state.state = s;
+    },
+    setReconnectAttempt: (count, ts) => {
+      state.attempts.push({ count, ts });
+    },
     closeWs: () => {},
     rejectAllPending: () => {},
     discoverAndConnect: async () => {
@@ -258,7 +285,10 @@ function makeReconnectCtx({ succeedOnAttempt = 0, afterReconnect } = {}) {
     getBgPollTimer: () => null,
     isConnected: () => false,
     afterReconnect: afterReconnect
-      ? async () => { state.afterReconnectCalls++; await afterReconnect(); }
+      ? async () => {
+          state.afterReconnectCalls++;
+          await afterReconnect();
+        }
       : undefined,
   };
   return { state, ctx };
@@ -267,8 +297,10 @@ function makeReconnectCtx({ succeedOnAttempt = 0, afterReconnect } = {}) {
 test('B132: reconnect() calls afterReconnect exactly once after successful attempt', async () => {
   let hookCalls = 0;
   const { state, ctx } = makeReconnectCtx({
-    succeedOnAttempt: 0,  // first attempt succeeds — no backoff waits
-    afterReconnect: async () => { hookCalls++; },
+    succeedOnAttempt: 0, // first attempt succeeds — no backoff waits
+    afterReconnect: async () => {
+      hookCalls++;
+    },
   });
 
   await reconnect(ctx);
@@ -291,7 +323,9 @@ test('B132: reconnect() does NOT call afterReconnect when callback is not provid
 test('B132: afterReconnect failure is caught + logged, never propagates (reconnect success preserved)', async () => {
   const { state, ctx } = makeReconnectCtx({
     succeedOnAttempt: 0,
-    afterReconnect: async () => { throw new Error('hook boom'); },
+    afterReconnect: async () => {
+      throw new Error('hook boom');
+    },
   });
 
   // reconnect() must still resolve cleanly — hook failure cannot undo a successful reconnect.

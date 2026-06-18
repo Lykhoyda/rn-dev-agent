@@ -285,7 +285,9 @@ function connectWs(ctx, url) {
             try {
                 ws.terminate();
             }
-            catch { /* already gone */ }
+            catch {
+                /* already gone */
+            }
             reject(new Error('WebSocket connect timed out'));
         }, 7000);
         ws.on('open', () => {
@@ -302,7 +304,9 @@ function connectWs(ctx, url) {
                 try {
                     ws.terminate();
                 }
-                catch { /* already closing */ }
+                catch {
+                    /* already closing */
+                }
                 reject(err);
             }
             else {

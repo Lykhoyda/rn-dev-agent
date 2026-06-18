@@ -1,6 +1,8 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 let sessionReloadCount = 0;
-export function getSessionReloadCount() { return sessionReloadCount; }
+export function getSessionReloadCount() {
+    return sessionReloadCount;
+}
 const SOFT_RECONNECT_DEADLINE_MS = 30_000;
 const SOFT_RECONNECT_ATTEMPTS = 5;
 const FORCE_FALLBACK_TIMEOUT_MS = 10_000;
@@ -78,7 +80,7 @@ export function createReloadHandler(getClient, setClient, createClient) {
         }
         const wsDownDeadline = Date.now() + 3_000;
         while (client.isConnected && Date.now() < wsDownDeadline) {
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 200));
         }
         let reconnected = false;
         let lastReconnErr = '';
@@ -104,7 +106,7 @@ export function createReloadHandler(getClient, setClient, createClient) {
             catch (reconnErr) {
                 lastReconnErr = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
                 if (attempt < SOFT_RECONNECT_ATTEMPTS - 1) {
-                    await new Promise(r => setTimeout(r, 2000 + attempt * 1000));
+                    await new Promise((r) => setTimeout(r, 2000 + attempt * 1000));
                 }
             }
             finally {
@@ -145,10 +147,15 @@ export function createReloadHandler(getClient, setClient, createClient) {
         }
         const helperDeadline = Date.now() + 12_000;
         while (!client.helpersInjected && Date.now() < helperDeadline) {
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, 400));
         }
         if (!client.isConnected) {
-            return okResult({ reloaded: true, type: 'full', reconnected: false }, { meta: { warning: 'Reload triggered but connection dropped after re-discovery.', ...forceMeta } });
+            return okResult({ reloaded: true, type: 'full', reconnected: false }, {
+                meta: {
+                    warning: 'Reload triggered but connection dropped after re-discovery.',
+                    ...forceMeta,
+                },
+            });
         }
         if (!client.helpersInjected) {
             const injected = await client.reinjectHelpers(10_000);

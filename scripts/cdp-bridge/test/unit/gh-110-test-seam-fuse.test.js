@@ -110,7 +110,11 @@ test('fuse: error message includes GH #110 reference and remediation hint', () =
     }
     if (!threw) throw new Error('expected fuse to throw on re-arm');
   `);
-  assert.match(stdout, /GOOD_ERROR[\s\S]*SCENARIO_OK/, `expected GOOD_ERROR then SCENARIO_OK\nstdout: ${stdout}\nstderr: ${stderr}\nstatus: ${status}`);
+  assert.match(
+    stdout,
+    /GOOD_ERROR[\s\S]*SCENARIO_OK/,
+    `expected GOOD_ERROR then SCENARIO_OK\nstdout: ${stdout}\nstderr: ${stderr}\nstatus: ${status}`,
+  );
 });
 
 test('fuse: setting null to clear override does not block when fuse has NOT blown', () => {

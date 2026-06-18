@@ -45,22 +45,38 @@ async function collectJsConsole(
     if (result.error || typeof result.value !== 'string') return [];
 
     let parsed: unknown;
-    try { parsed = JSON.parse(result.value); } catch { return []; }
+    try {
+      parsed = JSON.parse(result.value);
+    } catch {
+      return [];
+    }
 
-    let raw: Array<{ level?: string; text?: string; message?: string; timestamp?: string | number }>;
+    let raw: Array<{
+      level?: string;
+      text?: string;
+      message?: string;
+      timestamp?: string | number;
+    }>;
     if (Array.isArray(parsed)) {
       raw = parsed;
-    } else if (parsed && typeof parsed === 'object' && 'entries' in parsed && Array.isArray((parsed as { entries: unknown[] }).entries)) {
+    } else if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'entries' in parsed &&
+      Array.isArray((parsed as { entries: unknown[] }).entries)
+    ) {
       raw = (parsed as { entries: typeof raw }).entries;
     } else {
       return [];
     }
 
-    return raw.map(e => ({
+    return raw.map((e) => ({
       source: 'js_console' as const,
       level: e.level ?? 'log',
       text: e.message ?? e.text ?? '',
-      timestamp: normalizeTimestamp(typeof e.timestamp === 'number' ? new Date(e.timestamp).toISOString() : e.timestamp),
+      timestamp: normalizeTimestamp(
+        typeof e.timestamp === 'number' ? new Date(e.timestamp).toISOString() : e.timestamp,
+      ),
     }));
   } catch {
     return [];
@@ -80,11 +96,11 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
 
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn('xcrun', [
-        'simctl', 'spawn', 'booted', 'log', 'stream',
-        '--style', 'ndjson',
-        '--level', 'debug',
-      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      proc = spawn(
+        'xcrun',
+        ['simctl', 'spawn', 'booted', 'log', 'stream', '--style', 'ndjson', '--level', 'debug'],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
     } catch (err) {
       reject(err instanceof Error ? err : new Error('Failed to spawn xcrun'));
       return;
@@ -101,10 +117,16 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
     };
     const timeout = setTimeout(kill, killMs);
 
-    const onAbort = () => { clearTimeout(timeout); kill(); };
+    const onAbort = () => {
+      clearTimeout(timeout);
+      kill();
+    };
     signal.addEventListener('abort', onAbort, { once: true });
 
-    if (signal.aborted) { clearTimeout(timeout); kill(); }
+    if (signal.aborted) {
+      clearTimeout(timeout);
+      kill();
+    }
 
     let stderrBuf = '';
     proc.stderr!.on('data', (chunk: Buffer) => {
@@ -148,7 +170,11 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
       if (sigkillTimer) clearTimeout(sigkillTimer);
       signal.removeEventListener('abort', onAbort);
       killed = true;
-      try { proc.kill('SIGKILL'); } catch { /* process may not exist */ }
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* process may not exist */
+      }
       reject(err);
     });
   });
@@ -161,7 +187,11 @@ function parseIosNdjson(line: string): LogEntry | null {
     const ts = normalizeTimestamp(typeof obj.timestamp === 'string' ? obj.timestamp : undefined);
     const messageType = String(obj.messageType ?? 'Default');
     const levelMap: Record<string, string> = {
-      Default: 'log', Info: 'info', Debug: 'debug', Error: 'error', Fault: 'error',
+      Default: 'log',
+      Info: 'info',
+      Debug: 'debug',
+      Error: 'error',
+      Fault: 'error',
     };
     return {
       source: 'native_ios',
@@ -187,10 +217,22 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
 
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn('adb', [
-        'logcat', '-v', 'threadtime', '-T', '1',
-        '-s', 'ReactNative:V', 'ReactNativeJS:V', 'AndroidRuntime:E', 'DEBUG:V',
-      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      proc = spawn(
+        'adb',
+        [
+          'logcat',
+          '-v',
+          'threadtime',
+          '-T',
+          '1',
+          '-s',
+          'ReactNative:V',
+          'ReactNativeJS:V',
+          'AndroidRuntime:E',
+          'DEBUG:V',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
     } catch (err) {
       reject(err instanceof Error ? err : new Error('Failed to spawn adb'));
       return;
@@ -206,10 +248,16 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
     };
     const timeout = setTimeout(kill, killMs);
 
-    const onAbort = () => { clearTimeout(timeout); kill(); };
+    const onAbort = () => {
+      clearTimeout(timeout);
+      kill();
+    };
     signal.addEventListener('abort', onAbort, { once: true });
 
-    if (signal.aborted) { clearTimeout(timeout); kill(); }
+    if (signal.aborted) {
+      clearTimeout(timeout);
+      kill();
+    }
 
     let stderrBuf = '';
     proc.stderr!.on('data', (chunk: Buffer) => {
@@ -253,16 +301,27 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
       if (sigkillTimer) clearTimeout(sigkillTimer);
       signal.removeEventListener('abort', onAbort);
       killed = true;
-      try { proc.kill('SIGKILL'); } catch { /* process may not exist */ }
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* process may not exist */
+      }
       reject(err);
     });
   });
 }
 
-const LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
+const LOGCAT_RE =
+  /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
 
 const ANDROID_LEVEL_MAP: Record<string, string> = {
-  V: 'debug', D: 'debug', I: 'info', W: 'warn', E: 'error', F: 'error', S: 'log',
+  V: 'debug',
+  D: 'debug',
+  I: 'info',
+  W: 'warn',
+  E: 'error',
+  F: 'error',
+  S: 'log',
 };
 
 export function parseLogcatLine(line: string, year: number): LogEntry | null {
@@ -315,30 +374,39 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
                 promise: collectJsConsole(client, args.logLevel ?? 'all', 200),
               });
             } else if (client.isConnected) {
-              errors.js_console = 'CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.';
+              errors.js_console =
+                'CDP connected but helpers not ready — app may still be loading. Retry in a few seconds.';
             } else {
               errors.js_console = 'CDP not connected — skipped. Call cdp_status first to connect.';
             }
             break;
           }
           case 'native_ios':
-            promises.push({ source, promise: collectNativeIos(args.durationMs, controller.signal) });
+            promises.push({
+              source,
+              promise: collectNativeIos(args.durationMs, controller.signal),
+            });
             break;
           case 'native_android':
-            promises.push({ source, promise: collectNativeAndroid(args.durationMs, controller.signal) });
+            promises.push({
+              source,
+              promise: collectNativeAndroid(args.durationMs, controller.signal),
+            });
             break;
         }
       }
 
       if (promises.length === 0) {
         if (Object.keys(errors).length > 0) {
-          const msg = Object.entries(errors).map(([s, e]) => `${s}: ${e}`).join('; ');
+          const msg = Object.entries(errors)
+            .map(([s, e]) => `${s}: ${e}`)
+            .join('; ');
           return failResult(`All sources unavailable: ${msg}`);
         }
         return failResult('No valid sources specified');
       }
 
-      const settled = await Promise.allSettled(promises.map(p => p.promise));
+      const settled = await Promise.allSettled(promises.map((p) => p.promise));
 
       let allEntries: LogEntry[] = [];
       for (let i = 0; i < settled.length; i++) {
@@ -347,13 +415,14 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
           allEntries.push(...result.value);
         } else {
           const src = promises[i].source;
-          errors[src] = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          errors[src] =
+            result.reason instanceof Error ? result.reason.message : String(result.reason);
         }
       }
 
       allEntries = allEntries
-        .filter(e => matchesFilters(e, args.filter, args.logLevel))
-        .sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
+        .filter((e) => matchesFilters(e, args.filter, args.logLevel))
+        .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
 
       const totalBeforeLimit = allEntries.length;
       if (allEntries.length > args.limit) {
@@ -371,7 +440,9 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
 
       const hasErrors = Object.keys(errors).length > 0;
       if (hasErrors && allEntries.length === 0) {
-        const msg = Object.entries(errors).map(([s, e]) => `${s}: ${e}`).join('; ');
+        const msg = Object.entries(errors)
+          .map(([s, e]) => `${s}: ${e}`)
+          .join('; ');
         return failResult(`All collectors failed: ${msg}`);
       }
       if (hasErrors) {

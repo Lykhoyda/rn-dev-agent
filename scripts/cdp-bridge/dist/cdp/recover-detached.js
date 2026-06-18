@@ -110,9 +110,9 @@ async function recoverDetachedInner(client, deps = {}) {
     };
     // GH #262: a previously CONFIRMED missing bundle short-circuits the whole
     // attempt — but a cheap re-probe first, so a user reinstall self-heals.
-    if (confirmedNotInstalled
-        && confirmedNotInstalled.udid === udid
-        && confirmedNotInstalled.appId === appId) {
+    if (confirmedNotInstalled &&
+        confirmedNotInstalled.udid === udid &&
+        confirmedNotInstalled.appId === appId) {
         const verdict = await isAppInstalled(udid, appId);
         if (verdict === false) {
             const snapshotHint = buildHint();
@@ -191,10 +191,17 @@ async function recoverDetachedInner(client, deps = {}) {
     try {
         await reconnect();
     }
-    catch { /* best-effort; the liveness probe is the verdict */ }
+    catch {
+        /* best-effort; the liveness probe is the verdict */
+    }
     if (await probeAlive()) {
         attempts = 0; // success bounds CONSECUTIVE detaches, not lifetime
         return { recovered: true, reason: 'recovered', attempt };
     }
-    return { recovered: false, reason: 'still-detached', attempt, ...(relaunchError ? { error: relaunchError } : {}) };
+    return {
+        recovered: false,
+        reason: 'still-detached',
+        attempt,
+        ...(relaunchError ? { error: relaunchError } : {}),
+    };
 }

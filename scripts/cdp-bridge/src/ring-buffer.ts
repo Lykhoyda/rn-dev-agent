@@ -12,7 +12,7 @@ export class RingBuffer<T, K = unknown> {
 
   constructor(capacity: number, options?: RingBufferOptions<T, K>) {
     this.capacity = capacity;
-    this.buffer = new Array(capacity);
+    this.buffer = Array.from({ length: capacity });
     this.indexKey = options?.indexKey;
     this.index = options?.indexKey ? new Map() : null;
   }
@@ -64,7 +64,7 @@ export class RingBuffer<T, K = unknown> {
   }
 
   clear(): void {
-    this.buffer = new Array(this.capacity);
+    this.buffer = Array.from({ length: this.capacity });
     this.cursor = 0;
     this.count = 0;
     this.index?.clear();
@@ -82,7 +82,10 @@ export const NO_DEVICE_KEY = 'noport-notarget';
  * Falls back to a sentinel string when either is null, so events captured before
  * a target is selected still have a valid bucket.
  */
-export function makeDeviceKey(port: number | null | undefined, targetId: string | null | undefined): string {
+export function makeDeviceKey(
+  port: number | null | undefined,
+  targetId: string | null | undefined,
+): string {
   return `${port ?? 'noport'}-${targetId ?? 'notarget'}`;
 }
 
@@ -135,7 +138,10 @@ export class DeviceBufferManager<T, K = unknown> {
       if (this.buffers.size >= this.opts.maxDevices) {
         this.evictOldest();
       }
-      buf = new RingBuffer<T, K>(this.opts.capacityPerDevice, this.opts.indexKey ? { indexKey: this.opts.indexKey } : undefined);
+      buf = new RingBuffer<T, K>(
+        this.opts.capacityPerDevice,
+        this.opts.indexKey ? { indexKey: this.opts.indexKey } : undefined,
+      );
       this.buffers.set(deviceKey, buf);
     }
     buf.push(item);

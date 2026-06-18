@@ -28,7 +28,8 @@ test('parsePortPatternEntry: matches hostname with port', async () => {
 
 test('parsePortPatternEntry: extracts entry from a noisy snapshot blob', async () => {
   const { parsePortPatternEntry } = await import(MOD_PATH);
-  const snapshot = 'Development servers\nrn-dev-agent-test-app\n192.168.1.5:8081\nEnter URL manually';
+  const snapshot =
+    'Development servers\nrn-dev-agent-test-app\n192.168.1.5:8081\nEnter URL manually';
   assert.equal(parsePortPatternEntry(snapshot), '192.168.1.5:8081');
 });
 
@@ -160,7 +161,8 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
       pickerCheckCalls++;
       // First call: pre-tap auto-advance probe — picker still showing.
       // Subsequent: waitForBundle — picker is gone after tap.
-      if (pickerCheckCalls === 1) return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+      if (pickerCheckCalls === 1)
+        return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
       return { ok: true, candidates: [] };
     }
     if (text === '192.168.1.5:8081') {
@@ -169,7 +171,9 @@ test('dismissPicker: taps host:port row when picker shows LAN IP', async () => {
     return { ok: true, candidates: [] };
   });
   _setPressCandidateForTest(async (_candidate, _action) => {
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { pressed: true } }) }] };
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { pressed: true } }) }],
+    };
   });
   try {
     const result = await dismissPicker();
@@ -226,7 +230,9 @@ test('dismissPicker: returns dismissed:false with helpful reason when nothing ma
 // ── waitForBundle: cadence — fast-then-slow polling ──────────────────
 
 test('waitForBundle: returns within 500ms when picker dismissed quickly', async () => {
-  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(MOD_PATH);
+  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(
+    MOD_PATH
+  );
   let calls = 0;
   _setFetchCandidatesForTest(async (_text) => {
     calls++;
@@ -238,7 +244,10 @@ test('waitForBundle: returns within 500ms when picker dismissed quickly', async 
     const start = Date.now();
     await waitForBundle();
     const elapsed = Date.now() - start;
-    assert.ok(elapsed < 500, `waitForBundle should complete fast in single-server case; took ${elapsed}ms`);
+    assert.ok(
+      elapsed < 500,
+      `waitForBundle should complete fast in single-server case; took ${elapsed}ms`,
+    );
     assert.ok(calls >= 2, `waitForBundle should poll at least twice; saw ${calls} calls`);
   } finally {
     _resetFetchCandidatesForTest();
@@ -246,9 +255,14 @@ test('waitForBundle: returns within 500ms when picker dismissed quickly', async 
 });
 
 test('waitForBundle: bounded by ~10s wall-clock budget', async () => {
-  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(MOD_PATH);
+  const { _setFetchCandidatesForTest, _resetFetchCandidatesForTest, waitForBundle } = await import(
+    MOD_PATH
+  );
   // Always-loading mock: picker text always present.
-  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] }));
+  _setFetchCandidatesForTest(async () => ({
+    ok: true,
+    candidates: [{ ref: 'e1', label: 'Development servers' }],
+  }));
   try {
     const start = Date.now();
     await waitForBundle();
@@ -283,7 +297,8 @@ test('handleDevClientPicker: returns success without tap when picker auto-advanc
       detectCalls++;
       // First call: picker visible (handleDevClientPicker proceeds to dismissPicker).
       // Second call (re-check inside dismissPicker.isDevClientPickerShowing): picker gone.
-      if (detectCalls === 1) return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
+      if (detectCalls === 1)
+        return { ok: true, candidates: [{ ref: 'e1', label: 'Development servers' }] };
       return { ok: true, candidates: [] };
     }
     return { ok: true, candidates: [] };

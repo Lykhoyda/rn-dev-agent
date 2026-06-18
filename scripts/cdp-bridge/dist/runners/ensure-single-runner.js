@@ -41,7 +41,10 @@ export async function eradicateLegacyRunnerApps(udid, deps) {
     // A booted simulator always carries built-in system apps; zero parsed ids
     // means the listapps format changed (parse failure), not a clean device.
     if (installed.size === 0) {
-        return { removedApps, warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`] };
+        return {
+            removedApps,
+            warnings: [`listapps parsed 0 apps — treating as parse failure, not a clean device`],
+        };
     }
     for (const id of selectInstalledLegacyApps(installed)) {
         try {
@@ -111,9 +114,17 @@ function defaultDeps() {
         fileExists: (path) => existsSync(path),
         removeFile: (path) => unlinkSync(path),
         delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        listApps: (udid) => execFileSync('xcrun', ['simctl', 'listapps', udid], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] }),
+        listApps: (udid) => execFileSync('xcrun', ['simctl', 'listapps', udid], {
+            encoding: 'utf8',
+            timeout: 5_000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+        }),
         uninstallApp: (udid, bundleId) => {
-            execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+            execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], {
+                encoding: 'utf8',
+                timeout: 10_000,
+                stdio: ['ignore', 'pipe', 'ignore'],
+            });
         },
     };
 }

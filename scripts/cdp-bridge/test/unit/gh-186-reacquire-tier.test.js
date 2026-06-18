@@ -12,19 +12,35 @@ const SENTINEL = [{ label: 'AgentDeviceRunner' }]; // isAgentDeviceRunnerSentine
 const APP = [{ label: 'Home', identifier: 'home' }]; // → false
 
 const ok = () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] });
-const snap = (nodes) => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { nodes } }) }], __nodes: nodes });
+const snap = (nodes) => ({
+  content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { nodes } }) }],
+  __nodes: nodes,
+});
 
 function makeDeps(snapshotQueue, { withReacquire = true } = {}) {
   const calls = [];
   let i = 0;
   const deps = {
-    closeSession: async () => { calls.push('close'); return ok(); },
-    openSession: async (a) => { calls.push(a.attachOnly ? 'open:attach' : 'open:relaunch'); return ok(); },
-    resnapshot: async () => { calls.push('resnap'); return snap(snapshotQueue[i++] ?? SENTINEL); },
+    closeSession: async () => {
+      calls.push('close');
+      return ok();
+    },
+    openSession: async (a) => {
+      calls.push(a.attachOnly ? 'open:attach' : 'open:relaunch');
+      return ok();
+    },
+    resnapshot: async () => {
+      calls.push('resnap');
+      return snap(snapshotQueue[i++] ?? SENTINEL);
+    },
     parseNodes: (r) => r.__nodes ?? null,
     sleep: async () => {},
   };
-  if (withReacquire) deps.reacquire = async () => { calls.push('reacquire'); return ok(); };
+  if (withReacquire)
+    deps.reacquire = async () => {
+      calls.push('reacquire');
+      return ok();
+    };
   return { calls, deps };
 }
 
@@ -34,7 +50,10 @@ test('reacquire tier clears the sentinel WITHOUT any relaunch/attach', async () 
   assert.equal(out.recovered, true);
   assert.equal(out.tier, 'reacquire');
   assert.ok(calls.includes('reacquire'), 'tried reacquire');
-  assert.ok(!calls.some((c) => c.startsWith('open:')), 'no openSession — app state preserved, no 44s relaunch');
+  assert.ok(
+    !calls.some((c) => c.startsWith('open:')),
+    'no openSession — app state preserved, no 44s relaunch',
+  );
 });
 
 test('falls through reacquire → attachOnly → full-relaunch when reacquire does not clear the sentinel', async () => {

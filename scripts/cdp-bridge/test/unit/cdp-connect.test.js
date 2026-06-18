@@ -19,11 +19,19 @@ function createMockContext({ initialFilters = {}, port = 8081 } = {}) {
     isReconnecting: () => false,
     isSoftReconnectRequested: () => false,
     getState: () => state.currentState,
-    setState: (s) => { state.currentState = s; state.setStateCalls.push(s); },
+    setState: (s) => {
+      state.currentState = s;
+      state.setStateCalls.push(s);
+    },
     getPort: () => state.port,
-    setPort: (v) => { state.port = v; },
+    setPort: (v) => {
+      state.port = v;
+    },
     getConnectFilters: () => state.connectFilters,
-    setConnectFilters: (v) => { state.connectFilters = v; state.setConnectFiltersCalled = true; },
+    setConnectFilters: (v) => {
+      state.connectFilters = v;
+      state.setConnectFiltersCalled = true;
+    },
     getWs: () => null,
     setWs: () => {},
     setHelpersInjected: () => {},
@@ -57,7 +65,10 @@ test('discoverAndConnect: throws with selectionWarning when discover returns [] 
   );
   // State must be left clean for the reconnect loop / caller error handling
   assert.equal(state.currentState, 'disconnected');
-  assert.ok(state.setStateCalls.includes('disconnected'), 'setState("disconnected") must be called before throw');
+  assert.ok(
+    state.setStateCalls.includes('disconnected'),
+    'setState("disconnected") must be called before throw',
+  );
 });
 
 test('discoverAndConnect: throws with default message when discover returns [] without warning (B111/D643/G9)', async () => {

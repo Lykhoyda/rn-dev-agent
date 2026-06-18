@@ -87,7 +87,10 @@ test('M11 network_log: no hint when requests present', async () => {
   });
   // Push a fake request so buffer is non-empty
   client.networkBufferManager.push(client.activeDeviceKey, {
-    id: 'req1', url: 'https://example.com', method: 'GET', timestamp: new Date().toISOString(),
+    id: 'req1',
+    url: 'https://example.com',
+    method: 'GET',
+    timestamp: new Date().toISOString(),
   });
   const handler = createNetworkLogHandler(() => client);
   const result = await handler({ limit: 20, clear: false });
@@ -104,15 +107,20 @@ test('M11 network_log: no hint when empty but recent push (lastEventAt within wi
   // Push then clear — so buffer is empty but lastPush is recent (Date.now() at push)
   // Mock the manager's internal lastPush by pushing then directly overwriting.
   client.networkBufferManager.push(client.activeDeviceKey, {
-    id: 'req1', url: 'https://ex.com', method: 'GET', timestamp: new Date().toISOString(),
+    id: 'req1',
+    url: 'https://ex.com',
+    method: 'GET',
+    timestamp: new Date().toISOString(),
   });
   client.networkBufferManager.clear(client.activeDeviceKey);
   // After clear, the buffer is empty BUT the manager's lastPush map may still hold an entry.
   // The test's real purpose: if getLastPush returns undefined after clear, hint-fire depends
   // on connectedAt alone; if it returns a ts, hint-fire depends on max(connectedAt, lastPush).
   // Explicitly simulate "recent event observed" by spying on getLastPush.
-  const originalGetLastPush = client.networkBufferManager.getLastPush.bind(client.networkBufferManager);
-  client.networkBufferManager.getLastPush = (key) => {
+  const originalGetLastPush = client.networkBufferManager.getLastPush.bind(
+    client.networkBufferManager,
+  );
+  client.networkBufferManager.getLastPush = (_key) => {
     // Override: pretend we saw an event recently (now - 5s)
     return 1_000_000 + 115_000;
   };

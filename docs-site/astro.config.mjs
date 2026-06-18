@@ -7,16 +7,33 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'rn-dev-agent',
-      description: 'Claude Code plugin for React Native development — 74 MCP tools, 5 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
+      description:
+        'Claude Code plugin for React Native development — 74 MCP tools, 5 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/Lykhoyda/rn-dev-agent' },
       ],
       head: [
-        { tag: 'meta', attrs: { name: 'keywords', content: 'react native, claude code, plugin, mcp, chrome devtools protocol, expo, ios simulator, android emulator, ai testing, mobile development' } },
-        { tag: 'meta', attrs: { property: 'og:image', content: 'https://lykhoyda.github.io/rn-dev-agent/og-image.png' } },
+        {
+          tag: 'meta',
+          attrs: {
+            name: 'keywords',
+            content:
+              'react native, claude code, plugin, mcp, chrome devtools protocol, expo, ios simulator, android emulator, ai testing, mobile development',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:image',
+            content: 'https://lykhoyda.github.io/rn-dev-agent/og-image.png',
+          },
+        },
         { tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
         { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
-        { tag: 'link', attrs: { rel: 'canonical', href: 'https://lykhoyda.github.io/rn-dev-agent/' } },
+        {
+          tag: 'link',
+          attrs: { rel: 'canonical', href: 'https://lykhoyda.github.io/rn-dev-agent/' },
+        },
         {
           tag: 'script',
           attrs: { type: 'application/ld+json' },
@@ -24,11 +41,16 @@ export default defineConfig({
             '@context': 'https://schema.org',
             '@type': 'SoftwareApplication',
             name: 'rn-dev-agent',
-            description: 'Claude Code plugin for React Native development with 74 MCP tools for live app verification via Chrome DevTools Protocol.',
+            description:
+              'Claude Code plugin for React Native development with 74 MCP tools for live app verification via Chrome DevTools Protocol.',
             applicationCategory: 'DeveloperApplication',
             operatingSystem: 'macOS, Linux',
             url: 'https://lykhoyda.github.io/rn-dev-agent/',
-            author: { '@type': 'Person', name: 'Anton Lykhoyda', url: 'https://github.com/Lykhoyda' },
+            author: {
+              '@type': 'Person',
+              name: 'Anton Lykhoyda',
+              url: 'https://github.com/Lykhoyda',
+            },
             offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
           }),
         },

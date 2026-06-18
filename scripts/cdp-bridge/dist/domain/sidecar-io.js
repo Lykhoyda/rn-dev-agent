@@ -6,7 +6,7 @@
 // error rather than crashing downstream consumers.
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { freshRuntimeState, } from './reusable-action.js';
+import { freshRuntimeState } from './reusable-action.js';
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath) {
     // <project>/.rn-agent/actions/<id>.yaml → <project>/.rn-agent/state/<id>.state.json
@@ -72,7 +72,9 @@ export function loadOrInitSidecar(yamlFilePath, now = () => new Date()) {
     try {
         mtimeMs = statSync(yamlFilePath).mtimeMs;
     }
-    catch { /* ignore */ }
+    catch {
+        /* ignore */
+    }
     return freshRuntimeState(now, mtimeMs);
 }
 /**

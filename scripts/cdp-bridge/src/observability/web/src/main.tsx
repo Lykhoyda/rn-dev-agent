@@ -82,7 +82,9 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const merge = (incoming: AgentEvent[]): void => {
-      const fresh = incoming.filter((e) => e && typeof e.seq === 'number' && e.seq > maxSeqRef.current);
+      const fresh = incoming.filter(
+        (e) => e && typeof e.seq === 'number' && e.seq > maxSeqRef.current,
+      );
       if (fresh.length === 0) return;
       for (const e of fresh) if (e.seq > maxSeqRef.current) maxSeqRef.current = e.seq;
       setEvents((prev) => {
@@ -101,11 +103,18 @@ function App(): JSX.Element {
       } catch {
         return;
       }
-      const type = (parsed && typeof parsed === 'object') ? (parsed as { type?: string }).type : undefined;
+      const type =
+        parsed && typeof parsed === 'object' ? (parsed as { type?: string }).type : undefined;
       // The server sends this right before it stops. Close the EventSource so
       // the browser does NOT auto-reconnect (which would hammer the dead port,
       // or silently reattach to a different session reusing the same port).
-      if (type === 'shutdown') { es.close(); setConn('error'); setLiveShotSeq(null); setLiveRoute(null); return; }
+      if (type === 'shutdown') {
+        es.close();
+        setConn('error');
+        setLiveShotSeq(null);
+        setLiveRoute(null);
+        return;
+      }
       if (type === 'live') {
         const p = parsed as { shotSeq?: number; route?: string };
         if (typeof p.shotSeq === 'number') setLiveShotSeq(p.shotSeq);
@@ -113,7 +122,7 @@ function App(): JSX.Element {
         return;
       }
       if (type === 'snapshot') {
-        merge(((parsed as { events?: AgentEvent[] }).events) ?? []);
+        merge((parsed as { events?: AgentEvent[] }).events ?? []);
       } else {
         merge([parsed as AgentEvent]);
       }
@@ -134,12 +143,15 @@ function App(): JSX.Element {
     [events],
   );
 
-  const navEv = latestByTool(events, ['cdp_navigation_state']) ?? latestByFamily(events, 'navigation');
+  const navEv =
+    latestByTool(events, ['cdp_navigation_state']) ?? latestByFamily(events, 'navigation');
   const storeEv = latestByTool(events, ['cdp_store_state']);
   const treeEv = latestByTool(events, ['cdp_component_tree']);
   const shotEv = useMemo(
     () =>
-      [...events].reverse().find((e) => e.family === 'introspection' && e.tool === 'device_screenshot'),
+      [...events]
+        .reverse()
+        .find((e) => e.family === 'introspection' && e.tool === 'device_screenshot'),
     [events],
   );
   const route = routeOf(navEv);

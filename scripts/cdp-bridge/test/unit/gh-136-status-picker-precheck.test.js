@@ -53,9 +53,17 @@ test('cdp_status: picker probe runs BEFORE autoConnect when not connected', asyn
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
   try {
-    const handler = createStatusHandler(() => client, () => {}, () => client);
+    const handler = createStatusHandler(
+      () => client,
+      () => {},
+      () => client,
+    );
     expectOk(await handler({}));
-    assert.deepEqual(events, ['pickerProbe', 'autoConnect'], `events out of order: ${JSON.stringify(events)}`);
+    assert.deepEqual(
+      events,
+      ['pickerProbe', 'autoConnect'],
+      `events out of order: ${JSON.stringify(events)}`,
+    );
   } finally {
     _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
@@ -78,7 +86,11 @@ test('cdp_status: picker probe is skipped when already connected', async () => {
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
   try {
-    const handler = createStatusHandler(() => client, () => {}, () => client);
+    const handler = createStatusHandler(
+      () => client,
+      () => {},
+      () => client,
+    );
     expectOk(await handler({}));
     assert.equal(pickerProbed, false, 'connected client should NOT trigger picker probe');
   } finally {

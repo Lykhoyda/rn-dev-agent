@@ -14,17 +14,20 @@ const RUN_ACTION_PATH = '../../dist/tools/run-action.js';
 function makeProject() {
   const root = mkdtempSync(join(tmpdir(), 'gh119-'));
   mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
-  writeFileSync(join(root, '.rn-agent', 'actions', 'sample.yaml'), [
-    'appId: com.test.app',
-    '---',
-    '# id: sample',
-    '# intent: a sample',
-    '# status: experimental',
-    '# mutates: false',
-    '- launchApp',
-    '- tapOn:',
-    '    id: "btn-A"',
-  ].join('\n'));
+  writeFileSync(
+    join(root, '.rn-agent', 'actions', 'sample.yaml'),
+    [
+      'appId: com.test.app',
+      '---',
+      '# id: sample',
+      '# intent: a sample',
+      '# status: experimental',
+      '# mutates: false',
+      '- launchApp',
+      '- tapOn:',
+      '    id: "btn-A"',
+    ].join('\n'),
+  );
   return root;
 }
 
@@ -40,30 +43,48 @@ test('AutoRepairOutcome.nextFailedSelector populated when retry fails on a diffe
     mCount++;
     if (mCount === 1) {
       return {
-        content: [{ type: 'text', text: JSON.stringify({
-          ok: true,
-          data: { passed: false, output: '== Element with id "btn-A" not found ==' },
-        }) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { passed: false, output: '== Element with id "btn-A" not found ==' },
+            }),
+          },
+        ],
       };
     }
     // Retry: also fails, but on a different selector
     return {
-      content: [{ type: 'text', text: JSON.stringify({
-        ok: true,
-        data: { passed: false, output: '== Element with id "btn-B" not found ==' },
-      }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            data: { passed: false, output: '== Element with id "btn-B" not found ==' },
+          }),
+        },
+      ],
     };
   });
 
   const fakeRepairAction = mock.fn(async () => ({
-    content: [{ type: 'text', text: JSON.stringify({
-      ok: true,
-      data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new', score: 0.9 },
-      meta: { repairTimestamp: new Date().toISOString() },
-    }) }],
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok: true,
+          data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new', score: 0.9 },
+          meta: { repairTimestamp: new Date().toISOString() },
+        }),
+      },
+    ],
   }));
 
-  const handler = createRunActionHandler({ maestroRun: fakeMaestroRun, repairAction: fakeRepairAction });
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun,
+    repairAction: fakeRepairAction,
+  });
   const result = await handler({
     actionId: 'sample',
     projectRoot: root,
@@ -76,11 +97,17 @@ test('AutoRepairOutcome.nextFailedSelector populated when retry fails on a diffe
   const env = JSON.parse(result.content[0].text);
   // The autoRepair payload is in meta (failResult shape)
   const autoRepair = env.meta?.autoRepair ?? env.data?.autoRepair;
-  assert.ok(autoRepair, `expected autoRepair in envelope; got ${result.content[0].text.slice(0, 300)}`);
+  assert.ok(
+    autoRepair,
+    `expected autoRepair in envelope; got ${result.content[0].text.slice(0, 300)}`,
+  );
   assert.equal(autoRepair.outcome, 'failed');
   // The fix's contract: when retry fails on a different selector, capture it
-  assert.equal(autoRepair.nextFailedSelector, 'btn-B',
-    `nextFailedSelector should be the retry's failed selector; got ${autoRepair.nextFailedSelector}`);
+  assert.equal(
+    autoRepair.nextFailedSelector,
+    'btn-B',
+    `nextFailedSelector should be the retry's failed selector; got ${autoRepair.nextFailedSelector}`,
+  );
   // The original diff stays unchanged
   assert.equal(autoRepair.diff?.selector?.from, 'btn-A');
   assert.equal(autoRepair.diff?.selector?.to, 'btn-A-new');
@@ -97,30 +124,48 @@ test('AutoRepairOutcome.nextFailedSelector NOT populated when retry fails on the
     mCount++;
     if (mCount === 1) {
       return {
-        content: [{ type: 'text', text: JSON.stringify({
-          ok: true,
-          data: { passed: false, output: '== Element with id "btn-A" not found ==' },
-        }) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { passed: false, output: '== Element with id "btn-A" not found ==' },
+            }),
+          },
+        ],
       };
     }
     // Retry fails on the SAME (newly patched) selector — patch didn't work
     return {
-      content: [{ type: 'text', text: JSON.stringify({
-        ok: true,
-        data: { passed: false, output: '== Element with id "btn-A-new" not found ==' },
-      }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            data: { passed: false, output: '== Element with id "btn-A-new" not found ==' },
+          }),
+        },
+      ],
     };
   });
 
   const fakeRepairAction = mock.fn(async () => ({
-    content: [{ type: 'text', text: JSON.stringify({
-      ok: true,
-      data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new' },
-      meta: { repairTimestamp: new Date().toISOString() },
-    }) }],
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok: true,
+          data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new' },
+          meta: { repairTimestamp: new Date().toISOString() },
+        }),
+      },
+    ],
   }));
 
-  const handler = createRunActionHandler({ maestroRun: fakeMaestroRun, repairAction: fakeRepairAction });
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun,
+    repairAction: fakeRepairAction,
+  });
   const result = await handler({
     actionId: 'sample',
     projectRoot: root,
@@ -133,8 +178,11 @@ test('AutoRepairOutcome.nextFailedSelector NOT populated when retry fails on the
   assert.ok(autoRepair);
   assert.equal(autoRepair.outcome, 'failed');
   // No cascading selector — should be absent
-  assert.equal(autoRepair.nextFailedSelector, undefined,
-    `nextFailedSelector should NOT be present when same selector failed; got ${autoRepair.nextFailedSelector}`);
+  assert.equal(
+    autoRepair.nextFailedSelector,
+    undefined,
+    `nextFailedSelector should NOT be present when same selector failed; got ${autoRepair.nextFailedSelector}`,
+  );
 
   rmSync(root, { recursive: true, force: true });
 });
@@ -148,26 +196,44 @@ test('AutoRepairOutcome.nextFailedSelector NOT populated when retry passed (happ
     mCount++;
     if (mCount === 1) {
       return {
-        content: [{ type: 'text', text: JSON.stringify({
-          ok: true,
-          data: { passed: false, output: '== Element with id "btn-A" not found ==' },
-        }) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              data: { passed: false, output: '== Element with id "btn-A" not found ==' },
+            }),
+          },
+        ],
       };
     }
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }),
+        },
+      ],
     };
   });
 
   const fakeRepairAction = mock.fn(async () => ({
-    content: [{ type: 'text', text: JSON.stringify({
-      ok: true,
-      data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new' },
-      meta: { repairTimestamp: new Date().toISOString() },
-    }) }],
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok: true,
+          data: { patched: true, oldSelector: 'btn-A', newSelector: 'btn-A-new' },
+          meta: { repairTimestamp: new Date().toISOString() },
+        }),
+      },
+    ],
   }));
 
-  const handler = createRunActionHandler({ maestroRun: fakeMaestroRun, repairAction: fakeRepairAction });
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun,
+    repairAction: fakeRepairAction,
+  });
   const result = await handler({
     actionId: 'sample',
     projectRoot: root,

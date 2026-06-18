@@ -35,7 +35,7 @@ const ANDROID_NOISE_PATTERNS = [
 export function parseIOSLog(stdout) {
     const entries = [];
     for (const line of stdout.split('\n')) {
-        if (!IOS_NOISE_PATTERNS.some(p => p.test(line)))
+        if (!IOS_NOISE_PATTERNS.some((p) => p.test(line)))
             continue;
         const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
         const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
@@ -55,7 +55,7 @@ export function parseIOSLog(stdout) {
 export function parseAndroidLog(stdout) {
     const entries = [];
     for (const line of stdout.split('\n')) {
-        if (!ANDROID_NOISE_PATTERNS.some(p => p.test(line)))
+        if (!ANDROID_NOISE_PATTERNS.some((p) => p.test(line)))
             continue;
         const tsMatch = line.match(/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
         const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
@@ -112,10 +112,22 @@ export async function readNativeErrors(opts = {}) {
     try {
         if (platform === 'android') {
             const out = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
-            return { ok: true, entries: parseAndroidLog(out).slice(-limit), unavailable: false, error: '', command };
+            return {
+                ok: true,
+                entries: parseAndroidLog(out).slice(-limit),
+                unavailable: false,
+                error: '',
+                command,
+            };
         }
         const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
-        return { ok: true, entries: parseIOSLog(out).slice(-limit), unavailable: false, error: '', command };
+        return {
+            ok: true,
+            entries: parseIOSLog(out).slice(-limit),
+            unavailable: false,
+            error: '',
+            command,
+        };
     }
     catch (err) {
         // CDP-016: surface tool-unavailability as a structured failure. Returning
@@ -134,9 +146,7 @@ export async function readNativeErrors(opts = {}) {
 export function createNativeErrorsHandler(getClient) {
     return async (args) => {
         const client = getClient();
-        const platform = args.platform
-            ?? client.connectedTarget?.platform
-            ?? 'ios';
+        const platform = args.platform ?? client.connectedTarget?.platform ?? 'ios';
         try {
             const result = await readNativeErrors({
                 platform,

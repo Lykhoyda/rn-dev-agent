@@ -170,7 +170,9 @@ export function createDiagnosticRenderersHandler(getClient: () => CDPClient) {
       const parsed = JSON.parse(result.value);
       return okResult(parsed);
     } catch (err) {
-      return failResult(`cdp_diagnostic_renderers: failed to parse hook probe response: ${String(err)}`);
+      return failResult(
+        `cdp_diagnostic_renderers: failed to parse hook probe response: ${String(err)}`,
+      );
     }
   });
 }

@@ -93,7 +93,9 @@ export class CDPMultiplexer {
   private readonly capabilityToken: string = generateCapabilityToken();
 
   /** Phase 134.4: the capability token for this multiplexer instance. */
-  get token(): string { return this.capabilityToken; }
+  get token(): string {
+    return this.capabilityToken;
+  }
   private routingSweeper: NodeJS.Timeout | null = null;
 
   constructor(opts: MultiplexerOptions) {
@@ -182,7 +184,10 @@ export class CDPMultiplexer {
 
       this.wss.on('connection', (ws) => this.onConsumerConnect(ws));
       this.wss.on('error', (err) => {
-        logger.warn(this.opts.logTag, `WebSocketServer error: ${err instanceof Error ? err.message : err}`);
+        logger.warn(
+          this.opts.logTag,
+          `WebSocketServer error: ${err instanceof Error ? err.message : err}`,
+        );
       });
 
       this.httpServer.once('error', reject);
@@ -230,7 +235,10 @@ export class CDPMultiplexer {
   private onConsumerConnect(ws: WebSocket): void {
     const consumerId = this.nextConsumerId++;
     this.consumers.set(consumerId, ws);
-    logger.info(this.opts.logTag, `consumer ${consumerId} connected (total: ${this.consumers.size})`);
+    logger.info(
+      this.opts.logTag,
+      `consumer ${consumerId} connected (total: ${this.consumers.size})`,
+    );
 
     ws.on('message', (data) => this.onConsumerMessage(consumerId, data));
     ws.on('close', () => {
@@ -238,7 +246,10 @@ export class CDPMultiplexer {
       for (const [upstreamId, entry] of this.routingTable) {
         if (entry.consumerId === consumerId) this.routingTable.delete(upstreamId);
       }
-      logger.info(this.opts.logTag, `consumer ${consumerId} disconnected (remaining: ${this.consumers.size})`);
+      logger.info(
+        this.opts.logTag,
+        `consumer ${consumerId} disconnected (remaining: ${this.consumers.size})`,
+      );
     });
     ws.on('error', (err) => {
       logger.warn(this.opts.logTag, `consumer ${consumerId} WS error: ${err.message}`);
@@ -314,7 +325,11 @@ export class CDPMultiplexer {
   private onHermesClose(code: number, reason: string): void {
     logger.warn(this.opts.logTag, `upstream Hermes closed (code=${code}, reason='${reason}')`);
     for (const ws of this.consumers.values()) {
-      try { ws.close(1011, 'upstream closed'); } catch { /* ignore */ }
+      try {
+        ws.close(1011, 'upstream closed');
+      } catch {
+        /* ignore */
+      }
     }
     this.consumers.clear();
     this.routingTable.clear();
@@ -337,7 +352,10 @@ export class CDPMultiplexer {
       return;
     }
     if (this.hermesWs.readyState !== WebSocket.OPEN) {
-      logger.warn(this.opts.logTag, `upstream WS not open (state=${this.hermesWs.readyState}), dropping`);
+      logger.warn(
+        this.opts.logTag,
+        `upstream WS not open (state=${this.hermesWs.readyState}), dropping`,
+      );
       return;
     }
     this.hermesWs.send(rawMessage);
@@ -373,7 +391,11 @@ export class CDPMultiplexer {
   private broadcastToConsumers(rawMessage: string): void {
     for (const ws of this.consumers.values()) {
       if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(rawMessage); } catch { /* one consumer failing should not abort the others */ }
+        try {
+          ws.send(rawMessage);
+        } catch {
+          /* one consumer failing should not abort the others */
+        }
       }
     }
   }
@@ -381,18 +403,30 @@ export class CDPMultiplexer {
   private async cleanup(): Promise<void> {
     this.stopRoutingSweeper();
     if (this.hermesWs) {
-      try { this.hermesWs.close(1000, 'proxy stopping'); } catch { /* ignore */ }
+      try {
+        this.hermesWs.close(1000, 'proxy stopping');
+      } catch {
+        /* ignore */
+      }
       this.hermesWs = null;
     }
     for (const ws of this.consumers.values()) {
-      try { ws.close(1001, 'proxy stopping'); } catch { /* ignore */ }
+      try {
+        ws.close(1001, 'proxy stopping');
+      } catch {
+        /* ignore */
+      }
     }
     this.consumers.clear();
     this.routingTable.clear();
     this.hermesBuffer = [];
 
     if (this.wss) {
-      try { this.wss.close(); } catch { /* ignore */ }
+      try {
+        this.wss.close();
+      } catch {
+        /* ignore */
+      }
       this.wss = null;
     }
     if (this.httpServer) {

@@ -1,7 +1,10 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRestartHandler, _resetRestartHandlerStateForTest } from '../../dist/tools/restart.js';
-import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
+import {
+  createRestartHandler,
+  _resetRestartHandlerStateForTest,
+} from '../../dist/tools/restart.js';
+import { expectOk } from '../helpers/result-helpers.js';
 
 // Reset module-scoped state (lastSeenBundleId cache, inflight guard) before
 // every test — these would otherwise leak across cases and produce
@@ -14,8 +17,12 @@ beforeEach(() => {
 function makeMockClient({ port = 8081, connected = false, autoConnectImpl, disconnectImpl } = {}) {
   const calls = { disconnect: 0, autoConnect: 0 };
   const client = {
-    get metroPort() { return port; },
-    get isConnected() { return connected; },
+    get metroPort() {
+      return port;
+    },
+    get isConnected() {
+      return connected;
+    },
     disconnect: async () => {
       calls.disconnect += 1;
       if (disconnectImpl) return disconnectImpl();
@@ -39,8 +46,13 @@ test('cdp_restart: happy path — disconnects old client, creates fresh, reconne
 
   let currentClient = oldClient;
   const getClient = () => currentClient;
-  const setClient = (c) => { currentClient = c; };
-  const createClient = (port) => { newClient.__requestedPort = port; return newClient; };
+  const setClient = (c) => {
+    currentClient = c;
+  };
+  const createClient = (port) => {
+    newClient.__requestedPort = port;
+    return newClient;
+  };
 
   const handler = createRestartHandler(getClient, setClient, createClient);
   const data = expectOk(await handler({}));
@@ -59,9 +71,18 @@ test('cdp_restart: preserves port when not overridden (B76/D644)', async () => {
 
   let currentClient = oldClient;
   let requestedPort;
-  const createClient = (port) => { requestedPort = port; return newClient; };
+  const createClient = (port) => {
+    requestedPort = port;
+    return newClient;
+  };
 
-  const handler = createRestartHandler(() => currentClient, (c) => { currentClient = c; }, createClient);
+  const handler = createRestartHandler(
+    () => currentClient,
+    (c) => {
+      currentClient = c;
+    },
+    createClient,
+  );
   await handler({});
 
   assert.equal(requestedPort, 19000, 'new client uses preserved port');
@@ -73,9 +94,18 @@ test('cdp_restart: metroPort arg overrides preserved port (B76/D644)', async () 
 
   let currentClient = oldClient;
   let requestedPort;
-  const createClient = (port) => { requestedPort = port; return newClient; };
+  const createClient = (port) => {
+    requestedPort = port;
+    return newClient;
+  };
 
-  const handler = createRestartHandler(() => currentClient, (c) => { currentClient = c; }, createClient);
+  const handler = createRestartHandler(
+    () => currentClient,
+    (c) => {
+      currentClient = c;
+    },
+    createClient,
+  );
   await handler({ metroPort: 8082 });
 
   assert.equal(requestedPort, 8082, 'new client uses overridden port');
@@ -84,13 +114,17 @@ test('cdp_restart: metroPort arg overrides preserved port (B76/D644)', async () 
 test('cdp_restart: autoConnect failure returns okResult with connectError + connected:false (B76/D644)', async () => {
   const { client: oldClient } = makeMockClient();
   const { client: newClient } = makeMockClient({
-    autoConnectImpl: () => { throw new Error('Metro not found'); },
+    autoConnectImpl: () => {
+      throw new Error('Metro not found');
+    },
   });
 
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
   );
   const data = expectOk(await handler({}));
@@ -102,14 +136,18 @@ test('cdp_restart: autoConnect failure returns okResult with connectError + conn
 
 test('cdp_restart: old disconnect failure is non-fatal — new client still created (B76/D644)', async () => {
   const { client: oldClient, calls: oldCalls } = makeMockClient({
-    disconnectImpl: async () => { throw new Error('ws already closed'); },
+    disconnectImpl: async () => {
+      throw new Error('ws already closed');
+    },
   });
   const { client: newClient, calls: newCalls } = makeMockClient();
 
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
   );
   const data = expectOk(await handler({}));
@@ -126,7 +164,9 @@ test('cdp_restart: passes platform filter through to autoConnect (B76/D644)', as
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
   );
   await handler({ platform: 'ios' });
@@ -137,7 +177,11 @@ test('cdp_restart: passes platform filter through to autoConnect (B76/D644)', as
 // ── GH #105 follow-up: cdp_restart hardReset ─────────────────────────────
 
 /** Build a mock CDPClient that also exposes a connectedTarget for hardReset. */
-function makeMockClientWithTarget({ port = 8081, bundleId = 'com.example.app', platform = 'ios' } = {}) {
+function makeMockClientWithTarget({
+  port = 8081,
+  bundleId = 'com.example.app',
+  platform = 'ios',
+} = {}) {
   const inner = makeMockClient({ port });
   inner.client.connectedTarget = bundleId ? { description: bundleId, platform } : null;
   return inner;
@@ -154,7 +198,10 @@ function makeMockExecFile() {
 }
 
 test('cdp_restart hardReset:true → stops fast-runner + simctl terminate + simctl launch + sleeps + soft-resets (GH #105)', async () => {
-  const { client: oldClient } = makeMockClientWithTarget({ port: 8081, bundleId: 'com.rndevagent.testapp' });
+  const { client: oldClient } = makeMockClientWithTarget({
+    port: 8081,
+    bundleId: 'com.rndevagent.testapp',
+  });
   const { client: newClient } = makeMockClient({ port: 8081 });
   const { execFile, calls: execCalls } = makeMockExecFile();
   let stopFastRunnerCalls = 0;
@@ -163,12 +210,18 @@ test('cdp_restart hardReset:true → stops fast-runner + simctl terminate + simc
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     {
       execFile,
-      stopFastRunner: () => { stopFastRunnerCalls += 1; },
-      sleep: async () => { sleepCalls += 1; },
+      stopFastRunner: () => {
+        stopFastRunnerCalls += 1;
+      },
+      sleep: async () => {
+        sleepCalls += 1;
+      },
     },
   );
 
@@ -197,11 +250,15 @@ test('cdp_restart hardReset:true skips simctl when bundleId unknown (no connecte
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     {
       execFile,
-      stopFastRunner: () => { stopFastRunnerCalls += 1; },
+      stopFastRunner: () => {
+        stopFastRunnerCalls += 1;
+      },
       sleep: async () => {},
       // GH #262: pin the new strict-app.json fallback + active-session lookups
       // off so this case keeps asserting the genuine no-bundleId skip path —
@@ -221,14 +278,19 @@ test('cdp_restart hardReset:true skips simctl when bundleId unknown (no connecte
 });
 
 test('cdp_restart hardReset:true on android skips simctl (iOS-only for phase 1)', async () => {
-  const { client: oldClient } = makeMockClientWithTarget({ bundleId: 'com.example.app', platform: 'android' });
+  const { client: oldClient } = makeMockClientWithTarget({
+    bundleId: 'com.example.app',
+    platform: 'android',
+  });
   const { client: newClient } = makeMockClient();
   const { execFile, calls: execCalls } = makeMockExecFile();
 
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     { execFile, stopFastRunner: () => {}, sleep: async () => {} },
   );
@@ -251,7 +313,9 @@ test('cdp_restart hardReset:true — simctl terminate failure is non-fatal, laun
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     { execFile, stopFastRunner: () => {}, sleep: async () => {} },
   );
@@ -271,11 +335,15 @@ test('cdp_restart hardReset omitted/false → no hard-reset side effects (defaul
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     {
       execFile,
-      stopFastRunner: () => { stopFastRunnerCalls += 1; },
+      stopFastRunner: () => {
+        stopFastRunnerCalls += 1;
+      },
       sleep: async () => {},
     },
   );
@@ -299,7 +367,9 @@ test('cdp_restart hardReset: bundleId is cached across calls — second call sti
   // First call: connectedTarget present → simctl fires + bundleId cached.
   const firstOld = makeMockClientWithTarget({ bundleId: 'com.example.app' }).client;
   const firstNew = makeMockClient({
-    autoConnectImpl: () => { throw new Error('Hermes not yet registered'); },
+    autoConnectImpl: () => {
+      throw new Error('Hermes not yet registered');
+    },
   }).client;
   // Second call's "old" client has no connectedTarget — simulates the post-
   // first-failure state where setClient swapped in a fresh disconnected client.
@@ -307,13 +377,18 @@ test('cdp_restart hardReset: bundleId is cached across calls — second call sti
   const secondNew = makeMockClient().client;
 
   const execCalls = [];
-  const execFile = async (cmd, args) => { execCalls.push(args); return { stdout: '', stderr: '' }; };
+  const execFile = async (cmd, args) => {
+    execCalls.push(args);
+    return { stdout: '', stderr: '' };
+  };
 
   let currentClient = firstOld;
   let nextNew = firstNew;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => nextNew,
     { execFile, stopFastRunner: () => {}, sleep: async () => {} },
   );
@@ -322,7 +397,10 @@ test('cdp_restart hardReset: bundleId is cached across calls — second call sti
   const first = expectOk(await handler({ hardReset: true }));
   assert.equal(first.connected, false, 'first autoConnect failed as designed');
   assert.equal(first.bundleId, 'com.example.app', 'first call records bundleId in result');
-  assert.ok(execCalls.some((a) => a[1] === 'terminate' && a[3] === 'com.example.app'), 'first call did simctl terminate');
+  assert.ok(
+    execCalls.some((a) => a[1] === 'terminate' && a[3] === 'com.example.app'),
+    'first call did simctl terminate',
+  );
 
   // Prep second call: "old" client now has null target (post-first-failure state).
   currentClient = secondOld;
@@ -331,10 +409,20 @@ test('cdp_restart hardReset: bundleId is cached across calls — second call sti
 
   const second = expectOk(await handler({ hardReset: true }));
   // The cache MUST keep the bundleId alive so simctl still fires.
-  assert.equal(second.bundleId, 'com.example.app', 'second call resolves bundleId from cache, not null target');
-  assert.equal(execCalls.length, 2, 'second call still issues simctl terminate + launch from cache');
-  assert.ok(!second.hardResetSteps.join('|').includes('skip-simctl:no-bundleId'),
-    'second call must NOT degrade to no-bundleId skip');
+  assert.equal(
+    second.bundleId,
+    'com.example.app',
+    'second call resolves bundleId from cache, not null target',
+  );
+  assert.equal(
+    execCalls.length,
+    2,
+    'second call still issues simctl terminate + launch from cache',
+  );
+  assert.ok(
+    !second.hardResetSteps.join('|').includes('skip-simctl:no-bundleId'),
+    'second call must NOT degrade to no-bundleId skip',
+  );
 });
 
 // Codex #1 follow-on: explicit bundleId arg also wins, even if cache is empty.
@@ -342,12 +430,17 @@ test('cdp_restart hardReset: explicit bundleId arg overrides everything (Codex #
   const oldNoTarget = makeMockClientWithTarget({ bundleId: null }).client;
   const newClient = makeMockClient().client;
   const execCalls = [];
-  const execFile = async (cmd, args) => { execCalls.push(args); return { stdout: '', stderr: '' }; };
+  const execFile = async (cmd, args) => {
+    execCalls.push(args);
+    return { stdout: '', stderr: '' };
+  };
 
   let currentClient = oldNoTarget;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     { execFile, stopFastRunner: () => {}, sleep: async () => {} },
   );
@@ -365,17 +458,25 @@ test('cdp_restart: concurrent calls — second caller short-circuits to restart-
   const oldClient = makeMockClientWithTarget({ bundleId: 'com.example.app' }).client;
   const newClient = makeMockClient().client;
   const execCalls = [];
-  const execFile = async (cmd, args) => { execCalls.push(args); return { stdout: '', stderr: '' }; };
+  const execFile = async (cmd, args) => {
+    execCalls.push(args);
+    return { stdout: '', stderr: '' };
+  };
   // Block the 3s sleep step in hardReset so the first call is provably
   // in-flight when the second call lands. sleep is awaited unconditionally
   // in the iOS hardReset path, so we know doRestart pauses here.
   let resolveSleep;
-  const sleep = () => new Promise((r) => { resolveSleep = r; });
+  const sleep = () =>
+    new Promise((r) => {
+      resolveSleep = r;
+    });
 
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     { execFile, stopFastRunner: () => {}, sleep },
   );
@@ -400,8 +501,16 @@ test('cdp_restart: concurrent calls — second caller short-circuits to restart-
   assert.equal(first.restarted, true);
   // The second call must not have triggered any extra simctl side-effects.
   // First call's pair (terminate + launch) is the only one we expect.
-  assert.equal(execCalls.filter((a) => a[1] === 'terminate').length, 1, 'simctl terminate fired exactly once across the pair');
-  assert.equal(execCalls.filter((a) => a[1] === 'launch').length, 1, 'simctl launch fired exactly once across the pair');
+  assert.equal(
+    execCalls.filter((a) => a[1] === 'terminate').length,
+    1,
+    'simctl terminate fired exactly once across the pair',
+  );
+  assert.equal(
+    execCalls.filter((a) => a[1] === 'launch').length,
+    1,
+    'simctl launch fired exactly once across the pair',
+  );
 });
 
 // Codex #3 (conf 85): the realistic failure shape — simctl succeeds, but
@@ -410,14 +519,18 @@ test('cdp_restart: concurrent calls — second caller short-circuits to restart-
 test('cdp_restart hardReset + autoConnect failure → reports both hardResetSteps and connectError (Codex #3)', async () => {
   const oldClient = makeMockClientWithTarget({ bundleId: 'com.example.app' }).client;
   const newClient = makeMockClient({
-    autoConnectImpl: () => { throw new Error('Failed to connect after 5 attempts.'); },
+    autoConnectImpl: () => {
+      throw new Error('Failed to connect after 5 attempts.');
+    },
   }).client;
   const execFile = async () => ({ stdout: '', stderr: '' });
 
   let currentClient = oldClient;
   const handler = createRestartHandler(
     () => currentClient,
-    (c) => { currentClient = c; },
+    (c) => {
+      currentClient = c;
+    },
     () => newClient,
     { execFile, stopFastRunner: () => {}, sleep: async () => {} },
   );
@@ -429,7 +542,10 @@ test('cdp_restart hardReset + autoConnect failure → reports both hardResetStep
   // simctl + fast-runner steps DID run, even though the final connect was
   // unsuccessful. Without this, the user can't tell whether to retry
   // (transient) or escalate (something deeper is wrong).
-  assert.ok(Array.isArray(data.hardResetSteps), 'hardResetSteps still present despite connect failure');
+  assert.ok(
+    Array.isArray(data.hardResetSteps),
+    'hardResetSteps still present despite connect failure',
+  );
   assert.match(data.hardResetSteps.join('|'), /stopFastRunner:ok/);
   assert.match(data.hardResetSteps.join('|'), /terminate com\.example\.app:ok/);
   assert.match(data.hardResetSteps.join('|'), /launch com\.example\.app:ok/);

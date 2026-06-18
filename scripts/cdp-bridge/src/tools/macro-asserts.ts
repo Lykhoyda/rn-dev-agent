@@ -89,7 +89,9 @@ export function evaluateReduxAssertions(
   assertions: ReduxAssertions,
 ): { matched: true } | { matched: false; failure: AssertionFailure } {
   // exists is the implicit default if nothing else is asserted.
-  const ops = Object.keys(assertions).filter((k) => assertions[k as keyof ReduxAssertions] !== undefined);
+  const ops = Object.keys(assertions).filter(
+    (k) => assertions[k as keyof ReduxAssertions] !== undefined,
+  );
   if (ops.length === 0) {
     if (actual === undefined || actual === null) {
       return { matched: false, failure: { op: 'exists', expected: true, actual } };
@@ -104,13 +106,19 @@ export function evaluateReduxAssertions(
         pass = deepEqual(actual, expected);
         break;
       case 'exists':
-        pass = expected ? actual !== undefined && actual !== null : actual === undefined || actual === null;
+        pass = expected
+          ? actual !== undefined && actual !== null
+          : actual === undefined || actual === null;
         break;
       case 'notExists':
-        pass = expected ? actual === undefined || actual === null : actual !== undefined && actual !== null;
+        pass = expected
+          ? actual === undefined || actual === null
+          : actual !== undefined && actual !== null;
         break;
       case 'length':
-        pass = (Array.isArray(actual) || typeof actual === 'string') && (actual as { length: number }).length === expected;
+        pass =
+          (Array.isArray(actual) || typeof actual === 'string') &&
+          (actual as { length: number }).length === expected;
         break;
       case 'contains':
         pass = Array.isArray(actual) && actual.some((x) => deepEqual(x, expected));
@@ -179,23 +187,38 @@ export function extractStack(navState: {
 }
 
 export function evaluateRouteAssertions(
-  navState: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }>; stack?: unknown; nested?: unknown },
+  navState: {
+    routeName?: string;
+    params?: unknown;
+    routes?: Array<{ name?: string }>;
+    stack?: unknown;
+    nested?: unknown;
+  },
   assertions: RouteAssertions,
 ): { matched: true } | { matched: false; failure: RouteFailure } {
   if (assertions.name !== undefined) {
     if (navState.routeName !== assertions.name) {
-      return { matched: false, failure: { field: 'name', expected: assertions.name, actual: navState.routeName } };
+      return {
+        matched: false,
+        failure: { field: 'name', expected: assertions.name, actual: navState.routeName },
+      };
     }
   }
   if (assertions.paramsEquals !== undefined) {
     if (!deepEqual(navState.params, assertions.paramsEquals)) {
-      return { matched: false, failure: { field: 'params', expected: assertions.paramsEquals, actual: navState.params } };
+      return {
+        matched: false,
+        failure: { field: 'params', expected: assertions.paramsEquals, actual: navState.params },
+      };
     }
   }
   if (assertions.inStack !== undefined) {
     const stack = extractStack(navState as Parameters<typeof extractStack>[0]);
     if (!stack.includes(assertions.inStack)) {
-      return { matched: false, failure: { field: 'inStack', expected: assertions.inStack, actual: stack } };
+      return {
+        matched: false,
+        failure: { field: 'inStack', expected: assertions.inStack, actual: stack },
+      };
     }
   }
   return { matched: true };
@@ -268,23 +291,52 @@ export function createExpectReduxHandler(getClient: () => CDPClient) {
     const probe = async (): Promise<{ matched: boolean; result: Probe }> => {
       const result = await client.evaluate(expression);
       if (result.error || typeof result.value !== 'string') {
-        return { matched: false, result: { kind: 'eval-failed', reason: result.error ?? 'No string response from getStoreState' } };
+        return {
+          matched: false,
+          result: {
+            kind: 'eval-failed',
+            reason: result.error ?? 'No string response from getStoreState',
+          },
+        };
       }
       let raw: unknown = undefined;
       try {
         raw = JSON.parse(result.value);
       } catch {
-        return { matched: false, result: { kind: 'eval-failed', reason: 'getStoreState returned non-JSON' } };
+        return {
+          matched: false,
+          result: { kind: 'eval-failed', reason: 'getStoreState returned non-JSON' },
+        };
       }
       // Phase 128 (post-review #8): truncation surfaces with the user's
       // original op preserved so the failure shape is accurate.
-      if (raw !== null && typeof raw === 'object' && '__agent_truncated' in (raw as Record<string, unknown>)) {
-        return { matched: false, result: { kind: 'truncated', previewSize: (raw as { originalLength?: unknown }).originalLength } };
+      if (
+        raw !== null &&
+        typeof raw === 'object' &&
+        '__agent_truncated' in (raw as Record<string, unknown>)
+      ) {
+        return {
+          matched: false,
+          result: {
+            kind: 'truncated',
+            previewSize: (raw as { originalLength?: unknown }).originalLength,
+          },
+        };
       }
       // Phase 128 (post-review #7): surface __agent_error from getStoreState
       // (path not found, no store mounted) as a distinct failure code.
-      if (raw !== null && typeof raw === 'object' && '__agent_error' in (raw as Record<string, unknown>)) {
-        const obj = raw as { __agent_error?: unknown; availableKeys?: unknown; hint?: unknown; hint2?: unknown; hint3?: unknown };
+      if (
+        raw !== null &&
+        typeof raw === 'object' &&
+        '__agent_error' in (raw as Record<string, unknown>)
+      ) {
+        const obj = raw as {
+          __agent_error?: unknown;
+          availableKeys?: unknown;
+          hint?: unknown;
+          hint2?: unknown;
+          hint3?: unknown;
+        };
         const hints: string[] = [];
         if (typeof obj.hint === 'string') hints.push(obj.hint);
         if (typeof obj.hint2 === 'string') hints.push(obj.hint2);
@@ -376,16 +428,37 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
       return failResult('expect_route requires at least one of: name, paramsEquals, inStack');
     }
 
-    const probe = async (): Promise<{ matched: boolean; result: { navState: unknown; eval: ReturnType<typeof evaluateRouteAssertions> } }> => {
+    const probe = async (): Promise<{
+      matched: boolean;
+      result: { navState: unknown; eval: ReturnType<typeof evaluateRouteAssertions> };
+    }> => {
       const result = await client.evaluate(client.helperExpr('getNavState()'));
       if (result.error || typeof result.value !== 'string') {
-        return { matched: false, result: { navState: { error: result.error ?? 'no nav state' }, eval: { matched: false, failure: { field: 'name', expected: args.name, actual: undefined } } } };
+        return {
+          matched: false,
+          result: {
+            navState: { error: result.error ?? 'no nav state' },
+            eval: {
+              matched: false,
+              failure: { field: 'name', expected: args.name, actual: undefined },
+            },
+          },
+        };
       }
       let parsed: { routeName?: string; params?: unknown; routes?: Array<{ name?: string }> };
       try {
         parsed = JSON.parse(result.value);
       } catch {
-        return { matched: false, result: { navState: { error: 'malformed nav state' }, eval: { matched: false, failure: { field: 'name', expected: args.name, actual: undefined } } } };
+        return {
+          matched: false,
+          result: {
+            navState: { error: 'malformed nav state' },
+            eval: {
+              matched: false,
+              failure: { field: 'name', expected: args.name, actual: undefined },
+            },
+          },
+        };
       }
       const ev = evaluateRouteAssertions(parsed, args);
       return { matched: ev.matched, result: { navState: parsed, eval: ev } };
@@ -397,17 +470,13 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
     if (ev.matched) {
       return okResult({ matched: true, navState });
     }
-    return failResult(
-      `expect_route assertion failed: ${ev.failure.field}`,
-      'ASSERTION_FAILED',
-      {
-        field: ev.failure.field,
-        actual: ev.failure.actual,
-        expected: ev.failure.expected,
-        navState,
-        hint: 'Call cdp_navigation_state directly to inspect the full route tree. If a navigation animation is in flight, pass timeoutMs (e.g. 1000) to retry.',
-      },
-    );
+    return failResult(`expect_route assertion failed: ${ev.failure.field}`, 'ASSERTION_FAILED', {
+      field: ev.failure.field,
+      actual: ev.failure.actual,
+      expected: ev.failure.expected,
+      navState,
+      hint: 'Call cdp_navigation_state directly to inspect the full route tree. If a navigation animation is in flight, pass timeoutMs (e.g. 1000) to retry.',
+    });
   });
 }
 
@@ -417,7 +486,7 @@ export function createExpectRouteHandler(getClient: () => CDPClient) {
 
 export interface ExpectVisibleByTestIDArgs {
   testID: string;
-  exists?: boolean;       // default true
+  exists?: boolean; // default true
   timeoutMs?: number;
 }
 
@@ -487,14 +556,17 @@ export function createExpectVisibleByTestIDHandler() {
 
 export interface ExpectTextArgs {
   text: string;
-  exact?: boolean;        // default false (substring)
-  exists?: boolean;       // default true
+  exact?: boolean; // default false (substring)
+  exists?: boolean; // default true
   timeoutMs?: number;
 }
 
 export function findRefsByText(snapshotEnvelope: string, text: string, exact: boolean): string[] {
   try {
-    const env = JSON.parse(snapshotEnvelope) as { ok?: boolean; data?: { nodes?: Array<{ ref?: string; label?: string }> } };
+    const env = JSON.parse(snapshotEnvelope) as {
+      ok?: boolean;
+      data?: { nodes?: Array<{ ref?: string; label?: string }> };
+    };
     if (!env.ok) return [];
     const nodes = env.data?.nodes ?? [];
     const matches = nodes.filter((n) => {

@@ -6,24 +6,41 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getDeviceSessionHealth } from '../../dist/tools/device-session-health.js';
 
-const session = (over = {}) => ({ name: 's', platform: 'ios', deviceId: 'UDID-1', openedAt: 'now', appId: 'com.x', ...over });
+const session = (over = {}) => ({
+  name: 's',
+  platform: 'ios',
+  deviceId: 'UDID-1',
+  openedAt: 'now',
+  appId: 'com.x',
+  ...over,
+});
 
 test('#210 health: no active session → sessionOpen:false, rnFastRunner:dead, probe NOT called', async () => {
   let probed = 0;
   const h = await getDeviceSessionHealth({
     getActiveSession: () => null,
-    probeLiveness: async () => { probed++; return 'alive'; },
+    probeLiveness: async () => {
+      probed++;
+      return 'alive';
+    },
   });
   assert.deepEqual(h, { sessionOpen: false, rnFastRunner: 'dead' });
   assert.equal(probed, 0, 'must not probe /health when no session is open');
 });
 
 test('#210 health: Android session → rnFastRunner:dead, probe + detectForeign NOT called (iOS-only)', async () => {
-  let probed = 0, detected = 0;
+  let probed = 0,
+    detected = 0;
   const h = await getDeviceSessionHealth({
     getActiveSession: () => session({ platform: 'android' }),
-    probeLiveness: async () => { probed++; return 'alive'; },
-    detectForeign: async () => { detected++; return { detected: true }; },
+    probeLiveness: async () => {
+      probed++;
+      return 'alive';
+    },
+    detectForeign: async () => {
+      detected++;
+      return { detected: true };
+    },
   });
   assert.equal(h.sessionOpen, true);
   assert.equal(h.rnFastRunner, 'dead', 'Android never uses the iOS runner');
@@ -44,14 +61,19 @@ test('#210 health: session open + runner alive → reports alive + appId/deviceI
 });
 
 test('#210 health: session open + runner stale → reports stale', async () => {
-  const h = await getDeviceSessionHealth({ getActiveSession: () => session(), probeLiveness: async () => 'stale' });
+  const h = await getDeviceSessionHealth({
+    getActiveSession: () => session(),
+    probeLiveness: async () => 'stale',
+  });
   assert.equal(h.rnFastRunner, 'stale');
 });
 
 test('#210 health: probe throws → degrades to dead (never throws)', async () => {
   const h = await getDeviceSessionHealth({
     getActiveSession: () => session(),
-    probeLiveness: async () => { throw new Error('boom'); },
+    probeLiveness: async () => {
+      throw new Error('boom');
+    },
   });
   assert.equal(h.rnFastRunner, 'dead');
 });
@@ -69,7 +91,9 @@ test('#210 health: detectForeign throws → omitted (best-effort, never throws)'
   const h = await getDeviceSessionHealth({
     getActiveSession: () => session(),
     probeLiveness: async () => 'alive',
-    detectForeign: async () => { throw new Error('ps failed'); },
+    detectForeign: async () => {
+      throw new Error('ps failed');
+    },
   });
   assert.equal(h.foreignRunner, undefined);
 });

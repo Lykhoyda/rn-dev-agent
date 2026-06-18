@@ -26,7 +26,9 @@ export interface WedgeRecoveryResult {
 
 let attempts = 0;
 /** Reset the per-session recovery budget (on device_snapshot open AND on a successful recovery). */
-export function resetWedgeRecoveryCounter(): void { attempts = 0; }
+export function resetWedgeRecoveryCounter(): void {
+  attempts = 0;
+}
 
 export interface RecoverWedgeDeps {
   getSession?: () => { deviceId?: string; appId?: string; platform?: string } | null;
@@ -92,9 +94,17 @@ export async function recoverWedge(
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   stopFastRunner();
-  try { await launchApp(udid, appId); } catch { /* best-effort re-foreground */ }
+  try {
+    await launchApp(udid, appId);
+  } catch {
+    /* best-effort re-foreground */
+  }
   await sleep(FOREGROUND_SETTLE_MS);
-  try { await reconnect(); } catch { /* best-effort; the liveness probe is the verdict */ }
+  try {
+    await reconnect();
+  } catch {
+    /* best-effort; the liveness probe is the verdict */
+  }
 
   if (await probeAlive()) {
     attempts = 0; // success bounds CONSECUTIVE wedges, not lifetime

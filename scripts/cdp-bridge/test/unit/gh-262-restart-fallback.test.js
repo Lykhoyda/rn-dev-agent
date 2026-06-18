@@ -9,7 +9,8 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createRestartHandler, _resetRestartHandlerStateForTest,
+  createRestartHandler,
+  _resetRestartHandlerStateForTest,
 } from '../../dist/tools/restart.js';
 import { expectOk, expectFail, parseEnvelope } from '../helpers/result-helpers.js';
 
@@ -20,11 +21,18 @@ beforeEach(() => {
 function makeMockClient({ port = 8081 } = {}) {
   let connected = false;
   return {
-    get metroPort() { return port; },
-    get isConnected() { return connected; },
+    get metroPort() {
+      return port;
+    },
+    get isConnected() {
+      return connected;
+    },
     // connectedTarget intentionally undefined: the fresh-process case.
     disconnect: async () => {},
-    autoConnect: async () => { connected = true; return 'Connected to test'; },
+    autoConnect: async () => {
+      connected = true;
+      return 'Connected to test';
+    },
   };
 }
 
@@ -34,7 +42,9 @@ function harness(deps) {
   let current = oldClient;
   return createRestartHandler(
     () => current,
-    (c) => { current = c; },
+    (c) => {
+      current = c;
+    },
     () => newClient,
     { getSession: () => null, ...deps },
   );
@@ -43,7 +53,10 @@ function harness(deps) {
 test('hardReset: empty cache + no session → strict app.json fallback, simctl on booted', async () => {
   const simctl = [];
   const handler = harness({
-    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    execFile: async (cmd, args) => {
+      simctl.push(args.join(' '));
+      return { stdout: '', stderr: '' };
+    },
     stopFastRunner: () => {},
     sleep: async () => {},
     resolveBundleIdStrict: (platform) => {
@@ -61,29 +74,51 @@ test('hardReset: empty cache + no session → strict app.json fallback, simctl o
 test('hardReset: active iOS session appId outranks app.json; simctl targets the session UDID', async () => {
   const simctl = [];
   const handler = harness({
-    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    execFile: async (cmd, args) => {
+      simctl.push(args.join(' '));
+      return { stdout: '', stderr: '' };
+    },
     stopFastRunner: () => {},
     sleep: async () => {},
-    getSession: () => ({ deviceId: 'F1A2B3C4-1111-2222-3333-444455556666', appId: 'com.session.app', platform: 'ios' }),
+    getSession: () => ({
+      deviceId: 'F1A2B3C4-1111-2222-3333-444455556666',
+      appId: 'com.session.app',
+      platform: 'ios',
+    }),
     resolveBundleIdStrict: () => 'com.fallback.app',
   });
   expectOk(await handler({ hardReset: true }));
-  assert.ok(simctl.some((c) => c === 'simctl terminate F1A2B3C4-1111-2222-3333-444455556666 com.session.app'), `got: ${simctl}`);
-  assert.ok(simctl.some((c) => c === 'simctl launch F1A2B3C4-1111-2222-3333-444455556666 com.session.app'));
+  assert.ok(
+    simctl.some(
+      (c) => c === 'simctl terminate F1A2B3C4-1111-2222-3333-444455556666 com.session.app',
+    ),
+    `got: ${simctl}`,
+  );
+  assert.ok(
+    simctl.some((c) => c === 'simctl launch F1A2B3C4-1111-2222-3333-444455556666 com.session.app'),
+  );
 });
 
 test('codex-pair Fix 1: active session appId outranks the (stale) cache', async () => {
   // 1st restart: an iOS connectedTarget populates the cache with the OLD app.
   const oldAppClient = {
-    get metroPort() { return 8081; },
-    get isConnected() { return false; },
+    get metroPort() {
+      return 8081;
+    },
+    get isConnected() {
+      return false;
+    },
     connectedTarget: { description: 'com.old.app', platform: 'ios' },
     disconnect: async () => {},
     autoConnect: async () => 'Connected',
   };
   const plainClient = {
-    get metroPort() { return 8081; },
-    get isConnected() { return false; },
+    get metroPort() {
+      return 8081;
+    },
+    get isConnected() {
+      return false;
+    },
     disconnect: async () => {},
     autoConnect: async () => 'Connected',
   };
@@ -96,7 +131,10 @@ test('codex-pair Fix 1: active session appId outranks the (stale) cache', async 
     () => plainClient,
     {
       getSession: () => session,
-      execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+      execFile: async (cmd, args) => {
+        simctl.push(args.join(' '));
+        return { stdout: '', stderr: '' };
+      },
       stopFastRunner: () => {},
       sleep: async () => {},
       resolveBundleIdStrict: () => null,
@@ -107,7 +145,11 @@ test('codex-pair Fix 1: active session appId outranks the (stale) cache', async 
   // Switch apps in the same bridge process: no connectedTarget, but a live
   // session pointing at the CURRENT app.
   current = plainClient;
-  session = { deviceId: 'F1A2B3C4-1111-2222-3333-444455556666', appId: 'com.current.app', platform: 'ios' };
+  session = {
+    deviceId: 'F1A2B3C4-1111-2222-3333-444455556666',
+    appId: 'com.current.app',
+    platform: 'ios',
+  };
 
   expectOk(await handler({ hardReset: true }));
   assert.ok(
@@ -123,7 +165,10 @@ test('codex-pair Fix 1: active session appId outranks the (stale) cache', async 
 test('codex-pair Fix 2: malformed session deviceId falls back to booted (never reaches simctl argv)', async () => {
   const simctl = [];
   const handler = harness({
-    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    execFile: async (cmd, args) => {
+      simctl.push(args.join(' '));
+      return { stdout: '', stderr: '' };
+    },
     stopFastRunner: () => {},
     sleep: async () => {},
     getSession: () => ({ deviceId: 'evil; rm -rf /', appId: 'com.session.app', platform: 'ios' }),
@@ -131,7 +176,10 @@ test('codex-pair Fix 2: malformed session deviceId falls back to booted (never r
   });
   expectOk(await handler({ hardReset: true }));
   // bundleId from the session is still trusted; only the deviceId is rejected.
-  assert.ok(simctl.some((c) => c === 'simctl launch booted com.session.app'), `got: ${JSON.stringify(simctl)}`);
+  assert.ok(
+    simctl.some((c) => c === 'simctl launch booted com.session.app'),
+    `got: ${JSON.stringify(simctl)}`,
+  );
   assert.ok(
     !simctl.some((c) => c.includes('evil')),
     `malformed deviceId must never reach simctl argv — got: ${JSON.stringify(simctl)}`,
@@ -175,8 +223,14 @@ test('hardReset: launch fails + probe FALSE → typed APP_NOT_INSTALLED failure 
   // hardResetSteps stays complete in meta — the launch:err step is recorded
   // before we return.
   const steps = env.meta?.hardResetSteps;
-  assert.ok(Array.isArray(steps), `expected hardResetSteps in meta, got: ${JSON.stringify(env.meta)}`);
-  assert.ok(steps.some((s) => s.includes('APP_NOT_INSTALLED')), `got: ${JSON.stringify(steps)}`);
+  assert.ok(
+    Array.isArray(steps),
+    `expected hardResetSteps in meta, got: ${JSON.stringify(env.meta)}`,
+  );
+  assert.ok(
+    steps.some((s) => s.includes('APP_NOT_INSTALLED')),
+    `got: ${JSON.stringify(steps)}`,
+  );
 });
 
 test('hardReset: launch fails + probe NULL → raw launch:err step (fail open, unchanged)', async () => {
@@ -191,21 +245,33 @@ test('hardReset: launch fails + probe NULL → raw launch:err step (fail open, u
     probeAppInstalled: async () => null,
   });
   const data = expectOk(await handler({ hardReset: true }));
-  assert.ok(data.hardResetSteps.some((s) => s.startsWith('simctl launch:err(') && !s.includes('APP_NOT_INSTALLED')));
+  assert.ok(
+    data.hardResetSteps.some(
+      (s) => s.startsWith('simctl launch:err(') && !s.includes('APP_NOT_INSTALLED'),
+    ),
+  );
 });
 
 test('hardReset: android-cached bundleId is NOT used for an iOS target (platform-keyed cache)', async () => {
   // 1st restart: android connectedTarget populates the cache.
   const androidClient = {
-    get metroPort() { return 8081; },
-    get isConnected() { return false; },
+    get metroPort() {
+      return 8081;
+    },
+    get isConnected() {
+      return false;
+    },
     connectedTarget: { description: 'com.android.pkg', platform: 'android' },
     disconnect: async () => {},
     autoConnect: async () => 'Connected',
   };
   const plainClient = {
-    get metroPort() { return 8081; },
-    get isConnected() { return false; },
+    get metroPort() {
+      return 8081;
+    },
+    get isConnected() {
+      return false;
+    },
     disconnect: async () => {},
     autoConnect: async () => 'Connected',
   };
@@ -213,11 +279,14 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
   const simctl = [];
   const handler = createRestartHandler(
     () => current,
-    (c) => {},
+    (_c) => {},
     () => plainClient,
     {
       getSession: () => null,
-      execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+      execFile: async (cmd, args) => {
+        simctl.push(args.join(' '));
+        return { stdout: '', stderr: '' };
+      },
       stopFastRunner: () => {},
       sleep: async () => {},
       resolveBundleIdStrict: () => null,
@@ -253,7 +322,10 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
 test('codex-pair Fix 1: explicit invalid bundleId arg fails fast, simctl never called', async () => {
   const simctl = [];
   const handler = harness({
-    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    execFile: async (cmd, args) => {
+      simctl.push(args.join(' '));
+      return { stdout: '', stderr: '' };
+    },
     stopFastRunner: () => {},
     sleep: async () => {},
     resolveBundleIdStrict: () => 'com.fallback.app',
@@ -262,13 +334,20 @@ test('codex-pair Fix 1: explicit invalid bundleId arg fails fast, simctl never c
   assert.match(err, /invalid bundleId argument/);
   const env = parseEnvelope(await handler({ hardReset: true, bundleId: 'not a bundle' }));
   assert.equal(env.code, 'INVALID_BUNDLE_ID');
-  assert.equal(simctl.length, 0, `simctl must never run with an invalid explicit bundleId — got: ${JSON.stringify(simctl)}`);
+  assert.equal(
+    simctl.length,
+    0,
+    `simctl must never run with an invalid explicit bundleId — got: ${JSON.stringify(simctl)}`,
+  );
 });
 
 test('codex-pair Fix 1: invalid cached/config bundleId → skip-simctl step, never reaches simctl argv', async () => {
   const simctl = [];
   const handler = harness({
-    execFile: async (cmd, args) => { simctl.push(args.join(' ')); return { stdout: '', stderr: '' }; },
+    execFile: async (cmd, args) => {
+      simctl.push(args.join(' '));
+      return { stdout: '', stderr: '' };
+    },
     stopFastRunner: () => {},
     sleep: async () => {},
     // A corrupted app.json / config value resolved from a NON-arg source.
@@ -279,7 +358,11 @@ test('codex-pair Fix 1: invalid cached/config bundleId → skip-simctl step, nev
     data.hardResetSteps.includes('skip-simctl:invalid-bundleId-from-cache-or-config'),
     `expected the invalid-from-cache skip step — got: ${JSON.stringify(data.hardResetSteps)}`,
   );
-  assert.equal(simctl.length, 0, `simctl must never run with an invalid resolved bundleId — got: ${JSON.stringify(simctl)}`);
+  assert.equal(
+    simctl.length,
+    0,
+    `simctl must never run with an invalid resolved bundleId — got: ${JSON.stringify(simctl)}`,
+  );
   // bundleId nulled out → omitted from the envelope (never echoed back as valid).
   assert.equal(data.bundleId, undefined);
 });
@@ -291,8 +374,14 @@ test('hardReset success resets the detached-recovery budget', async () => {
     stopFastRunner: () => {},
     sleep: async () => {},
     resolveBundleIdStrict: () => 'com.fallback.app',
-    resetDetachedBudget: () => { resets += 1; },
+    resetDetachedBudget: () => {
+      resets += 1;
+    },
   });
   expectOk(await handler({ hardReset: true }));
-  assert.equal(resets, 1, 'a successful manual hard reset is a working recovery — budget must reset');
+  assert.equal(
+    resets,
+    1,
+    'a successful manual hard reset is a working recovery — budget must reset',
+  );
 });

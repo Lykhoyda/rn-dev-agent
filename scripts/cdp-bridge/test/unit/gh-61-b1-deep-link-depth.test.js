@@ -9,7 +9,9 @@ const MOD_PATH = '../../dist/verification/deep-link-depth.js';
 
 function envelope(data, meta) {
   return {
-    content: [{ type: 'text', text: JSON.stringify({ ok: true, data, ...(meta ? { meta } : {}) }) }],
+    content: [
+      { type: 'text', text: JSON.stringify({ ok: true, data, ...(meta ? { meta } : {}) }) },
+    ],
   };
 }
 
@@ -67,7 +69,10 @@ test('analyzeDeepLinkUrl: 3+ segments exceed threshold', async () => {
   // myapp://orders/123/edit = 3 segments — meets threshold.
   assert.equal(analyzeDeepLinkUrl('myapp://orders/123/edit').exceedsThreshold, true);
   // myapp://wallet/policies/abc/details/edit = 5 segments — clearly deep.
-  assert.equal(analyzeDeepLinkUrl('myapp://wallet/policies/abc/details/edit').exceedsThreshold, true);
+  assert.equal(
+    analyzeDeepLinkUrl('myapp://wallet/policies/abc/details/edit').exceedsThreshold,
+    true,
+  );
 });
 
 test('analyzeDeepLinkUrl: strips query and fragment', async () => {
@@ -100,11 +105,27 @@ test('analyzeDeepLinkUrl: handles https universal links', async () => {
 
 test('analyzeDeepLinkUrl: handles malformed and empty inputs safely', async () => {
   const { analyzeDeepLinkUrl } = await import(MOD_PATH);
-  assert.deepEqual(analyzeDeepLinkUrl(''), { segments: 0, endsWithSuccessWord: false, exceedsThreshold: false });
-  assert.deepEqual(analyzeDeepLinkUrl(null), { segments: 0, endsWithSuccessWord: false, exceedsThreshold: false });
-  assert.deepEqual(analyzeDeepLinkUrl(undefined), { segments: 0, endsWithSuccessWord: false, exceedsThreshold: false });
+  assert.deepEqual(analyzeDeepLinkUrl(''), {
+    segments: 0,
+    endsWithSuccessWord: false,
+    exceedsThreshold: false,
+  });
+  assert.deepEqual(analyzeDeepLinkUrl(null), {
+    segments: 0,
+    endsWithSuccessWord: false,
+    exceedsThreshold: false,
+  });
+  assert.deepEqual(analyzeDeepLinkUrl(undefined), {
+    segments: 0,
+    endsWithSuccessWord: false,
+    exceedsThreshold: false,
+  });
   // Bare scheme with no path
-  assert.deepEqual(analyzeDeepLinkUrl('myapp://'), { segments: 0, endsWithSuccessWord: false, exceedsThreshold: false });
+  assert.deepEqual(analyzeDeepLinkUrl('myapp://'), {
+    segments: 0,
+    endsWithSuccessWord: false,
+    exceedsThreshold: false,
+  });
 });
 
 // ── annotateDeepLinkDepth: integration with envelope ─────────────────────
@@ -210,5 +231,9 @@ test('source guard: mutation-absence refactored to use shared envelope helper', 
   const src = readFileSync(join(__dirname, '../../dist/verification/mutation-absence.js'), 'utf-8');
   assert.match(src, /attachVerificationWarning/);
   // Private augmentMeta should be gone now.
-  assert.equal(/^function augmentMeta\b/m.test(src), false, 'private augmentMeta should have been removed');
+  assert.equal(
+    /^function augmentMeta\b/m.test(src),
+    false,
+    'private augmentMeta should have been removed',
+  );
 });

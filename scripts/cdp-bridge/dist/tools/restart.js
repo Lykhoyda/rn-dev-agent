@@ -93,7 +93,9 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
             // Capture the bundle id BEFORE we disconnect — the connectedTarget
             // is cleared on disconnect, and we need it to issue simctl commands.
             const observedBundleId = oldClient.connectedTarget?.description ?? null;
-            const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+            const targetPlatform = (oldClient.connectedTarget?.platform ??
+                args.platform ??
+                'ios').toLowerCase();
             // The cache write must happen on every restart (incl. soft) so a later
             // hardReset still has a bundleId after autoConnect clears connectedTarget.
             if (observedBundleId)
@@ -114,11 +116,12 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 // bridge process has no cache, so without the fallbacks hardReset
                 // silently degraded to a soft reset. STRICT: an Android package must
                 // never be fed to iOS simctl.
-                bundleId = args.bundleId
-                    ?? observedBundleId
-                    ?? (sessionMatches ? session?.appId ?? null : null)
-                    ?? (lastSeenBundleIds.get(targetPlatform) ?? null)
-                    ?? resolveBundleIdStrictFn(targetPlatform);
+                bundleId =
+                    args.bundleId ??
+                        observedBundleId ??
+                        (sessionMatches ? (session?.appId ?? null) : null) ??
+                        lastSeenBundleIds.get(targetPlatform) ??
+                        resolveBundleIdStrictFn(targetPlatform);
                 // simctl targets the session's simulator when one is open — 'booted' is
                 // ambiguous with multiple booted sims. deviceId is persisted/untrusted,
                 // so validate before it reaches argv (invalid → 'booted').
@@ -148,7 +151,9 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 // android branch is a follow-up.
                 if (bundleId && targetPlatform === 'ios') {
                     try {
-                        await execFile('xcrun', ['simctl', 'terminate', targetUdid, bundleId], { timeout: 5000 });
+                        await execFile('xcrun', ['simctl', 'terminate', targetUdid, bundleId], {
+                            timeout: 5000,
+                        });
                         hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
                     }
                     catch (err) {
@@ -169,7 +174,9 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                             try {
                                 hint = snapshotHintFn(bundleId);
                             }
-                            catch { /* best-effort */ }
+                            catch {
+                                /* best-effort */
+                            }
                             const advice = buildNotInstalledAdvice(targetUdid, bundleId, hint);
                             // Record the step BEFORE returning so hardResetSteps in meta stays
                             // complete, then return a typed failure: a confirmed-missing bundle
@@ -215,7 +222,9 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 // subsequent recovery cycle keeps a valid bundleId. (Codex #1.)
                 const postConnectBundle = newClient.connectedTarget?.description;
                 if (postConnectBundle) {
-                    const postConnectPlatform = (newClient.connectedTarget?.platform ?? args.platform ?? 'ios').toLowerCase();
+                    const postConnectPlatform = (newClient.connectedTarget?.platform ??
+                        args.platform ??
+                        'ios').toLowerCase();
                     lastSeenBundleIds.set(postConnectPlatform, postConnectBundle);
                 }
             }

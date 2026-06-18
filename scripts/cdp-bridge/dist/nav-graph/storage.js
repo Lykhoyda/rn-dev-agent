@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync, lstatSync, mkdirSync, } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 const RN_AGENT_DIR = '.rn-agent';
@@ -151,10 +151,7 @@ export function findProjectRoot(opts = {}) {
     // cascade hit matches it, return immediately. Otherwise remember the
     // first hit as a fallback for when no sibling matches either.
     let walkupHit = null;
-    const starts = [
-        process.env.CLAUDE_USER_CWD,
-        process.cwd(),
-    ].filter(Boolean);
+    const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
     for (const start of starts) {
         if (isRnProject(start)) {
             if (targetBundleId && readProjectBundleId(start) === targetBundleId)
@@ -214,7 +211,9 @@ function getProjectSlug(projectRoot) {
         if (pkg.name && typeof pkg.name === 'string')
             return pkg.name;
     }
-    catch { /* fall through */ }
+    catch {
+        /* fall through */
+    }
     return projectRoot.split('/').pop() ?? 'unknown';
 }
 export function getGraphPath(projectRoot) {
@@ -273,7 +272,7 @@ function buildScreen(raw, isActive) {
     return screen;
 }
 function buildNavigator(raw, activeScreenName) {
-    const screens = raw.routes.map(r => buildScreen(r, r.name === activeScreenName));
+    const screens = raw.routes.map((r) => buildScreen(r, r.name === activeScreenName));
     return {
         id: raw.id,
         kind: raw.kind,
@@ -354,8 +353,8 @@ export function mergeGraph(existing, raw, projectRoot) {
     }
     const freshScreenNames = new Set(fresh.all_screens);
     const existingScreenNames = new Set(existing.all_screens);
-    const newRoutes = fresh.all_screens.filter(s => !existingScreenNames.has(s));
-    const removedRoutes = existing.all_screens.filter(s => !freshScreenNames.has(s));
+    const newRoutes = fresh.all_screens.filter((s) => !existingScreenNames.has(s));
+    const removedRoutes = existing.all_screens.filter((s) => !freshScreenNames.has(s));
     fresh.meta.created_at = existing.meta.created_at;
     fresh.meta.scan_count = existing.meta.scan_count + 1;
     if (!fresh.meta.scanned_at_commit && existing.meta.scanned_at_commit) {
@@ -470,7 +469,7 @@ export function recordNavigation(projectRoot, input) {
         return null;
     let targetScreen = null;
     for (const nav of graph.navigators) {
-        const found = nav.screens.find(s => s.name === input.screen);
+        const found = nav.screens.find((s) => s.name === input.screen);
         if (found) {
             targetScreen = found;
             break;
@@ -499,15 +498,18 @@ export function recordNavigation(projectRoot, input) {
     else {
         targetScreen.reliability_score = Math.max(targetScreen.reliability_score + RELIABILITY_FAILURE_DELTA, 0);
     }
-    const successRecords = (targetScreen.action_records ?? []).filter(r => r.success && r.latency_ms > 0);
-    targetScreen.avg_load_ms = successRecords.length > 0
-        ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
-        : undefined;
+    const successRecords = (targetScreen.action_records ?? []).filter((r) => r.success && r.latency_ms > 0);
+    targetScreen.avg_load_ms =
+        successRecords.length > 0
+            ? Math.round(successRecords.reduce((sum, r) => sum + r.latency_ms, 0) / successRecords.length)
+            : undefined;
     const strike = updateStrike(input.screen, input.method, input.success);
     try {
         writeGraph(projectRoot, graph);
     }
-    catch { /* best effort */ }
+    catch {
+        /* best effort */
+    }
     return {
         screen: input.screen,
         method: input.method,

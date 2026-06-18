@@ -14,12 +14,22 @@ export function createNetworkBodyHandler(getClient) {
         // CDP path: Network.getResponseBody (RN 0.83+)
         if (client.networkMode === 'cdp') {
             try {
-                const result = await client.send('Network.getResponseBody', { requestId: args.requestId });
+                const result = (await client.send('Network.getResponseBody', {
+                    requestId: args.requestId,
+                }));
                 let body = result.body ?? '';
                 const truncated = body.length > maxLen;
                 if (truncated)
                     body = body.slice(0, maxLen);
-                return okResult({ requestId: args.requestId, url: entry.url, status: entry.status, base64Encoded: result.base64Encoded ?? false, bodyLength: (result.body ?? '').length, body, source: 'cdp' }, { truncated });
+                return okResult({
+                    requestId: args.requestId,
+                    url: entry.url,
+                    status: entry.status,
+                    base64Encoded: result.base64Encoded ?? false,
+                    bodyLength: (result.body ?? '').length,
+                    body,
+                    source: 'cdp',
+                }, { truncated });
             }
             catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -58,7 +68,15 @@ export function createNetworkBodyHandler(getClient) {
                 const truncated = body.length > maxLen;
                 if (truncated)
                     body = body.slice(0, maxLen);
-                return okResult({ requestId: args.requestId, url: entry.url, status: entry.status, base64Encoded: false, bodyLength: (parsed.body ?? '').length, body, source: 'hook' }, { truncated });
+                return okResult({
+                    requestId: args.requestId,
+                    url: entry.url,
+                    status: entry.status,
+                    base64Encoded: false,
+                    bodyLength: (parsed.body ?? '').length,
+                    body,
+                    source: 'hook',
+                }, { truncated });
             }
             catch (err) {
                 return failResult(`Failed to read body from hook cache: ${err instanceof Error ? err.message : err}`);

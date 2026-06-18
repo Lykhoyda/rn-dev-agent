@@ -22,12 +22,18 @@ function tsFiles(dir) {
 // Strip line comments + block comments so historical mentions of "agent-device"
 // in prose never trip the gate — we only care about live code.
 function stripComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\/\/.*$/gm, '');
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\/\/.*$/gm, '');
 }
 
 const FORBIDDEN = [
   // spawning the agent-device executable in any form
-  { re: /(execFile|execFileAsync|spawn|exec)\(\s*['"]agent-device['"]/, name: "spawn of 'agent-device'" },
+  {
+    re: /(execFile|execFileAsync|spawn|exec)\(\s*['"]agent-device['"]/,
+    name: "spawn of 'agent-device'",
+  },
   // the deleted daemon tier
   { re: /\brunViaDaemon\b/, name: 'runViaDaemon (deleted daemon tier)' },
   { re: /\bloadDaemonInfo\b/, name: 'loadDaemonInfo (deleted daemon tier)' },
@@ -47,14 +53,26 @@ test('Phase 2 gate: no live agent-device dispatch remains in src', () => {
       if (re.test(code)) violations.push(`${relative(SRC, file)}: ${name}`);
     }
   }
-  assert.deepEqual(violations, [], `Forbidden agent-device dispatch found:\n${violations.join('\n')}`);
+  assert.deepEqual(
+    violations,
+    [],
+    `Forbidden agent-device dispatch found:\n${violations.join('\n')}`,
+  );
 });
 
 test('Phase 2 gate: D-b foreign-runner cleanup is RETAINED (negative control)', () => {
   // These SHOULD exist — the gate must not have been satisfied by deleting the
   // legitimate self-heal defense against a stale upstream AgentDeviceRunner.
   const ensure = readFileSync(join(SRC, 'runners', 'ensure-single-runner.ts'), 'utf8');
-  assert.match(ensure, /AgentDeviceRunner|callstack\.agentdevice/, 'foreign-runner cleanup must remain (spec D-b)');
+  assert.match(
+    ensure,
+    /AgentDeviceRunner|callstack\.agentdevice/,
+    'foreign-runner cleanup must remain (spec D-b)',
+  );
   const sentinel = readFileSync(join(SRC, 'tools', 'runner-leak-recovery.ts'), 'utf8');
-  assert.match(sentinel, /isAgentDeviceRunnerSentinel/, 'runner-leak sentinel must remain (spec D-b)');
+  assert.match(
+    sentinel,
+    /isAgentDeviceRunnerSentinel/,
+    'runner-leak sentinel must remain (spec D-b)',
+  );
 });

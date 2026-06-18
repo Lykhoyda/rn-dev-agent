@@ -17,9 +17,11 @@ export function sendWithTimeout(
     const id = nextId();
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(
-        `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`
-      ));
+      reject(
+        new Error(
+          `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`,
+        ),
+      );
     }, ms);
 
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });

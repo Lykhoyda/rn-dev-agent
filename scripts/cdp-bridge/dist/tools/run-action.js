@@ -136,7 +136,9 @@ export function createRunActionHandler(deps = {}) {
         const projectRoot = args.projectRoot ?? process.cwd();
         const loaded = loadAction(projectRoot, args.actionId);
         if (!loaded) {
-            return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', { hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.' });
+            return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', {
+                hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
+            });
         }
         // GH #173 (sub-issue 3): default-true forceReload acknowledges any
         // human edit to the YAML as the new baseline so downstream auto-repair
@@ -221,7 +223,13 @@ export function createRunActionHandler(deps = {}) {
                         trigger,
                         autoRepair,
                     });
-                    return failResult(`cdp_run_action: ${args.actionId} hit structural route-drift — ${drift.reason}. The flow changed shape; re-record the action. Auto-repair skipped (it only fixes stale selectors, not inserted/changed screens).`, 'ROUTE_DRIFT', { actionId: args.actionId, failureKind: 'ROUTE_DRIFT', liveRoute: drift.liveRoute, expectedRouteSequence: expectedSeq, autoRepair });
+                    return failResult(`cdp_run_action: ${args.actionId} hit structural route-drift — ${drift.reason}. The flow changed shape; re-record the action. Auto-repair skipped (it only fixes stale selectors, not inserted/changed screens).`, 'ROUTE_DRIFT', {
+                        actionId: args.actionId,
+                        failureKind: 'ROUTE_DRIFT',
+                        liveRoute: drift.liveRoute,
+                        expectedRouteSequence: expectedSeq,
+                        autoRepair,
+                    });
                 }
             }
             // Skip repair if disabled or if the failure isn't a repair shape.
@@ -230,8 +238,18 @@ export function createRunActionHandler(deps = {}) {
                 // (USER_DISABLED) from the kind-not-repairable skip path so MTTR
                 // analysis can tell "user said no" from "kind isn't repairable".
                 const autoRepair = autoRepairEnabled
-                    ? { attempted: false, outcome: 'skipped', refusedReason: 'NOT_REPAIRABLE_KIND', phases: { firstAttemptMs } }
-                    : { attempted: false, outcome: 'refused', refusedReason: 'USER_DISABLED', phases: { firstAttemptMs } };
+                    ? {
+                        attempted: false,
+                        outcome: 'skipped',
+                        refusedReason: 'NOT_REPAIRABLE_KIND',
+                        phases: { firstAttemptMs },
+                    }
+                    : {
+                        attempted: false,
+                        outcome: 'refused',
+                        refusedReason: 'USER_DISABLED',
+                        phases: { firstAttemptMs },
+                    };
                 const { actionCode, toolCode } = classifyFailure(failure);
                 await persistRun(args.actionId, projectRoot, {
                     timestamp: new Date().toISOString(),
@@ -249,9 +267,7 @@ export function createRunActionHandler(deps = {}) {
                     firstAttemptOutput: firstOutput.slice(0, 500),
                 };
                 const message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}`;
-                return toolCode
-                    ? failResult(message, toolCode, meta)
-                    : failResult(message, meta);
+                return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
             }
             // ─── SELECTOR_NOT_FOUND with auto-repair enabled ─────────────────
             if (failure.kind !== 'SELECTOR_NOT_FOUND') {
@@ -338,7 +354,8 @@ export function createRunActionHandler(deps = {}) {
             // RepairRecord without timestamp-fuzzy-matching.
             const repairScore = repairEnv.data?.score;
             const repairTimestamp = reloadedAction.state.repairHistory.length > 0
-                ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp
+                ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1]
+                    .timestamp
                 : undefined;
             // GH #119: when the retry fails on a DIFFERENT selector than the
             // one just patched, capture it as `nextFailedSelector` so MTTR
@@ -356,7 +373,9 @@ export function createRunActionHandler(deps = {}) {
                         nextFailedSelector = retryFailure.selector;
                     }
                 }
-                catch { /* best-effort — don't fail the run because the parser hiccuped */ }
+                catch {
+                    /* best-effort — don't fail the run because the parser hiccuped */
+                }
             }
             const autoRepair = {
                 attempted: true,
@@ -469,7 +488,11 @@ async function persistRun(actionId, projectRoot, record) {
         const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record)
             ? { ...fresh.metadata, status: 'active' }
             : fresh.metadata;
-        const next = { ...fresh, metadata: promotedMetadata, state: appendRunRecord(fresh.state, record) };
+        const next = {
+            ...fresh,
+            metadata: promotedMetadata,
+            state: appendRunRecord(fresh.state, record),
+        };
         const result = saveActionWithCAS(next);
         if (result.ok)
             return;

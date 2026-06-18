@@ -33,23 +33,40 @@ export function resetState(s: ResettableState): void {
 }
 
 export function setActiveFlag(port: number, target: HermesTarget | null): void {
-  try { writeFileSync(CDP_ACTIVE_FLAG, String(process.pid)); } catch { /* best-effort */ }
   try {
-    writeFileSync(CDP_SESSION_FILE, JSON.stringify({
-      port,
-      platform: target?.platform ?? null,
-      target: target?.title ?? null,
-      pid: process.pid,
-      connectedAt: new Date().toISOString(),
-    }));
-  } catch { /* best-effort */ }
+    writeFileSync(CDP_ACTIVE_FLAG, String(process.pid));
+  } catch {
+    /* best-effort */
+  }
+  try {
+    writeFileSync(
+      CDP_SESSION_FILE,
+      JSON.stringify({
+        port,
+        platform: target?.platform ?? null,
+        target: target?.title ?? null,
+        pid: process.pid,
+        connectedAt: new Date().toISOString(),
+      }),
+    );
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function clearActiveFlag(): void {
-  try { unlinkSync(CDP_ACTIVE_FLAG); } catch { /* may not exist */ }
-  try { unlinkSync(CDP_SESSION_FILE); } catch { /* may not exist */ }
+  try {
+    unlinkSync(CDP_ACTIVE_FLAG);
+  } catch {
+    /* may not exist */
+  }
+  try {
+    unlinkSync(CDP_SESSION_FILE);
+  } catch {
+    /* may not exist */
+  }
 }
 
 export function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }

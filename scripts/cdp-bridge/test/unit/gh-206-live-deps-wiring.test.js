@@ -1,7 +1,11 @@
 // test/unit/gh-206-live-deps-wiring.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLiveDeps, maybeCaptureLiveFrame, _resetLiveCaptureForTest } from '../../dist/observability/live-device.js';
+import {
+  buildLiveDeps,
+  maybeCaptureLiveFrame,
+  _resetLiveCaptureForTest,
+} from '../../dist/observability/live-device.js';
 import { Recorder } from '../../dist/observability/recorder.js';
 
 const baseInput = (over = {}) => ({
@@ -16,7 +20,9 @@ const baseInput = (over = {}) => ({
 });
 
 test('getPlatform prefers a valid agent-device session platform', () => {
-  const deps = buildLiveDeps(baseInput({ getActiveSession: () => ({ platform: 'ios', deviceId: 'UDID-1' }) }));
+  const deps = buildLiveDeps(
+    baseInput({ getActiveSession: () => ({ platform: 'ios', deviceId: 'UDID-1' }) }),
+  );
   assert.equal(deps.getPlatform(), 'ios');
 });
 
@@ -44,27 +50,36 @@ test('pushLive is bound to the recorder — real frame lands via the capture pat
 });
 
 test('getPlatform falls back to the connected CDP target when there is no session (the reporter flow)', () => {
-  const deps = buildLiveDeps(baseInput({
-    getActiveSession: () => null,
-    getClient: () => ({ isConnected: true, connectedTarget: { platform: 'ios' } }),
-  }));
+  const deps = buildLiveDeps(
+    baseInput({
+      getActiveSession: () => null,
+      getClient: () => ({ isConnected: true, connectedTarget: { platform: 'ios' } }),
+    }),
+  );
   assert.equal(deps.getPlatform(), 'ios');
 });
 
 test('getPlatform returns null when neither session nor CDP target yields ios/android', () => {
-  const deps = buildLiveDeps(baseInput({
-    getActiveSession: () => ({ platform: 'web' }),
-    getClient: () => ({ isConnected: true, connectedTarget: { platform: undefined } }),
-  }));
+  const deps = buildLiveDeps(
+    baseInput({
+      getActiveSession: () => ({ platform: 'web' }),
+      getClient: () => ({ isConnected: true, connectedTarget: { platform: undefined } }),
+    }),
+  );
   assert.equal(deps.getPlatform(), null);
 });
 
 test('readRoute returns null when CDP disconnected (no eval attempted)', async () => {
   let called = false;
-  const deps = buildLiveDeps(baseInput({
-    getClient: () => ({ isConnected: false, connectedTarget: null }),
-    readRoute: async () => { called = true; return 'X'; },
-  }));
+  const deps = buildLiveDeps(
+    baseInput({
+      getClient: () => ({ isConnected: false, connectedTarget: null }),
+      readRoute: async () => {
+        called = true;
+        return 'X';
+      },
+    }),
+  );
   assert.equal(await deps.readRoute(), null);
   assert.equal(called, false, 'must not call the route reader when disconnected');
 });

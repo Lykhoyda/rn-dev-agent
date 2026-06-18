@@ -73,5 +73,5 @@ test('discoverTestIDs returns empty array for nonexistent dir', () => {
 
 test('discoverTestIDs skips node_modules and dotfiles', () => {
   const ids = discoverTestIDs(join(__dirname, '..'));
-  assert.ok(!ids.some(id => id.includes('node_modules')));
+  assert.ok(!ids.some((id) => id.includes('node_modules')));
 });

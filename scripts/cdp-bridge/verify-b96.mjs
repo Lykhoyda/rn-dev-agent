@@ -23,8 +23,12 @@ function sh(cmd, args) {
 }
 
 function adbOk(args) {
-  try { sh('adb', args); return { ok: true }; }
-  catch (e) { return { ok: false, err: (e.stderr || e.message).split('\n').slice(0, 2).join(' | ') }; }
+  try {
+    sh('adb', args);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, err: (e.stderr || e.message).split('\n').slice(0, 2).join(' | ') };
+  }
 }
 
 function openSettingsSearch() {
@@ -35,7 +39,9 @@ function openSettingsSearch() {
 function clearFocusedField() {
   sh('adb', ['shell', 'input', 'keyevent', '123']); // MOVE_END
   for (let i = 0; i < 80; i++) {
-    try { sh('adb', ['shell', 'input', 'keyevent', '67']); } catch {} // DEL
+    try {
+      sh('adb', ['shell', 'input', 'keyevent', '67']);
+    } catch {} // DEL
   }
 }
 
@@ -123,18 +129,14 @@ function trunc(s, n) {
 let pass = 0;
 let fail = 0;
 
-console.log(
-  'label'.padEnd(22),
-  'input'.padEnd(32),
-  'result'.padEnd(8),
-  'field content',
-);
+console.log('label'.padEnd(22), 'input'.padEnd(32), 'result'.padEnd(8), 'field content');
 console.log('-'.repeat(90));
 
 for (const tc of TEST_INPUTS) {
   const res = runOne(tc.input);
   const ok = res.err == null && res.actual === tc.input;
-  if (ok) pass++; else fail++;
+  if (ok) pass++;
+  else fail++;
   console.log(
     tc.label.padEnd(22),
     trunc(tc.input, 30).padEnd(32),

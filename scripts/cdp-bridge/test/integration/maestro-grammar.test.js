@@ -51,62 +51,76 @@ test('B59 grammar guard: `maestro test` subcommand exists', { skip: !maestroAvai
   );
 });
 
-test('B59 grammar guard: --platform flag our code uses is still documented', { skip: !maestroAvailable() }, () => {
-  // Our dispatch builds `['test', '--platform', platform, flowFile]`.
-  // Maestro v2.x documents the flag as either `-p=<platform>` or the
-  // long-form `--platform=<platform>`; clikt-based parsers accept both
-  // the `-p` short form and the `--platform` long form. We assert at
-  // least one form is present — either would keep our dispatch working.
-  const { text } = captureHelp();
-  const hasLongForm = /--platform/.test(text);
-  const hasShortForm = /\[-p=<platform>\]|-p,\s*--platform|-p\s+<platform>|-p=<platform>/.test(text);
-  assert.ok(
-    hasLongForm || hasShortForm,
-    `Neither '--platform' nor '-p' platform flag found in maestro test --help.\n` +
-    `Dispatch argv would break. First 500 chars:\n${text.slice(0, 500)}`,
-  );
-});
+test(
+  'B59 grammar guard: --platform flag our code uses is still documented',
+  { skip: !maestroAvailable() },
+  () => {
+    // Our dispatch builds `['test', '--platform', platform, flowFile]`.
+    // Maestro v2.x documents the flag as either `-p=<platform>` or the
+    // long-form `--platform=<platform>`; clikt-based parsers accept both
+    // the `-p` short form and the `--platform` long form. We assert at
+    // least one form is present — either would keep our dispatch working.
+    const { text } = captureHelp();
+    const hasLongForm = /--platform/.test(text);
+    const hasShortForm = /\[-p=<platform>\]|-p,\s*--platform|-p\s+<platform>|-p=<platform>/.test(
+      text,
+    );
+    assert.ok(
+      hasLongForm || hasShortForm,
+      `Neither '--platform' nor '-p' platform flag found in maestro test --help.\n` +
+        `Dispatch argv would break. First 500 chars:\n${text.slice(0, 500)}`,
+    );
+  },
+);
 
-test('B59 grammar guard: --device-type flag must NOT exist (pre-ship bug regression)', { skip: !maestroAvailable() }, () => {
-  // This is the exact bug Gemini (conf 97) + Codex (conf 98) caught on
-  // 2026-04-24. Initial draft used --device-type; if maestro ever
-  // introduces that flag AND we haven't updated our dispatch, this test
-  // will fail and signal "reconsider argv choice." More importantly, if
-  // someone re-introduces --device-type in a refactor thinking it's the
-  // platform selector, live maestro will reject it and this test fails.
-  const { text } = captureHelp();
-  assert.doesNotMatch(
-    text,
-    /--device-type/,
-    `Unexpected: --device-type appears in maestro test --help. ` +
-    `Our dispatch uses --platform; if you intend to switch, update ` +
-    `scripts/cdp-bridge/src/tools/maestro-dispatch.ts buildArgs.`,
-  );
-});
+test(
+  'B59 grammar guard: --device-type flag must NOT exist (pre-ship bug regression)',
+  { skip: !maestroAvailable() },
+  () => {
+    // This is the exact bug Gemini (conf 97) + Codex (conf 98) caught on
+    // 2026-04-24. Initial draft used --device-type; if maestro ever
+    // introduces that flag AND we haven't updated our dispatch, this test
+    // will fail and signal "reconsider argv choice." More importantly, if
+    // someone re-introduces --device-type in a refactor thinking it's the
+    // platform selector, live maestro will reject it and this test fails.
+    const { text } = captureHelp();
+    assert.doesNotMatch(
+      text,
+      /--device-type/,
+      `Unexpected: --device-type appears in maestro test --help. ` +
+        `Our dispatch uses --platform; if you intend to switch, update ` +
+        `scripts/cdp-bridge/src/tools/maestro-dispatch.ts buildArgs.`,
+    );
+  },
+);
 
-test('B59 grammar guard: `maestro` accepts --platform ios without parse error (smoke)', { skip: !maestroAvailable() }, () => {
-  // Sanity smoke: invoke maestro with our exact argv prefix against a
-  // non-existent flow. The flag must parse cleanly — the CLI must reach
-  // the "flow file not found" branch, not fail at "Unknown option."
-  const r = spawnSync('maestro', ['test', '--platform', 'ios', '/tmp/__does-not-exist__.yaml'], {
-    encoding: 'utf8',
-    timeout: 15_000,
-  });
-  const combined = (r.stdout ?? '') + '\n' + (r.stderr ?? '');
-  assert.doesNotMatch(
-    combined,
-    /Unknown option/,
-    `maestro CLI rejected our argv — dispatch would fail in production.\n` +
-    `Combined output: ${combined.slice(0, 500)}`,
-  );
-  // We DO expect a "flow not found" type error — that proves the flag
-  // parsed and we reached the flow-file lookup step.
-  assert.match(
-    combined,
-    /(Flow path does not exist|Flow not found|No such file|does not exist)/i,
-    `Expected flow-not-found error (proving flag parsing succeeded). Got:\n${combined.slice(0, 500)}`,
-  );
-});
+test(
+  'B59 grammar guard: `maestro` accepts --platform ios without parse error (smoke)',
+  { skip: !maestroAvailable() },
+  () => {
+    // Sanity smoke: invoke maestro with our exact argv prefix against a
+    // non-existent flow. The flag must parse cleanly — the CLI must reach
+    // the "flow file not found" branch, not fail at "Unknown option."
+    const r = spawnSync('maestro', ['test', '--platform', 'ios', '/tmp/__does-not-exist__.yaml'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    const combined = (r.stdout ?? '') + '\n' + (r.stderr ?? '');
+    assert.doesNotMatch(
+      combined,
+      /Unknown option/,
+      `maestro CLI rejected our argv — dispatch would fail in production.\n` +
+        `Combined output: ${combined.slice(0, 500)}`,
+    );
+    // We DO expect a "flow not found" type error — that proves the flag
+    // parsed and we reached the flow-file lookup step.
+    assert.match(
+      combined,
+      /(Flow path does not exist|Flow not found|No such file|does not exist)/i,
+      `Expected flow-not-found error (proving flag parsing succeeded). Got:\n${combined.slice(0, 500)}`,
+    );
+  },
+);
 
 test('B59 grammar guard: when `maestro` is missing, all guards skip cleanly', () => {
   // Meta-test: documents that this whole file is opt-in. The `skip:

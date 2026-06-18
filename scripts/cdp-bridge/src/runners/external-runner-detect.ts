@@ -20,13 +20,14 @@ export async function detectAndroidExternalRunner(
     const bin = 'adb';
     const argv = [...serialArgs, 'shell', 'ps', '-A'];
     const opts = { timeout: 2_000, encoding: 'utf8' as const };
-    const run = execFileImpl === execFile
-      ? promisify(execFileImpl)
-      : (execFileImpl as unknown as (
-          b: string,
-          a: string[],
-          o: typeof opts,
-        ) => Promise<{ stdout: string }>);
+    const run =
+      execFileImpl === execFile
+        ? promisify(execFileImpl)
+        : (execFileImpl as unknown as (
+            b: string,
+            a: string[],
+            o: typeof opts,
+          ) => Promise<{ stdout: string }>);
     const { stdout } = await run(bin, argv, opts);
     const lines = stdout
       .split('\n')
@@ -38,7 +39,8 @@ export async function detectAndroidExternalRunner(
     return {
       platform: 'android',
       code: 'ANDROID_UIAUTOMATOR_COMPETITOR',
-      message: 'A competing Android UIAutomator or agent-device process is running. Stop it (or opt out of the in-tree runner with RN_ANDROID_RUNNER=0) to avoid focus and input contention.',
+      message:
+        'A competing Android UIAutomator or agent-device process is running. Stop it (or opt out of the in-tree runner with RN_ANDROID_RUNNER=0) to avoid focus and input contention.',
       processLines: lines,
     };
   } catch {
@@ -68,13 +70,14 @@ export async function detectIosExternalRunner(
 ): Promise<IosExternalRunnerWarning | null> {
   try {
     const opts = { timeout: 2_000, encoding: 'utf8' as const };
-    const run = execFileImpl === execFile
-      ? promisify(execFileImpl)
-      : (execFileImpl as unknown as (
-          b: string,
-          a: string[],
-          o: typeof opts,
-        ) => Promise<{ stdout: string }>);
+    const run =
+      execFileImpl === execFile
+        ? promisify(execFileImpl)
+        : (execFileImpl as unknown as (
+            b: string,
+            a: string[],
+            o: typeof opts,
+          ) => Promise<{ stdout: string }>);
     // -ww: unlimited command-column width — macOS ps truncates otherwise, and
     // a UDID sitting mid-path in a long driver command line would be cut off,
     // silently breaking the includes(udid) scoping (GH#186 plan review).

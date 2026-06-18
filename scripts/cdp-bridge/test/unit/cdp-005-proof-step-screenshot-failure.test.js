@@ -30,8 +30,10 @@ test('CDP-005: errors accumulated (e.g. navigation error) → warn metadata is s
   const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ screen: 'X', verifyTestID: 'something', waitMs: 0 });
   const env = parseEnvelope(r);
-  assert.ok(typeof env.meta?.warning === 'string' && env.meta.warning.length > 0,
-    'navigation error must set meta.warning, not be silent');
+  assert.ok(
+    typeof env.meta?.warning === 'string' && env.meta.warning.length > 0,
+    'navigation error must set meta.warning, not be silent',
+  );
   assert.ok(env.data.errors?.some((e) => /Navigation/i.test(e)));
 });
 
@@ -45,9 +47,11 @@ test('CDP-005: verification requested + verified=false alone triggers warning', 
   assert.equal(env.data.verified, false);
 });
 
-test('CDP-005: clean verification stays verified=true (warn may still fire from screenshot if no session — that\'s the expected CDP-005 behaviour)', async () => {
+test("CDP-005: clean verification stays verified=true (warn may still fire from screenshot if no session — that's the expected CDP-005 behaviour)", async () => {
   const client = createMockClient();
-  client.evaluate = async () => ({ value: JSON.stringify({ tree: { component: 'View', testID: 'real' } }) });
+  client.evaluate = async () => ({
+    value: JSON.stringify({ tree: { component: 'View', testID: 'real' } }),
+  });
   const handler = createProofStepHandler(() => client, { hasSession: () => false });
   const r = await handler({ verifyTestID: 'real', waitMs: 0 });
   const env = parseEnvelope(r);

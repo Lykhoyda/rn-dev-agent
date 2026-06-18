@@ -5,8 +5,12 @@ import { ObservabilityServer } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
 
 export const observeSchema = {
-  action: z.enum(['start', 'stop', 'status']).default('status')
-    .describe('start = launch the web UI and return its URL; stop = tear it down; status = report whether it is running'),
+  action: z
+    .enum(['start', 'stop', 'status'])
+    .default('status')
+    .describe(
+      'start = launch the web UI and return its URL; stop = tear it down; status = report whether it is running',
+    ),
 };
 
 export interface ObserveArgs {

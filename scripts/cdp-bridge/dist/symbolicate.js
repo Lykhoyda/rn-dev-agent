@@ -18,7 +18,7 @@ export function parseHermesStack(rawStack) {
 }
 function formatSymbolicatedStack(frames) {
     return frames
-        .map(f => `  at ${f.methodName} (${f.file}:${f.lineNumber}:${f.column})`)
+        .map((f) => `  at ${f.methodName} (${f.file}:${f.lineNumber}:${f.column})`)
         .join('\n');
 }
 export async function symbolicateErrors(errors, metroPort) {
@@ -42,7 +42,7 @@ export async function symbolicateErrors(errors, metroPort) {
         });
         if (!resp.ok)
             return errors;
-        const body = await resp.json();
+        const body = (await resp.json());
         const resultFrames = body.stack;
         if (!Array.isArray(resultFrames) || resultFrames.length !== allFrames.length) {
             return errors;

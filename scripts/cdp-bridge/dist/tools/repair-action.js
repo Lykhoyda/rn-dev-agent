@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-wrapper.js';
 import { okResult, failResult, withSession } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import { loadAction, saveAction, actionWasEditedExternally, } from '../domain/action-store.js';
+import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
 import { extractAllTestIDs, extractIdSelectors, detectTransportBlind, attemptRepair, applyRepair, DEFAULT_REPAIR_THRESHOLD, } from '../domain/repair-engine.js';
 import { repairBudgetAvailable, recentRepairCount } from '../domain/reusable-action.js';
 import { snapshotEnvelopeFailed } from './device-batch.js';
@@ -53,7 +53,10 @@ async function resolveIOSDeviceIdForRepair() {
     if (session?.deviceId)
         return session.deviceId;
     try {
-        const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], { timeout: 5000, encoding: 'utf8' });
+        const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
+            timeout: 5000,
+            encoding: 'utf8',
+        });
         const data = JSON.parse(stdout);
         for (const list of Object.values(data.devices ?? {})) {
             for (const dev of list) {
@@ -62,7 +65,9 @@ async function resolveIOSDeviceIdForRepair() {
             }
         }
     }
-    catch { /* best-effort */ }
+    catch {
+        /* best-effort */
+    }
     return undefined;
 }
 async function bringTargetAppToForeground(platform, bundleId) {
@@ -74,16 +79,23 @@ async function bringTargetAppToForeground(platform, bundleId) {
     try {
         stopFastRunner();
     }
-    catch { /* best-effort — fast-runner may already be dead */ }
+    catch {
+        /* best-effort — fast-runner may already be dead */
+    }
     try {
         if (platform === 'android') {
             await execFile('adb', ['shell', 'monkey', '-p', bundleId, '-c', 'android.intent.category.LAUNCHER', '1'], { timeout: 5000, encoding: 'utf8' });
         }
         else {
-            await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], { timeout: 5000, encoding: 'utf8' });
+            await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
+                timeout: 5000,
+                encoding: 'utf8',
+            });
         }
     }
-    catch { /* best-effort — sentinel detection covers the failure case */ }
+    catch {
+        /* best-effort — sentinel detection covers the failure case */
+    }
 }
 /**
  * Parse agent-device snapshot envelope into the small node shape that

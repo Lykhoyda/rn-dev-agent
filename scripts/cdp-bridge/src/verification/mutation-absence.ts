@@ -95,9 +95,10 @@ export function normalizeRouteName(raw: string | null | undefined): string | nul
   // Slice the tail rather than the head — success-shape matching cares about
   // the end of the string, so any input over MAX_NAME_LENGTH still has its
   // signal-bearing suffix preserved.
-  const bounded = candidate.length > MAX_NAME_LENGTH
-    ? candidate.slice(candidate.length - MAX_NAME_LENGTH)
-    : candidate;
+  const bounded =
+    candidate.length > MAX_NAME_LENGTH
+      ? candidate.slice(candidate.length - MAX_NAME_LENGTH)
+      : candidate;
   return bounded.toLowerCase();
 }
 
@@ -135,7 +136,7 @@ export function countWindowedMutations(
     const status = entry.status;
     if (status === undefined) {
       const t = Date.parse(entry.timestamp);
-      return Number.isFinite(t) && (now - t) <= MAX_PENDING_AGE_MS;
+      return Number.isFinite(t) && now - t <= MAX_PENDING_AGE_MS;
     }
     return status >= 200 && status < 400;
   });
@@ -184,7 +185,12 @@ export function annotateMutationAbsence(result: ToolResult, ctx: AnnotateContext
   const windowMs = ctx.windowMs ?? DEFAULT_WINDOW_MS;
   const now = (ctx.now ?? Date.now)();
   const methods = ctx.mutationMethods ?? MUTATION_METHODS;
-  const { inWindow, lastMutationAgeMs } = countWindowedMutations(ctx.client, windowMs, now, methods);
+  const { inWindow, lastMutationAgeMs } = countWindowedMutations(
+    ctx.client,
+    windowMs,
+    now,
+    methods,
+  );
   if (inWindow > 0) return result;
 
   const hint =

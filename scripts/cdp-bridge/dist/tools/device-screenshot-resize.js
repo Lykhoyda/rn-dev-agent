@@ -57,7 +57,10 @@ export function parseSipsDimensions(stdout) {
 async function getDimensions(path, deps) {
     const runner = deps.exec ?? execFile;
     try {
-        const { stdout } = await runner('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', path], { timeout: 5000, encoding: 'utf8' });
+        const { stdout } = await runner('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', path], {
+            timeout: 5000,
+            encoding: 'utf8',
+        });
         return parseSipsDimensions(stdout);
     }
     catch {

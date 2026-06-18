@@ -2,7 +2,9 @@ import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 
 let sessionReloadCount = 0;
-export function getSessionReloadCount(): number { return sessionReloadCount; }
+export function getSessionReloadCount(): number {
+  return sessionReloadCount;
+}
 
 const SOFT_RECONNECT_DEADLINE_MS = 30_000;
 const SOFT_RECONNECT_ATTEMPTS = 5;
@@ -99,14 +101,14 @@ export function createReloadHandler(
     try {
       const result = await client.evaluate(
         '(function() {' +
-        '  var ds = null;' +
-        '  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}' +
-        '  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}' +
-        '  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}' +
-        '  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }' +
-        '  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }' +
-        '  throw new Error("DevSettings not available — use Maestro or simctl to restart the app");' +
-        '})()'
+          '  var ds = null;' +
+          '  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}' +
+          '  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}' +
+          '  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}' +
+          '  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }' +
+          '  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }' +
+          '  throw new Error("DevSettings not available — use Maestro or simctl to restart the app");' +
+          '})()',
       );
       if (result.error) {
         return failResult(`Reload failed: ${result.error}`);
@@ -124,7 +126,7 @@ export function createReloadHandler(
 
     const wsDownDeadline = Date.now() + 3_000;
     while (client.isConnected && Date.now() < wsDownDeadline) {
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     let reconnected = false;
@@ -153,7 +155,7 @@ export function createReloadHandler(
       } catch (reconnErr) {
         lastReconnErr = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
         if (attempt < SOFT_RECONNECT_ATTEMPTS - 1) {
-          await new Promise(r => setTimeout(r, 2000 + attempt * 1000));
+          await new Promise((r) => setTimeout(r, 2000 + attempt * 1000));
         }
       } finally {
         if (reconnTimer) clearTimeout(reconnTimer);
@@ -196,13 +198,18 @@ export function createReloadHandler(
 
     const helperDeadline = Date.now() + 12_000;
     while (!client.helpersInjected && Date.now() < helperDeadline) {
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 400));
     }
 
     if (!client.isConnected) {
       return okResult(
         { reloaded: true, type: 'full', reconnected: false },
-        { meta: { warning: 'Reload triggered but connection dropped after re-discovery.', ...forceMeta } },
+        {
+          meta: {
+            warning: 'Reload triggered but connection dropped after re-discovery.',
+            ...forceMeta,
+          },
+        },
       );
     }
 

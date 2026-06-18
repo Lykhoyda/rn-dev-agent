@@ -1,7 +1,12 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 
-type DevAction = 'reload' | 'toggleInspector' | 'togglePerfMonitor' | 'dismissRedBox' | 'disableDevMenu';
+type DevAction =
+  | 'reload'
+  | 'toggleInspector'
+  | 'togglePerfMonitor'
+  | 'dismissRedBox'
+  | 'disableDevMenu';
 
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
@@ -52,7 +57,8 @@ export function createDevSettingsHandler(getClient: () => CDPClient) {
       }
     } catch (evalErr) {
       const msg = evalErr instanceof Error ? evalErr.message : String(evalErr);
-      const isDisconnect = msg.includes('WebSocket closed') || msg.includes('WebSocket not connected');
+      const isDisconnect =
+        msg.includes('WebSocket closed') || msg.includes('WebSocket not connected');
       if (args.action === 'reload' && isDisconnect) {
         return okResult(
           { action: args.action, executed: true },

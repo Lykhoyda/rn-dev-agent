@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { okResult, failResult, warnResult } from '../../dist/utils.js';
-import { parseEnvelope, expectOk, expectFail, expectWarn } from '../helpers/result-helpers.js';
+import { parseEnvelope, expectOk, expectWarn } from '../helpers/result-helpers.js';
 
 // ── okResult ──────────────────────────────────────────────────────────
 

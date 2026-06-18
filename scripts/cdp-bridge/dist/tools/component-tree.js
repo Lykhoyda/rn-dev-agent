@@ -26,7 +26,10 @@ export function createComponentTreeHandler(getClient) {
             return failResult(`Component tree error: ${parsed.error}`);
         }
         if (parsed.warning === 'APP_HAS_REDBOX') {
-            return warnResult({ message: parsed.message ?? 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.' }, 'APP_HAS_REDBOX');
+            return warnResult({
+                message: parsed.message ??
+                    'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
+            }, 'APP_HAS_REDBOX');
         }
         return okResult(parsed);
     });

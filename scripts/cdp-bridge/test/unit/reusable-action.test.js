@@ -39,7 +39,10 @@ test('Phase127 freshRuntimeState: schema invariants', () => {
 test('Phase127 appendRunRecord: pass updates stats correctly', () => {
   const s0 = freshRuntimeState(fixedNow, 0);
   const s1 = appendRunRecord(s0, {
-    timestamp: FROZEN_DATE, durationMs: 4200, status: 'pass', trigger: 'agent',
+    timestamp: FROZEN_DATE,
+    durationMs: 4200,
+    status: 'pass',
+    trigger: 'agent',
   });
   assert.equal(s1.stats.totalRuns, 1);
   assert.equal(s1.stats.successCount, 1);
@@ -51,9 +54,25 @@ test('Phase127 appendRunRecord: pass updates stats correctly', () => {
 
 test('Phase127 appendRunRecord: avgDurationMs uses successful runs only', () => {
   let s = freshRuntimeState(fixedNow, 0);
-  s = appendRunRecord(s, { timestamp: FROZEN_DATE, durationMs: 4000, status: 'pass', trigger: 'agent' });
-  s = appendRunRecord(s, { timestamp: FROZEN_DATE, durationMs: 9999, status: 'fail', trigger: 'agent', failureCode: 'TIMEOUT' });
-  s = appendRunRecord(s, { timestamp: FROZEN_DATE, durationMs: 6000, status: 'pass', trigger: 'agent' });
+  s = appendRunRecord(s, {
+    timestamp: FROZEN_DATE,
+    durationMs: 4000,
+    status: 'pass',
+    trigger: 'agent',
+  });
+  s = appendRunRecord(s, {
+    timestamp: FROZEN_DATE,
+    durationMs: 9999,
+    status: 'fail',
+    trigger: 'agent',
+    failureCode: 'TIMEOUT',
+  });
+  s = appendRunRecord(s, {
+    timestamp: FROZEN_DATE,
+    durationMs: 6000,
+    status: 'pass',
+    trigger: 'agent',
+  });
   assert.equal(s.stats.totalRuns, 3);
   assert.equal(s.stats.successCount, 2);
   assert.equal(s.stats.failureCount, 1);
@@ -63,7 +82,12 @@ test('Phase127 appendRunRecord: avgDurationMs uses successful runs only', () => 
 test('Phase127 appendRunRecord: history bounded by RUN_HISTORY_MAX', () => {
   let s = freshRuntimeState(fixedNow, 0);
   for (let i = 0; i < HISTORY_LIMITS.RUN_HISTORY_MAX + 5; i++) {
-    s = appendRunRecord(s, { timestamp: FROZEN_DATE, durationMs: 100, status: 'pass', trigger: 'agent' });
+    s = appendRunRecord(s, {
+      timestamp: FROZEN_DATE,
+      durationMs: 100,
+      status: 'pass',
+      trigger: 'agent',
+    });
   }
   assert.equal(s.runHistory.length, HISTORY_LIMITS.RUN_HISTORY_MAX);
   assert.equal(s.stats.totalRuns, HISTORY_LIMITS.RUN_HISTORY_MAX + 5);
@@ -111,17 +135,27 @@ test('Phase127 repairBudget: 3 repairs in last 24h → budget exhausted', () => 
   let s = freshRuntimeState(fixedNow, 0);
   // Three repairs all today — at the limit (budget < 3 means available)
   for (let i = 0; i < REPAIR_BUDGET.ATTEMPTS_PER_24H; i++) {
-    s = appendRepairRecord(s, { timestamp: FROZEN_DATE, failureCode: 'SELECTOR_NOT_FOUND', diff: {}, durationMs: 100 });
+    s = appendRepairRecord(s, {
+      timestamp: FROZEN_DATE,
+      failureCode: 'SELECTOR_NOT_FOUND',
+      diff: {},
+      durationMs: 100,
+    });
   }
   assert.equal(repairBudgetAvailable(s, fixedNow), false);
 });
 
-test('Phase127 repairBudget: old repairs (>24h) don\'t count against budget', () => {
+test("Phase127 repairBudget: old repairs (>24h) don't count against budget", () => {
   let s = freshRuntimeState(fixedNow, 0);
   // 5 repairs from a week ago → all stale
   const oldTs = '2026-04-23T15:00:00.000Z';
   for (let i = 0; i < 5; i++) {
-    s = appendRepairRecord(s, { timestamp: oldTs, failureCode: 'SELECTOR_NOT_FOUND', diff: {}, durationMs: 100 });
+    s = appendRepairRecord(s, {
+      timestamp: oldTs,
+      failureCode: 'SELECTOR_NOT_FOUND',
+      diff: {},
+      durationMs: 100,
+    });
   }
   assert.equal(repairBudgetAvailable(s, fixedNow), true);
 });
@@ -136,15 +170,21 @@ test('Phase127 shouldAutoPromoteToActive: experimental + pass → true', () => {
   assert.equal(shouldAutoPromoteToActive(meta, lastRun), true);
 });
 
-test('Phase127 shouldAutoPromoteToActive: active flow doesn\'t re-promote', () => {
+test("Phase127 shouldAutoPromoteToActive: active flow doesn't re-promote", () => {
   const meta = { id: 'x', intent: 'y', status: 'active' };
   const lastRun = { timestamp: FROZEN_DATE, durationMs: 4000, status: 'pass', trigger: 'agent' };
   assert.equal(shouldAutoPromoteToActive(meta, lastRun), false);
 });
 
-test('Phase127 shouldAutoPromoteToActive: failed run doesn\'t promote', () => {
+test("Phase127 shouldAutoPromoteToActive: failed run doesn't promote", () => {
   const meta = { id: 'x', intent: 'y', status: 'experimental' };
-  const lastRun = { timestamp: FROZEN_DATE, durationMs: 4000, status: 'fail', trigger: 'agent', failureCode: 'TIMEOUT' };
+  const lastRun = {
+    timestamp: FROZEN_DATE,
+    durationMs: 4000,
+    status: 'fail',
+    trigger: 'agent',
+    failureCode: 'TIMEOUT',
+  };
   assert.equal(shouldAutoPromoteToActive(meta, lastRun), false);
 });
 
@@ -289,19 +329,22 @@ test('D1209 serializeM7Header: omits produces when undefined or empty', () => {
 });
 
 test('D1209 parseM7Header: produces map roundtrips with mixed types', () => {
-  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { authenticated: true, route: home, retries: 3 }\n';
+  const yaml =
+    '# id: foo\n# intent: bar\n# status: active\n# produces: { authenticated: true, route: home, retries: 3 }\n';
   const meta = parseM7Header(yaml);
   assert.deepEqual(meta.produces, { authenticated: true, route: 'home', retries: 3 });
 });
 
 test('D1209 parseM7Header: produces handles boolean false + negative + decimal', () => {
-  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { dirty: false, offset: -2, ratio: 0.75 }\n';
+  const yaml =
+    '# id: foo\n# intent: bar\n# status: active\n# produces: { dirty: false, offset: -2, ratio: 0.75 }\n';
   const meta = parseM7Header(yaml);
   assert.deepEqual(meta.produces, { dirty: false, offset: -2, ratio: 0.75 });
 });
 
 test('D1209 parseM7Header: produces strips quotes around string values', () => {
-  const yaml = '# id: foo\n# intent: bar\n# status: active\n# produces: { route: "Settings", lang: \'en-US\' }\n';
+  const yaml =
+    '# id: foo\n# intent: bar\n# status: active\n# produces: { route: "Settings", lang: \'en-US\' }\n';
   const meta = parseM7Header(yaml);
   assert.deepEqual(meta.produces, { route: 'Settings', lang: 'en-US' });
 });

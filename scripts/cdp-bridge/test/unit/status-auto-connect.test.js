@@ -26,7 +26,11 @@ test('cdp_status: payload includes autoConnect resolution', async () => {
     autoConnectState: { enabled: false, source: 'env' },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
-  const handler = createStatusHandler(() => client, () => {}, () => client);
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
   const result = await handler({});
   const data = expectOk(result);
   assert.deepEqual(data.autoConnect, { enabled: false, source: 'env' });
@@ -39,8 +43,11 @@ test('CDPClient.autoConnectState: resolved once, stable across env flips', () =>
     const client = new CDPClient();
     assert.deepEqual(client.autoConnectState, { enabled: false, source: 'env' });
     process.env.RN_CDP_AUTOCONNECT = '1';
-    assert.deepEqual(client.autoConnectState, { enabled: false, source: 'env' },
-      'resolution must be cached, not re-read');
+    assert.deepEqual(
+      client.autoConnectState,
+      { enabled: false, source: 'env' },
+      'resolution must be cached, not re-read',
+    );
   } finally {
     if (prev === undefined) delete process.env.RN_CDP_AUTOCONNECT;
     else process.env.RN_CDP_AUTOCONNECT = prev;

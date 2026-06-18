@@ -39,33 +39,52 @@ test('buildSipsResizeArgs forces JPEG format + quality for .jpg paths', () => {
   // PNG bytes from the fast-runner path get re-encoded as JPEG instead of
   // staying as PNG-in-.jpg-extension. Without the format flag, savings drop
   // from ~46% (full re-encode) to ~12% (resize-only) under fast-runner.
-  assert.deepEqual(
-    buildSipsResizeArgs('/tmp/x.jpg', 800, 85),
-    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '/tmp/x.jpg'],
-  );
+  assert.deepEqual(buildSipsResizeArgs('/tmp/x.jpg', 800, 85), [
+    '--resampleWidth',
+    '800',
+    '-s',
+    'format',
+    'jpeg',
+    '-s',
+    'formatOptions',
+    '85',
+    '/tmp/x.jpg',
+  ]);
 });
 
 test('buildSipsResizeArgs forces JPEG format + quality for .jpeg paths', () => {
-  assert.deepEqual(
-    buildSipsResizeArgs('/tmp/x.jpeg', 800, 85),
-    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '/tmp/x.jpeg'],
-  );
+  assert.deepEqual(buildSipsResizeArgs('/tmp/x.jpeg', 800, 85), [
+    '--resampleWidth',
+    '800',
+    '-s',
+    'format',
+    'jpeg',
+    '-s',
+    'formatOptions',
+    '85',
+    '/tmp/x.jpeg',
+  ]);
 });
 
 test('buildSipsResizeArgs omits format/quality flags for .png paths', () => {
-  assert.deepEqual(
-    buildSipsResizeArgs('/tmp/x.png', 800, 85),
-    ['--resampleWidth', '800', '/tmp/x.png'],
-  );
+  assert.deepEqual(buildSipsResizeArgs('/tmp/x.png', 800, 85), [
+    '--resampleWidth',
+    '800',
+    '/tmp/x.png',
+  ]);
 });
 
 test('buildSipsResizeArgs forces JPEG format even when quality is undefined for .jpg paths', () => {
   // The format conversion is unconditional for .jpg/.jpeg outputs (PNG-in-jpg
   // would otherwise leak through). Quality is the only conditional flag.
-  assert.deepEqual(
-    buildSipsResizeArgs('/tmp/x.jpg', 800, undefined),
-    ['--resampleWidth', '800', '-s', 'format', 'jpeg', '/tmp/x.jpg'],
-  );
+  assert.deepEqual(buildSipsResizeArgs('/tmp/x.jpg', 800, undefined), [
+    '--resampleWidth',
+    '800',
+    '-s',
+    'format',
+    'jpeg',
+    '/tmp/x.jpg',
+  ]);
 });
 
 // ── deriveScreenshotPath ──────────────────────────────────────────────
@@ -84,14 +103,22 @@ test('deriveScreenshotPath defaults to .jpg when no path/format', () => {
 });
 
 test('deriveScreenshotPath honors format=png when no path', () => {
-  const out = deriveScreenshotPath({ format: 'png' }, () => 99, () => 0.5);
+  const out = deriveScreenshotPath(
+    { format: 'png' },
+    () => 99,
+    () => 0.5,
+  );
   assert.match(out, /^\/tmp\/rn-screenshot-99-[a-z0-9]+\.png$/);
 });
 
 // ── resolveScreenshotPath ─────────────────────────────────────────────
 
 test('resolveScreenshotPath uses data.path when present and absolute', () => {
-  const result = { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/actual.png' } }) }] };
+  const result = {
+    content: [
+      { type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/actual.png' } }) },
+    ],
+  };
   assert.equal(resolveScreenshotPath(result, '/tmp/fallback.jpg'), '/tmp/actual.png');
 });
 
@@ -101,7 +128,11 @@ test('resolveScreenshotPath uses fallback when data.path is missing', () => {
 });
 
 test('resolveScreenshotPath uses fallback when data.path is relative', () => {
-  const result = { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: 'tmp/relative.png' } }) }] };
+  const result = {
+    content: [
+      { type: 'text', text: JSON.stringify({ ok: true, data: { path: 'tmp/relative.png' } }) },
+    ],
+  };
   assert.equal(resolveScreenshotPath(result, '/tmp/fallback.jpg'), '/tmp/fallback.jpg');
 });
 
@@ -113,7 +144,9 @@ test('resolveScreenshotPath uses fallback on malformed envelope', () => {
 // ── wrapResultWithResize ──────────────────────────────────────────────
 
 test('wrapResultWithResize adds resize meta and updates path on success', () => {
-  const result = { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/foo.jpg' } }) }] };
+  const result = {
+    content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/foo.jpg' } }) }],
+  };
   const resize = {
     resized: true,
     path: '/tmp/foo.jpg',
@@ -134,8 +167,14 @@ test('wrapResultWithResize adds resize meta and updates path on success', () => 
 });
 
 test('wrapResultWithResize adds reason meta when not resized', () => {
-  const result = { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/foo.jpg' } }) }] };
-  const wrapped = wrapResultWithResize(result, { resized: false, path: '/tmp/foo.jpg', reason: 'sips-unavailable' });
+  const result = {
+    content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: '/tmp/foo.jpg' } }) }],
+  };
+  const wrapped = wrapResultWithResize(result, {
+    resized: false,
+    path: '/tmp/foo.jpg',
+    reason: 'sips-unavailable',
+  });
   const env = JSON.parse(wrapped.content[0].text);
   assert.equal(env.meta.resize.resized, false);
   assert.equal(env.meta.resize.reason, 'sips-unavailable');
@@ -157,7 +196,11 @@ test('resizeWithSips skips when maxWidth=0', async () => {
 });
 
 test('resizeWithSips returns sips-unavailable when sips probe fails', async () => {
-  const exec = makeFakeExec({ '--version': () => { throw new Error('sips not found'); } });
+  const exec = makeFakeExec({
+    '--version': () => {
+      throw new Error('sips not found');
+    },
+  });
   const out = await resizeWithSips('/tmp/x.jpg', {}, { exec });
   assert.equal(out.resized, false);
   assert.equal(out.reason, 'sips-unavailable');
@@ -196,7 +239,10 @@ test('resizeWithSips happy path: invokes sips resample, returns dims + bytes', a
     },
     '--resampleWidth': () => ({ stdout: '', stderr: '' }),
   });
-  const fileSize = (() => { let i = 0; return () => (++i === 1 ? 800_000 : 200_000); })();
+  const fileSize = (() => {
+    let i = 0;
+    return () => (++i === 1 ? 800_000 : 200_000);
+  })();
   const out = await resizeWithSips('/tmp/x.jpg', { maxWidth: 800 }, { exec, fileSize });
   assert.equal(out.resized, true);
   assert.deepEqual(out.originalDims, { width: 1200, height: 2600 });
@@ -209,7 +255,9 @@ test('resizeWithSips returns sips-failed when resample throws', async () => {
   const exec = makeFakeExec({
     '--version': () => ({ stdout: 'sips 10.4.4', stderr: '' }),
     '-g': () => ({ stdout: 'pixelWidth: 1200\npixelHeight: 2600', stderr: '' }),
-    '--resampleWidth': () => { throw new Error('disk full'); },
+    '--resampleWidth': () => {
+      throw new Error('disk full');
+    },
   });
   const out = await resizeWithSips('/tmp/x.jpg', { maxWidth: 800 }, { exec });
   assert.equal(out.resized, false);

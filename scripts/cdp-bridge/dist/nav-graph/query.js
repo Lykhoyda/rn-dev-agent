@@ -2,7 +2,7 @@ import { isMethodCooledDown } from './storage.js';
 export function findRouteInGraph(graph, routeName) {
     const candidates = [];
     for (const nav of graph.navigators) {
-        const screen = nav.screens.find(s => s.name === routeName);
+        const screen = nav.screens.find((s) => s.name === routeName);
         if (screen)
             candidates.push({ nav, screen });
     }
@@ -27,12 +27,12 @@ function buildNavigatorPath(graph, navigatorId) {
         if (visited.has(currentId))
             break;
         visited.add(currentId);
-        const nav = graph.navigators.find(n => n.id === currentId);
+        const nav = graph.navigators.find((n) => n.id === currentId);
         if (!nav)
             break;
         if (nav.parent_screen) {
             path.unshift(nav.parent_screen);
-            const parentNav = graph.navigators.find(n => n.screens.some(s => s.name === nav.parent_screen));
+            const parentNav = graph.navigators.find((n) => n.screens.some((s) => s.name === nav.parent_screen));
             currentId = parentNav?.id;
         }
         else {
@@ -56,21 +56,21 @@ export function listAllRoutes(graph) {
 }
 export function getNavigatorSubtree(graph, rootId) {
     const result = [];
-    const root = graph.navigators.find(n => n.id === rootId);
+    const root = graph.navigators.find((n) => n.id === rootId);
     if (!root)
         return result;
     const seen = new Set([root.id]);
     result.push(root);
-    const queue = root.screens.map(s => s.name);
+    const queue = root.screens.map((s) => s.name);
     while (queue.length > 0) {
         const screenName = queue.shift();
-        const childNavs = graph.navigators.filter(n => n.parent_screen === screenName);
+        const childNavs = graph.navigators.filter((n) => n.parent_screen === screenName);
         for (const child of childNavs) {
             if (seen.has(child.id))
                 continue;
             seen.add(child.id);
             result.push(child);
-            queue.push(...child.screens.map(s => s.name));
+            queue.push(...child.screens.map((s) => s.name));
         }
     }
     return result;
@@ -78,11 +78,11 @@ export function getNavigatorSubtree(graph, rootId) {
 // --- Phase B: Navigation Planning ---
 const AUTH_SCREEN_PATTERNS = /\b(login|signin|sign.?in|welcome|register|signup|sign.?up|auth|landing|onboarding)\b/i;
 function findNavigatorForScreen(graph, screenName) {
-    return graph.navigators.find(n => n.screens.some(s => s.name === screenName)) ?? null;
+    return graph.navigators.find((n) => n.screens.some((s) => s.name === screenName)) ?? null;
 }
 function getActiveScreenChain(graph) {
     const chain = [];
-    let nav = graph.navigators.find(n => !n.parent_screen);
+    let nav = graph.navigators.find((n) => !n.parent_screen);
     if (!nav)
         return chain;
     const visited = new Set();
@@ -90,7 +90,7 @@ function getActiveScreenChain(graph) {
         visited.add(nav.id);
         if (nav.active_screen) {
             chain.push(nav.active_screen);
-            nav = graph.navigators.find(n => n.parent_screen === nav.active_screen);
+            nav = graph.navigators.find((n) => n.parent_screen === nav.active_screen);
         }
         else {
             break;
@@ -100,11 +100,15 @@ function getActiveScreenChain(graph) {
 }
 function actionForKind(kind) {
     switch (kind) {
-        case 'tab': return 'switch_tab';
-        case 'drawer': return 'open_drawer';
+        case 'tab':
+            return 'switch_tab';
+        case 'drawer':
+            return 'open_drawer';
         case 'stack':
-        case 'native-stack': return 'navigate';
-        default: return 'navigate';
+        case 'native-stack':
+            return 'navigate';
+        default:
+            return 'navigate';
     }
 }
 function computeStepReliability(screen, kind) {
@@ -183,7 +187,7 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
         const nav = findNavigatorForScreen(graph, screenName);
         if (!nav)
             continue;
-        const screen = nav.screens.find(s => s.name === screenName);
+        const screen = nav.screens.find((s) => s.name === screenName);
         if (!screen)
             continue;
         steps.push({
@@ -229,19 +233,17 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
         }
     }
     let reliability = 100;
-    const programmaticSteps = steps.filter(s => s.method === 'programmatic');
+    const programmaticSteps = steps.filter((s) => s.method === 'programmatic');
     for (const step of programmaticSteps) {
-        const nav = graph.navigators.find(n => n.id === step.navigator_id);
-        const screen = nav?.screens.find(s => s.name === step.target_screen);
+        const nav = graph.navigators.find((n) => n.id === step.navigator_id);
+        const screen = nav?.screens.find((s) => s.name === step.target_screen);
         if (screen && nav) {
             reliability = Math.min(reliability, computeStepReliability(screen, nav.kind));
         }
     }
-    const hasCooledProgrammatic = programmaticSteps.some(s => isMethodCooledDown(s.target_screen, s.method));
+    const hasCooledProgrammatic = programmaticSteps.some((s) => isMethodCooledDown(s.target_screen, s.method));
     const prerequisites = detectPrerequisites(graph, targetScreen);
-    let preferredMethod = deepLinkAvailable && programmaticSteps.length >= 2
-        ? 'deep_link'
-        : 'programmatic';
+    let preferredMethod = deepLinkAvailable && programmaticSteps.length >= 2 ? 'deep_link' : 'programmatic';
     if (hasCooledProgrammatic) {
         if (deepLinkAvailable && !isMethodCooledDown(targetScreen, 'deep_link')) {
             preferredMethod = 'deep_link';

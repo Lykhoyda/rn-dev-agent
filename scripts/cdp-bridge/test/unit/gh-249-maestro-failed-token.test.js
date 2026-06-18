@@ -20,8 +20,14 @@ test('#249 matches Maestro terminal status lines', () => {
 
 test('#249 does NOT match app/console log content that merely contains the substring', () => {
   assert.equal(outputIndicatesFlowFailure('[INFO] dispatching action FETCH_FAILED'), false);
-  assert.equal(outputIndicatesFlowFailure('console.log: USER_REGISTRATION_FAILED event sent'), false);
-  assert.equal(outputIndicatesFlowFailure('2026-06-10 12:00:01 upload FAILED midway, retrying'), false);
+  assert.equal(
+    outputIndicatesFlowFailure('console.log: USER_REGISTRATION_FAILED event sent'),
+    false,
+  );
+  assert.equal(
+    outputIndicatesFlowFailure('2026-06-10 12:00:01 upload FAILED midway, retrying'),
+    false,
+  );
   assert.equal(outputIndicatesFlowFailure('FAILED to fetch user profile'), false); // line-leading but prose, not a status line
   assert.equal(outputIndicatesFlowFailure('All steps passed'), false);
   assert.equal(outputIndicatesFlowFailure(''), false);

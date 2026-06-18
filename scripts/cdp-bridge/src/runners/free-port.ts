@@ -27,7 +27,10 @@ export function findFreePort(preferred: number): Promise<number> {
       srv.listen({ port, host: '127.0.0.1' }, () => {
         const addr = srv.address();
         const chosen = typeof addr === 'object' && addr ? addr.port : 0;
-        if (!chosen) { srv.close(() => reject(new Error('findFreePort: OS returned port 0'))); return; }
+        if (!chosen) {
+          srv.close(() => reject(new Error('findFreePort: OS returned port 0')));
+          return;
+        }
         srv.close(() => resolve(chosen));
       });
     };

@@ -20,10 +20,7 @@ test('CDPClient.isProxyActive defaults to false before startProxy is called', ()
 
 test('CDPClient.startProxy throws when no target is connected', async () => {
   const client = new CDPClient();
-  await assert.rejects(
-    () => client.startProxy(),
-    /startProxy requires an active CDP connection/,
-  );
+  await assert.rejects(() => client.startProxy(), /startProxy requires an active CDP connection/);
   // No state drift after failed guard
   assert.equal(client.isProxyActive, false);
   assert.equal(client.proxyUrl, null);
@@ -46,7 +43,11 @@ test('CDPClient.startProxy is idempotent — second call returns existing URL wi
   client._multiplexer = { port: 45678, stop: async () => {}, isRunning: true, consumerCount: 0 };
 
   const returned = await client.startProxy();
-  assert.equal(returned, 'ws://127.0.0.1:45678', 'returns existing URL, does not allocate new port');
+  assert.equal(
+    returned,
+    'ws://127.0.0.1:45678',
+    'returns existing URL, does not allocate new port',
+  );
   assert.equal(client.proxyUrl, 'ws://127.0.0.1:45678', 'state unchanged');
 });
 
@@ -61,7 +62,9 @@ test('CDPClient.disconnect tears down the multiplexer and clears proxy state (gr
     port: 45999,
     isRunning: true,
     consumerCount: 0,
-    stop: async () => { stopCalled = true; },
+    stop: async () => {
+      stopCalled = true;
+    },
   };
 
   await client.disconnect();
@@ -81,7 +84,9 @@ test('CDPClient.disconnect is idempotent — safe to call twice (graceful shutdo
     port: 45000,
     isRunning: true,
     consumerCount: 0,
-    stop: async () => { stopCalls++; },
+    stop: async () => {
+      stopCalls++;
+    },
   };
 
   await client.disconnect();
@@ -98,7 +103,9 @@ test('CDPClient.disconnect tolerates multiplexer.stop() rejecting (best-effort c
     port: 45111,
     isRunning: true,
     consumerCount: 0,
-    stop: async () => { throw new Error('multiplexer cleanup failed'); },
+    stop: async () => {
+      throw new Error('multiplexer cleanup failed');
+    },
   };
 
   // disconnect() must still complete — proxy cleanup is best-effort, not a hard requirement.
@@ -126,7 +133,9 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
 
   // Stub softReconnect to simulate the "connection landed, but the full session
   // re-setup failed" path. This is the only branch that triggers rollback.
-  client._softReconnectDirect = async () => { throw new Error('simulated reconnect failure'); };
+  client._softReconnectDirect = async () => {
+    throw new Error('simulated reconnect failure');
+  };
 
   await assert.rejects(() => client.startProxy(), /simulated reconnect failure/);
 
@@ -137,9 +146,15 @@ test('CDPClient.startProxy rolls back multiplexer when softReconnect throws (D66
 
   // A fresh startProxy must succeed (state genuinely reset, not just nulled out).
   let reconnects = 0;
-  client._softReconnectDirect = async () => { reconnects++; };
+  client._softReconnectDirect = async () => {
+    reconnects++;
+  };
   const url = await client.startProxy();
-  assert.match(url, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'fresh startProxy succeeds after rollback');
+  assert.match(
+    url,
+    /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/,
+    'fresh startProxy succeeds after rollback',
+  );
   assert.equal(reconnects, 1);
 
   await client.disconnect();
@@ -208,7 +223,9 @@ test('B132: _suspendProxy clears _proxyUrl synchronously, preserves _proxyDesire
   // Plant active-proxy state.
   client._proxyUrl = 'ws://127.0.0.1:45678';
   client._multiplexer = {
-    port: 45678, isRunning: true, consumerCount: 0,
+    port: 45678,
+    isRunning: true,
+    consumerCount: 0,
     stop: async () => {},
   };
   client._proxyDesired = true;
@@ -220,7 +237,11 @@ test('B132: _suspendProxy clears _proxyUrl synchronously, preserves _proxyDesire
   // observes cleared state without waiting for multiplexer.stop() to complete.
   assert.equal(client._proxyUrl, null, '_proxyUrl cleared synchronously');
   assert.equal(client._multiplexer, null, '_multiplexer cleared synchronously');
-  assert.equal(client._proxyDesired, true, '_proxyDesired preserved — resume hook should re-allocate');
+  assert.equal(
+    client._proxyDesired,
+    true,
+    '_proxyDesired preserved — resume hook should re-allocate',
+  );
 
   await suspendPromise;
 });
@@ -235,7 +256,10 @@ test('B132: _resumeProxy no-ops when _proxyDesired=false', async () => {
   // Track whether startProxy fires.
   let startCalls = 0;
   const originalStartProxy = client.startProxy.bind(client);
-  client.startProxy = async (...args) => { startCalls++; return originalStartProxy(...args); };
+  client.startProxy = async (...args) => {
+    startCalls++;
+    return originalStartProxy(...args);
+  };
 
   await client._resumeProxy();
   assert.equal(startCalls, 0, '_resumeProxy skipped — no desired intent');
@@ -245,11 +269,14 @@ test('B132: _resumeProxy no-ops when _proxyUrl already set (already active)', as
   const client = new CDPClient();
   plantConnectedTarget(client, 'ws://127.0.0.1:99999/existing');
   client._proxyDesired = true;
-  client._proxyUrl = 'ws://127.0.0.1:45678';  // Already active
+  client._proxyUrl = 'ws://127.0.0.1:45678'; // Already active
 
   let startCalls = 0;
   const originalStartProxy = client.startProxy.bind(client);
-  client.startProxy = async (...args) => { startCalls++; return originalStartProxy(...args); };
+  client.startProxy = async (...args) => {
+    startCalls++;
+    return originalStartProxy(...args);
+  };
 
   await client._resumeProxy();
   assert.equal(startCalls, 0, '_resumeProxy skipped — proxy already active');
@@ -262,7 +289,9 @@ test('B132: _resumeProxy failure clears _proxyDesired (predictable one-shot poli
   client._proxyDesired = true;
 
   // Stub _softReconnectDirect to fail — startProxy rollback fires, resume fails.
-  client._softReconnectDirect = async () => { throw new Error('resume softReconnect failed'); };
+  client._softReconnectDirect = async () => {
+    throw new Error('resume softReconnect failed');
+  };
 
   await client._resumeProxy();
 
@@ -280,8 +309,8 @@ test('B132: softReconnect wrapper suspends + resumes the proxy across reconnect'
   plantConnectedTarget(client, hermes.url);
 
   // First startProxy via the direct path — plants _proxyUrl + _proxyDesired=true.
-  client._softReconnectDirect = async () => {};  // no-op reconnect
-  const originalUrl = await client.startProxy();
+  client._softReconnectDirect = async () => {}; // no-op reconnect
+  const _originalUrl = await client.startProxy();
   assert.ok(client._proxyDesired, '_proxyDesired set after successful startProxy');
 
   const firstMux = client._multiplexer;
@@ -291,7 +320,10 @@ test('B132: softReconnect wrapper suspends + resumes the proxy across reconnect'
   // and the old mux should have been stopped.
   let firstMuxStopped = false;
   const origStop = firstMux.stop.bind(firstMux);
-  firstMux.stop = async () => { firstMuxStopped = true; return origStop(); };
+  firstMux.stop = async () => {
+    firstMuxStopped = true;
+    return origStop();
+  };
 
   await client.softReconnect();
 
@@ -311,7 +343,9 @@ test('B132: softReconnect wrapper does NOT suspend/resume when proxy was inactiv
   assert.equal(client._proxyUrl, null, 'precondition: proxy inactive');
 
   let directCalls = 0;
-  client._softReconnectDirect = async () => { directCalls++; };
+  client._softReconnectDirect = async () => {
+    directCalls++;
+  };
 
   await client.softReconnect();
 
@@ -378,7 +412,9 @@ test('B132: afterReconnect path — _resumeProxy picks up the new target URL (re
 
   // Simulate reconnect loop: discoverAndConnect picked a refreshed target.
   client._connectedTarget = {
-    id: 'page1', title: 'Mock', vm: 'Hermes',
+    id: 'page1',
+    title: 'Mock',
+    vm: 'Hermes',
     webSocketDebuggerUrl: hermesB.url,
     platform: 'ios',
   };
@@ -388,7 +424,11 @@ test('B132: afterReconnect path — _resumeProxy picks up the new target URL (re
 
   const muxB = client._multiplexer;
   assert.notEqual(muxB, muxA, 'fresh multiplexer allocated via afterReconnect path');
-  assert.equal(muxB.opts ? muxB.opts.hermesUrl : undefined, hermesB.url, 'new proxy points at hermes B');
+  assert.equal(
+    muxB.opts ? muxB.opts.hermesUrl : undefined,
+    hermesB.url,
+    'new proxy points at hermes B',
+  );
 
   await client.disconnect();
   await hermesA.stop();
@@ -405,7 +445,11 @@ test('B132: end-to-end — proxy rehydrates against a NEW target URL after recon
   client._softReconnectDirect = async () => {};
   const urlA = await client.startProxy();
   const muxA = client._multiplexer;
-  assert.equal(muxA.opts ? muxA.opts.hermesUrl : undefined, hermesA.url, 'proxy A points at hermes A');
+  assert.equal(
+    muxA.opts ? muxA.opts.hermesUrl : undefined,
+    hermesA.url,
+    'proxy A points at hermes A',
+  );
 
   // Simulate a reconnect where the target's URL changed. In production, the
   // reconnect loop would update _connectedTarget via discoverAndConnect; here
@@ -413,7 +457,9 @@ test('B132: end-to-end — proxy rehydrates against a NEW target URL after recon
   client._softReconnectDirect = async () => {
     // Discovery picked a "refreshed" target with the same ID but a new URL.
     client._connectedTarget = {
-      id: 'page1', title: 'Mock', vm: 'Hermes',
+      id: 'page1',
+      title: 'Mock',
+      vm: 'Hermes',
       webSocketDebuggerUrl: hermesB.url,
       platform: 'ios',
     };
@@ -423,7 +469,11 @@ test('B132: end-to-end — proxy rehydrates against a NEW target URL after recon
 
   const muxB = client._multiplexer;
   assert.notEqual(muxB, muxA, 'new multiplexer allocated on resume');
-  assert.equal(muxB.opts ? muxB.opts.hermesUrl : undefined, hermesB.url, 'new proxy points at hermes B — this is the B132 fix');
+  assert.equal(
+    muxB.opts ? muxB.opts.hermesUrl : undefined,
+    hermesB.url,
+    'new proxy points at hermes B — this is the B132 fix',
+  );
   assert.notEqual(client._proxyUrl, urlA, 'proxy URL changed (new ephemeral port)');
 
   await client.disconnect();

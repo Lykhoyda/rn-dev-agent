@@ -106,7 +106,11 @@ test('Phase128: findRefByTestID walks fast-runner tree shape (deep match)', () =
             identifier: 'screen',
             children: [
               { ref: 'e3', identifier: 'header' },
-              { ref: 'e4', identifier: 'fab-create-task', children: [{ ref: 'e5', identifier: 'icon' }] },
+              {
+                ref: 'e4',
+                identifier: 'fab-create-task',
+                children: [{ ref: 'e5', identifier: 'icon' }],
+              },
             ],
           },
         ],

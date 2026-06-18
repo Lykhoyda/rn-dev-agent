@@ -15,15 +15,31 @@ import { createInteractHandler } from '../../dist/tools/interact.js';
 
 function createSandbox(opts = {}) {
   const sandbox = {
-    Array, Object, JSON, Map, WeakSet, Error, Date, parseInt, parseFloat,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Error,
+    Date,
+    parseInt,
+    parseFloat,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
-    String, Number, Boolean, RegExp, Symbol, Set, Promise, setTimeout, clearTimeout,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Symbol,
+    Set,
+    Promise,
+    setTimeout,
+    clearTimeout,
   };
   sandbox.globalThis = sandbox;
   if (opts.fiberRoot) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map([[1, {}]]),
-      getFiberRoots: (id) => id === 1 ? new Set([{ current: opts.fiberRoot }]) : new Set(),
+      getFiberRoots: (id) => (id === 1 ? new Set([{ current: opts.fiberRoot }]) : new Set()),
     };
   }
   vm.createContext(sandbox);
@@ -60,7 +76,9 @@ test('#250 helper: a throwing onPress reports success:false with action_executed
         name: 'Pressable',
         props: {
           testID: 'crash-btn',
-          onPress: () => { throw new Error('Cannot update unmounted component'); },
+          onPress: () => {
+            throw new Error('Cannot update unmounted component');
+          },
         },
       },
     ],
@@ -75,9 +93,7 @@ test('#250 helper: a throwing onPress reports success:false with action_executed
 test('#250 helper: a non-throwing onPress still reports success:true (regression guard)', () => {
   const root = buildFiber({
     name: 'App',
-    children: [
-      { name: 'Pressable', props: { testID: 'ok-btn', onPress: () => {} } },
-    ],
+    children: [{ name: 'Pressable', props: { testID: 'ok-btn', onPress: () => {} } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(sandbox.__RN_AGENT.interact({ action: 'press', testID: 'ok-btn' }));

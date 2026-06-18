@@ -18,10 +18,7 @@ import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
-import {
-  type ActionLifecycle,
-  freshRuntimeState,
-} from '../domain/reusable-action.js';
+import { type ActionLifecycle, freshRuntimeState } from '../domain/reusable-action.js';
 import { actionPathFor } from '../domain/action-store.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { atomicWriter } from '../domain/atomic-writer.js';
@@ -87,10 +84,16 @@ export interface SaveAsActionArgs {
 export function createSaveAsActionHandler() {
   return async (args: SaveAsActionArgs): Promise<ToolResult> => {
     if (!args.id || typeof args.id !== 'string') {
-      return failResult('cdp_record_test_save_as_action requires id (lower-case kebab-case slug)', 'BAD_FILENAME');
+      return failResult(
+        'cdp_record_test_save_as_action requires id (lower-case kebab-case slug)',
+        'BAD_FILENAME',
+      );
     }
     if (!args.intent || typeof args.intent !== 'string') {
-      return failResult('cdp_record_test_save_as_action requires intent (one-line goal)', 'BAD_FILENAME');
+      return failResult(
+        'cdp_record_test_save_as_action requires intent (one-line goal)',
+        'BAD_FILENAME',
+      );
     }
     // Light validation on id shape — refuse path traversal and
     // weird shells in the filename. Lower-case kebab-case + digits.

@@ -9,9 +9,8 @@
 // multi-renderer-loop tokens so drift between the two copies fails loudly.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { findAllRootFibersForTest, INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,8 +64,14 @@ test('B143: single renderer with multiple roots returns all roots', () => {
   const hook = makeHook({ 1: makeRootsMap([f1, f2]) });
   const result = findAllRootFibersForTest(hook);
   assert.equal(result.length, 2);
-  assert.deepEqual(result.map((r) => r.rendererId), [1, 1]);
-  assert.deepEqual(result.map((r) => r.fiber), [f1, f2]);
+  assert.deepEqual(
+    result.map((r) => r.rendererId),
+    [1, 1],
+  );
+  assert.deepEqual(
+    result.map((r) => r.fiber),
+    [f1, f2],
+  );
 });
 
 test('B143: multi-renderer (1 + 2) returns union — the B143 core case', () => {
@@ -79,8 +84,14 @@ test('B143: multi-renderer (1 + 2) returns union — the B143 core case', () => 
   });
   const result = findAllRootFibersForTest(hook);
   assert.equal(result.length, 3);
-  assert.deepEqual(result.map((r) => r.rendererId), [1, 2, 2]);
-  assert.deepEqual(result.map((r) => r.fiber), [logboxFiber, appFiber1, appFiber2]);
+  assert.deepEqual(
+    result.map((r) => r.rendererId),
+    [1, 2, 2],
+  );
+  assert.deepEqual(
+    result.map((r) => r.fiber),
+    [logboxFiber, appFiber1, appFiber2],
+  );
 });
 
 test('B143: sparse rendererIDs (1, 4) both included', () => {
@@ -89,7 +100,10 @@ test('B143: sparse rendererIDs (1, 4) both included', () => {
   const hook = makeHook({ 1: makeRootsMap([f1]), 4: makeRootsMap([f4]) });
   const result = findAllRootFibersForTest(hook);
   assert.equal(result.length, 2);
-  assert.deepEqual(result.map((r) => r.rendererId), [1, 4]);
+  assert.deepEqual(
+    result.map((r) => r.rendererId),
+    [1, 4],
+  );
 });
 
 test('B143: empty renderer IDs are skipped', () => {
@@ -118,8 +132,14 @@ test('B143: null root in the map is filtered out', () => {
             let i = 0;
             return {
               next() {
-                if (i === 0) { i++; return { done: false, value: null }; }
-                if (i === 1) { i++; return { done: false, value: { current: { tag: 'ok' } } }; }
+                if (i === 0) {
+                  i++;
+                  return { done: false, value: null };
+                }
+                if (i === 1) {
+                  i++;
+                  return { done: false, value: { current: { tag: 'ok' } } };
+                }
                 return { done: true };
               },
             };
@@ -144,8 +164,19 @@ test('B143: root without .current is filtered out', () => {
             let i = 0;
             return {
               next() {
-                if (i === 0) { i++; return { done: false, value: { /* no current */ } }; }
-                if (i === 1) { i++; return { done: false, value: { current: { tag: 'real' } } }; }
+                if (i === 0) {
+                  i++;
+                  return {
+                    done: false,
+                    value: {
+                      /* no current */
+                    },
+                  };
+                }
+                if (i === 1) {
+                  i++;
+                  return { done: false, value: { current: { tag: 'real' } } };
+                }
                 return { done: true };
               },
             };
@@ -195,36 +226,72 @@ test('B143 A3 (Gemini 80) + Issue #126: per-renderer throw does NOT poison the u
 
 test('B143 + Issue #126: injected helpers contain findAllRootFibers with MAX_RENDERER_IDS loop', () => {
   const src = INJECTED_HELPERS;
-  assert.match(src, /function findAllRootFibers\(\)/, 'findAllRootFibers function missing from injected helpers');
+  assert.match(
+    src,
+    /function findAllRootFibers\(\)/,
+    'findAllRootFibers function missing from injected helpers',
+  );
   // GH #126 Gap B Task 3 refactor: findAllRootFibers now delegates to
   // iterateAllRoots — the renderer-loop invariants live there. The shared
   // primitive still walks 1..MAX_RENDERER_IDS, uses hook.getFiberRoots(ri),
   // and the wrapper still emits the {rendererId, fiber} shape via cb args.
-  assert.match(src, /function iterateAllRoots\(cb\)/, 'iterateAllRoots primitive missing — findAllRootFibers depends on it');
-  assert.match(src, /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/, 'renderer loop missing or no longer uses MAX_RENDERER_IDS constant');
+  assert.match(
+    src,
+    /function iterateAllRoots\(cb\)/,
+    'iterateAllRoots primitive missing — findAllRootFibers depends on it',
+  );
+  assert.match(
+    src,
+    /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/,
+    'renderer loop missing or no longer uses MAX_RENDERER_IDS constant',
+  );
   assert.match(src, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
   assert.match(src, /hook\.getFiberRoots\(ri\)/, 'hook.getFiberRoots(ri) iteration missing');
   // findAllRootFibers cb pushes {rendererId, fiber} into the output array.
   const findAllSlice = src.split('function findAllRootFibers')[1]?.split('function ')[0] ?? '';
-  assert.match(findAllSlice, /out\.push\(\{ rendererId: rendererId, fiber: rootFiber \}\)/, 'findAllRootFibers collector cb drifted from {rendererId, fiber} shape');
+  assert.match(
+    findAllSlice,
+    /out\.push\(\{ rendererId: rendererId, fiber: rootFiber \}\)/,
+    'findAllRootFibers collector cb drifted from {rendererId, fiber} shape',
+  );
 });
 
 test('B143: filter path in getTree uses findAllRootFibers (no single-root short-circuit)', () => {
   const src = INJECTED_HELPERS;
   // The filter branch must populate its BFS queue from allRoots, not from
   // the first renderer's first root.
-  assert.match(src, /var allRoots = findAllRootFibers\(\);/, 'filter path did not switch to findAllRootFibers');
-  assert.match(src, /for \(var qi = 0; qi < allRoots\.length; qi\+\+\) queue\.push\(allRoots\[qi\]\.fiber\);/, 'filter path queue init drifted');
+  assert.match(
+    src,
+    /var allRoots = findAllRootFibers\(\);/,
+    'filter path did not switch to findAllRootFibers',
+  );
+  assert.match(
+    src,
+    /for \(var qi = 0; qi < allRoots\.length; qi\+\+\) queue\.push\(allRoots\[qi\]\.fiber\);/,
+    'filter path queue init drifted',
+  );
   // And the result payload exposes rootsSeeded for observability.
-  assert.match(src, /rootsSeeded: allRoots\.length/, 'rootsSeeded metric missing from filter response');
+  assert.match(
+    src,
+    /rootsSeeded: allRoots\.length/,
+    'rootsSeeded metric missing from filter response',
+  );
 });
 
 test('B143 A1 (Gemini 85): hasErrorOverlay check runs across all renderers', () => {
   // Pre-A1 this only checked the first renderer's root. An Error Boundary
   // mounted on a later renderer would be missed.
   const src = INJECTED_HELPERS;
-  assert.match(src, /var overlayRoots = findAllRootFibers\(\);/, 'error-overlay check did not switch to findAllRootFibers');
-  assert.match(src, /hasErrorOverlay\(overlayRoots\[oi\]\.fiber\)/, 'error-overlay loop did not walk each renderer root');
+  assert.match(
+    src,
+    /var overlayRoots = findAllRootFibers\(\);/,
+    'error-overlay check did not switch to findAllRootFibers',
+  );
+  assert.match(
+    src,
+    /hasErrorOverlay\(overlayRoots\[oi\]\.fiber\)/,
+    'error-overlay loop did not walk each renderer root',
+  );
 });
 
 test('B143 A3 (Gemini 80): IIFE wraps per-renderer getFiberRoots in try/catch', () => {
@@ -242,6 +309,10 @@ test('B143 Codex #1 (conf 82): scan budget scales with rootsSeeded count', () =>
   // With N roots, budget = min(5000, 2000 * N) so later renderers don't
   // starve when renderer 1 has a deep/wide subtree.
   const src = INJECTED_HELPERS;
-  assert.match(src, /var scanBudget = Math\.min\(5000, 2000 \* Math\.max\(1, allRoots\.length\)\)/, 'scan budget scaling missing or drifted');
+  assert.match(
+    src,
+    /var scanBudget = Math\.min\(5000, 2000 \* Math\.max\(1, allRoots\.length\)\)/,
+    'scan budget scaling missing or drifted',
+  );
   assert.match(src, /scanned < scanBudget/, 'BFS loop did not switch to scanBudget variable');
 });

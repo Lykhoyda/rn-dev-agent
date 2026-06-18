@@ -1,14 +1,12 @@
 // Verify PR-B picker logic against representative real-world snapshots.
 // Imports the freshly-compiled NEW dist (not the OLD one running in MCP).
-import {
-  parsePortPatternEntry,
-  parseFirstServerEntry,
-} from '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/tools/dev-client-picker.js';
+import { parseFirstServerEntry } from '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/tools/dev-client-picker.js';
 
 const cases = [
   {
     name: 'Real LAN-IP picker from #136 reproducer',
-    snapshot: 'Development servers\nrn-dev-agent-test-app\n192.168.1.5:8081\nEnter URL manually\nFetch development servers',
+    snapshot:
+      'Development servers\nrn-dev-agent-test-app\n192.168.1.5:8081\nEnter URL manually\nFetch development servers',
     expected: '192.168.1.5:8081',
   },
   {
@@ -23,7 +21,8 @@ const cases = [
   },
   {
     name: 'Real-world: picker with manifest name only (URL hidden)',
-    snapshot: 'Development servers\nrn-dev-agent-test-app\nEnter URL manually\nFetch development servers',
+    snapshot:
+      'Development servers\nrn-dev-agent-test-app\nEnter URL manually\nFetch development servers',
     expected: 'rn-dev-agent-test-app',
   },
   {
@@ -53,12 +52,14 @@ const cases = [
   },
 ];
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 console.log('PR-B picker logic verification — new dist\n');
 for (const c of cases) {
   const got = parseFirstServerEntry(c.snapshot);
   const ok = got === c.expected;
-  if (ok) pass++; else fail++;
+  if (ok) pass++;
+  else fail++;
   console.log(`${ok ? '✓' : '✗'} ${c.name}`);
   console.log(`    expected: ${JSON.stringify(c.expected)}`);
   console.log(`    got:      ${JSON.stringify(got)}`);

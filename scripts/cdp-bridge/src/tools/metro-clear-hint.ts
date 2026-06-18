@@ -30,10 +30,7 @@ export interface HintDeps {
  * resets the clock. Both must be older than the threshold for the hint
  * to fire.
  */
-export function shouldShowMetroClearHint(
-  deps: HintDeps,
-  resultIsEmpty: boolean,
-): boolean {
+export function shouldShowMetroClearHint(deps: HintDeps, resultIsEmpty: boolean): boolean {
   if (!resultIsEmpty) return false;
   if (deps.connectedAt == null) return false;
   const ref = Math.max(deps.connectedAt, deps.lastEventAt ?? deps.connectedAt);

@@ -2,7 +2,9 @@ import { okResult, failResult, withConnection } from '../utils.js';
 export function createExceptionBreakpointHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const state = args.state ?? 'uncaught';
-        const duration = args.durationMs ? Math.min(Math.max(args.durationMs, 1000), 30000) : undefined;
+        const duration = args.durationMs
+            ? Math.min(Math.max(args.durationMs, 1000), 30000)
+            : undefined;
         const savedHandler = client['eventHandlers'].get('Debugger.paused');
         try {
             await client.send('Debugger.setPauseOnExceptions', { state });
@@ -23,16 +25,21 @@ export function createExceptionBreakpointHandler(getClient) {
                         url: topFrame?.url,
                         line: topFrame?.location?.lineNumber,
                         column: topFrame?.location?.columnNumber,
-                        stackPreview: p.callFrames?.slice(0, 5).map(f => `  at ${f.functionName || '(anonymous)'} (${f.url ?? '?'}:${f.location?.lineNumber ?? '?'})`).join('\n'),
+                        stackPreview: p.callFrames
+                            ?.slice(0, 5)
+                            .map((f) => `  at ${f.functionName || '(anonymous)'} (${f.url ?? '?'}:${f.location?.lineNumber ?? '?'})`)
+                            .join('\n'),
                     });
                 }
                 try {
                     await client.send('Debugger.resume', undefined);
                 }
-                catch { /* best effort */ }
+                catch {
+                    /* best effort */
+                }
             };
             client['eventHandlers'].set('Debugger.paused', captureHandler);
-            await new Promise(r => setTimeout(r, duration));
+            await new Promise((r) => setTimeout(r, duration));
             await client.send('Debugger.setPauseOnExceptions', { state: 'none' });
             // CDP-006: when no prior handler existed, the temporary capture
             // handler must be DELETED (not left in place) — otherwise later
@@ -63,7 +70,9 @@ export function createExceptionBreakpointHandler(getClient) {
             try {
                 await client.send('Debugger.setPauseOnExceptions', { state: 'none' });
             }
-            catch { /* cleanup */ }
+            catch {
+                /* cleanup */
+            }
             return failResult(`Exception breakpoint failed: ${err instanceof Error ? err.message : err}`);
         }
     });

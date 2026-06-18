@@ -37,7 +37,11 @@ export function createErrorLogHandler(getClient: () => CDPClient) {
     if (parsed.length === 0) {
       return okResult(
         { errors: [], count: 0 },
-        { meta: { hint: 'No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)' } },
+        {
+          meta: {
+            hint: 'No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)',
+          },
+        },
       );
     }
 

@@ -1,4 +1,8 @@
-import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
+import {
+  runNative as _runAgentDeviceImpl,
+  hasActiveSession,
+  getActiveSession,
+} from '../agent-device-wrapper.js';
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
@@ -62,10 +66,7 @@ export function _resetHasSessionForTest(): void {
  *   - null if no active device session (silent skip)
  */
 
-const PICKER_INDICATORS = [
-  'Development servers',
-  'DEVELOPMENT SERVERS',
-];
+const PICKER_INDICATORS = ['Development servers', 'DEVELOPMENT SERVERS'];
 
 export interface PickerResult {
   dismissed: boolean;
@@ -147,7 +148,10 @@ const HEADER_PATTERNS = [/development servers/i];
 export function parseFirstServerEntry(snapshot: string | null | undefined): string | null {
   if (typeof snapshot !== 'string' || snapshot.length === 0) return null;
 
-  const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+  const lines = snapshot
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
   const literalIps = new Set(['localhost', '127.0.0.1', '10.0.2.2']);
   for (const line of lines) {
     if (literalIps.has(line)) return line;
@@ -200,13 +204,17 @@ export async function clearDevClientPickerIfPresent(
   // SessionState.platform is typed `string | undefined`, so narrow it to the
   // valid platforms before it can short-circuit the detectPlatform() fallback.
   const sessionPlatform = getActiveSession()?.platform;
-  const resolved = platform ?? (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ?? (await detectPlatform());
+  const resolved =
+    platform ??
+    (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ??
+    (await detectPlatform());
   if (resolved === 'ios') {
     return {
       dismissed: false,
       skipped: true,
       platform: 'ios',
-      reason: 'iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.',
+      reason:
+        'iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.',
     };
   }
   if (resolved !== 'android') {
@@ -242,7 +250,10 @@ export async function dismissPicker(): Promise<PickerResult> {
   if (target) {
     const findResult = await fetchCandidatesFn(target);
     if (findResult.ok && findResult.candidates.length > 0) {
-      const pressResult = await pressCandidateFn(findResult.candidates[0] as FindCandidate, 'click');
+      const pressResult = await pressCandidateFn(
+        findResult.candidates[0] as FindCandidate,
+        'click',
+      );
       if (!pressResult.isError) {
         await waitForBundle();
         return { dismissed: true, reason: `Tapped server entry "${target}"` };
@@ -252,7 +263,8 @@ export async function dismissPicker(): Promise<PickerResult> {
 
   return {
     dismissed: false,
-    reason: 'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
+    reason:
+      'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
   };
 }
 
@@ -297,9 +309,9 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
   return false;
 }
 
-export function createDismissDevClientPickerHandler(): (
-  args: { platform?: 'ios' | 'android' },
-) => Promise<ToolResult> {
+export function createDismissDevClientPickerHandler(): (args: {
+  platform?: 'ios' | 'android';
+}) => Promise<ToolResult> {
   return async (args) => {
     const t0 = Date.now();
     const outcome = await clearDevClientPickerIfPresent(args.platform);
@@ -316,11 +328,17 @@ export function createDismissDevClientPickerHandler(): (
       return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
     }
     if (outcome.dismissed) {
-      return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+      return okResult(
+        { dismissed: true, reason: outcome.reason, platform: outcome.platform },
+        { meta },
+      );
     }
     if (outcome.reason.toLowerCase().includes('could not find')) {
       return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
     }
-    return okResult({ dismissed: false, reason: outcome.reason, platform: outcome.platform }, { meta });
+    return okResult(
+      { dismissed: false, reason: outcome.reason, platform: outcome.platform },
+      { meta },
+    );
   };
 }

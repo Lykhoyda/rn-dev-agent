@@ -61,7 +61,10 @@ test('Other > StaticText > ScrollView', () => {
     node({ ref: 'sv', type: 'ScrollView' }),
     node({ ref: 'o', type: 'Other' }),
   ]);
-  assert.deepEqual(ranked.map((n) => n.ref), ['o', 'st', 'sv']);
+  assert.deepEqual(
+    ranked.map((n) => n.ref),
+    ['o', 'st', 'sv'],
+  );
 });
 
 // ── Stable for equal scores ──
@@ -72,7 +75,10 @@ test('equal-score nodes preserve original order (stable sort)', () => {
     node({ ref: 'b', type: 'Other' }),
     node({ ref: 'c', type: 'Other' }),
   ]);
-  assert.deepEqual(ranked.map((n) => n.ref), ['a', 'b', 'c']);
+  assert.deepEqual(
+    ranked.map((n) => n.ref),
+    ['a', 'b', 'c'],
+  );
 });
 
 // ── Rect dedupe ──
@@ -127,7 +133,10 @@ test('unknown type falls in mid-tier', () => {
     node({ ref: 'st', type: 'StaticText' }),
   ]);
   // Unknown gets default 50, StaticText is 30, ScrollView is 10
-  assert.deepEqual(ranked.map((n) => n.ref), ['unknown', 'st', 'sv']);
+  assert.deepEqual(
+    ranked.map((n) => n.ref),
+    ['unknown', 'st', 'sv'],
+  );
 });
 
 test('missing type field falls in mid-tier (same as unknown)', () => {

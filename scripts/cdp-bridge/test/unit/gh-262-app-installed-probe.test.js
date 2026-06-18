@@ -8,12 +8,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  probeAppInstalled, buildNotInstalledAdvice, posixSingleQuote,
+  probeAppInstalled,
+  buildNotInstalledAdvice,
+  posixSingleQuote,
 } from '../../dist/cdp/app-installed-probe.js';
 
 function execFailing(stderr, message) {
   return async () => {
-    const err = new Error(message ?? `Command failed: xcrun simctl get_app_container ...\n${stderr}`);
+    const err = new Error(
+      message ?? `Command failed: xcrun simctl get_app_container ...\n${stderr}`,
+    );
     err.stderr = stderr;
     throw err;
   };
@@ -32,24 +36,36 @@ test('probeAppInstalled: container resolves → true', async () => {
 test('probeAppInstalled: real missing-app stderr (domain + code=2) → false', async () => {
   // Exact shape captured live on this machine (Xcode 26):
   const stderr =
-    'An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2):\n'
-    + 'The operation couldn’t be completed. No such file or directory\n'
-    + 'No such file or directory';
+    'An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2):\n' +
+    'The operation couldn’t be completed. No such file or directory\n' +
+    'No such file or directory';
   assert.equal(await probeAppInstalled('U', 'a', execFailing(stderr)), false);
 });
 
 test('probeAppInstalled: marker is case-insensitive and separator-flexible', async () => {
-  assert.equal(await probeAppInstalled('U', 'a', execFailing('nsposixerrordomain Code: 2 oops')), false);
+  assert.equal(
+    await probeAppInstalled('U', 'a', execFailing('nsposixerrordomain Code: 2 oops')),
+    false,
+  );
 });
 
 test('probeAppInstalled: code=-2 / code=20 / missing domain → null (never false)', async () => {
-  assert.equal(await probeAppInstalled('U', 'a', execFailing('domain=NSPOSIXErrorDomain, code=-2')), null);
-  assert.equal(await probeAppInstalled('U', 'a', execFailing('domain=NSPOSIXErrorDomain, code=20')), null);
+  assert.equal(
+    await probeAppInstalled('U', 'a', execFailing('domain=NSPOSIXErrorDomain, code=-2')),
+    null,
+  );
+  assert.equal(
+    await probeAppInstalled('U', 'a', execFailing('domain=NSPOSIXErrorDomain, code=20')),
+    null,
+  );
   assert.equal(await probeAppInstalled('U', 'a', execFailing('No such file or directory')), null);
 });
 
 test('probeAppInstalled: marker in Error.message but NOT stderr → null (argv-spoof defense)', async () => {
-  const spoof = execFailing('', 'Command failed: xcrun simctl get_app_container U NSPOSIXErrorDomain-code=2-trap app');
+  const spoof = execFailing(
+    '',
+    'Command failed: xcrun simctl get_app_container U NSPOSIXErrorDomain-code=2-trap app',
+  );
   assert.equal(await probeAppInstalled('U', 'NSPOSIXErrorDomain-code=2-trap', spoof), null);
 });
 
@@ -59,7 +75,12 @@ test('probeAppInstalled: device-level error → null (fail open)', async () => {
 });
 
 test('probeAppInstalled: no stderr at all (spawn error / timeout) → null', async () => {
-  assert.equal(await probeAppInstalled('U', 'a', async () => { throw new Error('ETIMEDOUT'); }), null);
+  assert.equal(
+    await probeAppInstalled('U', 'a', async () => {
+      throw new Error('ETIMEDOUT');
+    }),
+    null,
+  );
 });
 
 test('posixSingleQuote: inert metacharacters and embedded quotes', () => {
@@ -79,5 +100,8 @@ test('buildNotInstalledAdvice: base advice without hint; shell-quoted install li
   });
   assert.match(withHint, /42 min ago/);
   assert.match(withHint, /may be stale/);
-  assert.match(withHint, /xcrun simctl install 'UDID-A' '\/tmp\/rn-appfile-snapshots\/My App\.app'/);
+  assert.match(
+    withHint,
+    /xcrun simctl install 'UDID-A' '\/tmp\/rn-appfile-snapshots\/My App\.app'/,
+  );
 });

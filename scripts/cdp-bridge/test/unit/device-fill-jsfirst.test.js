@@ -9,7 +9,10 @@ test('buildRunIOSArgs type forwards --delay-ms', () => {
   assert.equal(a.delayMs, 40);
 });
 test('buildRunIOSArgs type forwards --clear-first (presence flag)', () => {
-  const a = buildRunIOSArgs(['fill', '@email', 'hello', '--clear-first', '--delay-ms', '40'], 'com.x.app');
+  const a = buildRunIOSArgs(
+    ['fill', '@email', 'hello', '--clear-first', '--delay-ms', '40'],
+    'com.x.app',
+  );
   assert.equal(a.clearFirst, true);
   assert.equal(a.delayMs, 40);
   assert.equal(a.text, 'hello');

@@ -8,7 +8,9 @@ function fakeWs({ open = true } = {}) {
   const sent = [];
   return {
     readyState: open ? OPEN : 3, // CLOSED
-    send(payload) { sent.push(JSON.parse(payload)); },
+    send(payload) {
+      sent.push(JSON.parse(payload));
+    },
     _sent: sent,
   };
 }
@@ -35,9 +37,20 @@ test('sendWithTimeout serializes {id, method, params} onto the socket', async ()
   const pending = new Map();
   const ws = fakeWs();
   let id = 0;
-  const p = sendWithTimeout(ws, pending, () => ++id, 'Runtime.evaluate', { expression: '1+1' }, 200);
+  const p = sendWithTimeout(
+    ws,
+    pending,
+    () => ++id,
+    'Runtime.evaluate',
+    { expression: '1+1' },
+    200,
+  );
   assert.equal(ws._sent.length, 1);
-  assert.deepEqual(ws._sent[0], { id: 1, method: 'Runtime.evaluate', params: { expression: '1+1' } });
+  assert.deepEqual(ws._sent[0], {
+    id: 1,
+    method: 'Runtime.evaluate',
+    params: { expression: '1+1' },
+  });
   assert.equal(pending.size, 1);
   // Resolve the promise so the test doesn't leak the timer
   const entry = pending.get(1);
@@ -79,7 +92,9 @@ test('handleMessage resolves matching pending call by id', () => {
   const pending = new Map();
   let resolved;
   pending.set(7, {
-    resolve: (v) => { resolved = v; },
+    resolve: (v) => {
+      resolved = v;
+    },
     reject: () => {},
     timer: setTimeout(() => {}, 60_000),
   });
@@ -93,7 +108,9 @@ test('handleMessage rejects pending call when error is present', () => {
   let rejected;
   pending.set(8, {
     resolve: () => {},
-    reject: (e) => { rejected = e; },
+    reject: (e) => {
+      rejected = e;
+    },
     timer: setTimeout(() => {}, 60_000),
   });
   handleMessage(JSON.stringify({ id: 8, error: { message: 'boom' } }), pending, new Map());
@@ -104,7 +121,9 @@ test('handleMessage rejects pending call when error is present', () => {
 test('handleMessage routes events to registered handler by method name', () => {
   const handlers = new Map();
   let received;
-  handlers.set('Network.requestWillBeSent', (p) => { received = p; });
+  handlers.set('Network.requestWillBeSent', (p) => {
+    received = p;
+  });
   handleMessage(
     JSON.stringify({ method: 'Network.requestWillBeSent', params: { requestId: 'r1' } }),
     new Map(),
@@ -119,7 +138,9 @@ test('handleMessage invokes console hook on Runtime.consoleAPICalled', () => {
     JSON.stringify({ method: 'Runtime.consoleAPICalled', params: { type: 'log', args: [] } }),
     new Map(),
     new Map(),
-    (p) => { hookParams = p; },
+    (p) => {
+      hookParams = p;
+    },
   );
   assert.deepEqual(hookParams, { type: 'log', args: [] });
 });

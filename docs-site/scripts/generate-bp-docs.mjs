@@ -9,7 +9,9 @@ const OUT_DIR = resolve(__dirname, '../src/content/docs/best-practices/rules');
 
 mkdirSync(OUT_DIR, { recursive: true });
 
-const files = readdirSync(REFS_DIR).filter(f => f.endsWith('.md')).sort();
+const files = readdirSync(REFS_DIR)
+  .filter((f) => f.endsWith('.md'))
+  .sort();
 let count = 0;
 
 for (const file of files) {

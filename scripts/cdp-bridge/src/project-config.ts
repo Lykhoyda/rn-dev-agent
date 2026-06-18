@@ -107,7 +107,10 @@ export function readRnAgentConfig(projectRoot?: string | null): RnAgentConfig | 
   } catch (err) {
     if (!warnedBadConfig) {
       warnedBadConfig = true;
-      logger.warn('CONFIG', `.rn-agent/config.json is unreadable — ignoring it: ${err instanceof Error ? err.message : err}`);
+      logger.warn(
+        'CONFIG',
+        `.rn-agent/config.json is unreadable — ignoring it: ${err instanceof Error ? err.message : err}`,
+      );
     }
     return null;
   }
@@ -118,10 +121,12 @@ export interface AutoConnectResolution {
   source: 'env' | 'config' | 'default';
 }
 
-export function resolveAutoConnect(deps: {
-  env?: string;
-  readConfig?: () => RnAgentConfig | null;
-} = {}): AutoConnectResolution {
+export function resolveAutoConnect(
+  deps: {
+    env?: string;
+    readConfig?: () => RnAgentConfig | null;
+  } = {},
+): AutoConnectResolution {
   // Present-but-undefined `env` means "treat as unset, do NOT fall back to
   // process.env" (test seam). Only an absent key reads process.env.RN_CDP_AUTOCONNECT.
   const envRaw = 'env' in deps ? deps.env : process.env.RN_CDP_AUTOCONNECT;

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { buildMaestroFlow, isValidBundleId, MaestroValidationError } from '../domain/maestro-validator.js';
+import { buildMaestroFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 /**
  * Phase 134.1 (deepsec CRITICAL #3): every step is now produced as a
  * structured object that flows through `buildMaestroFlow` for serialization,

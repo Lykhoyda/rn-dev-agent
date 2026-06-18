@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findProjectRoot } from '../../dist/nav-graph/storage.js';
@@ -14,10 +14,13 @@ import { findProjectRoot } from '../../dist/nav-graph/storage.js';
 
 function makeRnProject(dir) {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({
-    name: 'test-rn',
-    dependencies: { 'react-native': '0.76.0' }
-  }));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'test-rn',
+      dependencies: { 'react-native': '0.76.0' },
+    }),
+  );
 }
 
 function makeNonRnDir(dir, withPackageJson = false) {
@@ -63,7 +66,10 @@ test('findProjectRoot: cwd IS an RN project → returns cwd', () => {
         const result = findProjectRoot();
         // On macOS /tmp is a symlink to /private/tmp — the resolved path may start
         // with /private. Either answer is correct as long as it ends with the unique suffix.
-        assert.ok(result && result.endsWith(tmp.split('/').pop()), `expected result to end with tmp suffix, got ${result}`);
+        assert.ok(
+          result && result.endsWith(tmp.split('/').pop()),
+          `expected result to end with tmp suffix, got ${result}`,
+        );
       });
     });
   } finally {
@@ -81,7 +87,10 @@ test('findProjectRoot: cwd is inside an RN project → walks up to find it', () 
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(nestedCwd, () => {
         const result = findProjectRoot();
-        assert.ok(result && result.endsWith(tmp.split('/').pop()), `expected walk-up result to end with tmp suffix, got ${result}`);
+        assert.ok(
+          result && result.endsWith(tmp.split('/').pop()),
+          `expected walk-up result to end with tmp suffix, got ${result}`,
+        );
       });
     });
   } finally {
@@ -129,7 +138,10 @@ test('B134: findProjectRoot finds RN project as direct sibling (not nested)', ()
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
-        assert.ok(result && result.endsWith('test-app'), `expected direct sibling match, got ${result}`);
+        assert.ok(
+          result && result.endsWith('test-app'),
+          `expected direct sibling match, got ${result}`,
+        );
       });
     });
   } finally {
@@ -149,7 +161,10 @@ test('findProjectRoot: RN_PROJECT_ROOT env takes precedence over cascade', () =>
     withEnv({ RN_PROJECT_ROOT: rnRoot, CLAUDE_USER_CWD: null }, () => {
       withCwd(elsewhere, () => {
         const result = findProjectRoot();
-        assert.ok(result && result.endsWith('explicit-root'), `expected env override, got ${result}`);
+        assert.ok(
+          result && result.endsWith('explicit-root'),
+          `expected env override, got ${result}`,
+        );
       });
     });
   } finally {
@@ -188,7 +203,7 @@ test('findProjectRoot: no false positive inside a controlled RN-free tree', () =
           const resolvedTmp = tmp.replace(/^\/tmp\//, '/private/tmp/');
           assert.ok(
             !result.startsWith(tmp) && !result.startsWith(resolvedTmp),
-            `false positive inside controlled tree: ${result}`
+            `false positive inside controlled tree: ${result}`,
           );
         }
       });
@@ -223,7 +238,7 @@ test('B134: sibling-scan is breadth-first — direct sibling RN wins over grandc
         assert.ok(result, 'expected to find an RN project');
         assert.ok(
           result.endsWith('zzz-real'),
-          `breadth-first should pick direct sibling over grandchild, got ${result}`
+          `breadth-first should pick direct sibling over grandchild, got ${result}`,
         );
       });
     });
@@ -252,7 +267,7 @@ test('B134: sibling-scan pick is alphabetically deterministic across readdir ord
         const result = findProjectRoot();
         assert.ok(
           result && result.endsWith('aaa-rn'),
-          `alphabetical first should win, got ${result}`
+          `alphabetical first should win, got ${result}`,
         );
       });
     });

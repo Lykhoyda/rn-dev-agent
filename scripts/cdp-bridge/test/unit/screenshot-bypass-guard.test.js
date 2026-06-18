@@ -39,7 +39,7 @@ function* walk(dir) {
   }
 }
 
-test('B121: no source file outside the allowlist calls runAgentDevice([\"screenshot\", ...]) directly', () => {
+test('B121: no source file outside the allowlist calls runAgentDevice(["screenshot", ...]) directly', () => {
   const bypasses = [];
   for (const file of walk(SRC_DIR)) {
     const basename = file.split('/').pop();

@@ -243,11 +243,11 @@ export interface AutoRepairOutcome {
 
 /** A single replay attempt's outcome. Append-only; oldest dropped at limit. */
 export interface RunRecord {
-  timestamp: string;          // ISO
+  timestamp: string; // ISO
   durationMs: number;
   status: 'pass' | 'fail';
   failureCode?: ActionFailureCode;
-  failureDetail?: string;     // raw stderr summary, max ~500 chars
+  failureDetail?: string; // raw stderr summary, max ~500 chars
   trigger: 'agent' | 'ci' | 'human';
   /**
    * Populated by `cdp_run_action` when auto-repair was either attempted
@@ -317,8 +317,8 @@ export interface ActionRuntimeState {
  */
 export interface ReusableAction {
   metadata: M7Metadata;
-  body: string;            // raw YAML body, post-header
-  filePath: string;        // absolute path to the .yaml
+  body: string; // raw YAML body, post-header
+  filePath: string; // absolute path to the .yaml
   state: ActionRuntimeState;
 }
 
@@ -348,7 +348,10 @@ export const HISTORY_LIMITS = {
  * Build an empty runtime state for a brand-new action. Caller passes the
  * file's mtime so subsequent edits-vs-self-repair detection works.
  */
-export function freshRuntimeState(now: () => Date = () => new Date(), mtimeMs: number = 0): ActionRuntimeState {
+export function freshRuntimeState(
+  now: () => Date = () => new Date(),
+  mtimeMs: number = 0,
+): ActionRuntimeState {
   const ts = now().toISOString();
   return {
     schemaVersion: 1,
@@ -404,7 +407,10 @@ export function appendRunRecord(state: ActionRuntimeState, record: RunRecord): A
  * Caller is responsible for actually patching the YAML body separately
  * — this only updates the runtime state.
  */
-export function appendRepairRecord(state: ActionRuntimeState, record: RepairRecord): ActionRuntimeState {
+export function appendRepairRecord(
+  state: ActionRuntimeState,
+  record: RepairRecord,
+): ActionRuntimeState {
   const newHistory = [...state.repairHistory, record];
   while (newHistory.length > HISTORY_LIMITS.REPAIR_HISTORY_MAX) newHistory.shift();
   return {
@@ -419,12 +425,18 @@ export function appendRepairRecord(state: ActionRuntimeState, record: RepairReco
  * Check whether a self-repair attempt is within the rolling-24h budget.
  * Pure function — `now` is injectable for tests.
  */
-export function recentRepairCount(state: ActionRuntimeState, now: () => Date = () => new Date()): number {
+export function recentRepairCount(
+  state: ActionRuntimeState,
+  now: () => Date = () => new Date(),
+): number {
   const cutoff = now().getTime() - 24 * 60 * 60 * 1000;
   return state.repairHistory.filter((r) => new Date(r.timestamp).getTime() >= cutoff).length;
 }
 
-export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date = () => new Date()): boolean {
+export function repairBudgetAvailable(
+  state: ActionRuntimeState,
+  now: () => Date = () => new Date(),
+): boolean {
   return recentRepairCount(state, now) < REPAIR_BUDGET.ATTEMPTS_PER_24H;
 }
 
@@ -433,7 +445,10 @@ export function repairBudgetAvailable(state: ActionRuntimeState, now: () => Date
  * Used by /run-action when an experimental flow passes; also used after
  * a self-repair's verification replay succeeds.
  */
-export function shouldAutoPromoteToActive(metadata: M7Metadata, lastRun: RunRecord | undefined): boolean {
+export function shouldAutoPromoteToActive(
+  metadata: M7Metadata,
+  lastRun: RunRecord | undefined,
+): boolean {
   return metadata.status === 'experimental' && lastRun?.status === 'pass';
 }
 
@@ -473,16 +488,35 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
       const key = kv[1];
       const raw = kv[2].trim();
       if (key === 'tags') {
-        meta.tags = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+        meta.tags = raw
+          .replace(/^\[|\]$/g, '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean);
       } else if (key === 'mutates') {
         meta.mutates = /^true$/i.test(raw);
       } else if (key === 'params') {
-        meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+        meta.params = raw
+          .replace(/^\[|\]$/g, '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean);
       } else if (key === 'produces') {
         meta.produces = parseProducesMap(raw);
       } else if (key === 'expectedRouteSequence') {
-        meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
-      } else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
+        meta.expectedRouteSequence = raw
+          .replace(/^\[|\]$/g, '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else if (
+        key === 'id' ||
+        key === 'intent' ||
+        key === 'status' ||
+        key === 'appId' ||
+        key === 'createdAt' ||
+        key === 'author'
+      ) {
         meta[key] = raw;
       }
     } else if (inComment && line.trim() === '') {
@@ -521,7 +555,10 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
  * inside values are not supported in v1.
  */
 function parseProducesMap(raw: string): Record<string, string | number | boolean> | undefined {
-  const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+  const inner = raw
+    .trim()
+    .replace(/^\{|\}$/g, '')
+    .trim();
   if (!inner) return undefined;
   const result: Record<string, string | number | boolean> = {};
   for (const part of inner.split(',')) {
@@ -573,7 +610,9 @@ export function serializeM7Header(metadata: M7Metadata): string {
     lines.push(`# produces: { ${pairs.join(', ')} }`);
   }
   if (metadata.expectedRouteSequence && metadata.expectedRouteSequence.length) {
-    lines.push(`# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`);
+    lines.push(
+      `# expectedRouteSequence: [${metadata.expectedRouteSequence.map(stripNewlines).join(', ')}]`,
+    );
   }
   return lines.join('\n');
 }

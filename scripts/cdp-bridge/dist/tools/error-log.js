@@ -27,7 +27,11 @@ export function createErrorLogHandler(getClient) {
             return failResult('Unexpected response from getErrors — expected array');
         }
         if (parsed.length === 0) {
-            return okResult({ errors: [], count: 0 }, { meta: { hint: 'No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)' } });
+            return okResult({ errors: [], count: 0 }, {
+                meta: {
+                    hint: 'No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)',
+                },
+            });
         }
         const symbolicated = await symbolicateErrors(parsed, client.metroPort);
         return okResult({ errors: symbolicated, count: symbolicated.length });

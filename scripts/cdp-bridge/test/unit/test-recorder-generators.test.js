@@ -16,9 +16,7 @@ test('M6 Maestro: tap with testID emits tapOn id selector', () => {
 });
 
 test('M6 Maestro: type emits tapOn + inputText pair', () => {
-  const out = generateMaestro([
-    { type: 'type', testID: 'email-input', value: 'a@b.c', t: 1 },
-  ]);
+  const out = generateMaestro([{ type: 'type', testID: 'email-input', value: 'a@b.c', t: 1 }]);
   assert.match(out, /- tapOn:\s+id:\s+["']?email-input["']?/);
   assert.match(out, /- inputText: "a@b\.c"/);
 });
@@ -30,8 +28,8 @@ test('M6 Maestro: swipeUp uses finger-direction (dy>0 → up)', () => {
 
 test('M6 Maestro: swipeDown / swipeLeft / swipeRight all render', () => {
   const out = generateMaestro([
-    { type: 'swipe', direction: 'down',  t: 1 },
-    { type: 'swipe', direction: 'left',  t: 2 },
+    { type: 'swipe', direction: 'down', t: 1 },
+    { type: 'swipe', direction: 'left', t: 2 },
     { type: 'swipe', direction: 'right', t: 3 },
   ]);
   assert.match(out, /- swipeDown/);
@@ -64,16 +62,12 @@ test('M6 Detox: tap uses by.id selector', () => {
 });
 
 test('M6 Detox: type uses typeText with JSON-stringified value', () => {
-  const out = generateDetox([
-    { type: 'type', testID: 'email', value: 'with "quotes"', t: 1 },
-  ]);
+  const out = generateDetox([{ type: 'type', testID: 'email', value: 'with "quotes"', t: 1 }]);
   assert.match(out, /await element\(by\.id\("email"\)\)\.typeText\("with \\"quotes\\""\)/);
 });
 
 test('M6 Detox: swipe passes direction verbatim (finger-direction matches Detox)', () => {
-  const out = generateDetox([
-    { type: 'swipe', testID: 'list', direction: 'up', t: 1 },
-  ]);
+  const out = generateDetox([{ type: 'swipe', testID: 'list', direction: 'up', t: 1 }]);
   assert.match(out, /await element\(by\.id\("list"\)\)\.swipe\("up"\)/);
 });
 

@@ -55,12 +55,14 @@ test.afterEach(() => {
   process.chdir(origCwd);
   _resetState();
   delete process.env.RN_PROJECT_ROOT;
-  try { rmSync(root, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {}
 });
 
 // ─────────── save mode ───────────
 
-test("B144 Codex #2: save mode prefers captured recordingBundleId over live client", () => {
+test('B144 Codex #2: save mode prefers captured recordingBundleId over live client', () => {
   makeRnProject(join(root, 'captured-app'), 'captured-app', {
     expo: { ios: { bundleIdentifier: 'com.captured' } },
   });
@@ -78,7 +80,7 @@ test("B144 Codex #2: save mode prefers captured recordingBundleId over live clie
   assert.equal(resolver(), join(root, 'captured-app'));
 });
 
-test("B144 Codex #2: save mode falls back to live when no captured bundleId", () => {
+test('B144 Codex #2: save mode falls back to live when no captured bundleId', () => {
   makeRnProject(join(root, 'live-app'), 'live-app', {
     expo: { ios: { bundleIdentifier: 'com.live' } },
   });
@@ -92,7 +94,7 @@ test("B144 Codex #2: save mode falls back to live when no captured bundleId", ()
 
 // ─────────── load-list mode ───────────
 
-test("B144 Codex #2: load-list mode prefers LIVE client over captured recordingBundleId", () => {
+test('B144 Codex #2: load-list mode prefers LIVE client over captured recordingBundleId', () => {
   // This is the Codex-flagged scenario: user recorded app A, then reconnected
   // to app B and called load/list. They want B's recordings, not A's.
   makeRnProject(join(root, 'captured-app'), 'captured-app', {
@@ -111,7 +113,7 @@ test("B144 Codex #2: load-list mode prefers LIVE client over captured recordingB
   assert.equal(resolver(), join(root, 'live-app'));
 });
 
-test("B144 Codex #2: load-list mode falls back to captured when no live client is connected", () => {
+test('B144 Codex #2: load-list mode falls back to captured when no live client is connected', () => {
   makeRnProject(join(root, 'captured-app'), 'captured-app', {
     expo: { ios: { bundleIdentifier: 'com.captured' } },
   });
@@ -124,7 +126,7 @@ test("B144 Codex #2: load-list mode falls back to captured when no live client i
   assert.equal(resolver(), join(root, 'captured-app'));
 });
 
-test("B144 Codex #2: load-list mode falls back to legacy findProjectRoot when no bundleId at all", () => {
+test('B144 Codex #2: load-list mode falls back to legacy findProjectRoot when no bundleId at all', () => {
   // No env, no captured, no live — fully legacy alphabetical.
   makeRnProject(join(root, 'aaa-default'), 'aaa-default', {
     expo: { ios: { bundleIdentifier: 'com.aaa' } },

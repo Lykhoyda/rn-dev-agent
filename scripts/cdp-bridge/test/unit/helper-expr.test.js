@@ -23,7 +23,8 @@ test('accepts a JSON object-literal argument (getConsole) — the regression', (
 });
 
 test('accepts a nested-object argument (dispatchAction)', () => {
-  const call = 'dispatchAction({"action":"tasks/add","payload":{"title":"x"},"readPath":"tasks.items"})';
+  const call =
+    'dispatchAction({"action":"tasks/add","payload":{"title":"x"},"readPath":"tasks.items"})';
   assert.equal(helperExpr(call, false), `__RN_AGENT.${call}`);
 });
 

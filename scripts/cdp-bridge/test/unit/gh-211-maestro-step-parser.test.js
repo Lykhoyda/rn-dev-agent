@@ -2,8 +2,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseSteps, stripAnsi, findFailedStep, lastObservedStep, summarizeReason, buildStepSummary,
-  classifyExecError, formatFailureHeadline, combineRunnerOutput,
+  parseSteps,
+  stripAnsi,
+  findFailedStep,
+  lastObservedStep,
+  summarizeReason,
+  buildStepSummary,
+  classifyExecError,
+  formatFailureHeadline,
+  combineRunnerOutput,
 } from '../../dist/domain/maestro-step-parser.js';
 
 // Real maestro-runner format (same shape as the gh-263 fixtures).
@@ -17,9 +24,27 @@ const FAILED_RUN = `  ✓ launchApp (2.3s)
 test('parseSteps: verb/status/durationMs/index; summary line excluded', () => {
   const steps = parseSteps(FAILED_RUN);
   assert.equal(steps.length, 5);
-  assert.deepEqual(steps[0], { index: 0, name: 'launchApp', verb: 'launchApp', status: 'pass', durationMs: 2300 });
-  assert.deepEqual(steps[1], { index: 1, name: 'tapOn: id="a"', verb: 'tapOn', status: 'pass', durationMs: 2800 });
-  assert.deepEqual(steps[4], { index: 4, name: 'tapOn: id="c"', verb: 'tapOn', status: 'fail', durationMs: 12700 });
+  assert.deepEqual(steps[0], {
+    index: 0,
+    name: 'launchApp',
+    verb: 'launchApp',
+    status: 'pass',
+    durationMs: 2300,
+  });
+  assert.deepEqual(steps[1], {
+    index: 1,
+    name: 'tapOn: id="a"',
+    verb: 'tapOn',
+    status: 'pass',
+    durationMs: 2800,
+  });
+  assert.deepEqual(steps[4], {
+    index: 4,
+    name: 'tapOn: id="c"',
+    verb: 'tapOn',
+    status: 'fail',
+    durationMs: 12700,
+  });
   assert.ok(!steps.some((s) => s.verb === 'rn-maestro-run')); // `✗ rn-maestro-run 23.8s` has no (N.Ns)
 });
 
@@ -100,26 +125,34 @@ test('buildStepSummary: timeout partial (no ✗) → failedStep null, lastStep =
 });
 
 test('classifyExecError: timeout (killed, no code) → timedOut, not truncated', () => {
-  assert.deepEqual(
-    classifyExecError({ killed: true, signal: 'SIGTERM', code: null }),
-    { timedOut: true, outputTruncated: false },
-  );
+  assert.deepEqual(classifyExecError({ killed: true, signal: 'SIGTERM', code: null }), {
+    timedOut: true,
+    outputTruncated: false,
+  });
 });
 
 test('classifyExecError: maxBuffer overflow → truncated, not timedOut', () => {
-  assert.deepEqual(
-    classifyExecError({ killed: true, code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
-    { timedOut: false, outputTruncated: true },
-  );
+  assert.deepEqual(classifyExecError({ killed: true, code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), {
+    timedOut: false,
+    outputTruncated: true,
+  });
 });
 
 test('classifyExecError: normal non-zero exit → neither; null safe', () => {
-  assert.deepEqual(classifyExecError({ killed: false, code: 1 }), { timedOut: false, outputTruncated: false });
+  assert.deepEqual(classifyExecError({ killed: false, code: 1 }), {
+    timedOut: false,
+    outputTruncated: false,
+  });
   assert.deepEqual(classifyExecError(null), { timedOut: false, outputTruncated: false });
 });
 
 test('catch-path assembly: timeout → timedOut, partial steps, failedStep null', () => {
-  const err = { killed: true, code: null, stdout: '  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)', stderr: '' };
+  const err = {
+    killed: true,
+    code: null,
+    stdout: '  ✓ launchApp (2.0s)\n  ✓ tapOn: id="a" (2.5s)',
+    stderr: '',
+  };
   const combined = (err.stdout + '\n' + err.stderr).trim();
   const cls = classifyExecError(err);
   const summary = buildStepSummary(combined, { failed: true });
@@ -135,7 +168,9 @@ test('formatFailureHeadline: structured & raw-free; raw fallback only for system
     formatFailureHeadline(t, { timedOut: true, outputTruncated: false }, 'Command failed: …'),
     'Maestro flow timed out after step "tapOn: id="a""',
   );
-  const f = buildStepSummary('  ✗ tapOn: id="c" (12.7s)\nElement with id \'c\' not found', { failed: true });
+  const f = buildStepSummary('  ✗ tapOn: id="c" (12.7s)\nElement with id \'c\' not found', {
+    failed: true,
+  });
   assert.equal(
     formatFailureHeadline(f, { timedOut: false, outputTruncated: false }, 'x'),
     'Maestro flow failed at step "tapOn: id="c"" (SELECTOR_NOT_FOUND: c)',
@@ -172,9 +207,9 @@ test('formatFailureHeadline: long parsed names stay bounded (no raw blowup)', ()
 
 test('parseSteps: pathological whitespace lines do not catastrophically backtrack (ReDoS)', () => {
   const start = process.hrtime.bigint();
-  assert.deepEqual(parseSteps('✓ ' + ' '.repeat(8000) + 'x'), []);     // leading whitespace run
+  assert.deepEqual(parseSteps('✓ ' + ' '.repeat(8000) + 'x'), []); // leading whitespace run
   assert.deepEqual(parseSteps('✓ step' + ' '.repeat(8000) + 'x'), []); // trailing whitespace run
-  assert.deepEqual(parseSteps('✗ ' + '\t'.repeat(8000) + 'y'), []);    // tabs
+  assert.deepEqual(parseSteps('✗ ' + '\t'.repeat(8000) + 'y'), []); // tabs
   const ms = Number(process.hrtime.bigint() - start) / 1e6;
   // Generous ceiling: the fixed (linear) parser runs in <1ms; a catastrophic-
   // backtracking regression measures 30s+. 2000ms cleanly separates the two
@@ -183,11 +218,17 @@ test('parseSteps: pathological whitespace lines do not catastrophically backtrac
 });
 
 test('formatFailureHeadline: reason without a failed step → structured (raw-free) headline', () => {
-  const s = buildStepSummary("  ✓ launchApp (2.0s)\nElement with id 'missing' not found", { failed: true });
+  const s = buildStepSummary("  ✓ launchApp (2.0s)\nElement with id 'missing' not found", {
+    failed: true,
+  });
   assert.equal(s.failedStep, null);
   assert.deepEqual(s.reason, { kind: 'SELECTOR_NOT_FOUND', selector: 'missing' });
   assert.equal(
-    formatFailureHeadline(s, { timedOut: false, outputTruncated: false }, 'raw fallback should not appear'),
+    formatFailureHeadline(
+      s,
+      { timedOut: false, outputTruncated: false },
+      'raw fallback should not appear',
+    ),
     'Maestro flow failed (SELECTOR_NOT_FOUND: missing)',
   );
 });
@@ -196,10 +237,10 @@ test('parseSteps: caps returned steps to the most recent 1000 (tail kept, true i
   const lines = [];
   for (let i = 0; i < 1500; i++) lines.push(`  ✓ tapOn: id="s${i}" (1.0s)`);
   const steps = parseSteps(lines.join('\n'));
-  assert.equal(steps.length, 1000);                       // capped
+  assert.equal(steps.length, 1000); // capped
   assert.equal(steps[steps.length - 1].name, 'tapOn: id="s1499"'); // tail kept
-  assert.equal(steps[steps.length - 1].index, 1499);      // true index preserved
-  assert.equal(steps[0].index, 500);                      // 1500 total → first kept index = 500 (gap = truncation signal)
+  assert.equal(steps[steps.length - 1].index, 1499); // true index preserved
+  assert.equal(steps[0].index, 500); // 1500 total → first kept index = 500 (gap = truncation signal)
 });
 
 // GH #312 / B211: MAX_FIELD bounds the step `name` but the `verb` (the name's
@@ -233,9 +274,9 @@ test('parseSteps: real 4-space top-level + 6-space nested steps still parse (B21
 test('parseSteps: an unindented crafted ✗ line cannot poison failedStep/lastStep (B212)', () => {
   const out = '    ✓ launchApp (2.3s)\n    ✓ tapOn: id="a" (2.8s)\n✗ fake step failed (9.9s)';
   const s = buildStepSummary(out, { failed: true });
-  assert.equal(s.steps.length, 2);                  // only the two indented steps
-  assert.equal(s.lastStep.name, 'tapOn: id="a"');   // not the crafted line
-  assert.equal(s.failedStep, null);                 // the crafted column-0 ✗ is ignored
+  assert.equal(s.steps.length, 2); // only the two indented steps
+  assert.equal(s.lastStep.name, 'tapOn: id="a"'); // not the crafted line
+  assert.equal(s.failedStep, null); // the crafted column-0 ✗ is ignored
 });
 
 // The anchor must be HORIZONTAL whitespace only: JS `\s` also matches `\r`, `\v`,
@@ -244,11 +285,11 @@ test('parseSteps: an unindented crafted ✗ line cannot poison failedStep/lastSt
 test('parseSteps: a CR/NBSP/VT-prefixed column-0 line is NOT a step (B212)', () => {
   assert.deepEqual(parseSteps('\r✗ fake step failed (9.9s)'), []);
   assert.deepEqual(parseSteps('\u00a0✓ App started (1.2s)'), []); // NBSP
-  assert.deepEqual(parseSteps('\v✓ App started (1.2s)'), []);     // vertical tab
+  assert.deepEqual(parseSteps('\v✓ App started (1.2s)'), []); // vertical tab
   const out = '    ✓ launchApp (2.3s)\n\r✗ fake step failed (9.9s)';
   const s = buildStepSummary(out, { failed: true });
-  assert.equal(s.steps.length, 1);                 // only the real space-indented step
-  assert.equal(s.failedStep, null);                // CR-prefixed ✗ does not poison
+  assert.equal(s.steps.length, 1); // only the real space-indented step
+  assert.equal(s.failedStep, null); // CR-prefixed ✗ does not poison
   assert.equal(s.lastStep.name, 'launchApp');
 });
 
@@ -268,7 +309,7 @@ test('parseSteps: indented pathological whitespace line does not backtrack (B212
 test('combineRunnerOutput: preserves the first step line indent so it is not dropped (B212/#312)', () => {
   const stdout = '  ✓ launchApp (2.3s)\n  ✓ tapOn: id="a" (2.8s)\n  ✗ tapOn: id="b" (12.7s)';
   const s = buildStepSummary(combineRunnerOutput(stdout, ''), { failed: true });
-  assert.equal(s.steps.length, 3);              // launchApp NOT dropped
+  assert.equal(s.steps.length, 3); // launchApp NOT dropped
   assert.equal(s.steps[0].name, 'launchApp');
 });
 

@@ -27,20 +27,28 @@ export class ObservabilityServer {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE' && preferredPort) {
         this.port = await listen(server, 0);
-      } else { throw e; }
+      } else {
+        throw e;
+      }
     }
     this.server = server;
     return { url: this.url(), port: this.port };
   }
 
   async stop(): Promise<void> {
-    const s = this.server; this.server = null;
+    const s = this.server;
+    this.server = null;
     // Tell live SSE clients we're shutting down BEFORE yanking the sockets, so
     // the browser's EventSource closes instead of entering its auto-reconnect
     // loop (which would otherwise hammer the dead port, or silently reattach to
     // a different session started later on the same port).
     for (const res of this.streams) {
-      try { res.write('data: {"type":"shutdown"}\n\n'); res.end(); } catch { /* already closed */ }
+      try {
+        res.write('data: {"type":"shutdown"}\n\n');
+        res.end();
+      } catch {
+        /* already closed */
+      }
     }
     this.streams.clear();
     if (s) {
@@ -49,7 +57,9 @@ export class ObservabilityServer {
     }
   }
 
-  private url(): string { return `http://${HOST}:${this.port}`; }
+  private url(): string {
+    return `http://${HOST}:${this.port}`;
+  }
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
     if (!this.guard(req, res)) return;
@@ -59,42 +69,78 @@ export class ObservabilityServer {
     if (shot) return this.screenshot(Number(shot[1]), res);
     if (/^\/api\/live-screenshot\/\d+$/.test(url)) return this.liveScreenshot(res);
     if (url === '/') return this.index(res);
-    res.writeHead(404); res.end();
+    res.writeHead(404);
+    res.end();
   }
 
   private stream(res: ServerResponse): void {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
     res.flushHeaders?.();
     res.socket?.setTimeout(0);
     const write = (ev: unknown): boolean => {
-      try { return res.write(`data: ${JSON.stringify(ev)}\n\n`); }
-      catch { return false; }
+      try {
+        return res.write(`data: ${JSON.stringify(ev)}\n\n`);
+      } catch {
+        return false;
+      }
     };
     this.streams.add(res);
     const { snapshot, detach } = this.recorder.attach((ev) => {
       // Recorder.clear() emits a terminal sentinel — end the stream cleanly.
-      if ((ev as { type?: string }).type === 'cleared') { detach(); res.end(); return; }
-      if (!write(ev)) { detach(); res.end(); }
+      if ((ev as { type?: string }).type === 'cleared') {
+        detach();
+        res.end();
+        return;
+      }
+      if (!write(ev)) {
+        detach();
+        res.end();
+      }
     });
     write({ type: 'snapshot', events: snapshot });
-    const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15_000);
+    const hb = setInterval(() => {
+      try {
+        res.write(': hb\n\n');
+      } catch {
+        /* closed */
+      }
+    }, 15_000);
     hb.unref?.();
-    res.on('close', () => { clearInterval(hb); detach(); this.streams.delete(res); });
+    res.on('close', () => {
+      clearInterval(hb);
+      detach();
+      this.streams.delete(res);
+    });
   }
 
   private guard(req: IncomingMessage, res: ServerResponse): boolean {
     const host = (req.headers.host ?? '').toLowerCase();
-    const okHost = host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}`
-      || host === '127.0.0.1' || host === 'localhost';
+    const okHost =
+      host === `127.0.0.1:${this.port}` ||
+      host === `localhost:${this.port}` ||
+      host === '127.0.0.1' ||
+      host === 'localhost';
     const site = req.headers['sec-fetch-site'];
     const okSite = site === undefined || site === 'same-origin' || site === 'none';
-    if (!okHost || !okSite) { res.writeHead(403); res.end('forbidden'); return false; }
+    if (!okHost || !okSite) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return false;
+    }
     return true;
   }
 
   private screenshot(seq: number, res: ServerResponse): void {
     const shot = this.recorder.getScreenshot(seq);
-    if (!shot) { res.writeHead(404); res.end(); return; }
+    if (!shot) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
     res.end(shot.buf);
   }
@@ -103,7 +149,11 @@ export class ObservabilityServer {
     // The <seq> in the path is a cache-busting key only — always serve the
     // current live frame; 404 only when none has been captured this session.
     const shot = this.recorder.getLiveScreenshot();
-    if (!shot) { res.writeHead(404); res.end(); return; }
+    if (!shot) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
     res.end(shot.buf);
   }
@@ -115,13 +165,19 @@ export class ObservabilityServer {
       const html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
-    } catch { res.writeHead(503); res.end('SPA bundle not built — run npm run build:web'); }
+    } catch {
+      res.writeHead(503);
+      res.end('SPA bundle not built — run npm run build:web');
+    }
   }
 }
 
 function listen(server: Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
-    const onErr = (e: Error): void => { server.removeListener('error', onErr); reject(e); };
+    const onErr = (e: Error): void => {
+      server.removeListener('error', onErr);
+      reject(e);
+    };
     server.once('error', onErr);
     server.listen(port, HOST, () => {
       server.removeListener('error', onErr);

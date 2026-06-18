@@ -56,7 +56,9 @@ export function _setAndroidRunnerStateForTest(state) {
     runnerState = state;
 }
 export function parseAdbDevicesSerials(stdout) {
-    return stdout.split('\n').slice(1)
+    return stdout
+        .split('\n')
+        .slice(1)
         .map((l) => l.trim())
         .map((l) => /^(\S+)\s+device\b/.exec(l))
         .filter((m) => m !== null)
@@ -126,7 +128,9 @@ async function ensureAndroidRunnerInstalled(deviceId) {
     // Fail fast if the target isn't online — never start a multi-minute cold build (or an
     // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
     try {
-        const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], { timeout: 5_000 });
+        const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], {
+            timeout: 5_000,
+        });
         if (stdout.trim() !== 'device')
             throw new Error(`adb state is "${stdout.trim()}"`);
     }
@@ -136,7 +140,13 @@ async function ensureAndroidRunnerInstalled(deviceId) {
     }
     let pmOut = '';
     try {
-        pmOut = (await execFileAsync('adb', [...adbSerialArgs(deviceId), 'shell', 'pm', 'list', 'instrumentation'])).stdout;
+        pmOut = (await execFileAsync('adb', [
+            ...adbSerialArgs(deviceId),
+            'shell',
+            'pm',
+            'list',
+            'instrumentation',
+        ])).stdout;
     }
     catch {
         // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
@@ -161,8 +171,12 @@ async function ensureAndroidRunnerInstalled(deviceId) {
         }
     }
     try {
-        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), { timeout: ADB_INSTALL_TIMEOUT_MS });
-        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), { timeout: ADB_INSTALL_TIMEOUT_MS });
+        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), {
+            timeout: ADB_INSTALL_TIMEOUT_MS,
+        });
+        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), {
+            timeout: ADB_INSTALL_TIMEOUT_MS,
+        });
     }
     catch (err) {
         throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
@@ -181,7 +195,9 @@ export function isAndroidRunnerAvailable() {
         try {
             unlinkSync(STATE_FILE);
         }
-        catch { /* already removed */ }
+        catch {
+            /* already removed */
+        }
         return false;
     }
 }
@@ -216,7 +232,9 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
         try {
-            const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+            const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+                signal: controller.signal,
+            });
             if (resp.ok) {
                 const body = (await resp.json());
                 if (body?.ok === true)
@@ -270,7 +288,9 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
         // debuggable now that logcat is gone, and so an unconsumed stdio:'pipe' can't fill
         // its ~64KB buffer and wedge the child.
         let diag = '';
-        const capture = (chunk) => { diag = (diag + chunk.toString('utf-8')).slice(-4_000); };
+        const capture = (chunk) => {
+            diag = (diag + chunk.toString('utf-8')).slice(-4_000);
+        };
         child.stdout?.on('data', capture);
         child.stderr?.on('data', capture);
         const finishReady = () => {
@@ -289,7 +309,9 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             try {
                 writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
             }
-            catch { /* non-fatal */ }
+            catch {
+                /* non-fatal */
+            }
             resolve(state);
         };
         child.on('error', (err) => {
@@ -306,10 +328,13 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                 try {
                     unlinkSync(STATE_FILE);
                 }
-                catch { /* already removed */ }
+                catch {
+                    /* already removed */
+                }
                 if (typeof exitState?.hostPort === 'number') {
-                    execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort))
-                        .catch(() => { });
+                    execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort)).catch(() => {
+                        /* best-effort: must never throw from exit handler */
+                    });
                 }
             }
             if (!resolved) {
@@ -340,13 +365,17 @@ export async function stopAndroidRunner(deviceId) {
     try {
         unlinkSync(STATE_FILE);
     }
-    catch { /* already removed */ }
+    catch {
+        /* already removed */
+    }
     if (typeof stoppedState?.hostPort === 'number') {
         const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
         try {
             await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort));
         }
-        catch { /* non-fatal */ }
+        catch {
+            /* non-fatal */
+        }
     }
 }
 async function postCommand(body) {
@@ -378,7 +407,7 @@ async function postCommand(body) {
         clearTimeout(timer);
     }
     try {
-        return await resp.json();
+        return (await resp.json());
     }
     catch {
         throw new Error('rn-android-runner returned a non-JSON response body');
@@ -448,7 +477,9 @@ export async function runAndroid(args) {
         // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
         // failure and is rethrown unchanged.
         if (isAndroidConnectionFailure(m)) {
-            return failResult(`rn-android-runner is not reachable: ${m}`, 'RN_ANDROID_RUNNER_DOWN', { hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.' });
+            return failResult(`rn-android-runner is not reachable: ${m}`, 'RN_ANDROID_RUNNER_DOWN', {
+                hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.',
+            });
         }
         throw err;
     }
@@ -470,7 +501,9 @@ export async function runAndroid(args) {
                 message.includes('Idle timeout exceeded'))) {
             return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } });
         }
-        return code ? failResult(message, code) : failResult(message);
+        return code
+            ? failResult(message, code)
+            : failResult(message);
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
         const data = resp.data;

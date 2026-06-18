@@ -33,13 +33,17 @@ export function createOpenDevToolsHandler(getClient) {
                 supportsMultiple = supportsNativeMultiDebugger(parsed);
                 if (parsed && typeof parsed === 'object') {
                     const v = parsed;
-                    if (typeof v.major === 'number' && typeof v.minor === 'number' && typeof v.patch === 'number') {
+                    if (typeof v.major === 'number' &&
+                        typeof v.minor === 'number' &&
+                        typeof v.patch === 'number') {
                         rnVersion = { major: v.major, minor: v.minor, patch: v.patch };
                     }
                 }
             }
         }
-        catch { /* leave rnVersion null, supportsMultiple false */ }
+        catch {
+            /* leave rnVersion null, supportsMultiple false */
+        }
         if (supportsMultiple) {
             // Native multi-debugger: DevTools connects directly to Hermes via Metro's
             // /inspector/debug endpoint. No proxy needed.

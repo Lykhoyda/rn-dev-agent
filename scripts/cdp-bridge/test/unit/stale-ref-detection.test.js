@@ -93,9 +93,19 @@ test('findNewRefByMetadata: returns new ref when cached identifier exists in new
   const reshuffled = [
     { ref: '@e0', type: 'Application', rect: { x: 0, y: 0, width: 393, height: 852 } },
     { ref: '@e1', type: 'Window', rect: { x: 0, y: 0, width: 393, height: 852 } },
-    { ref: '@e2', type: 'StaticText', label: 'Header', rect: { x: 0, y: 0, width: 100, height: 30 } },
+    {
+      ref: '@e2',
+      type: 'StaticText',
+      label: 'Header',
+      rect: { x: 0, y: 0, width: 100, height: 30 },
+    },
     { ref: '@e3', type: 'View', rect: { x: 0, y: 100, width: 393, height: 100 } },
-    { ref: '@e4', type: 'StaticText', label: 'Section', rect: { x: 0, y: 150, width: 100, height: 30 } },
+    {
+      ref: '@e4',
+      type: 'StaticText',
+      label: 'Section',
+      rect: { x: 0, y: 150, width: 100, height: 30 },
+    },
     {
       ref: '@e5',
       type: 'Button',
@@ -114,7 +124,12 @@ test('findNewRefByMetadata: returns null when cached identifier no longer in tre
   // A new snapshot that doesn't contain the cached button at all
   const withoutButton = [
     { ref: '@e0', type: 'Application', rect: { x: 0, y: 0, width: 393, height: 852 } },
-    { ref: '@e1', type: 'StaticText', label: 'No tasks', rect: { x: 16, y: 60, width: 100, height: 30 } },
+    {
+      ref: '@e1',
+      type: 'StaticText',
+      label: 'No tasks',
+      rect: { x: 16, y: 60, width: 100, height: 30 },
+    },
   ];
   assert.equal(findNewRefByMetadata('@e1', withoutButton), null);
 
@@ -126,18 +141,51 @@ test('Android flat nodes reuse generic stale-ref detection', () => {
   clearRefMap();
 
   updateRefMapFromFlat([
-    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 1800, width: 200, height: 100 } },
+    {
+      ref: '@e1',
+      type: 'android.widget.TextView',
+      identifier: 'tab-home',
+      label: 'Home',
+      rect: { x: 0, y: 1800, width: 200, height: 100 },
+    },
   ]);
 
-  assert.equal(isRefStale('@e1', [
-    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 1800, width: 200, height: 100 } },
-  ]), false);
+  assert.equal(
+    isRefStale('@e1', [
+      {
+        ref: '@e1',
+        type: 'android.widget.TextView',
+        identifier: 'tab-home',
+        label: 'Home',
+        rect: { x: 0, y: 1800, width: 200, height: 100 },
+      },
+    ]),
+    false,
+  );
 
-  assert.equal(isRefStale('@e1', [
-    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-settings', label: 'Settings', rect: { x: 0, y: 1800, width: 200, height: 100 } },
-  ]), true);
+  assert.equal(
+    isRefStale('@e1', [
+      {
+        ref: '@e1',
+        type: 'android.widget.TextView',
+        identifier: 'tab-settings',
+        label: 'Settings',
+        rect: { x: 0, y: 1800, width: 200, height: 100 },
+      },
+    ]),
+    true,
+  );
 
-  assert.equal(findNewRefByMetadata('@e1', [
-    { ref: '@e8', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 400, y: 1800, width: 200, height: 100 } },
-  ]), '@e8');
+  assert.equal(
+    findNewRefByMetadata('@e1', [
+      {
+        ref: '@e8',
+        type: 'android.widget.TextView',
+        identifier: 'tab-home',
+        label: 'Home',
+        rect: { x: 400, y: 1800, width: 200, height: 100 },
+      },
+    ]),
+    '@e8',
+  );
 });

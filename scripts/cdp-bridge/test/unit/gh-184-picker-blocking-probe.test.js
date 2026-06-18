@@ -13,13 +13,21 @@ import { probeReactReachable } from '../../dist/cdp/setup.js';
 import { shouldRunPickerProbe, PickerBlockingBundleError } from '../../dist/cdp/connect.js';
 
 const hermes = { id: 'a', title: 'X', vm: 'Hermes', webSocketDebuggerUrl: 'ws://x' };
-const cpp = { id: 'b', title: 'React Native Bridgeless [C++ connection]', vm: 'don\'t know', webSocketDebuggerUrl: 'ws://y' };
+const cpp = {
+  id: 'b',
+  title: 'React Native Bridgeless [C++ connection]',
+  vm: "don't know",
+  webSocketDebuggerUrl: 'ws://y',
+};
 
 // ── probeReactReachable ─────────────────────────────────────────────────
 
 test('probeReactReachable returns true as soon as React reports ready', async () => {
   let calls = 0;
-  const evaluate = async () => { calls++; return { value: calls >= 2 }; };
+  const evaluate = async () => {
+    calls++;
+    return { value: calls >= 2 };
+  };
   const ok = await probeReactReachable(evaluate, 1000, 5);
   assert.equal(ok, true);
   assert.ok(calls >= 2);
@@ -35,7 +43,11 @@ test('probeReactReachable returns false when React never readies within budget',
 
 test('probeReactReachable tolerates a throwing evaluate then success', async () => {
   let calls = 0;
-  const evaluate = async () => { calls++; if (calls < 2) throw new Error('not ready'); return { value: true }; };
+  const evaluate = async () => {
+    calls++;
+    if (calls < 2) throw new Error('not ready');
+    return { value: true };
+  };
   assert.equal(await probeReactReachable(evaluate, 1000, 5), true);
 });
 
@@ -43,7 +55,11 @@ test('probeReactReachable tolerates a throwing evaluate then success', async () 
 
 test('shouldRunPickerProbe only fires for status intent on a non-Hermes target', () => {
   assert.equal(shouldRunPickerProbe('status', cpp), true, 'status + non-Hermes → probe');
-  assert.equal(shouldRunPickerProbe('status', hermes), false, 'status + Hermes → skip (legit slow build)');
+  assert.equal(
+    shouldRunPickerProbe('status', hermes),
+    false,
+    'status + Hermes → skip (legit slow build)',
+  );
   assert.equal(shouldRunPickerProbe('default', cpp), false, 'default intent → never probe');
   assert.equal(shouldRunPickerProbe('default', hermes), false);
 });

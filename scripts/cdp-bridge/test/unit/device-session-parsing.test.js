@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 const UDID_RE = /^[0-9A-Fa-f-]{25,}$/;
 
 function parseDeviceId(data) {
-  const rawId = data?.deviceId
-    ?? data?.device_udid
-    ?? data?.id
-    ?? (typeof data?.device === 'object' ? data?.device?.id : undefined);
+  const rawId =
+    data?.deviceId ??
+    data?.device_udid ??
+    data?.id ??
+    (typeof data?.device === 'object' ? data?.device?.id : undefined);
   return typeof rawId === 'string' && UDID_RE.test(rawId) ? rawId : undefined;
 }
 

@@ -62,7 +62,10 @@ export function startParentDeathWatch(opts: ParentDeathWatchOptions): () => void
     try {
       parentWatchTick(getppid, initialPpid, opts.onOrphaned, opts.onHeartbeat);
     } catch (err) {
-      logger.warn('MCP', `parent-death watch tick failed: ${err instanceof Error ? err.message : err}`);
+      logger.warn(
+        'MCP',
+        `parent-death watch tick failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }, opts.intervalMs ?? DEFAULT_INTERVAL_MS);
   interval.unref?.();

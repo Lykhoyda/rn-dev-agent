@@ -85,7 +85,12 @@ export interface RecoveryOutcome {
   recovered: boolean;
   result: ToolResult;
   tier?: RecoveryTier;
-  reason?: 'no-session-context' | 'wrong-platform' | 'already-attempted' | 'still-sentinel' | 'reopen-failed';
+  reason?:
+    | 'no-session-context'
+    | 'wrong-platform'
+    | 'already-attempted'
+    | 'still-sentinel'
+    | 'reopen-failed';
 }
 
 /**

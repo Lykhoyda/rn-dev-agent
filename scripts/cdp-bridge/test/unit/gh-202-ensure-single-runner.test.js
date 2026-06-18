@@ -6,7 +6,8 @@ import {
   ensureSingleRunner,
 } from '../../dist/runners/ensure-single-runner.js';
 
-const LISTAPPS_NONE = '{\n    "com.rndevagent.testapp" =     {\n        ApplicationType = User;\n    };\n}';
+const LISTAPPS_NONE =
+  '{\n    "com.rndevagent.testapp" =     {\n        ApplicationType = User;\n    };\n}';
 
 // Realistic `ps -A -o pid=,args=` lines (synthetic; see field-verification note).
 const PS = [
@@ -38,9 +39,18 @@ test('GH#202 selectLegacyRunnerPids: matches the real CoreSimulator container-pa
 });
 
 test('GH#202 shouldRemoveDaemonFiles: remove only when daemon PID is dead or absent', () => {
-  assert.equal(shouldRemoveDaemonFiles(4242, () => true), false);  // alive → keep
-  assert.equal(shouldRemoveDaemonFiles(4242, () => false), true);  // dead → remove
-  assert.equal(shouldRemoveDaemonFiles(null, () => true), true);   // no pid → orphan → remove
+  assert.equal(
+    shouldRemoveDaemonFiles(4242, () => true),
+    false,
+  ); // alive → keep
+  assert.equal(
+    shouldRemoveDaemonFiles(4242, () => false),
+    true,
+  ); // dead → remove
+  assert.equal(
+    shouldRemoveDaemonFiles(null, () => true),
+    true,
+  ); // no pid → orphan → remove
 });
 
 function baseDeps(over = {}) {
@@ -60,10 +70,13 @@ function baseDeps(over = {}) {
 
 test('GH#202 ensureSingleRunner (device-open): SIGTERMs scoped legacy pids', async () => {
   const killed = [];
-  const r = await ensureSingleRunner({ udid: 'UDID-A' }, baseDeps({
-    kill: (pid, sig) => killed.push(`${pid}:${sig}`),
-    isAlive: () => false, // dead after SIGTERM → no SIGKILL escalation
-  }));
+  const r = await ensureSingleRunner(
+    { udid: 'UDID-A' },
+    baseDeps({
+      kill: (pid, sig) => killed.push(`${pid}:${sig}`),
+      isAlive: () => false, // dead after SIGTERM → no SIGKILL escalation
+    }),
+  );
   assert.deepEqual(r.killedPids.sort(), [501, 502]);
   assert.ok(killed.includes('501:SIGTERM'));
   assert.ok(!killed.some((k) => k.endsWith('SIGKILL')));
@@ -71,23 +84,29 @@ test('GH#202 ensureSingleRunner (device-open): SIGTERMs scoped legacy pids', asy
 
 test('GH#202 ensureSingleRunner (device-open): escalates to SIGKILL when still alive', async () => {
   const killed = [];
-  await ensureSingleRunner({ udid: 'UDID-OTHER' }, baseDeps({
-    kill: (pid, sig) => killed.push(`${pid}:${sig}`),
-    isAlive: () => true, // survives SIGTERM → SIGKILL
-  }));
+  await ensureSingleRunner(
+    { udid: 'UDID-OTHER' },
+    baseDeps({
+      kill: (pid, sig) => killed.push(`${pid}:${sig}`),
+      isAlive: () => true, // survives SIGTERM → SIGKILL
+    }),
+  );
   assert.ok(killed.includes('777:SIGTERM'));
   assert.ok(killed.includes('777:SIGKILL'));
 });
 
 test('GH#202 ensureSingleRunner (startup, no udid): never scans/kills processes; only dead-pid file cleanup', async () => {
   const removed = [];
-  const r = await ensureSingleRunner({}, baseDeps({
-    listProcesses: () => assert.fail('startup pass must not scan processes'),
-    readDaemonPid: () => 4242,
-    isAlive: () => false, // daemon dead → orphan
-    fileExists: () => true,
-    removeFile: (p) => removed.push(p),
-  }));
+  const r = await ensureSingleRunner(
+    {},
+    baseDeps({
+      listProcesses: () => assert.fail('startup pass must not scan processes'),
+      readDaemonPid: () => 4242,
+      isAlive: () => false, // daemon dead → orphan
+      fileExists: () => true,
+      removeFile: (p) => removed.push(p),
+    }),
+  );
   assert.equal(r.killedPids.length, 0);
   assert.equal(removed.length, 2); // daemon.json + daemon.lock
   assert.equal(r.removedFiles.length, 2);
@@ -95,12 +114,15 @@ test('GH#202 ensureSingleRunner (startup, no udid): never scans/kills processes;
 
 test('GH#202 ensureSingleRunner: keeps daemon files when the daemon PID is alive', async () => {
   const removed = [];
-  const r = await ensureSingleRunner({}, baseDeps({
-    readDaemonPid: () => 4242,
-    isAlive: () => true, // alive → may belong to another project → keep
-    fileExists: () => true,
-    removeFile: (p) => removed.push(p),
-  }));
+  const r = await ensureSingleRunner(
+    {},
+    baseDeps({
+      readDaemonPid: () => 4242,
+      isAlive: () => true, // alive → may belong to another project → keep
+      fileExists: () => true,
+      removeFile: (p) => removed.push(p),
+    }),
+  );
   assert.equal(removed.length, 0);
   assert.ok(r.warnings.some((w) => /alive/.test(w)));
 });

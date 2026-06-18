@@ -35,8 +35,8 @@ export class PickerBlockingBundleError extends Error {
   constructor(target: HermesTarget) {
     super(
       `Dev Client picker appears to be blocking the bundle: React was not reachable on target ` +
-      `"${target.title}" (vm=${target.vm}). If the Expo "Development servers" picker is showing on ` +
-      `the simulator, select your Metro server, then retry cdp_status. (If the bundle is still building, just retry.)`,
+        `"${target.title}" (vm=${target.vm}). If the Expo "Development servers" picker is showing on ` +
+        `the simulator, select your Metro server, then retry cdp_status. (If the bundle is still building, just retry.)`,
     );
     this.name = 'PickerBlockingBundleError';
     this.target = target;
@@ -178,7 +178,9 @@ export async function discoverAndConnect(
         connectedTarget = candidate;
         break;
       }
-      console.error(`CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`);
+      console.error(
+        `CDP: target ${candidate.id} (${candidate.title}) has __DEV__=${devCheck.value}, skipping`,
+      );
       if (!isLast) {
         closeAndResetWs(ctx);
         ctx.setState('disconnected');
@@ -201,7 +203,10 @@ export async function discoverAndConnect(
   }
 
   const generation = ctx.incrementConnectionGeneration();
-  logger.info('CDP', `Connected to target ${connectedTarget!.id} (${connectedTarget!.title}) on port ${metroPort}, generation=${generation}`);
+  logger.info(
+    'CDP',
+    `Connected to target ${connectedTarget!.id} (${connectedTarget!.title}) on port ${metroPort}, generation=${generation}`,
+  );
 
   // GH #59 #5: persist the resolved platform into _connectFilters when the
   // caller didn't pin one explicitly. Without this, softReconnect after
@@ -297,10 +302,14 @@ async function connectToTarget(
       handshakeOk = true;
       // D594: Early stale-target detection — quick probe before full setup
       try {
-        await ctx.sendWithTimeout('Runtime.evaluate', {
-          expression: '1+1',
-          returnByValue: true,
-        }, CDP_TIMEOUT_FAST);
+        await ctx.sendWithTimeout(
+          'Runtime.evaluate',
+          {
+            expression: '1+1',
+            returnByValue: true,
+          },
+          CDP_TIMEOUT_FAST,
+        );
       } catch {
         probeTimedOut = true;
         throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
@@ -315,7 +324,10 @@ async function connectToTarget(
       // Dev Client picker leaves advertised — abort fast with a typed error
       // instead of hanging. Hermes targets are skipped (legit slow builds).
       if (shouldRunPickerProbe(intent, target)) {
-        const reachable = await probeReactReachable((expr) => ctx.evaluate(expr), PICKER_PROBE_BUDGET_MS);
+        const reachable = await probeReactReachable(
+          (expr) => ctx.evaluate(expr),
+          PICKER_PROBE_BUDGET_MS,
+        );
         if (!reachable) throw new PickerBlockingBundleError(target);
       }
       await ctx.setup();
@@ -341,7 +353,12 @@ async function connectToTarget(
   }
   ctx.setState('disconnected');
   throw new Error(
-    formatConnectFailureMessage(retries, attempts, target.description ?? null, lastError?.message ?? null),
+    formatConnectFailureMessage(
+      retries,
+      attempts,
+      target.description ?? null,
+      lastError?.message ?? null,
+    ),
   );
 }
 
@@ -359,7 +376,11 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
     const guard = setTimeout(() => {
       if (settled) return;
       settled = true;
-      try { ws.terminate(); } catch { /* already gone */ }
+      try {
+        ws.terminate();
+      } catch {
+        /* already gone */
+      }
       reject(new Error('WebSocket connect timed out'));
     }, 7000);
 
@@ -375,7 +396,11 @@ function connectWs(ctx: ConnectContext, url: string): Promise<void> {
       if (!settled) {
         settled = true;
         clearTimeout(guard);
-        try { ws.terminate(); } catch { /* already closing */ }
+        try {
+          ws.terminate();
+        } catch {
+          /* already closing */
+        }
         reject(err);
       } else {
         console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);

@@ -11,7 +11,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { expectOk, expectFail, parseEnvelope } from '../helpers/result-helpers.js';
+import { expectOk, parseEnvelope } from '../helpers/result-helpers.js';
 import {
   createRecordTestStartHandler,
   createRecordTestStopHandler,
@@ -81,10 +81,10 @@ test('M6 stop: deduplicates + populates typeCounts + truncated flag', async () =
   const fakeEvents = [
     { type: 'tap', testID: 'btn', t: 1000 },
     { type: 'tap', testID: 'btn', t: 1050 }, // dedup window
-    { type: 'type', testID: 'email', value: 'a',     t: 1100 },
-    { type: 'type', testID: 'email', value: 'a@b',   t: 1110 },
+    { type: 'type', testID: 'email', value: 'a', t: 1100 },
+    { type: 'type', testID: 'email', value: 'a@b', t: 1110 },
     { type: 'type', testID: 'email', value: 'a@b.c', t: 1120 },
-    { type: 'navigate', from: 'Login', to: 'Home',   t: 1200 },
+    { type: 'navigate', from: 'Login', to: 'Home', t: 1200 },
   ];
   const client = makeClient(async (expr) => {
     if (expr.includes('__METRO_MCP_REC_CLEANUP__')) {
@@ -120,14 +120,16 @@ test('M6 generate: appium returns NOT_IMPLEMENTED', async () => {
 
 test('M6 generate: maestro round-trip produces expected YAML', async () => {
   _setStoredEvents([
-    { type: 'tap',      testID: 'login-btn', t: 1 },
-    { type: 'type',     testID: 'email',     value: 'a@b.c', t: 2 },
-    { type: 'submit',   testID: 'email',     t: 3 },
+    { type: 'tap', testID: 'login-btn', t: 1 },
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 2 },
+    { type: 'submit', testID: 'email', t: 3 },
     { type: 'navigate', from: 'Login', to: 'Home', t: 4 },
-    { type: 'tap',      testID: 'home-greeting', t: 5 },
+    { type: 'tap', testID: 'home-greeting', t: 5 },
   ]);
   const handler = createRecordTestGenerateHandler();
-  const data = expectOk(await handler({ format: 'maestro', testName: 'Login flow', bundleId: 'com.x.app' }));
+  const data = expectOk(
+    await handler({ format: 'maestro', testName: 'Login flow', bundleId: 'com.x.app' }),
+  );
   assert.equal(data.format, 'maestro');
   assert.equal(data.eventCount, 5);
   assert.match(data.text, /appId: com\.x\.app/);
@@ -143,8 +145,8 @@ test('M6 generate: maestro round-trip produces expected YAML', async () => {
 
 test('M6 generate: detox round-trip produces expected JS', async () => {
   _setStoredEvents([
-    { type: 'tap',  testID: 'login-btn', t: 1 },
-    { type: 'type', testID: 'email',     value: 'a@b.c', t: 2 },
+    { type: 'tap', testID: 'login-btn', t: 1 },
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 2 },
   ]);
   const handler = createRecordTestGenerateHandler();
   const data = expectOk(await handler({ format: 'detox' }));
@@ -196,10 +198,13 @@ test('M6 save → load round-trip restores events', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'm6-save-'));
   process.env.RN_PROJECT_ROOT = tmp;
   // findProjectRoot() requires an isRnProject signal — fake one cheaply.
-  await writeFile(join(tmp, 'package.json'), JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }));
+  await writeFile(
+    join(tmp, 'package.json'),
+    JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }),
+  );
   try {
     _setStoredEvents([
-      { type: 'tap',  testID: 'btn',   t: 1 },
+      { type: 'tap', testID: 'btn', t: 1 },
       { type: 'type', testID: 'email', value: 'a@b.c', t: 2 },
     ]);
     const saveData = expectOk(await createRecordTestSaveHandler()({ filename: 'login.json' }));
@@ -225,7 +230,10 @@ test('M6 save → load round-trip restores events', async () => {
 test('M6 list: returns sorted recording names without .json suffix', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'm6-list-'));
   process.env.RN_PROJECT_ROOT = tmp;
-  await writeFile(join(tmp, 'package.json'), JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }));
+  await writeFile(
+    join(tmp, 'package.json'),
+    JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }),
+  );
   await mkdir(join(tmp, '.rn-agent', 'recordings'), { recursive: true });
   await writeFile(join(tmp, '.rn-agent', 'recordings', 'zebra.json'), '[]');
   await writeFile(join(tmp, '.rn-agent', 'recordings', 'alpha.json'), '[]');
@@ -242,7 +250,10 @@ test('M6 list: returns sorted recording names without .json suffix', async () =>
 test('M6 load: LOAD_FAILED when file missing', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'm6-loadfail-'));
   process.env.RN_PROJECT_ROOT = tmp;
-  await writeFile(join(tmp, 'package.json'), JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }));
+  await writeFile(
+    join(tmp, 'package.json'),
+    JSON.stringify({ name: 'fake', dependencies: { 'react-native': '*' } }),
+  );
   try {
     const env = parseEnvelope(await createRecordTestLoadHandler()({ filename: 'nope' }));
     assert.equal(env.ok, false);

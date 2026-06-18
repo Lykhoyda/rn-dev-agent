@@ -5,7 +5,11 @@
 // stdout-shape contract.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStartOutput, parseStopOutput, parseStatusOutput } from '../../dist/tools/device-record.js';
+import {
+  parseStartOutput,
+  parseStopOutput,
+  parseStatusOutput,
+} from '../../dist/tools/device-record.js';
 
 // ── parseStartOutput ────────────────────────────────────────────────────
 
@@ -213,7 +217,11 @@ test('source guard: device_record tool registered in index.ts', async () => {
   const { dirname, join } = await import('node:path');
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const indexSrc = readFileSync(join(__dirname, '../../dist/index.js'), 'utf-8');
-  assert.match(indexSrc, /'device_record'/, 'device_record tool name not found in built index.js');
+  assert.match(
+    indexSrc,
+    /['"]device_record['"]/,
+    'device_record tool name not found in built index.js',
+  );
   assert.match(indexSrc, /createDeviceRecordHandler/, 'createDeviceRecordHandler import missing');
 });
 

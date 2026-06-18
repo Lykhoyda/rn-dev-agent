@@ -28,7 +28,8 @@ export function classifyFillVerification(input: FillVerifyInput): FillVerifyOutc
   if (valueAfter === null) return 'unverifiable';
   if (valueAfter === text) return 'verified-exact';
   if (text.length === 0) return 'corrupted';
-  if (valueAfter.length > 0 && valueAfter.length >= HALF * text.length) return 'verified-transformed';
+  if (valueAfter.length > 0 && valueAfter.length >= HALF * text.length)
+    return 'verified-transformed';
   if (
     priorValueAfter !== undefined &&
     priorValueAfter !== null &&
@@ -56,7 +57,8 @@ export function resolveJsTestId(ref: string, opts: ResolveTestIdOpts = {}): stri
   if (opts.explicitTestId && opts.explicitTestId.length > 0) return opts.explicitTestId;
   const stripped = ref.replace(/^@/, '');
   if (stripped.length === 0) return null;
-  if (SNAPSHOT_REF_TOKEN.test(stripped)) return opts.cachedIdentifier && opts.cachedIdentifier.length > 0 ? opts.cachedIdentifier : null;
+  if (SNAPSHOT_REF_TOKEN.test(stripped))
+    return opts.cachedIdentifier && opts.cachedIdentifier.length > 0 ? opts.cachedIdentifier : null;
   if (/^\d+$/.test(stripped)) return null;
   return stripped;
 }
@@ -105,8 +107,13 @@ async function readInputValueOnce(
   try {
     const r = await deps.evaluate('__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')');
     if (!r.error && typeof r.value === 'string') {
-      const read = JSON.parse(r.value) as { value?: string | null; controlled?: boolean; __agent_error?: string };
-      if (!read.__agent_error) return { value: read.value ?? null, controlled: read.controlled ?? false };
+      const read = JSON.parse(r.value) as {
+        value?: string | null;
+        controlled?: boolean;
+        __agent_error?: string;
+      };
+      if (!read.__agent_error)
+        return { value: read.value ?? null, controlled: read.controlled ?? false };
     }
   } catch {
     /* unreadable */
@@ -150,10 +157,17 @@ export async function settleRead(
  * JS-first fill: eval-1 probes + fires onChangeText (no-op when no handler), then
  * settle-poll the value. Any CDP hiccup / stale helper degrades to handled:false.
  */
-export async function attemptJsFill(deps: EvaluateSeam, testID: string, text: string): Promise<JsFillResult> {
+export async function attemptJsFill(
+  deps: EvaluateSeam,
+  testID: string,
+  text: string,
+): Promise<JsFillResult> {
   let probe: Record<string, unknown>;
   try {
-    const expr = '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text, verify: true }) + ')';
+    const expr =
+      '__RN_AGENT.interact(' +
+      JSON.stringify({ action: 'typeText', testID, text, verify: true }) +
+      ')';
     const r = await deps.evaluate(expr);
     if (r.error || typeof r.value !== 'string') return { handled: false };
     probe = JSON.parse(r.value) as Record<string, unknown>;
@@ -168,7 +182,11 @@ export async function attemptJsFill(deps: EvaluateSeam, testID: string, text: st
   const settled = await settleRead(deps, testID, text, valueBefore);
   return {
     handled: true,
-    outcome: classifyFillVerification({ text, valueAfter: settled.value, controlled: settled.controlled }),
+    outcome: classifyFillVerification({
+      text,
+      valueAfter: settled.value,
+      controlled: settled.controlled,
+    }),
     valueAfter: settled.value,
     controlled: settled.controlled,
     handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,

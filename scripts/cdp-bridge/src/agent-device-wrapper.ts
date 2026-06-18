@@ -4,9 +4,8 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
 import type { SessionState } from './types.js';
-import { okResult, failResult } from './utils.js';
+import { failResult } from './utils.js';
 import {
-  isFastRunnerAvailable,
   startFastRunner,
   probeFastRunnerLiveness,
   reapStaleFastRunner,
@@ -15,7 +14,13 @@ import {
 } from './runners/rn-fast-runner-client.js';
 import type { FastRunnerLiveness } from './runners/rn-fast-runner-client.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS } from './fast-runner-ref-map.js';
+import {
+  refCenter,
+  getScreenRect,
+  clearRefMap,
+  isRefMapFresh,
+  MAX_REF_MAP_AGE_MS,
+} from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 
 /**
@@ -50,27 +55,6 @@ function getSessionFilePath(): string {
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 
-function extractFlags(args: string[]): { positionals: string[]; flags: Record<string, string | boolean> } {
-  const positionals: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('--') && arg.length > 2) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positionals.push(arg);
-    }
-  }
-  return { positionals, flags };
-}
-
 let activeSession: SessionState | null = null;
 
 // CDP-015: load session, refusing to follow symlinks (defends against the
@@ -99,7 +83,9 @@ if (!activeSession) {
     try {
       mkdirSync(dirname(SESSION_FILE), { recursive: true });
       writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
-    } catch { /* migration is best-effort */ }
+    } catch {
+      /* migration is best-effort */
+    }
   }
 }
 
@@ -116,17 +102,25 @@ export function setActiveSession(info: SessionState): void {
     const tmpPath = `${SESSION_FILE}.tmp.${process.pid}`;
     writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
     renameSync(tmpPath, SESSION_FILE);
-  } catch { /* ignore — in-memory session is still valid */ }
+  } catch {
+    /* ignore — in-memory session is still valid */
+  }
 }
 
 export function clearActiveSession(): void {
   activeSession = null;
   clearRefMap();
-  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+  try {
+    unlinkSync(SESSION_FILE);
+  } catch {
+    /* ignore */
+  }
 }
 
 // Exported for tests + diagnostics.
-export function getSessionFilePathForTest(): string { return SESSION_FILE; }
+export function getSessionFilePathForTest(): string {
+  return SESSION_FILE;
+}
 
 // Test-only: reset the in-memory session pointer without touching the on-disk
 // file. Tests that exercise paths gated on hasActiveSession() (e.g. the
@@ -155,7 +149,15 @@ interface CachedSnapshot {
   platform: string;
   // Lossless: the full runner nodes are stored (rect/enabled included) so a
   // cache-served device_find ranks and dedups identically to a fresh snapshot.
-  nodes: { ref: string; label?: string; identifier?: string; type?: string; hittable?: boolean; enabled?: boolean; rect?: { x: number; y: number; width: number; height: number } }[];
+  nodes: {
+    ref: string;
+    label?: string;
+    identifier?: string;
+    type?: string;
+    hittable?: boolean;
+    enabled?: boolean;
+    rect?: { x: number; y: number; width: number; height: number };
+  }[];
   capturedAt: string;
   capturedAtMs: number;
 }
@@ -172,7 +174,12 @@ const snapshotCache = new Map<string, CachedSnapshot>();
 let snapshotCacheDirty = true;
 
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
-  snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString(), capturedAtMs: Date.now() });
+  snapshotCache.set(platform, {
+    platform,
+    nodes,
+    capturedAt: new Date().toISOString(),
+    capturedAtMs: Date.now(),
+  });
   // A fresh snapshot is, by definition, a clean picture of the current screen.
   snapshotCacheDirty = false;
 }
@@ -189,7 +196,10 @@ export function markSnapshotDirty(): void {
 
 // True only when the cached snapshot is safe to reuse for targeting: present,
 // not invalidated by a mutating verb, and within the freshness budget.
-export function isSnapshotCacheValid(platform: string, maxAgeMs: number = MAX_REF_MAP_AGE_MS): boolean {
+export function isSnapshotCacheValid(
+  platform: string,
+  maxAgeMs: number = MAX_REF_MAP_AGE_MS,
+): boolean {
   if (snapshotCacheDirty) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
@@ -288,7 +298,8 @@ export function buildRunIOSArgs(
         return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
       }
       const [xS, yS] = positionals;
-      const x = Number(xS), y = Number(yS);
+      const x = Number(xS),
+        y = Number(yS);
       if (Number.isNaN(x) || Number.isNaN(y)) {
         throw new Error(`buildRunIOSArgs: tap requires a @ref or numeric x, y`);
       }
@@ -303,16 +314,30 @@ export function buildRunIOSArgs(
       const ref = positionals[0];
       const text = positionals.slice(1).join(' ');
       const delayRaw = optionValue(cliArgs, '--delay-ms');
-      const delayMs = delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
+      const delayMs =
+        delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
       const extra: { delayMs?: number; clearFirst?: boolean } = {};
       if (delayMs !== undefined) extra.delayMs = delayMs;
       if (cliArgs.includes('--clear-first')) extra.clearFirst = true;
       if (ref && ref.startsWith('@')) {
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
-          return { command: 'type', _staleRef: ref, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+          return {
+            command: 'type',
+            _staleRef: ref,
+            text,
+            ...extra,
+            ...(bundleId ? { bundleId } : {}),
+          };
         }
-        return { command: 'type', x: center.x, y: center.y, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+        return {
+          command: 'type',
+          x: center.x,
+          y: center.y,
+          text,
+          ...extra,
+          ...(bundleId ? { bundleId } : {}),
+        };
       }
       return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
     }
@@ -334,12 +359,19 @@ export function buildRunIOSArgs(
       // path: device-interact converts direction→coords up-front and
       // dispatches the coord shape.
       const [x1S, y1S, x2S, y2S, durationS] = positionals;
-      const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
+      const x1 = Number(x1S),
+        y1 = Number(y1S),
+        x2 = Number(x2S),
+        y2 = Number(y2S);
       if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
         throw new Error(`buildRunIOSArgs: ${cmd} requires four numeric coordinates`);
       }
       const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
-        command: 'drag', x: x1, y: y1, x2, y2,
+        command: 'drag',
+        x: x1,
+        y: y1,
+        x2,
+        y2,
         ...(bundleId ? { bundleId } : {}),
       };
       if (durationS !== undefined) {
@@ -351,12 +383,15 @@ export function buildRunIOSArgs(
     case 'longpress': {
       // CLI shape: ['longpress', x, y, durationMs?]
       const [xS, yS, durationS] = positionals;
-      const x = Number(xS), y = Number(yS);
+      const x = Number(xS),
+        y = Number(yS);
       if (Number.isNaN(x) || Number.isNaN(y)) {
         throw new Error(`buildRunIOSArgs: longpress requires numeric x, y`);
       }
       const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
-        command: 'longPress', x, y,
+        command: 'longPress',
+        x,
+        y,
         ...(bundleId ? { bundleId } : {}),
       };
       if (durationS !== undefined) {
@@ -373,11 +408,13 @@ export function buildRunIOSArgs(
         throw new Error(`buildRunIOSArgs: pinch requires numeric scale`);
       }
       const args: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
-        command: 'pinch', scale,
+        command: 'pinch',
+        scale,
         ...(bundleId ? { bundleId } : {}),
       };
       if (xS !== undefined && yS !== undefined) {
-        const x = Number(xS), y = Number(yS);
+        const x = Number(xS),
+          y = Number(yS);
         if (!Number.isNaN(x)) args.x = x;
         if (!Number.isNaN(y)) args.y = y;
       }
@@ -432,7 +469,8 @@ export function buildRunAndroidArgs(
         return { command: 'tap', x: center.x, y: center.y, ...withBundle };
       }
       const [xS, yS] = positionals;
-      const x = Number(xS), y = Number(yS);
+      const x = Number(xS),
+        y = Number(yS);
       if (Number.isNaN(x) || Number.isNaN(y)) {
         throw new Error(`buildRunAndroidArgs: tap requires a @ref or numeric x, y`);
       }
@@ -471,7 +509,10 @@ export function buildRunAndroidArgs(
     case 'scroll':
     case 'drag': {
       const [x1S, y1S, x2S, y2S, durationS] = positionals;
-      const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
+      const x1 = Number(x1S),
+        y1 = Number(y1S),
+        x2 = Number(x2S),
+        y2 = Number(y2S);
       if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
         throw new Error(`buildRunAndroidArgs: ${cmd} requires four numeric coordinates`);
       }
@@ -497,7 +538,8 @@ export function buildRunAndroidArgs(
           ...withBundle,
         };
       }
-      const x = Number(target), y = Number(yOrDuration);
+      const x = Number(target),
+        y = Number(yOrDuration);
       if (Number.isNaN(x) || Number.isNaN(y)) {
         throw new Error('buildRunAndroidArgs: longpress requires numeric x, y or a @ref');
       }
@@ -517,7 +559,8 @@ export function buildRunAndroidArgs(
       }
       const args: RunAndroidArgs = { command: 'pinch', scale, ...withBundle };
       if (xS !== undefined && yS !== undefined) {
-        const x = Number(xS), y = Number(yS);
+        const x = Number(xS),
+          y = Number(yS);
         if (!Number.isNaN(x)) args.x = x;
         if (!Number.isNaN(y)) args.y = y;
       }
@@ -608,7 +651,9 @@ export async function ensureFastRunner(deviceId: string, bundleId: string): Prom
   try {
     await startFastRunner(deviceId, bundleId);
   } catch (err) {
-    console.error(`Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -638,12 +683,12 @@ export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
   if (_testSeamFused) {
     throw new Error(
       `_setRunAgentDeviceForTest: blown fuse — a production runNative ` +
-      `call (cliArgs[0]=${JSON.stringify(_testSeamFuseBlownBy)}) already ` +
-      `dispatched in this process. The test seam cannot be re-armed at runtime ` +
-      `(GH #110 hardening). The most likely cause is a prior test forgot to ` +
-      `clear its override in afterEach. Spawn a fresh Node process — e.g. ` +
-      `\`node --test --test-isolation=process\` — if you genuinely need to ` +
-      `mix production and override paths.`,
+        `call (cliArgs[0]=${JSON.stringify(_testSeamFuseBlownBy)}) already ` +
+        `dispatched in this process. The test seam cannot be re-armed at runtime ` +
+        `(GH #110 hardening). The most likely cause is a prior test forgot to ` +
+        `clear its override in afterEach. Spawn a fresh Node process — e.g. ` +
+        `\`node --test --test-isolation=process\` — if you genuinely need to ` +
+        `mix production and override paths.`,
     );
   }
   _runAgentDeviceOverrideForTest = fn;
@@ -678,11 +723,7 @@ export async function runNative(
   // is started lazily — if no session has cold-launched it yet, we surface
   // a clear failure so the agent can call device_snapshot action=open.
   const targetPlatform = opts.platform ?? activeSession?.platform;
-  if (
-    targetPlatform === 'ios' &&
-    !opts.skipSession &&
-    RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])
-  ) {
+  if (targetPlatform === 'ios' && !opts.skipSession && RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
     const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
     // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
     // it here; the gate is only for verbs that genuinely require the XCUITest runner.
@@ -700,14 +741,30 @@ export async function runNative(
   // as a pure-TS orchestrator (snapshot → match → tap) for cross-platform symmetry.
   // UIAutomator's `By.text()` returns regex-match semantics while findInLatestSnapshot
   // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
-  const RN_ANDROID_RUNNER_COMMANDS = new Set<string>(['snapshot', 'tap', 'press', 'fill', 'type', 'back', 'screenshot', 'keyboard', 'swipe', 'scroll', 'drag', 'longpress', 'pinch']);
+  const RN_ANDROID_RUNNER_COMMANDS = new Set<string>([
+    'snapshot',
+    'tap',
+    'press',
+    'fill',
+    'type',
+    'back',
+    'screenshot',
+    'keyboard',
+    'swipe',
+    'scroll',
+    'drag',
+    'longpress',
+    'pinch',
+  ]);
 
   // eradicate-agent-device Phase 2 Task 9: when the operator explicitly disables the
   // Android runner (RN_ANDROID_RUNNER=0), return an actionable error instead of
   // silently falling through to NO_NATIVE_ROUTE. There is no agent-device fallback.
   if (
-    targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER === '0' &&
-    !opts.skipSession && RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
+    targetPlatform === 'android' &&
+    process.env.RN_ANDROID_RUNNER === '0' &&
+    !opts.skipSession &&
+    RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
   ) {
     return failResult(
       'In-tree Android runner is the only device backend; the agent-device fallback was removed (eradicate-agent-device). Unset RN_ANDROID_RUNNER (or set it to anything but "0") to use it.',
@@ -716,7 +773,9 @@ export async function runNative(
   }
 
   if (
-    targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
+    targetPlatform === 'android' &&
+    process.env.RN_ANDROID_RUNNER !== '0' &&
+    !opts.skipSession &&
     RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])
   ) {
     const appId = activeSession?.appId ?? resolveBundleId('android') ?? undefined;
@@ -725,7 +784,8 @@ export async function runNative(
     // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
     // fallback (like iOS simctl) — don't gate it on the runner.
     if (cliArgs[0] !== 'screenshot') {
-      const { resolveAndroidSerial, startAndroidRunner } = await import('./runners/rn-android-runner-client.js');
+      const { resolveAndroidSerial, startAndroidRunner } =
+        await import('./runners/rn-android-runner-client.js');
       const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
       if (!serial) {
         return failResult(

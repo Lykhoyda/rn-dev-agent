@@ -116,7 +116,12 @@ export async function runMaestroInline(yaml, opts) {
         const capturedOutput = ((errObj.stdout ?? '') + '\n' + (errObj.stderr ?? '')).trim();
         if (errObj.killed) {
             // Timeout — always a hard error, caller should treat as runner failure.
-            return { passed: false, output: capturedOutput, flowFile, error: `Maestro timed out after ${timeout}ms` };
+            return {
+                passed: false,
+                output: capturedOutput,
+                flowFile,
+                error: `Maestro timed out after ${timeout}ms`,
+            };
         }
         if (capturedOutput) {
             return { passed: false, output: capturedOutput, flowFile };

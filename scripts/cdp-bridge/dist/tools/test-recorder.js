@@ -9,7 +9,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEV_CHECK_JS, START_RECORDING_JS, STOP_RECORDING_JS, buildAnnotationJs, } from '../cdp/test-recorder-helpers.js';
-import { generateMaestro, generateDetox, } from './test-recorder-generators.js';
+import { generateMaestro, generateDetox } from './test-recorder-generators.js';
 // --- Module state ---
 // Shared across the 7 tool handlers — reset on start, written on stop, read by
 // generate / save. Test-only setters exposed at the bottom of this file for
@@ -86,9 +86,7 @@ export function _makeRecordingRootResolverForTest(getClient, mode = 'save') {
 function makeRecordingRootResolver(getClient, mode = 'save') {
     return () => {
         const liveBundleId = getClient?.().connectedTarget?.description ?? null;
-        const bundleId = mode === 'save'
-            ? (recordingBundleId ?? liveBundleId)
-            : (liveBundleId ?? recordingBundleId);
+        const bundleId = mode === 'save' ? (recordingBundleId ?? liveBundleId) : (liveBundleId ?? recordingBundleId);
         if (bundleId)
             return findProjectRoot({ bundleId });
         return findProjectRoot();
@@ -192,7 +190,12 @@ export function createRecordTestGenerateHandler() {
         const text = args.format === 'maestro'
             ? generateMaestro(storedEvents, opts)
             : generateDetox(storedEvents, opts);
-        return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
+        return okResult({
+            format: args.format,
+            eventCount: storedEvents.length,
+            text,
+            startRoute: recordingStartRoute,
+        });
     };
 }
 /**

@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const STORE_PATH = '../../dist/domain/action-store.js';
-const ACTION_PATH = '../../dist/domain/reusable-action.js';
+const _ACTION_PATH = '../../dist/domain/reusable-action.js';
 
 function makeProject() {
   const root = mkdtempSync(join(tmpdir(), 'gh113-'));
@@ -59,7 +59,9 @@ test('saveAction: succeeds when no external edit between load and save', async (
 });
 
 test('saveAction: throws SaveActionPreconditionError when YAML was edited externally', async () => {
-  const { loadAction, saveAction, withBody, SaveActionPreconditionError } = await import(STORE_PATH);
+  const { loadAction, saveAction, withBody, SaveActionPreconditionError } = await import(
+    STORE_PATH
+  );
   const root = makeProject();
   const filePath = writeAction(root, 'edited-mid-flight', ['- launchApp']);
   const action = loadAction(root, 'edited-mid-flight');
@@ -79,7 +81,9 @@ test('saveAction: throws SaveActionPreconditionError when YAML was edited extern
 
   // The error should reference the file path so a developer can identify
   // which action triggered the guard.
-  try { saveAction(modified); } catch (e) {
+  try {
+    saveAction(modified);
+  } catch (e) {
     assert.match(e.message, /edited-mid-flight\.yaml/);
     assert.match(e.message, /GH #113/);
     assert.match(e.message, /actionWasEditedExternally/);

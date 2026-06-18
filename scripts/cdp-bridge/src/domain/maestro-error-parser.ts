@@ -20,7 +20,12 @@
 // can decide whether to surface it verbatim or escalate to the user.
 
 export type MaestroFailure =
-  | { kind: 'SELECTOR_NOT_FOUND'; selectorKind: 'id' | 'text' | 'unknown'; selector: string; raw: string }
+  | {
+      kind: 'SELECTOR_NOT_FOUND';
+      selectorKind: 'id' | 'text' | 'unknown';
+      selector: string;
+      raw: string;
+    }
   | { kind: 'TIMEOUT'; selector: string | null; raw: string }
   | { kind: 'ASSERTION_FAILED'; selector: string | null; raw: string }
   | { kind: 'UNKNOWN'; raw: string };
@@ -65,7 +70,12 @@ const PATTERNS: Pattern[] = [
   },
   {
     re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-    build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'unknown', selector: m[2], raw }),
+    build: (m, raw) => ({
+      kind: 'SELECTOR_NOT_FOUND',
+      selectorKind: 'unknown',
+      selector: m[2],
+      raw,
+    }),
   },
   {
     re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,

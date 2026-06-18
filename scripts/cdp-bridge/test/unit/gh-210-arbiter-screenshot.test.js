@@ -18,7 +18,14 @@ test('#210 arbiter: device_screenshot runs UNLEASED during a flow (fallback allo
   const a = new DeviceSessionArbiter();
   a.tryAcquire('flow', 'maestro_run');
   let ran = 0;
-  const wrapped = arbiterWrap('device_screenshot', async () => { ran++; return { content: [] }; }, a);
+  const wrapped = arbiterWrap(
+    'device_screenshot',
+    async () => {
+      ran++;
+      return { content: [] };
+    },
+    a,
+  );
   const res = await wrapped();
   assert.equal(ran, 1, 'screenshot handler must run during a flow (simctl path is flow-safe)');
   assert.ok(!res.isError, 'must not refuse device_screenshot during a flow');
@@ -35,9 +42,20 @@ test('#210 arbiter: a NON-allowlisted interaction tool is still refused during a
 test('#210 arbiter: device_screenshot still acquires a lease when NO flow (coordinates normally)', async () => {
   const a = new DeviceSessionArbiter();
   let snapshotDuring = -1;
-  const wrapped = arbiterWrap('device_screenshot', async () => { snapshotDuring = a.snapshot.activeOps; return { content: [] }; }, a);
+  const wrapped = arbiterWrap(
+    'device_screenshot',
+    async () => {
+      snapshotDuring = a.snapshot.activeOps;
+      return { content: [] };
+    },
+    a,
+  );
   await wrapped();
-  assert.equal(snapshotDuring, 1, 'with no flow, screenshot holds an interaction lease while running');
+  assert.equal(
+    snapshotDuring,
+    1,
+    'with no flow, screenshot holds an interaction lease while running',
+  );
 });
 
 test('#210 arbiter: another interaction op active (NO flow) → device_screenshot runs LEASED, not unleased-fallback', async () => {
@@ -47,8 +65,22 @@ test('#210 arbiter: another interaction op active (NO flow) → device_screensho
   const a = new DeviceSessionArbiter();
   a.tryAcquire('interaction', 'device_press');
   let activeOpsDuring = -1;
-  const wrapped = arbiterWrap('device_screenshot', async () => { activeOpsDuring = a.snapshot.activeOps; return { content: [] }; }, a);
+  const wrapped = arbiterWrap(
+    'device_screenshot',
+    async () => {
+      activeOpsDuring = a.snapshot.activeOps;
+      return { content: [] };
+    },
+    a,
+  );
   const res = await wrapped();
-  assert.ok(!res.isError, 'interaction tools coexist — screenshot is not refused by a concurrent device_press');
-  assert.equal(activeOpsDuring, 2, 'screenshot holds its own interaction lease alongside device_press (leased, not unleased)');
+  assert.ok(
+    !res.isError,
+    'interaction tools coexist — screenshot is not refused by a concurrent device_press',
+  );
+  assert.equal(
+    activeOpsDuring,
+    2,
+    'screenshot holds its own interaction lease alongside device_press (leased, not unleased)',
+  );
 });

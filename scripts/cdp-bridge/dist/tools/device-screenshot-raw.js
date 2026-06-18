@@ -35,7 +35,10 @@ export function parseSimctlBootedUDID(jsonText) {
         if (!Array.isArray(list))
             continue;
         for (const device of list) {
-            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+            if (device &&
+                device.state === 'Booted' &&
+                typeof device.udid === 'string' &&
+                device.udid.length > 0) {
                 return device.udid;
             }
         }
@@ -58,7 +61,10 @@ export function parseSimctlBootedAll(jsonText) {
         if (!Array.isArray(list))
             continue;
         for (const device of list) {
-            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+            if (device &&
+                device.state === 'Booted' &&
+                typeof device.udid === 'string' &&
+                device.udid.length > 0) {
                 udids.push(device.udid);
             }
         }
@@ -167,13 +173,17 @@ const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
     let settled = false;
     let streamFinished = false;
     let procCode = null;
-    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const out = createWriteStream(path);
     const cleanupPartial = () => {
         try {
             unlinkSync(path);
         }
-        catch { /* file may not exist yet — ignore */ }
+        catch {
+            /* file may not exist yet — ignore */
+        }
     };
     const timer = setTimeout(() => {
         if (settled)
@@ -201,7 +211,10 @@ const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
         settle(outcome === 'success');
     };
     proc.stdout.pipe(out);
-    out.on('finish', () => { streamFinished = true; maybeSettle(); });
+    out.on('finish', () => {
+        streamFinished = true;
+        maybeSettle();
+    });
     out.on('error', () => {
         cleanupPartial();
         settle(false);
@@ -211,7 +224,10 @@ const defaultAndroidCapturer = async (emuId, path) => new Promise((resolve) => {
         cleanupPartial();
         settle(false);
     });
-    proc.on('close', (code) => { procCode = code; maybeSettle(); });
+    proc.on('close', (code) => {
+        procCode = code;
+        maybeSettle();
+    });
 });
 let iosResolver = defaultIosResolver;
 let androidResolver = defaultAndroidResolver;

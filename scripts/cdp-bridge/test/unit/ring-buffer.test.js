@@ -73,7 +73,7 @@ test('filter returns matching items in order', () => {
   buf.push({ level: 'error', msg: 'fail' });
   buf.push({ level: 'info', msg: 'ok' });
   buf.push({ level: 'error', msg: 'crash' });
-  const errors = buf.filter(e => e.level === 'error');
+  const errors = buf.filter((e) => e.level === 'error');
   assert.deepEqual(errors, [
     { level: 'error', msg: 'fail' },
     { level: 'error', msg: 'crash' },
@@ -84,7 +84,10 @@ test('filter returns [] when nothing matches', () => {
   const buf = new RingBuffer(5);
   buf.push(1);
   buf.push(2);
-  assert.deepEqual(buf.filter(x => x > 10), []);
+  assert.deepEqual(
+    buf.filter((x) => x > 10),
+    [],
+  );
 });
 
 // ── findLast ──────────────────────────────────────────────────────────
@@ -94,7 +97,7 @@ test('findLast returns most recent match', () => {
   buf.push({ id: 1, status: 200 });
   buf.push({ id: 2, status: 404 });
   buf.push({ id: 3, status: 200 });
-  const found = buf.findLast(e => e.status === 200);
+  const found = buf.findLast((e) => e.status === 200);
   assert.deepEqual(found, { id: 3, status: 200 });
 });
 
@@ -102,12 +105,18 @@ test('findLast returns undefined when nothing matches', () => {
   const buf = new RingBuffer(5);
   buf.push('a');
   buf.push('b');
-  assert.equal(buf.findLast(x => x === 'z'), undefined);
+  assert.equal(
+    buf.findLast((x) => x === 'z'),
+    undefined,
+  );
 });
 
 test('findLast on empty buffer returns undefined', () => {
   const buf = new RingBuffer(5);
-  assert.equal(buf.findLast(() => true), undefined);
+  assert.equal(
+    buf.findLast(() => true),
+    undefined,
+  );
 });
 
 // ── clear ─────────────────────────────────────────────────────────────

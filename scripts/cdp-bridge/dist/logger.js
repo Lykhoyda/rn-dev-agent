@@ -2,7 +2,9 @@ import { createWriteStream, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 const LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
-const configuredLevel = (process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? 'warn');
+const configuredLevel = (process.env.LOG_LEVEL ??
+    process.env.RN_DEV_AGENT_LOG_LEVEL ??
+    'warn');
 function resolveLogPath() {
     if (configuredLevel !== 'debug' && configuredLevel !== 'info')
         return null;
@@ -13,7 +15,9 @@ function resolveLogPath() {
                 mkdirSync(pluginData, { recursive: true });
             return join(pluginData, 'cdp-bridge.log');
         }
-        catch { /* fall through */ }
+        catch {
+            /* fall through */
+        }
     }
     const fallbackDir = join(homedir(), '.claude', 'logs');
     try {
@@ -21,7 +25,9 @@ function resolveLogPath() {
             mkdirSync(fallbackDir, { recursive: true });
         return join(fallbackDir, 'rn-dev-agent-cdp-bridge.log');
     }
-    catch { /* fall through */ }
+    catch {
+        /* fall through */
+    }
     return join(tmpdir(), 'rn-dev-agent-cdp-bridge.log');
 }
 const logFilePath = resolveLogPath();
@@ -36,7 +42,9 @@ function getLogStream() {
     if (!logStream) {
         try {
             logStream = createWriteStream(logFilePath, { flags: 'a' });
-            logStream.on('error', () => { });
+            logStream.on('error', () => {
+                /* disk error — drop best-effort logs */
+            });
         }
         catch {
             return null;
@@ -66,7 +74,9 @@ function writeLog(level, tag, msg) {
         try {
             stream.write(formatted + '\n');
         }
-        catch { /* best-effort */ }
+        catch {
+            /* best-effort */
+        }
     }
 }
 export const logger = {
@@ -74,6 +84,10 @@ export const logger = {
     info: (tag, msg) => writeLog('info', tag, msg),
     warn: (tag, msg) => writeLog('warn', tag, msg),
     error: (tag, msg) => writeLog('error', tag, msg),
-    get logFilePath() { return logFilePath; },
-    get level() { return configuredLevel; },
+    get logFilePath() {
+        return logFilePath;
+    },
+    get level() {
+        return configuredLevel;
+    },
 };

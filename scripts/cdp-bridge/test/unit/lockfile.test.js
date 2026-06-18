@@ -1,10 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync, utimesSync, statSync } from 'node:fs';
+import {
+  mkdtempSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  utimesSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { Lockfile, formatLockConflictMessage, defaultProcessName } from '../../dist/lifecycle/lockfile.js';
+import {
+  Lockfile,
+  formatLockConflictMessage,
+  defaultProcessName,
+} from '../../dist/lifecycle/lockfile.js';
 
 function makeTmpDir() {
   return mkdtempSync(join(tmpdir(), 'lockfile-test-'));
@@ -160,7 +172,11 @@ test('Lockfile: reclaims lock older than maxAgeMs (SIGKILL orphan)', () => {
     });
 
     const result = lockfile.acquire();
-    assert.equal(result.status, 'acquired', 'reclaimed stale (48h) lock despite live PID and matching name');
+    assert.equal(
+      result.status,
+      'acquired',
+      'reclaimed stale (48h) lock despite live PID and matching name',
+    );
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

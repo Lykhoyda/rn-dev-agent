@@ -55,9 +55,11 @@ export function classifyRuntimeDegradation(output: string, floorMs: number): Run
 }
 
 export function formatRuntimeDegradedHint(d: RuntimeDegradation): string {
-  return `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) — `
-    + `the simulator test runtime is likely wedged; reboot it `
-    + `(xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`;
+  return (
+    `RUNTIME_DEGRADED: median tapOn latency ${d.medianMs}ms (>= ${d.floorMs}ms) — ` +
+    `the simulator test runtime is likely wedged; reboot it ` +
+    `(xcrun simctl shutdown <udid> && xcrun simctl boot <udid>), relaunch the app, and retry.`
+  );
 }
 
 /**
@@ -76,6 +78,9 @@ export function augmentFailureWithDegradation(
   if (!d.degraded) return { message: baseMessage, meta: baseMeta };
   return {
     message: `${baseMessage} — ${formatRuntimeDegradedHint(d)}`,
-    meta: { ...baseMeta, runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount } },
+    meta: {
+      ...baseMeta,
+      runtimeDegraded: { medianTapMs: d.medianMs, floorMs: d.floorMs, sampleCount: d.sampleCount },
+    },
   };
 }

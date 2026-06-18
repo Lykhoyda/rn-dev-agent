@@ -17,7 +17,9 @@ const note = (method) => JSON.stringify({ jsonrpc: '2.0', method });
 
 test('GH#264 core: requests forward to worker, responses forward to client', () => {
   const core = new SupervisorCore();
-  assert.deepEqual(core.onClientLine(req(1, 'initialize')), [{ kind: 'toWorker', line: req(1, 'initialize') }]);
+  assert.deepEqual(core.onClientLine(req(1, 'initialize')), [
+    { kind: 'toWorker', line: req(1, 'initialize') },
+  ]);
   assert.deepEqual(core.onWorkerLine(res(1)), [{ kind: 'toClient', line: res(1) }]);
 });
 
@@ -31,9 +33,12 @@ test('GH#264 core: worker death errors out in-flight requests with -32000 and re
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerLine(res(1));
   core.onClientLine(note('notifications/initialized'));
-  core.onClientLine(req(2, 'tools/call'));            // in flight — never answered
+  core.onClientLine(req(2, 'tools/call')); // in flight — never answered
   const actions = core.onWorkerExit(null, 'SIGKILL', false);
-  assert.deepEqual(actions[0], { kind: 'toClient', line: workerDeathErrorLine(2, 'signal SIGKILL') });
+  assert.deepEqual(actions[0], {
+    kind: 'toClient',
+    line: workerDeathErrorLine(2, 'signal SIGKILL'),
+  });
   assert.deepEqual(actions[1], { kind: 'spawn' });
   const parsed = JSON.parse(workerDeathErrorLine(2, 'signal SIGKILL'));
   assert.equal(parsed.error.code, -32000);
@@ -42,7 +47,7 @@ test('GH#264 core: worker death errors out in-flight requests with -32000 and re
 
 test('GH#264 core: worker death does NOT -32000 the initialize id (handshake is replayable, not retryable)', () => {
   const core = new SupervisorCore();
-  core.onClientLine(req(1, 'initialize'));             // in flight — worker dies before answering
+  core.onClientLine(req(1, 'initialize')); // in flight — worker dies before answering
   const actions = core.onWorkerExit(null, 'SIGKILL', false);
   assert.ok(!actions.some((a) => a.kind === 'toClient'), 'no death error for the initialize id');
   assert.deepEqual(actions.at(-1), { kind: 'spawn' });
@@ -57,7 +62,7 @@ test('GH#264 core: crash BEFORE the first initialize response — fresh worker a
   // Until the fresh worker answers, the supervisor stays restarting — client
   // traffic queued in this window must NOT reach a pre-handshake worker.
   assert.equal(core.state, 'restarting');
-  core.onClientLine(req(4, 'tools/call'));             // queued, not forwarded
+  core.onClientLine(req(4, 'tools/call')); // queued, not forwarded
   // The fresh worker's answer is the REAL one — forwarded, then queue drains.
   assert.deepEqual(core.onWorkerLine(res(1)), [
     { kind: 'toClient', line: res(1) },
@@ -75,12 +80,10 @@ test('GH#264 core: respawn replays initialize ONLY; initialized + queue follow t
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerLine(res(1));
   core.onClientLine(note('notifications/initialized'));
-  core.onWorkerExit(1, null, false);                   // crash → restarting
-  core.onClientLine(req(3, 'tools/call'));             // arrives mid-restart → queued
+  core.onWorkerExit(1, null, false); // crash → restarting
+  core.onClientLine(req(3, 'tools/call')); // arrives mid-restart → queued
   const replay = core.onSpawned();
-  assert.deepEqual(replay, [
-    { kind: 'toWorker', line: req(1, 'initialize') },
-  ]);
+  assert.deepEqual(replay, [{ kind: 'toWorker', line: req(1, 'initialize') }]);
   // duplicate initialize response is swallowed; THEN initialized replays, THEN the queue
   assert.deepEqual(core.onWorkerLine(res(1)), [
     { kind: 'toWorker', line: note('notifications/initialized') },
@@ -167,7 +170,7 @@ test('GH#264 core: workerRestarts is monotonic lifetime telemetry, distinct from
   let t = 0;
   const core = new SupervisorCore({ maxRespawns: 3, windowMs: 60_000, now: () => t });
   for (let i = 0; i < 5; i++) {
-    t += 61_000;                                        // window always slides — budget never exhausts
+    t += 61_000; // window always slides — budget never exhausts
     core.onWorkerExit(1, null, false);
     core.onSpawned();
   }
@@ -175,16 +178,26 @@ test('GH#264 core: workerRestarts is monotonic lifetime telemetry, distinct from
 });
 
 test('GH#264 bridgeEnvState: unsupervised by default, parses supervisor-set env', () => {
-  assert.deepEqual(bridgeEnvState({}), { supervised: false, workerRestarts: 0, lastWorkerExit: null });
+  assert.deepEqual(bridgeEnvState({}), {
+    supervised: false,
+    workerRestarts: 0,
+    lastWorkerExit: null,
+  });
   assert.deepEqual(
-    bridgeEnvState({ RN_BRIDGE_SUPERVISED: '1', RN_BRIDGE_RESTARTS: '2', RN_BRIDGE_LAST_EXIT: 'signal SIGKILL' }),
+    bridgeEnvState({
+      RN_BRIDGE_SUPERVISED: '1',
+      RN_BRIDGE_RESTARTS: '2',
+      RN_BRIDGE_LAST_EXIT: 'signal SIGKILL',
+    }),
     { supervised: true, workerRestarts: 2, lastWorkerExit: 'signal SIGKILL' },
   );
   assert.equal(bridgeEnvState({ RN_BRIDGE_RESTARTS: 'garbage' }).workerRestarts, 0);
 });
 
 const statusSrc = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/tools/status.ts'), 'utf8');
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../src/tools/status.ts'),
+  'utf8',
+);
 
 test('GH#264 cdp_status wires bridgeEnvState into the status result', () => {
   assert.match(statusSrc, /bridge:\s*bridgeEnvState\(process\.env\)/);
@@ -198,7 +211,6 @@ test('GH#264 cdp_status failure paths also carry bridge supervision facts', () =
   const wired = (statusSrc.match(/bridge:\s*bridgeEnvState\(process\.env\)/g) ?? []).length;
   assert.ok(wired >= 4, `expected bridge on success + 3 failure paths, found ${wired}`);
 });
-
 
 // Review finding (Gemini, PR #273): SIGUSR2 hot-reload exits 1, which charged
 // the crash budget — 3 intentional reloads in 60s wedged the bridge into
@@ -215,7 +227,7 @@ test('GH#264 core: hot-reload exits never charge the respawn budget (no terminal
     const a = core.onWorkerExit(1, null, false);
     assert.deepEqual(a.at(-1), { kind: 'spawn' }, `hot-reload ${i + 1} respawns`);
     core.onSpawned();
-    core.onWorkerLine(res(1));                          // swallow replay response
+    core.onWorkerLine(res(1)); // swallow replay response
   }
   assert.equal(core.state, 'running');
   assert.equal(core.restartCount, 5, 'reloads still count as restarts (telemetry)');
@@ -229,13 +241,13 @@ test('GH#264 core: hot-reload flag is one-shot — a later real crash charges th
   const core = new SupervisorCore({ maxRespawns: 1, windowMs: 60_000, now: () => t });
   core.onHotReloadRequested();
   t += 1000;
-  core.onWorkerExit(1, null, false);                    // the requested reload — free
+  core.onWorkerExit(1, null, false); // the requested reload — free
   core.onSpawned();
   t += 1000;
-  core.onWorkerExit(1, null, false);                    // real crash #1 — charges
+  core.onWorkerExit(1, null, false); // real crash #1 — charges
   core.onSpawned();
   t += 1000;
-  const a = core.onWorkerExit(1, null, false);          // real crash #2 — budget (1) gone
+  const a = core.onWorkerExit(1, null, false); // real crash #2 — budget (1) gone
   assert.ok(!a.some((x) => x.kind === 'spawn'));
   assert.equal(core.state, 'terminal');
 });
@@ -267,13 +279,13 @@ test('GH#264 core: budget exhausted AFTER a successful handshake -> no spurious 
   let t = 0;
   const core = new SupervisorCore({ maxRespawns: 1, windowMs: 60_000, now: () => t });
   core.onClientLine(req(1, 'initialize'));
-  core.onWorkerLine(res(1));                            // handshake answered
+  core.onWorkerLine(res(1)); // handshake answered
   t += 1000;
   core.onWorkerExit(1, null, false);
   core.onSpawned();
-  core.onWorkerLine(res(1));                            // replay swallowed
+  core.onWorkerLine(res(1)); // replay swallowed
   t += 1000;
-  const final = core.onWorkerExit(1, null, false);      // budget gone
+  const final = core.onWorkerExit(1, null, false); // budget gone
   assert.equal(core.state, 'terminal');
   assert.deepEqual(final, [], 'no error lines — nothing pending, handshake already answered');
 });
@@ -290,15 +302,17 @@ test('GH#264 core: queued mid-restart request is NOT death-errored, drains once 
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerLine(res(1));
   t += 1000;
-  core.onWorkerExit(1, null, false);                    // crash 1 → restarting
-  core.onClientLine(req(7, 'tools/call'));              // arrives mid-restart → queued, never sent
+  core.onWorkerExit(1, null, false); // crash 1 → restarting
+  core.onClientLine(req(7, 'tools/call')); // arrives mid-restart → queued, never sent
   core.onSpawned();
   t += 1000;
-  const crash2 = core.onWorkerExit(1, null, false);     // fresh worker dies BEFORE queue drained
-  assert.ok(!crash2.some((a) => a.kind === 'toClient' && a.line.includes('"id":7')),
-    'queued id 7 was never delivered — no death error for it');
+  const crash2 = core.onWorkerExit(1, null, false); // fresh worker dies BEFORE queue drained
+  assert.ok(
+    !crash2.some((a) => a.kind === 'toClient' && a.line.includes('"id":7')),
+    'queued id 7 was never delivered — no death error for it',
+  );
   core.onSpawned();
-  const drained = core.onWorkerLine(res(1));            // swallow replay → queue flushes ONCE
+  const drained = core.onWorkerLine(res(1)); // swallow replay → queue flushes ONCE
   assert.deepEqual(drained, [{ kind: 'toWorker', line: req(7, 'tools/call') }]);
   assert.deepEqual(core.onWorkerLine(res(7)), [{ kind: 'toClient', line: res(7) }]);
 });
@@ -309,15 +323,17 @@ test('GH#264 core: terminal transition errors queued never-sent requests (no sil
   core.onClientLine(req(1, 'initialize'));
   core.onWorkerLine(res(1));
   t += 1000;
-  core.onWorkerExit(1, null, false);                    // burns the only budget slot → restarting
-  core.onClientLine(req(8, 'tools/call'));              // queued mid-restart
+  core.onWorkerExit(1, null, false); // burns the only budget slot → restarting
+  core.onClientLine(req(8, 'tools/call')); // queued mid-restart
   core.onSpawned();
   t += 1000;
-  const final = core.onWorkerExit(1, null, false);      // budget gone → terminal
+  const final = core.onWorkerExit(1, null, false); // budget gone → terminal
   assert.equal(core.state, 'terminal');
   const errored = final.filter((a) => a.kind === 'toClient').map((a) => JSON.parse(a.line));
-  assert.ok(errored.some((e) => e.id === 8 && /crash-looping/.test(e.error.message)),
-    'queued id 8 gets the terminal error instead of hanging');
+  assert.ok(
+    errored.some((e) => e.id === 8 && /crash-looping/.test(e.error.message)),
+    'queued id 8 gets the terminal error instead of hanging',
+  );
 });
 
 // An `initialized` arriving mid-restart is CACHED for replay — queueing the
@@ -326,13 +342,15 @@ test('GH#264 core: terminal transition errors queued never-sent requests (no sil
 test('GH#264 core: initialized arriving mid-restart replays exactly once', () => {
   const core = new SupervisorCore();
   core.onClientLine(req(1, 'initialize'));
-  core.onWorkerLine(res(1));                            // client got its answer...
-  core.onWorkerExit(1, null, false);                    // ...worker dies before initialized reaches it
+  core.onWorkerLine(res(1)); // client got its answer...
+  core.onWorkerExit(1, null, false); // ...worker dies before initialized reaches it
   core.onClientLine(note('notifications/initialized')); // arrives mid-restart
-  core.onClientLine(req(5, 'tools/call'));              // queued
+  core.onClientLine(req(5, 'tools/call')); // queued
   core.onSpawned();
-  const after = core.onWorkerLine(res(1));              // swallow → initialized + queue
-  const initializedCount = after.filter((a) => a.kind === 'toWorker' && a.line.includes('initialized')).length;
+  const after = core.onWorkerLine(res(1)); // swallow → initialized + queue
+  const initializedCount = after.filter(
+    (a) => a.kind === 'toWorker' && a.line.includes('initialized'),
+  ).length;
   assert.equal(initializedCount, 1, 'exactly one initialized reaches the fresh worker');
   assert.deepEqual(after.at(-1), { kind: 'toWorker', line: req(5, 'tools/call') });
 });

@@ -49,7 +49,9 @@ export function createOpenDevToolsHandler(getClient: () => CDPClient) {
   return async (): Promise<ReturnType<typeof okResult | typeof failResult>> => {
     const client = getClient();
     if (!client.isConnected) {
-      return failResult('cdp_open_devtools: not connected. Call cdp_status first to auto-connect to the live app.');
+      return failResult(
+        'cdp_open_devtools: not connected. Call cdp_status first to auto-connect to the live app.',
+      );
     }
 
     const target = client.connectedTarget;
@@ -73,12 +75,18 @@ export function createOpenDevToolsHandler(getClient: () => CDPClient) {
         supportsMultiple = supportsNativeMultiDebugger(parsed);
         if (parsed && typeof parsed === 'object') {
           const v = parsed as { major?: unknown; minor?: unknown; patch?: unknown };
-          if (typeof v.major === 'number' && typeof v.minor === 'number' && typeof v.patch === 'number') {
+          if (
+            typeof v.major === 'number' &&
+            typeof v.minor === 'number' &&
+            typeof v.patch === 'number'
+          ) {
             rnVersion = { major: v.major, minor: v.minor, patch: v.patch };
           }
         }
       }
-    } catch { /* leave rnVersion null, supportsMultiple false */ }
+    } catch {
+      /* leave rnVersion null, supportsMultiple false */
+    }
 
     if (supportsMultiple) {
       // Native multi-debugger: DevTools connects directly to Hermes via Metro's

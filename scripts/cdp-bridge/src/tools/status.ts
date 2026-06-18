@@ -84,7 +84,9 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
           fiberTree = probe.fiberTree;
           hasRedBox = probe.hasRedBox;
         }
-      } catch { /* probe failed */ }
+      } catch {
+        /* probe failed */
+      }
     }
   }
 
@@ -105,7 +107,9 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
     servingCwd = enriched.servingCwd;
     candidates = enriched.candidates; // omitted by the fast path when ≤1 Metro is up
     metroTimings = enriched.timings_ms;
-  } catch { /* fail-open: omit diagnostics */ }
+  } catch {
+    /* fail-open: omit diagnostics */
+  }
 
   return {
     metro: {
@@ -120,7 +124,13 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       servingCwd,
       timings_ms: metroTimings,
     },
-    cdp: { connected: client.isConnected, device: client.connectedTarget?.title ?? null, pageId: client.connectedTarget?.id ?? null, platform: client.connectedTarget?.platform ?? null, bundleId: client.connectedTarget?.description ?? null },
+    cdp: {
+      connected: client.isConnected,
+      device: client.connectedTarget?.title ?? null,
+      pageId: client.connectedTarget?.id ?? null,
+      platform: client.connectedTarget?.platform ?? null,
+      bundleId: client.connectedTarget?.description ?? null,
+    },
     app: {
       platform: (appInfo?.platform as string) ?? null,
       dev: (appInfo?.__DEV__ as boolean) ?? null,
@@ -166,7 +176,12 @@ export function createStatusHandler(
   getClient: () => CDPClient,
   setClient: (c: CDPClient) => void,
   createClient: (port: number) => CDPClient,
-  deps: { recoverDetached?: (client: CDPClient, rdeps?: RecoverDetachedDeps) => Promise<DetachedRecoveryResult> } = {},
+  deps: {
+    recoverDetached?: (
+      client: CDPClient,
+      rdeps?: RecoverDetachedDeps,
+    ) => Promise<DetachedRecoveryResult>;
+  } = {},
 ) {
   const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
   return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
@@ -200,7 +215,9 @@ export function createStatusHandler(
           if (await isDevClientPickerShowing()) {
             await handleDevClientPicker();
           }
-        } catch { /* fall through to autoConnect */ }
+        } catch {
+          /* fall through to autoConnect */
+        }
         // GH #208 (RC1): when a reconnect storm is in flight, bare autoConnect
         // throws "Already connecting to Metro..." (connect.ts guard) and dead-ends
         // cdp_status — the one tool meant to diagnose+recover. Preempt the storm
@@ -226,7 +243,9 @@ export function createStatusHandler(
         const currentTarget = client.connectedTarget;
         const requestedPlatform = args.platform.toLowerCase();
         const currentPlatform = currentTarget?.platform?.toLowerCase();
-        const titleMatch = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`.toLowerCase().includes(requestedPlatform);
+        const titleMatch = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`
+          .toLowerCase()
+          .includes(requestedPlatform);
         if (currentPlatform !== requestedPlatform && !titleMatch) {
           await client.disconnect();
           client = createClient(client.metroPort);
@@ -258,8 +277,11 @@ export function createStatusHandler(
                   status.app.dev = true;
                   status.app.platform = (retryProbe.appInfo?.platform as string) ?? null;
                   status.app.hermes = (retryProbe.appInfo?.hermes as boolean) ?? null;
-                  status.app.rnVersion = retryProbe.appInfo?.rnVersion ? JSON.stringify(retryProbe.appInfo.rnVersion) : null;
-                  status.app.dimensions = (retryProbe.appInfo?.dimensions as { width: number; height: number }) ?? null;
+                  status.app.rnVersion = retryProbe.appInfo?.rnVersion
+                    ? JSON.stringify(retryProbe.appInfo.rnVersion)
+                    : null;
+                  status.app.dimensions =
+                    (retryProbe.appInfo?.dimensions as { width: number; height: number }) ?? null;
                   status.app.hasRedBox = retryProbe.hasRedBox;
                   status.app.errorCount = retryProbe.errorCount;
                   status.app.isPaused = client.isPaused;
@@ -280,7 +302,10 @@ export function createStatusHandler(
           // Recovery failed, fall through to warning
         }
         if (!devRecovered) {
-          return warnResult(status, 'Connected to a JS context where __DEV__ is false. This may not be the app\'s main context. Try cdp_reload(full=true) or restart Metro.');
+          return warnResult(
+            status,
+            "Connected to a JS context where __DEV__ is false. This may not be the app's main context. Try cdp_reload(full=true) or restart Metro.",
+          );
         }
       }
 
@@ -319,7 +344,10 @@ export function createStatusHandler(
 
       const reloadCount = getSessionReloadCount();
       if (reloadCount >= 5) {
-        return warnResult(status, `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`);
+        return warnResult(
+          status,
+          `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`,
+        );
       }
 
       // B114 (D642): suspicion hint. When we're CDP-connected but the app didn't
@@ -327,10 +355,10 @@ export function createStatusHandler(
       // (RedBox, blank screen, native-module-missing) is INVISIBLE to our tools
       // because __RN_AGENT never loaded. Point the agent at cdp_native_errors.
       if (
-        status.cdp.connected
-        && !client.helpersInjected
-        && !status.app.hasRedBox
-        && status.app.errorCount === 0
+        status.cdp.connected &&
+        !client.helpersInjected &&
+        !status.app.hasRedBox &&
+        status.app.errorCount === 0
       ) {
         return warnResult(
           status,
@@ -348,7 +376,10 @@ export function createStatusHandler(
         return warnResult(status, mismatch.warning!);
       }
 
-      return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined);
+      return okResult(
+        status,
+        autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : undefined,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -445,19 +476,36 @@ export function createStatusHandler(
                 `Dev Client picker was blocking — auto-dismissed (${pickerResult.reason}). Connection recovered.`,
               );
             }
-          } catch { /* retry failed — fall through */ }
-          return failResult(`${message}. Dev Client picker was dismissed but reconnection failed. Try cdp_status again.`);
+          } catch {
+            /* retry failed — fall through */
+          }
+          return failResult(
+            `${message}. Dev Client picker was dismissed but reconnection failed. Try cdp_status again.`,
+          );
         }
-        if (pickerResult && !pickerResult.dismissed && pickerResult.reason.includes('could not find')) {
+        if (
+          pickerResult &&
+          !pickerResult.dismissed &&
+          pickerResult.reason.includes('could not find')
+        ) {
           return failResult(`${message}. ${pickerResult.reason}`);
         }
-      } catch { /* picker check failed, return original error */ }
+      } catch {
+        /* picker check failed, return original error */
+      }
 
       // GH #208 (RC1): carry the reconnect attempt count so a connect failure
       // during a reconnect storm reads as "attempt N/30", not a dead end.
       return pickerBlocking
-        ? failResult(message, 'PICKER_BLOCKING', { autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) })
-        : failResult(message, { reconnect: getClient().reconnectState, autoConnect: getClient().autoConnectState, bridge: bridgeEnvState(process.env) });
+        ? failResult(message, 'PICKER_BLOCKING', {
+            autoConnect: getClient().autoConnectState,
+            bridge: bridgeEnvState(process.env),
+          })
+        : failResult(message, {
+            reconnect: getClient().reconnectState,
+            autoConnect: getClient().autoConnectState,
+            bridge: bridgeEnvState(process.env),
+          });
     }
   };
 }

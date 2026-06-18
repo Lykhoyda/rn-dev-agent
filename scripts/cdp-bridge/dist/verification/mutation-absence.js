@@ -89,7 +89,7 @@ export function countWindowedMutations(client, windowMs, now, methods = MUTATION
         const status = entry.status;
         if (status === undefined) {
             const t = Date.parse(entry.timestamp);
-            return Number.isFinite(t) && (now - t) <= MAX_PENDING_AGE_MS;
+            return Number.isFinite(t) && now - t <= MAX_PENDING_AGE_MS;
         }
         return status >= 200 && status < 400;
     });

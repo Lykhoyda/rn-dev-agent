@@ -73,11 +73,13 @@ test('cdp_network_log: clear also empties freshly drained entries', async () => 
 test('cdp_wait_for_network: retroactive match against drained entries', async () => {
   const client = hookClient();
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/auth/otp',
-    timeout_ms: 500,
-    since: '2000-01-01T00:00:00.000Z',
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/auth/otp',
+      timeout_ms: 500,
+      since: '2000-01-01T00:00:00.000Z',
+    }),
+  );
   assert.equal(data.matched, true);
   assert.equal(data.mutation.id, 'q1');
 });

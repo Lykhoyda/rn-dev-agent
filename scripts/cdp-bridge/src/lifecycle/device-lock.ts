@@ -1,6 +1,12 @@
 import {
-  existsSync, mkdirSync, openSync, writeSync, closeSync,
-  readFileSync, unlinkSync, writeFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  writeSync,
+  closeSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +17,7 @@ export interface DeviceLockBody {
   pid: number;
   projectRoot: string;
   platform: 'ios' | 'android';
-  deviceId: string;  // iOS UDID or Android adb serial
+  deviceId: string; // iOS UDID or Android adb serial
   appId?: string;
   startedAt: number;
   lastHeartbeat: number;
@@ -28,7 +34,11 @@ export interface DeviceLockAcquired {
    */
   degraded?: boolean;
 }
-export interface DeviceLockConflict { status: 'conflict'; lockPath: string; holder: DeviceLockBody }
+export interface DeviceLockConflict {
+  status: 'conflict';
+  lockPath: string;
+  holder: DeviceLockBody;
+}
 export type DeviceLockResult = DeviceLockAcquired | DeviceLockConflict;
 
 export interface DeviceLockOptions {
@@ -46,7 +56,12 @@ export interface DeviceLockOptions {
 }
 
 function defaultProcessAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -89,7 +104,7 @@ export class DeviceLock {
   constructor(opts: DeviceLockOptions) {
     this.platform = opts.platform;
     this.deviceId = opts.deviceId;
-    this.projectRoot = opts.projectRoot ?? (process.env.CLAUDE_USER_CWD ?? process.cwd());
+    this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
     const uid = opts.uid ?? userInfo().uid;
     this.tmpDir = opts.tmpDir ?? tmpdir();
     this.pid = opts.pid ?? process.pid;
@@ -98,7 +113,10 @@ export class DeviceLock {
     this.clock = opts.clock ?? Date.now;
     this.processAlive = opts.processAlive ?? defaultProcessAlive;
     this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
-    this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
+    this.lockPath = join(
+      this.tmpDir,
+      `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`,
+    );
   }
 
   acquire(): DeviceLockResult {
@@ -130,7 +148,11 @@ export class DeviceLock {
     ) {
       return { status: 'conflict', lockPath: this.lockPath, holder: before };
     }
-    try { unlinkSync(this.lockPath); } catch { /* already gone */ }
+    try {
+      unlinkSync(this.lockPath);
+    } catch {
+      /* already gone */
+    }
     try {
       this.create();
       return { status: 'acquired', lockPath: this.lockPath };
@@ -152,7 +174,11 @@ export class DeviceLock {
     // overwrite and resurrect a lock we no longer hold.
     if (!holder || holder.pid !== this.pid) return;
     holder.lastHeartbeat = this.clock();
-    try { writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), 'utf8'); } catch { /* best-effort */ }
+    try {
+      writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), 'utf8');
+    } catch {
+      /* best-effort */
+    }
   }
 
   release(): void {
@@ -160,7 +186,9 @@ export class DeviceLock {
     try {
       const holder = this.readExisting();
       if (holder?.pid === this.pid) unlinkSync(this.lockPath);
-    } catch { /* release must never fail shutdown */ }
+    } catch {
+      /* release must never fail shutdown */
+    }
     this.acquired = false;
   }
 
@@ -206,11 +234,15 @@ function isValidBody(o: unknown): o is DeviceLockBody {
   if (typeof o !== 'object' || o === null) return false;
   const b = o as Record<string, unknown>;
   return (
-    typeof b.pid === 'number' && Number.isFinite(b.pid) &&
+    typeof b.pid === 'number' &&
+    Number.isFinite(b.pid) &&
     (b.platform === 'ios' || b.platform === 'android') &&
-    typeof b.deviceId === 'string' && b.deviceId.length > 0 &&
+    typeof b.deviceId === 'string' &&
+    b.deviceId.length > 0 &&
     typeof b.projectRoot === 'string' &&
-    typeof b.startedAt === 'number' && Number.isFinite(b.startedAt) &&
-    typeof b.lastHeartbeat === 'number' && Number.isFinite(b.lastHeartbeat)
+    typeof b.startedAt === 'number' &&
+    Number.isFinite(b.startedAt) &&
+    typeof b.lastHeartbeat === 'number' &&
+    Number.isFinite(b.lastHeartbeat)
   );
 }

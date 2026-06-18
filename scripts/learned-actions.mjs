@@ -47,8 +47,10 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--memory-cwd') flags.memoryCwd = argv[++i] || process.cwd();
   else if (a === '--workspace-root') flags.workspaceRoot = argv[++i] || process.cwd();
   else if (a === '--section') flags.section = (argv[++i] || 'all').toLowerCase();
-  else if (a === '--max') { const m = parseInt(argv[++i] || '50', 10); flags.max = Number.isNaN(m) ? 50 : m; }
-  else if (a === '--help' || a === '-h') {
+  else if (a === '--max') {
+    const m = parseInt(argv[++i] || '50', 10);
+    flags.max = Number.isNaN(m) ? 50 : m;
+  } else if (a === '--help' || a === '-h') {
     console.log(`Usage: learned-actions.mjs [--json] [--filter KW] [--appId ID]
                                 [--memory-cwd PATH] [--workspace-root PATH]
                                 [--section a|b|c|d|all] [--max N]`);
@@ -60,8 +62,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 const matchKw = (...fields) =>
-  !flags.filter ||
-  fields.some((f) => (f || '').toString().toLowerCase().includes(flags.filter));
+  !flags.filter || fields.some((f) => (f || '').toString().toLowerCase().includes(flags.filter));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A. Feedback memories
@@ -219,7 +220,10 @@ function parseFlowMeta(text) {
 // null when empty or unparseable so callers can omit the field. Mirrors
 // parseProducesMap() in scripts/cdp-bridge/src/domain/reusable-action.ts.
 function parseProducesMap(raw) {
-  const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+  const inner = raw
+    .trim()
+    .replace(/^\{|\}$/g, '')
+    .trim();
   if (!inner) return null;
   const result = {};
   for (const part of inner.split(',')) {
@@ -336,7 +340,11 @@ function truncate(s, n) {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';
 }
 function safeReaddir(p) {
-  try { return fs.readdirSync(p); } catch { return []; }
+  try {
+    return fs.readdirSync(p);
+  } catch {
+    return [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,21 +356,28 @@ const flows = want('b') ? scanFlows() : { items: [], roots: [] };
 const skeletons = want('c') ? scanSkeletons() : { items: [] };
 const commands = want('d') ? scanPluginCommands() : { items: [] };
 
-const total = memories.items.length + flows.items.length + skeletons.items.length + commands.items.length;
+const total =
+  memories.items.length + flows.items.length + skeletons.items.length + commands.items.length;
 
 if (flags.json) {
-  process.stdout.write(JSON.stringify({
-    cwd: process.cwd(),
-    memoryCwd: flags.memoryCwd,
-    filter: flags.filter || null,
-    sections: {
-      memories: { count: memories.items.length, dir: memories.dir, items: memories.items },
-      flows: { count: flows.items.length, roots: flows.roots, items: flows.items },
-      skeletons: { count: skeletons.items.length, items: skeletons.items },
-      commands: { count: commands.items.length, items: commands.items },
-    },
-    total,
-  }, null, 2) + '\n');
+  process.stdout.write(
+    JSON.stringify(
+      {
+        cwd: process.cwd(),
+        memoryCwd: flags.memoryCwd,
+        filter: flags.filter || null,
+        sections: {
+          memories: { count: memories.items.length, dir: memories.dir, items: memories.items },
+          flows: { count: flows.items.length, roots: flows.roots, items: flows.items },
+          skeletons: { count: skeletons.items.length, items: skeletons.items },
+          commands: { count: commands.items.length, items: commands.items },
+        },
+        total,
+      },
+      null,
+      2,
+    ) + '\n',
+  );
   process.exit(total === 0 ? 3 : 0);
 }
 
@@ -380,7 +395,9 @@ if (want('a')) {
     parts.push('| Name | Description | File |');
     parts.push('|---|---|---|');
     for (const m of memories.items) {
-      parts.push(`| ${escapeMarkdownTableCell(m.name)} | ${escapeMarkdownTableCell(m.description)} | \`${m.file}\` |`);
+      parts.push(
+        `| ${escapeMarkdownTableCell(m.name)} | ${escapeMarkdownTableCell(m.description)} | \`${m.file}\` |`,
+      );
     }
   }
   parts.push('');
@@ -398,11 +415,13 @@ if (want('b')) {
     parts.push('| Flow | Purpose | App ID | Mutates | Status | Tags | Produces | Replay |');
     parts.push('|---|---|---|---|---|---|---|---|');
     for (const f of flows.items) {
-      const mut = f.mutates === null || f.mutates === undefined ? '?' : (f.mutates ? 'yes' : 'no');
+      const mut = f.mutates === null || f.mutates === undefined ? '?' : f.mutates ? 'yes' : 'no';
       const status = f.status || '?';
-      const tags = (f.tags && f.tags.length) ? f.tags.join(', ') : '?';
+      const tags = f.tags && f.tags.length ? f.tags.join(', ') : '?';
       const produces = formatProducesCell(f.produces);
-      parts.push(`| \`${f.flow}\` | ${escapeMarkdownTableCell(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${escapeMarkdownTableCell(tags)} | ${escapeMarkdownTableCell(produces)} | \`${f.replay}\` |`);
+      parts.push(
+        `| \`${f.flow}\` | ${escapeMarkdownTableCell(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${escapeMarkdownTableCell(tags)} | ${escapeMarkdownTableCell(produces)} | \`${f.replay}\` |`,
+      );
     }
   }
   parts.push('');
@@ -435,7 +454,9 @@ if (want('d')) {
 }
 
 parts.push('---');
-parts.push('**Reminder:** For any UI flow, replay a matching flow from section B BEFORE composing `device_*` primitives. Manual walks are a fallback. (See `feedback_execute_artifacts_before_manual.md`.)');
+parts.push(
+  '**Reminder:** For any UI flow, replay a matching flow from section B BEFORE composing `device_*` primitives. Manual walks are a fallback. (See `feedback_execute_artifacts_before_manual.md`.)',
+);
 process.stdout.write(parts.join('\n') + '\n');
 process.exit(total === 0 ? 3 : 0);
 

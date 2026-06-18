@@ -201,8 +201,8 @@ export type ToolErrorCode =
   | 'STALE_TARGET'
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
-  | 'APP_DETACHED'              // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
-  | 'APP_NOT_INSTALLED'         // GH #262: relaunch failed and get_app_container confirms the bundle is missing
+  | 'APP_DETACHED' // GH #208 (RC2/RC3): Metro up but 0 Hermes targets (app detached)
+  | 'APP_NOT_INSTALLED' // GH #262: relaunch failed and get_app_container confirms the bundle is missing
   | 'NOT_CONNECTED'
   | 'HELPERS_NOT_INJECTED'
   // M6 / Phase 112 (D669): cdp_record_test_* tool family.
@@ -223,24 +223,24 @@ export type ToolErrorCode =
   | 'DEVICE_RESET_RECONNECT_FAILED'
   | 'CDP_NOT_CONNECTED'
   // CDP tool review batch 2026-04-29.
-  | 'CDP_TARGET_APP_MISMATCH'   // CDP-003
-  | 'INVALID_PLATFORM'          // CDP-014
-  | 'PROFILER_UNAVAILABLE'      // CDP-007
-  | 'NATIVE_LOG_UNAVAILABLE'    // CDP-016
+  | 'CDP_TARGET_APP_MISMATCH' // CDP-003
+  | 'INVALID_PLATFORM' // CDP-014
+  | 'PROFILER_UNAVAILABLE' // CDP-007
+  | 'NATIVE_LOG_UNAVAILABLE' // CDP-016
   // D1206 Tier 2 Sprint A/B post-review batch 2026-04-30.
-  | 'TESTID_NOT_FOUND'          // device_batch testID-keyed step / expect_visible_by_testid
-  | 'ASSERTION_FAILED'          // expect_redux / expect_route / expect_text / expect_visible_by_testid
-  | 'SNAPSHOT_FAILED'           // agent-device snapshot returned ok:false (distinct from "not present")
-  | 'RN_FAST_RUNNER_DOWN'       // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
-  | 'RN_ANDROID_RUNNER_DOWN'    // #243: rn-android-runner not reachable (cold-start race / can't bind port)
-  | 'SCREENSHOT_FAILED'         // rn-android-runner screenshot response missing pngBase64 payload
-  | 'PATH_NOT_FOUND'            // expect_redux when getStoreState surfaces __agent_error
-  | 'STORE_TRUNCATED'           // expect_redux when store payload exceeded safeStringify cap
+  | 'TESTID_NOT_FOUND' // device_batch testID-keyed step / expect_visible_by_testid
+  | 'ASSERTION_FAILED' // expect_redux / expect_route / expect_text / expect_visible_by_testid
+  | 'SNAPSHOT_FAILED' // agent-device snapshot returned ok:false (distinct from "not present")
+  | 'RN_FAST_RUNNER_DOWN' // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
+  | 'RN_ANDROID_RUNNER_DOWN' // #243: rn-android-runner not reachable (cold-start race / can't bind port)
+  | 'SCREENSHOT_FAILED' // rn-android-runner screenshot response missing pngBase64 payload
+  | 'PATH_NOT_FOUND' // expect_redux when getStoreState surfaces __agent_error
+  | 'STORE_TRUNCATED' // expect_redux when store payload exceeded safeStringify cap
   // Phase 134.2: appId / packageName validation at adb shell boundary.
-  | 'INVALID_APPID'             // device_permission
+  | 'INVALID_APPID' // device_permission
   | 'DEVICE_RESET_INVALID_APPID' // device_reset_state
-  | 'INVALID_PACKAGE_NAME'      // device_deeplink
-  | 'INVALID_BUNDLE_ID'         // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
+  | 'INVALID_PACKAGE_NAME' // device_deeplink
+  | 'INVALID_BUNDLE_ID' // GH #262 codex-pair: cdp_restart explicit bundleId arg failed strict validation
   // GH #105 / B153: cdp_repair_action's snapshot landed on Agent Device Runner.
   | 'RUNNER_LEAK'
   // GH #317: rn-fast-runner sees the selector but Maestro/WDA reported it not visible (empty a11y tree).

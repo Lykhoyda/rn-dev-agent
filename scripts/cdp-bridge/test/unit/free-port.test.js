@@ -20,17 +20,26 @@ test('findFreePort: returns the preferred port when it is free', async () => {
 
 test('findFreePort: returns a different, valid port when preferred is occupied', async () => {
   const blocker = createServer();
-  const held = await new Promise((r) => blocker.listen({ port: 0, host: '127.0.0.1' }, () => r(blocker.address().port)));
+  const held = await new Promise((r) =>
+    blocker.listen({ port: 0, host: '127.0.0.1' }, () => r(blocker.address().port)),
+  );
   try {
     const p = await findFreePort(held);
     assert.notEqual(p, held);
     assert.ok(p > 0 && p < 65536);
-  } finally { await new Promise((r) => blocker.close(r)); }
+  } finally {
+    await new Promise((r) => blocker.close(r));
+  }
 });
 
 test('isPortFree: true for a free port, false for an occupied one', async () => {
   const blocker = createServer();
-  const held = await new Promise((r) => blocker.listen({ port: 0, host: '127.0.0.1' }, () => r(blocker.address().port)));
-  try { assert.equal(await isPortFree(held), false); }
-  finally { await new Promise((r) => blocker.close(r)); }
+  const held = await new Promise((r) =>
+    blocker.listen({ port: 0, host: '127.0.0.1' }, () => r(blocker.address().port)),
+  );
+  try {
+    assert.equal(await isPortFree(held), false);
+  } finally {
+    await new Promise((r) => blocker.close(r));
+  }
 });

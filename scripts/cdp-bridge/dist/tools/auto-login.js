@@ -10,22 +10,38 @@ import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidat
 import { runFlowParked } from './maestro-run.js';
 const execFile = promisify(execFileCb);
 const AUTH_ROUTE_PATTERNS = [
-    'login', 'signin', 'sign_in', 'sign-in',
-    'welcome', 'register', 'signup', 'sign_up', 'sign-up',
-    'onboarding', 'auth', 'landing',
+    'login',
+    'signin',
+    'sign_in',
+    'sign-in',
+    'welcome',
+    'register',
+    'signup',
+    'sign_up',
+    'sign-up',
+    'onboarding',
+    'auth',
+    'landing',
 ];
 const LOGIN_FLOW_PRIORITY = [
-    'login.yaml', 'login.yml',
-    'sign_in.yaml', 'sign_in.yml',
-    'signin.yaml', 'signin.yml',
-    'auth.yaml', 'auth.yml',
-    'flow_start.yaml', 'flow_start.yml',
-    'register_user.yaml', 'register_user.yml',
-    'register.yaml', 'register.yml',
+    'login.yaml',
+    'login.yml',
+    'sign_in.yaml',
+    'sign_in.yml',
+    'signin.yaml',
+    'signin.yml',
+    'auth.yaml',
+    'auth.yml',
+    'flow_start.yaml',
+    'flow_start.yml',
+    'register_user.yaml',
+    'register_user.yml',
+    'register.yaml',
+    'register.yml',
 ];
 function matchesAuthPattern(routeName) {
     const lower = routeName.toLowerCase();
-    return AUTH_ROUTE_PATTERNS.some(p => lower.includes(p));
+    return AUTH_ROUTE_PATTERNS.some((p) => lower.includes(p));
 }
 function getDeepestRouteName(state) {
     if (state.nested)
@@ -55,10 +71,7 @@ export async function isOnAuthScreen(client) {
     }
 }
 function findLoginFlow(projectRoot) {
-    const searchDirs = [
-        join(projectRoot, '.maestro', 'subflows'),
-        join(projectRoot, '.maestro'),
-    ];
+    const searchDirs = [join(projectRoot, '.maestro', 'subflows'), join(projectRoot, '.maestro')];
     for (const dir of searchDirs) {
         if (!existsSync(dir))
             continue;
@@ -74,7 +87,7 @@ function findLoginFlow(projectRoot) {
                 return join(dir, candidate);
             }
         }
-        const authFile = files.find(f => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some(p => f.toLowerCase().includes(p)));
+        const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
         if (authFile)
             return join(dir, authFile);
     }
@@ -83,7 +96,7 @@ function findLoginFlow(projectRoot) {
 function stripClearState(yamlContent) {
     return yamlContent
         .split('\n')
-        .filter(line => !/^\s*clearState\s*:\s*true/i.test(line))
+        .filter((line) => !/^\s*clearState\s*:\s*true/i.test(line))
         .join('\n');
 }
 export async function handleAutoLogin(client, opts = {}) {
@@ -102,7 +115,10 @@ export async function handleAutoLogin(client, opts = {}) {
     }
     const projectRoot = findProjectRoot();
     if (!projectRoot) {
-        return { loggedIn: false, reason: 'Could not find RN project root to scan for Maestro subflows' };
+        return {
+            loggedIn: false,
+            reason: 'Could not find RN project root to scan for Maestro subflows',
+        };
     }
     const flowPath = findLoginFlow(projectRoot);
     if (!flowPath) {
@@ -164,7 +180,10 @@ export async function handleAutoLogin(client, opts = {}) {
     }
     catch (err) {
         if (err instanceof MaestroValidationError) {
-            return { loggedIn: false, reason: `Auto-login wrapper refused: ${err.message} (Phase 134.1)` };
+            return {
+                loggedIn: false,
+                reason: `Auto-login wrapper refused: ${err.message} (Phase 134.1)`,
+            };
         }
         throw err;
     }
@@ -181,7 +200,10 @@ export async function handleAutoLogin(client, opts = {}) {
         await runFlowParked(() => execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
             timeout: 120_000,
             encoding: 'utf8',
-        }), { platform: platform === 'android' ? 'android' : 'ios', deviceId: getActiveSession()?.deviceId });
+        }), {
+            platform: platform === 'android' ? 'android' : 'ios',
+            deviceId: getActiveSession()?.deviceId,
+        });
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -196,7 +218,7 @@ export async function handleAutoLogin(client, opts = {}) {
     let stillOnAuth = true;
     const authDeadline = Date.now() + 5000;
     do {
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300));
         stillOnAuth = await isOnAuthScreen(client);
     } while (stillOnAuth && Date.now() < authDeadline);
     if (stillOnAuth) {

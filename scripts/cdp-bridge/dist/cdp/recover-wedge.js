@@ -9,7 +9,9 @@ const DEFAULT_MAX_PER_SESSION = 3;
 const FOREGROUND_SETTLE_MS = 800;
 let attempts = 0;
 /** Reset the per-session recovery budget (on device_snapshot open AND on a successful recovery). */
-export function resetWedgeRecoveryCounter() { attempts = 0; }
+export function resetWedgeRecoveryCounter() {
+    attempts = 0;
+}
 async function defaultLaunchApp(udid, appId) {
     // Bare `simctl launch` (NO --terminate-running-process): empirically foregrounds
     // an already-running backgrounded app with the SAME pid, preserving JS state —
@@ -58,12 +60,16 @@ export async function recoverWedge(client, deps = {}) {
     try {
         await launchApp(udid, appId);
     }
-    catch { /* best-effort re-foreground */ }
+    catch {
+        /* best-effort re-foreground */
+    }
     await sleep(FOREGROUND_SETTLE_MS);
     try {
         await reconnect();
     }
-    catch { /* best-effort; the liveness probe is the verdict */ }
+    catch {
+        /* best-effort; the liveness probe is the verdict */
+    }
     if (await probeAlive()) {
         attempts = 0; // success bounds CONSECUTIVE wedges, not lifetime
         return { recovered: true, reason: 'recovered', attempt };

@@ -6,7 +6,10 @@
 // path-traversal / containment / cycle / depth guards.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAndValidateFlow, MaestroValidationError } from '../../dist/domain/maestro-validator.js';
+import {
+  parseAndValidateFlow,
+  MaestroValidationError,
+} from '../../dist/domain/maestro-validator.js';
 
 const FLOW_ROOT = '/proj/.rn-agent/actions';
 const FLOW_DIR = FLOW_ROOT;
@@ -43,7 +46,12 @@ test('runFlow {file} within flowRoot is expanded inline (no file ref remains)', 
   const sub = `${FLOW_ROOT}/dialog.yaml`;
   const fs = makeFs({ [sub]: `- tapOn: "Allow"` });
   const yaml = `- runFlow: dialog.yaml`;
-  const flow = parseAndValidateFlow(yaml, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs });
+  const flow = parseAndValidateFlow(yaml, {
+    rejectHeader: true,
+    flowDir: FLOW_DIR,
+    flowRoot: FLOW_ROOT,
+    ...fs,
+  });
   // The sub-flow's command is present and the serialized raw has no runFlow file ref.
   assert.ok(!/dialog\.yaml/.test(flow.raw), 'no file ref remains in serialized flow');
   assert.ok(/Allow/.test(flow.raw), 'sub-flow command was inlined');
@@ -52,7 +60,13 @@ test('runFlow {file} within flowRoot is expanded inline (no file ref remains)', 
 test('runFlow {file} with .. traversal is rejected', () => {
   const fs = makeFs({});
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: ../../etc/evil.yaml`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: ../../etc/evil.yaml`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });
@@ -60,7 +74,13 @@ test('runFlow {file} with .. traversal is rejected', () => {
 test('runFlow {file} with an absolute path is rejected', () => {
   const fs = makeFs({});
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: /etc/evil.yaml`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: /etc/evil.yaml`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });
@@ -69,7 +89,13 @@ test('runFlow {file} that realpath-escapes flowRoot (symlink) is rejected', () =
   const inside = `${FLOW_ROOT}/link.yaml`;
   const fs = makeFs({ [inside]: `- tapOn: x`, __realpath: { [inside]: '/etc/outside.yaml' } });
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: link.yaml`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: link.yaml`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });
@@ -77,7 +103,13 @@ test('runFlow {file} that realpath-escapes flowRoot (symlink) is rejected', () =
 test('runFlow {file} with a non-yaml extension is rejected', () => {
   const fs = makeFs({ [`${FLOW_ROOT}/x.js`]: `whatever` });
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: x.js`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: x.js`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });
@@ -87,7 +119,13 @@ test('runFlow {file} cycle (a -> b -> a) is rejected', () => {
   const b = `${FLOW_ROOT}/b.yaml`;
   const fs = makeFs({ [a]: `- runFlow: b.yaml`, [b]: `- runFlow: a.yaml` });
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: a.yaml`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: a.yaml`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });
@@ -97,7 +135,14 @@ test('runFlow {file} exceeding max depth is rejected', () => {
   for (let i = 0; i < 8; i++) files[`${FLOW_ROOT}/d${i}.yaml`] = `- runFlow: d${i + 1}.yaml`;
   const fs = makeFs(files);
   assert.throws(
-    () => parseAndValidateFlow(`- runFlow: d0.yaml`, { rejectHeader: true, flowDir: FLOW_DIR, flowRoot: FLOW_ROOT, maxRunFlowDepth: 3, ...fs }),
+    () =>
+      parseAndValidateFlow(`- runFlow: d0.yaml`, {
+        rejectHeader: true,
+        flowDir: FLOW_DIR,
+        flowRoot: FLOW_ROOT,
+        maxRunFlowDepth: 3,
+        ...fs,
+      }),
     MaestroValidationError,
   );
 });

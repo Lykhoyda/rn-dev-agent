@@ -1,6 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, warnResult, withConnection } from '../utils.js';
 import { hasActiveSession } from '../agent-device-wrapper.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
@@ -41,7 +41,8 @@ export interface ProofStepDeps {
 export function createProofStepHandler(getClient: () => CDPClient, deps: ProofStepDeps = {}) {
   const hasSession = deps.hasSession ?? hasActiveSession;
   const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
-  const fetchCandidates = deps.fetchCandidates ?? ((text: string) => fetchFindCandidates(text, false));
+  const fetchCandidates =
+    deps.fetchCandidates ?? ((text: string) => fetchFindCandidates(text, false));
   return withConnection(getClient, async (args: ProofStepArgs, client) => {
     const result: ProofStepResult = {
       screenshotPath: '',
@@ -73,7 +74,7 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
     // Step 2: Wait for settlement
     const waitMs = args.waitMs ?? 1500;
     if (waitMs > 0) {
-      await new Promise(r => setTimeout(r, waitMs));
+      await new Promise((r) => setTimeout(r, waitMs));
     }
 
     // Step 3: Verify element (optional)
@@ -109,8 +110,9 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
           const parsed = JSON.parse(treeResult.value);
           const matches = parsed && Array.isArray(parsed.matches) ? parsed.matches : null;
           const treeNode = parsed ? parsed.tree : null;
-          const hasMatch = (matches !== null && matches.length > 0)
-            || (treeNode !== null && treeNode !== undefined);
+          const hasMatch =
+            (matches !== null && matches.length > 0) ||
+            (treeNode !== null && treeNode !== undefined);
           if (parsed && parsed.__agent_error) {
             result.verified = false;
             result.verifyDetail = `testID "${args.verifyTestID}" not found: ${parsed.__agent_error}`;
@@ -174,7 +176,10 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
       mutationMethods: cfg.mutationMethods,
     };
     if (hasFailure) {
-      return annotateMutationAbsence(warnResult(result, errors.join('; ') || 'proof_step verification failed'), ctx);
+      return annotateMutationAbsence(
+        warnResult(result, errors.join('; ') || 'proof_step verification failed'),
+        ctx,
+      );
     }
     return annotateMutationAbsence(okResult(result), ctx);
   });

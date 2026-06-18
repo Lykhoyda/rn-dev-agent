@@ -50,8 +50,7 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       // existed on neither; type=boolean reads were broken since the tool
       // shipped.
       const getMethod =
-        valueType === 'number' ? 'getNumber' :
-        valueType === 'boolean' ? 'getBoolean' : 'getString';
+        valueType === 'number' ? 'getNumber' : valueType === 'boolean' ? 'getBoolean' : 'getString';
       actionBody = `var v = mmkv.${getMethod}(${JSON.stringify(args.key)}); return JSON.stringify({ value: v === undefined ? null : v });`;
       break;
     }

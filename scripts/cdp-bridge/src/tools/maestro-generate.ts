@@ -3,7 +3,11 @@ import { join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { buildMaestroFlow, isValidBundleId, MaestroValidationError } from '../domain/maestro-validator.js';
+import {
+  buildMaestroFlow,
+  isValidBundleId,
+  MaestroValidationError,
+} from '../domain/maestro-validator.js';
 
 interface MaestroStep {
   action: 'tap' | 'fill' | 'assert' | 'scroll' | 'navigate' | 'back' | 'wait' | 'swipe' | 'launch';

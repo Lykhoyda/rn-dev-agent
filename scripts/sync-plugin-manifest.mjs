@@ -31,7 +31,7 @@ const newVersion = synth.version;
 if (typeof newVersion !== 'string' || !/^\d+\.\d+\.\d+/.test(newVersion)) {
   console.error(
     `sync-plugin-manifest: synthetic package .claude-plugin/package.json ` +
-    `has invalid version ${JSON.stringify(newVersion)} — expected semver.`,
+      `has invalid version ${JSON.stringify(newVersion)} — expected semver.`,
   );
   process.exit(1);
 }
@@ -52,11 +52,10 @@ if (!pluginEntry) {
   );
   process.exit(1);
 }
-const oldMarketplaceVersion = pluginEntry.version;
+const _oldMarketplaceVersion = pluginEntry.version;
 pluginEntry.version = newVersion;
 writeFileSync(marketplaceJsonPath, JSON.stringify(marketplace, null, 2) + '\n', 'utf-8');
 
 console.log(
-  `sync-plugin-manifest: ${oldPluginVersion} → ${newVersion} ` +
-  `(plugin.json + marketplace.json)`,
+  `sync-plugin-manifest: ${oldPluginVersion} → ${newVersion} ` + `(plugin.json + marketplace.json)`,
 );

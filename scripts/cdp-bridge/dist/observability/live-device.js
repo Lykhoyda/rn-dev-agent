@@ -32,18 +32,36 @@ export function isStateMutating(tool, args) {
  */
 const SNAPSHOT_CACHE_READS = new Set([
     // CDP / native introspection
-    'cdp_component_tree', 'cdp_component_state', 'cdp_store_state', 'cdp_network_log',
-    'cdp_network_body', 'cdp_console_log', 'cdp_error_log', 'cdp_native_errors',
-    'cdp_diagnostic_renderers', 'cdp_object_inspect', 'cdp_heap_usage', 'collect_logs',
-    'cdp_metro_events', 'cdp_wait_for_network',
+    'cdp_component_tree',
+    'cdp_component_state',
+    'cdp_store_state',
+    'cdp_network_log',
+    'cdp_network_body',
+    'cdp_console_log',
+    'cdp_error_log',
+    'cdp_native_errors',
+    'cdp_diagnostic_renderers',
+    'cdp_object_inspect',
+    'cdp_heap_usage',
+    'collect_logs',
+    'cdp_metro_events',
+    'cdp_wait_for_network',
     // perception (the cache's producer + consumer)
-    'device_snapshot', 'device_screenshot',
+    'device_snapshot',
+    'device_screenshot',
     // navigation reads (NOT cdp_navigate, which changes the screen)
-    'cdp_navigation_state', 'cdp_nav_graph',
+    'cdp_navigation_state',
+    'cdp_nav_graph',
     // diagnostics / connection
-    'cdp_status', 'cdp_targets', 'device_list', 'observe',
+    'cdp_status',
+    'cdp_targets',
+    'device_list',
+    'observe',
     // state assertions (verify-via-state — pure reads)
-    'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
+    'expect_redux',
+    'expect_route',
+    'expect_visible_by_testid',
+    'expect_text',
     'cross_platform_verify',
 ]);
 /**
@@ -63,12 +81,15 @@ export function toolInvalidatesSnapshotCache(tool, args) {
  * wrapped so the per-call `isStateMutating(tool, args)` check can run.
  */
 export function mayTriggerLiveCapture(tool) {
-    return classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find';
+    return (classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find');
 }
 let inFlight = false;
 let pending = false;
 /** Test-only: reset the single-flight latches between cases. */
-export function _resetLiveCaptureForTest() { inFlight = false; pending = false; }
+export function _resetLiveCaptureForTest() {
+    inFlight = false;
+    pending = false;
+}
 export async function maybeCaptureLiveFrame(deps) {
     try {
         if (!deps.hasObservers() || deps.isFlowActive())
@@ -106,13 +127,17 @@ async function runCapture(deps) {
                 frame.shot = bytes;
         }
     }
-    catch { /* screenshot best-effort */ }
+    catch {
+        /* screenshot best-effort */
+    }
     try {
         const route = await deps.readRoute();
         if (route)
             frame.route = route;
     }
-    catch { /* route best-effort */ }
+    catch {
+        /* route best-effort */
+    }
     if (frame.shot || frame.route)
         deps.pushLive(frame);
 }

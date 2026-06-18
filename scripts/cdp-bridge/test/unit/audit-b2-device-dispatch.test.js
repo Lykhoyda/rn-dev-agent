@@ -2,10 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  buildRunIOSArgs,
-  buildRunAndroidArgs,
-} from '../../dist/agent-device-wrapper.js';
+import { buildRunIOSArgs, buildRunAndroidArgs } from '../../dist/agent-device-wrapper.js';
 import {
   updateRefMapFromFlat,
   clearRefMap,
@@ -40,7 +37,9 @@ test('buildRunAndroidArgs throws instead of dispatching NaN coordinates', () => 
 // --- ref-map freshness gate ---
 
 test('isRefMapFresh tracks snapshot age', () => {
-  updateRefMapFromFlat([{ ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } }]);
+  updateRefMapFromFlat([
+    { ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } },
+  ]);
   assert.equal(isRefMapFresh(60_000), true, 'just-populated map is fresh');
   assert.equal(isRefMapFresh(-1), false, 'any positive age fails a negative threshold');
   clearRefMap();
@@ -49,12 +48,16 @@ test('isRefMapFresh tracks snapshot age', () => {
 });
 
 test('buildRunIOSArgs resolves a fresh @ref to coordinates', () => {
-  updateRefMapFromFlat([{ ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } }]);
+  updateRefMapFromFlat([
+    { ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } },
+  ]);
   assert.deepEqual(buildRunIOSArgs(['tap', '@e0']), { command: 'tap', x: 60, y: 40 });
 });
 
 test('buildRunIOSArgs surfaces _staleRef when the @ref is unresolvable', () => {
-  updateRefMapFromFlat([{ ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } }]);
+  updateRefMapFromFlat([
+    { ref: '@e0', type: 'Button', rect: { x: 10, y: 20, width: 100, height: 40 } },
+  ]);
   assert.deepEqual(buildRunIOSArgs(['tap', '@missing']), { command: 'tap', _staleRef: '@missing' });
 });
 
@@ -85,13 +88,22 @@ test('buildDirectionalSwipeCliArgs emits a swipe gesture with duration', () => {
 // --- iOS dispatch no longer hangs forever when the runner wedges ---
 
 test('runIOS rejects with RUNNER_TIMEOUT when the runner does not respond', async () => {
-  _setRunnerStateForTest({ port: 22088, pid: 999999, deviceId: 'sim', bundleId: 'com.test', startedAt: 'now' });
+  _setRunnerStateForTest({
+    port: 22088,
+    pid: 999999,
+    deviceId: 'sim',
+    bundleId: 'com.test',
+    startedAt: 'now',
+  });
   _setHttpTimeoutForTest(50);
-  _setFetchForTest((_url, init) => new Promise((_resolve, reject) => {
-    init.signal.addEventListener('abort', () => {
-      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-    });
-  }));
+  _setFetchForTest(
+    (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      }),
+  );
   try {
     await assert.rejects(() => runIOS({ command: 'tap', x: 1, y: 1 }), /RUNNER_TIMEOUT/);
   } finally {

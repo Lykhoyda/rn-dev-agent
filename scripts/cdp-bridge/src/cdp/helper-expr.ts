@@ -33,7 +33,7 @@ function validateCall(call: string): void {
   }
   throw new Error(
     `helper-expr: refusing to interpolate untrusted call "${call.slice(0, 80)}"; ` +
-    `expected identifier(<args>) where <args> are pure JSON data values.`,
+      `expected identifier(<args>) where <args> are pure JSON data values.`,
   );
 }
 

@@ -30,7 +30,7 @@ export function createMetroEventsHandler(getClient) {
                 buildErrors: 0,
                 count: 0,
                 events: [],
-                hint: 'Metro /events endpoint is serving the Expo manifest protocol, not Metro\'s reporter stream. This is expected on Expo-managed projects — bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream.',
+                hint: "Metro /events endpoint is serving the Expo manifest protocol, not Metro's reporter stream. This is expected on Expo-managed projects — bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream.",
             });
         }
         if (args.clearErrors) {

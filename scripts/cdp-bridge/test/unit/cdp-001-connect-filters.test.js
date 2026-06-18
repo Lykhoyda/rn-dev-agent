@@ -8,20 +8,26 @@ import assert from 'node:assert/strict';
 import { createConnectHandler } from '../../dist/tools/connection.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 
-function buildHarness(currentTarget = {
-  id: 'old-page',
-  title: 'React Native (Hermes)',
-  vm: 'Hermes',
-  description: 'com.old.app',
-  platform: 'ios',
-  webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/old-page',
-}, currentPort = 8081) {
+function buildHarness(
+  currentTarget = {
+    id: 'old-page',
+    title: 'React Native (Hermes)',
+    vm: 'Hermes',
+    description: 'com.old.app',
+    platform: 'ios',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/old-page',
+  },
+  currentPort = 8081,
+) {
   const client = createMockClient({
     _connectedTarget: currentTarget,
     _metroPort: currentPort,
   });
   let disconnectCalls = 0;
-  client.disconnect = async () => { disconnectCalls++; client._isConnected = false; };
+  client.disconnect = async () => {
+    disconnectCalls++;
+    client._isConnected = false;
+  };
   let autoConnectArgs = null;
   client.autoConnect = async (port, opts) => {
     autoConnectArgs = { port, opts };
@@ -44,7 +50,12 @@ function buildHarness(currentTarget = {
 
 test('CDP-001: same target + same port + matching platform → alreadyConnected (fast path preserved)', async () => {
   const h = buildHarness();
-  const result = await h.handler({ platform: 'ios', metroPort: 8081, targetId: 'old-page', bundleId: 'com.old.app' });
+  const result = await h.handler({
+    platform: 'ios',
+    metroPort: 8081,
+    targetId: 'old-page',
+    bundleId: 'com.old.app',
+  });
   const data = JSON.parse(result.content[0].text);
   assert.equal(data.ok, true);
   assert.equal(data.data.alreadyConnected, true);
@@ -79,8 +90,12 @@ test('CDP-001: metroPort mismatch must trigger disconnect + reconnect on request
 
 test('CDP-001: platform mismatch (ios target, requested android) must reconnect', async () => {
   const h = buildHarness({
-    id: 'p1', title: 'iOS hermes', vm: 'Hermes', description: 'com.old.app',
-    platform: 'ios', webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/p1',
+    id: 'p1',
+    title: 'iOS hermes',
+    vm: 'Hermes',
+    description: 'com.old.app',
+    platform: 'ios',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/p1',
   });
   await h.handler({ platform: 'android' });
   assert.equal(h.counts().disconnects, 1, 'platform mismatch must reconnect');
@@ -88,8 +103,11 @@ test('CDP-001: platform mismatch (ios target, requested android) must reconnect'
 
 test('CDP-001: bundleId match by description (case-insensitive) keeps fast path', async () => {
   const h = buildHarness({
-    id: 'page1', title: 'React Native (Hermes)', vm: 'Hermes',
-    description: 'COM.OLD.APP', platform: 'ios',
+    id: 'page1',
+    title: 'React Native (Hermes)',
+    vm: 'Hermes',
+    description: 'COM.OLD.APP',
+    platform: 'ios',
     webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
   });
   const result = await h.handler({ bundleId: 'com.old.app' });
@@ -122,21 +140,31 @@ test('Phase 134.5: bundleId `com.old.app` does NOT match haystack containing `co
   // Live target is com.old.app-test, caller asks for com.old.app.
   // Substring match would say "already connected" wrongly.
   const h = buildHarness({
-    id: 'page1', title: 'com.old.app-test (Hermes)', vm: 'Hermes',
-    description: 'com.old.app-test', platform: 'ios',
+    id: 'page1',
+    title: 'com.old.app-test (Hermes)',
+    vm: 'Hermes',
+    description: 'com.old.app-test',
+    platform: 'ios',
     webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
   });
   const result = await h.handler({ bundleId: 'com.old.app' });
   const data = JSON.parse(result.content[0].text);
   // Bundle mismatch should trigger reconnect, NOT alreadyConnected
-  assert.notEqual(data.data?.alreadyConnected, true, 'must NOT short-circuit on substring false-positive');
+  assert.notEqual(
+    data.data?.alreadyConnected,
+    true,
+    'must NOT short-circuit on substring false-positive',
+  );
   assert.equal(h.counts().disconnects, 1, 'should reconnect to fetch the correct target');
 });
 
 test('Phase 134.5: bundleId `com.old.app` does NOT match haystack containing `com.old.app2` (regression)', async () => {
   const h = buildHarness({
-    id: 'page1', title: 'com.old.app2 (Hermes)', vm: 'Hermes',
-    description: 'com.old.app2', platform: 'ios',
+    id: 'page1',
+    title: 'com.old.app2 (Hermes)',
+    vm: 'Hermes',
+    description: 'com.old.app2',
+    platform: 'ios',
     webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
   });
   const result = await h.handler({ bundleId: 'com.old.app' });
@@ -149,8 +177,11 @@ test('Phase 134.5: bundleId match still works when surrounded by punctuation (po
   // Haystack with the bundleId as a standalone token bordered by
   // whitespace + brackets. The word-boundary check still recognizes it.
   const h = buildHarness({
-    id: 'page1', title: 'React Native [com.old.app] (Hermes)', vm: 'Hermes',
-    description: 'app: com.old.app, target: page1', platform: 'ios',
+    id: 'page1',
+    title: 'React Native [com.old.app] (Hermes)',
+    vm: 'Hermes',
+    description: 'app: com.old.app, target: page1',
+    platform: 'ios',
     webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
   });
   const result = await h.handler({ bundleId: 'com.old.app' });

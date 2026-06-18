@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { discover, AppDetachedError } from '../../dist/cdp/discovery.js';
 
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 // metroPort: the port whose /status returns `packager-status:running` (null = none).
 // targets: the array returned by that port's /json/list.

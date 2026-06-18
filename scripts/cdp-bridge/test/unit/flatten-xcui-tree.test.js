@@ -42,7 +42,10 @@ test('flattenXCUITree: produces FlatNode array with stable refs', () => {
   const { nodes } = flattenXCUITree(sampleTree);
   // Depth-first: Application(@e0) → Window(@e1) → Button(@e2) → StaticText(@e3)
   assert.equal(nodes.length, 4);
-  assert.deepEqual(nodes.map((n) => n.ref), ['@e0', '@e1', '@e2', '@e3']);
+  assert.deepEqual(
+    nodes.map((n) => n.ref),
+    ['@e0', '@e1', '@e2', '@e3'],
+  );
   assert.equal(nodes[0].type, 'Application');
   assert.equal(nodes[1].type, 'Window');
   assert.equal(nodes[2].type, 'Button');
@@ -93,7 +96,13 @@ test('flattenXCUITree: skips nodes without frame', () => {
   const { nodes } = flattenXCUITree(treeWithMissingFrame);
   // Application + Button + StaticText (Group has no frame, skipped)
   assert.equal(nodes.length, 3);
-  assert.deepEqual(nodes.map((n) => n.type), ['Application', 'Button', 'StaticText']);
+  assert.deepEqual(
+    nodes.map((n) => n.type),
+    ['Application', 'Button', 'StaticText'],
+  );
   // Refs remain @e0/@e1/@e2 (frame-less nodes don't consume a ref slot)
-  assert.deepEqual(nodes.map((n) => n.ref), ['@e0', '@e1', '@e2']);
+  assert.deepEqual(
+    nodes.map((n) => n.ref),
+    ['@e0', '@e1', '@e2'],
+  );
 });

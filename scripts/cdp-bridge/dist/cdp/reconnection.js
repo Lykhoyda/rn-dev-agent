@@ -46,7 +46,9 @@ export function handleClose(ctx, code) {
         ctx.setState('disconnected');
         clearActiveFlag();
         logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
-        console.error('CDP: connection closed (code ' + code + '). Auto-reconnect is disabled ' +
+        console.error('CDP: connection closed (code ' +
+            code +
+            '). Auto-reconnect is disabled ' +
             '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
             'the bridge will reconnect on the next CDP tool call. ' +
             'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.');
@@ -179,7 +181,9 @@ export function startBackgroundPoll(ctx) {
                 stopBackgroundPoll(ctx);
                 ctx.setReconnecting(true);
                 ctx.setState('reconnecting');
-                reconnect(ctx).catch(() => { ctx.setReconnecting(false); });
+                reconnect(ctx).catch(() => {
+                    ctx.setReconnecting(false);
+                });
             }
         }
         catch {

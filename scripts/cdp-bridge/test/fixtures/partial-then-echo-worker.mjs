@@ -13,12 +13,22 @@ if (process.env.RN_BRIDGE_RESTARTS === '0') {
   const rl = createInterface({ input: process.stdin });
   rl.on('line', (line) => {
     let msg;
-    try { msg = JSON.parse(line); } catch { return; }
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
     if (msg.id === undefined) return;
-    process.stdout.write(JSON.stringify({
-      jsonrpc: '2.0',
-      id: msg.id,
-      result: { echo: msg.method, pid: process.pid, restarts: process.env.RN_BRIDGE_RESTARTS ?? null },
-    }) + '\n');
+    process.stdout.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: {
+          echo: msg.method,
+          pid: process.pid,
+          restarts: process.env.RN_BRIDGE_RESTARTS ?? null,
+        },
+      }) + '\n',
+    );
   });
 }

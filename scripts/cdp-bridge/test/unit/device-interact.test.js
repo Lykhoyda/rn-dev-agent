@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAdbInputTextArgv, splitChunkAroundPercentS, findInputForPressable } from '../../dist/tools/device-interact.js';
+import {
+  buildAdbInputTextArgv,
+  splitChunkAroundPercentS,
+  findInputForPressable,
+} from '../../dist/tools/device-interact.js';
 
 // ── buildAdbInputTextArgv ──────────────────────────────────────────────
 
@@ -9,40 +13,29 @@ test('buildAdbInputTextArgv wraps chunk in single-quoted shell literal', () => {
 });
 
 test('buildAdbInputTextArgv replaces spaces with %s inside the quoted literal', () => {
-  assert.deepEqual(
-    buildAdbInputTextArgv('hello world'),
-    ['shell', 'input', 'text', "'hello%sworld'"],
-  );
-  assert.deepEqual(
-    buildAdbInputTextArgv('a b c d'),
-    ['shell', 'input', 'text', "'a%sb%sc%sd'"],
-  );
+  assert.deepEqual(buildAdbInputTextArgv('hello world'), [
+    'shell',
+    'input',
+    'text',
+    "'hello%sworld'",
+  ]);
+  assert.deepEqual(buildAdbInputTextArgv('a b c d'), ['shell', 'input', 'text', "'a%sb%sc%sd'"]);
 });
 
 test("buildAdbInputTextArgv escapes embedded single quotes via POSIX '\\'' dance", () => {
-  assert.deepEqual(
-    buildAdbInputTextArgv("it's"),
-    ['shell', 'input', 'text', "'it'\\''s'"],
-  );
-  assert.deepEqual(
-    buildAdbInputTextArgv("a'b'c"),
-    ['shell', 'input', 'text', "'a'\\''b'\\''c'"],
-  );
+  assert.deepEqual(buildAdbInputTextArgv("it's"), ['shell', 'input', 'text', "'it'\\''s'"]);
+  assert.deepEqual(buildAdbInputTextArgv("a'b'c"), ['shell', 'input', 'text', "'a'\\''b'\\''c'"]);
 });
 
 test('buildAdbInputTextArgv keeps shell metacharacters inside quotes (no escape needed)', () => {
-  assert.deepEqual(
-    buildAdbInputTextArgv('a$b`c\\d'),
-    ['shell', 'input', 'text', "'a$b`c\\d'"],
-  );
-  assert.deepEqual(
-    buildAdbInputTextArgv('a|b&c;d'),
-    ['shell', 'input', 'text', "'a|b&c;d'"],
-  );
-  assert.deepEqual(
-    buildAdbInputTextArgv('a<b>c*d?e[f]'),
-    ['shell', 'input', 'text', "'a<b>c*d?e[f]'"],
-  );
+  assert.deepEqual(buildAdbInputTextArgv('a$b`c\\d'), ['shell', 'input', 'text', "'a$b`c\\d'"]);
+  assert.deepEqual(buildAdbInputTextArgv('a|b&c;d'), ['shell', 'input', 'text', "'a|b&c;d'"]);
+  assert.deepEqual(buildAdbInputTextArgv('a<b>c*d?e[f]'), [
+    'shell',
+    'input',
+    'text',
+    "'a<b>c*d?e[f]'",
+  ]);
 });
 
 test('buildAdbInputTextArgv handles empty string', () => {
@@ -87,10 +80,7 @@ test('splitChunkAroundPercentS handles two consecutive %s', () => {
 });
 
 test('splitChunkAroundPercentS handles three %s in mixed text', () => {
-  assert.deepEqual(
-    splitChunkAroundPercentS('x%sy%sz%sw'),
-    ['x', '%', 'sy', '%', 'sz', '%', 'sw'],
-  );
+  assert.deepEqual(splitChunkAroundPercentS('x%sy%sz%sw'), ['x', '%', 'sy', '%', 'sz', '%', 'sw']);
 });
 
 test('splitChunkAroundPercentS preserves spaces (not yet encoded)', () => {
@@ -99,7 +89,7 @@ test('splitChunkAroundPercentS preserves spaces (not yet encoded)', () => {
 
 test('splitChunkAroundPercentS + buildAdbInputTextArgv produce correct argv sequence', () => {
   const segments = splitChunkAroundPercentS('hello %s world');
-  const argvs = segments.map(s => buildAdbInputTextArgv(s));
+  const argvs = segments.map((s) => buildAdbInputTextArgv(s));
   assert.deepEqual(argvs, [
     ['shell', 'input', 'text', "'hello%s'"],
     ['shell', 'input', 'text', "'%'"],

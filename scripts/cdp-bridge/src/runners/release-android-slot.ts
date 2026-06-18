@@ -77,7 +77,12 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
       }
     },
     isAlive: (pid) => {
-      try { process.kill(pid, 0); return true; } catch { return false; }
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
     },
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
@@ -148,7 +153,9 @@ export async function releaseAndroidInteractionSlot(
       if (pid !== null && deps.isAlive(pid)) {
         const { selfPid, parentPid } = deps.protectedPids();
         if (isProtectedPid(pid, selfPid, parentPid)) {
-          warnings.push(`Refusing to kill agent-device daemon PID ${pid} — it is our own process/parent.`);
+          warnings.push(
+            `Refusing to kill agent-device daemon PID ${pid} — it is our own process/parent.`,
+          );
           keepFiles = true;
         } else {
           try {
@@ -165,8 +172,12 @@ export async function releaseAndroidInteractionSlot(
       if (!keepFiles) {
         for (const f of DAEMON_FILES) {
           if (!deps.fileExists(f)) continue;
-          try { deps.removeFile(f); removedFiles.push(f); }
-          catch (err) { warnings.push(`rm ${f} failed: ${msg(err)}`); }
+          try {
+            deps.removeFile(f);
+            removedFiles.push(f);
+          } catch (err) {
+            warnings.push(`rm ${f} failed: ${msg(err)}`);
+          }
         }
       }
     } catch (err) {
@@ -175,7 +186,14 @@ export async function releaseAndroidInteractionSlot(
   }
   timings.legacyDaemon = deps.now() - tLegacy;
 
-  return { stoppedOwnRunner, forceStoppedPackages, killedDaemonPids, removedFiles, warnings, meta: { timings_ms: timings } };
+  return {
+    stoppedOwnRunner,
+    forceStoppedPackages,
+    killedDaemonPids,
+    removedFiles,
+    warnings,
+    meta: { timings_ms: timings },
+  };
 }
 
 function msg(err: unknown): string {

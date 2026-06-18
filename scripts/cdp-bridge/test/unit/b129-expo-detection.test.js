@@ -1,9 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  detectExpoManifestResponse,
-  MetroEventsClient,
-} from '../../dist/metro/events-client.js';
+import { detectExpoManifestResponse, MetroEventsClient } from '../../dist/metro/events-client.js';
 
 /**
  * B129 (D658) regression: MetroEventsClient must detect Expo CLI's /events
@@ -84,7 +81,9 @@ function makeFetchReturning(body, ok = true) {
 }
 
 function makeFetchThrowing() {
-  return async () => { throw new Error('network error'); };
+  return async () => {
+    throw new Error('network error');
+  };
 }
 
 test('MetroEventsClient: Expo /events detection short-circuits before WS (B129)', async () => {
@@ -171,7 +170,11 @@ test('MetroEventsClient: L1 — stop() clears incompatibleReason, allowing re-pr
   // (WS will fail because port 59995 is unreachable, but incompatibleReason
   // stays null because this probe returned the non-Expo shape)
   await client.start();
-  assert.equal(client.incompatibleReason, null, 'second probe re-runs and returns null on non-Expo body');
+  assert.equal(
+    client.incompatibleReason,
+    null,
+    'second probe re-runs and returns null on non-Expo body',
+  );
 
   client.stop();
 });
@@ -184,7 +187,10 @@ test('MetroEventsClient: skipIncompatibilityProbe bypasses the probe', async () 
   const client = new MetroEventsClient({
     port: 59996,
     skipIncompatibilityProbe: true,
-    fetchFn: async () => { probeCalled = true; return { ok: true, text: async () => 'x' }; },
+    fetchFn: async () => {
+      probeCalled = true;
+      return { ok: true, text: async () => 'x' };
+    },
     maxReconnectAttempts: 1,
   });
 

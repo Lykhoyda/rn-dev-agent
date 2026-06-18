@@ -19,13 +19,7 @@ const ACCEPT_LABELS_IOS = [
   'Accept',
 ];
 
-const DISMISS_LABELS_IOS_BASE = [
-  'Cancel',
-  'No',
-  'Deny',
-  'Not Now',
-  'Reject',
-];
+const DISMISS_LABELS_IOS_BASE = ['Cancel', 'No', 'Deny', 'Not Now', 'Reject'];
 
 const DISMISS_LABELS_IOS = [
   ...DISMISS_LABELS_IOS_BASE,
@@ -44,14 +38,7 @@ const ACCEPT_LABELS_ANDROID = [
   'Yes',
 ];
 
-const DISMISS_LABELS_ANDROID = [
-  'Deny',
-  'DENY',
-  'Cancel',
-  'CANCEL',
-  'No',
-  'Not now',
-];
+const DISMISS_LABELS_ANDROID = ['Deny', 'DENY', 'Cancel', 'CANCEL', 'No', 'Not now'];
 
 export interface SystemDialogArgs {
   label?: string;
@@ -115,11 +102,15 @@ function pickLabels(userLabel: string | undefined, defaults: string[]): string[]
   });
 }
 
-export function createDeviceAcceptSystemDialogHandler(): (args: SystemDialogArgs) => Promise<ToolResult> {
+export function createDeviceAcceptSystemDialogHandler(): (
+  args: SystemDialogArgs,
+) => Promise<ToolResult> {
   return async (args) => {
     const platform = args.platform ?? (await detectPlatform());
     if (!platform) {
-      return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+      return failResult('No device detected. Pass platform or boot a device first.', {
+        code: 'NO_DEVICE',
+      });
     }
     const defaults = platform === 'ios' ? ACCEPT_LABELS_IOS : ACCEPT_LABELS_ANDROID;
     const labels = pickLabels(args.label, defaults);
@@ -127,11 +118,15 @@ export function createDeviceAcceptSystemDialogHandler(): (args: SystemDialogArgs
   };
 }
 
-export function createDeviceDismissSystemDialogHandler(): (args: SystemDialogArgs) => Promise<ToolResult> {
+export function createDeviceDismissSystemDialogHandler(): (
+  args: SystemDialogArgs,
+) => Promise<ToolResult> {
   return async (args) => {
     const platform = args.platform ?? (await detectPlatform());
     if (!platform) {
-      return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+      return failResult('No device detected. Pass platform or boot a device first.', {
+        code: 'NO_DEVICE',
+      });
     }
     const defaults = platform === 'ios' ? DISMISS_LABELS_IOS : DISMISS_LABELS_ANDROID;
     const labels = pickLabels(args.label, defaults);

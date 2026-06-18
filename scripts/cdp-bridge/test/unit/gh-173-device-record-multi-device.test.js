@@ -57,7 +57,10 @@ test('parseAllAdbDevices: returns emulators AND physical devices (multi-device d
   const out = parseAllAdbDevices(stdout);
   // All four lines are surfaced — the resolver caller filters by state.
   assert.equal(out.length, 4);
-  const states = out.reduce((acc, d) => { acc[d.serial] = d.state; return acc; }, {});
+  const states = out.reduce((acc, d) => {
+    acc[d.serial] = d.state;
+    return acc;
+  }, {});
   assert.equal(states['emulator-5554'], 'device');
   assert.equal(states['R3CW70BFGAA'], 'device');
   assert.equal(states['emulator-5556'], 'offline');
@@ -99,14 +102,15 @@ test('resolveTargetDevice: 1 candidate + matching deviceId → use it (not auto-
   const r = resolveTargetDevice([{ id: 'BBB-BOOTED' }], 'BBB-BOOTED');
   assert.equal(r.ok, true);
   assert.equal(r.deviceId, 'BBB-BOOTED');
-  assert.equal(r.autoSelected, false, 'explicit match is not auto-selected even with only one candidate');
+  assert.equal(
+    r.autoSelected,
+    false,
+    'explicit match is not auto-selected even with only one candidate',
+  );
 });
 
 test('resolveTargetDevice: >1 candidates, deviceId matches one → use it', () => {
-  const r = resolveTargetDevice(
-    [{ id: 'AAA' }, { id: 'BBB' }, { id: 'CCC' }],
-    'BBB',
-  );
+  const r = resolveTargetDevice([{ id: 'AAA' }, { id: 'BBB' }, { id: 'CCC' }], 'BBB');
   assert.equal(r.ok, true);
   assert.equal(r.deviceId, 'BBB');
   assert.equal(r.autoSelected, false);
@@ -123,19 +127,13 @@ test('resolveTargetDevice: >1 candidates, no deviceId → AMBIGUOUS with full li
   );
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'AMBIGUOUS');
-  assert.deepEqual(
-    r.candidates.map((c) => c.id).sort(),
-    ['BBB-BOOTED', 'CCC-BOOTED'],
-  );
+  assert.deepEqual(r.candidates.map((c) => c.id).sort(), ['BBB-BOOTED', 'CCC-BOOTED']);
   // Labels preserved so the error message can name what each id is.
   assert.equal(r.candidates.find((c) => c.id === 'BBB-BOOTED').label, 'iPhone 17 Pro');
 });
 
 test('resolveTargetDevice: >1 candidates, deviceId does NOT match → AMBIGUOUS (typo surfaces fast)', () => {
-  const r = resolveTargetDevice(
-    [{ id: 'AAA' }, { id: 'BBB' }],
-    'typo-here',
-  );
+  const r = resolveTargetDevice([{ id: 'AAA' }, { id: 'BBB' }], 'typo-here');
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'AMBIGUOUS');
   assert.equal(r.candidates.length, 2);

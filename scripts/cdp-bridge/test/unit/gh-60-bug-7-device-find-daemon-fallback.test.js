@@ -23,7 +23,10 @@ test('isDaemonTimeoutError: matches "daemon timed out"', () => {
 });
 
 test('isDaemonTimeoutError: matches "daemon timeout" inside JSON envelope', () => {
-  const envelope = JSON.stringify({ ok: false, error: 'Daemon error: daemon timeout. Restart agent-device daemon.' });
+  const envelope = JSON.stringify({
+    ok: false,
+    error: 'Daemon error: daemon timeout. Restart agent-device daemon.',
+  });
   assert.equal(isDaemonTimeoutError(envelope), true);
 });
 
@@ -61,8 +64,14 @@ test('source guard: device_find handler no longer dispatches to CLI daemon (IN_T
   // The dead CLI fallback path is gone; the in-tree-runner gate must be present.
   assert.match(src, /IN_TREE_RUNNER_REQUIRED/);
   // No ['find', ...] literal should survive into the built output.
-  const findLiterals = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
-  assert.equal(findLiterals.length, 0, `Found ['find' literal in device-interact.js:\n${findLiterals.join('\n')}`);
+  const findLiterals = src
+    .split('\n')
+    .filter((l) => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  assert.equal(
+    findLiterals.length,
+    0,
+    `Found ['find' literal in device-interact.js:\n${findLiterals.join('\n')}`,
+  );
 });
 
 test('source guard: isDaemonTimeoutError still exported (used by tests + future callers)', async () => {

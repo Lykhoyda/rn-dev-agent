@@ -20,7 +20,10 @@ const fnBody = fnMatch[0];
 
 test('M3: ensureFastRunner probes tri-state liveness, not just the PID', () => {
   assert.match(fnBody, /probeFastRunnerLiveness\(/, 'must probe liveness');
-  assert.ok(!/if \(isFastRunnerAvailable\(\)\) return;/.test(fnBody), 'must NOT gate solely on the PID-only check');
+  assert.ok(
+    !/if \(isFastRunnerAvailable\(\)\) return;/.test(fnBody),
+    'must NOT gate solely on the PID-only check',
+  );
 });
 
 test('M3: ensureFastRunner reaps a stale (wedged) runner before starting fresh', () => {

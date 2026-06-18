@@ -27,8 +27,14 @@ test('DeviceBufferManager: pushes to the correct device bucket', () => {
   mgr.push('ios-1', { value: 'b' });
   mgr.push('android-1', { value: 'x' });
 
-  assert.deepEqual(mgr.getLast('ios-1', 10).map((e) => e.value), ['a', 'b']);
-  assert.deepEqual(mgr.getLast('android-1', 10).map((e) => e.value), ['x']);
+  assert.deepEqual(
+    mgr.getLast('ios-1', 10).map((e) => e.value),
+    ['a', 'b'],
+  );
+  assert.deepEqual(
+    mgr.getLast('android-1', 10).map((e) => e.value),
+    ['x'],
+  );
   assert.equal(mgr.deviceCount, 2);
 });
 
@@ -42,7 +48,10 @@ test('DeviceBufferManager: per-device capacity overflow evicts oldest within THA
   for (let i = 0; i < 5; i++) mgr.push('dev-a', { i });
   mgr.push('dev-b', { x: 1 });
 
-  assert.deepEqual(mgr.getLast('dev-a', 10).map((e) => e.i), [2, 3, 4]);
+  assert.deepEqual(
+    mgr.getLast('dev-a', 10).map((e) => e.i),
+    [2, 3, 4],
+  );
   assert.deepEqual(mgr.getLast('dev-b', 10), [{ x: 1 }], 'dev-b unaffected by dev-a overflow');
 });
 
@@ -79,7 +88,11 @@ test('DeviceBufferManager: recently-pushed device survives eviction even if old'
   mgr.push('d1', { x: 11 });
   mgr.push('d4', { x: 4 });
 
-  assert.deepEqual(mgr.getLast('d1', 10).map((e) => e.x), [1, 11], 'd1 survived because of re-push');
+  assert.deepEqual(
+    mgr.getLast('d1', 10).map((e) => e.x),
+    [1, 11],
+    'd1 survived because of re-push',
+  );
   assert.deepEqual(mgr.getLast('d2', 10), [], 'd2 evicted as new-oldest');
 });
 
@@ -111,7 +124,11 @@ test('DeviceBufferManager: "all" respects the n limit (tails to most recent)', (
   for (let i = 6; i <= 10; i++) mgr.push('d2', { ts: i });
 
   const last3 = mgr.getLast('all', 3);
-  assert.deepEqual(last3.map((e) => e.ts), [8, 9, 10], '"all" limit applied after sorting');
+  assert.deepEqual(
+    last3.map((e) => e.ts),
+    [8, 9, 10],
+    '"all" limit applied after sorting',
+  );
 });
 
 test('DeviceBufferManager: "all" falls back to concatenation when no timestampOf', () => {
@@ -136,7 +153,10 @@ test('DeviceBufferManager: filter scoped to one device', () => {
   mgr.push('d2', { url: '/users', v: 3 });
 
   const d1Users = mgr.filter('d1', (e) => e.url === '/users');
-  assert.deepEqual(d1Users.map((e) => e.v), [1]);
+  assert.deepEqual(
+    d1Users.map((e) => e.v),
+    [1],
+  );
 });
 
 test('DeviceBufferManager: filter with "all" merges and sorts', () => {
@@ -149,7 +169,11 @@ test('DeviceBufferManager: filter with "all" merges and sorts', () => {
   mgr.push('d1', { ts: 200, url: '/posts', v: 3 });
 
   const users = mgr.filter('all', (e) => e.url === '/users');
-  assert.deepEqual(users.map((e) => e.v), [2, 1], 'sorted by ts');
+  assert.deepEqual(
+    users.map((e) => e.v),
+    [2, 1],
+    'sorted by ts',
+  );
 });
 
 // ── getByKey ──
@@ -163,7 +187,7 @@ test('DeviceBufferManager: getByKey with indexKey scoped to one device', () => {
   mgr.push('d2', { id: 'req-2', url: '/posts' });
 
   assert.equal(mgr.getByKey('d1', 'req-1')?.url, '/users');
-  assert.equal(mgr.getByKey('d1', 'req-2'), undefined, 'd1 does not see d2\'s req');
+  assert.equal(mgr.getByKey('d1', 'req-2'), undefined, "d1 does not see d2's req");
   assert.equal(mgr.getByKey('d2', 'req-2')?.url, '/posts');
 });
 
@@ -243,11 +267,21 @@ test('DeviceBufferManager: switching device no longer leaks stale entries into t
 
   // Simulate iOS session
   const iosKey = makeDeviceKey(8081, 'ios-target-1');
-  mgr.push(iosKey, { id: 'req-old', method: 'GET', url: '/stale', timestamp: '2026-04-01T00:00:00Z' });
+  mgr.push(iosKey, {
+    id: 'req-old',
+    method: 'GET',
+    url: '/stale',
+    timestamp: '2026-04-01T00:00:00Z',
+  });
 
   // Switch to Android — different key
   const androidKey = makeDeviceKey(8081, 'android-target-1');
-  mgr.push(androidKey, { id: 'req-new', method: 'GET', url: '/fresh', timestamp: '2026-04-20T00:00:00Z' });
+  mgr.push(androidKey, {
+    id: 'req-new',
+    method: 'GET',
+    url: '/fresh',
+    timestamp: '2026-04-20T00:00:00Z',
+  });
 
   assert.deepEqual(
     mgr.getLast(androidKey, 10).map((e) => e.url),

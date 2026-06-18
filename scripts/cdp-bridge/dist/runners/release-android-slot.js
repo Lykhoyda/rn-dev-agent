@@ -158,7 +158,14 @@ export async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDep
         }
     }
     timings.legacyDaemon = deps.now() - tLegacy;
-    return { stoppedOwnRunner, forceStoppedPackages, killedDaemonPids, removedFiles, warnings, meta: { timings_ms: timings } };
+    return {
+        stoppedOwnRunner,
+        forceStoppedPackages,
+        killedDaemonPids,
+        removedFiles,
+        warnings,
+        meta: { timings_ms: timings },
+    };
 }
 function msg(err) {
     return err instanceof Error ? err.message : String(err);

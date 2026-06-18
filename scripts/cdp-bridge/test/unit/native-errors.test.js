@@ -1,10 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  parseIOSLog,
-  parseAndroidLog,
-  readNativeErrors,
-} from '../../dist/tools/native-errors.js';
+import { parseIOSLog, parseAndroidLog, readNativeErrors } from '../../dist/tools/native-errors.js';
 
 // B114/D642: native-log fallback. Parser is pure; reader accepts injected
 // runners so tests don't spawn simctl/adb.
@@ -31,7 +27,8 @@ test('parseIOSLog tags RCTFatal as fatal level', () => {
 });
 
 test('parseIOSLog tags regular errors as error level', () => {
-  const input = '2026-04-16 22:15:00.123 Error Module AppRegistry is not a registered callable module';
+  const input =
+    '2026-04-16 22:15:00.123 Error Module AppRegistry is not a registered callable module';
   const out = parseIOSLog(input);
   assert.equal(out.length, 1);
   assert.equal(out[0].level, 'error');
@@ -90,7 +87,9 @@ test('readNativeErrors dispatches to iOS runner by default', async () => {
   const mockOut = '2026-04-16 22:15:00.123 Error Cannot find native module "Foo"';
   const result = await readNativeErrors({
     runIOS: async () => mockOut,
-    runAndroid: async () => { throw new Error('should not run'); },
+    runAndroid: async () => {
+      throw new Error('should not run');
+    },
   });
   assert.equal(result.ok, true);
   assert.equal(result.unavailable, false);
@@ -102,7 +101,9 @@ test('readNativeErrors dispatches to Android runner for platform=android', async
   const mockOut = '04-16 22:15:00.123 E/ReactNative: FATAL EXCEPTION: main';
   const result = await readNativeErrors({
     platform: 'android',
-    runIOS: async () => { throw new Error('should not run'); },
+    runIOS: async () => {
+      throw new Error('should not run');
+    },
     runAndroid: async () => mockOut,
   });
   assert.equal(result.ok, true);
@@ -112,7 +113,9 @@ test('readNativeErrors dispatches to Android runner for platform=android', async
 
 test('CDP-016: readNativeErrors surfaces runner failure as unavailable (was returning empty)', async () => {
   const result = await readNativeErrors({
-    runIOS: async () => { throw new Error('xcrun not found'); },
+    runIOS: async () => {
+      throw new Error('xcrun not found');
+    },
   });
   assert.equal(result.ok, false, 'tool failure must NOT be reported as success');
   assert.equal(result.unavailable, true, 'unavailable flag must be set');
@@ -124,7 +127,9 @@ test('CDP-016: readNativeErrors surfaces runner failure as unavailable (was retu
 test('readNativeErrors respects limit', async () => {
   const lines = [];
   for (let i = 0; i < 20; i++) {
-    lines.push(`2026-04-16 22:15:${String(i).padStart(2, '0')}.000 Error Cannot find native module "Mod${i}"`);
+    lines.push(
+      `2026-04-16 22:15:${String(i).padStart(2, '0')}.000 Error Cannot find native module "Mod${i}"`,
+    );
   }
   const result = await readNativeErrors({
     limit: 5,

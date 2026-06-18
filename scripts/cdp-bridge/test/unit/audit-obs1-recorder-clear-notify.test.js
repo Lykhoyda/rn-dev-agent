@@ -14,7 +14,11 @@ test('OBS-1: clear() notifies live subscribers with a terminal sentinel before d
   rec.clear();
 
   assert.equal(received.length, 1, 'subscriber should get exactly one terminal event');
-  assert.equal(received[0].type, 'cleared', 'the sentinel must be the {type:"cleared"} terminal event');
+  assert.equal(
+    received[0].type,
+    'cleared',
+    'the sentinel must be the {type:"cleared"} terminal event',
+  );
 
   // After clear(), the subscriber set is empty — a subsequent record() reaches
   // no one (no lingering reference).

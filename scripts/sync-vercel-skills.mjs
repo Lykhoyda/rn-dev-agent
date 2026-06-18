@@ -98,7 +98,7 @@ Options:
   --accept-missing-license-file
   --accept-delta
   --quiet
-`
+`,
   );
 }
 
@@ -231,7 +231,10 @@ function buildRulesIndex(lock) {
     const content = fs.readFileSync(fullPath, 'utf8');
     const fm = parseFrontmatter(content) || {};
     const id = `${skillName}/${ruleSlug}`;
-    const tags = (fm.tags || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const tags = (fm.tags || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     rules.push({
       id,
       title: fm.title || ruleSlug,
@@ -257,7 +260,10 @@ function buildRulesIndex(lock) {
       const content = fs.readFileSync(fullPath, 'utf8');
       const fm = parseFrontmatter(content) || {};
       const ruleSlug = path.basename(file, '.md');
-      const tags = (fm.tags || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const tags = (fm.tags || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       rules.push({
         id: `rn-dev-agent/${ruleSlug}`,
         title: fm.title || ruleSlug,
@@ -335,7 +341,7 @@ async function runFix(args) {
     const delta = Math.abs(lock.ruleCounts.total - prevRuleCount) / prevRuleCount;
     if (delta > 0.2 && !args.acceptDelta) {
       console.error(
-        `error: rule count changed by ${(delta * 100).toFixed(0)}% (was ${prevRuleCount}, now ${lock.ruleCounts.total})`
+        `error: rule count changed by ${(delta * 100).toFixed(0)}% (was ${prevRuleCount}, now ${lock.ruleCounts.total})`,
       );
       console.error('       pass --accept-delta to override');
       process.exit(1);
@@ -353,7 +359,7 @@ async function runFix(args) {
   if (!args.quiet) {
     const customCount = index.length - lock.ruleCounts.total;
     console.log(
-      `  wrote ${path.relative(REPO_ROOT, indexPath)} (${lock.ruleCounts.total} upstream + ${customCount} custom = ${index.length} rules)`
+      `  wrote ${path.relative(REPO_ROOT, indexPath)} (${lock.ruleCounts.total} upstream + ${customCount} custom = ${index.length} rules)`,
     );
   }
 
@@ -380,19 +386,19 @@ async function runCheck(_args) {
     const actual = sha256(content);
     if (actual !== f.sha256) {
       console.error(
-        `hash mismatch: ${f.path} (expected ${f.sha256.slice(0, 12)}, got ${actual.slice(0, 12)})`
+        `hash mismatch: ${f.path} (expected ${f.sha256.slice(0, 12)}, got ${actual.slice(0, 12)})`,
       );
       mismatches++;
     }
   }
   if (mismatches > 0) {
     console.error(
-      `✗ ${mismatches} file(s) out of sync — run: node scripts/sync-vercel-skills.mjs --fix --ref ${lock.sha}`
+      `✗ ${mismatches} file(s) out of sync — run: node scripts/sync-vercel-skills.mjs --fix --ref ${lock.sha}`,
     );
     process.exit(1);
   }
   console.log(
-    `✓ ${lock.files.length} files in sync (sha=${lock.sha.slice(0, 12)} fetchedAt=${lock.fetchedAt})`
+    `✓ ${lock.files.length} files in sync (sha=${lock.sha.slice(0, 12)} fetchedAt=${lock.fetchedAt})`,
   );
 }
 

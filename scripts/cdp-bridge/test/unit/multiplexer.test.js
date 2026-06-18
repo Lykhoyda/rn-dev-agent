@@ -107,7 +107,9 @@ test('CDPMultiplexer: forwards a request and routes the response back with origi
     const consumer = await connectConsumer(port, proxy.token);
 
     const waitForResponse = waitForMessage(consumer, (m) => m.id === 42);
-    consumer.send(JSON.stringify({ id: 42, method: 'Runtime.evaluate', params: { expression: '1+1' } }));
+    consumer.send(
+      JSON.stringify({ id: 42, method: 'Runtime.evaluate', params: { expression: '1+1' } }),
+    );
 
     const response = await waitForResponse;
     assert.equal(response.id, 42, 'response id matches consumer original id');
@@ -144,8 +146,8 @@ test('CDPMultiplexer: two consumers with same id do not collide — responses ro
     const [r1, r2] = await Promise.all([w1, w2]);
     assert.equal(r1.id, 7);
     assert.equal(r2.id, 7);
-    assert.equal(r1.result.echo, 'Domain.a', 'c1 received its own response, not c2\'s');
-    assert.equal(r2.result.echo, 'Domain.b', 'c2 received its own response, not c1\'s');
+    assert.equal(r1.result.echo, 'Domain.a', "c1 received its own response, not c2's");
+    assert.equal(r2.result.echo, 'Domain.b', "c2 received its own response, not c1's");
 
     c1.close();
     c2.close();
@@ -255,7 +257,10 @@ test('CDPMultiplexer: drops messages with non-numeric ids without crashing', asy
 
     await new Promise((r) => setTimeout(r, 100));
     // Hermes should have received the two JSON messages (second and third) but not the non-JSON.
-    assert.ok(hermes.received.length >= 2, `expected >= 2 hermes messages, got ${hermes.received.length}`);
+    assert.ok(
+      hermes.received.length >= 2,
+      `expected >= 2 hermes messages, got ${hermes.received.length}`,
+    );
 
     consumer.close();
   } finally {
@@ -285,7 +290,11 @@ test('cdp_open_devtools: mode=native when RN >= 0.85 (no proxy started)', async 
   assert.equal(data.supportsMultipleDebuggers, true);
   assert.ok(data.devtoolsUrl !== null, 'devtoolsUrl populated in native mode');
   assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:8081/);
-  assert.equal(data.inspectorWsUrl, data.hermesWsUrl, 'native mode: inspector and hermes URLs identical');
+  assert.equal(
+    data.inspectorWsUrl,
+    data.hermesWsUrl,
+    'native mode: inspector and hermes URLs identical',
+  );
   assert.equal(data.proxyPort, null, 'native mode: no proxy port');
   assert.equal(client.proxyUrl, null, 'native mode does not call startProxy');
   assert.deepEqual(data.rnVersion, { major: 0, minor: 85, patch: 0 });
@@ -304,11 +313,27 @@ test('cdp_open_devtools: mode=proxy-active when RN < 0.85 (M1b — proxy auto-st
   assert.ok(data.devtoolsUrl, 'devtoolsUrl populated (points at proxy port)');
   // Phase 134.4: devtoolsUrl now includes the capability token in the
   // WebSocket path. `?ws=127.0.0.1:PORT/TOKEN` form.
-  assert.match(data.devtoolsUrl, /ws=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'devtoolsUrl ws= targets the proxy with token');
-  assert.match(data.inspectorWsUrl, /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/, 'inspectorWsUrl includes the capability token');
-  assert.match(data.hermesWsUrl, /\/inspector\/debug\?device=/, 'hermesWsUrl is still the direct Hermes URL');
+  assert.match(
+    data.devtoolsUrl,
+    /ws=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/,
+    'devtoolsUrl ws= targets the proxy with token',
+  );
+  assert.match(
+    data.inspectorWsUrl,
+    /^ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+$/,
+    'inspectorWsUrl includes the capability token',
+  );
+  assert.match(
+    data.hermesWsUrl,
+    /\/inspector\/debug\?device=/,
+    'hermesWsUrl is still the direct Hermes URL',
+  );
   assert.equal(typeof data.proxyPort, 'number', 'proxyPort is a bound port');
-  assert.match(data.guidance, /proxy has been started|coexist/i, 'guidance reflects active-proxy state');
+  assert.match(
+    data.guidance,
+    /proxy has been started|coexist/i,
+    'guidance reflects active-proxy state',
+  );
 });
 
 test('cdp_open_devtools: mode=proxy-active when rnVersion probe fails (conservative default)', async () => {
@@ -364,7 +389,10 @@ function makeSilentHermes() {
         port: server.address().port,
         url: `ws://127.0.0.1:${server.address().port}`,
         received,
-        stop: () => new Promise((r) => { wss.close(() => server.close(() => r())); }),
+        stop: () =>
+          new Promise((r) => {
+            wss.close(() => server.close(() => r()));
+          }),
       });
     });
   });
@@ -396,7 +424,10 @@ function makeDelayedHermes(openDelayMs) {
         port: server.address().port,
         url: `ws://127.0.0.1:${server.address().port}`,
         received,
-        stop: () => new Promise((r) => { wss.close(() => server.close(() => r())); }),
+        stop: () =>
+          new Promise((r) => {
+            wss.close(() => server.close(() => r()));
+          }),
       });
     });
   });
@@ -413,7 +444,10 @@ test('CDPMultiplexer: M1b prereq — hermesBuffer drops oldest when cap exceeded
     // Poll for the bound port — available as soon as httpServer.listen completes.
     let port = null;
     for (let i = 0; i < 30; i++) {
-      if (proxy.port !== null) { port = proxy.port; break; }
+      if (proxy.port !== null) {
+        port = proxy.port;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 5));
     }
     assert.ok(port, 'consumer server should bind before Hermes upgrade delay expires');
@@ -512,7 +546,7 @@ test('CDPMultiplexer: consumer disconnect clears its pending routes (no response
     c2.send(JSON.stringify({ id: 1, method: 'Normal.call' }));
     await wait;
 
-    assert.equal(leaked, false, 'c2 must not receive c1\'s orphan response');
+    assert.equal(leaked, false, "c2 must not receive c1's orphan response");
 
     c2.close();
   } finally {

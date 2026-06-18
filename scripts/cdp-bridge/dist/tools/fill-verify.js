@@ -110,7 +110,9 @@ export async function settleRead(deps, testID, text, valueBefore) {
 export async function attemptJsFill(deps, testID, text) {
     let probe;
     try {
-        const expr = '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text, verify: true }) + ')';
+        const expr = '__RN_AGENT.interact(' +
+            JSON.stringify({ action: 'typeText', testID, text, verify: true }) +
+            ')';
         const r = await deps.evaluate(expr);
         if (r.error || typeof r.value !== 'string')
             return { handled: false };
@@ -129,7 +131,11 @@ export async function attemptJsFill(deps, testID, text) {
     const settled = await settleRead(deps, testID, text, valueBefore);
     return {
         handled: true,
-        outcome: classifyFillVerification({ text, valueAfter: settled.value, controlled: settled.controlled }),
+        outcome: classifyFillVerification({
+            text,
+            valueAfter: settled.value,
+            controlled: settled.controlled,
+        }),
         valueAfter: settled.value,
         controlled: settled.controlled,
         handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,

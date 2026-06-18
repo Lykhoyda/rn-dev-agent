@@ -19,7 +19,9 @@ test('M7 probe: returns dead when no state (no runner ever started)', async () =
     getState: () => null,
     processAlive: () => assert.fail('processAlive should not be consulted when state is null'),
     httpProbe: async () => assert.fail('httpProbe should not run when state is null'),
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
   });
   assert.equal(liveness, 'dead');
   assert.equal(clearCalls, 0, 'no state to clear');
@@ -31,7 +33,9 @@ test('M7 probe: returns dead and clears state when PID has exited', async () => 
     getState: () => STATE,
     processAlive: () => false,
     httpProbe: async () => assert.fail('httpProbe should not run after PID check failed'),
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
   });
   assert.equal(liveness, 'dead');
   assert.equal(clearCalls, 1, 'state file must be cleared so next call rediscovers');
@@ -129,7 +133,9 @@ test('M7 probe: stale path does NOT clear state (reap is the explicit action)', 
     getState: () => STATE,
     processAlive: () => true,
     httpProbe: async () => ({ ok: true, status: 200, bodyOk: false }),
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
   });
   assert.equal(clearCalls, 0, 'probe is read-only on a living process');
 });
@@ -140,7 +146,9 @@ test('M7 probe: alive path does NOT clear state', async () => {
     getState: () => STATE,
     processAlive: () => true,
     httpProbe: async () => ({ ok: true, status: 200, bodyOk: true }),
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
   });
   assert.equal(clearCalls, 0);
 });
@@ -153,9 +161,13 @@ test('M7 reap: no-op when state is already null', async () => {
   await reapStaleFastRunner({
     getState: () => null,
     processAlive: () => assert.fail('processAlive should not be consulted when state is null'),
-    sendSignal: () => { signals++; },
+    sendSignal: () => {
+      signals++;
+    },
     sleep: async () => {},
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
   });
   assert.equal(signals, 0);
   assert.equal(clearCalls, 0);
@@ -172,12 +184,20 @@ test('M7 reap: SIGTERM succeeds — does not escalate to SIGKILL', async () => {
       // After SIGTERM + grace wait, process is dead
       return false;
     },
-    sendSignal: (pid, sig) => { signals.push([pid, sig]); },
+    sendSignal: (pid, sig) => {
+      signals.push([pid, sig]);
+    },
     sleep: async () => {},
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
     graceMs: 0,
   });
-  assert.deepEqual(signals, [[STATE.pid, 'SIGTERM']], 'only SIGTERM should be sent on graceful death');
+  assert.deepEqual(
+    signals,
+    [[STATE.pid, 'SIGTERM']],
+    'only SIGTERM should be sent on graceful death',
+  );
   assert.equal(processAliveCalls, 1);
   assert.equal(clearCalls, 1, 'state must be cleared after successful reap');
 });
@@ -188,12 +208,19 @@ test('M7 reap: SIGTERM ignored → SIGKILL escalation', async () => {
   await reapStaleFastRunner({
     getState: () => STATE,
     processAlive: () => true, // refuses to die after SIGTERM
-    sendSignal: (pid, sig) => { signals.push([pid, sig]); },
+    sendSignal: (pid, sig) => {
+      signals.push([pid, sig]);
+    },
     sleep: async () => {},
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
     graceMs: 0,
   });
-  assert.deepEqual(signals, [[STATE.pid, 'SIGTERM'], [STATE.pid, 'SIGKILL']]);
+  assert.deepEqual(signals, [
+    [STATE.pid, 'SIGTERM'],
+    [STATE.pid, 'SIGKILL'],
+  ]);
   assert.equal(clearCalls, 1);
 });
 
@@ -208,7 +235,9 @@ test('M7 reap: SIGTERM throws ESRCH (already dead) — clearState still called',
       throw err;
     },
     sleep: async () => {},
-    clearState: () => { clearCalls++; },
+    clearState: () => {
+      clearCalls++;
+    },
     graceMs: 0,
   });
   assert.equal(clearCalls, 1, 'state is cleared even when signal throws — target was already dead');
@@ -220,7 +249,9 @@ test('M7 reap: graceMs override respected (fake sleep captures value)', async ()
     getState: () => STATE,
     processAlive: () => false,
     sendSignal: () => {},
-    sleep: async (ms) => { observedGrace = ms; },
+    sleep: async (ms) => {
+      observedGrace = ms;
+    },
     clearState: () => {},
     graceMs: 250,
   });
@@ -233,7 +264,9 @@ test('M7 reap: default graceMs is 500', async () => {
     getState: () => STATE,
     processAlive: () => false,
     sendSignal: () => {},
-    sleep: async (ms) => { observedGrace = ms; },
+    sleep: async (ms) => {
+      observedGrace = ms;
+    },
     clearState: () => {},
   });
   assert.equal(observedGrace, 500);

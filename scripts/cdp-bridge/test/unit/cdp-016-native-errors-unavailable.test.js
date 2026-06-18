@@ -13,16 +13,22 @@ function parseEnvelope(result) {
 
 test('CDP-016: handler surfaces NATIVE_LOG_UNAVAILABLE when readNativeErrors returns unavailable', async () => {
   // Force the handler to use a runner that throws (simulating xcrun missing).
-  const client = createMockClient({
+  const _client = createMockClient({
     _connectedTarget: {
-      id: 'p1', title: 'iOS', vm: 'Hermes', description: 'com.x',
-      platform: 'ios', webSocketDebuggerUrl: 'ws://x',
+      id: 'p1',
+      title: 'iOS',
+      vm: 'Hermes',
+      description: 'com.x',
+      platform: 'ios',
+      webSocketDebuggerUrl: 'ws://x',
     },
   });
   // We can't override runIOS through the handler args, so we test
   // readNativeErrors directly for the dispatch contract.
   const result = await readNativeErrors({
-    runIOS: async () => { throw new Error('xcrun: command not found'); },
+    runIOS: async () => {
+      throw new Error('xcrun: command not found');
+    },
   });
   assert.equal(result.ok, false);
   assert.equal(result.unavailable, true);

@@ -38,10 +38,16 @@ test('sidecarPathFor: Windows-style backslash input extracts basename correctly 
   const result = sidecarPathFor('C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.yaml');
   // The trailing segment must be `my-action.state.json`, not the full
   // backslash-containing path.
-  assert.match(result, /[/\\]my-action\.state\.json$/, `result did not end with clean basename: ${result}`);
+  assert.match(
+    result,
+    /[/\\]my-action\.state\.json$/,
+    `result did not end with clean basename: ${result}`,
+  );
   // The result must NOT contain the entire Windows-style filename glued in.
-  assert.ok(!result.includes('C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.state.json'),
-    `result still contains the full Windows path: ${result}`);
+  assert.ok(
+    !result.includes('C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.state.json'),
+    `result still contains the full Windows path: ${result}`,
+  );
 });
 
 test('sidecarPathFor: mixed forward+backward slash input extracts basename correctly', async () => {

@@ -17,8 +17,10 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
 const STATE_FILE = '/tmp/rn-android-runner-state.json';
-const INSTRUMENTATION = 'dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner';
-const MAIN_LOOP_CLASS = 'dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop';
+const INSTRUMENTATION =
+  'dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner';
+const MAIN_LOOP_CLASS =
+  'dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop';
 const HEALTH_POLL_INTERVAL_MS = 150;
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 
@@ -27,13 +29,30 @@ const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 // external CLI to install (matches the /setup + /doctor docs).
 const RN_ANDROID_RUNNER_DIR = join(import.meta.dirname, '..', '..', '..', 'rn-android-runner');
 const GRADLEW = join(RN_ANDROID_RUNNER_DIR, 'gradlew');
-const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
-const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
+const APK_APP = join(
+  RN_ANDROID_RUNNER_DIR,
+  'app',
+  'build',
+  'outputs',
+  'apk',
+  'debug',
+  'app-debug.apk',
+);
+const APK_TEST = join(
+  RN_ANDROID_RUNNER_DIR,
+  'app',
+  'build',
+  'outputs',
+  'apk',
+  'androidTest',
+  'debug',
+  'app-debug-androidTest.apk',
+);
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 
 interface AndroidRunnerState {
-  hostPort: number;   // 127.0.0.1 port the TS client connects to (probed; globally contended)
+  hostPort: number; // 127.0.0.1 port the TS client connects to (probed; globally contended)
   devicePort: number; // NanoHTTPD listener inside the emulator (fixed; emulator-namespaced)
   pid: number;
   deviceId?: string;
@@ -120,7 +139,9 @@ export function _setAndroidRunnerStateForTest(state: AndroidRunnerState | null):
 }
 
 export function parseAdbDevicesSerials(stdout: string): string[] {
-  return stdout.split('\n').slice(1)
+  return stdout
+    .split('\n')
+    .slice(1)
     .map((l) => l.trim())
     .map((l) => /^(\S+)\s+device\b/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null)
@@ -134,7 +155,9 @@ export async function resolveAndroidSerial(explicit?: string): Promise<string | 
     const { stdout } = await execFileAsync('adb', ['devices']);
     const serials = parseAdbDevicesSerials(stdout);
     return serials.length === 1 ? serials[0] : undefined;
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 function adbSerialArgs(deviceId?: string): string[] {
@@ -143,11 +166,18 @@ function adbSerialArgs(deviceId?: string): string[] {
   return [];
 }
 
-export function buildAdbForwardArgs(deviceId: string | undefined, hostPort: number, devicePort: number): string[] {
+export function buildAdbForwardArgs(
+  deviceId: string | undefined,
+  hostPort: number,
+  devicePort: number,
+): string[] {
   return [...adbSerialArgs(deviceId), 'forward', `tcp:${hostPort}`, `tcp:${devicePort}`];
 }
 
-export function buildAdbForwardRemoveArgs(deviceId: string | undefined, hostPort: number): string[] {
+export function buildAdbForwardRemoveArgs(
+  deviceId: string | undefined,
+  hostPort: number,
+): string[] {
   return [...adbSerialArgs(deviceId), 'forward', '--remove', `tcp:${hostPort}`];
 }
 
@@ -168,7 +198,10 @@ export function buildGradleAssembleArgs(): string[] {
  * Anchored to the full id (not the bare package) so a superstring package
  * (`…androidrunner.testfoo`) or a `(target=…)` mention can't false-positive.
  */
-export function isInstrumentationRegistered(pmListStdout: string, instrumentation: string): boolean {
+export function isInstrumentationRegistered(
+  pmListStdout: string,
+  instrumentation: string,
+): boolean {
   const escaped = instrumentation.replace(/[.$*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|:)${escaped}(\\s|$)`, 'm').test(pmListStdout);
 }
@@ -196,18 +229,28 @@ async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
   // Fail fast if the target isn't online — never start a multi-minute cold build (or an
   // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
   try {
-    const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], { timeout: 5_000 });
+    const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], {
+      timeout: 5_000,
+    });
     if (stdout.trim() !== 'device') throw new Error(`adb state is "${stdout.trim()}"`);
   } catch (err) {
     throw new Error(
       `rn-android-runner: target device not online (adb get-state) — boot the emulator / connect the device. ` +
-      `${err instanceof Error ? err.message : String(err)}`,
+        `${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
   let pmOut = '';
   try {
-    pmOut = (await execFileAsync('adb', [...adbSerialArgs(deviceId), 'shell', 'pm', 'list', 'instrumentation'])).stdout;
+    pmOut = (
+      await execFileAsync('adb', [
+        ...adbSerialArgs(deviceId),
+        'shell',
+        'pm',
+        'list',
+        'instrumentation',
+      ])
+    ).stdout;
   } catch {
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
@@ -227,18 +270,22 @@ async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
     } catch (err) {
       throw new Error(
         `rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). ` +
-        `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`,
+          `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
   try {
-    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), { timeout: ADB_INSTALL_TIMEOUT_MS });
-    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), { timeout: ADB_INSTALL_TIMEOUT_MS });
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), {
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+    });
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), {
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+    });
   } catch (err) {
     throw new Error(
       `rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
-      `${err instanceof Error ? err.message : String(err)}`,
+        `${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -250,7 +297,11 @@ export function isAndroidRunnerAvailable(): boolean {
     return true;
   } catch {
     runnerState = null;
-    try { unlinkSync(STATE_FILE); } catch { /* already removed */ }
+    try {
+      unlinkSync(STATE_FILE);
+    } catch {
+      /* already removed */
+    }
     return false;
   }
 }
@@ -263,7 +314,10 @@ export function isAndroidRunnerAvailable(): boolean {
  * would silently hit the wrong device). When no specific deviceId is requested
  * (single-device flow), any live runner is acceptable.
  */
-export function shouldReuseAndroidRunner(state: AndroidRunnerState | null, deviceId?: string): boolean {
+export function shouldReuseAndroidRunner(
+  state: AndroidRunnerState | null,
+  deviceId?: string,
+): boolean {
   if (state === null) return false;
   if (!deviceId) return true;
   return state.deviceId === deviceId;
@@ -288,7 +342,9 @@ export async function waitForAndroidRunnerHealth(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
     try {
-      const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+      const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+        signal: controller.signal,
+      });
       if (resp.ok) {
         const body = (await resp.json()) as { ok?: boolean };
         if (body?.ok === true) return true;
@@ -303,8 +359,13 @@ export async function waitForAndroidRunnerHealth(
   return false;
 }
 
-export async function startAndroidRunner(deviceId?: string, bundleId?: string, devicePort = DEFAULT_PORT): Promise<AndroidRunnerState> {
-  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) return runnerState!;
+export async function startAndroidRunner(
+  deviceId?: string,
+  bundleId?: string,
+  devicePort = DEFAULT_PORT,
+): Promise<AndroidRunnerState> {
+  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
+    return runnerState!;
 
   // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
   // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
@@ -322,21 +383,25 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, d
   return new Promise((resolve, reject) => {
     let resolved = false;
 
-    const child = spawn('adb', [
-      ...adbSerialArgs(deviceId),
-      'shell',
-      'am',
-      'instrument',
-      '-w',
-      '-r',
-      ...buildInstrumentPortArgs(devicePort),
-      '-e',
-      'class',
-      MAIN_LOOP_CLASS,
-      INSTRUMENTATION,
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = spawn(
+      'adb',
+      [
+        ...adbSerialArgs(deviceId),
+        'shell',
+        'am',
+        'instrument',
+        '-w',
+        '-r',
+        ...buildInstrumentPortArgs(devicePort),
+        '-e',
+        'class',
+        MAIN_LOOP_CLASS,
+        INSTRUMENTATION,
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
 
     runnerProcess = child;
 
@@ -344,7 +409,9 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, d
     // debuggable now that logcat is gone, and so an unconsumed stdio:'pipe' can't fill
     // its ~64KB buffer and wedge the child.
     let diag = '';
-    const capture = (chunk: Buffer) => { diag = (diag + chunk.toString('utf-8')).slice(-4_000); };
+    const capture = (chunk: Buffer) => {
+      diag = (diag + chunk.toString('utf-8')).slice(-4_000);
+    };
     child.stdout?.on('data', capture);
     child.stderr?.on('data', capture);
 
@@ -360,7 +427,11 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, d
         startedAt: new Date().toISOString(),
       };
       runnerState = state;
-      try { writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8'); } catch { /* non-fatal */ }
+      try {
+        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+      } catch {
+        /* non-fatal */
+      }
       resolve(state);
     };
 
@@ -375,15 +446,27 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, d
         const exitState = runnerState;
         runnerProcess = null;
         runnerState = null;
-        try { unlinkSync(STATE_FILE); } catch { /* already removed */ }
+        try {
+          unlinkSync(STATE_FILE);
+        } catch {
+          /* already removed */
+        }
         if (typeof exitState?.hostPort === 'number') {
-          execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort))
-            .catch(() => { /* best-effort: must never throw from exit handler */ });
+          execFileAsync(
+            'adb',
+            buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort),
+          ).catch(() => {
+            /* best-effort: must never throw from exit handler */
+          });
         }
       }
       if (!resolved) {
         resolved = true;
-        reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `\n${diag.trim()}` : ''}`));
+        reject(
+          new Error(
+            `Android runner instrumentation exited before readiness (code ${code})${diag ? `\n${diag.trim()}` : ''}`,
+          ),
+        );
       }
     });
 
@@ -397,7 +480,11 @@ export async function startAndroidRunner(deviceId?: string, bundleId?: string, d
       }
       resolved = true;
       child.kill('SIGTERM');
-      reject(new Error(`Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`));
+      reject(
+        new Error(
+          `Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`,
+        ),
+      );
     });
   });
 }
@@ -407,10 +494,21 @@ export async function stopAndroidRunner(deviceId?: string): Promise<void> {
   runnerProcess?.kill('SIGTERM');
   runnerProcess = null;
   runnerState = null;
-  try { unlinkSync(STATE_FILE); } catch { /* already removed */ }
+  try {
+    unlinkSync(STATE_FILE);
+  } catch {
+    /* already removed */
+  }
   if (typeof stoppedState?.hostPort === 'number') {
     const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
-    try { await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort)); } catch { /* non-fatal */ }
+    try {
+      await execFileAsync(
+        'adb',
+        buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort),
+      );
+    } catch {
+      /* non-fatal */
+    }
   }
 }
 
@@ -419,7 +517,8 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   if (!state) throw new Error('rn-android-runner not started');
   // Bound every command so a wedged UIAutomator instrument can't hang the tool
   // indefinitely. type/snapshot/screenshot run long; everything else is fast.
-  const slow = body.command === 'type' || body.command === 'snapshot' || body.command === 'screenshot';
+  const slow =
+    body.command === 'type' || body.command === 'snapshot' || body.command === 'screenshot';
   const timeoutMs = slow ? 35_000 : 10_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -433,14 +532,16 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
     });
   } catch (err) {
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
-      throw new Error(`RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`);
+      throw new Error(
+        `RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`,
+      );
     }
     throw err;
   } finally {
     clearTimeout(timer);
   }
   try {
-    return await resp.json() as RunnerResponse;
+    return (await resp.json()) as RunnerResponse;
   } catch {
     throw new Error('rn-android-runner returned a non-JSON response body');
   }
@@ -499,11 +600,9 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
     // failure and is rethrown unchanged.
     if (isAndroidConnectionFailure(m)) {
-      return failResult(
-        `rn-android-runner is not reachable: ${m}`,
-        'RN_ANDROID_RUNNER_DOWN',
-        { hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.' },
-      );
+      return failResult(`rn-android-runner is not reachable: ${m}`, 'RN_ANDROID_RUNNER_DOWN', {
+        hint: 'The runner could not start or bind its port (e.g. just restarted after a Maestro flow). Retry the command; if it persists, ensure the emulator is booted and the app is installed.',
+      });
     }
     throw err;
   }
@@ -530,7 +629,9 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
         { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } },
       );
     }
-    return code ? failResult(message, code as Parameters<typeof failResult>[1]) : failResult(message);
+    return code
+      ? failResult(message, code as Parameters<typeof failResult>[1])
+      : failResult(message);
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
@@ -544,7 +645,11 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
 
   if (args.command === 'screenshot') {
     const data = resp.data as { pngBase64?: string } | undefined;
-    if (!data?.pngBase64) return failResult('Android runner screenshot response did not include pngBase64', 'SCREENSHOT_FAILED');
+    if (!data?.pngBase64)
+      return failResult(
+        'Android runner screenshot response did not include pngBase64',
+        'SCREENSHOT_FAILED',
+      );
     const outPath = args.outPath ?? `/tmp/rn-android-screenshot-${Date.now()}.png`;
     writeFileSync(outPath, Buffer.from(data.pngBase64, 'base64'));
     return okResult({ path: outPath });
@@ -558,5 +663,7 @@ function errMessage(err: unknown): string {
 }
 
 export function isAndroidConnectionFailure(message: string): boolean {
-  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
+  return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(
+    message,
+  );
 }

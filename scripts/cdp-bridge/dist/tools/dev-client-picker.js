@@ -1,4 +1,4 @@
-import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
+import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession, } from '../agent-device-wrapper.js';
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { fetchFindCandidates, pressCandidate } from './device-interact.js';
@@ -50,10 +50,7 @@ export function _resetHasSessionForTest() {
  *   - { dismissed: false, reason: '...' } if not detected or no session
  *   - null if no active device session (silent skip)
  */
-const PICKER_INDICATORS = [
-    'Development servers',
-    'DEVELOPMENT SERVERS',
-];
+const PICKER_INDICATORS = ['Development servers', 'DEVELOPMENT SERVERS'];
 // GH #136: structural matcher for dev-client picker rows. The picker shows
 // rows shaped like `<host>:<port>` — host may be a LAN IPv4 address, an
 // Android emulator alias (10.0.2.2), a `.local` mDNS name, or a bare DNS
@@ -122,7 +119,10 @@ const HEADER_PATTERNS = [/development servers/i];
 export function parseFirstServerEntry(snapshot) {
     if (typeof snapshot !== 'string' || snapshot.length === 0)
         return null;
-    const lines = snapshot.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+    const lines = snapshot
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
     const literalIps = new Set(['localhost', '127.0.0.1', '10.0.2.2']);
     for (const line of lines) {
         if (literalIps.has(line))
@@ -174,7 +174,9 @@ export async function clearDevClientPickerIfPresent(platform) {
     // SessionState.platform is typed `string | undefined`, so narrow it to the
     // valid platforms before it can short-circuit the detectPlatform() fallback.
     const sessionPlatform = getActiveSession()?.platform;
-    const resolved = platform ?? (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ?? (await detectPlatform());
+    const resolved = platform ??
+        (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ??
+        (await detectPlatform());
     if (resolved === 'ios') {
         return {
             dismissed: false,

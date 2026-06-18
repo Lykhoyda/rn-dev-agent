@@ -78,7 +78,7 @@ test('parseSimctlDevicesAll: returns [] on empty devices object', () => {
 // ── 2. createDeviceListHandler — injected exec ────────────────────────────────
 
 test('createDeviceListHandler: merges iOS booted + Android serials', async () => {
-  _setDeviceListExecForTest(async (cmd, args) => {
+  _setDeviceListExecForTest(async (cmd, _args) => {
     if (cmd === 'xcrun') return { stdout: SIMCTL_JSON };
     if (cmd === 'adb') return { stdout: ADB_OUTPUT };
     throw new Error(`Unexpected command: ${cmd}`);
@@ -147,7 +147,9 @@ test('createDeviceListHandler: Android error does not fail iOS result', async ()
 });
 
 test('createDeviceListHandler: both fail → ok:true with empty devices array', async () => {
-  _setDeviceListExecForTest(async () => { throw new Error('nothing works'); });
+  _setDeviceListExecForTest(async () => {
+    throw new Error('nothing works');
+  });
   try {
     const handler = createDeviceListHandler();
     const result = await handler({});
@@ -171,9 +173,7 @@ test('createDeviceListHandler: does NOT call any agent-device path', async () =>
     const handler = createDeviceListHandler();
     await handler({});
     // Only xcrun and adb should be called — never agent-device
-    const hasAgentDevice = commandsCalled.some(
-      ({ cmd }) => String(cmd).includes('agent-device'),
-    );
+    const hasAgentDevice = commandsCalled.some(({ cmd }) => String(cmd).includes('agent-device'));
     assert.equal(hasAgentDevice, false, 'must not route through agent-device');
     // Confirm the expected native commands were called
     const cmds = commandsCalled.map(({ cmd }) => cmd);
@@ -185,6 +185,15 @@ test('createDeviceListHandler: does NOT call any agent-device path', async () =>
 });
 
 test('parseSimctlDevicesAll: skips Booted entries missing udid (beta-runtime partial entry)', () => {
-  const json = JSON.stringify({ devices: { 'runtime-x': [{ name: 'Ghost', state: 'Booted' }, { udid: 'OK-1', name: 'Real', state: 'Booted' }] } });
-  assert.deepEqual(parseSimctlDevicesAll(json), [{ platform: 'ios', id: 'OK-1', name: 'Real', state: 'Booted' }]);
+  const json = JSON.stringify({
+    devices: {
+      'runtime-x': [
+        { name: 'Ghost', state: 'Booted' },
+        { udid: 'OK-1', name: 'Real', state: 'Booted' },
+      ],
+    },
+  });
+  assert.deepEqual(parseSimctlDevicesAll(json), [
+    { platform: 'ios', id: 'OK-1', name: 'Real', state: 'Booted' },
+  ]);
 });

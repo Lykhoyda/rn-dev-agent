@@ -14,14 +14,20 @@ export async function detectPlatform(): Promise<Platform | null> {
   }
 
   try {
-    const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted'], { timeout: PROBE_TIMEOUT_MS });
+    const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted'], {
+      timeout: PROBE_TIMEOUT_MS,
+    });
     if (stdout.includes('Booted')) return 'ios';
-  } catch { /* no iOS */ }
+  } catch {
+    /* no iOS */
+  }
 
   try {
     const { stdout } = await execFile('adb', ['devices'], { timeout: PROBE_TIMEOUT_MS });
     if (/\tdevice$/m.test(stdout)) return 'android';
-  } catch { /* no Android */ }
+  } catch {
+    /* no Android */
+  }
 
   return null;
 }

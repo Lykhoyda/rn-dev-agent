@@ -13,25 +13,33 @@ const SRC = join(__dirname, '../../src/tools');
 
 test("task7: no ['find' literal in proof-step.ts", () => {
   const src = readFileSync(join(SRC, 'proof-step.ts'), 'utf8');
-  const lines = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  const lines = src
+    .split('\n')
+    .filter((l) => l.includes("['find'") && !l.trimStart().startsWith('//'));
   assert.equal(lines.length, 0, `Found ['find' in proof-step.ts:\n${lines.join('\n')}`);
 });
 
 test("task7: no ['find' literal in dev-client-picker.ts", () => {
   const src = readFileSync(join(SRC, 'dev-client-picker.ts'), 'utf8');
-  const lines = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  const lines = src
+    .split('\n')
+    .filter((l) => l.includes("['find'") && !l.trimStart().startsWith('//'));
   assert.equal(lines.length, 0, `Found ['find' in dev-client-picker.ts:\n${lines.join('\n')}`);
 });
 
 test("task7: no ['find' literal in device-batch.ts", () => {
   const src = readFileSync(join(SRC, 'device-batch.ts'), 'utf8');
-  const lines = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  const lines = src
+    .split('\n')
+    .filter((l) => l.includes("['find'") && !l.trimStart().startsWith('//'));
   assert.equal(lines.length, 0, `Found ['find' in device-batch.ts:\n${lines.join('\n')}`);
 });
 
 test("task7: no ['find' literal in device-interact.ts (dead legacy branch removed)", () => {
   const src = readFileSync(join(SRC, 'device-interact.ts'), 'utf8');
-  const lines = src.split('\n').filter(l => l.includes("['find'") && !l.trimStart().startsWith('//'));
+  const lines = src
+    .split('\n')
+    .filter((l) => l.includes("['find'") && !l.trimStart().startsWith('//'));
   assert.equal(lines.length, 0, `Found ['find' in device-interact.ts:\n${lines.join('\n')}`);
 });
 
@@ -45,7 +53,10 @@ test('task7: proof-step verifyText present → verified:true via orchestrator de
   client.evaluate = async () => ({ value: undefined });
   const handler = createProofStepHandler(() => client, {
     hasSession: () => true,
-    fetchCandidates: async (_text) => ({ ok: true, candidates: [{ ref: 'e1', label: 'Hello World' }] }),
+    fetchCandidates: async (_text) => ({
+      ok: true,
+      candidates: [{ ref: 'e1', label: 'Hello World' }],
+    }),
     captureScreenshot: async () => ({ content: [{ type: 'text', text: '/tmp/shot.png' }] }),
   });
   const r = await handler({ verifyText: 'Hello World', waitMs: 0 });

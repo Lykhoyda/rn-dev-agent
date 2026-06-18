@@ -35,8 +35,12 @@ test('B130: device-session recovery closeSession runs CLI close, clearActiveSess
     calls.push({ fn: 'runAgentDevice', args });
     return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: {} }) }] };
   };
-  const clearActiveSession = () => { calls.push({ fn: 'clearActiveSession' }); };
-  const stopFastRunner = () => { calls.push({ fn: 'stopFastRunner' }); };
+  const clearActiveSession = () => {
+    calls.push({ fn: 'clearActiveSession' });
+  };
+  const stopFastRunner = () => {
+    calls.push({ fn: 'stopFastRunner' });
+  };
 
   const wrappedClose = async () => {
     const closeResult = await runAgentDevice(['close']);
@@ -73,8 +77,12 @@ test('B130: wrapped close is equivalent to the normal close path (device-session
     // Simulate CLI close FAILING (possible when daemon is already dead)
     return { content: [{ type: 'text', text: 'ignored' }], isError: true };
   };
-  const clearActiveSession = () => { calls.push({ fn: 'clearActiveSession' }); };
-  const stopFastRunner = () => { calls.push({ fn: 'stopFastRunner' }); };
+  const clearActiveSession = () => {
+    calls.push({ fn: 'clearActiveSession' });
+  };
+  const stopFastRunner = () => {
+    calls.push({ fn: 'stopFastRunner' });
+  };
 
   const wrappedClose = async () => {
     const closeResult = await runAgentDevice(['close']);

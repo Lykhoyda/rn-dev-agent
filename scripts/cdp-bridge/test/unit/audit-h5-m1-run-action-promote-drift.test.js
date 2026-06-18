@@ -5,8 +5,12 @@ import { loadAction } from '../../dist/domain/action-store.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
 let project;
-beforeEach(() => { project = createTmpProject(); });
-afterEach(() => { project.cleanup(); });
+beforeEach(() => {
+  project = createTmpProject();
+});
+afterEach(() => {
+  project.cleanup();
+});
 
 function fakeMaestroRun(envelopes) {
   let i = 0;
@@ -20,7 +24,10 @@ function fakeMaestroRun(envelopes) {
   };
 }
 
-const PASS_ENV = { ok: true, data: { passed: true, output: 'Flow passed', flowFile: 'x', platform: 'ios' } };
+const PASS_ENV = {
+  ok: true,
+  data: { passed: true, output: 'Flow passed', flowFile: 'x', platform: 'ios' },
+};
 
 // Audit H5: the documented "first clean replay auto-promotes experimental →
 // active" lifecycle was never wired into a call site. A clean run must flip the
@@ -33,7 +40,11 @@ test('H5: a clean replay promotes an experimental action to active', async () =>
   assert.equal(res.isError, undefined, 'the run should succeed');
 
   const reloaded = loadAction(project.root, 'demo');
-  assert.equal(reloaded.metadata.status, 'active', 'experimental must be promoted to active after a clean replay');
+  assert.equal(
+    reloaded.metadata.status,
+    'active',
+    'experimental must be promoted to active after a clean replay',
+  );
 });
 
 test('H5: an already-active action stays active (no spurious churn)', async () => {
@@ -48,7 +59,12 @@ test('H5: an already-active action stays active (no spurious churn)', async () =
 // actually reclassify a selector failure on an off-sequence screen as drift.
 const FAIL_SELECTOR_ENV = {
   ok: false,
-  data: { passed: false, output: "Element with id 'fab-create-task' not found", flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: false,
+    output: "Element with id 'fab-create-task' not found",
+    flowFile: 'x',
+    platform: 'ios',
+  },
 };
 
 test('M1: a wired getLiveRoute reclassifies an off-sequence selector failure as ROUTE_DRIFT', async () => {
@@ -75,9 +91,18 @@ test('M1: a wired getLiveRoute reclassifies an off-sequence selector failure as 
     maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
     getLiveRoute: async () => 'CouponCode', // an unexpected, off-sequence screen
   });
-  const res = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios', autoRepair: true });
+  const res = await handler({
+    actionId: 'demo',
+    projectRoot: project.root,
+    platform: 'ios',
+    autoRepair: true,
+  });
 
   assert.equal(res.isError, true, 'an off-sequence failure should not silently pass');
   const text = res.content?.[0]?.text ?? '';
-  assert.match(text, /ROUTE_DRIFT|route-drift/i, 'failure should be classified as route drift, not routed into selector repair');
+  assert.match(
+    text,
+    /ROUTE_DRIFT|route-drift/i,
+    'failure should be classified as route drift, not routed into selector repair',
+  );
 });

@@ -18,7 +18,10 @@ export function wireEventHandlers(
 ): void {
   eventHandlers.set('Runtime.consoleAPICalled', (params: unknown) => {
     const p = params as { type: string; args?: Array<{ value?: unknown; description?: string }> };
-    const text = p.args?.map(a => a.value !== undefined ? String(a.value) : (a.description ?? '')).join(' ') ?? '';
+    const text =
+      p.args
+        ?.map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? '')))
+        .join(' ') ?? '';
     if (text.startsWith('__RN_NET__:')) return;
     buffers.console.push({
       level: p.type,
@@ -68,7 +71,16 @@ export function wireEventHandlers(
   });
 
   eventHandlers.set('Log.entryAdded', (params: unknown) => {
-    const p = params as { entry?: { source?: string; level?: string; text?: string; timestamp?: number; url?: string; lineNumber?: number } };
+    const p = params as {
+      entry?: {
+        source?: string;
+        level?: string;
+        text?: string;
+        timestamp?: number;
+        url?: string;
+        lineNumber?: number;
+      };
+    };
     const e = p.entry;
     if (!e) return;
     buffers.log.push({
@@ -151,6 +163,10 @@ export function parseNetworkHookMessage(
     const data = JSON.parse(parts.slice(2).join(':'));
     applyNetworkHookEntry(type, data, networkManager, deviceKey);
   } catch (err) {
-    console.error('CDP: malformed network hook message dropped:', typeof firstArg === 'string' ? firstArg.slice(0, 100) : typeof firstArg, err instanceof Error ? err.message : '');
+    console.error(
+      'CDP: malformed network hook message dropped:',
+      typeof firstArg === 'string' ? firstArg.slice(0, 100) : typeof firstArg,
+      err instanceof Error ? err.message : '',
+    );
   }
 }

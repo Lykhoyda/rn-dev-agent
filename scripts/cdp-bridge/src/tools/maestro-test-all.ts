@@ -64,7 +64,10 @@ function discoverFlows(dir: string, pattern?: string): string[] {
 
 export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Promise<ToolResult> {
   return async (args) => {
-    const platform = (args.platform ?? getActiveSession()?.platform) as 'ios' | 'android' | undefined;
+    const platform = (args.platform ?? getActiveSession()?.platform) as
+      | 'ios'
+      | 'android'
+      | undefined;
     if (!platform) {
       return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
@@ -84,7 +87,9 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
     const flows = discoverFlows(flowDir, args.pattern);
     if (flows.length === 0) {
-      return failResult(`No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`);
+      return failResult(
+        `No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`,
+      );
     }
 
     const timeout = args.timeoutPerFlow ?? 120_000;
@@ -112,13 +117,26 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
           parsed.appId !== undefined ? { appId: parsed.appId } : {},
           parsed.commands,
         );
-        safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join(
+          tmpdir(),
+          `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
+        );
         writeFileSync(safeFlowFile, canonical, 'utf-8');
         // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
         // the app, which maestro-runner can only do given --app-file.
-        const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, undefined);
+        const appFileResolution = resolveAppFileForClearState(
+          platform,
+          canonical,
+          parsed.appId,
+          undefined,
+        );
         if (!appFileResolution.ok) {
-          results.push({ name, passed: false, durationMs: Date.now() - start, error: appFileResolution.error.slice(0, 300) });
+          results.push({
+            name,
+            passed: false,
+            durationMs: Date.now() - start,
+            error: appFileResolution.error.slice(0, 300),
+          });
           failed++;
           if (args.stopOnFailure) break;
           continue;
@@ -143,11 +161,11 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       try {
         const { stdout, stderr } = await runFlowParked(
           () =>
-            execFile(
-              dispatch.binPath,
-              dispatch.buildArgs(platform, safeFlowFile, appFile),
-              { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-            ),
+            execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), {
+              timeout,
+              encoding: 'utf8',
+              maxBuffer: 10 * 1024 * 1024,
+            }),
           { platform, deviceId: getActiveSession()?.deviceId },
         );
         const output = (stdout + '\n' + stderr).trim();

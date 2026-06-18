@@ -29,11 +29,25 @@ function parseSnapshotNodes(xml) {
     const ref = n.match(/ resource-id="([^"]*)"/)?.[1] ?? '';
     // CodeQL js/double-escaping (alert #19): decode `&amp;` LAST. Decoding it
     // first would incorrectly turn `&amp;lt;` (literal text `&lt;`) into `<`.
-    const label = n.match(/ text="([^"]*)"/)?.[1]?.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') ?? undefined;
-    const type = n.match(/ class="([^"]*)"/)?.[1]?.split('.').pop() ?? undefined;
+    const label =
+      n
+        .match(/ text="([^"]*)"/)?.[1]
+        ?.replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&') ?? undefined;
+    const type =
+      n
+        .match(/ class="([^"]*)"/)?.[1]
+        ?.split('.')
+        .pop() ?? undefined;
     const identifier = n.match(/ content-desc="([^"]*)"/)?.[1] || ref || undefined;
     if (label || identifier) {
-      nodes.push({ ref: `@${nodes.length}`, label: label || undefined, identifier: identifier || undefined, type });
+      nodes.push({
+        ref: `@${nodes.length}`,
+        label: label || undefined,
+        identifier: identifier || undefined,
+        type,
+      });
     }
   }
   return nodes;
@@ -57,7 +71,9 @@ try {
   // Use simctl's accessibility audit or just use the screenshot approach
   // Since we don't have agent-device running, simulate with known elements
   // For real verification, the Settings app has predictable elements
-  const iosXml = sh('xcrun', ['simctl', 'spawn', 'booted', 'uiautomation', '--dump'], { timeout: 10000 }).catch?.(() => null);
+  const iosXml = sh('xcrun', ['simctl', 'spawn', 'booted', 'uiautomation', '--dump'], {
+    timeout: 10000,
+  }).catch?.(() => null);
   iosNodes = iosXml ? parseSnapshotNodes(iosXml) : null;
 } catch {
   iosNodes = null;
@@ -109,14 +125,16 @@ const elementsToCheck = [
   'General',
   'Display',
   'Privacy',
-  'Network',  // Android has it, iOS has it differently
-  'Battery',  // Both should have
+  'Network', // Android has it, iOS has it differently
+  'Battery', // Both should have
 ];
 
 const iosSnap = getCachedSnapshot('ios');
 const androidSnap = getCachedSnapshot('android');
 
-console.log(`\nCache state: iOS=${iosSnap ? `${iosSnap.nodes.length} nodes` : 'MISSING'}, Android=${androidSnap ? `${androidSnap.nodes.length} nodes` : 'MISSING'}`);
+console.log(
+  `\nCache state: iOS=${iosSnap ? `${iosSnap.nodes.length} nodes` : 'MISSING'}, Android=${androidSnap ? `${androidSnap.nodes.length} nodes` : 'MISSING'}`,
+);
 console.log(`iOS cached at: ${iosSnap?.capturedAt}`);
 console.log(`Android cached at: ${androidSnap?.capturedAt}\n`);
 
@@ -130,7 +148,8 @@ for (const el of elementsToCheck) {
   const iosFound = iosSnap ? findElement(iosSnap.nodes, el, 'any') : false;
   const androidFound = androidSnap ? findElement(androidSnap.nodes, el, 'any') : false;
   const match = iosFound && androidFound;
-  if (match) pass++; else fail++;
+  if (match) pass++;
+  else fail++;
 
   console.log(
     el.padEnd(20),
@@ -157,7 +176,9 @@ for (const tc of testCases) {
   const result = findElement(tc.nodes, tc.q, tc.mode);
   const ok = result === tc.expect;
   if (ok) unitPass++;
-  console.log(`  ${ok ? 'PASS' : 'FAIL'} findElement(${tc.q}, ${tc.mode}) = ${result} (expected ${tc.expect})`);
+  console.log(
+    `  ${ok ? 'PASS' : 'FAIL'} findElement(${tc.q}, ${tc.mode}) = ${result} (expected ${tc.expect})`,
+  );
 }
 
 console.log(`\n${unitPass}/${testCases.length} findElement checks pass`);

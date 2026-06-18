@@ -70,7 +70,10 @@ export function lookaheadNavigate(events, fromIndex, windowMs = TAP_TO_NAV_WINDO
                 return { event: ev, index: j };
             return null;
         }
-        if (ev.type === 'tap' || ev.type === 'long_press' || ev.type === 'swipe' || ev.type === 'submit') {
+        if (ev.type === 'tap' ||
+            ev.type === 'long_press' ||
+            ev.type === 'swipe' ||
+            ev.type === 'submit') {
             return null;
         }
     }
@@ -199,7 +202,12 @@ export function generateMaestro(events, opts = {}) {
                 // would otherwise emit `- swipeUp\n- runScript: ...` into the
                 // generated YAML. Constrain to the 4 enum values; anything else
                 // falls back to 'Up'.
-                const allowed = { up: 'Up', down: 'Down', left: 'Left', right: 'Right' };
+                const allowed = {
+                    up: 'Up',
+                    down: 'Down',
+                    left: 'Left',
+                    right: 'Right',
+                };
                 const raw = typeof ev.direction === 'string' ? ev.direction.toLowerCase() : '';
                 const dir = allowed[raw] ?? 'Up';
                 lines.push(`- swipe${dir}`);

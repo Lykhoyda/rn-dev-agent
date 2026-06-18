@@ -153,13 +153,18 @@ export interface ToolObservation {
   ghost?: { attempted: boolean; outcome: string };
 }
 
-export function unwrapResult(result: unknown): { ok?: boolean; data?: unknown; error?: string } | undefined {
+export function unwrapResult(
+  result: unknown,
+): { ok?: boolean; data?: unknown; error?: string } | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const env = result as { content?: Array<{ text?: string }> };
   const text = env.content?.[0]?.text;
   if (typeof text !== 'string') return undefined;
-  try { return JSON.parse(text) as { ok?: boolean; data?: unknown; error?: string }; }
-  catch { return undefined; }
+  try {
+    return JSON.parse(text) as { ok?: boolean; data?: unknown; error?: string };
+  } catch {
+    return undefined;
+  }
 }
 
 export function summarize(

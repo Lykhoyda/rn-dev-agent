@@ -9,8 +9,7 @@ import { join, basename } from 'node:path';
  *   - the standalone `- clearState` command (in the validator allowlist)
  */
 export function flowUsesClearState(flowText) {
-    return /clearState:\s*true\b/.test(flowText)
-        || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+    return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 /** GH#186 live-gate finding: clearState UNINSTALLS the app, deleting the very
  * container `--app-file` pointed into — the reinstall then read a deleted
@@ -91,7 +90,10 @@ export function resolveAppFileForClearState(platform, flowText, headerAppId, exp
 }
 function defaultGetAppContainer(bundleId) {
     try {
-        const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], { encoding: 'utf8', timeout: 5_000 }).trim();
+        const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], {
+            encoding: 'utf8',
+            timeout: 5_000,
+        }).trim();
         return out || null;
     }
     catch {

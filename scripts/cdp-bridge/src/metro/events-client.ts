@@ -253,11 +253,21 @@ export class MetroEventsClient {
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      try { this.ws.removeAllListeners(); } catch { /* ignore */ }
+      try {
+        this.ws.removeAllListeners();
+      } catch {
+        /* ignore */
+      }
       // Swallow the handshake-abort error that fires on close() against a
       // CONNECTING socket. No-op on already-OPEN or already-CLOSED sockets.
-      this.ws.on('error', () => { /* post-stop error: swallow */ });
-      try { this.ws.close(1000, 'client stopping'); } catch { /* ignore */ }
+      this.ws.on('error', () => {
+        /* post-stop error: swallow */
+      });
+      try {
+        this.ws.close(1000, 'client stopping');
+      } catch {
+        /* ignore */
+      }
       this.ws = null;
     }
     this.state = 'stopped';
@@ -377,8 +387,14 @@ export class MetroEventsClient {
 
     this.reconnectAttempt++;
 
-    if (this.opts.maxReconnectAttempts > 0 && this.reconnectAttempt > this.opts.maxReconnectAttempts) {
-      logger.warn(this.opts.logTag, `max reconnect attempts (${this.opts.maxReconnectAttempts}) exceeded, giving up`);
+    if (
+      this.opts.maxReconnectAttempts > 0 &&
+      this.reconnectAttempt > this.opts.maxReconnectAttempts
+    ) {
+      logger.warn(
+        this.opts.logTag,
+        `max reconnect attempts (${this.opts.maxReconnectAttempts}) exceeded, giving up`,
+      );
       this.state = 'stopped';
       return;
     }

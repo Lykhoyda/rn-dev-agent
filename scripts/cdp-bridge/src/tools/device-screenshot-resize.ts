@@ -57,7 +57,11 @@ export interface ResizeDeps {
 }
 
 const defaultFileSize = (path: string): number | undefined => {
-  try { return statSync(path).size; } catch { return undefined; }
+  try {
+    return statSync(path).size;
+  } catch {
+    return undefined;
+  }
 };
 
 async function checkSipsAvailable(deps: ResizeDeps): Promise<boolean> {
@@ -91,18 +95,21 @@ export function parseSipsDimensions(stdout: string): Dimensions | null {
 async function getDimensions(path: string, deps: ResizeDeps): Promise<Dimensions | null> {
   const runner = deps.exec ?? execFile;
   try {
-    const { stdout } = await runner(
-      'sips',
-      ['-g', 'pixelWidth', '-g', 'pixelHeight', path],
-      { timeout: 5000, encoding: 'utf8' },
-    );
+    const { stdout } = await runner('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', path], {
+      timeout: 5000,
+      encoding: 'utf8',
+    });
     return parseSipsDimensions(stdout);
   } catch {
     return null;
   }
 }
 
-export function buildSipsResizeArgs(path: string, maxWidth: number, quality: number | undefined): string[] {
+export function buildSipsResizeArgs(
+  path: string,
+  maxWidth: number,
+  quality: number | undefined,
+): string[] {
   const args = ['--resampleWidth', String(maxWidth)];
   // B121 follow-up: when the requested path has a .jpg/.jpeg extension we MUST
   // emit `-s format jpeg`. Without it, sips preserves the input format — and

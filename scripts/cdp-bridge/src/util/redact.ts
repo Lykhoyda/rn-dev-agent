@@ -4,12 +4,12 @@ const HOME = homedir();
 const HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
 
 const SECRET_PATTERNS = [
-  /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_\-]{20,}/gi,
+  /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
   /Bearer\s+[A-Za-z0-9_\-./+=]{20,}/g,
   /ghp_[A-Za-z0-9_]{36}/g,
   /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9\-]+\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
   /\bAIza[0-9A-Za-z\-_]{35}\b/g,
   // Any private-key label variant: PRIVATE KEY, RSA PRIVATE KEY,
   // OPENSSH PRIVATE KEY, EC/DSA/ENCRYPTED PRIVATE KEY, ... The old single-word
@@ -23,7 +23,8 @@ const SECRET_PATTERNS = [
 // the key prefix. Catches `"password":"hunter2longvalue"` and `api_key=abc...`
 // that SECRET_PATTERNS (which requires the keyword glued directly to the value)
 // misses because the quote/colon separates them.
-const KEYED_SECRET_RE = /((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?)([^"'\s,;}]{6,})/gi;
+const KEYED_SECRET_RE =
+  /((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?)([^"'\s,;}]{6,})/gi;
 
 const PII_PATTERNS = [
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
@@ -34,7 +35,8 @@ const PII_PATTERNS = [
   /\b\d{3}-\d{2}-\d{4}\b/g,
 ];
 
-const AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+const AUTH_PATHS =
+  /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
 
 const MAX_STRING_LENGTH = 2000;
 

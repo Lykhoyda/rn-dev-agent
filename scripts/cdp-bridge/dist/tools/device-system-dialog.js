@@ -15,13 +15,7 @@ const ACCEPT_LABELS_IOS = [
     'Yes',
     'Accept',
 ];
-const DISMISS_LABELS_IOS_BASE = [
-    'Cancel',
-    'No',
-    'Deny',
-    'Not Now',
-    'Reject',
-];
+const DISMISS_LABELS_IOS_BASE = ['Cancel', 'No', 'Deny', 'Not Now', 'Reject'];
 const DISMISS_LABELS_IOS = [
     ...DISMISS_LABELS_IOS_BASE,
     `Don${APOSTROPHE_ASCII}t Allow`,
@@ -37,14 +31,7 @@ const ACCEPT_LABELS_ANDROID = [
     'Continue',
     'Yes',
 ];
-const DISMISS_LABELS_ANDROID = [
-    'Deny',
-    'DENY',
-    'Cancel',
-    'CANCEL',
-    'No',
-    'Not now',
-];
+const DISMISS_LABELS_ANDROID = ['Deny', 'DENY', 'Cancel', 'CANCEL', 'No', 'Not now'];
 // Per-label timeout when sequentially probing dialog buttons. Intentionally short —
 // if the label is not visible, Maestro should fail fast so we can try the next label.
 const PER_LABEL_TIMEOUT_MS = 4_000;
@@ -89,7 +76,9 @@ export function createDeviceAcceptSystemDialogHandler() {
     return async (args) => {
         const platform = args.platform ?? (await detectPlatform());
         if (!platform) {
-            return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+            return failResult('No device detected. Pass platform or boot a device first.', {
+                code: 'NO_DEVICE',
+            });
         }
         const defaults = platform === 'ios' ? ACCEPT_LABELS_IOS : ACCEPT_LABELS_ANDROID;
         const labels = pickLabels(args.label, defaults);
@@ -100,7 +89,9 @@ export function createDeviceDismissSystemDialogHandler() {
     return async (args) => {
         const platform = args.platform ?? (await detectPlatform());
         if (!platform) {
-            return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+            return failResult('No device detected. Pass platform or boot a device first.', {
+                code: 'NO_DEVICE',
+            });
         }
         const defaults = platform === 'ios' ? DISMISS_LABELS_IOS : DISMISS_LABELS_ANDROID;
         const labels = pickLabels(args.label, defaults);

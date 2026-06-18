@@ -79,7 +79,9 @@ else {
                 worker = null;
             apply(core.onWorkerExit(code, signal, shutdownRequested));
         };
-        child.stdin?.on('error', () => { });
+        child.stdin?.on('error', () => {
+            /* EPIPE on a dying worker — exit handler covers it */
+        });
         child.on('error', (err) => onDeath(null, null, `spawn failed: ${err.message}`));
         if (child.stdout) {
             // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences —
@@ -113,10 +115,14 @@ else {
         if (!child || child.exitCode !== null)
             process.exit(0);
         child.kill('SIGTERM');
-        const force = setTimeout(() => { try {
-            child.kill('SIGKILL');
-        }
-        catch { /* already gone */ } }, 3000);
+        const force = setTimeout(() => {
+            try {
+                child.kill('SIGKILL');
+            }
+            catch {
+                /* already gone */
+            }
+        }, 3000);
         force.unref();
         child.on('exit', () => process.exit(0));
     }
@@ -145,7 +151,9 @@ else {
                 if (lockfile && !lockfile.touch())
                     beginShutdown('single-instance lock reclaimed by another bridge');
             }
-            catch { /* best-effort heartbeat */ }
+            catch {
+                /* best-effort heartbeat */
+            }
         },
     });
     spawnWorker();

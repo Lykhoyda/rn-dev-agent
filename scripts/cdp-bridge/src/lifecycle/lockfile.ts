@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -210,12 +220,18 @@ export class Lockfile {
     const before = this.readExisting();
     if (
       before &&
-      (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) &&
+      (existing === null ||
+        before.pid !== existing.pid ||
+        before.startedAt !== existing.startedAt) &&
       this.isLockLive(before)
     ) {
       return this.conflictOf(before);
     }
-    try { unlinkSync(this.lockPath); } catch { /* already gone */ }
+    try {
+      unlinkSync(this.lockPath);
+    } catch {
+      /* already gone */
+    }
     try {
       this.writeLock();
       this.acquired = true;

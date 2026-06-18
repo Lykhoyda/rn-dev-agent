@@ -123,7 +123,14 @@ test('save-as-action: missing intent returns BAD_FILENAME', async () => {
 test('save-as-action: id regex rejects path-traversal vectors', async () => {
   _setStoredEvents(SAMPLE_EVENTS);
   const handler = createSaveAsActionHandler();
-  const malicious = ['../escape', 'with/slash', 'with.dot', 'UPPER', 'with_under', '-leading-hyphen'];
+  const malicious = [
+    '../escape',
+    'with/slash',
+    'with.dot',
+    'UPPER',
+    'with_under',
+    '-leading-hyphen',
+  ];
   for (const id of malicious) {
     const result = await handler({
       id,
@@ -260,7 +267,11 @@ test('save-as-action: when YAML write fails after sidecar succeeds, no false-pos
   );
 
   // YAML must NOT exist on disk — the .tmp write failed before rename.
-  assert.equal(project.yamlExists('partial-fail'), false, 'YAML should not be present after partial failure');
+  assert.equal(
+    project.yamlExists('partial-fail'),
+    false,
+    'YAML should not be present after partial failure',
+  );
 
   // Sidecar exists (step 1+2 succeeded). Its lastSeenMtimeMs is the
   // projected future mtime — strictly ≥ Date.now() at the moment of
@@ -270,7 +281,11 @@ test('save-as-action: when YAML write fails after sidecar succeeds, no false-pos
   // `Date.now() - 500`. Tightened to `> Date.now() - 100` (small slack
   // covers wall-clock advance during the test, but rules out values in
   // the pre-test past).
-  assert.equal(project.sidecarExists('partial-fail'), true, 'sidecar should exist with projected mtime');
+  assert.equal(
+    project.sidecarExists('partial-fail'),
+    true,
+    'sidecar should exist with projected mtime',
+  );
   const sidecar = project.readSidecar('partial-fail');
   assert.ok(
     sidecar.lastSeenMtimeMs > Date.now() - 100,

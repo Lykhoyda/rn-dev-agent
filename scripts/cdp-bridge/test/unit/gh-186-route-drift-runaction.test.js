@@ -8,9 +8,17 @@ import { createTmpProject } from '../helpers/tmp-project.js';
 
 const FAIL_SELECTOR_ENV = {
   ok: false,
-  data: { passed: false, output: "Element with id 'addr-line1' not found", flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: false,
+    output: "Element with id 'addr-line1' not found",
+    flowFile: 'x',
+    platform: 'ios',
+  },
 };
-const fakeMaestroRun = (env) => async () => ({ content: [{ type: 'text', text: JSON.stringify(env) }], isError: true });
+const fakeMaestroRun = (env) => async () => ({
+  content: [{ type: 'text', text: JSON.stringify(env) }],
+  isError: true,
+});
 
 const ACTION_YAML = [
   '# id: demo',
@@ -23,17 +31,28 @@ const ACTION_YAML = [
 ].join('\n');
 
 let project;
-beforeEach(() => { project = createTmpProject(); });
-afterEach(() => { project.cleanup(); });
+beforeEach(() => {
+  project = createTmpProject();
+});
+afterEach(() => {
+  project.cleanup();
+});
 
-function parse(r) { return JSON.parse(r.content[0].text); }
+function parse(r) {
+  return JSON.parse(r.content[0].text);
+}
 
 test('SELECTOR_NOT_FOUND on an OFF-sequence live route → ROUTE_DRIFT, repair skipped', async () => {
   project.seedAction('demo', ACTION_YAML);
   let repairCalled = false;
   const handler = createRunActionHandler({
     maestroRun: fakeMaestroRun(FAIL_SELECTOR_ENV),
-    repairAction: async () => { repairCalled = true; return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { patched: true } }) }] }; },
+    repairAction: async () => {
+      repairCalled = true;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { patched: true } }) }],
+      };
+    },
     getLiveRoute: async () => 'CouponCode', // an inserted screen, not in the expected sequence
   });
   const env = parse(await handler({ actionId: 'demo', projectRoot: project.root }));
@@ -47,7 +66,12 @@ test('SELECTOR_NOT_FOUND on an EXPECTED live route still attempts repair (not dr
   let repairCalled = false;
   const handler = createRunActionHandler({
     maestroRun: fakeMaestroRun(FAIL_SELECTOR_ENV),
-    repairAction: async () => { repairCalled = true; return { content: [{ type: 'text', text: JSON.stringify({ ok: false, data: { patched: false } }) }] }; },
+    repairAction: async () => {
+      repairCalled = true;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ ok: false, data: { patched: false } }) }],
+      };
+    },
     getLiveRoute: async () => 'PhoneNumber', // on the expected sequence → not drift
   });
   await handler({ actionId: 'demo', projectRoot: project.root });
@@ -55,11 +79,21 @@ test('SELECTOR_NOT_FOUND on an EXPECTED live route still attempts repair (not dr
 });
 
 test('no expectedRouteSequence → drift check is inert, repair attempted as before', async () => {
-  project.seedAction('demo', ['# id: demo', '# intent: x', '# status: active', '', '- tapOn:', '    id: "addr-line1"'].join('\n'));
+  project.seedAction(
+    'demo',
+    ['# id: demo', '# intent: x', '# status: active', '', '- tapOn:', '    id: "addr-line1"'].join(
+      '\n',
+    ),
+  );
   let repairCalled = false;
   const handler = createRunActionHandler({
     maestroRun: fakeMaestroRun(FAIL_SELECTOR_ENV),
-    repairAction: async () => { repairCalled = true; return { content: [{ type: 'text', text: JSON.stringify({ ok: false, data: { patched: false } }) }] }; },
+    repairAction: async () => {
+      repairCalled = true;
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ ok: false, data: { patched: false } }) }],
+      };
+    },
     getLiveRoute: async () => 'CouponCode', // would be drift IF a sequence were recorded
   });
   await handler({ actionId: 'demo', projectRoot: project.root });

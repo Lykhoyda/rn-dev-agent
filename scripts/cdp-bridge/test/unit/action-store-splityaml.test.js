@@ -12,11 +12,23 @@ test('Issue #102 A1: leading blank line + comment header parses to headerLines, 
   const yaml = '\n\n# id: foo\n# intent: bar\n\n- launchApp\n- tapOn:\n    id: "x"\n';
   const out = splitYaml(yaml);
   assert.equal(out.topSection, '');
-  assert.ok(out.headerLines.some((l) => l.includes('id: foo')), `expected header to contain id: foo, got ${JSON.stringify(out.headerLines)}`);
-  assert.ok(out.headerLines.some((l) => l.includes('intent: bar')), `expected header to contain intent: bar`);
-  assert.ok(out.bodyLines.some((l) => l.includes('launchApp')), `expected body to contain launchApp`);
+  assert.ok(
+    out.headerLines.some((l) => l.includes('id: foo')),
+    `expected header to contain id: foo, got ${JSON.stringify(out.headerLines)}`,
+  );
+  assert.ok(
+    out.headerLines.some((l) => l.includes('intent: bar')),
+    `expected header to contain intent: bar`,
+  );
+  assert.ok(
+    out.bodyLines.some((l) => l.includes('launchApp')),
+    `expected body to contain launchApp`,
+  );
   // The M7 header lines should NOT be in body.
-  assert.ok(!out.bodyLines.some((l) => l.includes('id: foo')), `M7 header line leaked into body: ${JSON.stringify(out.bodyLines)}`);
+  assert.ok(
+    !out.bodyLines.some((l) => l.includes('id: foo')),
+    `M7 header line leaked into body: ${JSON.stringify(out.bodyLines)}`,
+  );
 });
 
 test('Issue #102 A1: round-trip through joinYaml preserves the body without duplicating the header', () => {
@@ -25,7 +37,11 @@ test('Issue #102 A1: round-trip through joinYaml preserves the body without dupl
   const rejoined = joinYaml(split);
   // Header should appear exactly once.
   const headerOccurrences = (rejoined.match(/# id: foo/g) ?? []).length;
-  assert.equal(headerOccurrences, 1, `expected exactly one header occurrence, got ${headerOccurrences} in: ${rejoined}`);
+  assert.equal(
+    headerOccurrences,
+    1,
+    `expected exactly one header occurrence, got ${headerOccurrences} in: ${rejoined}`,
+  );
 });
 
 test('Issue #102 A1: pre-existing well-formed YAML (no leading blanks) is unaffected', () => {

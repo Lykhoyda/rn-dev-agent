@@ -21,9 +21,24 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
  */
 function makeSandbox(opts = {}) {
   const sandbox = {
-    Array, Object, JSON, Map, WeakSet, Set, Error, Date, RegExp, Symbol,
-    parseInt, parseFloat, String, Number, Boolean, Promise,
-    setTimeout, clearTimeout,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Set,
+    Error,
+    Date,
+    RegExp,
+    Symbol,
+    parseInt,
+    parseFloat,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    setTimeout,
+    clearTimeout,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
@@ -32,7 +47,7 @@ function makeSandbox(opts = {}) {
   } else if (opts.rootFiber) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map([[1, {}]]),
-      getFiberRoots: (id) => id === 1 ? new Set([{ current: opts.rootFiber }]) : new Set(),
+      getFiberRoots: (id) => (id === 1 ? new Set([{ current: opts.rootFiber }]) : new Set()),
     };
   } else {
     // No native renderer roots — tests that ONLY care about extra-roots.
@@ -66,7 +81,7 @@ function linkFiber(parent, child) {
  */
 function fiber(props) {
   return {
-    type: { displayName: props && props.displayName || 'View' },
+    type: { displayName: (props && props.displayName) || 'View' },
     memoizedProps: (props && props.memoizedProps) || {},
     child: null,
     sibling: null,
@@ -105,7 +120,7 @@ test('extractFiberFromInstance: instance with _reactInternalFiber returns the fi
 test('extractFiberFromInstance: already-a-fiber input passes through; generator-like with only .return is rejected', () => {
   const sandbox = makeSandbox({});
   const realFiber = fiber({ displayName: 'PortalRoot' });
-  const generatorLike = { return: function() {} }; // has .return but no .child
+  const generatorLike = { return: function () {} }; // has .return but no .child
   const extract = vm.runInContext(
     '(function(inst) { return __RN_AGENT.__extractFiberFromInstance(inst); })',
     sandbox,
@@ -132,12 +147,12 @@ test('iterateAllRoots: instance with neither _reactInternals nor _reactInternalF
   const goodFiber = fiber({ displayName: 'GoodPortal' });
   const sandbox = makeSandbox({
     extraRoots: () => [
-      { notAFiber: true },           // skipped — no extraction path
+      { notAFiber: true }, // skipped — no extraction path
       { _reactInternals: goodFiber }, // included
     ],
   });
   const all = callFindAllRootFibers(sandbox);
-  const extras = all.filter(r => r.rendererId === -1);
+  const extras = all.filter((r) => r.rendererId === -1);
   assert.equal(extras.length, 1, 'only the well-formed instance should be added');
   assert.equal(extras[0].fiber, goodFiber);
 });
@@ -147,7 +162,7 @@ test('iterateAllRoots: mixed array with null items → nulls skipped, valid ones
   const sandbox = makeSandbox({
     extraRoots: () => [null, { _reactInternals: goodFiber }, undefined, null].filter(Boolean),
   });
-  const extras = callFindAllRootFibers(sandbox).filter(r => r.rendererId === -1);
+  const extras = callFindAllRootFibers(sandbox).filter((r) => r.rendererId === -1);
   assert.equal(extras.length, 1, 'filter(Boolean) idiom should work cleanly');
   assert.equal(extras[0].fiber, goodFiber);
 });
@@ -156,11 +171,13 @@ test('iterateAllRoots: resolver throws → renderer roots remain in output, extr
   const rendererRoot = fiber({ displayName: 'MainApp' });
   const sandbox = makeSandbox({
     rootFiber: rendererRoot,
-    extraRoots: () => { throw new Error('user bug in resolver'); },
+    extraRoots: () => {
+      throw new Error('user bug in resolver');
+    },
   });
   const all = callFindAllRootFibers(sandbox);
-  const renderers = all.filter(r => r.rendererId === 1);
-  const extras = all.filter(r => r.rendererId === -1);
+  const renderers = all.filter((r) => r.rendererId === 1);
+  const extras = all.filter((r) => r.rendererId === -1);
   assert.equal(renderers.length, 1, 'renderer roots survive a thrown resolver');
   assert.equal(renderers[0].fiber, rendererRoot);
   assert.equal(extras.length, 0, 'no extras when resolver throws');
@@ -173,8 +190,8 @@ test('iterateAllRoots: resolver returns non-array → skipped silently, renderer
     extraRoots: () => ({ not: 'an-array' }),
   });
   const all = callFindAllRootFibers(sandbox);
-  assert.equal(all.filter(r => r.rendererId === -1).length, 0);
-  assert.equal(all.filter(r => r.rendererId === 1).length, 1);
+  assert.equal(all.filter((r) => r.rendererId === -1).length, 0);
+  assert.equal(all.filter((r) => r.rendererId === 1).length, 1);
 });
 
 test('iterateAllRoots: __RN_AGENT_EXTRA_ROOTS__ undefined → output equals pre-PR baseline (backward compat)', () => {
@@ -212,7 +229,11 @@ test('forEachRootFiber: cb returning truthy on an extra-root short-circuits iter
     return rendererId === -1 ? rootFiber : null;
   });
   assert.equal(result, extraRoot, 'extra-root fiber returned via short-circuit');
-  assert.equal(cbCalls, 2, 'cb called for renderer root (no match), then extra root (match) — no further calls');
+  assert.equal(
+    cbCalls,
+    2,
+    'cb called for renderer root (no match), then extra root (match) — no further calls',
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,12 +249,12 @@ test('iterateAllRoots: sparse array (holes) — holes treated as undefined and s
   const goodFiber = fiber({ displayName: 'GoodPortal' });
   const sandbox = makeSandbox({
     extraRoots: () => {
-      const arr = new Array(5);
+      const arr = Array.from({ length: 5 });
       arr[2] = { _reactInternals: goodFiber };
       return arr;
     },
   });
-  const extras = callFindAllRootFibers(sandbox).filter(r => r.rendererId === -1);
+  const extras = callFindAllRootFibers(sandbox).filter((r) => r.rendererId === -1);
   assert.equal(extras.length, 1, 'only the populated index should yield a fiber');
   assert.equal(extras[0].fiber, goodFiber);
 });
@@ -265,7 +286,12 @@ test('end-to-end: cdp_interact press testID resolves to component inside extra-r
   let onPressFired = false;
   const buttonFiber = fiber({
     displayName: 'Pressable',
-    memoizedProps: { testID: 'modal-confirm-btn', onPress: () => { onPressFired = true; } },
+    memoizedProps: {
+      testID: 'modal-confirm-btn',
+      onPress: () => {
+        onPressFired = true;
+      },
+    },
   });
   // Modal root → Pressable child. The Pressable carries the testID.
   const modalRoot = fiber({ displayName: 'SheetProvider' });
@@ -277,10 +303,12 @@ test('end-to-end: cdp_interact press testID resolves to component inside extra-r
     extraRoots: () => [{ _reactInternals: modalRoot }],
   });
 
-  const result = JSON.parse(vm.runInContext(
-    "__RN_AGENT.interact({ action: 'press', testID: 'modal-confirm-btn' })",
-    sandbox,
-  ));
+  const result = JSON.parse(
+    vm.runInContext(
+      "__RN_AGENT.interact({ action: 'press', testID: 'modal-confirm-btn' })",
+      sandbox,
+    ),
+  );
 
   assert.equal(result.success, true, `expected success, got: ${JSON.stringify(result)}`);
   assert.equal(result.action, 'press');

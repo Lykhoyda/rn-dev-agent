@@ -8,7 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  findSnapshotForBundleId, snapshotHintForBundleId,
+  findSnapshotForBundleId,
+  snapshotHintForBundleId,
 } from '../../dist/tools/resolve-ios-app-file.js';
 
 const A = '/tmp/rn-appfile-snapshots/AppA.app';
@@ -31,11 +32,17 @@ test('findSnapshotForBundleId: sorts newest-first BEFORE the cap — newest surv
   const reads = [];
   const deps = {
     listSnapshots: () => [...decoys, target],
-    readBundleId: (p) => { reads.push(p); return p === target ? 'com.example.app' : 'com.decoy'; },
+    readBundleId: (p) => {
+      reads.push(p);
+      return p === target ? 'com.example.app' : 'com.decoy';
+    },
     mtimeMs: (p) => (p === target ? 99_000 : 1000),
     now: () => 0,
   };
-  assert.deepEqual(findSnapshotForBundleId('com.example.app', deps), { path: target, mtimeMs: 99_000 });
+  assert.deepEqual(findSnapshotForBundleId('com.example.app', deps), {
+    path: target,
+    mtimeMs: 99_000,
+  });
   assert.equal(reads[0], target, 'newest candidate is plutil-read first');
   assert.equal(reads.length, 1, 'first (newest) match short-circuits the scan');
 });
@@ -43,8 +50,12 @@ test('findSnapshotForBundleId: sorts newest-first BEFORE the cap — newest surv
 test('findSnapshotForBundleId: no bundle-id match → null; at most 10 plutil reads', () => {
   let reads = 0;
   const deps = {
-    listSnapshots: () => Array.from({ length: 25 }, (_, i) => `/tmp/rn-appfile-snapshots/App${i}.app`),
-    readBundleId: () => { reads += 1; return 'com.nomatch'; },
+    listSnapshots: () =>
+      Array.from({ length: 25 }, (_, i) => `/tmp/rn-appfile-snapshots/App${i}.app`),
+    readBundleId: () => {
+      reads += 1;
+      return 'com.nomatch';
+    },
     mtimeMs: () => 1000,
     now: () => 0,
   };
@@ -66,10 +77,16 @@ test('findSnapshotForBundleId: budget overrun → stops before further plutil re
   let reads = 0;
   const deps = {
     listSnapshots: () => [A, B],
-    readBundleId: () => { reads += 1; return 'com.example.app'; },
+    readBundleId: () => {
+      reads += 1;
+      return 'com.example.app';
+    },
     mtimeMs: () => 1000,
     // First call (deadline calc) t=0; every later call is past the 3s budget.
-    now: (() => { let calls = 0; return () => (calls++ === 0 ? 0 : 10_000); })(),
+    now: (() => {
+      let calls = 0;
+      return () => (calls++ === 0 ? 0 : 10_000);
+    })(),
   };
   assert.equal(findSnapshotForBundleId('com.example.app', deps), null);
   assert.equal(reads, 0, 'no plutil read after budget exceeded');
@@ -80,7 +97,11 @@ test('findSnapshotForBundleId: per-read timeout is clamped to the remaining dead
   let t = 0;
   const deps = {
     listSnapshots: () => [A, B],
-    readBundleId: (p, timeoutMs) => { timeouts.push(timeoutMs); t += 1500; return 'com.nomatch'; },
+    readBundleId: (p, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      t += 1500;
+      return 'com.nomatch';
+    },
     mtimeMs: () => 1000,
     now: () => t,
   };
@@ -111,10 +132,22 @@ test('snapshotHintForBundleId: future mtime (clock skew) clamps to ageMinutes 0'
 });
 
 test('never throws: throwing deps → null from both functions', () => {
-  const boom = () => { throw new Error('boom'); };
+  const boom = () => {
+    throw new Error('boom');
+  };
   assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: boom }), null);
   assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: boom }), null);
-  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: () => 1, readBundleId: boom }), null);
-  assert.equal(findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: () => 1, now: boom }), null);
+  assert.equal(
+    findSnapshotForBundleId('com.x', {
+      listSnapshots: () => [A],
+      mtimeMs: () => 1,
+      readBundleId: boom,
+    }),
+    null,
+  );
+  assert.equal(
+    findSnapshotForBundleId('com.x', { listSnapshots: () => [A], mtimeMs: () => 1, now: boom }),
+    null,
+  );
   assert.equal(snapshotHintForBundleId('com.x', { listSnapshots: boom }), null);
 });

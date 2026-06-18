@@ -55,7 +55,12 @@ export function parseAllBootedIosDevices(jsonText: string): SimctlDevice[] {
   for (const list of Object.values(runtimes)) {
     if (!Array.isArray(list)) continue;
     for (const device of list) {
-      if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+      if (
+        device &&
+        device.state === 'Booted' &&
+        typeof device.udid === 'string' &&
+        device.udid.length > 0
+      ) {
         out.push({ udid: device.udid, state: device.state, name: device.name });
       }
     }
@@ -166,7 +171,9 @@ function defaultOutputPath(platform: 'ios' | 'android'): string {
 }
 
 export function parseStartOutput(stdout: string): { pid: number; output: string } | null {
-  const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) output=(.+?)\s*$/m);
+  const match = stdout.match(
+    /Recording started: platform=(?:ios|android) pid=(\d+) output=(.+?)\s*$/m,
+  );
   if (!match) return null;
   return { pid: Number(match[1]), output: match[2].trim() };
 }
@@ -237,9 +244,10 @@ async function runStart(args: DeviceRecordArgs): Promise<ToolResult> {
   // non-deterministically when more than one device is booted/connected,
   // and silently captures the wrong one. Refuse to start until the
   // caller pins a target with `deviceId`.
-  const candidates = platform === 'ios'
-    ? (await listBootedIosUdids()).map((d) => ({ id: d.udid, label: d.name }))
-    : (await listConnectedAndroidDevices()).map((d) => ({ id: d.serial }));
+  const candidates =
+    platform === 'ios'
+      ? (await listBootedIosUdids()).map((d) => ({ id: d.udid, label: d.name }))
+      : (await listConnectedAndroidDevices()).map((d) => ({ id: d.serial }));
 
   if (candidates.length === 0) {
     return failResult(
@@ -256,7 +264,7 @@ async function runStart(args: DeviceRecordArgs): Promise<ToolResult> {
     const argName = platform === 'ios' ? 'UDID' : 'serial';
     return failResult(
       `device_record: ${resolution.candidates.length} ${platform} ${argName === 'UDID' ? 'simulators booted' : 'devices connected'} — refusing to auto-pick to avoid recording the wrong device. ` +
-      `Pass deviceId=<${argName}> to disambiguate:\n${list}`,
+        `Pass deviceId=<${argName}> to disambiguate:\n${list}`,
       { code: 'DEVICE_AMBIGUOUS', platform, candidates: resolution.candidates },
     );
   }
@@ -272,11 +280,9 @@ async function runStart(args: DeviceRecordArgs): Promise<ToolResult> {
   }
 
   try {
-    const { stdout } = await execFileAsync(
-      getRecordScript(),
-      scriptArgs,
-      { timeout: START_TIMEOUT_MS },
-    );
+    const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, {
+      timeout: START_TIMEOUT_MS,
+    });
     const parsed = parseStartOutput(stdout);
     if (!parsed) {
       return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
@@ -325,9 +331,14 @@ async function runStop(args: DeviceRecordArgs): Promise<ToolResult> {
   const saved = parseStopOutput(stopOutput);
   if (saved.length === 0) {
     if (/No active recordings/i.test(stopOutput)) {
-      return warnResult({ saved: [] }, 'No active recordings to stop.', { code: 'NO_ACTIVE_RECORDING' });
+      return warnResult({ saved: [] }, 'No active recordings to stop.', {
+        code: 'NO_ACTIVE_RECORDING',
+      });
     }
-    return warnResult({ saved: [] }, `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`);
+    return warnResult(
+      { saved: [] },
+      `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`,
+    );
   }
 
   if (!args.gif) {
@@ -386,7 +397,9 @@ async function runStop(args: DeviceRecordArgs): Promise<ToolResult> {
 
 async function runStatus(): Promise<ToolResult> {
   try {
-    const { stdout } = await execFileAsync(getRecordScript(), ['status'], { timeout: STATUS_TIMEOUT_MS });
+    const { stdout } = await execFileAsync(getRecordScript(), ['status'], {
+      timeout: STATUS_TIMEOUT_MS,
+    });
     const active = parseStatusOutput(stdout);
     return okResult({ action: 'status', active });
   } catch (e: unknown) {
@@ -401,6 +414,8 @@ export function createDeviceRecordHandler(): (args: DeviceRecordArgs) => Promise
     if (args.action === 'start') return runStart(args);
     if (args.action === 'stop') return runStop(args);
     if (args.action === 'status') return runStatus();
-    return failResult(`Unknown action: "${(args as { action: string }).action}". Expected start, stop, or status.`);
+    return failResult(
+      `Unknown action: "${(args as { action: string }).action}". Expected start, stop, or status.`,
+    );
   };
 }

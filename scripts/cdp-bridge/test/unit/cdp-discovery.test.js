@@ -27,7 +27,7 @@ test('filterValidTargets accepts React Native targets without Hermes VM', () => 
     { id: '3', title: 'Chrome tab', webSocketDebuggerUrl: 'ws://x/c' },
   ]);
   assert.equal(out.length, 2);
-  assert.deepEqual(out.map(t => t.id).sort(), ['1', '2']);
+  assert.deepEqual(out.map((t) => t.id).sort(), ['1', '2']);
 });
 
 test('filterValidTargets rewrites IPv6 localhost to 127.0.0.1', () => {
@@ -47,7 +47,10 @@ test('selectTarget sorts by page id descending (newest session first)', () => {
     { id: 'page-2', platform: 'ios' },
   ];
   const { targets: sorted } = selectTarget(targets);
-  assert.deepEqual(sorted.map(t => t.id), ['page-3', 'page-2', 'page-1']);
+  assert.deepEqual(
+    sorted.map((t) => t.id),
+    ['page-3', 'page-2', 'page-1'],
+  );
 });
 
 test('selectTarget with platform filter returns matching targets only', () => {
@@ -59,7 +62,7 @@ test('selectTarget with platform filter returns matching targets only', () => {
   const { targets: sorted, warning } = selectTarget(targets, 'ios');
   assert.equal(sorted.length, 2);
   assert.equal(warning, undefined);
-  assert.ok(sorted.every(t => t.platform === 'ios'));
+  assert.ok(sorted.every((t) => t.platform === 'ios'));
 });
 
 test('selectTarget falls back to text match when no platform property matches', () => {
@@ -130,7 +133,7 @@ test('selectTarget with bundleId filters zombie targets out', () => {
   ];
   const { targets: sorted } = selectTarget(targets, { bundleId: 'com.rndevagent.testapp' });
   assert.equal(sorted.length, 2);
-  assert.ok(sorted.every(t => t.description === 'com.rndevagent.testapp'));
+  assert.ok(sorted.every((t) => t.description === 'com.rndevagent.testapp'));
   // Sort still picks the highest page id within the bundle
   assert.equal(sorted[0].id, '6f8d21-2');
 });
@@ -153,7 +156,9 @@ test('selectTarget preferredBundleId is soft filter — only applies when it nar
     { id: '6f8d21-2', platform: 'ios', description: 'com.rndevagent.testapp' },
   ];
   // Preferred matches one target → narrows to it
-  const { targets: narrowed } = selectTarget(targets, { preferredBundleId: 'com.rndevagent.testapp' });
+  const { targets: narrowed } = selectTarget(targets, {
+    preferredBundleId: 'com.rndevagent.testapp',
+  });
   assert.equal(narrowed.length, 1);
   assert.equal(narrowed[0].description, 'com.rndevagent.testapp');
 
@@ -190,9 +195,7 @@ test('selectTarget: legacy string signature still works', () => {
 test('selectTarget: bundleId hard-fails on single-target mismatch (B111/D643)', () => {
   // Pre-D643, the bundleId check was guarded by `length > 1` and silently
   // skipped this case — connecting to the wrong app. Now hard-fails.
-  const targets = [
-    { id: 'aaa-1', platform: 'ios', description: 'com.zombie.app' },
-  ];
+  const targets = [{ id: 'aaa-1', platform: 'ios', description: 'com.zombie.app' }];
   const { targets: sorted, warning } = selectTarget(targets, { bundleId: 'com.realapp' });
   assert.equal(sorted.length, 0);
   assert.match(warning, /bundleId "com.realapp" not found/);
@@ -206,7 +209,7 @@ test('selectTarget: bundleId match is case-insensitive (B111/D643/G4)', () => {
   ];
   const { targets: sorted } = selectTarget(targets, { bundleId: 'HOST.EXP.EXPONENT' });
   assert.equal(sorted.length, 2);
-  assert.ok(sorted.every(t => t.description?.toLowerCase() === 'host.exp.exponent'));
+  assert.ok(sorted.every((t) => t.description?.toLowerCase() === 'host.exp.exponent'));
 });
 
 test('selectTarget: preferredBundleId match is case-insensitive (B111/D643/G4)', () => {
@@ -262,7 +265,11 @@ test('selectTarget: warning includes available ids when targetId not found (B111
 
 // ── B116 / D639: platform inference via simctl listapps + adb pm list ──
 
-import { parseSimctlListapps, inferPlatforms, inferPlatformFromDeviceName } from '../../dist/cdp/discovery.js';
+import {
+  parseSimctlListapps,
+  inferPlatforms,
+  inferPlatformFromDeviceName,
+} from '../../dist/cdp/discovery.js';
 
 test('parseSimctlListapps extracts top-level bundle IDs only', () => {
   const input = `{
@@ -404,7 +411,11 @@ test('inferPlatforms: B131 regression — deviceName overrides package-list infe
   // New code reads deviceName and assigns correctly.
   const targets = [
     { id: 'ios1', description: 'com.rndevagent.testapp', deviceName: 'iPhone 17 Pro' },
-    { id: 'and1', description: 'com.rndevagent.testapp', deviceName: 'sdk_gphone16k_arm64 - 17 - API 37' },
+    {
+      id: 'and1',
+      description: 'com.rndevagent.testapp',
+      deviceName: 'sdk_gphone16k_arm64 - 17 - API 37',
+    },
   ];
   inferPlatforms(targets, {
     readAndroid: () => new Set(['com.rndevagent.testapp']),
@@ -418,9 +429,7 @@ test('inferPlatforms: B131 regression — deviceName overrides package-list infe
 });
 
 test('inferPlatforms: falls back to package-list when deviceName is unrecognized', () => {
-  const targets = [
-    { id: '1', description: 'com.app', deviceName: 'Mystery Device' },
-  ];
+  const targets = [{ id: '1', description: 'com.app', deviceName: 'Mystery Device' }];
   inferPlatforms(targets, {
     readAndroid: () => new Set(['com.app']),
     readIOS: () => new Set(),

@@ -28,7 +28,9 @@ export function createInteractHandler(getClient: () => CDPClient) {
     }
     if (args.action === 'setFieldValue') {
       if (args.name === undefined || args.name.length === 0) {
-        return failResult('name parameter is required for setFieldValue action — the React Hook Form field name');
+        return failResult(
+          'name parameter is required for setFieldValue action — the React Hook Form field name',
+        );
       }
       if (args.value === undefined) {
         return failResult('value parameter is required for setFieldValue action');
@@ -47,9 +49,7 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.shouldValidate !== undefined) opts.shouldValidate = args.shouldValidate;
     if (args.shouldDirty !== undefined) opts.shouldDirty = args.shouldDirty;
 
-    const result = await client.evaluate(
-      `__RN_AGENT.interact(${JSON.stringify(opts)})`
-    );
+    const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
 
     if (result.error) {
       return failResult(`Interact error: ${result.error}`);
@@ -77,14 +77,11 @@ export function createInteractHandler(getClient: () => CDPClient) {
     // dispatched but its effect likely didn't happen. actionExecuted in meta keeps
     // the "dispatched but threw" / "couldn't dispatch" distinction.
     if (parsed.action_executed && parsed.handler_error) {
-      return failResult(
-        `Action executed but handler threw: ${parsed.handler_error}`,
-        {
-          actionExecuted: true,
-          handlerError: parsed.handler_error,
-          hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
-        },
-      );
+      return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
+        actionExecuted: true,
+        handlerError: parsed.handler_error,
+        hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
+      });
     }
 
     return okResult(parsed);

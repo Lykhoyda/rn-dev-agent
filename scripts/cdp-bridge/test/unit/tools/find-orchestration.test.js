@@ -13,10 +13,34 @@ import { findInLatestSnapshot } from '../../../dist/tools/device-interact.js';
 
 const sampleNodes = [
   { ref: '@e0', type: 'Application', rect: { x: 0, y: 0, width: 393, height: 852 } },
-  { ref: '@e1', type: 'Button', identifier: 'task-mark-all-done', label: 'Mark all done', rect: { x: 16, y: 200, width: 361, height: 44 }, hittable: true },
-  { ref: '@e2', type: 'StaticText', label: 'Tasks', rect: { x: 16, y: 60, width: 100, height: 30 } },
-  { ref: '@e3', type: 'Button', identifier: 'task-delete', label: 'Delete task', rect: { x: 16, y: 250, width: 361, height: 44 }, hittable: true },
-  { ref: '@e4', type: 'StaticText', label: 'Mark all done as completed', rect: { x: 16, y: 300, width: 200, height: 20 } },
+  {
+    ref: '@e1',
+    type: 'Button',
+    identifier: 'task-mark-all-done',
+    label: 'Mark all done',
+    rect: { x: 16, y: 200, width: 361, height: 44 },
+    hittable: true,
+  },
+  {
+    ref: '@e2',
+    type: 'StaticText',
+    label: 'Tasks',
+    rect: { x: 16, y: 60, width: 100, height: 30 },
+  },
+  {
+    ref: '@e3',
+    type: 'Button',
+    identifier: 'task-delete',
+    label: 'Delete task',
+    rect: { x: 16, y: 250, width: 361, height: 44 },
+    hittable: true,
+  },
+  {
+    ref: '@e4',
+    type: 'StaticText',
+    label: 'Mark all done as completed',
+    rect: { x: 16, y: 300, width: 200, height: 20 },
+  },
 ];
 
 test('findInLatestSnapshot: exact label match returns first node', () => {
@@ -55,8 +79,20 @@ test('findInLatestSnapshot: exact:true rejects substring match and returns null'
 
 test('findInLatestSnapshot: Android testID identifier wins over text fallback', () => {
   const nodes = [
-    { ref: '@e1', type: 'android.widget.TextView', identifier: 'tab-home', label: 'Home', rect: { x: 0, y: 0, width: 100, height: 50 } },
-    { ref: '@e2', type: 'android.widget.TextView', identifier: 'tab-settings', label: 'Home', rect: { x: 100, y: 0, width: 100, height: 50 } },
+    {
+      ref: '@e1',
+      type: 'android.widget.TextView',
+      identifier: 'tab-home',
+      label: 'Home',
+      rect: { x: 0, y: 0, width: 100, height: 50 },
+    },
+    {
+      ref: '@e2',
+      type: 'android.widget.TextView',
+      identifier: 'tab-settings',
+      label: 'Home',
+      rect: { x: 100, y: 0, width: 100, height: 50 },
+    },
   ];
   const found = findInLatestSnapshot(nodes, 'tab-home', { exact: true });
   assert.equal(found.ref, '@e1');

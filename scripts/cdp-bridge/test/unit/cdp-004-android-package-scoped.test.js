@@ -21,17 +21,26 @@ test('CDP-004: argv does NOT contain a bare (un-flagged) bundleId', () => {
   const occurrences = argv.filter((a) => a === 'com.example.app').length;
   assert.equal(occurrences, 1, 'bundleId should only appear once');
   const bundleIdIdx = argv.indexOf('com.example.app');
-  assert.equal(argv[bundleIdIdx - 1], '-p', 'bundleId must be preceded by -p (flag-scoped, not bare)');
+  assert.equal(
+    argv[bundleIdIdx - 1],
+    '-p',
+    'bundleId must be preceded by -p (flag-scoped, not bare)',
+  );
 });
 
 test('CDP-004: argv structure matches expected shape (am start -W -a MAIN -c LAUNCHER -p PKG)', () => {
   const argv = buildAndroidLaunchArgv('com.example.app');
   assert.deepEqual(argv, [
-    'shell', 'am', 'start',
+    'shell',
+    'am',
+    'start',
     '-W',
-    '-a', 'android.intent.action.MAIN',
-    '-c', 'android.intent.category.LAUNCHER',
-    '-p', 'com.example.app',
+    '-a',
+    'android.intent.action.MAIN',
+    '-c',
+    'android.intent.category.LAUNCHER',
+    '-p',
+    'com.example.app',
   ]);
 });
 

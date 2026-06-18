@@ -79,7 +79,11 @@ test('Phase129 findBestMatch: returns null when no candidate clears threshold', 
 });
 
 test('Phase129 findBestMatch: picks the highest-scoring candidate', () => {
-  const out = findBestMatch('fab-create-task', ['fab-create-task-btn', 'fab-create-tasks', 'create-task-fab'], 0.6);
+  const out = findBestMatch(
+    'fab-create-task',
+    ['fab-create-task-btn', 'fab-create-tasks', 'create-task-fab'],
+    0.6,
+  );
   assert.ok(out);
   // fab-create-tasks (single insert) scores highest
   assert.equal(out.match, 'fab-create-tasks');
@@ -137,10 +141,14 @@ test('Phase129 extractAllTestIDs: fast-runner tree shape (recursive)', () => {
         ref: 'e1',
         identifier: 'app',
         children: [
-          { ref: 'e2', identifier: 'screen', children: [
-            { ref: 'e3', identifier: 'fab' },
-            { ref: 'e4', identifier: 'list' },
-          ]},
+          {
+            ref: 'e2',
+            identifier: 'screen',
+            children: [
+              { ref: 'e3', identifier: 'fab' },
+              { ref: 'e4', identifier: 'list' },
+            ],
+          },
         ],
       },
     },
@@ -162,7 +170,8 @@ test('Phase129 extractAllTestIDs: dedupe across tree nodes', () => {
     ok: true,
     data: {
       tree: {
-        identifier: 'foo', ref: 'e1',
+        identifier: 'foo',
+        ref: 'e1',
         children: [{ identifier: 'foo', ref: 'e2' }],
       },
     },
@@ -201,18 +210,12 @@ test('Phase129 extractIdSelectors: body without id: returns []', () => {
 
 // Issue #102 A2 — strip trailing inline comments on bare-form selectors.
 test('Issue #102 A2: extractIdSelectors strips trailing inline comments on bare-form selectors', () => {
-  const out = extractIdSelectors([
-    '- tapOn:',
-    '    id: foo-bar  # this is a comment',
-  ].join('\n'));
+  const out = extractIdSelectors(['- tapOn:', '    id: foo-bar  # this is a comment'].join('\n'));
   assert.deepEqual(out, ['foo-bar']);
 });
 
 test('Issue #102 A2: quoted forms remain unaffected by the comment-strip', () => {
-  const out = extractIdSelectors([
-    '- tapOn:',
-    '    id: "with-quotes"',
-  ].join('\n'));
+  const out = extractIdSelectors(['- tapOn:', '    id: "with-quotes"'].join('\n'));
   assert.deepEqual(out, ['with-quotes']);
 });
 
@@ -221,7 +224,11 @@ test('Issue #102 A2: quoted forms remain unaffected by the comment-strip', () =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('Phase129 replaceIdSelector: surgical replacement preserves quoting', () => {
-  const { body: out, replacements } = replaceIdSelector(SAMPLE_BODY, 'fab-create-task', 'fab-create-task-btn');
+  const { body: out, replacements } = replaceIdSelector(
+    SAMPLE_BODY,
+    'fab-create-task',
+    'fab-create-task-btn',
+  );
   assert.equal(replacements, 1);
   assert.match(out, /id: "fab-create-task-btn"/);
   // Other selectors untouched
@@ -230,12 +237,20 @@ test('Phase129 replaceIdSelector: surgical replacement preserves quoting', () =>
 });
 
 test('Phase129 replaceIdSelector: preserves single-quote style', () => {
-  const { body: out } = replaceIdSelector(SAMPLE_BODY, 'wizard-title-input', 'wizard-title-input-2');
+  const { body: out } = replaceIdSelector(
+    SAMPLE_BODY,
+    'wizard-title-input',
+    'wizard-title-input-2',
+  );
   assert.match(out, /id: 'wizard-title-input-2'/);
 });
 
 test('Phase129 replaceIdSelector: returns 0 replacements when not present', () => {
-  const { body: out, replacements } = replaceIdSelector(SAMPLE_BODY, 'never-present', 'replacement');
+  const { body: out, replacements } = replaceIdSelector(
+    SAMPLE_BODY,
+    'never-present',
+    'replacement',
+  );
   assert.equal(replacements, 0);
   assert.equal(out, SAMPLE_BODY);
 });
@@ -253,9 +268,9 @@ test('Phase129 replaceIdSelector: only matches `id:` lines, not embedded `id` in
   // shouldn't be touched.
   const body = `- tapOn:\n    id: "real-btn"\n- inputText: "id: real-btn"`;
   const { body: out, replacements } = replaceIdSelector(body, 'real-btn', 'new-btn');
-  assert.equal(replacements, 1);  // ONLY the actual id: line
+  assert.equal(replacements, 1); // ONLY the actual id: line
   assert.match(out, /id: "new-btn"/);
-  assert.match(out, /inputText: "id: real-btn"/);  // embedded literal preserved
+  assert.match(out, /inputText: "id: real-btn"/); // embedded literal preserved
 });
 
 test('Phase129 replaceIdSelector: handles regex special chars in oldId', () => {
@@ -282,11 +297,11 @@ function makeAction() {
 }
 
 test('Phase129 attemptRepair: patched when failed selector present + good candidate', () => {
-  const result = attemptRepair(
-    makeAction(),
-    'fab-create-task',
-    ['tab-tasks', 'fab-create-task-btn', 'wizard-title-input'],
-  );
+  const result = attemptRepair(makeAction(), 'fab-create-task', [
+    'tab-tasks',
+    'fab-create-task-btn',
+    'wizard-title-input',
+  ]);
   assert.equal(result.kind, 'patched');
   if (result.kind === 'patched') {
     assert.equal(result.oldSelector, 'fab-create-task');
@@ -297,20 +312,16 @@ test('Phase129 attemptRepair: patched when failed selector present + good candid
 });
 
 test('Phase129 attemptRepair: no-stale-selector when failed selector absent from body', () => {
-  const result = attemptRepair(
-    makeAction(),
-    'never-was-in-this-flow',
-    ['some', 'candidates'],
-  );
+  const result = attemptRepair(makeAction(), 'never-was-in-this-flow', ['some', 'candidates']);
   assert.equal(result.kind, 'no-stale-selector');
 });
 
 test('Phase129 attemptRepair: no-match when candidates too distant', () => {
-  const result = attemptRepair(
-    makeAction(),
-    'fab-create-task',
-    ['totally-unrelated-thing', 'menu-1', 'submit-btn'],
-  );
+  const result = attemptRepair(makeAction(), 'fab-create-task', [
+    'totally-unrelated-thing',
+    'menu-1',
+    'submit-btn',
+  ]);
   assert.equal(result.kind, 'no-match');
   if (result.kind === 'no-match') {
     assert.equal(result.failedSelector, 'fab-create-task');
@@ -327,11 +338,10 @@ test('Phase129 attemptRepair: no-match with bestScore=null when candidates is em
 test('Phase129 attemptRepair: filters the failed selector itself out of candidates', () => {
   // If the live snapshot still contains the failed selector as a candidate,
   // we should NOT pick it as the "fix" (that would be a no-op patch).
-  const result = attemptRepair(
-    makeAction(),
+  const result = attemptRepair(makeAction(), 'fab-create-task', [
     'fab-create-task',
-    ['fab-create-task', 'fab-create-task-btn'],
-  );
+    'fab-create-task-btn',
+  ]);
   assert.equal(result.kind, 'patched');
   if (result.kind === 'patched') assert.equal(result.newSelector, 'fab-create-task-btn');
 });
@@ -355,11 +365,7 @@ test('Phase129 attemptRepair: respects custom threshold', () => {
 
 test('Phase129 applyRepair: bumps revision + appends RepairRecord', () => {
   const action = makeAction();
-  const result = attemptRepair(
-    action,
-    'fab-create-task',
-    ['fab-create-task-btn'],
-  );
+  const result = attemptRepair(action, 'fab-create-task', ['fab-create-task-btn']);
   assert.equal(result.kind, 'patched');
   if (result.kind !== 'patched') return;
   const repaired = applyRepair(action, result, fixedNow, 'agent: snapshot showed renamed FAB');

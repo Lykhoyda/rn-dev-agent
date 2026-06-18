@@ -17,7 +17,12 @@ import {
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
-import { buildStepSummary, classifyExecError, combineRunnerOutput, formatFailureHeadline } from '../domain/maestro-step-parser.js';
+import {
+  buildStepSummary,
+  classifyExecError,
+  combineRunnerOutput,
+  formatFailureHeadline,
+} from '../domain/maestro-step-parser.js';
 import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
@@ -102,7 +107,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         if (!PARAM_KEY_RE.test(key)) {
           return failResult(
             `Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
-            `— must match ${PARAM_KEY_RE.source} (GH #116).`,
+              `— must match ${PARAM_KEY_RE.source} (GH #116).`,
           );
         }
         if (typeof value !== 'string') {
@@ -115,9 +120,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
 
     const platform = resolvePlatform(args.platform);
     if (!platform) {
-      return failResult(
-        'Cannot determine platform. Pass platform or open a device session first.',
-      );
+      return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
 
     // B59: tiered dispatch — maestro-runner when viable, Maestro CLI fallback
@@ -166,14 +169,22 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       const rawAppId = resolveAppId(args.appId, platform);
       headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
       if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
-        return failResult(`Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`);
+        return failResult(
+          `Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`,
+        );
       }
-      validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
+      validatedContent = buildMaestroFlow(
+        headerAppId ? { appId: headerAppId } : {},
+        parsed.commands,
+      );
       // Unique per-call path — multi-LLM review caught the fixed
       // `/tmp/rn-maestro-inline.yaml` racing on concurrent maestro_run
       // calls (parallel test invocations could overwrite each other's
       // validated content between writeFileSync and execFile).
-      flowFile = join(tmpdir(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      flowFile = join(
+        tmpdir(),
+        `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
+      );
       writeFileSync(flowFile, validatedContent, 'utf-8');
     } catch (err) {
       if (err instanceof MaestroValidationError) {
@@ -189,7 +200,12 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
     // params. Validation already ran at the top of the handler so by
     // this point every key matches PARAM_KEY_RE and every value is a
     // string — no need to re-check.
-    const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile);
+    const appFileResolution = resolveAppFileForClearState(
+      platform,
+      validatedContent,
+      headerAppId,
+      args.appFile,
+    );
     if (!appFileResolution.ok) {
       return failResult(appFileResolution.error);
     }

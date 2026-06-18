@@ -5,12 +5,19 @@ import type { AgentEvent, ToolObservation } from './events.js';
 
 const DEFAULT_CAP = 500;
 const MAX_SHOT_BYTES = 4_000_000;
-export interface ScreenshotBytes { buf: Buffer; contentType: string; }
+export interface ScreenshotBytes {
+  buf: Buffer;
+  contentType: string;
+}
 
 function screenshotPath(result: unknown): string | null {
-  const data = (unwrapResult(result)?.data ?? (result as { data?: unknown })?.data) as { message?: string; path?: string } | undefined;
+  const data = (unwrapResult(result)?.data ?? (result as { data?: unknown })?.data) as
+    | { message?: string; path?: string }
+    | undefined;
   const p = data?.path ?? data?.message;
-  return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png')) ? p : null;
+  return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png'))
+    ? p
+    : null;
 }
 
 export class Recorder {
@@ -32,18 +39,39 @@ export class Recorder {
       const ev = mapObservation(++this.seq, o);
       this.buf.push(ev);
       this.captureScreenshot(ev, o);
-      for (const fn of this.subs) { try { fn(ev); } catch { /* per-subscriber swallow */ } }
-    } catch { /* non-load-bearing: never throw into the tool path */ }
+      for (const fn of this.subs) {
+        try {
+          fn(ev);
+        } catch {
+          /* per-subscriber swallow */
+        }
+      }
+    } catch {
+      /* non-load-bearing: never throw into the tool path */
+    }
   }
-  snapshot(): AgentEvent[] { return this.buf.getLast(this.buf.size); }
+  snapshot(): AgentEvent[] {
+    return this.buf.getLast(this.buf.size);
+  }
   attach(fn: (e: AgentEvent) => void): { snapshot: AgentEvent[]; detach: () => void } {
     const snapshot = this.buf.getLast(this.buf.size);
     this.subs.add(fn);
-    return { snapshot, detach: () => { this.subs.delete(fn); } };
+    return {
+      snapshot,
+      detach: () => {
+        this.subs.delete(fn);
+      },
+    };
   }
-  getScreenshot(seq: number): ScreenshotBytes | undefined { return this.shots.get(seq); }
-  hasSubscribers(): boolean { return this.subs.size > 0; }
-  getLiveScreenshot(): ScreenshotBytes | undefined { return this.liveShotData; }
+  getScreenshot(seq: number): ScreenshotBytes | undefined {
+    return this.shots.get(seq);
+  }
+  hasSubscribers(): boolean {
+    return this.subs.size > 0;
+  }
+  getLiveScreenshot(): ScreenshotBytes | undefined {
+    return this.liveShotData;
+  }
   pushLive(frame: { shot?: ScreenshotBytes; route?: string }): void {
     const ev: Record<string, unknown> = { type: 'live' };
     let changed = false;
@@ -58,7 +86,11 @@ export class Recorder {
     }
     if (!changed) return;
     for (const fn of this.subs) {
-      try { fn(ev as unknown as AgentEvent); } catch { /* per-subscriber swallow */ }
+      try {
+        fn(ev as unknown as AgentEvent);
+      } catch {
+        /* per-subscriber swallow */
+      }
     }
   }
   clear(): void {
@@ -68,7 +100,11 @@ export class Recorder {
     // SSE stream + its heartbeat interval. The server's stream subscriber ends
     // the response on this event.
     for (const fn of this.subs) {
-      try { fn({ type: 'cleared' } as unknown as AgentEvent); } catch { /* per-subscriber swallow */ }
+      try {
+        fn({ type: 'cleared' } as unknown as AgentEvent);
+      } catch {
+        /* per-subscriber swallow */
+      }
     }
     this.subs.clear();
     this.shots.clear();
@@ -90,7 +126,9 @@ export class Recorder {
         if (oldest === undefined) break;
         this.shots.delete(oldest);
       }
-    } catch { /* file vanished/unreadable — fail-safe */ }
+    } catch {
+      /* file vanished/unreadable — fail-safe */
+    }
   }
 }
 export const recorder = new Recorder();

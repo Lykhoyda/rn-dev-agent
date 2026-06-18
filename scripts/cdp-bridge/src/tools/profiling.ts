@@ -17,7 +17,9 @@ async function safeProbeArchitecture(client: CDPClient): Promise<'new' | 'old' |
     const result = await client.evaluate(client.helperExpr('getAppInfo()'));
     if (typeof result.value !== 'string') return 'unknown';
     const info = JSON.parse(result.value) as { architecture?: unknown };
-    return info.architecture === 'new' || info.architecture === 'old' ? info.architecture : 'unknown';
+    return info.architecture === 'new' || info.architecture === 'old'
+      ? info.architecture
+      : 'unknown';
   } catch {
     return 'unknown';
   }
@@ -26,7 +28,7 @@ async function safeProbeArchitecture(client: CDPClient): Promise<'new' | 'old' |
 export function createHeapUsageHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (_args: Record<string, never>, client) => {
     try {
-      const result = await client.send('Runtime.getHeapUsage', undefined) as {
+      const result = (await client.send('Runtime.getHeapUsage', undefined)) as {
         usedSize?: number;
         totalSize?: number;
       };
@@ -35,7 +37,9 @@ export function createHeapUsageHandler(getClient: () => CDPClient) {
         totalMB: Number(((result.totalSize ?? 0) / 1024 / 1024).toFixed(2)),
         usedBytes: result.usedSize ?? 0,
         totalBytes: result.totalSize ?? 0,
-        utilization: result.totalSize ? Number(((result.usedSize ?? 0) / result.totalSize * 100).toFixed(1)) : 0,
+        utilization: result.totalSize
+          ? Number((((result.usedSize ?? 0) / result.totalSize) * 100).toFixed(1))
+          : 0,
       });
     } catch (err) {
       return failResult(`Heap usage unavailable: ${err instanceof Error ? err.message : err}`);
@@ -61,14 +65,15 @@ export function createCpuProfileHandler(getClient: () => CDPClient) {
       const archHint = arch === 'old' ? OLD_ARCH_PROFILER_HINT : null;
       return failResult(
         'CPU profiling unavailable: CDP Profiler domain is not exposed by this Hermes target. ' +
-        'No JS-based fallback is provided because sampling the sampler\'s own stack produced ' +
-        'misleading hotFunctions (CDP-007).',
+          "No JS-based fallback is provided because sampling the sampler's own stack produced " +
+          'misleading hotFunctions (CDP-007).',
         'PROFILER_UNAVAILABLE',
         {
           architecture: arch,
-          hint: archHint
-            ?? 'For memory analysis use cdp_heap_usage. For diagnostics use cdp_console_log/cdp_error_log. ' +
-               'Profiler domain availability varies across React Native + Hermes versions.',
+          hint:
+            archHint ??
+            'For memory analysis use cdp_heap_usage. For diagnostics use cdp_console_log/cdp_error_log. ' +
+              'Profiler domain availability varies across React Native + Hermes versions.',
         },
       );
     }
@@ -77,11 +82,15 @@ export function createCpuProfileHandler(getClient: () => CDPClient) {
       await client.send('Profiler.enable', undefined);
       await client.send('Profiler.start', undefined);
 
-      await new Promise(r => setTimeout(r, duration));
+      await new Promise((r) => setTimeout(r, duration));
 
-      const result = await client.send('Profiler.stop', undefined) as {
+      const result = (await client.send('Profiler.stop', undefined)) as {
         profile?: {
-          nodes?: Array<{ id: number; callFrame: { functionName: string; url: string; lineNumber: number }; hitCount?: number }>;
+          nodes?: Array<{
+            id: number;
+            callFrame: { functionName: string; url: string; lineNumber: number };
+            hitCount?: number;
+          }>;
           startTime?: number;
           endTime?: number;
         };
@@ -95,10 +104,10 @@ export function createCpuProfileHandler(getClient: () => CDPClient) {
       }
 
       const hotFunctions = profile.nodes
-        .filter(n => (n.hitCount ?? 0) > 0)
+        .filter((n) => (n.hitCount ?? 0) > 0)
         .sort((a, b) => (b.hitCount ?? 0) - (a.hitCount ?? 0))
         .slice(0, 20)
-        .map(n => ({
+        .map((n) => ({
           name: n.callFrame.functionName || '(anonymous)',
           url: n.callFrame.url,
           line: n.callFrame.lineNumber,
@@ -113,7 +122,11 @@ export function createCpuProfileHandler(getClient: () => CDPClient) {
         endTime: profile.endTime,
       });
     } catch (err) {
-      try { await client.send('Profiler.disable', undefined); } catch { /* cleanup */ }
+      try {
+        await client.send('Profiler.disable', undefined);
+      } catch {
+        /* cleanup */
+      }
       const base = `CPU profiling failed: ${err instanceof Error ? err.message : err}`;
       // M10: advisory hint when the cause is likely Old Architecture.
       const arch = await safeProbeArchitecture(client);

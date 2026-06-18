@@ -210,7 +210,9 @@ function cleanupOrphans(yamlPath: string, sidecarPath: string): void {
         const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
         if (now - mtimeMs < ORPHAN_MAX_AGE_MS) continue; // fresh — likely a concurrent writer's
         atomicWriter._unlink(orphanPath);
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
   }
 }

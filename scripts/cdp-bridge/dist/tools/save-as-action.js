@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
-import { freshRuntimeState, } from '../domain/reusable-action.js';
+import { freshRuntimeState } from '../domain/reusable-action.js';
 import { actionPathFor } from '../domain/action-store.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { atomicWriter } from '../domain/atomic-writer.js';

@@ -11,8 +11,7 @@ import type { SnapshotHint } from '../cdp/app-installed-probe.js';
  *   - the standalone `- clearState` command (in the validator allowlist)
  */
 export function flowUsesClearState(flowText: string): boolean {
-  return /clearState:\s*true\b/.test(flowText)
-    || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 
 export interface ResolveAppFileDeps {
@@ -71,9 +70,7 @@ export function resolveIosAppFile(bundleId: string, deps: ResolveAppFileDeps = {
   return null;
 }
 
-export type AppFileResolution =
-  | { ok: true; appFile?: string }
-  | { ok: false; error: string };
+export type AppFileResolution = { ok: true; appFile?: string } | { ok: false; error: string };
 
 /**
  * GH#201: decide the `--app-file` value for a single flow. Returns the explicit
@@ -114,11 +111,10 @@ export function resolveAppFileForClearState(
 
 function defaultGetAppContainer(bundleId: string): string | null {
   try {
-    const out = execFileSync(
-      'xcrun',
-      ['simctl', 'get_app_container', 'booted', bundleId, 'app'],
-      { encoding: 'utf8', timeout: 5_000 },
-    ).trim();
+    const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    }).trim();
     return out || null;
   } catch {
     return null;

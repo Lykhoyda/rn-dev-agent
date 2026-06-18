@@ -33,7 +33,16 @@ afterEach(() => {
 test('runAndroid posts snapshot to /command with appBundleId', async () => {
   response = {
     ok: true,
-    data: { nodes: [{ index: 1, type: 'TextView', identifier: 'tab-home', rect: { x: 0, y: 0, width: 100, height: 50 } }] },
+    data: {
+      nodes: [
+        {
+          index: 1,
+          type: 'TextView',
+          identifier: 'tab-home',
+          rect: { x: 0, y: 0, width: 100, height: 50 },
+        },
+      ],
+    },
   };
   const result = await runAndroid({ command: 'snapshot', bundleId: 'com.rndevagent.testapp' });
   assert.equal(result.isError, undefined);
@@ -60,7 +69,10 @@ test('runAndroid returns STALE_REF without posting', async () => {
 });
 
 test('runAndroid surfaces runner error code', async () => {
-  response = { ok: false, error: { code: 'APP_NOT_FOREGROUND', message: 'target did not foreground' } };
+  response = {
+    ok: false,
+    error: { code: 'APP_NOT_FOREGROUND', message: 'target did not foreground' },
+  };
   const result = await runAndroid({ command: 'snapshot', bundleId: 'com.nope' });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /target did not foreground/);

@@ -51,7 +51,12 @@ test('Phase 134.2: device_permission rejects newline-injected appId before adb',
 test('Phase 134.2: device_permission rejects shell-metachar appId before adb', async () => {
   const { createDevicePermissionHandler } = await import('../../dist/tools/device-permission.js');
   const handler = createDevicePermissionHandler();
-  for (const malicious of [ATTACK_SHELL_METACHARS, ATTACK_BACKTICK, ATTACK_PIPE, ATTACK_SUBSTITUTION]) {
+  for (const malicious of [
+    ATTACK_SHELL_METACHARS,
+    ATTACK_BACKTICK,
+    ATTACK_PIPE,
+    ATTACK_SUBSTITUTION,
+  ]) {
     const r = await handler({
       action: 'grant',
       permission: 'camera',
@@ -98,7 +103,10 @@ test('Phase 134.2: device_reset_state rejects newline-injected appId before any 
   const { createDeviceResetStateHandler } = await import('../../dist/tools/device-reset-state.js');
   // Pass a fake getClient — the validator should short-circuit before
   // any CDP work.
-  const handler = createDeviceResetStateHandler(() => ({ connectedTarget: null, isConnected: false }));
+  const handler = createDeviceResetStateHandler(() => ({
+    connectedTarget: null,
+    isConnected: false,
+  }));
   const r = await handler({
     appId: ATTACK_NEWLINE,
     platform: 'android',
@@ -110,7 +118,10 @@ test('Phase 134.2: device_reset_state rejects newline-injected appId before any 
 
 test('Phase 134.2: device_reset_state rejects shell-metachar appId', async () => {
   const { createDeviceResetStateHandler } = await import('../../dist/tools/device-reset-state.js');
-  const handler = createDeviceResetStateHandler(() => ({ connectedTarget: null, isConnected: false }));
+  const handler = createDeviceResetStateHandler(() => ({
+    connectedTarget: null,
+    isConnected: false,
+  }));
   const r = await handler({
     appId: ATTACK_SHELL_METACHARS,
     platform: 'android',
@@ -165,8 +176,11 @@ test('Phase 134.2: device_permission accepts a standard reverse-DNS appId past v
   // or "bundle", we have a regression on the valid-input path.
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /invalid bundle/i,
-      'Valid bundle ID was incorrectly rejected as invalid');
+    assert.doesNotMatch(
+      env.error ?? '',
+      /invalid bundle/i,
+      'Valid bundle ID was incorrectly rejected as invalid',
+    );
   }
 });
 
@@ -267,8 +281,11 @@ test('Phase 134.2-followup: device_deeplink accepts urls with legitimate special
   // May error from adb-not-installed but NOT from input validation.
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /control characters|newlines|too long/i,
-      'Legitimate URL with query/fragment must pass input validation');
+    assert.doesNotMatch(
+      env.error ?? '',
+      /control characters|newlines|too long/i,
+      'Legitimate URL with query/fragment must pass input validation',
+    );
   }
 });
 
@@ -283,7 +300,10 @@ test('Phase 134.2-followup: device_deeplink without packageName works (optional 
   });
   if (r.isError) {
     const env = parseEnvelope(r);
-    assert.doesNotMatch(env.error ?? '', /invalid (bundle|packageName)/i,
-      'Omitting packageName should not trigger validation');
+    assert.doesNotMatch(
+      env.error ?? '',
+      /invalid (bundle|packageName)/i,
+      'Omitting packageName should not trigger validation',
+    );
   }
 });

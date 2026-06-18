@@ -9,27 +9,28 @@ const WRAPPER_PATH = resolve(__dirname, '../../src/agent-device-wrapper.ts');
 const source = readFileSync(WRAPPER_PATH, 'utf8');
 
 test('buildRunAndroidArgs maps Android MVP verbs', () => {
+  const normalized = source.replace(/'/g, '"');
   for (const fragment of [
-    "case 'press':",
-    "case 'tap':",
-    "case 'fill':",
-    "case 'type':",
-    "case 'snapshot':",
-    "case 'back':",
-    "case 'screenshot':",
-    "case 'keyboard':",
-    "case 'swipe':",
-    "case 'scroll':",
-    "case 'drag':",
-    "case 'longpress':",
-    "case 'pinch':",
+    'case "press":',
+    'case "tap":',
+    'case "fill":',
+    'case "type":',
+    'case "snapshot":',
+    'case "back":',
+    'case "screenshot":',
+    'case "keyboard":',
+    'case "swipe":',
+    'case "scroll":',
+    'case "drag":',
+    'case "longpress":',
+    'case "pinch":',
   ]) {
-    assert.ok(source.includes(fragment), `missing ${fragment}`);
+    assert.ok(normalized.includes(fragment), `missing ${fragment}`);
   }
 });
 
 test('buildRunAndroidArgs includes stale-ref sentinel and screenshot out path', () => {
   assert.match(source, /_staleRef: ref/);
   assert.match(source, /_staleRef: target/);
-  assert.match(source, /outPath: optionValue\(cliArgs, '--out'\)/);
+  assert.match(source, /outPath: optionValue\(cliArgs, ['"]--out['"]\)/);
 });

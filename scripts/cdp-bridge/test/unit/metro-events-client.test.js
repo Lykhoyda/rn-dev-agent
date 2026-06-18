@@ -38,13 +38,18 @@ function makeMockMetroEventsServer() {
         totalConnectionsEver: () => totalConnectionsEver,
         closeAllConnections: () => {
           for (const ws of connections) {
-            try { ws.close(1000); } catch { /* ignore */ }
+            try {
+              ws.close(1000);
+            } catch {
+              /* ignore */
+            }
           }
           connections.length = 0;
         },
-        stop: () => new Promise((r) => {
-          wss.close(() => server.close(() => r()));
-        }),
+        stop: () =>
+          new Promise((r) => {
+            wss.close(() => server.close(() => r()));
+          }),
       });
     });
   });
@@ -55,7 +60,8 @@ function waitForCondition(check, timeoutMs = 2000, intervalMs = 25) {
     const start = Date.now();
     const tick = () => {
       if (check()) return resolve();
-      if (Date.now() - start >= timeoutMs) return reject(new Error(`condition not met within ${timeoutMs}ms`));
+      if (Date.now() - start >= timeoutMs)
+        return reject(new Error(`condition not met within ${timeoutMs}ms`));
       setTimeout(tick, intervalMs);
     };
     tick();
@@ -257,8 +263,13 @@ test('MetroEventsClient: D656 regression — initial connect failure does NOT do
   // We verify indirectly: only ONE reconnect was scheduled → the max-attempts guard
   // fires at the boundary, not 1 attempt early.
   // Also verify no double-timer leak: process.getActiveResourcesInfo().
-  const activeTimers = (process.getActiveResourcesInfo?.() ?? []).filter((n) => n === 'Timeout').length;
-  assert.ok(activeTimers <= 1, `expected ≤1 pending Timeout (single-schedule), got ${activeTimers}`);
+  const activeTimers = (process.getActiveResourcesInfo?.() ?? []).filter(
+    (n) => n === 'Timeout',
+  ).length;
+  assert.ok(
+    activeTimers <= 1,
+    `expected ≤1 pending Timeout (single-schedule), got ${activeTimers}`,
+  );
   client.stop();
 });
 
@@ -316,7 +327,9 @@ test('MetroEventsClient: D656 regression — stop() during CONNECTING state does
   // CONNECTING briefly, then immediately call stop() and assert the process
   // is still alive and no 'uncaughtException' was observed.
   let uncaught = null;
-  const handler = (err) => { uncaught = err; };
+  const handler = (err) => {
+    uncaught = err;
+  };
   process.once('uncaughtException', handler);
 
   try {
@@ -335,7 +348,11 @@ test('MetroEventsClient: D656 regression — stop() during CONNECTING state does
     process.off('uncaughtException', handler);
   }
 
-  assert.equal(uncaught, null, `expected no uncaughtException, got: ${uncaught?.message ?? 'none'}`);
+  assert.equal(
+    uncaught,
+    null,
+    `expected no uncaughtException, got: ${uncaught?.message ?? 'none'}`,
+  );
 });
 
 // ── cdp_metro_events tool ──
@@ -385,7 +402,9 @@ test('cdp_metro_events: type filter narrows results', async () => {
 
     const mock = createMockClient({ _metroEventsClient: events });
     const handler = createMetroEventsHandler(() => mock);
-    const data = expectOk(await handler({ limit: 10, type: 'bundle_build_failed', clearErrors: false }));
+    const data = expectOk(
+      await handler({ limit: 10, type: 'bundle_build_failed', clearErrors: false }),
+    );
     assert.equal(data.count, 2);
     assert.ok(data.events.every((e) => e.type === 'bundle_build_failed'));
     assert.equal(data.buildErrors, 2);

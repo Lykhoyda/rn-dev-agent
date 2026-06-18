@@ -40,7 +40,7 @@ export function createProofStepHandler(getClient, deps = {}) {
         // Step 2: Wait for settlement
         const waitMs = args.waitMs ?? 1500;
         if (waitMs > 0) {
-            await new Promise(r => setTimeout(r, waitMs));
+            await new Promise((r) => setTimeout(r, waitMs));
         }
         // Step 3: Verify element (optional)
         if (args.verifyText && hasSession()) {
@@ -79,8 +79,8 @@ export function createProofStepHandler(getClient, deps = {}) {
                     const parsed = JSON.parse(treeResult.value);
                     const matches = parsed && Array.isArray(parsed.matches) ? parsed.matches : null;
                     const treeNode = parsed ? parsed.tree : null;
-                    const hasMatch = (matches !== null && matches.length > 0)
-                        || (treeNode !== null && treeNode !== undefined);
+                    const hasMatch = (matches !== null && matches.length > 0) ||
+                        (treeNode !== null && treeNode !== undefined);
                     if (parsed && parsed.__agent_error) {
                         result.verified = false;
                         result.verifyDetail = `testID "${args.verifyTestID}" not found: ${parsed.__agent_error}`;

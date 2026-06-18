@@ -12,7 +12,9 @@ import {
 } from '../../dist/tools/test-recorder-generators.js';
 
 test('B136: Maestro emits `# startRoute:` preamble when set', () => {
-  const out = generateMaestro([{ type: 'annotation', note: 'first', t: 1 }], { startRoute: 'ProfileTab' });
+  const out = generateMaestro([{ type: 'annotation', note: 'first', t: 1 }], {
+    startRoute: 'ProfileTab',
+  });
   assert.match(out, /# startRoute: ProfileTab/);
 });
 

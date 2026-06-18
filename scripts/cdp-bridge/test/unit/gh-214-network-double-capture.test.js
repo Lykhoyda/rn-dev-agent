@@ -41,7 +41,8 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
     if (expr === REACT_READY_PROBE_JS) return { value: true };
     if (expr === INJECTED_HELPERS) return { value: undefined };
     if (expr === 'typeof globalThis.__RN_AGENT === "object"') return { value: true };
-    if (expr === NETWORK_HOOK_SCRIPT || expr === NETWORK_CB_BUFFERED_SCRIPT) return { value: undefined };
+    if (expr === NETWORK_HOOK_SCRIPT || expr === NETWORK_CB_BUFFERED_SCRIPT)
+      return { value: undefined };
     // probe fetch (`void fetch(...)`) — optionally simulate a delivered event.
     if (typeof expr === 'string' && expr.includes('fetch(') && bufferGrowsOnProbe) size += 1;
     return { value: undefined };
@@ -86,7 +87,10 @@ test('CDP mode (probe succeeds) keeps the domain — does NOT disable it', async
   const result = await performSetup(h.opts);
 
   assert.equal(result.networkMode, 'cdp', 'a delivered probe event keeps CDP mode');
-  assert.ok(!h.sent.includes('Network.disable'), 'must not disable the domain that is the sole capture source');
+  assert.ok(
+    !h.sent.includes('Network.disable'),
+    'must not disable the domain that is the sole capture source',
+  );
 });
 
 test('Network.enable unsupported (genuine RN<0.83): reaches hook mode without crashing', async () => {

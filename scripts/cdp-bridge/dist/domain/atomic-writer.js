@@ -179,7 +179,9 @@ function cleanupOrphans(yamlPath, sidecarPath) {
                     continue; // fresh — likely a concurrent writer's
                 atomicWriter._unlink(orphanPath);
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
         }
     }
 }

@@ -43,8 +43,12 @@ test('cwdForPort: memoizes pid→cwd but re-resolves port→pid each call', () =
   let pidCalls = 0;
   let cwdCalls = 0;
   const exec = (cmd, args) => {
-    if (args.includes('-ti')) { pidCalls++; return '777\n'; }
-    cwdCalls++; return 'p777\nfcwd\nn/repo/worktreeA\n';
+    if (args.includes('-ti')) {
+      pidCalls++;
+      return '777\n';
+    }
+    cwdCalls++;
+    return 'p777\nfcwd\nn/repo/worktreeA\n';
   };
   cwdForPort(8081, exec);
   cwdForPort(8081, exec);
@@ -54,7 +58,9 @@ test('cwdForPort: memoizes pid→cwd but re-resolves port→pid each call', () =
 
 test('cwdForPort: fail-open — null when exec throws or returns junk', () => {
   _resetMetroCwdCacheForTest();
-  const throwing = () => { throw new Error('lsof not found'); };
+  const throwing = () => {
+    throw new Error('lsof not found');
+  };
   assert.equal(cwdForPort(8081, throwing), null);
   _resetMetroCwdCacheForTest();
   const noPid = (cmd, args) => (args.includes('-ti') ? '' : '');

@@ -22,9 +22,25 @@ function makeNavRefShape(extra = {}) {
 function createSandbox(opts = {}) {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON, Map, WeakSet, Error, Date, parseInt, parseFloat,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Error,
+    Date,
+    parseInt,
+    parseFloat,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
-    String, Number, Boolean, RegExp, Symbol, Set, Promise, setTimeout, clearTimeout,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Symbol,
+    Set,
+    Promise,
+    setTimeout,
+    clearTimeout,
   };
   sandbox.globalThis = sandbox;
 
@@ -86,7 +102,8 @@ test('findNavRef: walks past unrelated hooks to find the nav ref', () => {
         },
       },
     },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = navigate(sandbox, 'Home');
@@ -102,7 +119,8 @@ test('findNavRef: rejects hook with .current.navigate but missing dispatch (stri
     ref: null,
     stateNode: null,
     memoizedState: { memoizedState: partial, next: null },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = navigate(sandbox, 'Home');
@@ -117,7 +135,8 @@ test('findNavRef: existing fiber.ref path still works (no regression)', () => {
     ref: { current: navRef }, // ref-prop path — pre-#72 behavior
     stateNode: null,
     memoizedState: null,
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = navigate(sandbox, 'Home');
@@ -136,11 +155,16 @@ test('findNavRef: globals path still wins over fiber walk (no regression)', () =
     type: { displayName: 'NavigationContainer' },
     ref: { current: fiberRef },
     memoizedState: null,
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   let navigatedTo = null;
-  globalRef.navigate = (s) => { navigatedTo = `global:${s}`; };
-  fiberRef.navigate = (s) => { navigatedTo = `fiber:${s}`; };
+  globalRef.navigate = (s) => {
+    navigatedTo = `global:${s}`;
+  };
+  fiberRef.navigate = (s) => {
+    navigatedTo = `fiber:${s}`;
+  };
   const sandbox = createSandbox({
     fiberRoot: fiber,
     globals: { __NAV_REF__: globalRef },
@@ -166,7 +190,8 @@ test('findNavRef: hopGuard prevents infinite loop on circular hooks chain', () =
   const fiber = {
     type: { displayName: 'NavigationContainer' },
     memoizedState: hookA,
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const start = Date.now();

@@ -66,7 +66,9 @@ const NAV_READY_TIMEOUT_MS = 12_000;
 function normalizePermissions(input: DeviceResetStateArgs['permissions']): PermissionSpec[] {
   if (!input || input.length === 0) return [];
   return input.map((p) =>
-    typeof p === 'string' ? { name: p, action: 'revoke' as const } : { name: p.name, action: p.action ?? 'revoke' },
+    typeof p === 'string'
+      ? { name: p, action: 'revoke' as const }
+      : { name: p.name, action: p.action ?? 'revoke' },
   );
 }
 
@@ -123,28 +125,51 @@ async function runStorageSteps(
       const evalResult = await client.evaluate(expr);
       if (evalResult.error) {
         results.push({
-          step: 'storage', target: key, action: 'delete', ok: false,
-          durationMs: Date.now() - start, error: evalResult.error,
+          step: 'storage',
+          target: key,
+          action: 'delete',
+          ok: false,
+          durationMs: Date.now() - start,
+          error: evalResult.error,
         });
         continue;
       }
       // Expression returns JSON; check for __agent_error sentinel.
-      const raw = typeof evalResult.value === 'string' ? evalResult.value : JSON.stringify(evalResult.value);
+      const raw =
+        typeof evalResult.value === 'string' ? evalResult.value : JSON.stringify(evalResult.value);
       let parsed: unknown;
-      try { parsed = JSON.parse(raw); } catch { parsed = null; }
-      const obj = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+      const obj = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
       if (obj && typeof obj.__agent_error === 'string') {
         results.push({
-          step: 'storage', target: key, action: 'delete', ok: false,
-          durationMs: Date.now() - start, error: obj.__agent_error,
+          step: 'storage',
+          target: key,
+          action: 'delete',
+          ok: false,
+          durationMs: Date.now() - start,
+          error: obj.__agent_error,
         });
         continue;
       }
-      results.push({ step: 'storage', target: key, action: 'delete', ok: true, durationMs: Date.now() - start });
+      results.push({
+        step: 'storage',
+        target: key,
+        action: 'delete',
+        ok: true,
+        durationMs: Date.now() - start,
+      });
     } catch (e: unknown) {
       results.push({
-        step: 'storage', target: key, action: 'delete', ok: false,
-        durationMs: Date.now() - start, error: e instanceof Error ? e.message : String(e),
+        step: 'storage',
+        target: key,
+        action: 'delete',
+        ok: false,
+        durationMs: Date.now() - start,
+        error: e instanceof Error ? e.message : String(e),
       });
     }
   }
@@ -158,7 +183,10 @@ async function runTerminateStep(appId: string, platform: 'ios' | 'android'): Pro
     return { step: 'terminate', target: appId, ok: true, durationMs: Date.now() - start };
   } catch (e: unknown) {
     return {
-      step: 'terminate', target: appId, ok: false, durationMs: Date.now() - start,
+      step: 'terminate',
+      target: appId,
+      ok: false,
+      durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e),
     };
   }
@@ -171,13 +199,18 @@ async function runLaunchStep(appId: string, platform: 'ios' | 'android'): Promis
     return { step: 'launch', target: appId, ok: true, durationMs: Date.now() - start };
   } catch (e: unknown) {
     return {
-      step: 'launch', target: appId, ok: false, durationMs: Date.now() - start,
+      step: 'launch',
+      target: appId,
+      ok: false,
+      durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e),
     };
   }
 }
 
-async function runReconnectStep(client: CDPClient): Promise<{ step: StepResult; reconnected: boolean }> {
+async function runReconnectStep(
+  client: CDPClient,
+): Promise<{ step: StepResult; reconnected: boolean }> {
   const start = Date.now();
   await new Promise((r) => setTimeout(r, POST_LAUNCH_SETTLE_MS));
   await handleDevClientPicker().catch(() => undefined);
@@ -195,7 +228,9 @@ async function runReconnectStep(client: CDPClient): Promise<{ step: StepResult; 
       } else {
         return {
           step: {
-            step: 'reconnect', ok: false, durationMs: Date.now() - start,
+            step: 'reconnect',
+            ok: false,
+            durationMs: Date.now() - start,
             error: err instanceof Error ? err.message : String(err),
           },
           reconnected: false,
@@ -204,12 +239,19 @@ async function runReconnectStep(client: CDPClient): Promise<{ step: StepResult; 
     }
   }
   return {
-    step: { step: 'reconnect', ok: false, durationMs: Date.now() - start, error: 'reconnect attempts exhausted' },
+    step: {
+      step: 'reconnect',
+      ok: false,
+      durationMs: Date.now() - start,
+      error: 'reconnect attempts exhausted',
+    },
     reconnected: false,
   };
 }
 
-async function runHelpersStep(client: CDPClient): Promise<{ step: StepResult; helpersInjected: boolean }> {
+async function runHelpersStep(
+  client: CDPClient,
+): Promise<{ step: StepResult; helpersInjected: boolean }> {
   const start = Date.now();
   const deadline = Date.now() + HELPERS_DEADLINE_MS;
   while (!client.helpersInjected && Date.now() < deadline) {
@@ -218,7 +260,9 @@ async function runHelpersStep(client: CDPClient): Promise<{ step: StepResult; he
   const ok = client.helpersInjected;
   return {
     step: {
-      step: 'helpers', ok, durationMs: Date.now() - start,
+      step: 'helpers',
+      ok,
+      durationMs: Date.now() - start,
       ...(ok ? {} : { error: `helpers not injected within ${HELPERS_DEADLINE_MS}ms` }),
     },
     helpersInjected: ok,
@@ -229,7 +273,9 @@ async function runNavReadyStep(client: CDPClient): Promise<StepResult> {
   const start = Date.now();
   const ready = await waitForNavigationReady(client, NAV_READY_TIMEOUT_MS);
   return {
-    step: 'nav_ready', ok: ready, durationMs: Date.now() - start,
+    step: 'nav_ready',
+    ok: ready,
+    durationMs: Date.now() - start,
     ...(ready ? {} : { error: `nav ref not ready within ${NAV_READY_TIMEOUT_MS}ms` }),
   };
 }
@@ -309,9 +355,14 @@ export function createDeviceResetStateHandler(
       if (!client.isConnected) {
         for (const key of storageKeys) {
           steps.push({
-            step: 'storage', target: key, action: 'delete', ok: false, durationMs: 0,
+            step: 'storage',
+            target: key,
+            action: 'delete',
+            ok: false,
+            durationMs: 0,
             code: 'CDP_NOT_CONNECTED',
-            error: 'CDP not connected — storage keys skipped. Connect first to clear MMKV before terminate.',
+            error:
+              'CDP not connected — storage keys skipped. Connect first to clear MMKV before terminate.',
           });
         }
       } else if (!cdpTargetMatchesApp(client, args.appId)) {
@@ -322,7 +373,11 @@ export function createDeviceResetStateHandler(
         const desc = target?.description ?? target?.title ?? target?.id ?? '?';
         for (const key of storageKeys) {
           steps.push({
-            step: 'storage', target: key, action: 'delete', ok: false, durationMs: 0,
+            step: 'storage',
+            target: key,
+            action: 'delete',
+            ok: false,
+            durationMs: 0,
             code: 'CDP_TARGET_APP_MISMATCH',
             error: `CDP target "${desc}" does not appear to belong to ${args.appId} — storage skipped to avoid wrong-app deletion. Reconnect to ${args.appId} (cdp_connect bundleId=...) first.`,
           });

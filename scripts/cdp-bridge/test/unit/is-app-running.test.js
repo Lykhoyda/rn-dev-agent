@@ -8,8 +8,13 @@ import { isAppRunning } from '../../dist/tools/device-session.js';
 test('isAppRunning routes to iOS probe by default', async () => {
   let called = null;
   const result = await isAppRunning('ios', 'com.foo.app', {
-    ios: async (id) => { called = id; return true; },
-    android: async () => { throw new Error('should not reach android'); },
+    ios: async (id) => {
+      called = id;
+      return true;
+    },
+    android: async () => {
+      throw new Error('should not reach android');
+    },
   });
   assert.equal(called, 'com.foo.app');
   assert.equal(result, true);
@@ -18,8 +23,13 @@ test('isAppRunning routes to iOS probe by default', async () => {
 test('isAppRunning routes to Android probe for android platform', async () => {
   let called = null;
   const result = await isAppRunning('android', 'com.foo.app', {
-    ios: async () => { throw new Error('should not reach ios'); },
-    android: async (id) => { called = id; return true; },
+    ios: async () => {
+      throw new Error('should not reach ios');
+    },
+    android: async (id) => {
+      called = id;
+      return true;
+    },
   });
   assert.equal(called, 'com.foo.app');
   assert.equal(result, true);

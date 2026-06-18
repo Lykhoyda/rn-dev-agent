@@ -18,8 +18,12 @@ function sh(cmd, args) {
 }
 
 function adbOk(args) {
-  try { sh('adb', args); return { ok: true }; }
-  catch (e) { return { ok: false, err: (e.stderr || e.message).split('\n').slice(0, 2).join(' | ') }; }
+  try {
+    sh('adb', args);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, err: (e.stderr || e.message).split('\n').slice(0, 2).join(' | ') };
+  }
 }
 
 function openSettingsSearch() {
@@ -30,7 +34,9 @@ function openSettingsSearch() {
 function clearField() {
   sh('adb', ['shell', 'input', 'keyevent', '123']);
   for (let i = 0; i < 80; i++) {
-    try { sh('adb', ['shell', 'input', 'keyevent', '67']); } catch {}
+    try {
+      sh('adb', ['shell', 'input', 'keyevent', '67']);
+    } catch {}
   }
 }
 
@@ -45,7 +51,14 @@ function readField() {
     const t = n.match(/ text="([^"]*)"/);
     // CodeQL js/double-escaping (alert #17): decode `&amp;` LAST. Decoding it
     // first would incorrectly turn `&amp;lt;` (literal text `&lt;`) into `<`.
-    return t ? t[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&') : '';
+    return t
+      ? t[1]
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&amp;/g, '&')
+      : '';
   }
   return null;
 }
@@ -66,7 +79,7 @@ function clipboardPaste(text) {
 }
 
 // broadcast-based clipboard (fallback for older API)
-function clipboardPasteBroadcast(text) {
+function _clipboardPasteBroadcast(text) {
   const r1 = adbOk(['shell', 'am', 'broadcast', '-a', 'clipper.set', '-e', 'text', text]);
   if (!r1.ok) return r1;
   sh('sh', ['-c', 'sleep 0.3']);
@@ -109,8 +122,10 @@ const seqTests = [
 
 for (const tc of seqTests) {
   const r = runProbe(tc.label, () => inputText(tc.raw));
-  const ok = r.actual === tc.raw.replace(/%s/g, ' '); // only %s should become space
-  console.log(`  ${tc.label.padEnd(25)} raw=${JSON.stringify(tc.raw).padEnd(12)} → field=${JSON.stringify(r.actual).padEnd(12)} ${r.err ? `ERR: ${r.err.slice(0,30)}` : ''}`);
+  const _ok = r.actual === tc.raw.replace(/%s/g, ' '); // only %s should become space
+  console.log(
+    `  ${tc.label.padEnd(25)} raw=${JSON.stringify(tc.raw).padEnd(12)} → field=${JSON.stringify(r.actual).padEnd(12)} ${r.err ? `ERR: ${r.err.slice(0, 30)}` : ''}`,
+  );
 }
 
 // === Part 2: Can we escape %s to preserve it literally? ===
@@ -125,7 +140,9 @@ const escTests = [
 for (const tc of escTests) {
   const r = runProbe(tc.label, () => inputText(tc.raw));
   const ok = r.actual === tc.expected;
-  console.log(`  ${(ok ? 'PASS' : 'FAIL').padEnd(6)} ${tc.label.padEnd(28)} raw=${JSON.stringify(tc.raw).padEnd(12)} expected=${JSON.stringify(tc.expected).padEnd(8)} actual=${JSON.stringify(r.actual)}`);
+  console.log(
+    `  ${(ok ? 'PASS' : 'FAIL').padEnd(6)} ${tc.label.padEnd(28)} raw=${JSON.stringify(tc.raw).padEnd(12)} expected=${JSON.stringify(tc.expected).padEnd(8)} actual=${JSON.stringify(r.actual)}`,
+  );
 }
 
 // === Part 3: Clipboard paste approach ===
@@ -134,13 +151,19 @@ const clipTests = [
   { label: 'literal %s via clipboard', text: 'a%sb', expected: 'a%sb' },
   { label: 'spaces via clipboard', text: 'hello world', expected: 'hello world' },
   { label: 'mixed special via clip', text: "it's $100 (50% off)", expected: "it's $100 (50% off)" },
-  { label: 'long via clipboard', text: 'abcdefghijklmnopqrstuvwxyz1234567890', expected: 'abcdefghijklmnopqrstuvwxyz1234567890' },
+  {
+    label: 'long via clipboard',
+    text: 'abcdefghijklmnopqrstuvwxyz1234567890',
+    expected: 'abcdefghijklmnopqrstuvwxyz1234567890',
+  },
 ];
 
 for (const tc of clipTests) {
   const r = runProbe(tc.label, () => clipboardPaste(tc.text));
   const ok = r.actual === tc.expected;
-  console.log(`  ${(ok ? 'PASS' : 'FAIL').padEnd(6)} ${tc.label.padEnd(28)} expected=${JSON.stringify(tc.expected).padEnd(24)} actual=${JSON.stringify(r.actual)} ${r.err ? `ERR: ${r.err.slice(0,40)}` : ''}`);
+  console.log(
+    `  ${(ok ? 'PASS' : 'FAIL').padEnd(6)} ${tc.label.padEnd(28)} expected=${JSON.stringify(tc.expected).padEnd(24)} actual=${JSON.stringify(r.actual)} ${r.err ? `ERR: ${r.err.slice(0, 40)}` : ''}`,
+  );
 }
 
 console.log('\n--- Part 4: summary ---');

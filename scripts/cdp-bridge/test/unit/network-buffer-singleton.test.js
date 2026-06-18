@@ -43,8 +43,18 @@ test('getNetworkBufferManager: B128 regression — buffers survive simulated CDP
   // Session 2 (Android): push events to a different device key — both buffers
   // coexist, neither clobbers the other.
   const androidKey = '8081-android-target-1';
-  mgr2.push(androidKey, { id: 'a1', method: 'GET', url: '/feed', timestamp: '2026-04-20T16:05:00Z' });
-  mgr2.push(androidKey, { id: 'a2', method: 'GET', url: '/notifs', timestamp: '2026-04-20T16:05:01Z' });
+  mgr2.push(androidKey, {
+    id: 'a1',
+    method: 'GET',
+    url: '/feed',
+    timestamp: '2026-04-20T16:05:00Z',
+  });
+  mgr2.push(androidKey, {
+    id: 'a2',
+    method: 'GET',
+    url: '/notifs',
+    timestamp: '2026-04-20T16:05:01Z',
+  });
 
   assert.equal(mgr2.size(iosKey), 3, 'iOS buffer unchanged by Android activity');
   assert.equal(mgr2.size(androidKey), 2, 'Android buffer populated');
@@ -63,7 +73,12 @@ test('getNetworkBufferManager: B128 regression — buffers survive simulated CDP
 
 test('getNetworkBufferManager: resetNetworkBufferManager is test-only (clears state)', () => {
   const mgr1 = getNetworkBufferManager();
-  mgr1.push('test-device', { id: 'x', method: 'GET', url: '/x', timestamp: '2026-04-20T00:00:00Z' });
+  mgr1.push('test-device', {
+    id: 'x',
+    method: 'GET',
+    url: '/x',
+    timestamp: '2026-04-20T00:00:00Z',
+  });
   assert.equal(mgr1.size('test-device'), 1);
 
   resetNetworkBufferManager();
@@ -83,7 +98,12 @@ test('getNetworkBufferManager: capacity and eviction work on the singleton', () 
   // timestamps aren't required — Map iteration preserves insertion order and the
   // first-inserted device is evicted when capacity is exceeded.
   for (let i = 0; i < 11; i++) {
-    mgr.push(`device-${i}`, { id: `r${i}`, method: 'GET', url: `/u${i}`, timestamp: `2026-04-20T00:00:0${i}Z` });
+    mgr.push(`device-${i}`, {
+      id: `r${i}`,
+      method: 'GET',
+      url: `/u${i}`,
+      timestamp: `2026-04-20T00:00:0${i}Z`,
+    });
   }
 
   // `device-0` should be evicted (oldest last-push)

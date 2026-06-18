@@ -49,11 +49,26 @@ test('buildMmkvExpression: set with type=number coerces value', () => {
 });
 
 test('buildMmkvExpression: set with type=boolean accepts true and "true"', () => {
-  const exprTrue = buildMmkvExpression({ action: 'set', key: 'flag', value: true, type: 'boolean' });
+  const exprTrue = buildMmkvExpression({
+    action: 'set',
+    key: 'flag',
+    value: true,
+    type: 'boolean',
+  });
   assert.match(exprTrue, /\.set\("flag", true\)/);
-  const exprStrTrue = buildMmkvExpression({ action: 'set', key: 'flag', value: 'true', type: 'boolean' });
+  const exprStrTrue = buildMmkvExpression({
+    action: 'set',
+    key: 'flag',
+    value: 'true',
+    type: 'boolean',
+  });
   assert.match(exprStrTrue, /\.set\("flag", true\)/);
-  const exprFalse = buildMmkvExpression({ action: 'set', key: 'flag', value: false, type: 'boolean' });
+  const exprFalse = buildMmkvExpression({
+    action: 'set',
+    key: 'flag',
+    value: false,
+    type: 'boolean',
+  });
   assert.match(exprFalse, /\.set\("flag", false\)/);
 });
 
@@ -105,7 +120,13 @@ test('buildMmkvExpression: malicious instanceId expression executes safely (no J
   const expr = buildMmkvExpression({ action: 'keys', instanceId: evil });
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON, String, Number, Boolean, Error,
+    Array,
+    Object,
+    JSON,
+    String,
+    Number,
+    Boolean,
+    Error,
   };
   sandbox.globalThis = sandbox;
   // Force the createMMKV-failure branch by returning null from createMMKV.
@@ -120,8 +141,16 @@ test('buildMmkvExpression: malicious instanceId expression executes safely (no J
   // payload appears as data inside __agent_error, not as executed code.
   const raw = vm.runInContext(expr, sandbox);
   const result = JSON.parse(raw);
-  assert.match(result.__agent_error, /createMMKV returned no instance/, 'must reach the failure-branch return');
-  assert.doesNotMatch(result.__agent_error, /MMKV op threw/, 'injection would surface as a thrown error envelope');
+  assert.match(
+    result.__agent_error,
+    /createMMKV returned no instance/,
+    'must reach the failure-branch return',
+  );
+  assert.doesNotMatch(
+    result.__agent_error,
+    /MMKV op threw/,
+    'injection would surface as a thrown error envelope',
+  );
 });
 
 // ── 2. End-to-end: run the expression in a VM with a mock NitroModulesProxy ──
@@ -129,8 +158,12 @@ test('buildMmkvExpression: malicious instanceId expression executes safely (no J
 function runExpr(expr, mmkvImpl) {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON,
-    String, Number, Boolean,
+    Array,
+    Object,
+    JSON,
+    String,
+    Number,
+    Boolean,
   };
   sandbox.globalThis = sandbox;
   if (mmkvImpl !== null) {
@@ -151,11 +184,8 @@ function runExpr(expr, mmkvImpl) {
 }
 
 test('expression runs against a mock instance: get returns stored value', () => {
-  const instance = { getString: (k) => k === 'foo' ? 'bar' : undefined };
-  const result = runExpr(
-    buildMmkvExpression({ action: 'get', key: 'foo' }),
-    () => instance,
-  );
+  const instance = { getString: (k) => (k === 'foo' ? 'bar' : undefined) };
+  const result = runExpr(buildMmkvExpression({ action: 'get', key: 'foo' }), () => instance);
   assert.deepEqual(result, { value: 'bar' });
 });
 
@@ -202,7 +232,12 @@ test('expression returns __agent_error when NitroModulesProxy is missing', () =>
 test('expression returns __agent_error when MMKVFactory is not registered', () => {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON, String, Number, Boolean,
+    Array,
+    Object,
+    JSON,
+    String,
+    Number,
+    Boolean,
   };
   sandbox.globalThis = sandbox;
   sandbox.NitroModulesProxy = {
@@ -215,7 +250,11 @@ test('expression returns __agent_error when MMKVFactory is not registered', () =
 });
 
 test('expression returns __agent_error when MMKV op throws', () => {
-  const instance = { getString: () => { throw new Error('disk error'); } };
+  const instance = {
+    getString: () => {
+      throw new Error('disk error');
+    },
+  };
   const result = runExpr(buildMmkvExpression({ action: 'get', key: 'foo' }), () => instance);
   assert.match(result.__agent_error, /MMKV op threw.*disk error/);
 });
@@ -224,7 +263,9 @@ test('expression returns __agent_error when MMKV op throws', () => {
 
 test('createMmkvHandler: returns failResult on __agent_error sentinel', async () => {
   const client = createMockClient({
-    evaluate: async () => ({ value: JSON.stringify({ __agent_error: 'NitroModulesProxy not available' }) }),
+    evaluate: async () => ({
+      value: JSON.stringify({ __agent_error: 'NitroModulesProxy not available' }),
+    }),
   });
   const handler = createMmkvHandler(() => client);
   const error = expectFail(await handler({ action: 'keys' }));

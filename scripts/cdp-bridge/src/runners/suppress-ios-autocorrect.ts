@@ -42,7 +42,9 @@ export async function suppressIOSAutocorrect(
     try {
       await deps.run(['simctl', 'spawn', udid, 'defaults', 'write', '-g', key, type, value]);
     } catch (err) {
-      warnings.push(`defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(
+        `defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   timings.suppress = Date.now() - t;

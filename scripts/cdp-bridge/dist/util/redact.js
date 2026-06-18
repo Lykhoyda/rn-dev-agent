@@ -2,12 +2,12 @@ import { homedir } from 'node:os';
 const HOME = homedir();
 const HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
 const SECRET_PATTERNS = [
-    /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_\-]{20,}/gi,
+    /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
     /Bearer\s+[A-Za-z0-9_\-./+=]{20,}/g,
     /ghp_[A-Za-z0-9_]{36}/g,
     /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g,
     /\bAKIA[0-9A-Z]{16}\b/g,
-    /\bxox[baprs]-[A-Za-z0-9\-]+\b/g,
+    /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
     /\bAIza[0-9A-Za-z\-_]{35}\b/g,
     // Any private-key label variant: PRIVATE KEY, RSA PRIVATE KEY,
     // OPENSSH PRIVATE KEY, EC/DSA/ENCRYPTED PRIVATE KEY, ... The old single-word

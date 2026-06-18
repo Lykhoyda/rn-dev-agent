@@ -15,12 +15,18 @@ const graph = (screens) => ({ meta: {}, navigators: [], all_screens: screens });
 // ── pre-flight: expected screen missing from the graph (definite mismatch) ──
 
 test('validateRouteSequenceAgainstGraph passes when every expected screen exists', () => {
-  const r = validateRouteSequenceAgainstGraph(graph(['Home', 'HomeAddress', 'PhoneNumber']), ['HomeAddress', 'PhoneNumber']);
+  const r = validateRouteSequenceAgainstGraph(graph(['Home', 'HomeAddress', 'PhoneNumber']), [
+    'HomeAddress',
+    'PhoneNumber',
+  ]);
   assert.equal(r.ok, true);
 });
 
 test('validateRouteSequenceAgainstGraph fails when an expected screen is gone (renamed/removed)', () => {
-  const r = validateRouteSequenceAgainstGraph(graph(['Home', 'PhoneNumber']), ['HomeAddress', 'PhoneNumber']);
+  const r = validateRouteSequenceAgainstGraph(graph(['Home', 'PhoneNumber']), [
+    'HomeAddress',
+    'PhoneNumber',
+  ]);
   assert.equal(r.ok, false);
   assert.deepEqual(r.missing, ['HomeAddress']);
 });
@@ -38,18 +44,30 @@ test('validateRouteSequenceAgainstGraph is a no-op with no expected sequence', (
 // ── post-failure: live route off the expected sequence (inserted screen) ──
 
 test('classifyRouteDriftAfterFailure flags an inserted screen as drift', () => {
-  const v = classifyRouteDriftAfterFailure({ expectedSequence: ['HomeAddress', 'PhoneNumber'], liveRoute: 'CouponCode' });
+  const v = classifyRouteDriftAfterFailure({
+    expectedSequence: ['HomeAddress', 'PhoneNumber'],
+    liveRoute: 'CouponCode',
+  });
   assert.equal(v.isDrift, true);
   assert.equal(v.liveRoute, 'CouponCode');
   assert.match(v.reason, /CouponCode/);
 });
 
 test('classifyRouteDriftAfterFailure does NOT flag drift when the live route is expected', () => {
-  const v = classifyRouteDriftAfterFailure({ expectedSequence: ['HomeAddress', 'PhoneNumber'], liveRoute: 'PhoneNumber' });
+  const v = classifyRouteDriftAfterFailure({
+    expectedSequence: ['HomeAddress', 'PhoneNumber'],
+    liveRoute: 'PhoneNumber',
+  });
   assert.equal(v.isDrift, false);
 });
 
 test('classifyRouteDriftAfterFailure is conservative with no sequence / no live route', () => {
-  assert.equal(classifyRouteDriftAfterFailure({ expectedSequence: [], liveRoute: 'X' }).isDrift, false);
-  assert.equal(classifyRouteDriftAfterFailure({ expectedSequence: ['A'], liveRoute: null }).isDrift, false);
+  assert.equal(
+    classifyRouteDriftAfterFailure({ expectedSequence: [], liveRoute: 'X' }).isDrift,
+    false,
+  );
+  assert.equal(
+    classifyRouteDriftAfterFailure({ expectedSequence: ['A'], liveRoute: null }).isDrift,
+    false,
+  );
 });

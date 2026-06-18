@@ -12,7 +12,10 @@ function parse(result) {
 }
 
 test('cross_platform_verify returns ok:false when elements differ across platforms', async () => {
-  cacheSnapshot('ios', [{ ref: '@1', identifier: 'shared' }, { ref: '@2', identifier: 'ios-only' }]);
+  cacheSnapshot('ios', [
+    { ref: '@1', identifier: 'shared' },
+    { ref: '@2', identifier: 'ios-only' },
+  ]);
   cacheSnapshot('android', [{ ref: '@1', identifier: 'shared' }]);
   const handler = createCrossPlatformVerifyHandler();
   const result = await handler({ elements: ['shared', 'ios-only'], matchBy: 'testID' });

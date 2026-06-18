@@ -1,4 +1,4 @@
-import { test, mock, beforeEach } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { withConnection, okResult, failResult } from '../../dist/utils.js';
 import { resetActiveSessionInMemoryForTest } from '../../dist/agent-device-wrapper.js';
@@ -87,7 +87,9 @@ test('withConnection waits for helpers to be injected', async () => {
     evaluate: async () => ({ value: 13 }),
   });
   // Simulate helpers becoming ready after a short delay
-  setTimeout(() => { client._helpersInjected = true; }, 100);
+  setTimeout(() => {
+    client._helpersInjected = true;
+  }, 100);
 
   const handler = withConnection(
     () => client,
@@ -118,7 +120,11 @@ test('withConnection actively re-injects helpers when passive wait expires', asy
     async () => okResult({ recovered: true }),
   );
   const result = await handler({});
-  assert.equal(reinjectCalled, 1, 'reinjectHelpers should fire exactly once after passive wait expires');
+  assert.equal(
+    reinjectCalled,
+    1,
+    'reinjectHelpers should fire exactly once after passive wait expires',
+  );
   const env = parseEnvelope(result);
   assert.equal(env.ok, true);
   assert.deepEqual(env.data, { recovered: true });

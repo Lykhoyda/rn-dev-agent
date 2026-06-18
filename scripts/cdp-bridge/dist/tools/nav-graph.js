@@ -23,7 +23,8 @@ export function buildScreenNameAliases(screens) {
             continue;
         if (!name.includes('_'))
             continue;
-        const pascal = name.split('_')
+        const pascal = name
+            .split('_')
             .filter((part) => part.length > 0)
             .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
             .join('');
@@ -86,7 +87,8 @@ export function createNavGraphHandler(getClient) {
             : '__RN_AGENT.getNavGraph()';
         const result = await client.evaluate(expr);
         if (result.error) {
-            if (String(result.error).includes('is not a function') || String(result.error).includes('undefined')) {
+            if (String(result.error).includes('is not a function') ||
+                String(result.error).includes('undefined')) {
                 return failResult('Nav graph requires helpers v10. Call cdp_reload to reinject updated helpers, then retry.');
             }
             return failResult(`Nav graph extraction error: ${result.error}`);
@@ -179,7 +181,7 @@ export function createNavGraphHandler(getClient) {
         if (args.navigator_id) {
             const subtree = getNavigatorSubtree(graph, args.navigator_id);
             if (subtree.length === 0) {
-                return failResult(`Navigator "${args.navigator_id}" not found. Known navigators: ${graph.navigators.map(n => n.id).join(', ')}`);
+                return failResult(`Navigator "${args.navigator_id}" not found. Known navigators: ${graph.navigators.map((n) => n.id).join(', ')}`);
             }
             const result = { navigators: subtree, stale, file_path: getGraphPath(projectRoot) };
             return stale
@@ -217,15 +219,17 @@ export function createNavGraphHandler(getClient) {
         }
         return okResult({
             plan,
-            message: `Navigation plan: ${plan.total_steps} step(s) to reach "${args.screen}" from "${plan.from ?? 'unknown'}". `
-                + `Reliability: ${plan.estimated_reliability}%. `
-                + (plan.deep_link_available ? `Deep link available: ${plan.deep_link_path}. ` : '')
-                + (plan.prerequisites.length > 0 ? `Prerequisites: ${plan.prerequisites.map(p => p.description).join('; ')}. ` : '')
-                + 'Execute each step using cdp_navigate or device_find/device_press.',
+            message: `Navigation plan: ${plan.total_steps} step(s) to reach "${args.screen}" from "${plan.from ?? 'unknown'}". ` +
+                `Reliability: ${plan.estimated_reliability}%. ` +
+                (plan.deep_link_available ? `Deep link available: ${plan.deep_link_path}. ` : '') +
+                (plan.prerequisites.length > 0
+                    ? `Prerequisites: ${plan.prerequisites.map((p) => p.description).join('; ')}. `
+                    : '') +
+                'Execute each step using cdp_navigate or device_find/device_press.',
             execution_hint: plan.preferred_method === 'programmatic'
                 ? plan.steps
-                    .filter(s => s.method === 'programmatic')
-                    .map(s => `cdp_navigate(screen="${s.target_screen}")`)
+                    .filter((s) => s.method === 'programmatic')
+                    .map((s) => `cdp_navigate(screen="${s.target_screen}")`)
                 : [`Open deep link: ${plan.deep_link_path}`],
         });
     };
@@ -297,7 +301,9 @@ export function createNavGraphHandler(getClient) {
         if (projectRoot) {
             const staleness = checkStaleness(projectRoot);
             result.staleness = staleness;
-            if (staleness.recommendation === 'rescan_required' || staleness.recommendation === 'rescan_recommended' || !graph) {
+            if (staleness.recommendation === 'rescan_required' ||
+                staleness.recommendation === 'rescan_recommended' ||
+                !graph) {
                 try {
                     const expr = client.bridgeDetected
                         ? '__RN_DEV_BRIDGE__.getNavGraph ? __RN_DEV_BRIDGE__.getNavGraph() : __RN_AGENT.getNavGraph()'
@@ -322,7 +328,9 @@ export function createNavGraphHandler(getClient) {
                         }
                     }
                 }
-                catch { /* scan failed, continue with cached graph */ }
+                catch {
+                    /* scan failed, continue with cached graph */
+                }
             }
         }
         // 2. Playbook tips
@@ -350,7 +358,9 @@ export function createNavGraphHandler(getClient) {
                         liveFromScreen = live;
                 }
             }
-            catch { /* fall back to cached graph */ }
+            catch {
+                /* fall back to cached graph */
+            }
         }
         if (graph) {
             result.plan = buildNavigationPlan(graph, args.screen, liveFromScreen) ?? undefined;
@@ -359,7 +369,7 @@ export function createNavGraphHandler(getClient) {
         // 4. Execute navigation — single CDP evaluate call
         // If the plan has a tab switch step, use direct tab+screen navigation (avoids the
         // fallback-navigate bug where unvisited tabs haven't mounted their nested navigators).
-        const planTabStep = result.plan?.steps?.find(s => s.action === 'switch_tab');
+        const planTabStep = result.plan?.steps?.find((s) => s.action === 'switch_tab');
         const paramsArg = args.params ? JSON.stringify(args.params) : 'undefined';
         const tabNavArgsJs = planTabStep
             ? buildTabNavigateArgs(planTabStep.target_screen, args.screen, paramsArg)
@@ -470,7 +480,11 @@ export function createNavGraphHandler(getClient) {
             // 5. Auto-heal on failure
             result.heal_advice = buildSelfHealAdvice(args.screen, 'programmatic', args.platform ?? null);
             if (projectRoot) {
-                recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: false });
+                recordNavigation(projectRoot, {
+                    screen: args.screen,
+                    method: 'programmatic',
+                    success: false,
+                });
             }
             result.latency_ms = Date.now() - startTime;
             return warnResult(result, `Navigation failed: ${navResult.error}. See heal_advice for recovery steps.`);
@@ -483,7 +497,11 @@ export function createNavGraphHandler(getClient) {
                     result.method_used = 'programmatic_failed';
                     result.heal_advice = buildSelfHealAdvice(args.screen, 'programmatic', args.platform ?? null);
                     if (projectRoot) {
-                        recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: false });
+                        recordNavigation(projectRoot, {
+                            screen: args.screen,
+                            method: 'programmatic',
+                            success: false,
+                        });
                     }
                     result.latency_ms = Date.now() - startTime;
                     return warnResult(result, `Navigation failed: ${parsed.error}. See heal_advice.`);
@@ -533,9 +551,11 @@ export function createNavGraphHandler(getClient) {
         if (!args.screen)
             return result;
         const envelope = JSON.parse(result.content[0].text);
-        const isNavRefMissing = (envelope.ok && envelope.meta?.warning?.includes('__NAV_REF__'))
-            || (envelope.ok && envelope.meta?.warning?.includes('Navigation failed'))
-            || (envelope.data && !envelope.data.arrived && envelope.data.method_used === 'programmatic_failed');
+        const isNavRefMissing = (envelope.ok && envelope.meta?.warning?.includes('__NAV_REF__')) ||
+            (envelope.ok && envelope.meta?.warning?.includes('Navigation failed')) ||
+            (envelope.data &&
+                !envelope.data.arrived &&
+                envelope.data.method_used === 'programmatic_failed');
         if (!isNavRefMissing)
             return result;
         const client = getClient();
@@ -561,11 +581,20 @@ export function createNavGraphHandler(getClient) {
                 const replayBundleId = client.connectedTarget?.description ?? null;
                 const projectRoot = findProjectRoot(replayBundleId ? { bundleId: replayBundleId } : undefined);
                 if (projectRoot) {
-                    recordNavigation(projectRoot, { screen: args.screen, method: 'programmatic', success: true, latency_ms: replayResult.latency_ms });
+                    recordNavigation(projectRoot, {
+                        screen: args.screen,
+                        method: 'programmatic',
+                        success: true,
+                        latency_ms: replayResult.latency_ms,
+                    });
                 }
                 return warnResult(goResult, `Programmatic navigation failed — recovered via startup replay (${replayResult.latency_ms}ms).`);
             }
-            return warnResult({ ...envelope.data, startup_replay_attempted: true, startup_replay_error: replayResult.error }, `Navigation failed. Startup replay also failed: ${replayResult.error}`);
+            return warnResult({
+                ...envelope.data,
+                startup_replay_attempted: true,
+                startup_replay_error: replayResult.error,
+            }, `Navigation failed. Startup replay also failed: ${replayResult.error}`);
         }
         catch {
             return result;

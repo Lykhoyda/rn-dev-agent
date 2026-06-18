@@ -48,7 +48,7 @@ const ANDROID_NOISE_PATTERNS = [
 export function parseIOSLog(stdout: string): NativeError[] {
   const entries: NativeError[] = [];
   for (const line of stdout.split('\n')) {
-    if (!IOS_NOISE_PATTERNS.some(p => p.test(line))) continue;
+    if (!IOS_NOISE_PATTERNS.some((p) => p.test(line))) continue;
     const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
     const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
     entries.push({
@@ -68,7 +68,7 @@ export function parseIOSLog(stdout: string): NativeError[] {
 export function parseAndroidLog(stdout: string): NativeError[] {
   const entries: NativeError[] = [];
   for (const line of stdout.split('\n')) {
-    if (!ANDROID_NOISE_PATTERNS.some(p => p.test(line))) continue;
+    if (!ANDROID_NOISE_PATTERNS.some((p) => p.test(line))) continue;
     const tsMatch = line.match(/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)/);
     const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
     const level: 'error' | 'fatal' = /FATAL|F\//.test(line) ? 'fatal' : 'error';
@@ -146,7 +146,9 @@ export interface NativeErrorsResult {
   command: string;
 }
 
-export async function readNativeErrors(opts: ReadNativeErrorsOptions = {}): Promise<NativeErrorsResult> {
+export async function readNativeErrors(
+  opts: ReadNativeErrorsOptions = {},
+): Promise<NativeErrorsResult> {
   const platform = (opts.platform ?? 'ios').toLowerCase();
   const sinceSeconds = opts.sinceSeconds ?? 60;
   const limit = opts.limit ?? 10;
@@ -155,10 +157,22 @@ export async function readNativeErrors(opts: ReadNativeErrorsOptions = {}): Prom
   try {
     if (platform === 'android') {
       const out = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
-      return { ok: true, entries: parseAndroidLog(out).slice(-limit), unavailable: false, error: '', command };
+      return {
+        ok: true,
+        entries: parseAndroidLog(out).slice(-limit),
+        unavailable: false,
+        error: '',
+        command,
+      };
     }
     const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
-    return { ok: true, entries: parseIOSLog(out).slice(-limit), unavailable: false, error: '', command };
+    return {
+      ok: true,
+      entries: parseIOSLog(out).slice(-limit),
+      unavailable: false,
+      error: '',
+      command,
+    };
   } catch (err) {
     // CDP-016: surface tool-unavailability as a structured failure. Returning
     // [] previously made "no native errors" indistinguishable from "the log
@@ -175,12 +189,14 @@ export async function readNativeErrors(opts: ReadNativeErrorsOptions = {}): Prom
 }
 
 export function createNativeErrorsHandler(getClient: () => CDPClient) {
-  return async (args: { platform?: string; sinceSeconds?: number; limit?: number }): Promise<ToolResult> => {
+  return async (args: {
+    platform?: string;
+    sinceSeconds?: number;
+    limit?: number;
+  }): Promise<ToolResult> => {
     const client = getClient();
     const platform =
-      args.platform
-      ?? (client.connectedTarget?.platform as string | undefined)
-      ?? 'ios';
+      args.platform ?? (client.connectedTarget?.platform as string | undefined) ?? 'ios';
 
     try {
       const result = await readNativeErrors({
@@ -198,9 +214,10 @@ export function createNativeErrorsHandler(getClient: () => CDPClient) {
           {
             platform,
             command: result.command,
-            hint: platform === 'ios'
-              ? 'Verify Xcode command-line tools are installed (xcode-select --install) and a simulator is booted.'
-              : 'Verify the Android SDK is installed and adb is on PATH (e.g. via $ANDROID_HOME/platform-tools).',
+            hint:
+              platform === 'ios'
+                ? 'Verify Xcode command-line tools are installed (xcode-select --install) and a simulator is booted.'
+                : 'Verify the Android SDK is installed and adb is on PATH (e.g. via $ANDROID_HOME/platform-tools).',
           },
         );
       }

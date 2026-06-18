@@ -54,7 +54,11 @@ test('explicit-platform raw path: parent directory is created before the capture
       platformExplicit: true,
     });
     const envelope = parseEnvelope(result);
-    assert.equal(parentExistedAtCapture, true, 'capturer must see the parent directory already created');
+    assert.equal(
+      parentExistedAtCapture,
+      true,
+      'capturer must see the parent directory already created',
+    );
     assert.equal(envelope.ok, true);
     assert.ok(!result.isError, `expected success, got: ${result.content[0].text}`);
   } finally {
@@ -75,8 +79,14 @@ test('mkdir failure (file blocks an intermediate segment): honest target-dir err
   let resolverCalls = 0;
   let capturerCalls = 0;
   raw._setForTest({
-    iosResolver: async () => { resolverCalls++; return 'UDID-265'; },
-    iosCapturer: async () => { capturerCalls++; return false; },
+    iosResolver: async () => {
+      resolverCalls++;
+      return 'UDID-265';
+    },
+    iosCapturer: async () => {
+      capturerCalls++;
+      return false;
+    },
   });
   try {
     const result = await deviceList.captureAndResizeScreenshot({
@@ -87,7 +97,11 @@ test('mkdir failure (file blocks an intermediate segment): honest target-dir err
     const envelope = parseEnvelope(result);
     assert.equal(result.isError, true);
     assert.equal(envelope.code, 'SCREENSHOT_FAILED');
-    assert.doesNotMatch(envelope.error, /transitioning/i, 'must not blame device state for a filesystem precondition');
+    assert.doesNotMatch(
+      envelope.error,
+      /transitioning/i,
+      'must not blame device state for a filesystem precondition',
+    );
     assert.match(envelope.error, /directory/i, 'must name the directory problem');
     assert.ok(envelope.error.includes(target), 'must include the offending path');
     assert.equal(resolverCalls, 0, 'must short-circuit before probing devices');
@@ -132,12 +146,18 @@ test('runner path (implicit platform): parent directory exists by the time runAg
   let parentExistedAtDispatch = null;
   deviceList._setRunAgentDeviceForTest(async () => {
     parentExistedAtDispatch = existsSync(dirname(target));
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: target } }) }] };
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: target } }) }],
+    };
   });
   try {
     const result = await deviceList.captureAndResizeScreenshot({ path: target });
     const envelope = parseEnvelope(result);
-    assert.equal(parentExistedAtDispatch, true, 'runner dispatch must see the parent directory already created');
+    assert.equal(
+      parentExistedAtDispatch,
+      true,
+      'runner dispatch must see the parent directory already created',
+    );
     assert.equal(envelope.ok, true);
   } finally {
     deviceList._resetRunAgentDeviceForTest();

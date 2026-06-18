@@ -21,9 +21,7 @@ test('parseReadySignal returns null when only READY seen, no port yet', () => {
 
 test('parseReadySignal resolves with port on full two-line handshake', () => {
   const buf =
-    'Test Suite started\n' +
-    'RN_FAST_RUNNER_LISTENER_READY\n' +
-    'RN_FAST_RUNNER_PORT=22088\n';
+    'Test Suite started\n' + 'RN_FAST_RUNNER_LISTENER_READY\n' + 'RN_FAST_RUNNER_PORT=22088\n';
   const result = parseReadySignal(buf);
   assert.deepEqual(result, { ready: true, port: 22088 });
 });
@@ -45,9 +43,7 @@ test('parseReadySignal rejects with error on LISTENER_FAILED marker', () => {
 });
 
 test('parseReadySignal rejects with error on PORT_NOT_SET marker', () => {
-  const buf =
-    'RN_FAST_RUNNER_LISTENER_READY\n' +
-    'RN_FAST_RUNNER_PORT_NOT_SET\n';
+  const buf = 'RN_FAST_RUNNER_LISTENER_READY\n' + 'RN_FAST_RUNNER_PORT_NOT_SET\n';
   const result = parseReadySignal(buf);
   assert.deepEqual(result, { error: 'RN_FAST_RUNNER_PORT_NOT_SET' });
 });
@@ -74,18 +70,12 @@ test('createReadySignalParser handles chunked input across feed calls', () => {
 
 test('createReadySignalParser detects LISTENER_FAILED before READY', () => {
   const parser = createReadySignalParser();
-  const result = parser.feed(
-    'Test Case started\n' +
-    'RN_FAST_RUNNER_LISTENER_FAILED=Some error\n'
-  );
+  const result = parser.feed('Test Case started\n' + 'RN_FAST_RUNNER_LISTENER_FAILED=Some error\n');
   assert.deepEqual(result, { error: 'RN_FAST_RUNNER_LISTENER_FAILED' });
 });
 
 test('createReadySignalParser handles CRLF line endings', () => {
   const parser = createReadySignalParser();
-  const result = parser.feed(
-    'RN_FAST_RUNNER_LISTENER_READY\r\n' +
-    'RN_FAST_RUNNER_PORT=44444\r\n'
-  );
+  const result = parser.feed('RN_FAST_RUNNER_LISTENER_READY\r\n' + 'RN_FAST_RUNNER_PORT=44444\r\n');
   assert.deepEqual(result, { ready: true, port: 44444 });
 });

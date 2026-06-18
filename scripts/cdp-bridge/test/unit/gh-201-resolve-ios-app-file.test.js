@@ -1,9 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  flowUsesClearState,
-  resolveIosAppFile,
-} from '../../dist/tools/resolve-ios-app-file.js';
+import { flowUsesClearState, resolveIosAppFile } from '../../dist/tools/resolve-ios-app-file.js';
 
 test('GH#201 flowUsesClearState detects clearState: true', () => {
   assert.equal(flowUsesClearState('- launchApp:\n    clearState: true\n'), true);
@@ -54,7 +51,10 @@ test('GH#186 resolveIosAppFile: container path is snapshotted (never passed as-i
   const out = resolveIosAppFile('com.x.y', {
     getAppContainer: () => container,
     exists: () => true,
-    snapshotApp: (src) => { copies.push(src); return '/tmp/snap-1/my.app'; },
+    snapshotApp: (src) => {
+      copies.push(src);
+      return '/tmp/snap-1/my.app';
+    },
   });
   assert.equal(out, '/tmp/snap-1/my.app');
   assert.deepEqual(copies, [container]);

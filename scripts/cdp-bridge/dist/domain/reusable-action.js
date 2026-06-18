@@ -153,21 +153,38 @@ export function parseM7Header(yamlText, fallbackId) {
             const key = kv[1];
             const raw = kv[2].trim();
             if (key === 'tags') {
-                meta.tags = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+                meta.tags = raw
+                    .replace(/^\[|\]$/g, '')
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
             else if (key === 'mutates') {
                 meta.mutates = /^true$/i.test(raw);
             }
             else if (key === 'params') {
-                meta.params = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+                meta.params = raw
+                    .replace(/^\[|\]$/g, '')
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
             else if (key === 'produces') {
                 meta.produces = parseProducesMap(raw);
             }
             else if (key === 'expectedRouteSequence') {
-                meta.expectedRouteSequence = raw.replace(/^\[|\]$/g, '').split(',').map((t) => t.trim()).filter(Boolean);
+                meta.expectedRouteSequence = raw
+                    .replace(/^\[|\]$/g, '')
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean);
             }
-            else if (key === 'id' || key === 'intent' || key === 'status' || key === 'appId' || key === 'createdAt' || key === 'author') {
+            else if (key === 'id' ||
+                key === 'intent' ||
+                key === 'status' ||
+                key === 'appId' ||
+                key === 'createdAt' ||
+                key === 'author') {
                 meta[key] = raw;
             }
         }
@@ -209,7 +226,10 @@ export function parseM7Header(yamlText, fallbackId) {
  * inside values are not supported in v1.
  */
 function parseProducesMap(raw) {
-    const inner = raw.trim().replace(/^\{|\}$/g, '').trim();
+    const inner = raw
+        .trim()
+        .replace(/^\{|\}$/g, '')
+        .trim();
     if (!inner)
         return undefined;
     const result = {};

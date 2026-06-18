@@ -1,7 +1,10 @@
 // test/unit/gh-206-live-capture.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { maybeCaptureLiveFrame, _resetLiveCaptureForTest } from '../../dist/observability/live-device.js';
+import {
+  maybeCaptureLiveFrame,
+  _resetLiveCaptureForTest,
+} from '../../dist/observability/live-device.js';
 
 function baseDeps(over = {}) {
   const pushed = [];
@@ -69,7 +72,14 @@ test('screenshot failure still pushes the route', async () => {
 
 test('errors in deps never throw out of maybeCaptureLiveFrame', async () => {
   _resetLiveCaptureForTest();
-  const { deps } = baseDeps({ captureScreenshot: async () => { throw new Error('boom'); }, readRoute: async () => { throw new Error('boom2'); } });
+  const { deps } = baseDeps({
+    captureScreenshot: async () => {
+      throw new Error('boom');
+    },
+    readRoute: async () => {
+      throw new Error('boom2');
+    },
+  });
   await maybeCaptureLiveFrame(deps); // must resolve, not reject
 });
 
@@ -77,13 +87,19 @@ test('single-flight trailing-coalesce: one trailing capture after an in-flight b
   _resetLiveCaptureForTest();
   let calls = 0;
   let release;
-  const gate = new Promise((r) => { release = r; });
+  const gate = new Promise((r) => {
+    release = r;
+  });
   const { deps, pushed } = baseDeps({
-    captureScreenshot: async (_p, path) => { calls++; await gate; return { ok: true, path }; },
+    captureScreenshot: async (_p, path) => {
+      calls++;
+      await gate;
+      return { ok: true, path };
+    },
   });
   const first = maybeCaptureLiveFrame(deps); // starts, blocks on gate
-  await maybeCaptureLiveFrame(deps);         // in-flight → sets pending, returns
-  await maybeCaptureLiveFrame(deps);         // in-flight → pending already set, returns
+  await maybeCaptureLiveFrame(deps); // in-flight → sets pending, returns
+  await maybeCaptureLiveFrame(deps); // in-flight → pending already set, returns
   assert.equal(calls, 1, 'only the first capture has started');
   release();
   await first;

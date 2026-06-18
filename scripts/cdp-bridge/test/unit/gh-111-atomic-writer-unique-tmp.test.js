@@ -6,7 +6,7 @@
 // prefixes and only deletes files older than ORPHAN_MAX_AGE_MS.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync, existsSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -48,13 +48,21 @@ test('pairWrite uses unique tmp suffixes — two back-to-back calls have differe
       const sidecarB = join(dir, 'state', 'beta.state.json');
       atomicWriter.pairWrite(yamlB, 'body: b\n', sidecarB, makeSidecarState());
 
-      const yamlTmps = observed.filter(p => /\.yaml\.tmp\./.test(p));
+      const yamlTmps = observed.filter((p) => /\.yaml\.tmp\./.test(p));
       // Two pairWrites × 1 YAML tmp each = 2 distinct paths
-      assert.equal(yamlTmps.length, 2, `expected 2 yaml tmp writes; got ${yamlTmps.length}: ${JSON.stringify(yamlTmps)}`);
+      assert.equal(
+        yamlTmps.length,
+        2,
+        `expected 2 yaml tmp writes; got ${yamlTmps.length}: ${JSON.stringify(yamlTmps)}`,
+      );
       assert.notEqual(yamlTmps[0], yamlTmps[1], 'two pairWrites must use distinct tmp stamps');
       // Each tmp path should match the .yaml.tmp.<stamp> shape
       for (const p of yamlTmps) {
-        assert.match(p, /\.yaml\.tmp\.\d+\.[a-z0-9]+\.[a-z0-9]+$/, `tmp path shape unexpected: ${p}`);
+        assert.match(
+          p,
+          /\.yaml\.tmp\.\d+\.[a-z0-9]+\.[a-z0-9]+$/,
+          `tmp path shape unexpected: ${p}`,
+        );
       }
     } finally {
       atomicWriter._writeFile = realWrite;
@@ -163,10 +171,10 @@ test('pairWrite is idempotent under repeated calls without orphan accumulation',
       atomicWriter.pairWrite(yamlPath, `body: iter${i}\n`, sidecarPath, makeSidecarState());
     }
     // YAML dir contains only `iter.yaml`
-    const yamlEntries = readdirSync(dir).filter(e => e.startsWith('iter.'));
+    const yamlEntries = readdirSync(dir).filter((e) => e.startsWith('iter.'));
     assert.deepEqual(yamlEntries.sort(), ['iter.yaml']);
     // Sidecar dir contains only `iter.state.json`
-    const sidecarEntries = readdirSync(join(dir, 'state')).filter(e => e.startsWith('iter.'));
+    const sidecarEntries = readdirSync(join(dir, 'state')).filter((e) => e.startsWith('iter.'));
     assert.deepEqual(sidecarEntries.sort(), ['iter.state.json']);
   } finally {
     rmSync(dir, { recursive: true, force: true });

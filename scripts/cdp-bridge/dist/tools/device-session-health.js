@@ -24,7 +24,9 @@ export async function getDeviceSessionHealth(deps = {}) {
                 if (f)
                     health.foreignRunner = f;
             }
-            catch { /* best-effort: a failed ps scan must never fail cdp_status */ }
+            catch {
+                /* best-effort: a failed ps scan must never fail cdp_status */
+            }
         }
     }
     return health;

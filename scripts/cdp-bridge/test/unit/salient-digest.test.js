@@ -11,9 +11,25 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 function createSandbox(fiberRoot) {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON, Map, WeakSet, Error, Date, parseInt, parseFloat,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Error,
+    Date,
+    parseInt,
+    parseFloat,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
-    String, Number, Boolean, RegExp, Symbol, Set, Promise, setTimeout, clearTimeout,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Symbol,
+    Set,
+    Promise,
+    setTimeout,
+    clearTimeout,
   };
   sandbox.globalThis = sandbox;
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
@@ -27,7 +43,10 @@ function createSandbox(fiberRoot) {
 
 const txt = (s) => ({ tag: 6, memoizedProps: s, child: null, sibling: null });
 const el = (name, props, child = null, sibling = null) => ({
-  type: { name }, memoizedProps: props || {}, child, sibling,
+  type: { name },
+  memoizedProps: props || {},
+  child,
+  sibling,
 });
 
 // A screen: a Pressable button, a TextInput, a Switch, and a non-interactive
@@ -37,7 +56,9 @@ function buildScreen() {
   const input = el('TextInput', { testID: 'email-input', placeholder: 'Email' });
   const toggle = el('Switch', { testID: 'notifications-switch', value: true });
   const staticView = el('View', {}, txt('Just a label, not actionable'));
-  button.sibling = input; input.sibling = toggle; toggle.sibling = staticView;
+  button.sibling = input;
+  input.sibling = toggle;
+  toggle.sibling = staticView;
   return el('View', {}, button);
 }
 
@@ -77,7 +98,11 @@ test('interactiveOnly digest is dramatically smaller than the full tree', () => 
 });
 
 test('interactiveOnly recognizes accessibilityRole=button without an onPress prop', () => {
-  const root = el('View', {}, el('View', { accessibilityRole: 'button', testID: 'a11y-btn' }, txt('Tap me')));
+  const root = el(
+    'View',
+    {},
+    el('View', { accessibilityRole: 'button', testID: 'a11y-btn' }, txt('Tap me')),
+  );
   const sandbox = createSandbox(root);
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
   const ids = result.interactive.map((n) => n.testID);
@@ -87,10 +112,12 @@ test('interactiveOnly recognizes accessibilityRole=button without an onPress pro
 // Review fixes (#324) — false-negative + usefulness gaps.
 
 test('interactiveOnly signals truncation instead of silently dropping (long screen)', () => {
-  let head = null, prev = null;
+  let head = null,
+    prev = null;
   for (let i = 0; i < 250; i++) {
     const node = el('Pressable', { onPress: () => {}, testID: 'btn-' + i }, txt('B' + i));
-    if (!head) head = node; else prev.sibling = node;
+    if (!head) head = node;
+    else prev.sibling = node;
     prev = node;
   }
   const sandbox = createSandbox(el('View', {}, head));
@@ -100,21 +127,33 @@ test('interactiveOnly signals truncation instead of silently dropping (long scre
 });
 
 test('interactiveOnly detects host-level onClick handlers (string fiber.type, no name)', () => {
-  const host = { type: 'RCTView', memoizedProps: { onClick: () => {}, testID: 'host-click' }, child: null, sibling: null };
+  const host = {
+    type: 'RCTView',
+    memoizedProps: { onClick: () => {}, testID: 'host-click' },
+    child: null,
+    sibling: null,
+  };
   const sandbox = createSandbox(el('View', {}, host));
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
-  assert.ok(result.interactive.some((n) => n.testID === 'host-click'), 'a host onClick element is actionable');
+  assert.ok(
+    result.interactive.some((n) => n.testID === 'host-click'),
+    'a host onClick element is actionable',
+  );
 });
 
 test('interactiveOnly captures a Button title prop when there is no child text', () => {
-  const sandbox = createSandbox(el('View', {}, el('Button', { onPress: () => {}, title: 'Confirm', testID: 'confirm-btn' })));
+  const sandbox = createSandbox(
+    el('View', {}, el('Button', { onPress: () => {}, title: 'Confirm', testID: 'confirm-btn' })),
+  );
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
   const e = result.interactive.find((n) => n.testID === 'confirm-btn');
   assert.equal(e.text, 'Confirm', 'title prop is the label when there is no child text');
 });
 
 test('interactiveOnly surfaces a Switch on/off value', () => {
-  const sandbox = createSandbox(el('View', {}, el('Switch', { onValueChange: () => {}, value: true, testID: 'sw' })));
+  const sandbox = createSandbox(
+    el('View', {}, el('Switch', { onValueChange: () => {}, value: true, testID: 'sw' })),
+  );
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ interactiveOnly: true }));
   const e = result.interactive.find((n) => n.testID === 'sw');
   assert.equal(e.value, true, 'switch state avoids an extra read before deciding to toggle');

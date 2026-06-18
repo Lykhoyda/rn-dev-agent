@@ -48,7 +48,11 @@ interface PermissionArgs {
   platform?: string;
 }
 
-async function iosPermission(action: string, permission: string, appId: string): Promise<ToolResult> {
+async function iosPermission(
+  action: string,
+  permission: string,
+  appId: string,
+): Promise<ToolResult> {
   const iosKey = IOS_PERMISSIONS[permission];
   if (!iosKey) {
     const valid = Object.keys(IOS_PERMISSIONS).join(', ');
@@ -71,10 +75,16 @@ async function iosPermission(action: string, permission: string, appId: string):
   }
 }
 
-async function androidPermission(action: string, permission: string, appId: string): Promise<ToolResult> {
+async function androidPermission(
+  action: string,
+  permission: string,
+  appId: string,
+): Promise<ToolResult> {
   if (action === 'reset') {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], { timeout: EXEC_TIMEOUT });
+      const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], {
+        timeout: EXEC_TIMEOUT,
+      });
       return okResult({ platform: 'android', action: 'reset', appId, output: stdout.trim() });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -90,7 +100,11 @@ async function androidPermission(action: string, permission: string, appId: stri
 
   const adbAction = action === 'grant' ? 'grant' : 'revoke';
   try {
-    const { stdout, stderr } = await execFileAsync('adb', ['shell', 'pm', adbAction, appId, androidKey], { timeout: EXEC_TIMEOUT });
+    const { stdout, stderr } = await execFileAsync(
+      'adb',
+      ['shell', 'pm', adbAction, appId, androidKey],
+      { timeout: EXEC_TIMEOUT },
+    );
     return okResult({
       platform: 'android',
       action: adbAction,
@@ -107,7 +121,9 @@ async function androidPermission(action: string, permission: string, appId: stri
 async function androidQueryPermission(permission: string, appId: string): Promise<ToolResult> {
   if (permission === 'all') {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+      const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
+        timeout: EXEC_TIMEOUT,
+      });
       if (stdout.includes('Unable to find package')) {
         return failResult(`Package "${appId}" not installed on device`);
       }
@@ -136,7 +152,9 @@ async function androidQueryPermission(permission: string, appId: string): Promis
   }
 
   try {
-    const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+    const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
+      timeout: EXEC_TIMEOUT,
+    });
     if (stdout.includes('Unable to find package')) {
       return failResult(`Package "${appId}" not installed on device`);
     }
@@ -183,7 +201,7 @@ async function iosQueryPermission(permission: string, appId: string): Promise<To
 
 export function createDevicePermissionHandler(): (args: PermissionArgs) => Promise<ToolResult> {
   return async (args) => {
-    const platform = args.platform ?? await detectPlatform();
+    const platform = args.platform ?? (await detectPlatform());
     if (!platform) return failResult('No iOS simulator or Android device detected');
 
     // CDP-014: validate platform value before routing. Previously a typo

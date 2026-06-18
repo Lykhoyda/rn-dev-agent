@@ -6,7 +6,9 @@ const MAX_SHOT_BYTES = 4_000_000;
 function screenshotPath(result) {
     const data = (unwrapResult(result)?.data ?? result?.data);
     const p = data?.path ?? data?.message;
-    return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png')) ? p : null;
+    return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png'))
+        ? p
+        : null;
 }
 export class Recorder {
     buf;
@@ -31,20 +33,37 @@ export class Recorder {
                 try {
                     fn(ev);
                 }
-                catch { /* per-subscriber swallow */ }
+                catch {
+                    /* per-subscriber swallow */
+                }
             }
         }
-        catch { /* non-load-bearing: never throw into the tool path */ }
+        catch {
+            /* non-load-bearing: never throw into the tool path */
+        }
     }
-    snapshot() { return this.buf.getLast(this.buf.size); }
+    snapshot() {
+        return this.buf.getLast(this.buf.size);
+    }
     attach(fn) {
         const snapshot = this.buf.getLast(this.buf.size);
         this.subs.add(fn);
-        return { snapshot, detach: () => { this.subs.delete(fn); } };
+        return {
+            snapshot,
+            detach: () => {
+                this.subs.delete(fn);
+            },
+        };
     }
-    getScreenshot(seq) { return this.shots.get(seq); }
-    hasSubscribers() { return this.subs.size > 0; }
-    getLiveScreenshot() { return this.liveShotData; }
+    getScreenshot(seq) {
+        return this.shots.get(seq);
+    }
+    hasSubscribers() {
+        return this.subs.size > 0;
+    }
+    getLiveScreenshot() {
+        return this.liveShotData;
+    }
     pushLive(frame) {
         const ev = { type: 'live' };
         let changed = false;
@@ -63,7 +82,9 @@ export class Recorder {
             try {
                 fn(ev);
             }
-            catch { /* per-subscriber swallow */ }
+            catch {
+                /* per-subscriber swallow */
+            }
         }
     }
     clear() {
@@ -76,7 +97,9 @@ export class Recorder {
             try {
                 fn({ type: 'cleared' });
             }
-            catch { /* per-subscriber swallow */ }
+            catch {
+                /* per-subscriber swallow */
+            }
         }
         this.subs.clear();
         this.shots.clear();
@@ -103,7 +126,9 @@ export class Recorder {
                 this.shots.delete(oldest);
             }
         }
-        catch { /* file vanished/unreadable — fail-safe */ }
+        catch {
+            /* file vanished/unreadable — fail-safe */
+        }
     }
 }
 export const recorder = new Recorder();

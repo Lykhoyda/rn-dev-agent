@@ -57,7 +57,9 @@ export class CDPMultiplexer {
      */
     capabilityToken = generateCapabilityToken();
     /** Phase 134.4: the capability token for this multiplexer instance. */
-    get token() { return this.capabilityToken; }
+    get token() {
+        return this.capabilityToken;
+    }
     routingSweeper = null;
     constructor(opts) {
         this.opts = {
@@ -259,7 +261,9 @@ export class CDPMultiplexer {
             try {
                 ws.close(1011, 'upstream closed');
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
         }
         this.consumers.clear();
         this.routingTable.clear();
@@ -315,7 +319,9 @@ export class CDPMultiplexer {
                 try {
                     ws.send(rawMessage);
                 }
-                catch { /* one consumer failing should not abort the others */ }
+                catch {
+                    /* one consumer failing should not abort the others */
+                }
             }
         }
     }
@@ -325,14 +331,18 @@ export class CDPMultiplexer {
             try {
                 this.hermesWs.close(1000, 'proxy stopping');
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
             this.hermesWs = null;
         }
         for (const ws of this.consumers.values()) {
             try {
                 ws.close(1001, 'proxy stopping');
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
         }
         this.consumers.clear();
         this.routingTable.clear();
@@ -341,7 +351,9 @@ export class CDPMultiplexer {
             try {
                 this.wss.close();
             }
-            catch { /* ignore */ }
+            catch {
+                /* ignore */
+            }
             this.wss = null;
         }
         if (this.httpServer) {

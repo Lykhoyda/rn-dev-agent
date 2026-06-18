@@ -45,8 +45,18 @@ test('B59 Tier 1: buildArgs emits --platform <p> test <flow>', () => {
     maestroRunnerPath: () => '/runner',
   });
   if (!('buildArgs' in d)) throw new Error('expected dispatch');
-  assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml'), ['--platform', 'ios', 'test', '/tmp/flow.yaml']);
-  assert.deepEqual(d.buildArgs('android', '/tmp/flow.yaml'), ['--platform', 'android', 'test', '/tmp/flow.yaml']);
+  assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml'), [
+    '--platform',
+    'ios',
+    'test',
+    '/tmp/flow.yaml',
+  ]);
+  assert.deepEqual(d.buildArgs('android', '/tmp/flow.yaml'), [
+    '--platform',
+    'android',
+    'test',
+    '/tmp/flow.yaml',
+  ]);
 });
 
 // ── Tier 2: Maestro CLI fallback ─────────────────────────────────────
@@ -60,7 +70,7 @@ test('B59 Tier 2: ios + no adb + maestro-runner installed → falls back to Maes
   });
   assert.equal('runner' in d ? d.runner : null, 'maestro');
   assert.equal('binPath' in d ? d.binPath : null, '/opt/homebrew/bin/maestro');
-  assert.match('fallbackReason' in d ? d.fallbackReason ?? '' : '', /B59|adb in PATH/);
+  assert.match('fallbackReason' in d ? (d.fallbackReason ?? '') : '', /B59|adb in PATH/);
 });
 
 test('B59 Tier 2: ios + no adb + no maestro-runner → falls back to Maestro CLI with installed-msg', () => {
@@ -71,7 +81,7 @@ test('B59 Tier 2: ios + no adb + no maestro-runner → falls back to Maestro CLI
     maestroRunnerPath: () => null,
   });
   assert.equal('runner' in d ? d.runner : null, 'maestro');
-  assert.match('fallbackReason' in d ? d.fallbackReason ?? '' : '', /not installed/);
+  assert.match('fallbackReason' in d ? (d.fallbackReason ?? '') : '', /not installed/);
 });
 
 test('B59 Tier 2: Maestro CLI argv uses -p <platform> for iOS (verified against `maestro test --help`)', () => {
@@ -100,7 +110,12 @@ test('B59 Tier 2: Maestro CLI argv uses -p android for Android', () => {
     maestroRunnerPath: () => null,
   });
   if (!('buildArgs' in d)) throw new Error('expected dispatch');
-  assert.deepEqual(d.buildArgs('android', '/tmp/f.yaml'), ['test', '--platform', 'android', '/tmp/f.yaml']);
+  assert.deepEqual(d.buildArgs('android', '/tmp/f.yaml'), [
+    'test',
+    '--platform',
+    'android',
+    '/tmp/f.yaml',
+  ]);
 });
 
 // ── Tier 3: fail-fast with install hint ──────────────────────────────
@@ -122,7 +137,7 @@ test('B59 Tier 3: nothing usable → returns error with install hint mentioning 
 test('B59 Tier 3: android with nothing → fail-fast still emits install hint', () => {
   const d = chooseMaestroDispatch({
     platform: 'android',
-    whichAdb: () => '/adb',  // adb present but no runner AND no maestro
+    whichAdb: () => '/adb', // adb present but no runner AND no maestro
     whichMaestro: () => null,
     maestroRunnerPath: () => null,
   });

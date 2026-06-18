@@ -13,7 +13,10 @@ function ensureAndroidEnv(): void {
         '/opt/android-sdk',
       ];
       for (const c of candidates) {
-        if (existsSync(c)) { process.env.ANDROID_HOME = c; break; }
+        if (existsSync(c)) {
+          process.env.ANDROID_HOME = c;
+          break;
+        }
       }
     }
   }
@@ -36,7 +39,7 @@ function ensureAndroidEnv(): void {
 
 function ensureJavaEnv(): void {
   const path = process.env.PATH ?? '';
-  if (path.split(':').some(p => existsSync(join(p, 'java')))) return;
+  if (path.split(':').some((p) => existsSync(join(p, 'java')))) return;
 
   const candidates = ['/opt/homebrew/opt/openjdk@17', '/opt/homebrew/opt/openjdk'];
   for (const jdk of candidates) {

@@ -15,7 +15,9 @@ export function extractActiveScreen(parsed: Record<string, unknown>): string | n
   const routes = parsed.routes;
   if (Array.isArray(routes) && routes.length > 0) {
     const idx = typeof parsed.index === 'number' ? parsed.index : routes.length - 1;
-    const active = routes[Math.max(0, Math.min(idx, routes.length - 1))] as Record<string, unknown> | undefined;
+    const active = routes[Math.max(0, Math.min(idx, routes.length - 1))] as
+      | Record<string, unknown>
+      | undefined;
     const name = active?.name;
     if (typeof name === 'string') return name;
     const path = active?.path;

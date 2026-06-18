@@ -44,10 +44,10 @@ const LISTAPPS_CLEAN = [
 ].join('\n');
 
 test('GH#202-P4 LEGACY_BUNDLE_IDS: exactly the two callstack runner bundles', () => {
-  assert.deepEqual([...LEGACY_BUNDLE_IDS], [
-    'com.callstack.agentdevice.runner',
-    'com.callstack.agentdevice.runner.uitests.xctrunner',
-  ]);
+  assert.deepEqual(
+    [...LEGACY_BUNDLE_IDS],
+    ['com.callstack.agentdevice.runner', 'com.callstack.agentdevice.runner.uitests.xctrunner'],
+  );
 });
 
 test('GH#202-P4 selectInstalledLegacyApps: finds installed legacy bundles, ignores nested keys and our own apps', () => {
@@ -76,9 +76,12 @@ function appDeps(over = {}) {
 // has already run by the time eradication is reached.
 test('GH#202-P4 eradicate: uninstalls every installed legacy bundle', async () => {
   const calls = [];
-  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    uninstallApp: (udid, id) => calls.push(`unin:${udid}:${id}`),
-  }));
+  const r = await eradicateLegacyRunnerApps(
+    'UDID-A',
+    appDeps({
+      uninstallApp: (udid, id) => calls.push(`unin:${udid}:${id}`),
+    }),
+  );
   assert.deepEqual(r.removedApps, [
     'com.callstack.agentdevice.runner',
     'com.callstack.agentdevice.runner.uitests.xctrunner',
@@ -97,19 +100,31 @@ test('GH#202-P4 eradicate: clean simulator is a warning-free no-op', async () =>
 });
 
 test('GH#202-P4 eradicate: uninstall failure -> warning with the manual command, other bundle still removed', async () => {
-  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    uninstallApp: (udid, id) => {
-      if (id === 'com.callstack.agentdevice.runner') throw new Error('Device busy');
-    },
-  }));
+  const r = await eradicateLegacyRunnerApps(
+    'UDID-A',
+    appDeps({
+      uninstallApp: (udid, id) => {
+        if (id === 'com.callstack.agentdevice.runner') throw new Error('Device busy');
+      },
+    }),
+  );
   assert.deepEqual(r.removedApps, ['com.callstack.agentdevice.runner.uitests.xctrunner']);
-  assert.ok(r.warnings.some((w) => w.includes('xcrun simctl uninstall UDID-A com.callstack.agentdevice.runner')));
+  assert.ok(
+    r.warnings.some((w) =>
+      w.includes('xcrun simctl uninstall UDID-A com.callstack.agentdevice.runner'),
+    ),
+  );
 });
 
 test('GH#202-P4 eradicate: listapps failure -> warning, no throw', async () => {
-  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    listApps: () => { throw new Error('Invalid device state'); },
-  }));
+  const r = await eradicateLegacyRunnerApps(
+    'UDID-A',
+    appDeps({
+      listApps: () => {
+        throw new Error('Invalid device state');
+      },
+    }),
+  );
   assert.deepEqual(r.removedApps, []);
   assert.ok(r.warnings.some((w) => /listapps failed/.test(w)));
 });
@@ -121,9 +136,12 @@ test('GH#202-P4 eradicate: listapps failure -> warning, no throw', async () => {
 // Surfacing it as a warning keeps the breakage visible instead of reading
 // as "no legacy apps installed".
 test('GH#202-P4 eradicate: zero parsed apps from a successful listapps -> parse-failure warning', async () => {
-  const r = await eradicateLegacyRunnerApps('UDID-A', appDeps({
-    listApps: () => 'totally reformatted output the parser cannot read',
-  }));
+  const r = await eradicateLegacyRunnerApps(
+    'UDID-A',
+    appDeps({
+      listApps: () => 'totally reformatted output the parser cannot read',
+    }),
+  );
   assert.deepEqual(r.removedApps, []);
   assert.ok(r.warnings.some((w) => /0 apps/.test(w)));
 });
@@ -158,7 +176,12 @@ test('GH#202-P4 ensureSingleRunner(udid): result carries removedApps + appEradic
 // re-scans — the scan is one listapps, ~tens of ms.
 test('GH#202-P4 ensureSingleRunner: every udid open re-scans (no memo)', async () => {
   let listCalls = 0;
-  const deps = fullDeps({ listApps: () => { listCalls += 1; return LISTAPPS_CLEAN; } });
+  const deps = fullDeps({
+    listApps: () => {
+      listCalls += 1;
+      return LISTAPPS_CLEAN;
+    },
+  });
   await ensureSingleRunner({ udid: 'UDID-A' }, deps);
   await ensureSingleRunner({ udid: 'UDID-A' }, deps);
   assert.equal(listCalls, 2);
@@ -166,7 +189,15 @@ test('GH#202-P4 ensureSingleRunner: every udid open re-scans (no memo)', async (
 
 test('GH#202-P4 ensureSingleRunner (startup, no udid): never touches simctl', async () => {
   let touched = false;
-  const r = await ensureSingleRunner({}, fullDeps({ listApps: () => { touched = true; return ''; } }));
+  const r = await ensureSingleRunner(
+    {},
+    fullDeps({
+      listApps: () => {
+        touched = true;
+        return '';
+      },
+    }),
+  );
   assert.equal(touched, false);
   assert.deepEqual(r.removedApps, []);
 });

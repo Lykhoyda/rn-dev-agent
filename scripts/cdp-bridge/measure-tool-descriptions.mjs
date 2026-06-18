@@ -54,7 +54,7 @@ function extractTools(src) {
  * useful guidance. Flags only "obvious archaeological lore" the LLM never benefits
  * from. Use this set first; act on flagged tools, then re-measure.
  */
-function classifyLoose(desc, name) {
+function classifyLoose(desc, _name) {
   const flags = [];
   if (/\b[BD]\d{2,3}\b/.test(desc)) flags.push('decision-id');
   if (/\bPhase\s+\d+\b|\bM\d+[a-z]?\b/.test(desc)) flags.push('phase-ref');
@@ -75,7 +75,7 @@ function classifyLoose(desc, name) {
  *
  * Long-desc only fires when COMBINED with another flag — length alone ≠ bloat.
  */
-function classifyStrict(desc, name) {
+function classifyStrict(desc, _name) {
   const flags = [];
 
   if (/\b[BD]\d{2,3}\b/.test(desc)) flags.push('decision-id');
@@ -158,14 +158,22 @@ if (isJson) {
   console.log();
   console.log(`Tools registered:      ${summary.tool_count}`);
   console.log(`Description chars:     ${summary.total_desc_chars.toLocaleString()}`);
-  console.log(`Zod .describe() chars: ${summary.total_zod_chars.toLocaleString()} (${summary.total_param_count} params)`);
+  console.log(
+    `Zod .describe() chars: ${summary.total_zod_chars.toLocaleString()} (${summary.total_param_count} params)`,
+  );
   console.log(`Combined chars:        ${summary.total_chars.toLocaleString()}`);
-  console.log(`Estimated tokens:      ~${summary.est_tokens_text_only.toLocaleString()} (text-only; add ~20-30% for JSON schema overhead)`);
+  console.log(
+    `Estimated tokens:      ~${summary.est_tokens_text_only.toLocaleString()} (text-only; add ~20-30% for JSON schema overhead)`,
+  );
   console.log();
   console.log(`Top 25 by total weight (description + parameter .describe() text):`);
   console.log();
-  console.log(`  # | ${pad('Tool', 32)} | ${padL('desc', 5)} | ${padL('zod', 5)} | ${padL('total', 5)} | loose | strict`);
-  console.log(`----|${'-'.repeat(34)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(40)}`);
+  console.log(
+    `  # | ${pad('Tool', 32)} | ${padL('desc', 5)} | ${padL('zod', 5)} | ${padL('total', 5)} | loose | strict`,
+  );
+  console.log(
+    `----|${'-'.repeat(34)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(7)}|${'-'.repeat(40)}`,
+  );
   for (const [i, t] of tools.slice(0, 25).entries()) {
     const looseMark = t.loose.length > 0 ? '  X  ' : '  -  ';
     const strictStr = t.strict.length > 0 ? t.strict.join(',') : '-';
@@ -174,8 +182,12 @@ if (isJson) {
     );
   }
   console.log();
-  console.log(`LOOSE  flagged: ${looseFlagged.length.toString().padStart(2)} / ${tools.length} tools, ${looseChars.toLocaleString().padStart(6)} chars (~${charsToTokens(looseChars).toLocaleString()} tokens)`);
-  console.log(`STRICT flagged: ${strictFlagged.length.toString().padStart(2)} / ${tools.length} tools, ${strictChars.toLocaleString().padStart(6)} chars (~${charsToTokens(strictChars).toLocaleString()} tokens)`);
+  console.log(
+    `LOOSE  flagged: ${looseFlagged.length.toString().padStart(2)} / ${tools.length} tools, ${looseChars.toLocaleString().padStart(6)} chars (~${charsToTokens(looseChars).toLocaleString()} tokens)`,
+  );
+  console.log(
+    `STRICT flagged: ${strictFlagged.length.toString().padStart(2)} / ${tools.length} tools, ${strictChars.toLocaleString().padStart(6)} chars (~${charsToTokens(strictChars).toLocaleString()} tokens)`,
+  );
   console.log();
   console.log(`Loose-only tools (definitely-clean candidates):`);
   for (const t of looseFlagged) {

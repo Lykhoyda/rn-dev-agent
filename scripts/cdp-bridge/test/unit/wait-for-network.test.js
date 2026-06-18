@@ -89,7 +89,11 @@ test('buildMatchPredicate: since cutoff drops earlier entries', () => {
 
 test('buildMatchPredicate: AND-combines all filters', () => {
   const pred = buildMatchPredicate('/cart', 'POST', '2026-04-27T09:00:00.000Z');
-  const match = makeEntry({ url: '/api/cart', method: 'POST', timestamp: '2026-04-27T10:00:00.000Z' });
+  const match = makeEntry({
+    url: '/api/cart',
+    method: 'POST',
+    timestamp: '2026-04-27T10:00:00.000Z',
+  });
   assert.ok(pred(match));
   assert.ok(!pred({ ...match, method: 'GET' }), 'wrong method fails');
   assert.ok(!pred({ ...match, url: '/api/users' }), 'wrong url fails');
@@ -152,13 +156,15 @@ test('handler: retroactive match — completed entry already in buffer returns i
   pushEntry(client, { url: '/api/cart/add', method: 'POST', status: 201 });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/cart',
-    method: 'POST',
-    since: past,
-    timeout_ms: 500,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/cart',
+      method: 'POST',
+      since: past,
+      timeout_ms: 500,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.mutation.url, '/api/cart/add');
@@ -169,11 +175,13 @@ test('handler: retroactive match — completed entry already in buffer returns i
 test('handler: timeout with no matching entries — matched:false, empty candidates_seen', async () => {
   const client = createMockClient();
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/never',
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/never',
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, false);
   assert.equal(data.timeout_ms, 150);
@@ -184,22 +192,31 @@ test('handler: timeout with in-flight match — surfaces in-flight in candidates
   const client = createMockClient();
   const past = new Date(Date.now() - 60_000).toISOString();
   // Push an entry that matches url+method+since but lacks status (in-flight)
-  const inflight = makeEntry({ id: 'req-pending', url: '/api/checkout', method: 'POST', timestamp: new Date().toISOString() });
+  const inflight = makeEntry({
+    id: 'req-pending',
+    url: '/api/checkout',
+    method: 'POST',
+    timestamp: new Date().toISOString(),
+  });
   delete inflight.status;
   client.networkBufferManager.push(client.activeDeviceKey, inflight);
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/checkout',
-    method: 'POST',
-    since: past,
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/checkout',
+      method: 'POST',
+      since: past,
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, false);
-  assert.ok(data.candidates_seen.some((e) => e.id === 'req-pending'),
-    'in-flight match should appear in candidates_seen for agent self-correction');
+  assert.ok(
+    data.candidates_seen.some((e) => e.id === 'req-pending'),
+    'in-flight match should appear in candidates_seen for agent self-correction',
+  );
 });
 
 test('handler: method filter excludes non-matching verbs', async () => {
@@ -208,13 +225,15 @@ test('handler: method filter excludes non-matching verbs', async () => {
   pushEntry(client, { url: '/api/cart', method: 'GET', status: 200 });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/cart',
-    method: 'POST',
-    since: past,
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/cart',
+      method: 'POST',
+      since: past,
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, false, 'GET should not satisfy POST filter');
 });
@@ -229,12 +248,14 @@ test('handler: explicit since cutoff excludes entries older than the timestamp',
   });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/cart',
-    since: '2025-01-01T00:00:00.000Z',
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/cart',
+      since: '2025-01-01T00:00:00.000Z',
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, false);
 });
@@ -253,12 +274,14 @@ test('handler: omitting since means no cutoff — retroactive scan finds complet
   });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/profile',
-    method: 'PUT',
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/profile',
+      method: 'PUT',
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.mutation.status, 200);
@@ -279,12 +302,14 @@ test('handler: candidates_seen capped at 10 even with many in-flight matches', a
   }
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/data',
-    since: past,
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/data',
+      since: past,
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, false);
   assert.equal(data.candidates_seen.length, 10);
@@ -312,13 +337,15 @@ test('handler: poll match — entry completes during polling window', async () =
   }, 75);
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/profile',
-    method: 'PUT',
-    since: past,
-    timeout_ms: 1000,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/profile',
+      method: 'PUT',
+      since: past,
+      timeout_ms: 1000,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.mutation.id, 'req-async');
@@ -336,12 +363,14 @@ test('handler: status=0 (loadingFailed) is treated as completed and matches', as
   });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/network-error',
-    since: past,
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/network-error',
+      since: past,
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.mutation.status, 0);
@@ -354,11 +383,13 @@ test('handler: response payload includes device scope for multi-device disambigu
   pushEntry(client, { url: '/api/cart', method: 'POST', status: 201 });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/cart',
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/cart',
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.device, '8081-page1', 'matches mock client activeDeviceKey');
@@ -376,12 +407,14 @@ test('handler: explicit device override is reflected in payload', async () => {
   });
 
   const handler = createWaitForNetworkHandler(() => client);
-  const data = expectOk(await handler({
-    url_pattern: '/api/cart',
-    device: '9000-other-target',
-    timeout_ms: 150,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/cart',
+      device: '9000-other-target',
+      timeout_ms: 150,
+      poll_interval_ms: 50,
+    }),
+  );
 
   assert.equal(data.matched, true);
   assert.equal(data.device, '9000-other-target');
@@ -393,15 +426,19 @@ test('handler: connection lost mid-poll returns matched:false with disconnected:
   // Drop the connection after the first poll tick. Without the in-loop
   // isConnected guard, the handler would wait the full timeout against a
   // frozen buffer.
-  setTimeout(() => { client._isConnected = false; }, 75);
+  setTimeout(() => {
+    client._isConnected = false;
+  }, 75);
 
   const handler = createWaitForNetworkHandler(() => client);
   const t0 = Date.now();
-  const data = expectOk(await handler({
-    url_pattern: '/api/never',
-    timeout_ms: 2000,
-    poll_interval_ms: 50,
-  }));
+  const data = expectOk(
+    await handler({
+      url_pattern: '/api/never',
+      timeout_ms: 2000,
+      poll_interval_ms: 50,
+    }),
+  );
   const elapsed = Date.now() - t0;
 
   assert.equal(data.matched, false);

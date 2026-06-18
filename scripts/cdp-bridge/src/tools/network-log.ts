@@ -44,7 +44,8 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
       ? client.networkBufferManager.filter(scope, (e) => {
           if (urlNeedle !== undefined && !e.url.includes(urlNeedle)) return false;
           if (since !== undefined && e.timestamp < since) return false;
-          if (wantedMethods !== null && !wantedMethods.includes(e.method.toUpperCase())) return false;
+          if (wantedMethods !== null && !wantedMethods.includes(e.method.toUpperCase()))
+            return false;
           return true;
         })
       : client.networkBufferManager.getLast(scope, limit);
@@ -55,7 +56,9 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
     // otherwise truncated could never be true on the unfiltered path.
     const totalMatches = hasFilters
       ? matches.length
-      : (scope === 'all' ? client.networkBufferManager.totalSize : client.networkBufferManager.size(scope));
+      : scope === 'all'
+        ? client.networkBufferManager.totalSize
+        : client.networkBufferManager.size(scope);
     const sliced = matches.length > limit ? matches.slice(-limit) : matches;
     const truncated = totalMatches > sliced.length;
 
@@ -63,7 +66,9 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
     const hint = shouldShowMetroClearHint(
       { connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now },
       sliced.length === 0,
-    ) ? METRO_CLEAR_HINT_TEXT : undefined;
+    )
+      ? METRO_CLEAR_HINT_TEXT
+      : undefined;
     const resultOpts = hint ? { meta: { hint } } : undefined;
 
     return okResult(

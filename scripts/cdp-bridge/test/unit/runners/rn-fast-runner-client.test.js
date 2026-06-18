@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runIOS, _setFetchForTest, _setRunnerStateForTest } from '../../../dist/runners/rn-fast-runner-client.js';
+import {
+  runIOS,
+  _setFetchForTest,
+  _setRunnerStateForTest,
+} from '../../../dist/runners/rn-fast-runner-client.js';
 
 // Pin a fake state so the client can resolve a port without spawning xcodebuild.
 _setRunnerStateForTest({
@@ -22,7 +26,9 @@ test('runIOS snapshot: POSTs /command with command=snapshot and bundleId', async
   mockCalls = [];
   mockResponse = {
     ok: true,
-    data: { tree: { type: 'Application', frame: { x: 0, y: 0, width: 393, height: 852 }, children: [] } },
+    data: {
+      tree: { type: 'Application', frame: { x: 0, y: 0, width: 393, height: 852 }, children: [] },
+    },
   };
   const result = await runIOS({ command: 'snapshot', bundleId: 'com.example' });
   assert.equal(result.isError, undefined);

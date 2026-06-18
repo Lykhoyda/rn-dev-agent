@@ -43,6 +43,8 @@ test('detectIosExternalRunner: null when no automation process present', async (
 });
 
 test('detectIosExternalRunner: error-safe when ps fails', async () => {
-  const ps = async () => { throw new Error('ps blew up'); };
+  const ps = async () => {
+    throw new Error('ps blew up');
+  };
   assert.equal(await detectIosExternalRunner(ps, UDID), null);
 });

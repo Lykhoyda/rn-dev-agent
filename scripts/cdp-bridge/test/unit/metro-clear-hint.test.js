@@ -15,42 +15,24 @@ const stub = (nowValue) => () => nowValue;
 
 test('M11 probe: non-empty result returns false regardless of timing', () => {
   assert.equal(
-    shouldShowMetroClearHint(
-      { connectedAt: NOW - 120_000, now: stub(NOW) },
-      false,
-    ),
+    shouldShowMetroClearHint({ connectedAt: NOW - 120_000, now: stub(NOW) }, false),
     false,
   );
 });
 
 test('M11 probe: null connectedAt returns false (not connected yet)', () => {
-  assert.equal(
-    shouldShowMetroClearHint(
-      { connectedAt: null, now: stub(NOW) },
-      true,
-    ),
-    false,
-  );
+  assert.equal(shouldShowMetroClearHint({ connectedAt: null, now: stub(NOW) }, true), false);
 });
 
 test('M11 probe: empty + connected 30s ago returns false (below threshold)', () => {
   assert.equal(
-    shouldShowMetroClearHint(
-      { connectedAt: NOW - 30_000, now: stub(NOW) },
-      true,
-    ),
+    shouldShowMetroClearHint({ connectedAt: NOW - 30_000, now: stub(NOW) }, true),
     false,
   );
 });
 
 test('M11 probe: empty + connected 61s ago returns true', () => {
-  assert.equal(
-    shouldShowMetroClearHint(
-      { connectedAt: NOW - 61_000, now: stub(NOW) },
-      true,
-    ),
-    true,
-  );
+  assert.equal(shouldShowMetroClearHint({ connectedAt: NOW - 61_000, now: stub(NOW) }, true), true);
 });
 
 test('M11 probe: empty + old connectedAt + recent lastEventAt returns false (recent event resets clock)', () => {

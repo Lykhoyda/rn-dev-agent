@@ -91,7 +91,7 @@ function compileShapes(raw: unknown): RegExp | null {
     // signal — a debugging dead-end. One line of stderr fixes that.
     process.stderr.write(
       `[verification] combined successShapes regex compile failed (${(e as Error).message}); ` +
-      `using built-in default. Check for named groups or backrefs in your patterns.\n`,
+        `using built-in default. Check for named groups or backrefs in your patterns.\n`,
     );
     return null;
   }

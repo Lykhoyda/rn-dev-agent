@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import WebSocket, { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws';
 
 /**
  * Minimal Hermes stand-in used by multiplexer and CDPClient proxy tests.
@@ -35,7 +35,9 @@ export function makeMockHermes() {
         );
       }
     });
-    ws.on('close', () => { activeWs = null; });
+    ws.on('close', () => {
+      activeWs = null;
+    });
   });
 
   return new Promise((resolve) => {
@@ -45,8 +47,13 @@ export function makeMockHermes() {
         port,
         url: `ws://127.0.0.1:${port}`,
         received,
-        emit: (event) => { if (activeWs) activeWs.send(JSON.stringify(event)); },
-        stop: () => new Promise((r) => { wss.close(() => server.close(() => r())); }),
+        emit: (event) => {
+          if (activeWs) activeWs.send(JSON.stringify(event));
+        },
+        stop: () =>
+          new Promise((r) => {
+            wss.close(() => server.close(() => r()));
+          }),
       });
     });
   });

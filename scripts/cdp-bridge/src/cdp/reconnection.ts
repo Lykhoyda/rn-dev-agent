@@ -95,17 +95,21 @@ export function handleClose(ctx: ReconnectContext, code: number): void {
     clearActiveFlag();
     logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
     console.error(
-      'CDP: connection closed (code ' + code + '). Auto-reconnect is disabled ' +
-      '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
-      'the bridge will reconnect on the next CDP tool call. ' +
-      'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.',
+      'CDP: connection closed (code ' +
+        code +
+        '). Auto-reconnect is disabled ' +
+        '(RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) — ' +
+        'the bridge will reconnect on the next CDP tool call. ' +
+        'Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.',
     );
     return;
   }
 
   logger.info('CDP', `WebSocket closed (code ${code}), starting reconnect`);
   if (code === 1006) {
-    console.error('CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...');
+    console.error(
+      'CDP: abnormal close (1006). App may have reloaded or crashed. Attempting reconnect...',
+    );
   } else {
     console.error('CDP: connection closed (code ' + code + '). Reconnecting...');
   }
@@ -171,7 +175,10 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
         try {
           await ctx.afterReconnect();
         } catch (err) {
-          logger.warn('CDP', `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`);
+          logger.warn(
+            'CDP',
+            `afterReconnect hook failed: ${err instanceof Error ? err.message : err}`,
+          );
         }
       }
       return;
@@ -182,7 +189,9 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
   ctx.setReconnecting(false);
   ctx.setState('disconnected');
   clearActiveFlag();
-  console.error('CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...');
+  console.error(
+    'CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...',
+  );
   startBackgroundPoll(ctx);
 }
 
@@ -216,31 +225,35 @@ export async function softReconnect(ctx: ReconnectContext): Promise<string> {
 export function startBackgroundPoll(ctx: ReconnectContext): void {
   if (ctx.getBgPollTimer() || ctx.isDisposed()) return;
   if (isPassive(ctx)) return;
-  ctx.setBgPollTimer(setInterval(async () => {
-    if (isPassive(ctx)) {
-      stopBackgroundPoll(ctx);
-      return;
-    }
-    if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
-      stopBackgroundPoll(ctx);
-      return;
-    }
-    try {
-      const res = await fetch(`http://127.0.0.1:${ctx.getPort()}/status`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      const text = await res.text();
-      if (text === 'packager-status:running') {
-        console.error('CDP: Metro detected via background poll. Reconnecting...');
+  ctx.setBgPollTimer(
+    setInterval(async () => {
+      if (isPassive(ctx)) {
         stopBackgroundPoll(ctx);
-        ctx.setReconnecting(true);
-        ctx.setState('reconnecting');
-        reconnect(ctx).catch(() => { ctx.setReconnecting(false); });
+        return;
       }
-    } catch {
-      // Metro not available yet — keep polling
-    }
-  }, 5000));
+      if (ctx.isDisposed() || ctx.isConnected() || ctx.isReconnecting()) {
+        stopBackgroundPoll(ctx);
+        return;
+      }
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.getPort()}/status`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        const text = await res.text();
+        if (text === 'packager-status:running') {
+          console.error('CDP: Metro detected via background poll. Reconnecting...');
+          stopBackgroundPoll(ctx);
+          ctx.setReconnecting(true);
+          ctx.setState('reconnecting');
+          reconnect(ctx).catch(() => {
+            ctx.setReconnecting(false);
+          });
+        }
+      } catch {
+        // Metro not available yet — keep polling
+      }
+    }, 5000),
+  );
 }
 
 export function stopBackgroundPoll(ctx: ReconnectContext): void {

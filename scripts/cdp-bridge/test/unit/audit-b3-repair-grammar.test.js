@@ -11,10 +11,10 @@ import { parseMaestroFailure } from '../../dist/domain/maestro-error-parser.js';
 // parser pulls it out of a failure line and extractIdSelectors must find the
 // matching `id:` line in the body.
 const TRICKY_IDS = [
-  "user's-task",        // single quote inside a double-quoted value
-  'say-"hi"',           // double quote inside a single-quoted value
-  'plain-kebab',        // ordinary
-  'btn.with.dots',      // regex-special chars
+  "user's-task", // single quote inside a double-quoted value
+  'say-"hi"', // double quote inside a single-quoted value
+  'plain-kebab', // ordinary
+  'btn.with.dots', // regex-special chars
 ];
 
 for (const id of TRICKY_IDS) {
@@ -42,7 +42,11 @@ test('extractIdSelectors strips a trailing comment after a quoted id', () => {
 });
 
 test('replaceIdSelector patches a quoted id with an embedded opposite quote', () => {
-  const { body, replacements } = replaceIdSelector(`- tapOn:\n    id: "user's-task"`, "user's-task", 'user-task');
+  const { body, replacements } = replaceIdSelector(
+    `- tapOn:\n    id: "user's-task"`,
+    "user's-task",
+    'user-task',
+  );
   assert.equal(replacements, 1);
   assert.match(body, /id: "user-task"/);
 });

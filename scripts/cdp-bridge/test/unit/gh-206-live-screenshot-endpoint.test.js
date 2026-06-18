@@ -5,7 +5,9 @@ import { Recorder } from '../../dist/observability/recorder.js';
 import { ObservabilityServer } from '../../dist/observability/server.js';
 
 async function get(port, path) {
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, { headers: { host: `127.0.0.1:${port}` } });
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    headers: { host: `127.0.0.1:${port}` },
+  });
   const buf = Buffer.from(await res.arrayBuffer());
   return { status: res.status, ctype: res.headers.get('content-type'), buf };
 }

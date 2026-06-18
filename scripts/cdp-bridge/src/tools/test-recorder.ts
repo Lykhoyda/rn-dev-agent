@@ -17,19 +17,40 @@ import {
   STOP_RECORDING_JS,
   buildAnnotationJs,
 } from '../cdp/test-recorder-helpers.js';
-import {
-  generateMaestro,
-  generateDetox,
-  type GenerateOpts,
-} from './test-recorder-generators.js';
+import { generateMaestro, generateDetox, type GenerateOpts } from './test-recorder-generators.js';
 
 export type RecordedEvent =
-  | { type: 'tap';        testID?: string | null; label?: string | null; route?: string | null; t: number }
-  | { type: 'long_press'; testID?: string | null; label?: string | null; route?: string | null; t: number }
-  | { type: 'type';       testID?: string | null; label?: string | null; value: string;          route?: string | null; t: number }
-  | { type: 'submit';     testID?: string | null; label?: string | null; route?: string | null; t: number }
-  | { type: 'swipe';      direction: 'up' | 'down' | 'left' | 'right'; testID?: string | null; route?: string | null; t: number }
-  | { type: 'navigate';   from?: string | null; to: string; route?: string | null; t: number }
+  | { type: 'tap'; testID?: string | null; label?: string | null; route?: string | null; t: number }
+  | {
+      type: 'long_press';
+      testID?: string | null;
+      label?: string | null;
+      route?: string | null;
+      t: number;
+    }
+  | {
+      type: 'type';
+      testID?: string | null;
+      label?: string | null;
+      value: string;
+      route?: string | null;
+      t: number;
+    }
+  | {
+      type: 'submit';
+      testID?: string | null;
+      label?: string | null;
+      route?: string | null;
+      t: number;
+    }
+  | {
+      type: 'swipe';
+      direction: 'up' | 'down' | 'left' | 'right';
+      testID?: string | null;
+      route?: string | null;
+      t: number;
+    }
+  | { type: 'navigate'; from?: string | null; to: string; route?: string | null; t: number }
   | { type: 'annotation'; note: string; route?: string | null; t: number };
 
 // --- Module state ---
@@ -86,7 +107,9 @@ export function sanitizeFilename(name: string): string {
   return name.replace(/\.json$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-export function getRecordingsDir(rootResolver: () => string | null = findProjectRoot): string | null {
+export function getRecordingsDir(
+  rootResolver: () => string | null = findProjectRoot,
+): string | null {
   const root = rootResolver();
   if (!root) return null;
   return join(root, '.rn-agent', 'recordings');
@@ -124,9 +147,8 @@ function makeRecordingRootResolver(
 ): () => string | null {
   return () => {
     const liveBundleId = getClient?.().connectedTarget?.description ?? null;
-    const bundleId = mode === 'save'
-      ? (recordingBundleId ?? liveBundleId)
-      : (liveBundleId ?? recordingBundleId);
+    const bundleId =
+      mode === 'save' ? (recordingBundleId ?? liveBundleId) : (liveBundleId ?? recordingBundleId);
     if (bundleId) return findProjectRoot({ bundleId });
     return findProjectRoot();
   };
@@ -153,7 +175,9 @@ async function probeDev(client: CDPClient): Promise<boolean> {
 const DEV_REQUIRED_MSG =
   'Recording requires __DEV__=true — release builds pre-freeze props at bundle time and cannot be intercepted';
 
-export function createRecordTestStartHandler(getClient: () => CDPClient): (args: Record<string, never>) => Promise<ToolResult> {
+export function createRecordTestStartHandler(
+  getClient: () => CDPClient,
+): (args: Record<string, never>) => Promise<ToolResult> {
   return withConnection(getClient, async (_args: Record<string, never>, client) => {
     if (!(await probeDev(client))) {
       return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
@@ -163,13 +187,24 @@ export function createRecordTestStartHandler(getClient: () => CDPClient): (args:
       return failResult(`Failed to start recording: ${result.error}`, 'EVAL_FAILED');
     }
     if (typeof result.value !== 'string') {
-      return failResult('Unexpected response from START_RECORDING_JS — expected JSON string', 'BAD_RESPONSE');
+      return failResult(
+        'Unexpected response from START_RECORDING_JS — expected JSON string',
+        'BAD_RESPONSE',
+      );
     }
-    let parsed: { ok?: boolean; error?: string; alreadyRunning?: boolean; activeRoute?: string | null };
+    let parsed: {
+      ok?: boolean;
+      error?: string;
+      alreadyRunning?: boolean;
+      activeRoute?: string | null;
+    };
     try {
       parsed = JSON.parse(result.value);
     } catch {
-      return failResult(`Invalid JSON from start: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+      return failResult(
+        `Invalid JSON from start: ${String(result.value).slice(0, 200)}`,
+        'BAD_RESPONSE',
+      );
     }
     if (!parsed.ok) {
       return failResult(parsed.error ?? 'start failed', 'START_FAILED');
@@ -189,20 +224,28 @@ export function createRecordTestStartHandler(getClient: () => CDPClient): (args:
   });
 }
 
-export function createRecordTestStopHandler(getClient: () => CDPClient): (args: Record<string, never>) => Promise<ToolResult> {
+export function createRecordTestStopHandler(
+  getClient: () => CDPClient,
+): (args: Record<string, never>) => Promise<ToolResult> {
   return withConnection(getClient, async (_args: Record<string, never>, client) => {
     const result = (await client.evaluate(STOP_RECORDING_JS)) as EvalResult;
     if (result.error) {
       return failResult(`Failed to stop recording: ${result.error}`, 'EVAL_FAILED');
     }
     if (typeof result.value !== 'string') {
-      return failResult('Unexpected response from STOP_RECORDING_JS — expected JSON string', 'BAD_RESPONSE');
+      return failResult(
+        'Unexpected response from STOP_RECORDING_JS — expected JSON string',
+        'BAD_RESPONSE',
+      );
     }
     let parsed: { ok?: boolean; events?: RecordedEvent[]; truncated?: boolean };
     try {
       parsed = JSON.parse(result.value);
     } catch {
-      return failResult(`Invalid JSON from stop: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+      return failResult(
+        `Invalid JSON from stop: ${String(result.value).slice(0, 200)}`,
+        'BAD_RESPONSE',
+      );
     }
     const raw = Array.isArray(parsed.events) ? parsed.events : [];
     storedEvents = deduplicateEvents(raw);
@@ -251,7 +294,12 @@ export function createRecordTestGenerateHandler(): (args: GenerateArgs) => Promi
       args.format === 'maestro'
         ? generateMaestro(storedEvents, opts)
         : generateDetox(storedEvents, opts);
-    return okResult({ format: args.format, eventCount: storedEvents.length, text, startRoute: recordingStartRoute });
+    return okResult({
+      format: args.format,
+      eventCount: storedEvents.length,
+      text,
+      startRoute: recordingStartRoute,
+    });
   };
 }
 
@@ -274,7 +322,9 @@ export function getRecordingStartRoute(): string | null {
   return recordingStartRoute;
 }
 
-export function createRecordTestAnnotateHandler(getClient: () => CDPClient): (args: { note: string }) => Promise<ToolResult> {
+export function createRecordTestAnnotateHandler(
+  getClient: () => CDPClient,
+): (args: { note: string }) => Promise<ToolResult> {
   return withConnection(getClient, async (args: { note: string }, client) => {
     if (!(await probeDev(client))) {
       return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
@@ -290,7 +340,10 @@ export function createRecordTestAnnotateHandler(getClient: () => CDPClient): (ar
     try {
       parsed = JSON.parse(result.value);
     } catch {
-      return failResult(`Invalid JSON from annotate: ${String(result.value).slice(0, 200)}`, 'BAD_RESPONSE');
+      return failResult(
+        `Invalid JSON from annotate: ${String(result.value).slice(0, 200)}`,
+        'BAD_RESPONSE',
+      );
     }
     if (!parsed.ok) {
       return failResult(parsed.error ?? 'Annotation failed', 'NOT_RECORDING');
@@ -299,7 +352,9 @@ export function createRecordTestAnnotateHandler(getClient: () => CDPClient): (ar
   });
 }
 
-export function createRecordTestSaveHandler(getClient?: () => CDPClient): (args: { filename: string }) => Promise<ToolResult> {
+export function createRecordTestSaveHandler(
+  getClient?: () => CDPClient,
+): (args: { filename: string }) => Promise<ToolResult> {
   return async (args) => {
     if (!storedEvents) {
       return failResult('No events to save — stop a recording first', 'NO_EVENTS');
@@ -328,7 +383,9 @@ export function createRecordTestSaveHandler(getClient?: () => CDPClient): (args:
   };
 }
 
-export function createRecordTestLoadHandler(getClient?: () => CDPClient): (args: { filename: string }) => Promise<ToolResult> {
+export function createRecordTestLoadHandler(
+  getClient?: () => CDPClient,
+): (args: { filename: string }) => Promise<ToolResult> {
   return async (args) => {
     const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
     if (!dir) {
@@ -364,7 +421,9 @@ export function createRecordTestLoadHandler(getClient?: () => CDPClient): (args:
   };
 }
 
-export function createRecordTestListHandler(getClient?: () => CDPClient): (args: Record<string, never>) => Promise<ToolResult> {
+export function createRecordTestListHandler(
+  getClient?: () => CDPClient,
+): (args: Record<string, never>) => Promise<ToolResult> {
   return async () => {
     const dir = getRecordingsDir(makeRecordingRootResolver(getClient, 'load-list'));
     if (!dir) {

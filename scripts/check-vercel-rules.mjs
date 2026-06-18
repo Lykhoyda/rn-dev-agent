@@ -52,10 +52,12 @@ const RULES = [
     upstream_id: 'react-native-skills/ui-pressable',
     severity: 'warn',
     description: 'Use Pressable instead of Touchable* (Opacity/Highlight/WithoutFeedback).',
-    upstream_path: 'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-pressable.md',
+    upstream_path:
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-pressable.md',
     check(content) {
       const matches = [];
-      const re = /^\s*import\b[^;\n]*?\b(Touchable(?:Opacity|Highlight|WithoutFeedback))\b[^;\n]*?from\s+['"]react-native['"]/gm;
+      const re =
+        /^\s*import\b[^;\n]*?\b(Touchable(?:Opacity|Highlight|WithoutFeedback))\b[^;\n]*?from\s+['"]react-native['"]/gm;
       for (const m of content.matchAll(re)) {
         matches.push({
           line: lineOf(content, m.index),
@@ -71,7 +73,8 @@ const RULES = [
     upstream_id: 'react-native-skills/list-performance-inline-objects',
     severity: 'warn',
     description: 'Stabilize renderItem; inline arrow forces re-render of list items.',
-    upstream_path: 'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-inline-objects.md',
+    upstream_path:
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-inline-objects.md',
     check(content) {
       const matches = [];
       // Match: renderItem={(...) => ...   (inline arrow)
@@ -91,7 +94,8 @@ const RULES = [
     upstream_id: 'react-native-skills/rendering-no-falsy-and',
     severity: 'warn',
     description: 'Use ternary or `> 0` instead of `{x.length && <JSX/>}` (renders "0").',
-    upstream_path: 'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md',
+    upstream_path:
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md',
     check(content) {
       const matches = [];
       // Match: {someName.length && <JSX
@@ -177,7 +181,7 @@ Baseline:
 Other:
   --max <n>                Max files in --all/--ci (default 1000)
   --quiet                  Less stderr output
-`
+`,
   );
 }
 
@@ -185,7 +189,7 @@ Other:
 
 function isCheckableFile(filePath) {
   if (!/\.(tsx|jsx|ts|js)$/.test(filePath)) return false;
-  if (/\.d\.ts$/.test(filePath)) return false;
+  if (filePath.endsWith('.d.ts')) return false;
   if (/(__tests__|\.test\.|\.spec\.|\.config\.)/.test(filePath)) return false;
   if (/node_modules|\/dist\/|\/build\/|\/\.git\/|\/\.next\//.test(filePath)) return false;
   return true;
@@ -225,7 +229,10 @@ function readStdinPaths() {
   try {
     if (process.stdin.isTTY) return [];
     const raw = fs.readFileSync(0, 'utf8');
-    return raw.split('\n').map((s) => s.trim()).filter(Boolean);
+    return raw
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -296,8 +303,7 @@ function formatJson(violations) {
 function formatSarif(violations) {
   const sarif = {
     version: '2.1.0',
-    $schema:
-      'https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json',
+    $schema: 'https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json',
     runs: [
       {
         tool: {
@@ -358,7 +364,9 @@ async function main() {
     fs.mkdirSync(path.dirname(args.baselinePath), { recursive: true });
     fs.writeFileSync(args.baselinePath, JSON.stringify(allViolations, null, 2) + '\n', 'utf8');
     if (!args.quiet) {
-      console.error(`✓ wrote ${args.baselinePath} with ${allViolations.length} baseline violations`);
+      console.error(
+        `✓ wrote ${args.baselinePath} with ${allViolations.length} baseline violations`,
+      );
     }
     process.exit(0);
   }

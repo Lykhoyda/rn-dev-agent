@@ -43,10 +43,16 @@ test('acknowledgeExternalEdit: refreshes sidecar lastSeenMtimeMs to YAML current
 
   project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ['edited-by-human'] }));
   const editedYaml = loadAction(project.root, id);
-  assert.ok(editedYaml.state.lastSeenMtimeMs === baseline, 'sidecar mtime is still pre-edit (the bug surface)');
+  assert.ok(
+    editedYaml.state.lastSeenMtimeMs === baseline,
+    'sidecar mtime is still pre-edit (the bug surface)',
+  );
 
   const acknowledged = acknowledgeExternalEdit(editedYaml);
-  assert.ok(acknowledged.state.lastSeenMtimeMs > baseline, 'returned action.state.lastSeenMtimeMs advanced');
+  assert.ok(
+    acknowledged.state.lastSeenMtimeMs > baseline,
+    'returned action.state.lastSeenMtimeMs advanced',
+  );
 
   // Persisted to disk — the next loadAction sees the new mtime.
   const reloaded = loadAction(project.root, id);
@@ -86,7 +92,15 @@ function fakeMaestroPassWithSnapshot(snapshot) {
   return async () => {
     snapshot.midRunMtime = project.readSidecar('demo').lastSeenMtimeMs;
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass', flowFile: 'x', platform: 'ios' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            data: { passed: true, output: 'pass', flowFile: 'x', platform: 'ios' },
+          }),
+        },
+      ],
     };
   };
 }
@@ -94,7 +108,9 @@ function fakeMaestroPassWithSnapshot(snapshot) {
 function fakeRepairUnused() {
   // The repair handler is never called on a passing first attempt, so a
   // throw here would catch any regression that incorrectly routes through it.
-  return async () => { throw new Error('repair should not be called on a passing flow'); };
+  return async () => {
+    throw new Error('repair should not be called on a passing flow');
+  };
 }
 
 test('cdp_run_action: forceReload=true (default) acknowledges the human edit BEFORE maestro runs', async () => {

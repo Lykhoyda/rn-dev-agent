@@ -37,7 +37,10 @@ export type ToolResult = {
 // instrument variable-cost paths (dispatch, snapshot, repair, reconnect) so the
 // breakdown is visible. `mark(label)` records elapsed-since-last-mark under
 // `label`; `timings()` returns the accumulated map for meta.timings_ms.
-export function createStepTimer(): { mark: (label: string) => void; timings: () => Record<string, number> } {
+export function createStepTimer(): {
+  mark: (label: string) => void;
+  timings: () => Record<string, number>;
+} {
   let last = Date.now();
   const acc: Record<string, number> = {};
   return {
@@ -52,7 +55,10 @@ export function createStepTimer(): { mark: (label: string) => void; timings: () 
   };
 }
 
-export function okResult<T>(data: T, opts?: { truncated?: boolean; meta?: Record<string, unknown> }): ToolResult {
+export function okResult<T>(
+  data: T,
+  opts?: { truncated?: boolean; meta?: Record<string, unknown> },
+): ToolResult {
   const envelope: ResultEnvelope<T> = { ok: true, data };
   if (opts?.truncated) envelope.truncated = true;
   if (opts?.meta) envelope.meta = opts.meta;
@@ -71,10 +77,17 @@ export function failResult(
   } else if (metaOrCode) {
     envelope.meta = metaOrCode;
   }
-  return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }], isError: true as const };
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(envelope) }],
+    isError: true as const,
+  };
 }
 
-export function warnResult<T>(data: T, warning: string, meta?: Record<string, unknown>): ToolResult {
+export function warnResult<T>(
+  data: T,
+  warning: string,
+  meta?: Record<string, unknown>,
+): ToolResult {
   const envelope: ResultEnvelope<T> = { ok: true, data, meta: { ...meta, warning } };
   return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
 }
@@ -100,20 +113,26 @@ export function withConnection<T>(
             // Reconnection in progress — wait up to 30s for it to complete (B89)
             const deadline = Date.now() + 30_000;
             while (!client.isConnected && Date.now() < deadline) {
-              await new Promise(r => setTimeout(r, 500));
+              await new Promise((r) => setTimeout(r, 500));
             }
             if (!client.isConnected) {
-              return failResult('Reconnection timed out. Call cdp_status to retry.', 'RECONNECT_TIMEOUT');
+              return failResult(
+                'Reconnection timed out. Call cdp_status to retry.',
+                'RECONNECT_TIMEOUT',
+              );
             }
           } else {
-            return failResult(`Auto-connect failed: ${msg}. If Metro was restarted, wait a moment then call cdp_status to reconnect.`, 'NOT_CONNECTED');
+            return failResult(
+              `Auto-connect failed: ${msg}. If Metro was restarted, wait a moment then call cdp_status to reconnect.`,
+              'NOT_CONNECTED',
+            );
           }
         }
       }
       if (requireHelpers && !client.helpersInjected) {
         const helperDeadline = Date.now() + 5_000;
         while (!client.helpersInjected && Date.now() < helperDeadline) {
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, 300));
         }
         // D1202: Active 1-shot re-inject. The initial inject during connect
         // setup can race with bundle re-load on app relaunch (Hermes recreates
@@ -154,7 +173,7 @@ export function withConnection<T>(
             console.error('CDP: Dev Client picker dismissed, waiting for helpers...');
             const extDeadline = Date.now() + 30_000;
             while (!client.helpersInjected && Date.now() < extDeadline) {
-              await new Promise(r => setTimeout(r, 500));
+              await new Promise((r) => setTimeout(r, 500));
             }
           }
           if (!client.helpersInjected) {
@@ -175,7 +194,9 @@ export function withConnection<T>(
         try {
           await recoverFromStaleTarget(client);
           forgetFreshness(client);
-        } catch { /* fall through — handler + catch-path recovery still apply */ }
+        } catch {
+          /* fall through — handler + catch-path recovery still apply */
+        }
       }
       // D502: Proactive freshness check (D631/S1 caches result for 2s per generation).
       // D633: delegated to cdp/recovery.probeFreshness.
@@ -186,7 +207,10 @@ export function withConnection<T>(
           forgetFreshness(client);
           const reinjected = await client.reinjectHelpers();
           if (!reinjected) {
-            return failResult('Helpers became stale and re-injection failed. Try cdp_reload.', 'HELPERS_STALE');
+            return failResult(
+              'Helpers became stale and re-injection failed. Try cdp_reload.',
+              'HELPERS_STALE',
+            );
           }
           rememberFreshness(client);
         } else if (probe.fresh) {
@@ -203,7 +227,9 @@ export function withConnection<T>(
       if (requireHelpers && result.isError && client.isConnected) {
         const probe = await probeFreshness(client);
         if (probe.probed && !probe.fresh) {
-          console.error('CDP: stale handler result detected (version probe failed), re-injecting helpers...');
+          console.error(
+            'CDP: stale handler result detected (version probe failed), re-injecting helpers...',
+          );
           forgetFreshness(client);
           const reinjected = await client.reinjectHelpers();
           if (reinjected) {
@@ -219,19 +245,20 @@ export function withConnection<T>(
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isDisconnect = message.includes('WebSocket closed') || message.includes('WebSocket not connected');
+      const isDisconnect =
+        message.includes('WebSocket closed') || message.includes('WebSocket not connected');
 
       if (isDisconnect) {
         // Path A: Clean disconnect — wait for auto-reconnect, then retry once
         const retryDeadline = Date.now() + 30_000;
         while (!client.isConnected && Date.now() < retryDeadline) {
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, 500));
         }
         if (client.isConnected) {
           if (requireHelpers && !client.helpersInjected) {
             const hd = Date.now() + 5_000;
             while (!client.helpersInjected && Date.now() < hd) {
-              await new Promise(r => setTimeout(r, 300));
+              await new Promise((r) => setTimeout(r, 300));
             }
           }
           if (!requireHelpers || client.helpersInjected) {
@@ -243,7 +270,9 @@ export function withConnection<T>(
             }
           }
         }
-        return failResult('Connection lost during operation and reconnect timed out. Metro may be restarting — call cdp_status to retry connection, or check: curl localhost:8081/status');
+        return failResult(
+          'Connection lost during operation and reconnect timed out. Metro may be restarting — call cdp_status to retry connection, or check: curl localhost:8081/status',
+        );
       }
 
       // Path B (B58 fix): stale-target recovery delegated to cdp/recovery.ts (D633).
@@ -255,7 +284,7 @@ export function withConnection<T>(
           if (requireHelpers && !client.helpersInjected) {
             const hd = Date.now() + 5_000;
             while (!client.helpersInjected && Date.now() < hd) {
-              await new Promise(r => setTimeout(r, 300));
+              await new Promise((r) => setTimeout(r, 300));
             }
           }
           if (!requireHelpers || client.helpersInjected) {
@@ -263,13 +292,23 @@ export function withConnection<T>(
               return await handler(args, client);
             } catch (retryErr) {
               const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-              return failResult(`Retry after stale-target recovery failed: ${retryMsg}`, 'STALE_TARGET', { originalError: message });
+              return failResult(
+                `Retry after stale-target recovery failed: ${retryMsg}`,
+                'STALE_TARGET',
+                { originalError: message },
+              );
             }
           }
-          return failResult('Stale target recovery: reconnected but helpers not injected.', 'HELPERS_NOT_INJECTED', { originalError: message });
+          return failResult(
+            'Stale target recovery: reconnected but helpers not injected.',
+            'HELPERS_NOT_INJECTED',
+            { originalError: message },
+          );
         }
         if (recovery.reason === 'reconnect-failed') {
-          return failResult(`Stale target recovery failed: ${recovery.error}`, 'STALE_TARGET', { originalError: message });
+          return failResult(`Stale target recovery failed: ${recovery.error}`, 'STALE_TARGET', {
+            originalError: message,
+          });
         }
       }
 
@@ -280,14 +319,14 @@ export function withConnection<T>(
 
 export type DeviceToolHandler<T> = (args: T) => Promise<ToolResult>;
 
-export function withSession<T>(
-  handler: DeviceToolHandler<T>,
-): (args: T) => Promise<ToolResult> {
+export function withSession<T>(handler: DeviceToolHandler<T>): (args: T) => Promise<ToolResult> {
   return async (args: T): Promise<ToolResult> => {
     if (!hasActiveSession()) {
       return failResult(
         'No device session open. Call device_snapshot with action="open" and provide appId and platform first.',
-        { hint: 'device_snapshot action=open starts a session. All device_press/device_fill/device_find/device_swipe/device_back tools require an open session.' },
+        {
+          hint: 'device_snapshot action=open starts a session. All device_press/device_fill/device_find/device_swipe/device_back tools require an open session.',
+        },
       );
     }
     return handler(args);

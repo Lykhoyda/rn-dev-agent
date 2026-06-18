@@ -46,7 +46,9 @@ test('loadVerificationConfig returns defaults when config file does not exist', 
 test('loadVerificationConfig parses successShapes regex array (OR-combined, case-insensitive)', async () => {
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
-  const root = makeProject(JSON.stringify({ verification: { successShapes: ['Receipt$', '^Thanks'] } }));
+  const root = makeProject(
+    JSON.stringify({ verification: { successShapes: ['Receipt$', '^Thanks'] } }),
+  );
   try {
     const cfg = loadVerificationConfig(root);
     assert.ok(cfg.successShapes instanceof RegExp);
@@ -62,7 +64,9 @@ test('loadVerificationConfig parses successShapes regex array (OR-combined, case
 test('loadVerificationConfig parses mutationMethods array uppercased and trimmed', async () => {
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
-  const root = makeProject(JSON.stringify({ verification: { mutationMethods: ['options', ' Query ', 'POST'] } }));
+  const root = makeProject(
+    JSON.stringify({ verification: { mutationMethods: ['options', ' Query ', 'POST'] } }),
+  );
   try {
     const cfg = loadVerificationConfig(root);
     assert.ok(cfg.mutationMethods instanceof Set);
@@ -104,7 +108,9 @@ test('loadVerificationConfig returns defaults when verification block is missing
 test('loadVerificationConfig drops invalid regex strings, keeps valid ones', async () => {
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
-  const root = makeProject(JSON.stringify({ verification: { successShapes: ['Valid$', '[invalid('] } }));
+  const root = makeProject(
+    JSON.stringify({ verification: { successShapes: ['Valid$', '[invalid('] } }),
+  );
   try {
     const cfg = loadVerificationConfig(root);
     assert.ok(cfg.successShapes instanceof RegExp);
@@ -133,7 +139,9 @@ test('loadVerificationConfig drops patterns longer than 200 chars (ReDoS-via-typ
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
   const tooLong = 'a'.repeat(201);
-  const root = makeProject(JSON.stringify({ verification: { successShapes: [tooLong, 'Valid$'] } }));
+  const root = makeProject(
+    JSON.stringify({ verification: { successShapes: [tooLong, 'Valid$'] } }),
+  );
   try {
     const cfg = loadVerificationConfig(root);
     assert.ok(cfg.successShapes instanceof RegExp);
@@ -165,7 +173,9 @@ test('loadVerificationConfig ignores empty arrays (falls back to defaults)', asy
   // `verification.disable: true` flag.
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
-  const root = makeProject(JSON.stringify({ verification: { successShapes: [], mutationMethods: [] } }));
+  const root = makeProject(
+    JSON.stringify({ verification: { successShapes: [], mutationMethods: [] } }),
+  );
   try {
     const cfg = loadVerificationConfig(root);
     assert.equal(cfg.successShapes, null);
@@ -204,10 +214,14 @@ test('loadVerificationConfig emits one stderr line on first load (observability)
   // debugging dead-end without needing SIGHUP/watcher reload machinery.
   const { loadVerificationConfig, _resetCacheForTests } = await import(MOD_PATH);
   _resetCacheForTests();
-  const root = makeProject(JSON.stringify({ verification: { successShapes: ['Foo$'], mutationMethods: ['POST', 'QUERY'] } }));
+  const root = makeProject(
+    JSON.stringify({
+      verification: { successShapes: ['Foo$'], mutationMethods: ['POST', 'QUERY'] },
+    }),
+  );
   const originalWrite = process.stderr.write.bind(process.stderr);
   const captured = [];
-  process.stderr.write = (chunk, ...rest) => {
+  process.stderr.write = (chunk, ..._rest) => {
     captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
     return true;
   };
@@ -219,6 +233,12 @@ test('loadVerificationConfig emits one stderr line on first load (observability)
     process.stderr.write = originalWrite;
     rmSync(root, { recursive: true, force: true });
   }
-  const matching = captured.filter(line => line.includes('[verification]') && line.includes('.rn-agent/config.json'));
-  assert.equal(matching.length, 1, `expected exactly one [verification] log line; got ${matching.length}: ${JSON.stringify(captured)}`);
+  const matching = captured.filter(
+    (line) => line.includes('[verification]') && line.includes('.rn-agent/config.json'),
+  );
+  assert.equal(
+    matching.length,
+    1,
+    `expected exactly one [verification] log line; got ${matching.length}: ${JSON.stringify(captured)}`,
+  );
 });

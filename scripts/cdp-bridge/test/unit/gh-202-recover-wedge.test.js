@@ -1,8 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  recoverWedge, resetWedgeRecoveryCounter,
-} from '../../dist/cdp/recover-wedge.js';
+import { recoverWedge, resetWedgeRecoveryCounter } from '../../dist/cdp/recover-wedge.js';
 
 function baseDeps(over = {}) {
   const calls = [];
@@ -11,9 +9,13 @@ function baseDeps(over = {}) {
     deps: {
       getSession: () => ({ deviceId: 'UDID-A', appId: 'com.example.app', platform: 'ios' }),
       isFlowActive: () => false,
-      launchApp: async (udid, appId) => { calls.push(`launch:${udid}:${appId}`); },
+      launchApp: async (udid, appId) => {
+        calls.push(`launch:${udid}:${appId}`);
+      },
       stopFastRunner: () => calls.push('stop'),
-      reconnect: async () => { calls.push('reconnect'); },
+      reconnect: async () => {
+        calls.push('reconnect');
+      },
       probeAlive: async () => true,
       sleep: async () => {},
       maxPerSession: 3,
@@ -54,7 +56,10 @@ test('GH#202 recoverWedge: no session → no-session; Android → unsupported-pl
   resetWedgeRecoveryCounter();
   const noSess = await recoverWedge({}, baseDeps({ getSession: () => null }).deps);
   assert.equal(noSess.reason, 'no-session');
-  const android = await recoverWedge({}, baseDeps({ getSession: () => ({ deviceId: 'X', appId: 'a', platform: 'android' }) }).deps);
+  const android = await recoverWedge(
+    {},
+    baseDeps({ getSession: () => ({ deviceId: 'X', appId: 'a', platform: 'android' }) }).deps,
+  );
   assert.equal(android.reason, 'unsupported-platform');
   const real = await recoverWedge({}, baseDeps({ probeAlive: async () => false }).deps);
   assert.equal(real.attempt, 1);
@@ -63,22 +68,27 @@ test('GH#202 recoverWedge: no session → no-session; Android → unsupported-pl
 test('GH#202 recoverWedge: caps CONSECUTIVE failures; a success resets the budget', async () => {
   resetWedgeRecoveryCounter();
   const failing = baseDeps({ probeAlive: async () => false, maxPerSession: 2 }).deps;
-  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged');      // attempt 1
-  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged');      // attempt 2
-  assert.equal((await recoverWedge({}, failing)).reason, 'budget-exhausted');  // refused (2 >= 2)
+  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged'); // attempt 1
+  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged'); // attempt 2
+  assert.equal((await recoverWedge({}, failing)).reason, 'budget-exhausted'); // refused (2 >= 2)
 
   // A SUCCESS resets the consecutive-failure count — exercised BEFORE the cap:
   resetWedgeRecoveryCounter();
-  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged');      // attempt 1
-  const ok = await recoverWedge({}, baseDeps({ probeAlive: async () => true, maxPerSession: 2 }).deps); // attempt 2 → success
+  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged'); // attempt 1
+  const ok = await recoverWedge(
+    {},
+    baseDeps({ probeAlive: async () => true, maxPerSession: 2 }).deps,
+  ); // attempt 2 → success
   assert.equal(ok.recovered, true);
-  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged');      // attempt 1 again → success reset the count
+  assert.equal((await recoverWedge({}, failing)).reason, 'still-wedged'); // attempt 1 again → success reset the count
 });
 
 test('GH#202 recoverWedge: re-foreground throws + probe FALSE → still-wedged (no false positive)', async () => {
   resetWedgeRecoveryCounter();
   const { deps } = baseDeps({
-    launchApp: async () => { throw new Error('simctl boom'); },
+    launchApp: async () => {
+      throw new Error('simctl boom');
+    },
     probeAlive: async () => false,
   });
   const r = await recoverWedge({}, deps);

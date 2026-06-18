@@ -14,7 +14,9 @@ export class DeviceSessionArbiter {
     ops = new Map();
     nextOpId = 1;
     now;
-    constructor(now = Date.now) { this.now = now; }
+    constructor(now = Date.now) {
+        this.now = now;
+    }
     tryAcquire(plane, tool) {
         if (plane === 'flow') {
             if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
@@ -92,29 +94,72 @@ export const arbiter = new DeviceSessionArbiter();
 // (cdp_auto_login runs a Maestro subflow; cdp_reload/restart relaunch the app —
 // none may interleave with a running flow.)
 const FLOW_TOOLS = new Set([
-    'maestro_run', 'maestro_test_all', 'cdp_run_action', 'cdp_auto_login',
-    'cdp_reload', 'cdp_restart',
+    'maestro_run',
+    'maestro_test_all',
+    'cdp_run_action',
+    'cdp_auto_login',
+    'cdp_reload',
+    'cdp_restart',
 ]);
 // interaction: anything that mutates device/app state — gestures AND
 // state-mutating CDP calls (navigate/dispatch/set_shared_value/mmkv write).
 // These are writes, deliberately NOT "introspection".
 const INTERACTION_TOOLS = new Set([
-    'device_screenshot', 'device_snapshot', 'device_find', 'device_press', 'device_fill',
-    'device_swipe', 'device_back', 'device_longpress', 'device_scroll', 'device_scrollintoview',
-    'device_pinch', 'device_permission', 'device_reset_state', 'device_deeplink',
-    'device_accept_system_dialog', 'device_dismiss_system_dialog', 'device_record',
-    'device_pick_value', 'device_pick_date', 'device_focus_next', 'device_batch',
-    'cdp_interact', 'cdp_repair_action', 'cross_platform_verify', 'proof_step',
-    'cdp_navigate', 'cdp_dispatch', 'cdp_set_shared_value', 'cdp_mmkv',
+    'device_screenshot',
+    'device_snapshot',
+    'device_find',
+    'device_press',
+    'device_fill',
+    'device_swipe',
+    'device_back',
+    'device_longpress',
+    'device_scroll',
+    'device_scrollintoview',
+    'device_pinch',
+    'device_permission',
+    'device_reset_state',
+    'device_deeplink',
+    'device_accept_system_dialog',
+    'device_dismiss_system_dialog',
+    'device_record',
+    'device_pick_value',
+    'device_pick_date',
+    'device_focus_next',
+    'device_batch',
+    'cdp_interact',
+    'cdp_repair_action',
+    'cross_platform_verify',
+    'proof_step',
+    'cdp_navigate',
+    'cdp_dispatch',
+    'cdp_set_shared_value',
+    'cdp_mmkv',
 ]);
 // introspection: genuinely read-only CDP/state queries.
 const INTROSPECTION_TOOLS = new Set([
-    'cdp_evaluate', 'cdp_component_tree', 'cdp_component_state', 'cdp_diagnostic_renderers',
-    'cdp_navigation_state', 'cdp_nav_graph', 'cdp_store_state',
-    'cdp_network_log', 'cdp_network_body', 'cdp_wait_for_network', 'cdp_console_log',
-    'cdp_error_log', 'cdp_native_errors', 'cdp_metro_events', 'cdp_heap_usage', 'cdp_cpu_profile',
-    'cdp_object_inspect', 'cdp_exception_breakpoint',
-    'collect_logs', 'expect_redux', 'expect_route', 'expect_visible_by_testid', 'expect_text',
+    'cdp_evaluate',
+    'cdp_component_tree',
+    'cdp_component_state',
+    'cdp_diagnostic_renderers',
+    'cdp_navigation_state',
+    'cdp_nav_graph',
+    'cdp_store_state',
+    'cdp_network_log',
+    'cdp_network_body',
+    'cdp_wait_for_network',
+    'cdp_console_log',
+    'cdp_error_log',
+    'cdp_native_errors',
+    'cdp_metro_events',
+    'cdp_heap_usage',
+    'cdp_cpu_profile',
+    'cdp_object_inspect',
+    'cdp_exception_breakpoint',
+    'collect_logs',
+    'expect_redux',
+    'expect_route',
+    'expect_visible_by_testid',
+    'expect_text',
 ]);
 // Everything else is UNARBITRATED (planeForTool → null): cdp_status (the health
 // check + the reset escape hatch), cdp_connect/disconnect/targets, device_list

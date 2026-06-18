@@ -13,7 +13,9 @@ test('foreignRunnerNotice: builds notice when foreign present and no flow lease'
   const n = foreignRunnerNotice(detection, false);
   assert.ok(n);
   assert.equal(n.meta.foreignRunner.code, 'IOS_XCUITEST_COMPETITOR');
-  assert.deepEqual(n.meta.foreignRunner.processLines, ['18225 /Devices/FC78.../maestro-driver-iosUITests-Runner']);
+  assert.deepEqual(n.meta.foreignRunner.processLines, [
+    '18225 /Devices/FC78.../maestro-driver-iosUITests-Runner',
+  ]);
   assert.match(n.warning, /^FOREIGN_RUNNER_ACTIVE:/);
 });
 

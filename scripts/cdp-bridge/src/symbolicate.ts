@@ -30,7 +30,7 @@ export function parseHermesStack(rawStack: string): StackFrame[] {
 
 function formatSymbolicatedStack(frames: StackFrame[]): string {
   return frames
-    .map(f => `  at ${f.methodName} (${f.file}:${f.lineNumber}:${f.column})`)
+    .map((f) => `  at ${f.methodName} (${f.file}:${f.lineNumber}:${f.column})`)
     .join('\n');
 }
 
@@ -61,7 +61,7 @@ export async function symbolicateErrors(
 
     if (!resp.ok) return errors;
 
-    const body = await resp.json() as { stack?: StackFrame[] };
+    const body = (await resp.json()) as { stack?: StackFrame[] };
     const resultFrames = body.stack;
     if (!Array.isArray(resultFrames) || resultFrames.length !== allFrames.length) {
       return errors;

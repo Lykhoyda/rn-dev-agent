@@ -27,7 +27,8 @@ test('H1: a >2000-char PEM private key is redacted, not leaked', () => {
 
 test('H1: OPENSSH private key over the cap is also redacted', () => {
   const body = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB'.repeat(50);
-  const key = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + body + '\n-----END OPENSSH PRIVATE KEY-----';
+  const key =
+    '-----BEGIN OPENSSH PRIVATE KEY-----\n' + body + '\n-----END OPENSSH PRIVATE KEY-----';
   const out = redact({ k: key });
   assert.ok(!out.k.includes('b3BlbnNzaC1rZXktdjEA'), 'OPENSSH key body must not leak');
   assert.ok(out.k.includes('[REDACTED_SECRET]'));

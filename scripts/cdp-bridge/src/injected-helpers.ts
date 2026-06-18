@@ -2134,7 +2134,9 @@ export const REACT_READY_PROBE_JS = `(function() {
 //
 // Issue #126: bumped MAX_RENDERER_IDS from 5 → 20 with early-exit-after-3-empty
 // heuristic so apps that register a renderer at id 6+ are no longer invisible.
-export interface FiberLike { current?: unknown }
+export interface FiberLike {
+  current?: unknown;
+}
 export interface RendererRootsLike {
   size: number;
   values(): Iterator<{ current?: unknown } | null | undefined>;
@@ -2146,7 +2148,9 @@ export interface DevToolsHookLike {
 export const MAX_RENDERER_IDS = 20;
 export const EARLY_EXIT_EMPTY_STREAK = 3;
 
-export function findAllRootFibersForTest(hook: DevToolsHookLike | null | undefined): Array<{ rendererId: number; fiber: unknown }> {
+export function findAllRootFibersForTest(
+  hook: DevToolsHookLike | null | undefined,
+): Array<{ rendererId: number; fiber: unknown }> {
   if (!hook || typeof hook.getFiberRoots !== 'function') return [];
   const out: Array<{ rendererId: number; fiber: unknown }> = [];
   let emptyStreak = 0;

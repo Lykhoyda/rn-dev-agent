@@ -41,11 +41,15 @@ export function createNetworkLogHandler(getClient) {
         // otherwise truncated could never be true on the unfiltered path.
         const totalMatches = hasFilters
             ? matches.length
-            : (scope === 'all' ? client.networkBufferManager.totalSize : client.networkBufferManager.size(scope));
+            : scope === 'all'
+                ? client.networkBufferManager.totalSize
+                : client.networkBufferManager.size(scope);
         const sliced = matches.length > limit ? matches.slice(-limit) : matches;
         const truncated = totalMatches > sliced.length;
         const lastEventAt = scope === 'all' ? null : client.networkBufferManager.getLastPush(scope);
-        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now }, sliced.length === 0) ? METRO_CLEAR_HINT_TEXT : undefined;
+        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now }, sliced.length === 0)
+            ? METRO_CLEAR_HINT_TEXT
+            : undefined;
         const resultOpts = hint ? { meta: { hint } } : undefined;
         return okResult({
             mode: client.networkMode,

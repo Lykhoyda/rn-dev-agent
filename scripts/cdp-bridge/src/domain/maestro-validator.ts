@@ -57,6 +57,7 @@ export function assertValidBundleId(s: unknown, context: string): asserts s is s
 // Rejects characters that would let a string escape its YAML scalar context
 // (newlines, document separators, unicode line breaks, control characters).
 
+// oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars to prevent YAML injection
 const UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
 const SCALAR_MAX_LEN = 4096;
 
@@ -154,7 +155,9 @@ function validateCommand(cmd: unknown): void {
   }
   if (typeof cmd === 'string') {
     if (!isSafeMaestroScalar(cmd)) {
-      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
+      throw new MaestroValidationError(
+        `Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`,
+      );
     }
     if (DENIED_COMMANDS.has(cmd)) {
       throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
@@ -197,12 +200,16 @@ function validateCommand(cmd: unknown): void {
 function validateRunFlowValue(v: unknown): void {
   if (typeof v === 'string') {
     if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+      throw new MaestroValidationError(
+        `Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`,
+      );
     }
     return;
   }
   if (v === null || typeof v !== 'object' || Array.isArray(v)) {
-    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? 'array' : typeof v}`);
+    throw new MaestroValidationError(
+      `runFlow value must be a file string or an object, got ${Array.isArray(v) ? 'array' : typeof v}`,
+    );
   }
   const obj = v as Record<string, unknown>;
   if ('file' in obj && (typeof obj.file !== 'string' || !isSafeMaestroScalar(obj.file))) {
@@ -307,7 +314,9 @@ function asRunFlow(cmd: unknown): { file?: string; when?: unknown; commands?: un
 // (defeats symlink escape). Throws on any violation or missing root context.
 function resolveRunFlowTarget(file: string, opts: ParseAndValidateOptions): string {
   if (!opts.flowDir || !opts.flowRoot) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
+    throw new MaestroValidationError(
+      `runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`,
+    );
   }
   if (isAbsolute(file)) {
     throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
@@ -325,7 +334,9 @@ function resolveRunFlowTarget(file: string, opts: ParseAndValidateOptions): stri
     resolved = realpath(join(opts.flowDir, file));
     rootReal = realpath(opts.flowRoot);
   } catch (err) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${(err as Error).message}`);
+    throw new MaestroValidationError(
+      `runFlow file ref "${file}" could not be resolved: ${(err as Error).message}`,
+    );
   }
   if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
     throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
@@ -341,7 +352,10 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
   const out: unknown[] = [];
   for (const cmd of commands) {
     const rf = asRunFlow(cmd);
-    if (!rf) { out.push(cmd); continue; }
+    if (!rf) {
+      out.push(cmd);
+      continue;
+    }
 
     if (rf.file !== undefined) {
       const depth = opts._depth ?? 0;
@@ -359,7 +373,9 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
       try {
         subText = readFile(resolved);
       } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${(err as Error).message}`);
+        throw new MaestroValidationError(
+          `runFlow file "${rf.file}" could not be read: ${(err as Error).message}`,
+        );
       }
       const sub = parseAndValidateFlow(subText, {
         ...opts,
@@ -386,7 +402,10 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
   return out;
 }
 
-export function parseAndValidateFlow(yamlText: string, opts: ParseAndValidateOptions = {}): ParsedFlow {
+export function parseAndValidateFlow(
+  yamlText: string,
+  opts: ParseAndValidateOptions = {},
+): ParsedFlow {
   let docs;
   try {
     docs = yaml.parseAllDocuments(yamlText, { strict: true });

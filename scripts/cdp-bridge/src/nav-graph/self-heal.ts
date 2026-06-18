@@ -22,15 +22,17 @@ export function getChangedNavFiles(fromCommit: string, projectRoot: string): str
   if (diff === '') return [];
 
   const allChanged = diff.split('\n').filter(Boolean);
-  return allChanged.filter(file => {
+  return allChanged.filter((file) => {
     const lower = file.toLowerCase();
-    return lower.includes('navigator')
-      || lower.includes('navigation')
-      || /\broutes?\b/.test(lower)
-      || lower.includes('linking')
-      || /screen/i.test(lower.split('/').pop() ?? '')
-      || lower.endsWith('app.json')
-      || lower.includes('app.config');
+    return (
+      lower.includes('navigator') ||
+      lower.includes('navigation') ||
+      /\broutes?\b/.test(lower) ||
+      lower.includes('linking') ||
+      /screen/i.test(lower.split('/').pop() ?? '') ||
+      lower.endsWith('app.json') ||
+      lower.includes('app.config')
+    );
   });
 }
 
@@ -124,7 +126,9 @@ export function stampGraphWithCommit(projectRoot: string): void {
 
   try {
     writeGraph(projectRoot, graph);
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 }
 
 // --- Action Playbook ---
@@ -154,9 +158,10 @@ const PLAYBOOK: PlaybookEntry[] = [
   {
     context: 'text_input_special_chars',
     platform: 'android',
-    use: "device_fill (single-quote wrapping)",
+    use: 'device_fill (single-quote wrapping)',
     avoid: 'adb shell input text with backslash escaping',
-    reason: 'execFile bypasses local shell, Android shell still interprets $ and special chars (D433)',
+    reason:
+      'execFile bypasses local shell, Android shell still interprets $ and special chars (D433)',
   },
   {
     context: 'system_dialog_dismiss',
@@ -190,14 +195,17 @@ const PLAYBOOK: PlaybookEntry[] = [
 
 export function getPlaybook(platform?: 'ios' | 'android'): PlaybookEntry[] {
   if (!platform) return PLAYBOOK;
-  return PLAYBOOK.filter(e => e.platform === platform || e.platform === 'both');
+  return PLAYBOOK.filter((e) => e.platform === platform || e.platform === 'both');
 }
 
-export function getPlaybookForContext(context: string, platform?: 'ios' | 'android'): PlaybookEntry | null {
+export function getPlaybookForContext(
+  context: string,
+  platform?: 'ios' | 'android',
+): PlaybookEntry | null {
   const filtered = platform
-    ? PLAYBOOK.filter(e => e.platform === platform || e.platform === 'both')
+    ? PLAYBOOK.filter((e) => e.platform === platform || e.platform === 'both')
     : PLAYBOOK;
-  return filtered.find(e => e.context === context) ?? null;
+  return filtered.find((e) => e.context === context) ?? null;
 }
 
 // --- Self-Healing ---
@@ -211,7 +219,9 @@ export function buildSelfHealAdvice(
   let recoveryMethod: string | undefined;
 
   if (failedMethod === 'programmatic') {
-    advice.push('Programmatic navigation failed — __NAV_REF__ may be unavailable or screen name may have changed.');
+    advice.push(
+      'Programmatic navigation failed — __NAV_REF__ may be unavailable or screen name may have changed.',
+    );
     advice.push('1. Re-scan graph: cdp_nav_graph action="scan" force=true');
     advice.push('2. Verify screen exists in updated graph');
     advice.push('3. Try UI interaction: device_find("<screen label>") + device_press');

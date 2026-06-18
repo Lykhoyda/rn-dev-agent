@@ -111,9 +111,17 @@ test('storageKeys when MMKV unavailable: __agent_error surfaces per-key failure'
   const client = makeMockClient({
     // CDP-003 guard: target description must include the appId so the
     // app-mismatch guard doesn't pre-empt the storage step under test.
-    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.example.app', platform: 'ios' },
+    connectedTarget: {
+      id: 'p1',
+      title: 'Hermes',
+      vm: 'Hermes',
+      description: 'com.example.app',
+      platform: 'ios',
+    },
     evaluateImpl: () => ({
-      value: JSON.stringify({ __agent_error: 'NitroModulesProxy not available — MMKV requires react-native-mmkv v3+' }),
+      value: JSON.stringify({
+        __agent_error: 'NitroModulesProxy not available — MMKV requires react-native-mmkv v3+',
+      }),
     }),
   });
   const handler = createDeviceResetStateHandler(() => client);
@@ -138,7 +146,13 @@ test('storageKeys success: each key reports ok with action=delete', async () => 
   const { createDeviceResetStateHandler } = await import(MOD_PATH);
   const client = makeMockClient({
     // CDP-003 guard: matching target description.
-    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.example.app', platform: 'ios' },
+    connectedTarget: {
+      id: 'p1',
+      title: 'Hermes',
+      vm: 'Hermes',
+      description: 'com.example.app',
+      platform: 'ios',
+    },
     evaluateImpl: () => ({ value: JSON.stringify({ deleted: true }) }),
   });
   const handler = createDeviceResetStateHandler(() => client);
@@ -162,7 +176,13 @@ test('storageKeys success: each key reports ok with action=delete', async () => 
 test('CDP-003: storage skipped with CDP_TARGET_APP_MISMATCH when connected target belongs to a different app', async () => {
   const { createDeviceResetStateHandler } = await import(MOD_PATH);
   const client = makeMockClient({
-    connectedTarget: { id: 'p1', title: 'Hermes', vm: 'Hermes', description: 'com.actual.different', platform: 'ios' },
+    connectedTarget: {
+      id: 'p1',
+      title: 'Hermes',
+      vm: 'Hermes',
+      description: 'com.actual.different',
+      platform: 'ios',
+    },
     evaluateImpl: () => ({ value: JSON.stringify({ deleted: true }) }),
   });
   const handler = createDeviceResetStateHandler(() => client);
@@ -179,8 +199,11 @@ test('CDP-003: storage skipped with CDP_TARGET_APP_MISMATCH when connected targe
   assert.match(storage.error, /com\.requested\.app/);
   // Crucially: evaluate must NOT have been called — that's the wrong-app
   // deletion that the guard prevents.
-  assert.equal(client._calls.evaluate.length, 0,
-    'guard must short-circuit before any MMKV mutation');
+  assert.equal(
+    client._calls.evaluate.length,
+    0,
+    'guard must short-circuit before any MMKV mutation',
+  );
 });
 
 // ── Permission shorthand string defaults to revoke ──────────────────────
@@ -325,7 +348,7 @@ test('source guard: device_reset_state tool registered in built index.js', async
   const { dirname, join } = await import('node:path');
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const indexSrc = readFileSync(join(__dirname, '../../dist/index.js'), 'utf-8');
-  assert.match(indexSrc, /'device_reset_state'/);
+  assert.match(indexSrc, /['"]device_reset_state['"]/);
   assert.match(indexSrc, /createDeviceResetStateHandler/);
 });
 
@@ -353,5 +376,9 @@ test('source guard: startup-replay reuses extracted helpers (no inline launchApp
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(join(__dirname, '../../dist/tools/startup-replay.js'), 'utf-8');
   assert.match(src, /from "\.\/app-lifecycle\.js"|from '\.\/app-lifecycle\.js'/);
-  assert.equal(/^function launchApp\b/m.test(src), false, 'private launchApp should have been removed');
+  assert.equal(
+    /^function launchApp\b/m.test(src),
+    false,
+    'private launchApp should have been removed',
+  );
 });

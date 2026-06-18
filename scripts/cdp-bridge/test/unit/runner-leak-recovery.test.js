@@ -111,8 +111,11 @@ test('tier-1 attachOnly success: returns recovered + tier=attach-only without es
   const out = await recoverFromRunnerLeak(ctx, deps);
   assert.equal(out.recovered, true);
   assert.equal(out.tier, 'attach-only');
-  assert.deepEqual(deps.calls.map(c => c.kind), ['close', 'open', 'snapshot']);
-  const openArgs = deps.calls.find(c => c.kind === 'open').args;
+  assert.deepEqual(
+    deps.calls.map((c) => c.kind),
+    ['close', 'open', 'snapshot'],
+  );
+  const openArgs = deps.calls.find((c) => c.kind === 'open').args;
   assert.equal(openArgs.appId, 'com.example.app');
   assert.equal(openArgs.platform, 'ios');
   assert.equal(openArgs.attachOnly, true);
@@ -198,7 +201,10 @@ function okResult(data) {
 }
 
 function errResult(msg) {
-  return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: msg }) }], isError: true };
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ ok: false, error: msg }) }],
+    isError: true,
+  };
 }
 
 function makeDepsRecording(scripted) {
@@ -222,7 +228,9 @@ function makeDepsRecording(scripted) {
     parseNodes: (result) => {
       try {
         return JSON.parse(result.content[0].text).data?.nodes ?? null;
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     },
     sleep: () => Promise.resolve(),
   };

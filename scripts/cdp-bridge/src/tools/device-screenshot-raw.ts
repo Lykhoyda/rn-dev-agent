@@ -45,7 +45,12 @@ export function parseSimctlBootedUDID(jsonText: string): string | null {
   for (const list of Object.values(runtimes)) {
     if (!Array.isArray(list)) continue;
     for (const device of list) {
-      if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+      if (
+        device &&
+        device.state === 'Booted' &&
+        typeof device.udid === 'string' &&
+        device.udid.length > 0
+      ) {
         return device.udid;
       }
     }
@@ -66,7 +71,12 @@ export function parseSimctlBootedAll(jsonText: string): string[] {
   for (const list of Object.values(runtimes)) {
     if (!Array.isArray(list)) continue;
     for (const device of list) {
-      if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+      if (
+        device &&
+        device.state === 'Booted' &&
+        typeof device.udid === 'string' &&
+        device.udid.length > 0
+      ) {
         udids.push(device.udid);
       }
     }
@@ -148,10 +158,14 @@ export function simctlScreenshotType(path: string): 'png' | 'jpeg' {
 
 const defaultIosCapturer: RawCapturer = async (udid, path) => {
   try {
-    await execFileAsync('xcrun', ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path], {
-      timeout: 15_000,
-      maxBuffer: 1024 * 1024,
-    });
+    await execFileAsync(
+      'xcrun',
+      ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path],
+      {
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
     return true;
   } catch {
     return false;
@@ -167,7 +181,10 @@ const defaultIosCapturer: RawCapturer = async (udid, path) => {
  * adb exited non-zero afterwards.
  */
 export type CaptureOutcome = 'success' | 'failure' | 'pending';
-export function resolveCaptureOutcome(streamFinished: boolean, procCode: number | null): CaptureOutcome {
+export function resolveCaptureOutcome(
+  streamFinished: boolean,
+  procCode: number | null,
+): CaptureOutcome {
   if (!streamFinished) return 'pending';
   if (procCode === null) return 'pending';
   return procCode === 0 ? 'success' : 'failure';
@@ -189,10 +206,16 @@ const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
     let settled = false;
     let streamFinished = false;
     let procCode: number | null = null;
-    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const out = createWriteStream(path);
     const cleanupPartial = (): void => {
-      try { unlinkSync(path); } catch { /* file may not exist yet — ignore */ }
+      try {
+        unlinkSync(path);
+      } catch {
+        /* file may not exist yet — ignore */
+      }
     };
     const timer = setTimeout(() => {
       if (settled) return;
@@ -217,7 +240,10 @@ const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
       settle(outcome === 'success');
     };
     proc.stdout.pipe(out);
-    out.on('finish', () => { streamFinished = true; maybeSettle(); });
+    out.on('finish', () => {
+      streamFinished = true;
+      maybeSettle();
+    });
     out.on('error', () => {
       cleanupPartial();
       settle(false);
@@ -227,7 +253,10 @@ const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
       cleanupPartial();
       settle(false);
     });
-    proc.on('close', (code) => { procCode = code; maybeSettle(); });
+    proc.on('close', (code) => {
+      procCode = code;
+      maybeSettle();
+    });
   });
 
 let iosResolver: RawResolver = defaultIosResolver;

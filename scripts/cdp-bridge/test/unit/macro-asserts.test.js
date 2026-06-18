@@ -83,7 +83,9 @@ test('Phase126 redux: length operator on arrays + strings', () => {
 });
 
 test('Phase126 redux: contains operator (deep)', () => {
-  assert.deepEqual(evaluateReduxAssertions([{ id: 1 }, { id: 2 }], { contains: { id: 2 } }), { matched: true });
+  assert.deepEqual(evaluateReduxAssertions([{ id: 1 }, { id: 2 }], { contains: { id: 2 } }), {
+    matched: true,
+  });
   const failed = evaluateReduxAssertions([{ id: 1 }], { contains: { id: 99 } });
   assert.equal(failed.matched, false);
 });
@@ -99,7 +101,9 @@ test('Phase126 redux: numeric comparators', () => {
 
 test('Phase126 redux: multiple operators evaluated as AND, first failure surfaces', () => {
   // both pass → matched
-  assert.deepEqual(evaluateReduxAssertions([1, 2, 3], { length: 3, contains: 2 }), { matched: true });
+  assert.deepEqual(evaluateReduxAssertions([1, 2, 3], { length: 3, contains: 2 }), {
+    matched: true,
+  });
   // length passes, contains fails
   const f = evaluateReduxAssertions([1, 2, 3], { length: 3, contains: 99 });
   assert.equal(f.matched, false);
@@ -130,10 +134,9 @@ const SAMPLE_NAV_STATE = {
 };
 
 test('Phase126 route: name matches current top-of-stack', () => {
-  assert.deepEqual(
-    evaluateRouteAssertions(SAMPLE_NAV_STATE, { name: 'TaskDetailScreen' }),
-    { matched: true },
-  );
+  assert.deepEqual(evaluateRouteAssertions(SAMPLE_NAV_STATE, { name: 'TaskDetailScreen' }), {
+    matched: true,
+  });
   const f = evaluateRouteAssertions(SAMPLE_NAV_STATE, { name: 'WrongScreen' });
   assert.equal(f.matched, false);
   if (!f.matched) {
@@ -153,8 +156,12 @@ test('Phase126 route: paramsEquals does deep-equal on params', () => {
 });
 
 test('Phase126 route: inStack matches a route anywhere in stack', () => {
-  assert.deepEqual(evaluateRouteAssertions(SAMPLE_NAV_STATE, { inStack: 'Home' }), { matched: true });
-  assert.deepEqual(evaluateRouteAssertions(SAMPLE_NAV_STATE, { inStack: 'TaskList' }), { matched: true });
+  assert.deepEqual(evaluateRouteAssertions(SAMPLE_NAV_STATE, { inStack: 'Home' }), {
+    matched: true,
+  });
+  assert.deepEqual(evaluateRouteAssertions(SAMPLE_NAV_STATE, { inStack: 'TaskList' }), {
+    matched: true,
+  });
   const f = evaluateRouteAssertions(SAMPLE_NAV_STATE, { inStack: 'NotInStack' });
   assert.equal(f.matched, false);
 });
@@ -170,7 +177,10 @@ test('Phase126 route: combines name + inStack as AND', () => {
     evaluateRouteAssertions(SAMPLE_NAV_STATE, { name: 'TaskDetailScreen', inStack: 'Home' }),
     { matched: true },
   );
-  const f = evaluateRouteAssertions(SAMPLE_NAV_STATE, { name: 'TaskDetailScreen', inStack: 'Missing' });
+  const f = evaluateRouteAssertions(SAMPLE_NAV_STATE, {
+    name: 'TaskDetailScreen',
+    inStack: 'Missing',
+  });
   assert.equal(f.matched, false);
   if (!f.matched) assert.equal(f.failure.field, 'inStack');
 });
@@ -223,14 +233,8 @@ test('Phase126 findRefsByText: ok=false envelope returns empty', () => {
 // Bug #1: unwrap {type, state} envelope from getStoreState
 
 test('Phase128: unwrapStoreEnvelope returns state from {type, state} wrapper', () => {
-  assert.deepEqual(
-    unwrapStoreEnvelope({ type: 'redux', state: [1, 2, 3] }),
-    [1, 2, 3],
-  );
-  assert.equal(
-    unwrapStoreEnvelope({ type: 'zustand', state: 'active' }),
-    'active',
-  );
+  assert.deepEqual(unwrapStoreEnvelope({ type: 'redux', state: [1, 2, 3] }), [1, 2, 3]);
+  assert.equal(unwrapStoreEnvelope({ type: 'zustand', state: 'active' }), 'active');
 });
 
 test('Phase128: unwrapStoreEnvelope leaves bare values untouched', () => {

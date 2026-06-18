@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DeviceSessionArbiter, planeForTool, arbiterWrap,
+  DeviceSessionArbiter,
+  planeForTool,
+  arbiterWrap,
 } from '../../dist/lifecycle/device-arbiter.js';
 
 test('GH#202 introspection + interaction coexist (shared)', () => {
@@ -10,7 +12,8 @@ test('GH#202 introspection + interaction coexist (shared)', () => {
   const r2 = a.tryAcquire('interaction', 'device_press');
   assert.equal(r1.ok, true);
   assert.equal(r2.ok, true);
-  a.release(r1.lease); a.release(r2.lease);
+  a.release(r1.lease);
+  a.release(r2.lease);
 });
 
 test('GH#202 flow is exclusive: refused while any op is active, and names the blocker', () => {
@@ -31,7 +34,8 @@ test('GH#202 reads/taps refused while a flow lease is held; holder is the flow',
   assert.equal(rf.ok, true);
   const ri = a.tryAcquire('introspection', 'cdp_store_state');
   const rx = a.tryAcquire('interaction', 'device_press');
-  assert.equal(ri.ok, false); assert.equal(ri.code, 'BUSY_FLOW_ACTIVE');
+  assert.equal(ri.ok, false);
+  assert.equal(ri.code, 'BUSY_FLOW_ACTIVE');
   assert.equal(rx.ok, false);
   assert.equal(ri.holder.opId, rf.lease.opId);
   assert.equal(ri.holder.tool, 'maestro_run');
@@ -75,8 +79,17 @@ test('GH#202 planeForTool: flow incl. auto-login/reload/restart; mutating CDP = 
 test('GH#202 arbiterWrap refuses with a TOP-LEVEL code while a flow runs, then frees it', async () => {
   const a = new DeviceSessionArbiter();
   let releaseFlow;
-  const flowGate = new Promise((res) => { releaseFlow = res; });
-  const flow = arbiterWrap('maestro_run', async () => { await flowGate; return { ok: true }; }, a);
+  const flowGate = new Promise((res) => {
+    releaseFlow = res;
+  });
+  const flow = arbiterWrap(
+    'maestro_run',
+    async () => {
+      await flowGate;
+      return { ok: true };
+    },
+    a,
+  );
   const tap = arbiterWrap('device_press', async () => ({ ok: true, _t: 'tap-done' }), a);
   const flowP = flow({});
   await Promise.resolve();

@@ -61,8 +61,12 @@ function makeFakeClient(buffer, deviceKey = '8081-page1') {
     connectionGeneration: 1,
     activeDeviceKey: deviceKey,
     networkBufferManager: buffer,
-    async evaluate() { return { value: 13 }; },
-    async reinjectHelpers() { return true; },
+    async evaluate() {
+      return { value: 13 };
+    },
+    async reinjectHelpers() {
+      return true;
+    },
   };
 }
 
@@ -105,18 +109,9 @@ async function timeAsync(fn, iterations) {
 console.log('\n=== A. Helper microbenchmarks (1M iterations each) ===\n');
 
 const helperResults = {
-  normalizeSince_alreadyZ: timeIt(
-    () => normalizeSince('2026-04-27T08:00:00.000Z'),
-    1_000_000,
-  ),
-  normalizeSince_withOffset: timeIt(
-    () => normalizeSince('2026-04-27T10:00:00+02:00'),
-    1_000_000,
-  ),
-  normalizeSince_unparseable: timeIt(
-    () => normalizeSince('not-a-date'),
-    1_000_000,
-  ),
+  normalizeSince_alreadyZ: timeIt(() => normalizeSince('2026-04-27T08:00:00.000Z'), 1_000_000),
+  normalizeSince_withOffset: timeIt(() => normalizeSince('2026-04-27T10:00:00+02:00'), 1_000_000),
+  normalizeSince_unparseable: timeIt(() => normalizeSince('not-a-date'), 1_000_000),
   buildMatchPredicate_construction: timeIt(
     () => buildMatchPredicate('/api/cart', 'POST', '2026-04-27T08:00:00.000Z'),
     1_000_000,
@@ -129,17 +124,16 @@ helperResults.predicate_eval_match = timeIt(
   () => samplePredicate({ ...sampleEntry, url: '/api/cart/add', method: 'POST' }),
   1_000_000,
 );
-helperResults.predicate_eval_miss_url = timeIt(
-  () => samplePredicate(sampleEntry),
-  1_000_000,
-);
+helperResults.predicate_eval_miss_url = timeIt(() => samplePredicate(sampleEntry), 1_000_000);
 helperResults.isComplete_true = timeIt(() => isComplete(sampleEntry), 1_000_000);
 const inflightEntry = { ...sampleEntry };
 delete inflightEntry.status;
 helperResults.isComplete_false = timeIt(() => isComplete(inflightEntry), 1_000_000);
 
 for (const [name, r] of Object.entries(helperResults)) {
-  console.log(`  ${name.padEnd(38)} ${String(r.ns_per_op).padStart(6)} ns/op  (${r.ops_per_sec.toLocaleString()} ops/s)`);
+  console.log(
+    `  ${name.padEnd(38)} ${String(r.ns_per_op).padStart(6)} ns/op  (${r.ops_per_sec.toLocaleString()} ops/s)`,
+  );
 }
 
 // ── B. Buffer scan latency vs buffer size ──────────────────────────────────
@@ -185,7 +179,9 @@ const handlerResults = {};
     50,
   );
   console.log(`  C1. Phase 1 hit (50-entry buf, completed match present)`);
-  console.log(`      min=${handlerResults.retroactive_hit.min_ms}ms  p50=${handlerResults.retroactive_hit.p50_ms}ms  p95=${handlerResults.retroactive_hit.p95_ms}ms  max=${handlerResults.retroactive_hit.max_ms}ms`);
+  console.log(
+    `      min=${handlerResults.retroactive_hit.min_ms}ms  p50=${handlerResults.retroactive_hit.p50_ms}ms  p95=${handlerResults.retroactive_hit.p95_ms}ms  max=${handlerResults.retroactive_hit.max_ms}ms`,
+  );
 }
 
 // C2. Poll hit — entry mutates from in-flight to complete during poll window
@@ -204,10 +200,18 @@ const handlerResults = {};
 
     // Mutate the entry to complete after ~75ms (one poll tick at default 100ms,
     // so the second tick should catch it).
-    setTimeout(() => { inflight.status = 200; inflight.duration_ms = 60; }, 75);
+    setTimeout(() => {
+      inflight.status = 200;
+      inflight.duration_ms = 60;
+    }, 75);
 
     const start = performance.now();
-    await handler({ url_pattern: '/api/profile/save', method: 'PUT', timeout_ms: 1000, poll_interval_ms: 50 });
+    await handler({
+      url_pattern: '/api/profile/save',
+      method: 'PUT',
+      timeout_ms: 1000,
+      poll_interval_ms: 50,
+    });
     samples.push(performance.now() - start);
   }
   samples.sort((a, b) => a - b);
@@ -221,7 +225,9 @@ const handlerResults = {};
     note: 'entry completes at +75ms; poll cadence 50ms',
   };
   console.log(`  C2. Poll hit (entry completes mid-poll, cadence=50ms)`);
-  console.log(`      min=${handlerResults.poll_hit_50ms.min_ms}ms  p50=${handlerResults.poll_hit_50ms.p50_ms}ms  p95=${handlerResults.poll_hit_50ms.p95_ms}ms  max=${handlerResults.poll_hit_50ms.max_ms}ms`);
+  console.log(
+    `      min=${handlerResults.poll_hit_50ms.min_ms}ms  p50=${handlerResults.poll_hit_50ms.p50_ms}ms  p95=${handlerResults.poll_hit_50ms.p95_ms}ms  max=${handlerResults.poll_hit_50ms.max_ms}ms`,
+  );
 }
 
 // C3. Timeout — no match, full timeout window
@@ -231,11 +237,18 @@ const handlerResults = {};
   const handler = createWaitForNetworkHandler(() => client);
 
   handlerResults.timeout_500ms = await timeAsync(
-    () => handler({ url_pattern: '/never-fires-' + Math.random(), timeout_ms: 500, poll_interval_ms: 100 }),
+    () =>
+      handler({
+        url_pattern: '/never-fires-' + Math.random(),
+        timeout_ms: 500,
+        poll_interval_ms: 100,
+      }),
     5,
   );
   console.log(`  C3. Timeout (no match, 500ms timeout, 100ms poll)`);
-  console.log(`      min=${handlerResults.timeout_500ms.min_ms}ms  p50=${handlerResults.timeout_500ms.p50_ms}ms  p95=${handlerResults.timeout_500ms.p95_ms}ms  max=${handlerResults.timeout_500ms.max_ms}ms`);
+  console.log(
+    `      min=${handlerResults.timeout_500ms.min_ms}ms  p50=${handlerResults.timeout_500ms.p50_ms}ms  p95=${handlerResults.timeout_500ms.p95_ms}ms  max=${handlerResults.timeout_500ms.max_ms}ms`,
+  );
 }
 
 // C4. Disconnect mid-poll — connection drops, handler should bail early
@@ -246,10 +259,16 @@ const handlerResults = {};
     const buf = makeBuffer(10);
     const client = makeFakeClient(buf);
     let connected = true;
-    Object.defineProperty(client, 'isConnected', { get() { return connected; } });
+    Object.defineProperty(client, 'isConnected', {
+      get() {
+        return connected;
+      },
+    });
     const handler = createWaitForNetworkHandler(() => client);
 
-    setTimeout(() => { connected = false; }, 75);
+    setTimeout(() => {
+      connected = false;
+    }, 75);
 
     const start = performance.now();
     await handler({ url_pattern: '/never-fires', timeout_ms: 5000, poll_interval_ms: 50 });
@@ -265,7 +284,9 @@ const handlerResults = {};
     note: 'connection drops at +75ms; timeout was 5000ms — should short-circuit',
   };
   console.log(`  C4. Disconnect bail-out (timeout=5000ms, connection drops at +75ms)`);
-  console.log(`      min=${handlerResults.disconnect_bail.min_ms}ms  p50=${handlerResults.disconnect_bail.p50_ms}ms  max=${handlerResults.disconnect_bail.max_ms}ms`);
+  console.log(
+    `      min=${handlerResults.disconnect_bail.min_ms}ms  p50=${handlerResults.disconnect_bail.p50_ms}ms  max=${handlerResults.disconnect_bail.max_ms}ms`,
+  );
 }
 
 // ── Persist machine-readable results ───────────────────────────────────────

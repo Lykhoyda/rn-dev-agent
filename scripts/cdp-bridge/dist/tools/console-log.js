@@ -30,7 +30,10 @@ export function createConsoleLogHandler(getClient) {
         if (Array.isArray(parsed)) {
             entries = parsed;
         }
-        else if (parsed && typeof parsed === 'object' && 'entries' in parsed && Array.isArray(parsed.entries)) {
+        else if (parsed &&
+            typeof parsed === 'object' &&
+            'entries' in parsed &&
+            Array.isArray(parsed.entries)) {
             entries = parsed.entries;
         }
         else {
@@ -39,7 +42,9 @@ export function createConsoleLogHandler(getClient) {
         // M11: include hint when buffer has stayed empty for >60s since connect.
         // Console has no per-buffer lastPush (queries in-app __RN_AGENT.getConsole),
         // so connectedAt is the only reference point.
-        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, now: client.now }, entries.length === 0) ? METRO_CLEAR_HINT_TEXT : undefined;
+        const hint = shouldShowMetroClearHint({ connectedAt: client.connectedAt, now: client.now }, entries.length === 0)
+            ? METRO_CLEAR_HINT_TEXT
+            : undefined;
         const resultOpts = hint ? { meta: { hint } } : undefined;
         return okResult({ count: entries.length, entries }, resultOpts);
     });

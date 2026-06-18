@@ -43,7 +43,8 @@ export async function drainNetworkHookBuffer(client: DrainableClient): Promise<n
     if (!Array.isArray(entries)) return 0;
     let applied = 0;
     for (const e of entries) {
-      if (!e || typeof e.t !== 'string' || !e.d || typeof (e.d as { id?: unknown }).id !== 'string') continue;
+      if (!e || typeof e.t !== 'string' || !e.d || typeof (e.d as { id?: unknown }).id !== 'string')
+        continue;
       const atMs = typeof e.ts === 'number' ? e.ts : undefined;
       applyNetworkHookEntry(
         e.t,
@@ -56,7 +57,10 @@ export async function drainNetworkHookBuffer(client: DrainableClient): Promise<n
     }
     return applied;
   } catch (err) {
-    logger.warn('CDP', `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`);
+    logger.warn(
+      'CDP',
+      `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`,
+    );
     return 0;
   }
 }

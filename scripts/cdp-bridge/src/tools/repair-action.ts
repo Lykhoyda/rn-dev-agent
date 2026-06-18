@@ -12,11 +12,7 @@ import { ensureFastRunner, getActiveSession, runNative } from '../agent-device-w
 import { okResult, failResult, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
-import {
-  loadAction,
-  saveAction,
-  actionWasEditedExternally,
-} from '../domain/action-store.js';
+import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
 import {
   extractAllTestIDs,
   extractIdSelectors,
@@ -67,25 +63,25 @@ async function resolveIOSDeviceIdForRepair(): Promise<string | undefined> {
   const session = getActiveSession();
   if (session?.deviceId) return session.deviceId;
   try {
-    const { stdout } = await execFile(
-      'xcrun',
-      ['simctl', 'list', 'devices', 'booted', '-j'],
-      { timeout: 5000, encoding: 'utf8' },
-    );
-    const data = JSON.parse(stdout) as { devices?: Record<string, Array<{ udid?: string; state?: string }>> };
+    const { stdout } = await execFile('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
+      timeout: 5000,
+      encoding: 'utf8',
+    });
+    const data = JSON.parse(stdout) as {
+      devices?: Record<string, Array<{ udid?: string; state?: string }>>;
+    };
     for (const list of Object.values(data.devices ?? {})) {
       for (const dev of list) {
         if (dev.state === 'Booted' && dev.udid) return dev.udid;
       }
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
   return undefined;
 }
 
-async function bringTargetAppToForeground(
-  platform: string,
-  bundleId: string,
-): Promise<void> {
+async function bringTargetAppToForeground(platform: string, bundleId: string): Promise<void> {
   // Kill the fast-runner FIRST so it can't re-grab focus the moment we
   // simctl-launch the test-app. Equivalent step exists in cdp_restart
   // hardReset (PR #161); this is its single-tool counterpart inside the
@@ -93,7 +89,9 @@ async function bringTargetAppToForeground(
   // a SELECTOR_NOT_FOUND.
   try {
     stopFastRunner();
-  } catch { /* best-effort — fast-runner may already be dead */ }
+  } catch {
+    /* best-effort — fast-runner may already be dead */
+  }
   try {
     if (platform === 'android') {
       await execFile(
@@ -102,13 +100,14 @@ async function bringTargetAppToForeground(
         { timeout: 5000, encoding: 'utf8' },
       );
     } else {
-      await execFile(
-        'xcrun',
-        ['simctl', 'launch', 'booted', bundleId],
-        { timeout: 5000, encoding: 'utf8' },
-      );
+      await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
+        timeout: 5000,
+        encoding: 'utf8',
+      });
     }
-  } catch { /* best-effort — sentinel detection covers the failure case */ }
+  } catch {
+    /* best-effort — sentinel detection covers the failure case */
+  }
 }
 
 /**
@@ -320,7 +319,12 @@ export function createRepairActionHandler() {
       );
     }
 
-    const result = attemptRepair(action, args.failedSelector, candidates, args.threshold ?? DEFAULT_REPAIR_THRESHOLD);
+    const result = attemptRepair(
+      action,
+      args.failedSelector,
+      candidates,
+      args.threshold ?? DEFAULT_REPAIR_THRESHOLD,
+    );
 
     if (result.kind === 'no-stale-selector') {
       // Issue #102 A3: this surfaces "the caller passed a failedSelector
@@ -330,16 +334,12 @@ export function createRepairActionHandler() {
       // BAD_FILENAME is the codebase's existing umbrella for "the
       // caller's input doesn't match the contract" — reuse rather than
       // adding a new ToolErrorCode for a single call site.
-      return failResult(
-        `cdp_repair_action: ${result.reason}`,
-        'BAD_FILENAME',
-        {
-          actionId: args.actionId,
-          failedSelector: args.failedSelector,
-          hint: 'failedSelector is not present in the action body. Re-parse the Maestro stderr — the prior selector hint may be wrong.',
-          bodyPreview: action.body.slice(0, 800),
-        },
-      );
+      return failResult(`cdp_repair_action: ${result.reason}`, 'BAD_FILENAME', {
+        actionId: args.actionId,
+        failedSelector: args.failedSelector,
+        hint: 'failedSelector is not present in the action body. Re-parse the Maestro stderr — the prior selector hint may be wrong.',
+        bodyPreview: action.body.slice(0, 800),
+      });
     }
     if (result.kind === 'no-match') {
       return failResult(

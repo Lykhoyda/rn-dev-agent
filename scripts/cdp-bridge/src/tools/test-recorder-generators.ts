@@ -98,7 +98,12 @@ export function lookaheadNavigate(
       if (ev.t - source.t <= windowMs) return { event: ev, index: j };
       return null;
     }
-    if (ev.type === 'tap' || ev.type === 'long_press' || ev.type === 'swipe' || ev.type === 'submit') {
+    if (
+      ev.type === 'tap' ||
+      ev.type === 'long_press' ||
+      ev.type === 'swipe' ||
+      ev.type === 'submit'
+    ) {
       return null;
     }
   }
@@ -169,7 +174,9 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   }
   if (opts.startRoute) {
     lines.push(`# startRoute: ${stripNewlines(opts.startRoute)}`);
-    lines.push('# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).');
+    lines.push(
+      '# NOTE: replay requires the app to be on this route before `- launchApp` finishes. If your app does not default to it, insert a navigation step here (e.g. deep link or tab tap).',
+    );
   }
   lines.push('- launchApp');
 
@@ -186,7 +193,9 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         else lines.push('# tap: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
-          lines.push(`# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          lines.push(
+            `# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`,
+          );
           const next = nextSelector(events, hit.index, maestroSelector);
           if (next) lines.push(`- assertVisible:\n    ${next}`);
           consumedNavIndices.add(hit.index);
@@ -199,7 +208,9 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         else lines.push('# long_press: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
-          lines.push(`# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          lines.push(
+            `# navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`,
+          );
           const next = nextSelector(events, hit.index, maestroSelector);
           if (next) lines.push(`- assertVisible:\n    ${next}`);
           consumedNavIndices.add(hit.index);
@@ -226,7 +237,12 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         // would otherwise emit `- swipeUp\n- runScript: ...` into the
         // generated YAML. Constrain to the 4 enum values; anything else
         // falls back to 'Up'.
-        const allowed: Record<string, string> = { up: 'Up', down: 'Down', left: 'Left', right: 'Right' };
+        const allowed: Record<string, string> = {
+          up: 'Up',
+          down: 'Down',
+          left: 'Left',
+          right: 'Right',
+        };
         const raw = typeof ev.direction === 'string' ? ev.direction.toLowerCase() : '';
         const dir = allowed[raw] ?? 'Up';
         lines.push(`- swipe${dir}`);
@@ -257,7 +273,9 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
     lines.push(`  // ${k}: ${v}`);
   }
   if (opts.startRoute) {
-    lines.push(`  // startRoute: ${stripNewlines(opts.startRoute)} — ensure app is on this route before running`);
+    lines.push(
+      `  // startRoute: ${stripNewlines(opts.startRoute)} — ensure app is on this route before running`,
+    );
   }
   lines.push('  beforeAll(async () => { await device.launchApp(); });');
   lines.push("  it('replays recorded steps', async () => {");
@@ -273,7 +291,9 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
         else lines.push('    // tap: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
-          lines.push(`    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          lines.push(
+            `    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`,
+          );
           const next = nextSelector(events, hit.index, detoxSelector);
           if (next) lines.push(`    await expect(${next}).toBeVisible();`);
           consumedNavIndices.add(hit.index);
@@ -286,7 +306,9 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
         else lines.push('    // long_press: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
-          lines.push(`    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`);
+          lines.push(
+            `    // navigated: ${stripNewlines(hit.event.from ?? '?')} -> ${stripNewlines(hit.event.to)}`,
+          );
           const next = nextSelector(events, hit.index, detoxSelector);
           if (next) lines.push(`    await expect(${next}).toBeVisible();`);
           consumedNavIndices.add(hit.index);
@@ -310,7 +332,10 @@ export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}):
         // Detox's .swipe(direction) uses the same finger-direction semantic
         // as our recorder, so we pass the direction verbatim.
         if (sel) lines.push(`    await ${sel}.swipe(${JSON.stringify(ev.direction)});`);
-        else lines.push(`    await element(by.type('RCTScrollView')).swipe(${JSON.stringify(ev.direction)});`);
+        else
+          lines.push(
+            `    await element(by.type('RCTScrollView')).swipe(${JSON.stringify(ev.direction)});`,
+          );
         break;
       }
       case 'navigate': {

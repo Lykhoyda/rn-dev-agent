@@ -7,5 +7,10 @@ export default defineConfig({
   // the developer's current browser, so no legacy downlevel is needed. It also
   // sidesteps an esbuild 0.28 regression that refuses to transform destructuring
   // to vite's default old-browser baseline (the GHSA-gv7w-rqvm-qjhr fix bump).
-  build: { target: 'esnext', outDir: '../../../dist/observability/web-dist', emptyOutDir: true, assetsInlineLimit: 100000000 },
+  build: {
+    target: 'esnext',
+    outDir: '../../../dist/observability/web-dist',
+    emptyOutDir: true,
+    assetsInlineLimit: 100000000,
+  },
 });

@@ -10,7 +10,9 @@ const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
 async function openIosDeeplink(url) {
     try {
-        const { stdout, stderr } = await execFile('xcrun', ['simctl', 'openurl', 'booted', url], { timeout: EXEC_TIMEOUT_MS });
+        const { stdout, stderr } = await execFile('xcrun', ['simctl', 'openurl', 'booted', url], {
+            timeout: EXEC_TIMEOUT_MS,
+        });
         return okResult({
             opened: true,
             platform: 'ios',
@@ -20,7 +22,11 @@ async function openIosDeeplink(url) {
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return failResult(`xcrun simctl openurl failed: ${msg}`, { code: 'DEEPLINK_FAILED', platform: 'ios', url });
+        return failResult(`xcrun simctl openurl failed: ${msg}`, {
+            code: 'DEEPLINK_FAILED',
+            platform: 'ios',
+            url,
+        });
     }
 }
 /**
@@ -43,7 +49,16 @@ function posixSingleQuote(s) {
 async function openAndroidDeeplink(url, packageName) {
     const serial = getAdbSerial();
     const quotedUrl = posixSingleQuote(url);
-    const args = [...serial, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', quotedUrl];
+    const args = [
+        ...serial,
+        'shell',
+        'am',
+        'start',
+        '-a',
+        'android.intent.action.VIEW',
+        '-d',
+        quotedUrl,
+    ];
     if (packageName)
         args.push('-n', packageName);
     try {
@@ -73,7 +88,11 @@ async function openAndroidDeeplink(url, packageName) {
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return failResult(`adb am start failed: ${msg}`, { code: 'DEEPLINK_FAILED', platform: 'android', url });
+        return failResult(`adb am start failed: ${msg}`, {
+            code: 'DEEPLINK_FAILED',
+            platform: 'android',
+            url,
+        });
     }
 }
 /**
@@ -91,10 +110,13 @@ export function annotatePicker(result, outcome) {
     catch {
         return result;
     }
-    const existingMeta = (envelope.meta && typeof envelope.meta === 'object') ? envelope.meta : {};
-    envelope.meta = outcome === null
-        ? { ...existingMeta, pickerChecked: false }
-        : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+    const existingMeta = envelope.meta && typeof envelope.meta === 'object'
+        ? envelope.meta
+        : {};
+    envelope.meta =
+        outcome === null
+            ? { ...existingMeta, pickerChecked: false }
+            : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
     result.content[0].text = JSON.stringify(envelope);
     return result;
 }
@@ -108,6 +130,7 @@ export function createDeviceDeeplinkHandler() {
         // openAndroidDeeplink covers the shell-metachar layer, but a URL
         // containing a newline or control char would break out of the
         // quoted string entirely. Reject those at the boundary.
+        // oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars before passing URL to adb shell
         if (typeof args.url !== 'string' || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
             return failResult(`url contains control characters or newlines — refuse to pass to adb shell (Phase 134.2-followup)`, { code: 'INVALID_ARGS' });
         }

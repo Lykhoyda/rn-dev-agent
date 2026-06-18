@@ -1,6 +1,6 @@
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { withSession, okResult, failResult } from '../../dist/utils.js';
+import { withSession, okResult } from '../../dist/utils.js';
 import { parseEnvelope } from '../helpers/result-helpers.js';
 
 // withSession depends on hasActiveSession() from agent-device-wrapper.

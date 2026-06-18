@@ -4,10 +4,7 @@
 // trailing snapshot entirely (~1,450 ms saved for action-only batches).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  salientizeSnapshotData,
-  createDeviceBatchHandler,
-} from '../../dist/tools/device-batch.js';
+import { salientizeSnapshotData, createDeviceBatchHandler } from '../../dist/tools/device-batch.js';
 import {
   _setRunAgentDeviceForTest,
   setActiveSessionInMemoryForTest,
@@ -16,12 +13,53 @@ import {
 
 const FULL = {
   nodes: [
-    { ref: '@e0', type: 'Application', label: 'app', rect: { x: 0, y: 0, width: 1, height: 1 }, enabled: true, hittable: true },
-    { ref: '@e1', type: 'StaticText', label: 'Welcome', rect: { x: 0, y: 0, width: 1, height: 1 }, enabled: true },
-    { ref: '@e2', type: 'Button', label: 'Submit', identifier: 'submit-btn', rect: { x: 0, y: 0, width: 1, height: 1 }, enabled: true, hittable: true },
-    { ref: '@e3', type: 'TextField', label: '', identifier: 'email', rect: { x: 0, y: 0, width: 1, height: 1 }, enabled: true, hittable: true },
-    { ref: '@e4', type: 'Switch', label: 'Notifications', rect: { x: 0, y: 0, width: 1, height: 1 }, enabled: true, hittable: true },
-    { ref: '@e5', type: 'Image', identifier: 'house.fill', rect: { x: 0, y: 0, width: 1, height: 1 } },
+    {
+      ref: '@e0',
+      type: 'Application',
+      label: 'app',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+      enabled: true,
+      hittable: true,
+    },
+    {
+      ref: '@e1',
+      type: 'StaticText',
+      label: 'Welcome',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+      enabled: true,
+    },
+    {
+      ref: '@e2',
+      type: 'Button',
+      label: 'Submit',
+      identifier: 'submit-btn',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+      enabled: true,
+      hittable: true,
+    },
+    {
+      ref: '@e3',
+      type: 'TextField',
+      label: '',
+      identifier: 'email',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+      enabled: true,
+      hittable: true,
+    },
+    {
+      ref: '@e4',
+      type: 'Switch',
+      label: 'Notifications',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+      enabled: true,
+      hittable: true,
+    },
+    {
+      ref: '@e5',
+      type: 'Image',
+      identifier: 'house.fill',
+      rect: { x: 0, y: 0, width: 1, height: 1 },
+    },
   ],
 };
 
@@ -37,12 +75,23 @@ test('salientizeSnapshotData keeps actionable types AND any identified (testID) 
 });
 
 test('salientizeSnapshotData keeps a testID-bearing node even when its type is not interactive (fail-safe)', () => {
-  const data = { nodes: [
-    { ref: '@e0', type: 'Other', identifier: 'custom-pressable', label: 'Tap me', hittable: true },
-    { ref: '@e1', type: 'Other', label: 'decorative wrapper' }, // no testID, non-interactive -> dropped
-  ] };
+  const data = {
+    nodes: [
+      {
+        ref: '@e0',
+        type: 'Other',
+        identifier: 'custom-pressable',
+        label: 'Tap me',
+        hittable: true,
+      },
+      { ref: '@e1', type: 'Other', label: 'decorative wrapper' }, // no testID, non-interactive -> dropped
+    ],
+  };
   const out = salientizeSnapshotData(data);
-  assert.deepEqual(out.nodes.map((n) => n.identifier), ['custom-pressable']);
+  assert.deepEqual(
+    out.nodes.map((n) => n.identifier),
+    ['custom-pressable'],
+  );
   assert.equal(out.nodes.length, 1, 'a custom Pressable surfacing as type Other is NOT dropped');
 });
 
@@ -61,7 +110,11 @@ test('salientizeSnapshotData passes through non-node data (e.g. a screenshot res
 });
 
 test('salientizeSnapshotData tolerates missing/empty nodes', () => {
-  assert.deepEqual(salientizeSnapshotData({ nodes: [] }), { nodes: [], salient: true, fullNodeCount: 0 });
+  assert.deepEqual(salientizeSnapshotData({ nodes: [] }), {
+    nodes: [],
+    salient: true,
+    fullNodeCount: 0,
+  });
   assert.deepEqual(salientizeSnapshotData(null), null);
 });
 
@@ -77,7 +130,12 @@ test('device_batch default returns a SALIENT final snapshot', async () => {
     if (cliArgs[0] === 'snapshot') snapshots++;
     return Promise.resolve(envelope(FULL));
   });
-  setActiveSessionInMemoryForTest({ name: 't', platform: 'ios', appId: 'com.test', openedAt: 'now' });
+  setActiveSessionInMemoryForTest({
+    name: 't',
+    platform: 'ios',
+    appId: 'com.test',
+    openedAt: 'now',
+  });
   try {
     const handler = createDeviceBatchHandler();
     const res = await handler({ steps: [{ action: 'wait', ms: 0 }], delayMs: 0 });
@@ -97,10 +155,19 @@ test("device_batch finalSnapshot:'none' skips the implicit trailing snapshot", a
     if (cliArgs[0] === 'snapshot') snapshots++;
     return Promise.resolve(envelope(FULL));
   });
-  setActiveSessionInMemoryForTest({ name: 't', platform: 'ios', appId: 'com.test', openedAt: 'now' });
+  setActiveSessionInMemoryForTest({
+    name: 't',
+    platform: 'ios',
+    appId: 'com.test',
+    openedAt: 'now',
+  });
   try {
     const handler = createDeviceBatchHandler();
-    const res = await handler({ steps: [{ action: 'wait', ms: 0 }], delayMs: 0, finalSnapshot: 'none' });
+    const res = await handler({
+      steps: [{ action: 'wait', ms: 0 }],
+      delayMs: 0,
+      finalSnapshot: 'none',
+    });
     const body = JSON.parse(res.content[0].text);
     assert.equal(body.ok, true);
     assert.equal(snapshots, 0, 'no trailing snapshot round-trip when finalSnapshot=none');
@@ -113,10 +180,19 @@ test("device_batch finalSnapshot:'none' skips the implicit trailing snapshot", a
 
 test("device_batch finalSnapshot:'full' preserves the full node list", async () => {
   _setRunAgentDeviceForTest(() => Promise.resolve(envelope(FULL)));
-  setActiveSessionInMemoryForTest({ name: 't', platform: 'ios', appId: 'com.test', openedAt: 'now' });
+  setActiveSessionInMemoryForTest({
+    name: 't',
+    platform: 'ios',
+    appId: 'com.test',
+    openedAt: 'now',
+  });
   try {
     const handler = createDeviceBatchHandler();
-    const res = await handler({ steps: [{ action: 'wait', ms: 0 }], delayMs: 0, finalSnapshot: 'full' });
+    const res = await handler({
+      steps: [{ action: 'wait', ms: 0 }],
+      delayMs: 0,
+      finalSnapshot: 'full',
+    });
     const body = JSON.parse(res.content[0].text);
     assert.equal(body.data.final_snapshot.nodes.length, 6, 'full node list preserved');
     assert.equal(body.data.final_snapshot.salient, undefined);

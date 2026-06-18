@@ -26,7 +26,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 
   let lockfile: Lockfile | null = null;
   if (!noLock) {
-    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version: string };
+    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as {
+      version: string;
+    };
     lockfile = new Lockfile({ version: pkg.version });
     const lockResult = lockfile.acquire();
     if (lockResult.status === 'conflict') {
@@ -77,7 +79,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       if (worker === child) worker = null;
       apply(core.onWorkerExit(code, signal, shutdownRequested));
     };
-    child.stdin?.on('error', () => { /* EPIPE on a dying worker — exit handler covers it */ });
+    child.stdin?.on('error', () => {
+      /* EPIPE on a dying worker — exit handler covers it */
+    });
     child.on('error', (err) => onDeath(null, null, `spawn failed: ${err.message}`));
     if (child.stdout) {
       // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences —
@@ -108,7 +112,13 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     const child = worker;
     if (!child || child.exitCode !== null) process.exit(0);
     child.kill('SIGTERM');
-    const force = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } }, 3000);
+    const force = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }, 3000);
     force.unref();
     child.on('exit', () => process.exit(0));
   }
@@ -134,8 +144,11 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     onOrphaned: () => beginShutdown('parent host gone (PPID changed)'),
     onHeartbeat: () => {
       try {
-        if (lockfile && !lockfile.touch()) beginShutdown('single-instance lock reclaimed by another bridge');
-      } catch { /* best-effort heartbeat */ }
+        if (lockfile && !lockfile.touch())
+          beginShutdown('single-instance lock reclaimed by another bridge');
+      } catch {
+        /* best-effort heartbeat */
+      }
     },
   });
 

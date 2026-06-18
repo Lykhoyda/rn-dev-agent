@@ -165,7 +165,9 @@ export function resolveScreenshotPath(result, fallback) {
             return candidate;
         }
     }
-    catch { /* malformed envelope — use fallback */ }
+    catch {
+        /* malformed envelope — use fallback */
+    }
     return fallback;
 }
 export function wrapResultWithResize(result, resize) {
@@ -272,7 +274,15 @@ export async function captureAndResizeScreenshot(args) {
     // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmu
     // skips it, the fallback fires, iOS screen is returned.
     const rawResultOk = (path, platform) => ({
-        content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path, via: platform === 'android' ? 'adb' : 'simctl' } }) }],
+        content: [
+            {
+                type: 'text',
+                text: JSON.stringify({
+                    ok: true,
+                    data: { path, via: platform === 'android' ? 'adb' : 'simctl' },
+                }),
+            },
+        ],
     });
     const rawResultFail = (platform, reason) => {
         const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
@@ -285,7 +295,10 @@ export async function captureAndResizeScreenshot(args) {
     // GH#186: a foreign flow routes pixels to simctl exactly like a local one.
     // lastActive is never falsely-false here: device_screenshot is an
     // interaction tool, so arbiterWrap ran gate.check() before this handler.
-    const route = chooseScreenshotPath({ flowActive: arbiter.flowActive || foreignFlowGate.lastActive, platform: args.platform ?? null });
+    const route = chooseScreenshotPath({
+        flowActive: arbiter.flowActive || foreignFlowGate.lastActive,
+        platform: args.platform ?? null,
+    });
     // A3: a Maestro flow owns the device and no platform could be resolved to simctl on →
     // refuse rather than touch the XCUITest runner (which would crash the flow).
     if (route === 'fail') {
@@ -293,7 +306,8 @@ export async function captureAndResizeScreenshot(args) {
     }
     // simctl path: a flow owns the device (raw-ONLY — never fall through to the runner, A3),
     // OR the existing GH#136 explicit-platform disambiguation (no flow). Both hard-fail on error.
-    if ((route === 'simctl' || args.platformExplicit) && (args.platform === 'ios' || args.platform === 'android')) {
+    if ((route === 'simctl' || args.platformExplicit) &&
+        (args.platform === 'ios' || args.platform === 'android')) {
         const raw = await tryRawScreenshot(args.platform, requestedPath);
         if (raw.ok)
             result = rawResultOk(raw.path, args.platform);
@@ -305,7 +319,9 @@ export async function captureAndResizeScreenshot(args) {
         // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
         // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
         try {
-            result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), { platform: args.platform ?? null });
+            result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), {
+                platform: args.platform ?? null,
+            });
         }
         catch (err) {
             result = failResult(err instanceof Error ? err.message : String(err), 'SCREENSHOT_FAILED');
@@ -344,10 +360,10 @@ export async function captureAndResizeScreenshot(args) {
 export function createDeviceScreenshotHandler(getClient) {
     return async (args) => {
         const platformExplicit = args.platform === 'ios' || args.platform === 'android';
-        const platform = args.platform
-            ?? getClient?.()?.connectedTarget?.platform
-            ?? getActiveSession()?.platform // A3: so a flow-active capture has a platform
-            ?? null;
+        const platform = args.platform ??
+            getClient?.()?.connectedTarget?.platform ??
+            getActiveSession()?.platform ?? // A3: so a flow-active capture has a platform
+            null;
         return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
     };
 }

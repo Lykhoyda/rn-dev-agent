@@ -18,16 +18,46 @@ function makeTarget() {
   return {
     calls,
     state,
-    setState: (v) => { calls.push(['state', v]); state.state = v; },
-    setHelpersInjected: (v) => { calls.push(['helpers', v]); state.helpersInjected = v; },
-    setBridgeDetected: (v) => { calls.push(['bridgeDetected', v]); state.bridgeDetected = v; },
-    setBridgeVersion: (v) => { calls.push(['bridgeVersion', v]); state.bridgeVersion = v; },
-    setConnectedTarget: (v) => { calls.push(['target', v]); state.connectedTarget = v; },
-    setConnectedAt: (v) => { calls.push(['connectedAt', v]); state.connectedAt = v; },
-    setLogDomainEnabled: (v) => { calls.push(['logDomain', v]); state.logDomainEnabled = v; },
-    setProfilerAvailable: (v) => { calls.push(['profiler', v]); state.profilerAvailable = v; },
-    setHeapProfilerAvailable: (v) => { calls.push(['heapProfiler', v]); state.heapProfilerAvailable = v; },
-    clearScripts: () => { calls.push(['clearScripts']); state.scripts.clear(); },
+    setState: (v) => {
+      calls.push(['state', v]);
+      state.state = v;
+    },
+    setHelpersInjected: (v) => {
+      calls.push(['helpers', v]);
+      state.helpersInjected = v;
+    },
+    setBridgeDetected: (v) => {
+      calls.push(['bridgeDetected', v]);
+      state.bridgeDetected = v;
+    },
+    setBridgeVersion: (v) => {
+      calls.push(['bridgeVersion', v]);
+      state.bridgeVersion = v;
+    },
+    setConnectedTarget: (v) => {
+      calls.push(['target', v]);
+      state.connectedTarget = v;
+    },
+    setConnectedAt: (v) => {
+      calls.push(['connectedAt', v]);
+      state.connectedAt = v;
+    },
+    setLogDomainEnabled: (v) => {
+      calls.push(['logDomain', v]);
+      state.logDomainEnabled = v;
+    },
+    setProfilerAvailable: (v) => {
+      calls.push(['profiler', v]);
+      state.profilerAvailable = v;
+    },
+    setHeapProfilerAvailable: (v) => {
+      calls.push(['heapProfiler', v]);
+      state.heapProfilerAvailable = v;
+    },
+    clearScripts: () => {
+      calls.push(['clearScripts']);
+      state.scripts.clear();
+    },
   };
 }
 
@@ -63,10 +93,18 @@ test('resetState clears the scripts map', () => {
 test('resetState calls every setter exactly once', () => {
   const t = makeTarget();
   resetState(t);
-  const names = t.calls.map(c => c[0]);
+  const names = t.calls.map((c) => c[0]);
   assert.deepEqual(names, [
-    'state', 'helpers', 'bridgeDetected', 'bridgeVersion',
-    'target', 'connectedAt', 'logDomain', 'profiler', 'heapProfiler', 'clearScripts',
+    'state',
+    'helpers',
+    'bridgeDetected',
+    'bridgeVersion',
+    'target',
+    'connectedAt',
+    'logDomain',
+    'profiler',
+    'heapProfiler',
+    'clearScripts',
   ]);
 });
 

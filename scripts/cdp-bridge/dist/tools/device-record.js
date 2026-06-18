@@ -28,7 +28,10 @@ export function parseAllBootedIosDevices(jsonText) {
         if (!Array.isArray(list))
             continue;
         for (const device of list) {
-            if (device && device.state === 'Booted' && typeof device.udid === 'string' && device.udid.length > 0) {
+            if (device &&
+                device.state === 'Booted' &&
+                typeof device.udid === 'string' &&
+                device.udid.length > 0) {
                 out.push({ udid: device.udid, state: device.state, name: device.name });
             }
         }
@@ -191,7 +194,9 @@ async function runStart(args) {
         scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
     }
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, { timeout: START_TIMEOUT_MS });
+        const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, {
+            timeout: START_TIMEOUT_MS,
+        });
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
             return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
@@ -240,7 +245,9 @@ async function runStop(args) {
     const saved = parseStopOutput(stopOutput);
     if (saved.length === 0) {
         if (/No active recordings/i.test(stopOutput)) {
-            return warnResult({ saved: [] }, 'No active recordings to stop.', { code: 'NO_ACTIVE_RECORDING' });
+            return warnResult({ saved: [] }, 'No active recordings to stop.', {
+                code: 'NO_ACTIVE_RECORDING',
+            });
         }
         return warnResult({ saved: [] }, `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`);
     }
@@ -285,7 +292,9 @@ async function runStop(args) {
 }
 async function runStatus() {
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), ['status'], { timeout: STATUS_TIMEOUT_MS });
+        const { stdout } = await execFileAsync(getRecordScript(), ['status'], {
+            timeout: STATUS_TIMEOUT_MS,
+        });
         const active = parseStatusOutput(stdout);
         return okResult({ action: 'status', active });
     }

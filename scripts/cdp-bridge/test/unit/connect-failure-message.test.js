@@ -42,7 +42,7 @@ test('connect: every handshake ok but probe timed out → JS-thread-paused messa
       { handshakeOk: true, probeTimedOut: true },
     ],
     'com.rndevagent.testapp',
-    "Target failed pre-flight probe (1+1) — likely a dead JS context",
+    'Target failed pre-flight probe (1+1) — likely a dead JS context',
   );
   assert.match(msg, /CDP probe timeout after 5 attempts/);
   assert.match(msg, /WebSocket handshake succeeded/);
@@ -68,7 +68,7 @@ test('connect: mixed (some handshakes fail, some probe ok) → fall back to gene
       { handshakeOk: true, probeTimedOut: true },
     ],
     'com.example.app',
-    "Target failed pre-flight probe (1+1) — likely a dead JS context",
+    'Target failed pre-flight probe (1+1) — likely a dead JS context',
   );
   assert.match(msg, /Failed to connect after 5 attempts/);
   assert.doesNotMatch(msg, /simctl terminate/);

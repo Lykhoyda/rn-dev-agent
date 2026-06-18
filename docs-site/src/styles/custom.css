@@ -95,7 +95,9 @@ nav.sidebar .top-level > li + li {
 
 nav.sidebar a {
   border-radius: 5px;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 nav.sidebar a:hover {
@@ -171,7 +173,9 @@ nav.sidebar summary {
 .card {
   border-radius: 8px;
   border: 1px solid var(--sl-color-gray-5);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .card:hover {

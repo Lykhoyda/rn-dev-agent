@@ -50,10 +50,14 @@ test('interact: returns failResult on evaluate error', async () => {
 
 test('interact: returns failResult when parsed response has error', async () => {
   const client = createMockClient({
-    evaluate: async () => ({ value: JSON.stringify({ error: 'Element not found', hint: 'Check testID' }) }),
+    evaluate: async () => ({
+      value: JSON.stringify({ error: 'Element not found', hint: 'Check testID' }),
+    }),
   });
   const handler = createInteractHandler(() => client);
-  const error = expectFail(await handler({ action: 'press', testID: 'missing-btn', animated: false }));
+  const error = expectFail(
+    await handler({ action: 'press', testID: 'missing-btn', animated: false }),
+  );
   assert.match(error, /Element not found/);
 });
 
@@ -74,8 +78,20 @@ test('interact: returns failResult when action_executed with handler_error (GH#2
 
 test('network_log: returns entries from buffer', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req2', method: 'POST', url: 'https://api.example.com/login', timestamp: '2026-04-13T00:00:01Z', status: 401 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req1',
+    method: 'GET',
+    url: 'https://api.example.com/users',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req2',
+    method: 'POST',
+    url: 'https://api.example.com/login',
+    timestamp: '2026-04-13T00:00:01Z',
+    status: 401,
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, clear: false }));
   assert.equal(data.count, 2);
@@ -84,8 +100,20 @@ test('network_log: returns entries from buffer', async () => {
 
 test('network_log: filters entries by URL substring', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req2', method: 'GET', url: 'https://cdn.example.com/image.png', timestamp: '2026-04-13T00:00:01Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req1',
+    method: 'GET',
+    url: 'https://api.example.com/users',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req2',
+    method: 'GET',
+    url: 'https://cdn.example.com/image.png',
+    timestamp: '2026-04-13T00:00:01Z',
+    status: 200,
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, filter: 'api.example', clear: false }));
   assert.equal(data.count, 1);
@@ -94,7 +122,13 @@ test('network_log: filters entries by URL substring', async () => {
 
 test('network_log: clear mode empties buffer', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req1',
+    method: 'GET',
+    url: 'https://api.example.com/users',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, clear: true }));
   assert.equal(data.cleared, true);
@@ -105,7 +139,13 @@ test('network_log: clear mode empties buffer', async () => {
 test('network_log: clamps limit to [1, 100]', async () => {
   const client = createMockClient();
   for (let i = 0; i < 5; i++) {
-    client.networkBufferManager.push(client.activeDeviceKey,{ id: `req${i}`, method: 'GET', url: `https://api.example.com/${i}`, timestamp: '2026-04-13T00:00:00Z', status: 200 });
+    client.networkBufferManager.push(client.activeDeviceKey, {
+      id: `req${i}`,
+      method: 'GET',
+      url: `https://api.example.com/${i}`,
+      timestamp: '2026-04-13T00:00:00Z',
+      status: 200,
+    });
   }
   const handler = createNetworkLogHandler(() => client);
   const dataLow = expectOk(await handler({ limit: 0, clear: false }));
@@ -119,61 +159,170 @@ test('network_log: clamps limit to [1, 100]', async () => {
 test('network_log: method filter (string) isolates POST from GET noise', async () => {
   const client = createMockClient();
   const ts = (i) => `2026-04-23T16:56:${String(i).padStart(2, '0')}Z`;
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/external_coverages', timestamp: ts(26), status: 201 });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET',  url: '/external_coverages', timestamp: ts(27), status: 200 });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET',  url: '/external_coverages', timestamp: ts(28), status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'POST',
+    url: '/external_coverages',
+    timestamp: ts(26),
+    status: 201,
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r2',
+    method: 'GET',
+    url: '/external_coverages',
+    timestamp: ts(27),
+    status: 200,
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r3',
+    method: 'GET',
+    url: '/external_coverages',
+    timestamp: ts(28),
+    status: 200,
+  });
   const handler = createNetworkLogHandler(() => client);
-  const data = expectOk(await handler({ limit: 5, filter: 'external_coverages', method: 'POST', clear: false }));
+  const data = expectOk(
+    await handler({ limit: 5, filter: 'external_coverages', method: 'POST', clear: false }),
+  );
   assert.equal(data.count, 1);
   assert.equal(data.requests[0].id, 'r1');
 });
 
 test('network_log: method filter (array) accepts multiple verbs case-insensitively', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST',   url: '/a', timestamp: '2026-04-23T16:56:26Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET',    url: '/a', timestamp: '2026-04-23T16:56:27Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'PATCH',  url: '/a', timestamp: '2026-04-23T16:56:28Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r4', method: 'PUT',    url: '/a', timestamp: '2026-04-23T16:56:29Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'POST',
+    url: '/a',
+    timestamp: '2026-04-23T16:56:26Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r2',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T16:56:27Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r3',
+    method: 'PATCH',
+    url: '/a',
+    timestamp: '2026-04-23T16:56:28Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r4',
+    method: 'PUT',
+    url: '/a',
+    timestamp: '2026-04-23T16:56:29Z',
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, method: ['post', 'patch'], clear: false }));
   assert.equal(data.count, 2);
-  assert.deepEqual(data.requests.map((r) => r.id), ['r1', 'r3']);
+  assert.deepEqual(
+    data.requests.map((r) => r.id),
+    ['r1', 'r3'],
+  );
 });
 
 test('network_log: since filter drops entries with timestamp < since', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'GET', url: '/a', timestamp: '2026-04-23T16:55:00Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET', url: '/a', timestamp: '2026-04-23T16:56:30Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET', url: '/a', timestamp: '2026-04-23T16:57:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T16:55:00Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r2',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T16:56:30Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r3',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T16:57:00Z',
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 10, since: '2026-04-23T16:56:00Z', clear: false }));
   assert.equal(data.count, 2);
-  assert.deepEqual(data.requests.map((r) => r.id), ['r2', 'r3']);
+  assert.deepEqual(
+    data.requests.map((r) => r.id),
+    ['r2', 'r3'],
+  );
 });
 
 test('network_log: since filter normalizes non-Z offset ISO to UTC for safe compare', async () => {
   const client = createMockClient();
   // Entry timestamps are always Z-form (per Date.toISOString())
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'GET', url: '/a', timestamp: '2026-04-23T14:55:00Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'GET', url: '/a', timestamp: '2026-04-23T14:56:30Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET', url: '/a', timestamp: '2026-04-23T14:57:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T14:55:00Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r2',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T14:56:30Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r3',
+    method: 'GET',
+    url: '/a',
+    timestamp: '2026-04-23T14:57:00Z',
+  });
   const handler = createNetworkLogHandler(() => client);
   // User passes since in +02:00 offset; 16:56:00+02:00 == 14:56:00Z
   // Naive string compare would treat "2026-04-23T16:56:00+02:00" > "2026-04-23T14:57:00Z" → 0 results
   // After normalization, it correctly drops only r1.
-  const data = expectOk(await handler({ limit: 10, since: '2026-04-23T16:56:00+02:00', clear: false }));
+  const data = expectOk(
+    await handler({ limit: 10, since: '2026-04-23T16:56:00+02:00', clear: false }),
+  );
   assert.equal(data.count, 2);
-  assert.deepEqual(data.requests.map((r) => r.id), ['r2', 'r3']);
+  assert.deepEqual(
+    data.requests.map((r) => r.id),
+    ['r2', 'r3'],
+  );
 });
 
 test('network_log: filter + method + since AND-combine', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/users',   timestamp: '2026-04-23T16:55:00Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r2', method: 'POST', url: '/orders',  timestamp: '2026-04-23T16:56:00Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r3', method: 'GET',  url: '/orders',  timestamp: '2026-04-23T16:57:00Z' });
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r4', method: 'POST', url: '/orders',  timestamp: '2026-04-23T16:58:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'POST',
+    url: '/users',
+    timestamp: '2026-04-23T16:55:00Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r2',
+    method: 'POST',
+    url: '/orders',
+    timestamp: '2026-04-23T16:56:00Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r3',
+    method: 'GET',
+    url: '/orders',
+    timestamp: '2026-04-23T16:57:00Z',
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r4',
+    method: 'POST',
+    url: '/orders',
+    timestamp: '2026-04-23T16:58:00Z',
+  });
   const handler = createNetworkLogHandler(() => client);
-  const data = expectOk(await handler({ limit: 10, filter: '/orders', method: 'POST', since: '2026-04-23T16:57:00Z', clear: false }));
+  const data = expectOk(
+    await handler({
+      limit: 10,
+      filter: '/orders',
+      method: 'POST',
+      since: '2026-04-23T16:57:00Z',
+      clear: false,
+    }),
+  );
   assert.equal(data.count, 1);
   assert.equal(data.requests[0].id, 'r4');
 });
@@ -181,19 +330,33 @@ test('network_log: filter + method + since AND-combine', async () => {
 test('network_log: truncated flag set when matches > limit', async () => {
   const client = createMockClient();
   for (let i = 0; i < 12; i++) {
-    client.networkBufferManager.push(client.activeDeviceKey, { id: `r${i}`, method: 'POST', url: '/orders', timestamp: `2026-04-23T16:56:${String(i).padStart(2, '0')}Z` });
+    client.networkBufferManager.push(client.activeDeviceKey, {
+      id: `r${i}`,
+      method: 'POST',
+      url: '/orders',
+      timestamp: `2026-04-23T16:56:${String(i).padStart(2, '0')}Z`,
+    });
   }
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 5, filter: '/orders', clear: false }));
   assert.equal(data.count, 5);
   assert.equal(data.truncated, true);
   assert.equal(data.total_matches, 12);
-  assert.deepEqual(data.requests.map((r) => r.id), ['r7', 'r8', 'r9', 'r10', 'r11'], 'returns the most recent 5');
+  assert.deepEqual(
+    data.requests.map((r) => r.id),
+    ['r7', 'r8', 'r9', 'r10', 'r11'],
+    'returns the most recent 5',
+  );
 });
 
 test('network_log: truncated absent when matches fit within limit', async () => {
   const client = createMockClient();
-  client.networkBufferManager.push(client.activeDeviceKey, { id: 'r1', method: 'POST', url: '/orders', timestamp: '2026-04-23T16:56:00Z' });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'r1',
+    method: 'POST',
+    url: '/orders',
+    timestamp: '2026-04-23T16:56:00Z',
+  });
   const handler = createNetworkLogHandler(() => client);
   const data = expectOk(await handler({ limit: 5, filter: '/orders', clear: false }));
   assert.equal(data.count, 1);
@@ -215,7 +378,13 @@ test('network_body: CDP path success', async () => {
       return {};
     },
   });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req1', method: 'GET', url: 'https://api.example.com/users', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req1',
+    method: 'GET',
+    url: 'https://api.example.com/users',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkBodyHandler(() => client);
   const data = expectOk(await handler({ requestId: 'req1' }));
   assert.equal(data.source, 'cdp');
@@ -234,7 +403,13 @@ test('network_body: hook path success', async () => {
     _networkMode: 'hook',
     evaluate: async () => ({ value: JSON.stringify({ body: '{"data":"test"}' }) }),
   });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'hook-req1', method: 'GET', url: 'https://api.example.com/data', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'hook-req1',
+    method: 'GET',
+    url: 'https://api.example.com/data',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkBodyHandler(() => client);
   const data = expectOk(await handler({ requestId: 'hook-req1' }));
   assert.equal(data.source, 'hook');
@@ -246,7 +421,13 @@ test('network_body: hook path cache miss returns failResult', async () => {
     _networkMode: 'hook',
     evaluate: async () => ({ value: JSON.stringify({ error: 'not_found' }) }),
   });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'hook-req2', method: 'GET', url: 'https://api.example.com/other', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'hook-req2',
+    method: 'GET',
+    url: 'https://api.example.com/other',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkBodyHandler(() => client);
   const error = expectFail(await handler({ requestId: 'hook-req2' }));
   assert.match(error, /not in cache/);
@@ -254,7 +435,13 @@ test('network_body: hook path cache miss returns failResult', async () => {
 
 test('network_body: no network mode returns failResult', async () => {
   const client = createMockClient({ _networkMode: 'none' });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'req-none', method: 'GET', url: 'https://api.example.com/test', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'req-none',
+    method: 'GET',
+    url: 'https://api.example.com/test',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkBodyHandler(() => client);
   const error = expectFail(await handler({ requestId: 'req-none' }));
   assert.match(error, /not active/);
@@ -278,7 +465,13 @@ test('network_body: truncates body when exceeding maxLength', async () => {
       return {};
     },
   });
-  client.networkBufferManager.push(client.activeDeviceKey,{ id: 'big-req', method: 'GET', url: 'https://api.example.com/big', timestamp: '2026-04-13T00:00:00Z', status: 200 });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: 'big-req',
+    method: 'GET',
+    url: 'https://api.example.com/big',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
   const handler = createNetworkBodyHandler(() => client);
   const result = await handler({ requestId: 'big-req', maxLength: 100 });
   const env = parseEnvelope(result);
@@ -352,7 +545,9 @@ test('dev_settings: no_method_available returns warnResult', async () => {
 
 test('dev_settings: reload with WebSocket disconnect returns okResult with note', async () => {
   const client = createMockClient({
-    evaluate: async () => { throw new Error('WebSocket closed'); },
+    evaluate: async () => {
+      throw new Error('WebSocket closed');
+    },
   });
   const handler = createDevSettingsHandler(() => client);
   const result = await handler({ action: 'reload' });
@@ -391,7 +586,9 @@ test('heap_usage: success returns MB and utilization', async () => {
 
 test('heap_usage: returns failResult when send throws', async () => {
   const client = createMockClient({
-    send: async () => { throw new Error('Runtime not available'); },
+    send: async () => {
+      throw new Error('Runtime not available');
+    },
   });
   const handler = createHeapUsageHandler(() => client);
   const error = expectFail(await handler({}));
@@ -412,11 +609,11 @@ test('cpu_profile: CDP path success with hot functions', async () => {
     startTime: 1000,
     endTime: 1500,
   };
-  let sendCallCount = 0;
+  let _sendCallCount = 0;
   const client = createMockClient({
     _profilerAvailable: true,
     send: async (method) => {
-      sendCallCount++;
+      _sendCallCount++;
       if (method === 'Profiler.stop') return { profile: mockProfile };
       return {};
     },
@@ -429,24 +626,28 @@ test('cpu_profile: CDP path success with hot functions', async () => {
   assert.ok(data.startTime !== undefined);
 });
 
-test('CDP-007: cpu_profile fails clearly when Profiler domain is unavailable (no misleading fallback)', async () => {
-  // Previous behaviour: sampled `new Error().stack` inside the sampler's own
-  // setInterval callback and emitted hotFunctions like "Timeout.eval" /
-  // "listOnTimeout" / "process.processTimers". Those described the sampler,
-  // not the app. Now the handler refuses to fabricate hotFunctions.
-  const client = createMockClient({
-    _profilerAvailable: false,
-    // Architecture probe — return 'new' so the OLD_ARCH-specific hint isn't fired.
-    evaluate: async () => ({ value: JSON.stringify({ architecture: 'new' }) }),
-  });
-  const handler = createCpuProfileHandler(() => client);
-  const result = await handler({ durationMs: 500 });
-  assert.equal(result.isError, true, 'must fail when Profiler domain is unavailable');
-  const env = JSON.parse(result.content[0].text);
-  assert.equal(env.code, 'PROFILER_UNAVAILABLE');
-  assert.match(env.error, /unavailable/i);
-  assert.ok(!env.data?.hotFunctions, 'must not emit hotFunctions sampled from sampler stack');
-}, { timeout: 3000 });
+test(
+  'CDP-007: cpu_profile fails clearly when Profiler domain is unavailable (no misleading fallback)',
+  async () => {
+    // Previous behaviour: sampled `new Error().stack` inside the sampler's own
+    // setInterval callback and emitted hotFunctions like "Timeout.eval" /
+    // "listOnTimeout" / "process.processTimers". Those described the sampler,
+    // not the app. Now the handler refuses to fabricate hotFunctions.
+    const client = createMockClient({
+      _profilerAvailable: false,
+      // Architecture probe — return 'new' so the OLD_ARCH-specific hint isn't fired.
+      evaluate: async () => ({ value: JSON.stringify({ architecture: 'new' }) }),
+    });
+    const handler = createCpuProfileHandler(() => client);
+    const result = await handler({ durationMs: 500 });
+    assert.equal(result.isError, true, 'must fail when Profiler domain is unavailable');
+    const env = JSON.parse(result.content[0].text);
+    assert.equal(env.code, 'PROFILER_UNAVAILABLE');
+    assert.match(env.error, /unavailable/i);
+    assert.ok(!env.data?.hotFunctions, 'must not emit hotFunctions sampled from sampler stack');
+  },
+  { timeout: 3000 },
+);
 
 test('cpu_profile: CDP path returns failResult when send throws', async () => {
   const client = createMockClient({
@@ -483,7 +684,7 @@ test('object_inspect: primitive result (no objectId)', async () => {
 
 test('object_inspect: object result with properties', async () => {
   const client = createMockClient({
-    send: async (method, params) => {
+    send: async (method, _params) => {
       if (method === 'Runtime.evaluate') {
         return {
           result: {
@@ -497,7 +698,11 @@ test('object_inspect: object result with properties', async () => {
       if (method === 'Runtime.getProperties') {
         return {
           result: [
-            { name: 'name', isOwn: true, value: { type: 'string', value: 'Alice', description: 'Alice' } },
+            {
+              name: 'name',
+              isOwn: true,
+              value: { type: 'string', value: 'Alice', description: 'Alice' },
+            },
             { name: 'age', isOwn: true, value: { type: 'number', value: 30, description: '30' } },
           ],
         };
@@ -548,7 +753,7 @@ test('object_inspect: depth is clamped to [0, 3]', async () => {
   });
   const handler = createObjectInspectHandler(() => client);
   await handler({ expression: 'x', depth: 99 });
-  const evalCall = sendCalls.find(c => c.method === 'Runtime.evaluate');
+  const evalCall = sendCalls.find((c) => c.method === 'Runtime.evaluate');
   assert.ok(evalCall, 'Runtime.evaluate should have been called');
 });
 
@@ -569,7 +774,9 @@ test('exception_breakpoint: set without duration returns message', async () => {
 
 test('exception_breakpoint: send failure returns failResult', async () => {
   const client = createMockClient({
-    send: async () => { throw new Error('Debugger domain not available'); },
+    send: async () => {
+      throw new Error('Debugger domain not available');
+    },
   });
 
   const handler = createExceptionBreakpointHandler(() => client);

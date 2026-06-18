@@ -15,7 +15,11 @@ test('getAdbSerial: returns empty when iOS session is active and no ANDROID_SERI
   const prevEnv = process.env.ANDROID_SERIAL;
   delete process.env.ANDROID_SERIAL;
   try {
-    setActiveSession({ name: 'ios-test', platform: 'ios', deviceId: 'ABCDEF12-1234-5678-9012-IOS-UDID-EXAMPLE' });
+    setActiveSession({
+      name: 'ios-test',
+      platform: 'ios',
+      deviceId: 'ABCDEF12-1234-5678-9012-IOS-UDID-EXAMPLE',
+    });
     assert.deepEqual(
       getAdbSerial(),
       [],
@@ -31,7 +35,11 @@ test('getAdbSerial: returns ANDROID_SERIAL when iOS session is active', () => {
   const prevEnv = process.env.ANDROID_SERIAL;
   process.env.ANDROID_SERIAL = 'emulator-5554';
   try {
-    setActiveSession({ name: 'ios-test', platform: 'ios', deviceId: 'ABCDEF12-1234-5678-9012-IOS-UDID-EXAMPLE' });
+    setActiveSession({
+      name: 'ios-test',
+      platform: 'ios',
+      deviceId: 'ABCDEF12-1234-5678-9012-IOS-UDID-EXAMPLE',
+    });
     assert.deepEqual(
       getAdbSerial(),
       ['-s', 'emulator-5554'],

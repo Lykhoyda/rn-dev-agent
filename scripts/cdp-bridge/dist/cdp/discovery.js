@@ -29,10 +29,15 @@ export class AppDetachedError extends Error {
     }
 }
 export const DISCOVERY_TIMEOUT_MS = 1500;
-export const USER_METRO_PORT = process.env.RN_METRO_PORT ? parseInt(process.env.RN_METRO_PORT, 10) : null;
+export const USER_METRO_PORT = process.env.RN_METRO_PORT
+    ? parseInt(process.env.RN_METRO_PORT, 10)
+    : null;
 export const DEFAULT_PORTS = [
     ...(USER_METRO_PORT && !isNaN(USER_METRO_PORT) ? [USER_METRO_PORT] : []),
-    8081, 8082, 19000, 19006,
+    8081,
+    8082,
+    19000,
+    19006,
 ];
 /**
  * GH #303: probe ALL candidate ports in parallel and return every one that is a
@@ -75,9 +80,12 @@ export async function fetchTargets(port, timeout) {
 }
 export function filterValidTargets(targets) {
     return targets
-        .filter(t => !!t.webSocketDebuggerUrl && !t.title?.includes('Experimental') &&
-        (t.vm === 'Hermes' || t.title?.includes('React Native') || t.description?.includes('React Native')))
-        .map(t => ({
+        .filter((t) => !!t.webSocketDebuggerUrl &&
+        !t.title?.includes('Experimental') &&
+        (t.vm === 'Hermes' ||
+            t.title?.includes('React Native') ||
+            t.description?.includes('React Native')))
+        .map((t) => ({
         ...t,
         webSocketDebuggerUrl: t.webSocketDebuggerUrl
             ?.replace(/\[::1\]/g, '127.0.0.1')
@@ -109,8 +117,9 @@ function readAndroidPackages() {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
         });
-        return new Set(out.split('\n')
-            .map(line => line.replace('package:', '').trim())
+        return new Set(out
+            .split('\n')
+            .map((line) => line.replace('package:', '').trim())
             .filter(Boolean));
     }
     catch {
@@ -216,11 +225,11 @@ export function selectTarget(validTargets, filtersOrPlatform) {
     // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
     // would silently connect the caller to a different target than requested.
     if (filters.targetId) {
-        const idMatched = validTargets.filter(t => t.id === filters.targetId);
+        const idMatched = validTargets.filter((t) => t.id === filters.targetId);
         if (idMatched.length === 0) {
             return {
                 targets: [],
-                warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map(t => t.id).join(', ')}`,
+                warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
             };
         }
         filteredTargets = idMatched;
@@ -229,20 +238,20 @@ export function selectTarget(validTargets, filtersOrPlatform) {
     // Runs even with 1 target — single non-matching target is still wrong.
     if (filters.bundleId) {
         const bundleLower = filters.bundleId.toLowerCase();
-        const bundleMatched = filteredTargets.filter(t => (t.description ?? '').toLowerCase() === bundleLower);
+        const bundleMatched = filteredTargets.filter((t) => (t.description ?? '').toLowerCase() === bundleLower);
         if (bundleMatched.length === 0) {
             return {
                 targets: [],
-                warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map(t => t.description ?? '?').join(', ')}`,
+                warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? '?').join(', ')}`,
             };
         }
         filteredTargets = bundleMatched;
     }
     if (filters.platform && filteredTargets.length > 1) {
         const pf = filters.platform.toLowerCase();
-        let platformMatched = filteredTargets.filter(t => t.platform === pf);
+        let platformMatched = filteredTargets.filter((t) => t.platform === pf);
         if (platformMatched.length === 0) {
-            platformMatched = filteredTargets.filter(t => {
+            platformMatched = filteredTargets.filter((t) => {
                 const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
                 return haystack.includes(pf);
             });
@@ -251,7 +260,7 @@ export function selectTarget(validTargets, filtersOrPlatform) {
             filteredTargets = platformMatched;
         }
         else {
-            warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map(t => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`);
+            warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`);
         }
     }
     // B111 (D643): preferredBundleId is a SOFT filter — auto-selection hint
@@ -259,7 +268,7 @@ export function selectTarget(validTargets, filtersOrPlatform) {
     // all candidates. Auto-populated from project-config.ts in connect.ts.
     const prefLower = filters.preferredBundleId?.toLowerCase();
     if (prefLower && filteredTargets.length > 1) {
-        const preferred = filteredTargets.filter(t => (t.description ?? '').toLowerCase() === prefLower);
+        const preferred = filteredTargets.filter((t) => (t.description ?? '').toLowerCase() === prefLower);
         if (preferred.length > 0 && preferred.length < filteredTargets.length) {
             logger.info('CDP', `Auto-selected target by preferredBundleId "${filters.preferredBundleId}" (${preferred.length} of ${filteredTargets.length})`);
             filteredTargets = preferred;
@@ -347,13 +356,14 @@ export async function discover(currentPort, platformFilterOrFilters) {
     // target so a detached sibling-worktree Metro can't shadow a healthy one.
     const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
     if (runningPorts.length === 0) {
-        throw new Error('Metro not found on ports ' + ports.join(', ') +
+        throw new Error('Metro not found on ports ' +
+            ports.join(', ') +
             '. Is the dev server running? Try: npx expo start or npx react-native start');
     }
     const perPort = await Promise.all(runningPorts.map(async (p) => {
         try {
             const raw = await fetchTargets(p, DISCOVERY_TIMEOUT_MS * 2);
-            const valid = filterValidTargets(raw).filter(t => {
+            const valid = filterValidTargets(raw).filter((t) => {
                 try {
                     const { hostname } = new URL(t.webSocketDebuggerUrl);
                     return hostname === '127.0.0.1' || hostname === 'localhost';
@@ -382,7 +392,7 @@ export async function discover(currentPort, platformFilterOrFilters) {
     inferPlatforms(validTargets);
     const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
     const warning = [portWarning, selectWarning].filter(Boolean).join(' | ') || undefined;
-    logger.debug('CDP', `Found ${sorted.length} valid target(s): ${sorted.map(t => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
+    logger.debug('CDP', `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
     return { port: metroPort, targets: sorted, warning };
 }
 export async function discoverForList(currentPort, portHint) {
@@ -405,7 +415,9 @@ export async function discoverForList(currentPort, portHint) {
                 break;
             }
         }
-        catch { /* try next running port */ }
+        catch {
+            /* try next running port */
+        }
     }
     inferPlatforms(targets);
     return { port: chosen, targets };
@@ -433,7 +445,9 @@ export async function enumerateMetroCandidates(connectedPort, projectRoot) {
         try {
             attached = filterValidTargets(await fetchTargets(p, DISCOVERY_TIMEOUT_MS)).length > 0;
         }
-        catch { /* treat as detached */ }
+        catch {
+            /* treat as detached */
+        }
         const cwd = cwdForPort(p);
         if (p === connectedPort)
             servingCwd = cwd;
@@ -447,5 +461,9 @@ export async function enumerateMetroCandidates(connectedPort, projectRoot) {
     }
     if (servingCwd === null)
         servingCwd = cwdForPort(connectedPort);
-    return { candidates, servingCwd, timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe } };
+    return {
+        candidates,
+        servingCwd,
+        timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe },
+    };
 }

@@ -54,7 +54,11 @@ export function resetDetachedRecoveryCounter(): void {
   confirmedNotInstalled = null;
 }
 
-type Exec = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ stdout: string; stderr: string }>;
+type Exec = (
+  cmd: string,
+  args: string[],
+  opts?: { timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>;
 
 /**
  * GH #208 (RC3): cold-restart the target app on the booted simulator — terminate
@@ -164,14 +168,20 @@ async function recoverDetachedInner(
   const isAppInstalled = deps.isAppInstalled ?? probeAppInstalled;
   const buildHint = (): SnapshotHint | undefined => {
     if (!deps.snapshotHint) return undefined;
-    try { return deps.snapshotHint(appId) ?? undefined; } catch { return undefined; }
+    try {
+      return deps.snapshotHint(appId) ?? undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   // GH #262: a previously CONFIRMED missing bundle short-circuits the whole
   // attempt — but a cheap re-probe first, so a user reinstall self-heals.
-  if (confirmedNotInstalled
-      && confirmedNotInstalled.udid === udid
-      && confirmedNotInstalled.appId === appId) {
+  if (
+    confirmedNotInstalled &&
+    confirmedNotInstalled.udid === udid &&
+    confirmedNotInstalled.appId === appId
+  ) {
     const verdict = await isAppInstalled(udid, appId);
     if (verdict === false) {
       const snapshotHint = buildHint();
@@ -250,11 +260,20 @@ async function recoverDetachedInner(
     }
   }
   await sleep(RELAUNCH_SETTLE_MS);
-  try { await reconnect(); } catch { /* best-effort; the liveness probe is the verdict */ }
+  try {
+    await reconnect();
+  } catch {
+    /* best-effort; the liveness probe is the verdict */
+  }
 
   if (await probeAlive()) {
     attempts = 0; // success bounds CONSECUTIVE detaches, not lifetime
     return { recovered: true, reason: 'recovered', attempt };
   }
-  return { recovered: false, reason: 'still-detached', attempt, ...(relaunchError ? { error: relaunchError } : {}) };
+  return {
+    recovered: false,
+    reason: 'still-detached',
+    attempt,
+    ...(relaunchError ? { error: relaunchError } : {}),
+  };
 }

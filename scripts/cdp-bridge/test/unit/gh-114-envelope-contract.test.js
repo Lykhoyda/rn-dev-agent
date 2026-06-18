@@ -20,10 +20,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  findRefByTestID,
-  snapshotEnvelopeFailed,
-} from '../../dist/tools/device-batch.js';
+import { findRefByTestID, snapshotEnvelopeFailed } from '../../dist/tools/device-batch.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Producer fixtures — canonical envelopes each dispatch tier emits.
@@ -40,9 +37,33 @@ const IN_TREE_IOS_SNAPSHOT_OK = {
   ok: true,
   data: {
     nodes: [
-      { ref: '@e0', type: 'Application', rect: { x: 0, y: 0, width: 393, height: 852 }, label: 'TaskApp', identifier: '', enabled: true, hittable: false },
-      { ref: '@e7', type: 'Button', rect: { x: 320, y: 720, width: 56, height: 56 }, label: 'Create task', identifier: 'fab-create-task', enabled: true, hittable: true },
-      { ref: '@e8', type: 'StaticText', rect: { x: 16, y: 60, width: 200, height: 24 }, label: 'Tasks', identifier: 'header-title', enabled: true, hittable: false },
+      {
+        ref: '@e0',
+        type: 'Application',
+        rect: { x: 0, y: 0, width: 393, height: 852 },
+        label: 'TaskApp',
+        identifier: '',
+        enabled: true,
+        hittable: false,
+      },
+      {
+        ref: '@e7',
+        type: 'Button',
+        rect: { x: 320, y: 720, width: 56, height: 56 },
+        label: 'Create task',
+        identifier: 'fab-create-task',
+        enabled: true,
+        hittable: true,
+      },
+      {
+        ref: '@e8',
+        type: 'StaticText',
+        rect: { x: 16, y: 60, width: 200, height: 24 },
+        label: 'Tasks',
+        identifier: 'header-title',
+        enabled: true,
+        hittable: false,
+      },
     ],
   },
 };
@@ -55,8 +76,24 @@ const IN_TREE_ANDROID_SNAPSHOT_OK = {
   ok: true,
   data: {
     nodes: [
-      { ref: '@e0', type: 'FrameLayout', rect: { x: 0, y: 0, width: 1080, height: 2400 }, label: '', identifier: '', enabled: true, hittable: false },
-      { ref: '@e12', type: 'Button', rect: { x: 800, y: 2000, width: 168, height: 168 }, label: 'Create task', identifier: 'fab-create-task', enabled: true, hittable: true },
+      {
+        ref: '@e0',
+        type: 'FrameLayout',
+        rect: { x: 0, y: 0, width: 1080, height: 2400 },
+        label: '',
+        identifier: '',
+        enabled: true,
+        hittable: false,
+      },
+      {
+        ref: '@e12',
+        type: 'Button',
+        rect: { x: 800, y: 2000, width: 168, height: 168 },
+        label: 'Create task',
+        identifier: 'fab-create-task',
+        enabled: true,
+        hittable: true,
+      },
     ],
   },
 };
@@ -67,9 +104,7 @@ const IN_TREE_ANDROID_SNAPSHOT_OK = {
 const LEGACY_DAEMON_SNAPSHOT_OK = {
   ok: true,
   data: {
-    nodes: [
-      { ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' },
-    ],
+    nodes: [{ ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' }],
   },
 };
 
@@ -79,9 +114,7 @@ const LEGACY_DAEMON_SNAPSHOT_OK = {
 const LEGACY_CLI_SNAPSHOT_OK = {
   ok: true,
   data: {
-    nodes: [
-      { ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' },
-    ],
+    nodes: [{ ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' }],
   },
 };
 
@@ -154,11 +187,15 @@ const IN_TREE_SNAPSHOT_OK_EMPTY = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SUCCESS_ENVELOPES_WITH_TARGET = [
-  { name: 'in-tree iOS (flat nodes)',     env: IN_TREE_IOS_SNAPSHOT_OK,                 expectedRef: '@e7' },
-  { name: 'in-tree Android (flat nodes)', env: IN_TREE_ANDROID_SNAPSHOT_OK,             expectedRef: '@e12' },
-  { name: 'legacy daemon (flat nodes)',   env: LEGACY_DAEMON_SNAPSHOT_OK,               expectedRef: 'el-0' },
-  { name: 'legacy CLI (flat nodes)',      env: LEGACY_CLI_SNAPSHOT_OK,                  expectedRef: 'el-0' },
-  { name: 'legacy fast-runner (nested)',  env: LEGACY_FAST_RUNNER_SNAPSHOT_OK_NESTED,   expectedRef: 'btn-7' },
+  { name: 'in-tree iOS (flat nodes)', env: IN_TREE_IOS_SNAPSHOT_OK, expectedRef: '@e7' },
+  { name: 'in-tree Android (flat nodes)', env: IN_TREE_ANDROID_SNAPSHOT_OK, expectedRef: '@e12' },
+  { name: 'legacy daemon (flat nodes)', env: LEGACY_DAEMON_SNAPSHOT_OK, expectedRef: 'el-0' },
+  { name: 'legacy CLI (flat nodes)', env: LEGACY_CLI_SNAPSHOT_OK, expectedRef: 'el-0' },
+  {
+    name: 'legacy fast-runner (nested)',
+    env: LEGACY_FAST_RUNNER_SNAPSHOT_OK_NESTED,
+    expectedRef: 'btn-7',
+  },
 ];
 
 for (const { name, env, expectedRef } of SUCCESS_ENVELOPES_WITH_TARGET) {
@@ -179,9 +216,9 @@ test('findRefByTestID: in-tree snapshot with present nodes but no match — retu
 });
 
 const FAILURE_ENVELOPES = [
-  { name: 'in-tree runner failure (object error)',  env: IN_TREE_RUNNER_FAILURE_APP_NOT_RUNNING },
-  { name: 'legacy daemon failure (string error)',   env: LEGACY_DAEMON_FAILURE_NO_DEVICE },
-  { name: 'legacy CLI failure (error + code)',      env: LEGACY_CLI_FAILURE_WITH_CODE },
+  { name: 'in-tree runner failure (object error)', env: IN_TREE_RUNNER_FAILURE_APP_NOT_RUNNING },
+  { name: 'legacy daemon failure (string error)', env: LEGACY_DAEMON_FAILURE_NO_DEVICE },
+  { name: 'legacy CLI failure (error + code)', env: LEGACY_CLI_FAILURE_WITH_CODE },
 ];
 
 for (const { name, env } of FAILURE_ENVELOPES) {

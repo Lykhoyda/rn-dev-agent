@@ -60,7 +60,8 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
     return okResult({
       closed: true,
       sessionAlreadyGone: true,
-      message: 'Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.',
+      message:
+        'Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.',
     });
   }
 

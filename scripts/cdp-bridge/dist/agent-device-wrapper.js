@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 /**
  * CDP-015: derive a per-user, per-project session file path. The previous
@@ -36,28 +36,6 @@ function getSessionFilePath() {
 }
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
-function extractFlags(args) {
-    const positionals = [];
-    const flags = {};
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        if (arg.startsWith('--') && arg.length > 2) {
-            const key = arg.slice(2);
-            const next = args[i + 1];
-            if (next !== undefined && !next.startsWith('--')) {
-                flags[key] = next;
-                i++;
-            }
-            else {
-                flags[key] = true;
-            }
-        }
-        else {
-            positionals.push(arg);
-        }
-    }
-    return { positionals, flags };
-}
 let activeSession = null;
 // CDP-015: load session, refusing to follow symlinks (defends against the
 // classic /tmp/<predictable-name> -> arbitrary-write attack). On failure
@@ -87,7 +65,9 @@ if (!activeSession) {
             mkdirSync(dirname(SESSION_FILE), { recursive: true });
             writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
         }
-        catch { /* migration is best-effort */ }
+        catch {
+            /* migration is best-effort */
+        }
     }
 }
 export function getActiveSession() {
@@ -103,7 +83,9 @@ export function setActiveSession(info) {
         writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
         renameSync(tmpPath, SESSION_FILE);
     }
-    catch { /* ignore — in-memory session is still valid */ }
+    catch {
+        /* ignore — in-memory session is still valid */
+    }
 }
 export function clearActiveSession() {
     activeSession = null;
@@ -111,10 +93,14 @@ export function clearActiveSession() {
     try {
         unlinkSync(SESSION_FILE);
     }
-    catch { /* ignore */ }
+    catch {
+        /* ignore */
+    }
 }
 // Exported for tests + diagnostics.
-export function getSessionFilePathForTest() { return SESSION_FILE; }
+export function getSessionFilePathForTest() {
+    return SESSION_FILE;
+}
 // Test-only: reset the in-memory session pointer without touching the on-disk
 // file. Tests that exercise paths gated on hasActiveSession() (e.g. the
 // HELPERS_NOT_INJECTED → handleDevClientPicker fallback) need this so they
@@ -143,7 +129,12 @@ const snapshotCache = new Map();
 // stale-by-content cache would drive a wrong-element tap.
 let snapshotCacheDirty = true;
 export function cacheSnapshot(platform, nodes) {
-    snapshotCache.set(platform, { platform, nodes, capturedAt: new Date().toISOString(), capturedAtMs: Date.now() });
+    snapshotCache.set(platform, {
+        platform,
+        nodes,
+        capturedAt: new Date().toISOString(),
+        capturedAtMs: Date.now(),
+    });
     // A fresh snapshot is, by definition, a clean picture of the current screen.
     snapshotCacheDirty = false;
 }
@@ -274,9 +265,22 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
-                    return { command: 'type', _staleRef: ref, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+                    return {
+                        command: 'type',
+                        _staleRef: ref,
+                        text,
+                        ...extra,
+                        ...(bundleId ? { bundleId } : {}),
+                    };
                 }
-                return { command: 'type', x: center.x, y: center.y, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+                return {
+                    command: 'type',
+                    x: center.x,
+                    y: center.y,
+                    text,
+                    ...extra,
+                    ...(bundleId ? { bundleId } : {}),
+                };
             }
             return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
         }
@@ -303,7 +307,11 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: ${cmd} requires four numeric coordinates`);
             }
             const args = {
-                command: 'drag', x: x1, y: y1, x2, y2,
+                command: 'drag',
+                x: x1,
+                y: y1,
+                x2,
+                y2,
                 ...(bundleId ? { bundleId } : {}),
             };
             if (durationS !== undefined) {
@@ -321,7 +329,9 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: longpress requires numeric x, y`);
             }
             const args = {
-                command: 'longPress', x, y,
+                command: 'longPress',
+                x,
+                y,
                 ...(bundleId ? { bundleId } : {}),
             };
             if (durationS !== undefined) {
@@ -339,7 +349,8 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: pinch requires numeric scale`);
             }
             const args = {
-                command: 'pinch', scale,
+                command: 'pinch',
+                scale,
                 ...(bundleId ? { bundleId } : {}),
             };
             if (xS !== undefined && yS !== undefined) {
@@ -597,9 +608,7 @@ export async function runNative(cliArgs, opts = {}) {
     // is started lazily — if no session has cold-launched it yet, we surface
     // a clear failure so the agent can call device_snapshot action=open.
     const targetPlatform = opts.platform ?? activeSession?.platform;
-    if (targetPlatform === 'ios' &&
-        !opts.skipSession &&
-        RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
+    if (targetPlatform === 'ios' && !opts.skipSession && RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
         const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
         // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
         // it here; the gate is only for verbs that genuinely require the XCUITest runner.
@@ -617,15 +626,33 @@ export async function runNative(cliArgs, opts = {}) {
     // as a pure-TS orchestrator (snapshot → match → tap) for cross-platform symmetry.
     // UIAutomator's `By.text()` returns regex-match semantics while findInLatestSnapshot
     // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
-    const RN_ANDROID_RUNNER_COMMANDS = new Set(['snapshot', 'tap', 'press', 'fill', 'type', 'back', 'screenshot', 'keyboard', 'swipe', 'scroll', 'drag', 'longpress', 'pinch']);
+    const RN_ANDROID_RUNNER_COMMANDS = new Set([
+        'snapshot',
+        'tap',
+        'press',
+        'fill',
+        'type',
+        'back',
+        'screenshot',
+        'keyboard',
+        'swipe',
+        'scroll',
+        'drag',
+        'longpress',
+        'pinch',
+    ]);
     // eradicate-agent-device Phase 2 Task 9: when the operator explicitly disables the
     // Android runner (RN_ANDROID_RUNNER=0), return an actionable error instead of
     // silently falling through to NO_NATIVE_ROUTE. There is no agent-device fallback.
-    if (targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER === '0' &&
-        !opts.skipSession && RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
+    if (targetPlatform === 'android' &&
+        process.env.RN_ANDROID_RUNNER === '0' &&
+        !opts.skipSession &&
+        RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
         return failResult('In-tree Android runner is the only device backend; the agent-device fallback was removed (eradicate-agent-device). Unset RN_ANDROID_RUNNER (or set it to anything but "0") to use it.', 'RUNNER_DISABLED');
     }
-    if (targetPlatform === 'android' && process.env.RN_ANDROID_RUNNER !== '0' && !opts.skipSession &&
+    if (targetPlatform === 'android' &&
+        process.env.RN_ANDROID_RUNNER !== '0' &&
+        !opts.skipSession &&
         RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
         const appId = activeSession?.appId ?? resolveBundleId('android') ?? undefined;
         // Parity with the iOS short-circuit: ensure the runner is up before dispatch so

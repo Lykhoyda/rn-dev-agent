@@ -8,20 +8,44 @@ const INDEX_TS = resolve(ROOT, 'scripts/cdp-bridge/src/index.ts');
 const OUT_BASE = resolve(__dirname, '../src/content/docs/tools');
 
 const CATEGORIES = {
-  cdp_status: 'cdp', cdp_connect: 'cdp', cdp_disconnect: 'cdp',
-  cdp_targets: 'cdp', cdp_evaluate: 'cdp', cdp_reload: 'cdp',
-  cdp_component_tree: 'cdp', cdp_component_state: 'cdp',
-  cdp_navigation_state: 'cdp', cdp_nav_graph: 'cdp', cdp_navigate: 'cdp',
-  cdp_store_state: 'cdp', cdp_dispatch: 'cdp', cdp_dev_settings: 'cdp',
-  cdp_interact: 'cdp', cdp_network_log: 'cdp', cdp_console_log: 'cdp',
-  cdp_error_log: 'cdp', collect_logs: 'cdp',
-  device_list: 'device', device_screenshot: 'device', device_snapshot: 'device',
-  device_find: 'device', device_press: 'device', device_fill: 'device',
-  device_swipe: 'device', device_scroll: 'device', device_scrollintoview: 'device',
-  device_back: 'device', device_longpress: 'device', device_pinch: 'device',
-  device_permission: 'device', device_batch: 'device',
-  cdp_auto_login: 'testing', proof_step: 'testing',
-  maestro_run: 'testing', maestro_generate: 'testing', maestro_test_all: 'testing',
+  cdp_status: 'cdp',
+  cdp_connect: 'cdp',
+  cdp_disconnect: 'cdp',
+  cdp_targets: 'cdp',
+  cdp_evaluate: 'cdp',
+  cdp_reload: 'cdp',
+  cdp_component_tree: 'cdp',
+  cdp_component_state: 'cdp',
+  cdp_navigation_state: 'cdp',
+  cdp_nav_graph: 'cdp',
+  cdp_navigate: 'cdp',
+  cdp_store_state: 'cdp',
+  cdp_dispatch: 'cdp',
+  cdp_dev_settings: 'cdp',
+  cdp_interact: 'cdp',
+  cdp_network_log: 'cdp',
+  cdp_console_log: 'cdp',
+  cdp_error_log: 'cdp',
+  collect_logs: 'cdp',
+  device_list: 'device',
+  device_screenshot: 'device',
+  device_snapshot: 'device',
+  device_find: 'device',
+  device_press: 'device',
+  device_fill: 'device',
+  device_swipe: 'device',
+  device_scroll: 'device',
+  device_scrollintoview: 'device',
+  device_back: 'device',
+  device_longpress: 'device',
+  device_pinch: 'device',
+  device_permission: 'device',
+  device_batch: 'device',
+  cdp_auto_login: 'testing',
+  proof_step: 'testing',
+  maestro_run: 'testing',
+  maestro_generate: 'testing',
+  maestro_test_all: 'testing',
 };
 
 const SORT_ORDER = Object.keys(CATEGORIES);
@@ -60,7 +84,11 @@ function parseStringLiteral(text, startPos) {
   let result = '';
   while (i < text.length) {
     if (text[i] === '\\') {
-      if (quote === "'" && text[i + 1] === "'") { result += "'"; i += 2; continue; }
+      if (quote === "'" && text[i + 1] === "'") {
+        result += "'";
+        i += 2;
+        continue;
+      }
       result += text[i + 1] ?? '';
       i += 2;
       continue;
@@ -92,7 +120,8 @@ function splitTopLevel(text) {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (!inString && (ch === '"' || ch === "'" || ch === '`')) {
-      inString = true; stringChar = ch;
+      inString = true;
+      stringChar = ch;
     } else if (inString && ch === stringChar && text[i - 1] !== '\\') {
       inString = false;
     } else if (!inString) {
@@ -114,7 +143,11 @@ function parseZodType(def) {
   if (def.startsWith('z.enum')) {
     const m = def.match(/z\.enum\(\[([^\]]+)\]/);
     if (m) {
-      const vals = m[1].replace(/['"]/g, '').split(',').map(s => s.trim()).filter(Boolean);
+      const vals = m[1]
+        .replace(/['"]/g, '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       return `enum: ${vals.join(' | ')}`;
     }
     return 'enum';
@@ -123,7 +156,11 @@ function parseZodType(def) {
   if (def.startsWith('z.array(z.enum')) {
     const m = def.match(/z\.array\(z\.enum\(\[([^\]]+)\]/);
     if (m) {
-      const vals = m[1].replace(/['"]/g, '').split(',').map(s => s.trim()).filter(Boolean);
+      const vals = m[1]
+        .replace(/['"]/g, '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       return `(${vals.join(' | ')})[]`;
     }
     return 'enum[]';
@@ -151,13 +188,23 @@ function extractSchemaParams(schemaText) {
     const name = line.slice(0, colonIdx).trim();
     const def = line.slice(colonIdx + 1).trim();
 
-    const param = { name, type: '', required: true, defaultValue: null, description: '', constraints: [] };
+    const param = {
+      name,
+      type: '',
+      required: true,
+      defaultValue: null,
+      description: '',
+      constraints: [],
+    };
 
     param.type = parseZodType(def);
     if (def.includes('.optional()')) param.required = false;
 
     const defMatch = def.match(/\.default\((\[.*?\]|[^)]+)\)/);
-    if (defMatch) { param.defaultValue = defMatch[1].trim(); param.required = false; }
+    if (defMatch) {
+      param.defaultValue = defMatch[1].trim();
+      param.required = false;
+    }
 
     const descRe = /\.describe\((['"`])([\s\S]*?)\1\s*\)/g;
     let descMatch;
@@ -178,13 +225,13 @@ function extractSchemaParams(schemaText) {
 
 function blockToTool(block) {
   let pos = 0;
-  while (pos < block.length && !"'\"`".includes(block[pos])) pos++;
+  while (pos < block.length && !'\'"`'.includes(block[pos])) pos++;
   const nameResult = parseStringLiteral(block, pos);
   if (!nameResult) return null;
   const name = nameResult.value;
   pos = nameResult.end;
 
-  while (pos < block.length && !"'\"`".includes(block[pos])) pos++;
+  while (pos < block.length && !'\'"`'.includes(block[pos])) pos++;
   const descResult = parseStringLiteral(block, pos);
   if (!descResult) return null;
   const description = descResult.value;
@@ -225,29 +272,34 @@ function generateMdx(tool) {
   const sortIdx = SORT_ORDER.indexOf(tool.name);
   const sidebar = sortIdx >= 0 ? `\nsidebar:\n  order: ${sortIdx}` : '';
 
-  const paramRows = tool.params.map(p => {
-    const constraints = p.constraints.length ? p.constraints.join(', ') : '';
-    const def = p.defaultValue ?? '';
-    const req = p.required ? 'Yes' : 'No';
-    return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdx(p.description)} |`;
-  }).join('\n');
+  const paramRows = tool.params
+    .map((p) => {
+      const constraints = p.constraints.length ? p.constraints.join(', ') : '';
+      const def = p.defaultValue ?? '';
+      const req = p.required ? 'Yes' : 'No';
+      return `| \`${p.name}\` | \`${p.type}\` | ${req} | ${def ? `\`${def}\`` : ''} | ${constraints} | ${escapeMdx(p.description)} |`;
+    })
+    .join('\n');
 
-  const paramsSection = tool.params.length > 0 ? `
+  const paramsSection =
+    tool.params.length > 0
+      ? `
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 ${paramRows}
-` : '\nThis tool takes no parameters.\n';
+`
+      : '\nThis tool takes no parameters.\n';
 
-  const deprecatedNote = isDeprecated ? `\n:::caution[Deprecated]\nThis tool is deprecated. ${escapeMdx(tool.description)}\n:::\n` : '';
+  const deprecatedNote = isDeprecated
+    ? `\n:::caution[Deprecated]\nThis tool is deprecated. ${escapeMdx(tool.description)}\n:::\n`
+    : '';
   const descBlock = isDeprecated ? '' : `\n${escapeMdx(tool.description)}\n`;
 
-  const requiredParams = tool.params.filter(p => p.required);
-  const usageArgs = requiredParams.map(p => `${p.name}: <${p.type}>`).join(', ');
-  const usage = requiredParams.length > 0
-    ? `${tool.name}(${usageArgs})`
-    : `${tool.name}()`;
+  const requiredParams = tool.params.filter((p) => p.required);
+  const usageArgs = requiredParams.map((p) => `${p.name}: <${p.type}>`).join(', ');
+  const usage = requiredParams.length > 0 ? `${tool.name}(${usageArgs})` : `${tool.name}()`;
 
   return `---
 title: "${escapeYaml(tool.name)}"
@@ -295,12 +347,15 @@ for (const tool of tools) {
 const changelog = readFileSync(resolve(ROOT, 'CHANGELOG.md'), 'utf8');
 const changelogOut = resolve(__dirname, '../src/content/docs/changelog.md');
 mkdirSync(dirname(changelogOut), { recursive: true });
-writeFileSync(changelogOut, `---
+writeFileSync(
+  changelogOut,
+  `---
 title: "Changelog"
 description: "Release history for rn-dev-agent"
 ---
 
-${changelog}`);
+${changelog}`,
+);
 console.log('  copied: changelog.md (with frontmatter)');
 
 console.log('Done.');

@@ -87,7 +87,12 @@ export function createMaestroTestAllHandler() {
                 // the app, which maestro-runner can only do given --app-file.
                 const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, undefined);
                 if (!appFileResolution.ok) {
-                    results.push({ name, passed: false, durationMs: Date.now() - start, error: appFileResolution.error.slice(0, 300) });
+                    results.push({
+                        name,
+                        passed: false,
+                        durationMs: Date.now() - start,
+                        error: appFileResolution.error.slice(0, 300),
+                    });
                     failed++;
                     if (args.stopOnFailure)
                         break;
@@ -111,7 +116,11 @@ export function createMaestroTestAllHandler() {
                 continue;
             }
             try {
-                const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
+                const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), {
+                    timeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                }), { platform, deviceId: getActiveSession()?.deviceId });
                 const output = (stdout + '\n' + stderr).trim();
                 // The runner already exited 0 here, so that exit code is the
                 // authoritative pass signal. The secondary scan keys on Maestro's own

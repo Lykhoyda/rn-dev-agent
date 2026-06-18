@@ -20,15 +20,25 @@ function makeDetachedClient() {
     _isConnected: false,
     _helpersInjected: true,
     reconnectState: { active: false, lastAttempt: null, attemptCount: 0 },
-    autoConnect: async () => { throw new AppDetachedError(8081); },
+    autoConnect: async () => {
+      throw new AppDetachedError(8081);
+    },
   });
 }
 
 function makeHandler(recovery, capture) {
   const client = makeDetachedClient();
-  return createStatusHandler(() => client, () => {}, () => client, {
-    recoverDetached: async (c, rdeps) => { if (capture) capture(rdeps); return recovery; },
-  });
+  return createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+    {
+      recoverDetached: async (c, rdeps) => {
+        if (capture) capture(rdeps);
+        return recovery;
+      },
+    },
+  );
 }
 
 test('cdp_status: app-not-installed → APP_NOT_INSTALLED with quoted snapshot advice', async () => {
@@ -48,7 +58,10 @@ test('cdp_status: app-not-installed → APP_NOT_INSTALLED with quoted snapshot a
     assert.equal(env.code, 'APP_NOT_INSTALLED');
     assert.match(env.error, /com\.example\.app is not installed on simulator UDID-A/);
     assert.match(env.error, /7 min ago/);
-    assert.match(env.error, /xcrun simctl install 'UDID-A' '\/tmp\/rn-appfile-snapshots\/My App\.app'/);
+    assert.match(
+      env.error,
+      /xcrun simctl install 'UDID-A' '\/tmp\/rn-appfile-snapshots\/My App\.app'/,
+    );
     assert.equal(env.meta.recovery.reason, 'app-not-installed');
   } finally {
     _resetHasSessionForTest();
@@ -78,12 +91,15 @@ test('cdp_status: injects a tools-layer snapshotHint fn into the recovery deps',
   _setHasSessionForTest(false);
   try {
     let rdeps;
-    const handler = makeHandler(
-      { recovered: false, reason: 'still-detached', attempt: 1 },
-      (d) => { rdeps = d; },
-    );
+    const handler = makeHandler({ recovered: false, reason: 'still-detached', attempt: 1 }, (d) => {
+      rdeps = d;
+    });
     await handler({});
-    assert.equal(typeof rdeps?.snapshotHint, 'function', 'status.ts must inject snapshotHint (layering rule)');
+    assert.equal(
+      typeof rdeps?.snapshotHint,
+      'function',
+      'status.ts must inject snapshotHint (layering rule)',
+    );
   } finally {
     _resetHasSessionForTest();
   }

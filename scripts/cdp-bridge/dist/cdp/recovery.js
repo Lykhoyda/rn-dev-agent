@@ -9,7 +9,9 @@ const STALE_RETRY_PROBE_MS = 3000;
 // 47s catch-path recovery into a fast pre-handler one. Process-scoped boolean —
 // a single MCP serves one device at a time, so no per-client keying is needed.
 let cdpStale = false;
-export function markCdpStale() { cdpStale = true; }
+export function markCdpStale() {
+    cdpStale = true;
+}
 /** Read-and-clear: returns whether the stale flag was set, resetting it. */
 export function consumeCdpStale() {
     const was = cdpStale;
@@ -26,7 +28,9 @@ export async function probeFreshness(client, timeoutMs = FRESHNESS_PROBE_MS) {
         // a no-op catch so a later rejection (e.g. a mid-probe WebSocket close)
         // can't surface as an unhandledRejection and crash the MCP process.
         const evalPromise = client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v');
-        evalPromise.catch(() => { });
+        evalPromise.catch(() => {
+            /* swallowed if the timeout already settled the race */
+        });
         const result = await Promise.race([
             evalPromise,
             new Promise((resolve) => {
@@ -76,7 +80,9 @@ async function probeDev(client, timeoutMs) {
         // No-op catch on the orphaned promise if the timeout wins the race (see
         // probeFreshness) — prevents an unhandledRejection on a mid-probe WS close.
         const evalPromise = client.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
-        evalPromise.catch(() => { });
+        evalPromise.catch(() => {
+            /* swallowed if the timeout already settled the race */
+        });
         const result = await Promise.race([
             evalPromise,
             new Promise((resolve) => {
@@ -97,5 +103,5 @@ async function probeDev(client, timeoutMs) {
     }
 }
 function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
+    return new Promise((r) => setTimeout(r, ms));
 }

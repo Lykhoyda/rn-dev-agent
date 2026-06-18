@@ -1,7 +1,9 @@
 export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey) {
     eventHandlers.set('Runtime.consoleAPICalled', (params) => {
         const p = params;
-        const text = p.args?.map(a => a.value !== undefined ? String(a.value) : (a.description ?? '')).join(' ') ?? '';
+        const text = p.args
+            ?.map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? '')))
+            .join(' ') ?? '';
         if (text.startsWith('__RN_NET__:'))
             return;
         buffers.console.push({

@@ -23,10 +23,16 @@ test('Issue #126: typeText Path 1 (matched-fiber) is single-fire — picks onCha
   const slice = typeTextSlice();
   // Path 1 single-fires after multi-LLM review caught the double-fire
   // bug on RHF Controllers (Gemini H1 from implementation review).
-  assert.match(slice, /typeof props\.onChangeText === 'function' \|\| typeof props\.onChange === 'function'/);
+  assert.match(
+    slice,
+    /typeof props\.onChangeText === 'function' \|\| typeof props\.onChange === 'function'/,
+  );
   assert.match(slice, /resolvedFrom: 'matched-fiber'/);
   // Single-fire structure: if-onChangeText-else-onChange (NOT if-then-if).
-  assert.match(slice, /if \(typeof props\.onChangeText === 'function'\) \{[^}]*p1Handler = 'onChangeText';[^}]*props\.onChangeText\(text\);[^}]*\} else \{[^}]*p1Handler = 'onChange';[^}]*props\.onChange\(/);
+  assert.match(
+    slice,
+    /if \(typeof props\.onChangeText === 'function'\) \{[^}]*p1Handler = 'onChangeText';[^}]*props\.onChangeText\(text\);[^}]*\} else \{[^}]*p1Handler = 'onChange';[^}]*props\.onChange\(/,
+  );
 });
 
 test('Issue #126: typeText descendant walk has TextInput-family type fingerprint (anchored, no bare Input/Field)', () => {
@@ -63,7 +69,10 @@ test('Issue #126: typeText is two-pass — onChangeText first, then onChange', (
   const pass2 = slice.indexOf("findHandlerDescendants('onChange')");
   assert.ok(pass1 >= 0, 'pass 1 (onChangeText) findHandlerDescendants call missing');
   assert.ok(pass2 >= 0, 'pass 2 (onChange) findHandlerDescendants call missing');
-  assert.ok(pass1 < pass2, 'onChangeText pass must come before onChange pass (avoids double-fire on RHF Controller-wrapped fields)');
+  assert.ok(
+    pass1 < pass2,
+    'onChangeText pass must come before onChange pass (avoids double-fire on RHF Controller-wrapped fields)',
+  );
 });
 
 test('Issue #126: typeText descendant walk single-fires (no double-fire bug from descendants)', () => {
@@ -98,7 +107,10 @@ test('Issue #126: typeText error message hints at depth + visited count for debu
   const slice = typeTextSlice();
   // The "no descendant has typeable handler" error includes diagnostic
   // hints — depth cap + visit count + cdp_component_tree pointer.
-  assert.match(slice, /Walked up to ' \+ DESCENDANT_DEPTH_CAP \+ ' levels \(' \+ visited \+ ' fibers\)/);
+  assert.match(
+    slice,
+    /Walked up to ' \+ DESCENDANT_DEPTH_CAP \+ ' levels \(' \+ visited \+ ' fibers\)/,
+  );
   assert.match(slice, /cdp_component_tree to inspect/);
 });
 
@@ -107,6 +119,12 @@ test('Issue #126: source guard — typeText branch length sanity', () => {
   // or "accidental duplication of the entire branch" (upper). Codex M5
   // from impl review flagged tight bounds as fragile; widened.
   const slice = typeTextSlice();
-  assert.ok(slice.length > 3500, `typeText branch unexpectedly short (${slice.length} bytes); descendant walk may have been removed`);
-  assert.ok(slice.length < 15000, `typeText branch unexpectedly long (${slice.length} bytes); accidental copy or runaway code?`);
+  assert.ok(
+    slice.length > 3500,
+    `typeText branch unexpectedly short (${slice.length} bytes); descendant walk may have been removed`,
+  );
+  assert.ok(
+    slice.length < 15000,
+    `typeText branch unexpectedly long (${slice.length} bytes); accidental copy or runaway code?`,
+  );
 });

@@ -5,12 +5,23 @@ import { createInterface } from 'node:readline';
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   let msg;
-  try { msg = JSON.parse(line); } catch { return; }
-  if (msg.method === 'hang') return;                    // never answers — stays in flight
-  if (msg.id === undefined) return;                     // notifications: no response
-  process.stdout.write(JSON.stringify({
-    jsonrpc: '2.0',
-    id: msg.id,
-    result: { echo: msg.method, pid: process.pid, supervised: process.env.RN_BRIDGE_SUPERVISED ?? null, restarts: process.env.RN_BRIDGE_RESTARTS ?? null },
-  }) + '\n');
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (msg.method === 'hang') return; // never answers — stays in flight
+  if (msg.id === undefined) return; // notifications: no response
+  process.stdout.write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        echo: msg.method,
+        pid: process.pid,
+        supervised: process.env.RN_BRIDGE_SUPERVISED ?? null,
+        restarts: process.env.RN_BRIDGE_RESTARTS ?? null,
+      },
+    }) + '\n',
+  );
 });

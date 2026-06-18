@@ -19,15 +19,28 @@ function makeCtx(overrides = {}) {
     setReconnectAttempt: () => {},
     closeWs: () => {},
     rejectAllPending: () => {},
-    discoverAndConnect: async () => { calls.discover++; return 'ws://x'; },
+    discoverAndConnect: async () => {
+      calls.discover++;
+      return 'ws://x';
+    },
     getResettableState: () => ({
-      setState: () => {}, setHelpersInjected: () => { calls.resetCalls++; }, setBridgeDetected: () => {},
-      setBridgeVersion: () => {}, setConnectedTarget: () => {}, setConnectedAt: () => {},
-      setLogDomainEnabled: () => {}, setProfilerAvailable: () => {},
-      setHeapProfilerAvailable: () => {}, clearScripts: () => {},
+      setState: () => {},
+      setHelpersInjected: () => {
+        calls.resetCalls++;
+      },
+      setBridgeDetected: () => {},
+      setBridgeVersion: () => {},
+      setConnectedTarget: () => {},
+      setConnectedAt: () => {},
+      setLogDomainEnabled: () => {},
+      setProfilerAvailable: () => {},
+      setHeapProfilerAvailable: () => {},
+      clearScripts: () => {},
     }),
     getPort: () => 8081,
-    setBgPollTimer: (t) => { ctx._timer = t; },
+    setBgPollTimer: (t) => {
+      ctx._timer = t;
+    },
     getBgPollTimer: () => ctx._timer ?? null,
     _timer: null,
     ...overrides,

@@ -134,7 +134,9 @@ test('NETWORK_CB_BUFFERED_SCRIPT: re-running preserves an existing buffer', () =
 test('NETWORK_CB_BUFFERED_SCRIPT: corrupted buffer is repaired and does not throw', () => {
   const g = runCbScript();
   g.__RN_AGENT_NET_BUF__ = 'corrupted';
-  assert.doesNotThrow(() => g.__RN_AGENT_NETWORK_CB__('request', { id: 'x', method: 'GET', url: '/y' }));
+  assert.doesNotThrow(() =>
+    g.__RN_AGENT_NETWORK_CB__('request', { id: 'x', method: 'GET', url: '/y' }),
+  );
   assert.ok(Array.isArray(g.__RN_AGENT_NET_BUF__));
   assert.equal(g.__RN_AGENT_NET_BUF__.length, 1);
   assert.equal(g.__RN_AGENT_NET_BUF__[0].d.id, 'x');
@@ -152,10 +154,13 @@ function makeDrainClient(bufEntries, mgr) {
 
 test('drainNetworkHookBuffer: merges drained entries into the manager', async () => {
   const mgr = makeManager();
-  const client = makeDrainClient([
-    { t: 'request', d: { id: 'q1', method: 'POST', url: '/api/otp' } },
-    { t: 'response', d: { id: 'q1', status: 200, duration_ms: 758 } },
-  ], mgr);
+  const client = makeDrainClient(
+    [
+      { t: 'request', d: { id: 'q1', method: 'POST', url: '/api/otp' } },
+      { t: 'response', d: { id: 'q1', status: 200, duration_ms: 758 } },
+    ],
+    mgr,
+  );
   const drained = await drainNetworkHookBuffer(client);
   assert.equal(drained, 2);
   const entry = mgr.getByKey('dev1', 'q1');
@@ -181,7 +186,9 @@ test('drainNetworkHookBuffer: evaluate failure is fail-open (0, no throw)', asyn
 test('drainNetworkHookBuffer: evaluate throw is fail-open (0, no throw)', async () => {
   const mgr = makeManager();
   const client = makeDrainClient([], mgr);
-  client.evaluate = async () => { throw new Error('socket closed'); };
+  client.evaluate = async () => {
+    throw new Error('socket closed');
+  };
   assert.equal(await drainNetworkHookBuffer(client), 0);
 });
 
@@ -194,12 +201,15 @@ test('drainNetworkHookBuffer: malformed payload is fail-open', async () => {
 
 test('drainNetworkHookBuffer: malformed single entries are skipped, valid ones applied', async () => {
   const mgr = makeManager();
-  const client = makeDrainClient([
-    null,
-    { nope: true },
-    { t: 'request', d: { id: 42 } },
-    { t: 'request', d: { id: 'ok1', method: 'GET', url: '/good' } },
-  ], mgr);
+  const client = makeDrainClient(
+    [
+      null,
+      { nope: true },
+      { t: 'request', d: { id: 42 } },
+      { t: 'request', d: { id: 'ok1', method: 'GET', url: '/good' } },
+    ],
+    mgr,
+  );
   const drained = await drainNetworkHookBuffer(client);
   assert.equal(drained, 1);
   assert.equal(mgr.getByKey('dev1', 'ok1').url, '/good');
@@ -209,21 +219,26 @@ test('drainNetworkHookBuffer: malformed single entries are skipped, valid ones a
 test('drainNetworkHookBuffer: entry with ts propagates app-side timestamp to the manager', async () => {
   const FIXED_EPOCH_MS = 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
   const mgr = makeManager();
-  const client = makeDrainClient([
-    { t: 'request', d: { id: 'ts-req', method: 'GET', url: '/timed' }, ts: FIXED_EPOCH_MS },
-  ], mgr);
+  const client = makeDrainClient(
+    [{ t: 'request', d: { id: 'ts-req', method: 'GET', url: '/timed' }, ts: FIXED_EPOCH_MS }],
+    mgr,
+  );
   await drainNetworkHookBuffer(client);
   const entry = mgr.getByKey('dev1', 'ts-req');
-  assert.equal(entry.timestamp, new Date(FIXED_EPOCH_MS).toISOString(),
-    'drain must forward app-side ts so the request is stamped at fire-time, not drain-time');
+  assert.equal(
+    entry.timestamp,
+    new Date(FIXED_EPOCH_MS).toISOString(),
+    'drain must forward app-side ts so the request is stamped at fire-time, not drain-time',
+  );
 });
 
 test('drainNetworkHookBuffer: entry without ts falls back to arrival-time (still a valid ISO string)', async () => {
   const before = Date.now();
   const mgr = makeManager();
-  const client = makeDrainClient([
-    { t: 'request', d: { id: 'no-ts', method: 'GET', url: '/no-ts' } },
-  ], mgr);
+  const client = makeDrainClient(
+    [{ t: 'request', d: { id: 'no-ts', method: 'GET', url: '/no-ts' } }],
+    mgr,
+  );
   await drainNetworkHookBuffer(client);
   const after = Date.now();
   const entry = mgr.getByKey('dev1', 'no-ts');
@@ -235,22 +250,32 @@ test('drainNetworkHookBuffer: entry without ts falls back to arrival-time (still
 test('drainNetworkHookBuffer: non-numeric ts is treated as absent (falls back to arrival-time)', async () => {
   const before = Date.now();
   const mgr = makeManager();
-  const client = makeDrainClient([
-    { t: 'request', d: { id: 'bad-ts', method: 'GET', url: '/bad-ts' }, ts: 'not-a-number' },
-  ], mgr);
+  const client = makeDrainClient(
+    [{ t: 'request', d: { id: 'bad-ts', method: 'GET', url: '/bad-ts' }, ts: 'not-a-number' }],
+    mgr,
+  );
   await drainNetworkHookBuffer(client);
   const after = Date.now();
   const entry = mgr.getByKey('dev1', 'bad-ts');
   const stamped = new Date(entry.timestamp).getTime();
   assert.ok(!isNaN(stamped), 'must still produce a valid timestamp');
-  assert.ok(stamped >= before && stamped <= after, 'non-numeric ts discarded, fallback is arrival-time');
+  assert.ok(
+    stamped >= before && stamped <= after,
+    'non-numeric ts discarded, fallback is arrival-time',
+  );
 });
 
 // Fix 1(iii): applyNetworkHookEntry with explicit atMs uses it; without, uses now
 test('applyNetworkHookEntry: explicit atMs is used for the request timestamp', () => {
   const FIXED_MS = 1_600_000_000_000;
   const mgr = makeManager();
-  applyNetworkHookEntry('request', { id: 'atms1', method: 'GET', url: '/at' }, mgr, 'dev1', FIXED_MS);
+  applyNetworkHookEntry(
+    'request',
+    { id: 'atms1', method: 'GET', url: '/at' },
+    mgr,
+    'dev1',
+    FIXED_MS,
+  );
   const entry = mgr.getByKey('dev1', 'atms1');
   assert.equal(entry.timestamp, new Date(FIXED_MS).toISOString());
 });

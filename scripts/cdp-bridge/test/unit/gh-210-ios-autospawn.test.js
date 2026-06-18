@@ -10,15 +10,23 @@ import { decideRunnerSpawn, ensureRunnerForCommand } from '../../dist/agent-devi
 
 // ── decideRunnerSpawn (pure) ──
 test('#210 spawn-decision: runner alive → proceed (no spawn)', () => {
-  assert.deepEqual(decideRunnerSpawn({ liveness: 'alive', prebuilt: false, deviceId: 'U' }), { action: 'proceed' });
+  assert.deepEqual(decideRunnerSpawn({ liveness: 'alive', prebuilt: false, deviceId: 'U' }), {
+    action: 'proceed',
+  });
 });
 
 test('#210 spawn-decision: down + prebuilt + deviceId → spawn', () => {
-  assert.deepEqual(decideRunnerSpawn({ liveness: 'dead', prebuilt: true, deviceId: 'U' }), { action: 'spawn', deviceId: 'U' });
+  assert.deepEqual(decideRunnerSpawn({ liveness: 'dead', prebuilt: true, deviceId: 'U' }), {
+    action: 'spawn',
+    deviceId: 'U',
+  });
 });
 
 test('#210 spawn-decision: stale + prebuilt → spawn (ensureFastRunner reaps then starts)', () => {
-  assert.deepEqual(decideRunnerSpawn({ liveness: 'stale', prebuilt: true, deviceId: 'U' }), { action: 'spawn', deviceId: 'U' });
+  assert.deepEqual(decideRunnerSpawn({ liveness: 'stale', prebuilt: true, deviceId: 'U' }), {
+    action: 'spawn',
+    deviceId: 'U',
+  });
 });
 
 test('#210 spawn-decision: down + NOT prebuilt → actionable error (no silent cold build)', () => {
@@ -37,7 +45,13 @@ test('#210 spawn-decision: down + prebuilt + NO deviceId → actionable error', 
 // ── ensureRunnerForCommand (orchestrator, structured result) ──
 test('#210 ensureRunnerForCommand: alive → ok (no spawn)', async () => {
   let spawned = 0;
-  const r = await ensureRunnerForCommand('U', 'com.x', { probe: async () => 'alive', ensure: async () => { spawned++; }, prebuilt: () => true });
+  const r = await ensureRunnerForCommand('U', 'com.x', {
+    probe: async () => 'alive',
+    ensure: async () => {
+      spawned++;
+    },
+    prebuilt: () => true,
+  });
   assert.deepEqual(r, { ok: true });
   assert.equal(spawned, 0);
 });
@@ -46,27 +60,42 @@ test('#210 ensureRunnerForCommand: dead+prebuilt → spawns, re-verifies alive �
   let n = 0;
   const r = await ensureRunnerForCommand('U', 'com.x', {
     probe: async () => (n++ === 0 ? 'dead' : 'alive'),
-    ensure: async () => {}, prebuilt: () => true,
+    ensure: async () => {},
+    prebuilt: () => true,
   });
   assert.deepEqual(r, { ok: true });
 });
 
 test('#210 ensureRunnerForCommand: dead+NOT prebuilt → actionable error (no spawn)', async () => {
   let spawned = 0;
-  const r = await ensureRunnerForCommand('U', 'com.x', { probe: async () => 'dead', ensure: async () => { spawned++; }, prebuilt: () => false });
+  const r = await ensureRunnerForCommand('U', 'com.x', {
+    probe: async () => 'dead',
+    ensure: async () => {
+      spawned++;
+    },
+    prebuilt: () => false,
+  });
   assert.equal(r.ok, false);
   assert.match(r.message, /device_snapshot action=open/);
   assert.equal(spawned, 0);
 });
 
 test('#210 ensureRunnerForCommand: spawn does not bring it up (swallowed error) → structured fail, NOT a throw', async () => {
-  const r = await ensureRunnerForCommand('U', 'com.x', { probe: async () => 'dead', ensure: async () => {}, prebuilt: () => true });
+  const r = await ensureRunnerForCommand('U', 'com.x', {
+    probe: async () => 'dead',
+    ensure: async () => {},
+    prebuilt: () => true,
+  });
   assert.equal(r.ok, false);
   assert.match(r.message, /did not become ready/i);
 });
 
 test('#210 ensureRunnerForCommand: no deviceId → actionable error', async () => {
-  const r = await ensureRunnerForCommand(null, 'com.x', { probe: async () => 'dead', ensure: async () => {}, prebuilt: () => true });
+  const r = await ensureRunnerForCommand(null, 'com.x', {
+    probe: async () => 'dead',
+    ensure: async () => {},
+    prebuilt: () => true,
+  });
   assert.equal(r.ok, false);
   assert.match(r.message, /no booted iOS simulator|device_snapshot action=open/i);
 });

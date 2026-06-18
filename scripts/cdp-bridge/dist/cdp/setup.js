@@ -1,11 +1,11 @@
-import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_CB_BUFFERED_SCRIPT, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS } from '../injected-helpers.js';
+import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_CB_BUFFERED_SCRIPT, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS, } from '../injected-helpers.js';
 import { logger } from '../logger.js';
 import { setActiveFlag, sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
 export const REACT_READY_TIMEOUT_MS = 30_000;
 export const REACT_READY_POLL_MS = 500;
 export async function performSetup(opts) {
-    const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits } = opts;
+    const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits, } = opts;
     logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
     await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
     await send('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
@@ -46,12 +46,24 @@ export async function performSetup(opts) {
     const helperResult = await evaluate(INJECTED_HELPERS);
     if (helperResult.error) {
         console.error('CDP: failed to inject helpers:', helperResult.error);
-        return { networkMode, helpersInjected: false, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
+        return {
+            networkMode,
+            helpersInjected: false,
+            logDomainEnabled,
+            profilerAvailable,
+            heapProfilerAvailable,
+        };
     }
     const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
     if (verify.value !== true) {
         console.error('CDP: helper injection succeeded but __RN_AGENT not found');
-        return { networkMode, helpersInjected: false, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
+        return {
+            networkMode,
+            helpersInjected: false,
+            logDomainEnabled,
+            profilerAvailable,
+            heapProfilerAvailable,
+        };
     }
     // Test seam: force the hook fallback on RN >= 0.83 so the buffered
     // transport can be live-verified without an old-RN app. Also disable the
@@ -62,7 +74,9 @@ export async function performSetup(opts) {
         try {
             await send('Network.disable', undefined, CDP_TIMEOUT_FAST);
         }
-        catch { /* best-effort */ }
+        catch {
+            /* best-effort */
+        }
         networkDomainEnabled = false;
     }
     logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
@@ -73,7 +87,13 @@ export async function performSetup(opts) {
     // its CDP event channel. Retry once at a longer interval before declaring
     // RN<0.83. Total worst-case wait for legitimate fallback: 500ms + 1500ms.
     if (networkMode === 'cdp') {
-        networkMode = await probeNetworkDomain({ evaluate, port, networkManager, getDeviceKey, waits: probeWaits });
+        networkMode = await probeNetworkDomain({
+            evaluate,
+            port,
+            networkManager,
+            getDeviceKey,
+            waits: probeWaits,
+        });
     }
     if (networkMode === 'none') {
         // GH #214: if the CDP Network domain is still enabled here, the probe fell
@@ -89,7 +109,9 @@ export async function performSetup(opts) {
             try {
                 await send('Network.disable', undefined, CDP_TIMEOUT_FAST);
             }
-            catch { /* best-effort */ }
+            catch {
+                /* best-effort */
+            }
             networkDomainEnabled = false;
         }
         const hookResult = await evaluate(NETWORK_HOOK_SCRIPT);
@@ -101,7 +123,13 @@ export async function performSetup(opts) {
             networkMode = 'hook';
         }
     }
-    return { networkMode, helpersInjected: true, logDomainEnabled, profilerAvailable, heapProfilerAvailable };
+    return {
+        networkMode,
+        helpersInjected: true,
+        logDomainEnabled,
+        profilerAvailable,
+        heapProfilerAvailable,
+    };
 }
 /**
  * GH #59 #9: probe whether Network.enable actually delivers events on the
@@ -125,7 +153,7 @@ export async function probeNetworkDomain(opts) {
     for (let attempt = 0; attempt < waits.length; attempt++) {
         const bufSizeBefore = networkManager.size(deviceKey);
         await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
-        await new Promise(r => setTimeout(r, waits[attempt]));
+        await new Promise((r) => setTimeout(r, waits[attempt]));
         if (networkManager.size(deviceKey) > bufSizeBefore) {
             return 'cdp';
         }

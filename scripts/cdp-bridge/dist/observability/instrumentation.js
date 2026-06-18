@@ -8,7 +8,9 @@ function notifyObserver(o) {
     try {
         toolObserver(o);
     }
-    catch { /* observability is non-load-bearing */ }
+    catch {
+        /* observability is non-load-bearing */
+    }
 }
 function classifyResult(result) {
     if (!result || typeof result !== 'object')
@@ -33,7 +35,9 @@ function classifyResult(result) {
                 if (parsed.ok === false)
                     return 'FAIL';
             }
-            catch { /* not JSON */ }
+            catch {
+                /* not JSON */
+            }
         }
     }
     return 'PASS';
@@ -49,7 +53,9 @@ function resultCode(envelope) {
         const parsed = JSON.parse(first.text);
         return typeof parsed.code === 'string' ? parsed.code : null;
     }
-    catch { /* not JSON */ }
+    catch {
+        /* not JSON */
+    }
     return null;
 }
 function extractErrorFromResult(result) {
@@ -67,7 +73,9 @@ function extractErrorFromResult(result) {
         if (parsed.ok === false && typeof parsed.error === 'string')
             return parsed.error;
     }
-    catch { /* not JSON */ }
+    catch {
+        /* not JSON */
+    }
     if (envelope.isError === true)
         return first.text;
     return null;
@@ -75,14 +83,18 @@ function extractErrorFromResult(result) {
 export function instrumentTool(toolName, handler) {
     return async (...fnArgs) => {
         const start = Date.now();
-        const params = (fnArgs[0] && typeof fnArgs[0] === 'object') ? fnArgs[0] : {};
+        const params = fnArgs[0] && typeof fnArgs[0] === 'object' ? fnArgs[0] : {};
         try {
             const result = await handler(...fnArgs);
             const latency = Date.now() - start;
             const status = classifyResult(result);
             notifyObserver({
-                tool: toolName, params, status, latencyMs: latency, result,
-                error: status === 'FAIL' ? extractErrorFromResult(result) ?? undefined : undefined,
+                tool: toolName,
+                params,
+                status,
+                latencyMs: latency,
+                result,
+                error: status === 'FAIL' ? (extractErrorFromResult(result) ?? undefined) : undefined,
             });
             return result;
         }

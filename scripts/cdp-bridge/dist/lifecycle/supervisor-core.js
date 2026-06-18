@@ -1,7 +1,11 @@
 function parseLine(line) {
     try {
         const m = JSON.parse(line);
-        return { id: m.id, method: m.method, isResponse: m.method === undefined && (m.result !== undefined || m.error !== undefined) };
+        return {
+            id: m.id,
+            method: m.method,
+            isResponse: m.method === undefined && (m.result !== undefined || m.error !== undefined),
+        };
     }
     catch {
         return null;
@@ -14,13 +18,14 @@ export function workerDeathErrorLine(id, detail) {
     return JSON.stringify({
         jsonrpc: '2.0',
         id,
-        error: { code: -32000, message: `rn-dev-agent bridge worker restarted (${detail}) — retry the call` },
+        error: {
+            code: -32000,
+            message: `rn-dev-agent bridge worker restarted (${detail}) — retry the call`,
+        },
     });
 }
 export function terminalErrorLine(id, lastExit, logPath = null) {
-    const where = logPath
-        ? `Check ${logPath}`
-        : 'Set LOG_LEVEL=info and check the bridge log';
+    const where = logPath ? `Check ${logPath}` : 'Set LOG_LEVEL=info and check the bridge log';
     return JSON.stringify({
         jsonrpc: '2.0',
         id,
@@ -189,14 +194,20 @@ export class SupervisorCore {
             // crash-loops to exhaustion before EVER answering it would otherwise go
             // terminal silently — the MCP host would hang on the handshake.
             if (this.initializeId !== null && !this.initializeAnswered) {
-                errors.push({ kind: 'toClient', line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath) });
+                errors.push({
+                    kind: 'toClient',
+                    line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath),
+                });
             }
             // Queued never-delivered requests can no longer be served — error each
             // (they're not in pending, so the loop above missed them) and drop them.
             for (const queued of this.queue) {
                 const msg = parseLine(queued);
                 if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') {
-                    errors.push({ kind: 'toClient', line: terminalErrorLine(msg.id, this.lastExit, this.logPath) });
+                    errors.push({
+                        kind: 'toClient',
+                        line: terminalErrorLine(msg.id, this.lastExit, this.logPath),
+                    });
                 }
             }
             this.queue = [];

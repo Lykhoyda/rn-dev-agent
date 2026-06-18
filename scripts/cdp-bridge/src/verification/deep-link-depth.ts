@@ -82,18 +82,16 @@ export function analyzeDeepLinkUrl(url: string): DeepLinkAnalysis {
  * pass it explicitly so callers can detect bypasses even when the response
  * shape changes.
  */
-export function annotateDeepLinkDepth(
-  result: ToolResult,
-  ctx: { url: string },
-): ToolResult {
+export function annotateDeepLinkDepth(result: ToolResult, ctx: { url: string }): ToolResult {
   const analysis = analyzeDeepLinkUrl(ctx.url);
   if (!analysis.exceedsThreshold && !analysis.endsWithSuccessWord) return result;
 
-  const trigger: DeepLinkDepthWarning['trigger'] = analysis.exceedsThreshold && analysis.endsWithSuccessWord
-    ? 'depth_and_success_suffix'
-    : analysis.exceedsThreshold
-      ? 'depth'
-      : 'success_suffix';
+  const trigger: DeepLinkDepthWarning['trigger'] =
+    analysis.exceedsThreshold && analysis.endsWithSuccessWord
+      ? 'depth_and_success_suffix'
+      : analysis.exceedsThreshold
+        ? 'depth'
+        : 'success_suffix';
 
   const reasons: string[] = [];
   if (analysis.exceedsThreshold) {

@@ -17,7 +17,9 @@ export interface DeviceSessionHealthDeps {
   detectForeign?: (udid?: string) => Promise<{ detected: true } | null>;
 }
 
-export async function getDeviceSessionHealth(deps: DeviceSessionHealthDeps = {}): Promise<DeviceSessionHealth> {
+export async function getDeviceSessionHealth(
+  deps: DeviceSessionHealthDeps = {},
+): Promise<DeviceSessionHealth> {
   const getSession = deps.getActiveSession ?? defaultGetActiveSession;
   const probe = deps.probeLiveness ?? probeFastRunnerLiveness;
 
@@ -29,12 +31,18 @@ export async function getDeviceSessionHealth(deps: DeviceSessionHealthDeps = {})
   if (session.deviceId) health.deviceId = session.deviceId;
 
   if (session.platform === 'ios') {
-    try { health.rnFastRunner = await probe(); } catch { health.rnFastRunner = 'dead'; }
+    try {
+      health.rnFastRunner = await probe();
+    } catch {
+      health.rnFastRunner = 'dead';
+    }
     if (deps.detectForeign) {
       try {
         const f = await deps.detectForeign(session.deviceId);
         if (f) health.foreignRunner = f;
-      } catch { /* best-effort: a failed ps scan must never fail cdp_status */ }
+      } catch {
+        /* best-effort: a failed ps scan must never fail cdp_status */
+      }
     }
   }
   return health;

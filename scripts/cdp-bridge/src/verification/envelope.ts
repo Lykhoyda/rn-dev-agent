@@ -26,7 +26,11 @@ export function attachVerificationWarning<T extends BaseVerificationWarning>(
   try {
     const text = result.content[0]?.text;
     if (!text) return result;
-    const env = JSON.parse(text) as { ok?: boolean; data?: unknown; meta?: Record<string, unknown> };
+    const env = JSON.parse(text) as {
+      ok?: boolean;
+      data?: unknown;
+      meta?: Record<string, unknown>;
+    };
     env.meta = { ...env.meta, verification_warning: warning };
     return { content: [{ type: 'text' as const, text: JSON.stringify(env) }] };
   } catch {

@@ -16,12 +16,14 @@ const LAUNCH_TIMEOUT_MS = 15_000;
 export async function terminateApp(bundleId, platform) {
     if (platform === 'ios') {
         await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {
-            timeout: TERMINATE_TIMEOUT_MS, encoding: 'utf8',
+            timeout: TERMINATE_TIMEOUT_MS,
+            encoding: 'utf8',
         });
     }
     else {
         await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
-            timeout: TERMINATE_TIMEOUT_MS, encoding: 'utf8',
+            timeout: TERMINATE_TIMEOUT_MS,
+            encoding: 'utf8',
         });
     }
 }
@@ -42,11 +44,16 @@ export function buildAndroidLaunchArgv(bundleId) {
         throw new Error('buildAndroidLaunchArgv: bundleId is required');
     }
     return [
-        'shell', 'am', 'start',
+        'shell',
+        'am',
+        'start',
         '-W',
-        '-a', 'android.intent.action.MAIN',
-        '-c', 'android.intent.category.LAUNCHER',
-        '-p', bundleId,
+        '-a',
+        'android.intent.action.MAIN',
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '-p',
+        bundleId,
     ];
 }
 /**
@@ -57,12 +64,14 @@ export function buildAndroidLaunchArgv(bundleId) {
 export async function launchApp(bundleId, platform) {
     if (platform === 'ios') {
         await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
-            timeout: LAUNCH_TIMEOUT_MS, encoding: 'utf8',
+            timeout: LAUNCH_TIMEOUT_MS,
+            encoding: 'utf8',
         });
     }
     else {
         await execFile('adb', buildAndroidLaunchArgv(bundleId), {
-            timeout: LAUNCH_TIMEOUT_MS, encoding: 'utf8',
+            timeout: LAUNCH_TIMEOUT_MS,
+            encoding: 'utf8',
         });
     }
 }

@@ -70,25 +70,58 @@ test('snapshot cache: dirty flag is global but validity is keyed per platform re
 
 test('cache invalidation: pure reads PRESERVE the cache (return false)', () => {
   for (const t of [
-    'device_snapshot', 'device_screenshot', 'cdp_store_state', 'cdp_component_tree',
-    'cdp_navigation_state', 'cdp_nav_graph', 'cdp_status', 'cdp_network_log',
-    'expect_route', 'expect_redux', 'expect_visible_by_testid', 'expect_text',
-    'cross_platform_verify', 'collect_logs',
+    'device_snapshot',
+    'device_screenshot',
+    'cdp_store_state',
+    'cdp_component_tree',
+    'cdp_navigation_state',
+    'cdp_nav_graph',
+    'cdp_status',
+    'cdp_network_log',
+    'expect_route',
+    'expect_redux',
+    'expect_visible_by_testid',
+    'expect_text',
+    'cross_platform_verify',
+    'collect_logs',
   ]) {
-    assert.equal(toolInvalidatesSnapshotCache(t), false, `${t} is a read and must preserve the cache`);
+    assert.equal(
+      toolInvalidatesSnapshotCache(t),
+      false,
+      `${t} is a read and must preserve the cache`,
+    );
   }
 });
 
 test('cache invalidation: screen-mutating tools INVALIDATE (return true) — incl. runNative-bypassing ones', () => {
   for (const t of [
-    'cdp_interact', 'cdp_navigate', 'device_deeplink', // bypass runNative (the review finding)
-    'device_press', 'device_fill', 'device_swipe', 'device_scroll', 'device_back',
-    'device_longpress', 'device_pinch', 'device_batch',
-    'maestro_run', 'maestro_test_all', 'cdp_run_action', 'cdp_auto_login', // flows
-    'cdp_reload', 'cdp_restart', // lifecycle screen changes
-    'cdp_dispatch', 'cdp_evaluate', 'cdp_mmkv', 'cdp_set_shared_value', // 'other' mutators
+    'cdp_interact',
+    'cdp_navigate',
+    'device_deeplink', // bypass runNative (the review finding)
+    'device_press',
+    'device_fill',
+    'device_swipe',
+    'device_scroll',
+    'device_back',
+    'device_longpress',
+    'device_pinch',
+    'device_batch',
+    'maestro_run',
+    'maestro_test_all',
+    'cdp_run_action',
+    'cdp_auto_login', // flows
+    'cdp_reload',
+    'cdp_restart', // lifecycle screen changes
+    'cdp_dispatch',
+    'cdp_evaluate',
+    'cdp_mmkv',
+    'cdp_set_shared_value', // 'other' mutators
   ]) {
-    assert.equal(toolInvalidatesSnapshotCache(t), true, `${t} can change the screen and must invalidate`);
+    assert.equal(
+      toolInvalidatesSnapshotCache(t),
+      true,
+      `${t} can change the screen and must invalidate`,
+    );
   }
 });
 
@@ -112,8 +145,16 @@ test('source guard: markSnapshotDirty is invoked inside runNative for mutating v
   const src = readFileSync(join(__dirname, '../../dist/agent-device-wrapper.js'), 'utf-8');
   // The wiring (not just the definition) must be present: the mutating-verb set
   // is consulted at the dispatch choke point and triggers the invalidation.
-  assert.match(src, /SNAPSHOT_MUTATING_VERBS\.has\(/, 'runNative must gate invalidation on the mutating-verb set');
-  assert.match(src, /markSnapshotDirty\(\)/, 'runNative must call markSnapshotDirty() on mutating verbs');
+  assert.match(
+    src,
+    /SNAPSHOT_MUTATING_VERBS\.has\(/,
+    'runNative must gate invalidation on the mutating-verb set',
+  );
+  assert.match(
+    src,
+    /markSnapshotDirty\(\)/,
+    'runNative must call markSnapshotDirty() on mutating verbs',
+  );
 });
 
 test('source guard: the central trackedTool boundary wires fail-safe cache invalidation', async () => {
@@ -123,6 +164,14 @@ test('source guard: the central trackedTool boundary wires fail-safe cache inval
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(join(__dirname, '../../dist/index.js'), 'utf-8');
   // Every external tool crosses trackedTool; the fail-safe invalidation must run there.
-  assert.match(src, /toolInvalidatesSnapshotCache\(/, 'trackedTool must consult the fail-safe predicate');
-  assert.match(src, /markSnapshotDirty\(\)/, 'trackedTool must invalidate the cache for mutating tools');
+  assert.match(
+    src,
+    /toolInvalidatesSnapshotCache\(/,
+    'trackedTool must consult the fail-safe predicate',
+  );
+  assert.match(
+    src,
+    /markSnapshotDirty\(\)/,
+    'trackedTool must invalidate the cache for mutating tools',
+  );
 });

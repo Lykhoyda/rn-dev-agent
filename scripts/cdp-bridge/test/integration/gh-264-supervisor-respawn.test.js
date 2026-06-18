@@ -24,15 +24,23 @@ function startSupervisor(workerPath, extraEnv = {}) {
     for (const p of parts) {
       if (!p.length) continue;
       const w = waiters.shift();
-      if (w) w(p); else pendingLines.push(p);
+      if (w) w(p);
+      else pendingLines.push(p);
     }
   });
-  const nextLine = () => new Promise((resolveLine, reject) => {
-    const queued = pendingLines.shift();
-    if (queued !== undefined) return resolveLine(queued);
-    const t = setTimeout(() => reject(new Error('timeout waiting for supervisor stdout line')), 15_000);
-    waiters.push((line) => { clearTimeout(t); resolveLine(line); });
-  });
+  const nextLine = () =>
+    new Promise((resolveLine, reject) => {
+      const queued = pendingLines.shift();
+      if (queued !== undefined) return resolveLine(queued);
+      const t = setTimeout(
+        () => reject(new Error('timeout waiting for supervisor stdout line')),
+        15_000,
+      );
+      waiters.push((line) => {
+        clearTimeout(t);
+        resolveLine(line);
+      });
+    });
   let id = 0;
   const send = (method, params = {}) => {
     id += 1;
@@ -53,7 +61,7 @@ test('GH#264 supervisor: kill -9 worker → in-flight error, respawn, handshake 
     assert.equal(initRes.result.supervised, '1');
     s.notify('notifications/initialized');
 
-    const hangId = s.send('hang');                       // stays in flight
+    const hangId = s.send('hang'); // stays in flight
     process.kill(pid1, 'SIGKILL');
 
     const deathErr = JSON.parse(await s.nextLine());
@@ -86,7 +94,7 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
   try {
     // The crasher dies pre-handshake repeatedly; after the budget the
     // supervisor stays alive and answers requests with the terminal error.
-    await new Promise((r) => setTimeout(r, 1500));      // let the crash loop burn its budget
+    await new Promise((r) => setTimeout(r, 1500)); // let the crash loop burn its budget
     const qId = s.send('tools/list');
     const reply = JSON.parse(await s.nextLine());
     assert.equal(reply.id, qId);
@@ -102,7 +110,7 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
 test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervisor (plan-review BLOCKER)', async () => {
   const s = startSupervisor('/nonexistent/worker.js', { RN_BRIDGE_MAX_RESPAWNS: '2' });
   try {
-    await new Promise((r) => setTimeout(r, 1500));      // spawn errors burn the budget
+    await new Promise((r) => setTimeout(r, 1500)); // spawn errors burn the budget
     assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');
     const qId = s.send('tools/list');
     const reply = JSON.parse(await s.nextLine());
@@ -122,10 +130,13 @@ test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer wr
     // Hand-build a request with multi-byte UTF-8 in the method, then write
     // its bytes in two chunks split INSIDE the é codepoint. setEncoding's
     // StringDecoder must reassemble it; without it the JSON corrupts to �.
-    const raw = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'écho→test', params: {} }) + '\n', 'utf8');
-    const splitAt = raw.indexOf(0xc3) + 1;              // first byte of the 2-byte é sequence
+    const raw = Buffer.from(
+      JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'écho→test', params: {} }) + '\n',
+      'utf8',
+    );
+    const splitAt = raw.indexOf(0xc3) + 1; // first byte of the 2-byte é sequence
     s.child.stdin.write(raw.subarray(0, splitAt));
-    await new Promise((r) => setTimeout(r, 50));         // force two distinct 'data' events
+    await new Promise((r) => setTimeout(r, 50)); // force two distinct 'data' events
     s.child.stdin.write(raw.subarray(splitAt));
     const reply = JSON.parse(await s.nextLine());
     assert.equal(reply.id, 99);
@@ -150,13 +161,17 @@ test('GH#264 supervisor: SIGUSR2 hot-reload respawns without burning the crash b
     // second would push the core into terminal mode.
     for (let round = 1; round <= 2; round++) {
       s.child.kill('SIGUSR2');
-      await new Promise((r) => setTimeout(r, 700));      // respawn + replay
+      await new Promise((r) => setTimeout(r, 700)); // respawn + replay
       const qId = s.send('ping');
       const reply = JSON.parse(await s.nextLine());
       assert.equal(reply.id, qId, `round ${round}: session still serves`);
       assert.ok(!reply.error, `round ${round}: no terminal error`);
       assert.notEqual(reply.result.pid, pid1, `round ${round}: fresh worker`);
-      assert.equal(reply.result.restarts, String(round), `round ${round}: telemetry counts reloads`);
+      assert.equal(
+        reply.result.restarts,
+        String(round),
+        `round ${round}: telemetry counts reloads`,
+      );
     }
   } finally {
     s.child.kill('SIGTERM');
@@ -165,7 +180,7 @@ test('GH#264 supervisor: SIGUSR2 hot-reload respawns without burning the crash b
 
 const PARTIAL = resolve(__dirname, '../fixtures/partial-then-echo-worker.mjs');
 
-test('GH#264 supervisor: dead worker\'s partial stdout frame does not contaminate the respawned worker (PR #273 Codex P2)', async () => {
+test("GH#264 supervisor: dead worker's partial stdout frame does not contaminate the respawned worker (PR #273 Codex P2)", async () => {
   // Incarnation 0 writes a partial JSON frame (no newline) and dies; the
   // splitter must not prefix the fresh worker's first line with that tail —
   // otherwise the replayed-initialize answer corrupts and garbage reaches
@@ -176,7 +191,7 @@ test('GH#264 supervisor: dead worker\'s partial stdout frame does not contaminat
     // First incarnation never answers (partial frame only) and exits 1;
     // the respawned echo incarnation answers the REPLAYED initialize.
     const initRes = JSON.parse(await s.nextLine());
-    assert.equal(initRes.id, initId, 'first full line is the fresh worker\'s initialize answer');
+    assert.equal(initRes.id, initId, "first full line is the fresh worker's initialize answer");
     assert.equal(initRes.result.echo, 'initialize');
     assert.equal(initRes.result.restarts, '1');
 
@@ -195,8 +210,10 @@ test('GH#264 worker SIGUSR2 exits 1 (hot-reload contract, behavioral)', async ()
   // The supervisor's hot-reload relies on the REAL worker's SIGUSR2 path
   // exiting 1 (respawn), never 0 (which the clean-exit policy mirrors by
   // shutting the supervisor down). Pin the contract by driving dist/index.js.
-  const w = spawn(process.execPath, [REAL_WORKER, '--no-lock'], { stdio: ['pipe', 'ignore', 'ignore'] });
-  await new Promise((r) => setTimeout(r, 1200));        // let handlers register
+  const w = spawn(process.execPath, [REAL_WORKER, '--no-lock'], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  await new Promise((r) => setTimeout(r, 1200)); // let handlers register
   const exited = new Promise((resolveExit) => w.on('exit', (code) => resolveExit(code)));
   w.kill('SIGUSR2');
   assert.equal(await exited, 1, 'SIGUSR2 must exit 1 so the supervisor respawns');

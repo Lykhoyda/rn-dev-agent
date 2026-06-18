@@ -57,5 +57,8 @@ test('timeoutForMethod with android doubles default (Runtime.evaluate path)', ()
 
 test('timeoutForMethod with ios is the same as no platform', () => {
   assert.equal(timeoutForMethod('Runtime.evaluate', 'ios'), timeoutForMethod('Runtime.evaluate'));
-  assert.equal(timeoutForMethod('HeapProfiler.takeHeapSnapshot', 'ios'), timeoutForMethod('HeapProfiler.takeHeapSnapshot'));
+  assert.equal(
+    timeoutForMethod('HeapProfiler.takeHeapSnapshot', 'ios'),
+    timeoutForMethod('HeapProfiler.takeHeapSnapshot'),
+  );
 });

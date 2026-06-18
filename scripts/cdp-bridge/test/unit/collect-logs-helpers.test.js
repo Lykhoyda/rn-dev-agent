@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { parseEnvelope, expectOk, expectFail, expectWarn } from '../helpers/result-helpers.js';
+import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
 import { createCollectLogsHandler } from '../../dist/tools/collect-logs.js';
 
 // collect_logs has three source types: js_console, native_ios, native_android.

@@ -22,8 +22,12 @@ const MOD = '../../dist/tools/mmkv.js';
 function runExpr(expr, mmkvImpl) {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON,
-    String, Number, Boolean,
+    Array,
+    Object,
+    JSON,
+    String,
+    Number,
+    Boolean,
   };
   sandbox.globalThis = sandbox;
   sandbox.NitroModulesProxy = {
@@ -56,9 +60,8 @@ function makeNitroV4Instance(store) {
 test('delete works against the real Nitro v4 surface (remove, no delete) — the #209 repro', async () => {
   const { buildMmkvExpression } = await import(MOD);
   const store = new Map([['authAccessToken', 'tok-123']]);
-  const result = runExpr(
-    buildMmkvExpression({ action: 'delete', key: 'authAccessToken' }),
-    () => makeNitroV4Instance(store),
+  const result = runExpr(buildMmkvExpression({ action: 'delete', key: 'authAccessToken' }), () =>
+    makeNitroV4Instance(store),
   );
   assert.equal(result.__agent_error, undefined, `expected success, got: ${JSON.stringify(result)}`);
   assert.equal(result.ok, true);
@@ -71,29 +74,22 @@ test('delete still works against a legacy wrapper-shaped object (delete, no remo
   const wrapperShaped = {
     delete: (k) => store.delete(k),
   };
-  const result = runExpr(
-    buildMmkvExpression({ action: 'delete', key: 'k' }),
-    () => wrapperShaped,
-  );
+  const result = runExpr(buildMmkvExpression({ action: 'delete', key: 'k' }), () => wrapperShaped);
   assert.equal(result.ok, true);
   assert.equal(store.has('k'), false);
 });
 
 test('delete with neither remove nor delete surfaces a clear error (not a TypeError)', async () => {
   const { buildMmkvExpression } = await import(MOD);
-  const result = runExpr(
-    buildMmkvExpression({ action: 'delete', key: 'k' }),
-    () => ({}),
-  );
+  const result = runExpr(buildMmkvExpression({ action: 'delete', key: 'k' }), () => ({}));
   assert.match(String(result.__agent_error), /neither remove\(\) nor delete\(\)/i);
 });
 
 test('get type=boolean works against the real Nitro v4 surface (getBoolean, no getBool)', async () => {
   const { buildMmkvExpression } = await import(MOD);
   const store = new Map([['flag', true]]);
-  const result = runExpr(
-    buildMmkvExpression({ action: 'get', key: 'flag', type: 'boolean' }),
-    () => makeNitroV4Instance(store),
+  const result = runExpr(buildMmkvExpression({ action: 'get', key: 'flag', type: 'boolean' }), () =>
+    makeNitroV4Instance(store),
   );
   assert.equal(result.__agent_error, undefined, `expected success, got: ${JSON.stringify(result)}`);
   assert.equal(result.value, true);

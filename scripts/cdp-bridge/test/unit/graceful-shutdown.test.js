@@ -18,11 +18,11 @@ function mockClient(disconnectImpl = async () => {}) {
 
 function captureExit() {
   const exits = [];
-  const exitFn = ((code) => {
+  const exitFn = (code) => {
     exits.push(code);
     // Do NOT actually exit — return undefined cast to never for type compat
     return undefined;
-  });
+  };
   return { exits, exitFn };
 }
 
@@ -35,7 +35,9 @@ test('gracefulShutdown: calls disconnect then stopFastRunner then exit with corr
 
   const shutdown = buildGracefulShutdown({
     getClient: () => client,
-    stopFastRunnerFn: () => { stopFastRunnerCalls += 1; },
+    stopFastRunnerFn: () => {
+      stopFastRunnerCalls += 1;
+    },
     exitFn,
     timeoutMs: 1000,
   });
@@ -69,7 +71,9 @@ test('gracefulShutdown: idempotent — second call is a no-op (B76/D644)', async
 
   const shutdown = buildGracefulShutdown({
     getClient: () => client,
-    stopFastRunnerFn: () => { stopFastRunnerCalls += 1; },
+    stopFastRunnerFn: () => {
+      stopFastRunnerCalls += 1;
+    },
     exitFn,
     timeoutMs: 1000,
   });
@@ -82,13 +86,17 @@ test('gracefulShutdown: idempotent — second call is a no-op (B76/D644)', async
 });
 
 test('gracefulShutdown: disconnect throw is non-fatal (B76/D644)', async () => {
-  const { client } = mockClient(async () => { throw new Error('boom'); });
+  const { client } = mockClient(async () => {
+    throw new Error('boom');
+  });
   let stopFastRunnerCalls = 0;
   const { exits, exitFn } = captureExit();
 
   const shutdown = buildGracefulShutdown({
     getClient: () => client,
-    stopFastRunnerFn: () => { stopFastRunnerCalls += 1; },
+    stopFastRunnerFn: () => {
+      stopFastRunnerCalls += 1;
+    },
     exitFn,
     timeoutMs: 1000,
   });
@@ -105,7 +113,9 @@ test('gracefulShutdown: stopFastRunner throw is non-fatal (B76/D644)', async () 
 
   const shutdown = buildGracefulShutdown({
     getClient: () => client,
-    stopFastRunnerFn: () => { throw new Error('fastrunner boom'); },
+    stopFastRunnerFn: () => {
+      throw new Error('fastrunner boom');
+    },
     exitFn,
     timeoutMs: 1000,
   });
@@ -142,13 +152,20 @@ test('gracefulShutdown: timeout forces exit if cleanup hangs (B76/D644)', async 
 test('gracefulShutdown: concurrent calls during slow disconnect share one cleanup (B76/D644 race)', async () => {
   // Simulates the cdp_restart-mid-flight + SIGTERM race the idempotency guard is for.
   let disconnectResolve;
-  const { client, calls } = mockClient(() => new Promise((r) => { disconnectResolve = r; }));
+  const { client, calls } = mockClient(
+    () =>
+      new Promise((r) => {
+        disconnectResolve = r;
+      }),
+  );
   let stopFastRunnerCalls = 0;
   const { exits, exitFn } = captureExit();
 
   const shutdown = buildGracefulShutdown({
     getClient: () => client,
-    stopFastRunnerFn: () => { stopFastRunnerCalls += 1; },
+    stopFastRunnerFn: () => {
+      stopFastRunnerCalls += 1;
+    },
     exitFn,
     timeoutMs: 5000,
   });
@@ -160,7 +177,11 @@ test('gracefulShutdown: concurrent calls during slow disconnect share one cleanu
 
   // Give the microtask queue a tick to ensure the first shutdown has entered its body
   await new Promise((r) => setImmediate(r));
-  assert.equal(calls.disconnect, 1, 'disconnect called exactly once despite 3 concurrent shutdowns');
+  assert.equal(
+    calls.disconnect,
+    1,
+    'disconnect called exactly once despite 3 concurrent shutdowns',
+  );
 
   // Resolve the slow disconnect → cleanup completes → exit fires
   disconnectResolve();

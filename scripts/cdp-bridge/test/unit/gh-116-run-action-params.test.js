@@ -22,7 +22,13 @@ test('maestro_run: rejects malformed param keys (shell-injection guard)', async 
   const { createMaestroRunHandler } = await import('../../dist/tools/maestro-run.js');
   const handler = createMaestroRunHandler();
   // Bad keys: lowercase, leading digit, contains `=`, `-`, space, etc.
-  const badKeys = ['lowercase', '1STARTS_WITH_DIGIT', 'KEY=INJECTED', '--FLAG_INJECTED', 'WITH SPACE'];
+  const badKeys = [
+    'lowercase',
+    '1STARTS_WITH_DIGIT',
+    'KEY=INJECTED',
+    '--FLAG_INJECTED',
+    'WITH SPACE',
+  ];
   for (const key of badKeys) {
     const result = await handler({
       inlineYaml: 'appId: com.test.app\n---\n- launchApp',
@@ -71,8 +77,16 @@ test('maestro_run: accepts well-formed params (key passes regex, value is string
   // Either way, the error message must NOT mention "invalid param key".
   if (result.isError) {
     const env = JSON.parse(result.content[0].text);
-    assert.doesNotMatch(env.error, /invalid param key/i, `unexpected param-key error: ${env.error}`);
-    assert.doesNotMatch(env.error, /non-string value/i, `unexpected param-value error: ${env.error}`);
+    assert.doesNotMatch(
+      env.error,
+      /invalid param key/i,
+      `unexpected param-key error: ${env.error}`,
+    );
+    assert.doesNotMatch(
+      env.error,
+      /non-string value/i,
+      `unexpected param-value error: ${env.error}`,
+    );
   }
 });
 
@@ -86,7 +100,9 @@ test('cdp_run_action: forwards params to first maestro_run call', async () => {
   const fakeMaestroRun = mock.fn(async (args) => {
     calls.push(args);
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: '' } }) }],
+      content: [
+        { type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: '' } }) },
+      ],
     };
   });
   const handler = createRunActionHandler({ maestroRun: fakeMaestroRun });
@@ -115,27 +131,35 @@ test('cdp_run_action: when reaching maestro_run, the params are passed through',
 
   const root = mkdtempSync(join(tmpdir(), 'gh116-'));
   mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
-  writeFileSync(join(root, '.rn-agent', 'actions', 'sample.yaml'), [
-    'appId: com.test.app',
-    '---',
-    '# id: sample',
-    '# intent: a sample action',
-    '# status: experimental',
-    '# mutates: false',
-    '- launchApp',
-    '- inputText: ${TITLE}',
-  ].join('\n'));
+  writeFileSync(
+    join(root, '.rn-agent', 'actions', 'sample.yaml'),
+    [
+      'appId: com.test.app',
+      '---',
+      '# id: sample',
+      '# intent: a sample action',
+      '# status: experimental',
+      '# mutates: false',
+      '- launchApp',
+      '- inputText: ${TITLE}',
+    ].join('\n'),
+  );
 
   const calls = [];
   const fakeMaestroRun = mock.fn(async (args) => {
     calls.push(args);
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }),
+        },
+      ],
     };
   });
 
   const handler = createRunActionHandler({ maestroRun: fakeMaestroRun });
-  const result = await handler({
+  const _result = await handler({
     actionId: 'sample',
     projectRoot: root,
     platform: 'ios',
@@ -145,8 +169,11 @@ test('cdp_run_action: when reaching maestro_run, the params are passed through',
   // The handler should have invoked maestro_run at least once with our params.
   assert.ok(calls.length >= 1, `maestro_run should be called at least once; got ${calls.length}`);
   const firstCall = calls[0];
-  assert.deepEqual(firstCall.params, { TITLE: 'Buy milk', PRIORITY: 'high' },
-    `params not forwarded; firstCall: ${JSON.stringify(firstCall)}`);
+  assert.deepEqual(
+    firstCall.params,
+    { TITLE: 'Buy milk', PRIORITY: 'high' },
+    `params not forwarded; firstCall: ${JSON.stringify(firstCall)}`,
+  );
   assert.equal(firstCall.flowPath.endsWith('sample.yaml'), true);
 
   // Cleanup
@@ -165,17 +192,20 @@ test('cdp_run_action: params are also threaded into the post-repair retry call (
 
   const root = mkdtempSync(join(tmpdir(), 'gh116-retry-'));
   mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
-  writeFileSync(join(root, '.rn-agent', 'actions', 'sample.yaml'), [
-    'appId: com.test.app',
-    '---',
-    '# id: sample',
-    '# intent: a sample action',
-    '# status: experimental',
-    '# mutates: false',
-    '- launchApp',
-    '- tapOn:',
-    '    id: "missing-btn"',
-  ].join('\n'));
+  writeFileSync(
+    join(root, '.rn-agent', 'actions', 'sample.yaml'),
+    [
+      'appId: com.test.app',
+      '---',
+      '# id: sample',
+      '# intent: a sample action',
+      '# status: experimental',
+      '# mutates: false',
+      '- launchApp',
+      '- tapOn:',
+      '    id: "missing-btn"',
+    ].join('\n'),
+  );
 
   const calls = [];
   // First call: fail with a SELECTOR_NOT_FOUND-shaped error.
@@ -184,14 +214,24 @@ test('cdp_run_action: params are also threaded into the post-repair retry call (
     calls.push(args);
     if (calls.length === 1) {
       return {
-        content: [{ type: 'text', text: JSON.stringify({
-          ok: true, // maestro_run wrapper returns ok:true with passed:false on warn
-          data: { passed: false, output: '== SELECTOR_NOT_FOUND tapOn id=missing-btn ==' },
-        }) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: true, // maestro_run wrapper returns ok:true with passed:false on warn
+              data: { passed: false, output: '== SELECTOR_NOT_FOUND tapOn id=missing-btn ==' },
+            }),
+          },
+        ],
       };
     }
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }),
+        },
+      ],
     };
   });
 

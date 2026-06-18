@@ -20,7 +20,10 @@ test('buildScreenshotArgs never emits --format', () => {
   ];
   for (const args of cases) {
     const out = buildScreenshotArgs(args);
-    assert.ok(!out.includes('--format'), `--format emitted for ${JSON.stringify(args)} → ${out.join(' ')}`);
+    assert.ok(
+      !out.includes('--format'),
+      `--format emitted for ${JSON.stringify(args)} → ${out.join(' ')}`,
+    );
   }
 });
 
@@ -32,14 +35,22 @@ test('buildScreenshotArgs uses --out for the path, not positional', () => {
 test('buildScreenshotArgs defaults to .jpg when no path and no format given', () => {
   // Phase 134.3: default filename includes a random suffix to prevent
   // parallel-call clobbering. Inject `rand` for deterministic test.
-  const out = buildScreenshotArgs({}, () => 12345, () => 0.5);
+  const out = buildScreenshotArgs(
+    {},
+    () => 12345,
+    () => 0.5,
+  );
   assert.equal(out[0], 'screenshot');
   assert.equal(out[1], '--out');
   assert.match(out[2], /^\/tmp\/rn-screenshot-12345-[a-z0-9]+\.jpg$/);
 });
 
 test('buildScreenshotArgs honors explicit format when no path given', () => {
-  const out = buildScreenshotArgs({ format: 'png' }, () => 99, () => 0.5);
+  const out = buildScreenshotArgs(
+    { format: 'png' },
+    () => 99,
+    () => 0.5,
+  );
   assert.match(out[2], /^\/tmp\/rn-screenshot-99-[a-z0-9]+\.png$/);
 });
 
@@ -107,10 +118,7 @@ test('B150: computeScreenshotAdvisories does NOT flag docs/ paths', () => {
 });
 
 test('B150: computeScreenshotAdvisories does NOT flag absolute project paths', () => {
-  const out = computeScreenshotAdvisories(
-    {},
-    '/Users/dev/myapp/docs/proof/cart/01-empty.jpg',
-  );
+  const out = computeScreenshotAdvisories({}, '/Users/dev/myapp/docs/proof/cart/01-empty.jpg');
   assert.equal(out.length, 0);
 });
 
@@ -155,7 +163,11 @@ test('B150: wrapResultWithAdvisories preserves existing meta fields (resize surv
     content: [
       {
         type: 'text',
-        text: JSON.stringify({ ok: true, data: { path: '/tmp/x.jpg' }, meta: { resize: { resized: false } } }),
+        text: JSON.stringify({
+          ok: true,
+          data: { path: '/tmp/x.jpg' },
+          meta: { resize: { resized: false } },
+        }),
       },
     ],
   };

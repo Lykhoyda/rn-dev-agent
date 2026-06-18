@@ -16,18 +16,12 @@ test('flat call when user requested the tab itself with params', () => {
 
 test('nested call when inner screen differs from tab', () => {
   const args = buildTabNavigateArgs('TasksTab', 'TaskDetail', 'undefined');
-  assert.equal(
-    args,
-    '"TasksTab", { screen: "TaskDetail", params: undefined }',
-  );
+  assert.equal(args, '"TasksTab", { screen: "TaskDetail", params: undefined }');
 });
 
 test('nested call with params when inner screen differs from tab', () => {
   const args = buildTabNavigateArgs('TasksTab', 'TaskDetail', '{"id":"1"}');
-  assert.equal(
-    args,
-    '"TasksTab", { screen: "TaskDetail", params: {"id":"1"} }',
-  );
+  assert.equal(args, '"TasksTab", { screen: "TaskDetail", params: {"id":"1"} }');
 });
 
 test('escapes quotes via JSON.stringify', () => {
@@ -44,7 +38,10 @@ test('output is valid JS fragment that works as ref.navigate args', () => {
 
   const argsNested = buildTabNavigateArgs('TasksTab', 'TaskDetail', '{"id":"1"}');
   const nestedExpr = `ref.navigate(${argsNested});`;
-  assert.match(nestedExpr, /^ref\.navigate\("TasksTab", \{ screen: "TaskDetail", params: \{"id":"1"\} \}\);$/);
+  assert.match(
+    nestedExpr,
+    /^ref\.navigate\("TasksTab", \{ screen: "TaskDetail", params: \{"id":"1"\} \}\);$/,
+  );
 });
 
 // ── B126: buildScreenNameAliases (UPPER_SNAKE_CASE → PascalCase) ──────
@@ -103,11 +100,11 @@ test('buildScreenNameAliases skips names that begin with a digit', () => {
 
 test('buildScreenNameAliases mixed input preserves only convertible names', () => {
   const aliases = buildScreenNameAliases([
-    'MAIN_TABS_HOME',  // snake → convert
-    'TaskDetail',       // pascal → skip
-    'pushPrompt',       // camel → skip
-    'PROFILE_EDIT',     // snake → convert
-    'HOME',             // single → skip
+    'MAIN_TABS_HOME', // snake → convert
+    'TaskDetail', // pascal → skip
+    'pushPrompt', // camel → skip
+    'PROFILE_EDIT', // snake → convert
+    'HOME', // single → skip
   ]);
   assert.deepEqual(aliases, {
     MAIN_TABS_HOME: 'MainTabsHome',

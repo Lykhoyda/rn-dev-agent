@@ -54,7 +54,11 @@ test('M9: script checks for idb-companion or idb_companion', () => {
   const content = readFileSync(SCRIPT_PATH, 'utf-8');
   // Both underscore and dash forms exist across idb installs — accept either.
   assert.match(content, /idb[-_]companion/, 'must check for idb-companion presence');
-  assert.match(content, /brew install idb-companion/, 'must hint the brew install command when missing');
+  assert.match(
+    content,
+    /brew install idb-companion/,
+    'must hint the brew install command when missing',
+  );
 });
 
 test('M9: script documents WiFi-debugging non-support stance', () => {

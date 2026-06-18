@@ -65,9 +65,9 @@ export function actionPathFor(projectRoot: string, actionId: string): string {
  * Pure function — exported for unit tests.
  */
 export function splitYaml(text: string): {
-  topSection: string;     // everything BEFORE the `---` separator (e.g. "appId: ...")
-  headerLines: string[];  // M7 comment lines AFTER the separator (above the body)
-  bodyLines: string[];    // the actual Maestro steps
+  topSection: string; // everything BEFORE the `---` separator (e.g. "appId: ...")
+  headerLines: string[]; // M7 comment lines AFTER the separator (above the body)
+  bodyLines: string[]; // the actual Maestro steps
 } {
   const allLines = text.split('\n');
   let separatorIdx = -1;
@@ -205,10 +205,10 @@ export class SaveActionPreconditionError extends Error {
   constructor(filePath: string) {
     super(
       `saveAction precondition violated: yaml at ${filePath} has been ` +
-      `edited externally since the in-memory action was loaded. The caller ` +
-      `must invoke actionWasEditedExternally() first and abort on true ` +
-      `(or use saveActionWithCAS for atomic detection). GH #113 contract ` +
-      `enforcement.`,
+        `edited externally since the in-memory action was loaded. The caller ` +
+        `must invoke actionWasEditedExternally() first and abort on true ` +
+        `(or use saveActionWithCAS for atomic detection). GH #113 contract ` +
+        `enforcement.`,
     );
     this.name = 'SaveActionPreconditionError';
   }

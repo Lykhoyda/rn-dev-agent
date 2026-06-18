@@ -2,8 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseTapLatencies, median, resolveFloorMs, classifyRuntimeDegradation,
-  formatRuntimeDegradedHint, augmentFailureWithDegradation, DEFAULT_FLOOR_MS,
+  parseTapLatencies,
+  median,
+  resolveFloorMs,
+  classifyRuntimeDegradation,
+  formatRuntimeDegradedHint,
+  augmentFailureWithDegradation,
+  DEFAULT_FLOOR_MS,
 } from '../../dist/domain/tap-latency.js';
 
 const DEGRADED = `  ✓ launchApp (2.3s)
@@ -72,8 +77,8 @@ test('classifyRuntimeDegradation: a single successful slow tap is NOT degraded (
 });
 
 test('median: odd, even, single, empty', () => {
-  assert.equal(median([3000, 2800, 1000]), 2800);  // sorted 1000,2800,3000
-  assert.equal(median([2800, 3000]), 2900);        // average of two middle
+  assert.equal(median([3000, 2800, 1000]), 2800); // sorted 1000,2800,3000
+  assert.equal(median([2800, 3000]), 2900); // average of two middle
   assert.equal(median([1500]), 1500);
   assert.equal(median([]), null);
 });
@@ -90,7 +95,7 @@ test('resolveFloorMs: default, valid override, invalid → default', () => {
 test('classifyRuntimeDegradation: degraded when median ≥ floor', () => {
   const d = classifyRuntimeDegradation(DEGRADED, 1500);
   assert.equal(d.degraded, true);
-  assert.equal(d.medianMs, 2900);   // median of [2800,3000]
+  assert.equal(d.medianMs, 2900); // median of [2800,3000]
   assert.equal(d.sampleCount, 2);
   assert.equal(d.floorMs, 1500);
 });
@@ -98,7 +103,7 @@ test('classifyRuntimeDegradation: degraded when median ≥ floor', () => {
 test('classifyRuntimeDegradation: normal latency is not degraded', () => {
   const d = classifyRuntimeDegradation(NORMAL, 1500);
   assert.equal(d.degraded, false);
-  assert.equal(d.medianMs, 800);    // median of [700,900]
+  assert.equal(d.medianMs, 800); // median of [700,900]
 });
 
 test('classifyRuntimeDegradation: no tap samples → not degraded, medianMs null', () => {
@@ -117,7 +122,9 @@ test('formatRuntimeDegradedHint: names the code, median, floor, and reboot', () 
 });
 
 test('augmentFailureWithDegradation: degraded → hint appended + meta.runtimeDegraded', () => {
-  const { message, meta } = augmentFailureWithDegradation(DEGRADED, 1500, 'Flow failed', { passed: false });
+  const { message, meta } = augmentFailureWithDegradation(DEGRADED, 1500, 'Flow failed', {
+    passed: false,
+  });
   assert.match(message, /Flow failed — RUNTIME_DEGRADED:/);
   assert.deepEqual(meta.runtimeDegraded, { medianTapMs: 2900, floorMs: 1500, sampleCount: 2 });
   assert.equal(meta.passed, false); // base meta preserved

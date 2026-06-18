@@ -30,14 +30,32 @@ test('cdp_status preempts an active reconnect storm via softReconnect, not bare 
     _isConnected: false,
     _helpersInjected: true,
     reconnectState: { active: true, lastAttempt: '2026-06-07T00:00:00.000Z', attemptCount: 12 },
-    autoConnect: async () => { events.push('autoConnect'); client._isConnected = true; client._helpersInjected = true; return 'connected'; },
-    softReconnect: async () => { events.push('softReconnect'); client._isConnected = true; client._helpersInjected = true; return 'reconnected'; },
+    autoConnect: async () => {
+      events.push('autoConnect');
+      client._isConnected = true;
+      client._helpersInjected = true;
+      return 'connected';
+    },
+    softReconnect: async () => {
+      events.push('softReconnect');
+      client._isConnected = true;
+      client._helpersInjected = true;
+      return 'reconnected';
+    },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
   try {
-    const handler = createStatusHandler(() => client, () => {}, () => client);
+    const handler = createStatusHandler(
+      () => client,
+      () => {},
+      () => client,
+    );
     expectOk(await handler({}));
-    assert.deepEqual(events, ['softReconnect'], 'a reconnect storm must be preempted via softReconnect, never bare autoConnect');
+    assert.deepEqual(
+      events,
+      ['softReconnect'],
+      'a reconnect storm must be preempted via softReconnect, never bare autoConnect',
+    );
   } finally {
     _resetHasSessionForTest();
   }
@@ -50,14 +68,32 @@ test('cdp_status uses autoConnect (not softReconnect) when disconnected with no 
     _isConnected: false,
     _helpersInjected: true,
     reconnectState: { active: false, lastAttempt: null, attemptCount: 0 },
-    autoConnect: async () => { events.push('autoConnect'); client._isConnected = true; client._helpersInjected = true; return 'connected'; },
-    softReconnect: async () => { events.push('softReconnect'); client._isConnected = true; client._helpersInjected = true; return 'reconnected'; },
+    autoConnect: async () => {
+      events.push('autoConnect');
+      client._isConnected = true;
+      client._helpersInjected = true;
+      return 'connected';
+    },
+    softReconnect: async () => {
+      events.push('softReconnect');
+      client._isConnected = true;
+      client._helpersInjected = true;
+      return 'reconnected';
+    },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
   try {
-    const handler = createStatusHandler(() => client, () => {}, () => client);
+    const handler = createStatusHandler(
+      () => client,
+      () => {},
+      () => client,
+    );
     expectOk(await handler({}));
-    assert.deepEqual(events, ['autoConnect'], 'a normal disconnected status should use autoConnect');
+    assert.deepEqual(
+      events,
+      ['autoConnect'],
+      'a normal disconnected status should use autoConnect',
+    );
   } finally {
     _resetHasSessionForTest();
   }

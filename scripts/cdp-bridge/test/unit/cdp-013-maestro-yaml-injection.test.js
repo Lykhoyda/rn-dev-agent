@@ -32,10 +32,14 @@ test('CDP-013: hostile label with newline + injection attempt does not escape sc
   // The generator already emits one `- launchApp` of its own — verify
   // there are no MORE than one.
   const launchAppOccurrences = (out.match(/^\s*- launchApp\s*$/gm) ?? []).length;
-  assert.equal(launchAppOccurrences, 1, 'attacker-injected `- launchApp` must NOT appear as a sibling step');
+  assert.equal(
+    launchAppOccurrences,
+    1,
+    'attacker-injected `- launchApp` must NOT appear as a sibling step',
+  );
 });
 
-test('CDP-013: label-only events emit `text:` selector (Maestro\'s correct visible-text matcher)', () => {
+test("CDP-013: label-only events emit `text:` selector (Maestro's correct visible-text matcher)", () => {
   const sel = maestroSelector({ type: 'tap', label: 'Submit', t: 1 });
   assert.match(sel, /^text:\s/, 'label-only events must use Maestro `text:` selector, not `id:`');
 });
@@ -61,5 +65,9 @@ test('CDP-013: round-trip parse extracts the original testID through the YAML sc
   assert.ok(Array.isArray(flow));
   const tapStep = flow.find((s) => s && typeof s === 'object' && 'tapOn' in s);
   assert.ok(tapStep, 'tapOn step must be parseable');
-  assert.equal(tapStep.tapOn.id, 'has spaces and "quotes"', 'original testID must survive serialization round-trip');
+  assert.equal(
+    tapStep.tapOn.id,
+    'has spaces and "quotes"',
+    'original testID must survive serialization round-trip',
+  );
 });

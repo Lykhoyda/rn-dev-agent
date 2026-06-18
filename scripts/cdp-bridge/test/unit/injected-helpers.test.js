@@ -11,7 +11,15 @@ import { INJECTED_HELPERS, REACT_READY_PROBE_JS } from '../../dist/injected-help
 function createSandbox(opts = {}) {
   const sandbox = {
     globalThis: {},
-    Array, Object, JSON, Map, WeakSet, Error, Date, parseInt, parseFloat,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Error,
+    Date,
+    parseInt,
+    parseFloat,
     typeof: undefined,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
     String,
@@ -57,7 +65,8 @@ test('getNavState: finds nav state in first hook position', () => {
       memoizedState: navState,
       next: null,
     },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
@@ -66,21 +75,26 @@ test('getNavState: finds nav state in first hook position', () => {
 });
 
 test('getNavState: finds nav state in third hook position (B3 regression)', () => {
-  const navState = { routes: [{ name: 'Profile' }, { name: 'Settings' }], index: 1, routeNames: ['Profile', 'Settings'] };
+  const navState = {
+    routes: [{ name: 'Profile' }, { name: 'Settings' }],
+    index: 1,
+    routeNames: ['Profile', 'Settings'],
+  };
   // Simulate: useState, useRef, then useReducer with nav state
   const fiber = {
     type: { displayName: 'NavigationContainer' },
     memoizedState: {
-      memoizedState: 'not-nav-state',  // useState
+      memoizedState: 'not-nav-state', // useState
       next: {
-        memoizedState: { current: null },  // useRef
+        memoizedState: { current: null }, // useRef
         next: {
-          memoizedState: navState,  // nav state in 3rd position
+          memoizedState: navState, // nav state in 3rd position
           next: null,
         },
       },
     },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
@@ -97,7 +111,8 @@ test('getNavState: finds nav state in queue.lastRenderedState', () => {
       queue: { lastRenderedState: navState },
       next: null,
     },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
@@ -109,7 +124,8 @@ test('getNavState: finds nav state via ExpoRoot fiber name', () => {
   const fiber = {
     type: { name: 'ExpoRoot' },
     memoizedState: { memoizedState: navState, next: null },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
@@ -123,7 +139,8 @@ test('getNavState: returns error when no nav state in hooks', () => {
       memoizedState: 'just a string',
       next: { memoizedState: 42, next: null },
     },
-    child: null, sibling: null,
+    child: null,
+    sibling: null,
   };
   const sandbox = createSandbox({ fiberRoot: fiber });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
@@ -135,7 +152,10 @@ test('getNavState: returns error when no nav state in hooks', () => {
 test('getStoreState: reads Jotai atoms via __JOTAI_STORE__ + __JOTAI_ATOMS__', () => {
   const countAtom = { __brand: 'countAtom' };
   const userAtom = { __brand: 'userAtom' };
-  const atomValues = new Map([[countAtom, 42], [userAtom, { name: 'Alice' }]]);
+  const atomValues = new Map([
+    [countAtom, 42],
+    [userAtom, { name: 'Alice' }],
+  ]);
 
   const sandbox = createSandbox({
     globals: {
@@ -196,7 +216,7 @@ test('M8: findActiveRenderer finds root at renderer ID 1 (happy path, no regress
   const fiber = { type: { name: 'App' }, child: null, sibling: null };
   const hook = {
     renderers: new Map([[1, {}]]),
-    getFiberRoots: (id) => id === 1 ? new Set([{ current: fiber }]) : new Set(),
+    getFiberRoots: (id) => (id === 1 ? new Set([{ current: fiber }]) : new Set()),
   };
   const sandbox = createSandbox({ hook });
   assert.equal(sandbox.__RN_AGENT.isReady(), true);
@@ -206,7 +226,7 @@ test('M8: findActiveRenderer probes past empty IDs to renderer 4', () => {
   const fiber = { type: { name: 'App' }, child: null, sibling: null };
   const hook = {
     renderers: new Map(),
-    getFiberRoots: (id) => id === 4 ? new Set([{ current: fiber }]) : new Set(),
+    getFiberRoots: (id) => (id === 4 ? new Set([{ current: fiber }]) : new Set()),
   };
   const sandbox = createSandbox({ hook });
   assert.equal(sandbox.__RN_AGENT.isReady(), true);
@@ -216,7 +236,7 @@ test('M8: findActiveRenderer succeeds when hook.renderers is empty (story repro)
   const fiber = { type: { name: 'App' }, child: null, sibling: null };
   const hook = {
     renderers: new Map(),
-    getFiberRoots: (id) => id === 1 ? new Set([{ current: fiber }]) : new Set(),
+    getFiberRoots: (id) => (id === 1 ? new Set([{ current: fiber }]) : new Set()),
   };
   const sandbox = createSandbox({ hook });
   assert.equal(sandbox.__RN_AGENT.isReady(), true);
@@ -248,24 +268,33 @@ function evalProbe(hook) {
 }
 
 test('M8 probe: returns true when fiber roots exist at renderer ID 1', () => {
-  assert.equal(evalProbe({
-    renderers: new Map(),
-    getFiberRoots: (i) => i === 1 ? new Set([{}]) : new Set(),
-  }), true);
+  assert.equal(
+    evalProbe({
+      renderers: new Map(),
+      getFiberRoots: (i) => (i === 1 ? new Set([{}]) : new Set()),
+    }),
+    true,
+  );
 });
 
 test('M8 probe: returns true when fiber roots only at renderer ID 4 (renderers map empty)', () => {
-  assert.equal(evalProbe({
-    renderers: new Map(),
-    getFiberRoots: (i) => i === 4 ? new Set([{}]) : new Set(),
-  }), true);
+  assert.equal(
+    evalProbe({
+      renderers: new Map(),
+      getFiberRoots: (i) => (i === 4 ? new Set([{}]) : new Set()),
+    }),
+    true,
+  );
 });
 
 test('M8 probe: returns false when no renderer 1..5 has fiber roots', () => {
-  assert.equal(evalProbe({
-    renderers: new Map(),
-    getFiberRoots: () => new Set(),
-  }), false);
+  assert.equal(
+    evalProbe({
+      renderers: new Map(),
+      getFiberRoots: () => new Set(),
+    }),
+    false,
+  );
 });
 
 test('M8 probe: returns false when hook.getFiberRoots is missing', () => {
@@ -289,7 +318,11 @@ function appInfoFrom(globals) {
 }
 
 test('M10: getAppInfo returns architecture=new when nativeFabricUIManager present', () => {
-  const info = appInfoFrom({ nativeFabricUIManager: { /* Fabric object */ } });
+  const info = appInfoFrom({
+    nativeFabricUIManager: {
+      /* Fabric object */
+    },
+  });
   assert.equal(info.architecture, 'new');
 });
 
@@ -305,7 +338,9 @@ test('M10: getAppInfo returns architecture=unknown when neither signal present',
 
 test('M10: getAppInfo returns architecture=new when BOTH Fabric and bridge present (Fabric wins)', () => {
   const info = appInfoFrom({
-    nativeFabricUIManager: { /* Fabric */ },
+    nativeFabricUIManager: {
+      /* Fabric */
+    },
     __fbBatchedBridge: { getCallableModule: () => null },
   });
   assert.equal(info.architecture, 'new');

@@ -17,7 +17,10 @@ import {
 
 test('helper: iOS is guarded — skips without calling runAgentDevice', async () => {
   const calls = [];
-  _setRunAgentDeviceForTest(async (args) => { calls.push(args); return { content: [{ type: 'text', text: '{}' }] }; });
+  _setRunAgentDeviceForTest(async (args) => {
+    calls.push(args);
+    return { content: [{ type: 'text', text: '{}' }] };
+  });
   try {
     const out = await clearDevClientPickerIfPresent('ios');
     assert.equal(calls.length, 0, 'runAgentDevice must never be called on iOS');
@@ -75,12 +78,17 @@ test('handler: no session → DEV_CLIENT_PICKER_NO_SESSION', async () => {
     const r = await handle({ platform: 'android' });
     assert.equal(r.isError, true);
     assert.equal(parse(r).code, 'DEV_CLIENT_PICKER_NO_SESSION');
-  } finally { _resetHasSessionForTest(); }
+  } finally {
+    _resetHasSessionForTest();
+  }
 });
 
 test('handler: iOS → warn, dismissed:false, never calls runAgentDevice', async () => {
   const calls = [];
-  _setRunAgentDeviceForTest(async (args) => { calls.push(args); return { content: [{ type: 'text', text: '{}' }] }; });
+  _setRunAgentDeviceForTest(async (args) => {
+    calls.push(args);
+    return { content: [{ type: 'text', text: '{}' }] };
+  });
   try {
     const r = await handle({ platform: 'ios' });
     assert.equal(r.isError, undefined);
@@ -89,7 +97,9 @@ test('handler: iOS → warn, dismissed:false, never calls runAgentDevice', async
     assert.equal(p.data.platform, 'ios');
     assert.match(p.meta.warning, /manually/i);
     assert.equal(calls.length, 0);
-  } finally { _resetRunAgentDeviceForTest(); }
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
 });
 
 test('handler: Android dismissed → ok dismissed:true with timings', async () => {
@@ -110,7 +120,10 @@ test('handler: Android dismissed → ok dismissed:true with timings', async () =
     const p = parse(r);
     assert.equal(p.data.dismissed, true);
     assert.ok(p.meta && typeof p.meta.timings_ms.total === 'number');
-  } finally { _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
 });
 
 test('handler: Android picker not detected → ok dismissed:false (no warning)', async () => {
@@ -123,14 +136,18 @@ test('handler: Android picker not detected → ok dismissed:false (no warning)',
     const p = parse(r);
     assert.equal(p.data.dismissed, false);
     assert.equal(p.meta?.warning, undefined);
-  } finally { _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
 });
 
 test('handler: Android detected but no entry → warn dismissed:false', async () => {
   _setHasSessionForTest(true);
   // snapshot still routes through runAgentDeviceFn
   _setRunAgentDeviceForTest(async (args) => {
-    if (args[0] === 'snapshot') return { content: [{ type: 'text', text: 'Development servers\nEnter URL manually' }] };
+    if (args[0] === 'snapshot')
+      return { content: [{ type: 'text', text: 'Development servers\nEnter URL manually' }] };
     return { content: [{ type: 'text', text: '{}' }] };
   });
   _setFetchCandidatesForTest(async (text) => {
@@ -146,12 +163,18 @@ test('handler: Android detected but no entry → warn dismissed:false', async ()
     const p = parse(r);
     assert.equal(p.data.dismissed, false);
     assert.match(p.meta.warning, /could not find|manually/i);
-  } finally { _resetRunAgentDeviceForTest(); _resetFetchCandidatesForTest(); _resetHasSessionForTest(); }
+  } finally {
+    _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
 });
 
 import { annotatePicker } from '../../dist/tools/device-deeplink.js';
 
-const okEnvelope = (data) => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }] });
+const okEnvelope = (data) => ({
+  content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }],
+});
 
 test('annotatePicker: null outcome → pickerChecked:false', () => {
   const r = annotatePicker(okEnvelope({ opened: true }), null);
@@ -160,7 +183,11 @@ test('annotatePicker: null outcome → pickerChecked:false', () => {
 });
 
 test('annotatePicker: dismissed outcome → pickerDismissed:true', () => {
-  const r = annotatePicker(okEnvelope({ opened: true }), { dismissed: true, reason: 'tapped', platform: 'android' });
+  const r = annotatePicker(okEnvelope({ opened: true }), {
+    dismissed: true,
+    reason: 'tapped',
+    platform: 'android',
+  });
   const p = JSON.parse(r.content[0].text);
   assert.equal(p.meta.pickerChecked, true);
   assert.equal(p.meta.pickerDismissed, true);

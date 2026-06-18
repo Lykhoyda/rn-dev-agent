@@ -2,10 +2,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner } from '../runners/rn-android-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
-import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice } from '../runners/external-runner-detect.js';
+import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
 import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
@@ -70,7 +70,10 @@ export async function isAppRunning(platform, bundleId, probes) {
 }
 async function defaultIOSProbe(bundleId) {
     try {
-        const { stdout } = await execFile('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], { timeout: 5000, encoding: 'utf8' });
+        const { stdout } = await execFile('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], {
+            timeout: 5000,
+            encoding: 'utf8',
+        });
         // launchctl list outputs lines like "<pid>  <status>  UIKitApplication:<bundleId>[...]"
         return stdout.includes(`UIKitApplication:${bundleId}`);
     }
@@ -119,7 +122,9 @@ export function createDeviceSnapshotHandler() {
             const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];
             if (EXPO_GO_BUNDLES.includes(appId)) {
                 return failResult('Expo Go is not supported — the in-tree device runner needs a Dev Client or standalone build. ' +
-                    'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.', { hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.' });
+                    'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.', {
+                    hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.',
+                });
             }
             const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
             // A device_snapshot action=open with `platform` OMITTED still opens an
@@ -138,7 +143,10 @@ export function createDeviceSnapshotHandler() {
             // On conflict, nothing has been launched yet — no teardown needed.
             const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
             if (lockResult.status === 'conflict') {
-                return failResult(deviceBusyMessage(deviceId, lockResult.holder), { code: 'DEVICE_BUSY', holder: lockResult.holder });
+                return failResult(deviceBusyMessage(deviceId, lockResult.holder), {
+                    code: 'DEVICE_BUSY',
+                    holder: lockResult.holder,
+                });
             }
             if (lockResult.degraded) {
                 logger.warn('rn-device', `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
@@ -168,13 +176,27 @@ export function createDeviceSnapshotHandler() {
                     }
                     // A bare simctl launch foregrounds a running PID without relaunch —
                     // safe whether or not attachOnly; ignore errors (app may be frontmost).
-                    await execFile('xcrun', ['simctl', 'launch', deviceId, appId], { timeout: 10_000, encoding: 'utf8' })
-                        .catch(() => { });
+                    await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
+                        timeout: 10_000,
+                        encoding: 'utf8',
+                    }).catch(() => {
+                        /* already frontmost is OK */
+                    });
                 }
                 else {
                     await startAndroidRunner(deviceId, appId);
                     if (!args.attachOnly) {
-                        await execFile('adb', ['-s', deviceId, 'shell', 'monkey', '-p', appId, '-c', 'android.intent.category.LAUNCHER', '1'], { timeout: 10_000, encoding: 'utf8' });
+                        await execFile('adb', [
+                            '-s',
+                            deviceId,
+                            'shell',
+                            'monkey',
+                            '-p',
+                            appId,
+                            '-c',
+                            'android.intent.category.LAUNCHER',
+                            '1',
+                        ], { timeout: 10_000, encoding: 'utf8' });
                     }
                 }
             }
@@ -233,7 +255,9 @@ export function createDeviceSnapshotHandler() {
                         logger.warn('rn-device', `  ${line.trim()}`);
                     }
                 })
-                    .catch(() => { });
+                    .catch(() => {
+                    /* non-fatal */
+                });
             }
             if (platform === 'ios') {
                 // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
@@ -245,7 +269,9 @@ export function createDeviceSnapshotHandler() {
                     if (sup.warnings.length)
                         logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
                 })
-                    .catch(() => { });
+                    .catch(() => {
+                    /* fail-open: never block session-open on keyboard prefs */
+                });
             }
             // GH#202 Phase 3: proactive foreign-runner heads-up (informational only).
             // Skip when opted out, or when WE hold the flow lease (a detected maestro
@@ -275,7 +301,9 @@ export function createDeviceSnapshotHandler() {
                 const warning = [
                     autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
                     foreign ? foreign.warning : null,
-                ].filter(Boolean).join('; ');
+                ]
+                    .filter(Boolean)
+                    .join('; ');
                 const meta = { ...(foreign ? foreign.meta : {}) };
                 if (foreignDetectMs !== undefined)
                     meta.timings_ms = { foreignDetect: foreignDetectMs };
@@ -295,7 +323,9 @@ export function createDeviceSnapshotHandler() {
         }
         // action === 'snapshot'
         if (!getActiveSession()) {
-            return failResult('No device session open. Call device_snapshot with action="open" first.', { hint: 'Provide appId and platform to start a session.' });
+            return failResult('No device session open. Call device_snapshot with action="open" first.', {
+                hint: 'Provide appId and platform to start a session.',
+            });
         }
         const result = await rawSnapshot();
         const nodes = parseSnapshotNodes(result);
@@ -324,7 +354,7 @@ export function createDeviceSnapshotHandler() {
                 // (appId + deviceId) needed to re-foreground the app and restart the
                 // fast-runner; otherwise omitted so recovery falls back to the
                 // existing tiers.
-                reacquire: (session?.platform === 'ios' && session?.appId && session?.deviceId)
+                reacquire: session?.platform === 'ios' && session?.appId && session?.deviceId
                     ? () => reacquireIosTargetApp(session.appId, session.deviceId)
                     : undefined,
             });
@@ -352,9 +382,9 @@ export function createDeviceSnapshotHandler() {
 }
 export function runnerLeakFailureMessage(reason, session) {
     if (reason === 'no-session-context' && session && !session.appId) {
-        return 'device_snapshot returned AgentDeviceRunner\'s own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.';
+        return "device_snapshot returned AgentDeviceRunner's own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.";
     }
-    return 'device_snapshot returned AgentDeviceRunner\'s own UI tree instead of the target app (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.';
+    return "device_snapshot returned AgentDeviceRunner's own UI tree instead of the target app (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.";
 }
 export function runnerLeakFailureHint(reason, session) {
     if (reason === 'no-session-context' && session && !session.appId) {
@@ -378,15 +408,24 @@ async function reacquireIosTargetApp(appId, deviceId) {
     try {
         stopFastRunner();
     }
-    catch { /* best-effort — may already be dead */ }
-    try {
-        await execFile('xcrun', ['simctl', 'launch', 'booted', appId], { timeout: 5000, encoding: 'utf8' });
+    catch {
+        /* best-effort — may already be dead */
     }
-    catch { /* best-effort — the sentinel re-check covers a failed foreground */ }
+    try {
+        await execFile('xcrun', ['simctl', 'launch', 'booted', appId], {
+            timeout: 5000,
+            encoding: 'utf8',
+        });
+    }
+    catch {
+        /* best-effort — the sentinel re-check covers a failed foreground */
+    }
     try {
         await ensureFastRunner(deviceId, appId);
     }
-    catch { /* non-fatal — re-snapshot will surface a still-broken runner */ }
+    catch {
+        /* non-fatal — re-snapshot will surface a still-broken runner */
+    }
     return okResult({ reacquired: true, appId });
 }
 async function rawSnapshot() {
@@ -415,7 +454,9 @@ function cacheSnapshotIfPossible(result) {
             cacheSnapshot(platform, envelope.data.nodes);
         }
     }
-    catch { /* best-effort cache */ }
+    catch {
+        /* best-effort cache */
+    }
 }
 function wrapWithMeta(result, meta) {
     if (result.isError)

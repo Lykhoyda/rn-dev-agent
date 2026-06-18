@@ -5,8 +5,18 @@ const DEFAULT_PICKER_TIMEOUT_MS = 20_000;
 // Names of months used to decompose an ISO date into tappable picker values.
 // Full English names — matches the strings UIDatePicker exposes via accessibility.
 const MONTH_NAMES = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
 ];
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})/;
 function parseISODate(date) {
@@ -33,7 +43,9 @@ export function createDevicePickValueHandler() {
         }
         const platform = args.platform ?? (await detectPlatform());
         if (!platform) {
-            return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+            return failResult('No device detected. Pass platform or boot a device first.', {
+                code: 'NO_DEVICE',
+            });
         }
         const open = buildOpenPickerSteps(args.pickerTestId);
         const yaml = `${open}- tapOn:\n    text: "${yamlEscape(args.value)}"`;
@@ -46,7 +58,11 @@ export function createDevicePickValueHandler() {
             return okResult({ picked: true, value: args.value, platform });
         }
         if (result.error) {
-            return failResult(`Pick value failed: ${result.error}`, { code: 'PICK_FAILED', value: args.value, flowFile: result.flowFile });
+            return failResult(`Pick value failed: ${result.error}`, {
+                code: 'PICK_FAILED',
+                value: args.value,
+                flowFile: result.flowFile,
+            });
         }
         return warnResult({ picked: false, value: args.value, output: result.output.slice(0, 500) }, `Value "${args.value}" was not tappable. The picker may not be open, or the value may not be visible in the current scroll position (scroll-to-visible is not yet implemented).`, { code: 'VALUE_NOT_VISIBLE' });
     };
@@ -55,11 +71,15 @@ export function createDevicePickDateHandler() {
     return async (args) => {
         const parsed = parseISODate(args.date);
         if (!parsed) {
-            return failResult(`Invalid date "${args.date}". Expected YYYY-MM-DD or ISO 8601.`, { code: 'INVALID_ARGS' });
+            return failResult(`Invalid date "${args.date}". Expected YYYY-MM-DD or ISO 8601.`, {
+                code: 'INVALID_ARGS',
+            });
         }
         const platform = args.platform ?? (await detectPlatform());
         if (!platform) {
-            return failResult('No device detected. Pass platform or boot a device first.', { code: 'NO_DEVICE' });
+            return failResult('No device detected. Pass platform or boot a device first.', {
+                code: 'NO_DEVICE',
+            });
         }
         // Run each wheel component as a separate non-optional flow. First failure stops
         // the chain and returns which components succeeded. This avoids the all-optional

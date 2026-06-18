@@ -1,11 +1,26 @@
 import { runNative } from '../agent-device-wrapper.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate } from './device-interact.js';
+import {
+  buildDirectionalScrollCliArgs,
+  buildDirectionalSwipeCliArgs,
+  fetchFindCandidates,
+  pressCandidate,
+} from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 
 export interface BatchStep {
-  action: 'find' | 'press' | 'fill' | 'swipe' | 'scroll' | 'back' | 'wait' | 'hideKeyboard' | 'snapshot' | 'screenshot';
+  action:
+    | 'find'
+    | 'press'
+    | 'fill'
+    | 'swipe'
+    | 'scroll'
+    | 'back'
+    | 'wait'
+    | 'hideKeyboard'
+    | 'snapshot'
+    | 'screenshot';
   text?: string;
   ref?: string;
   /**
@@ -56,9 +71,22 @@ export interface BatchArgs {
 // GH #321: a11y node types that represent something the agent can act on. Used
 // to compact the batch's final payload to just the actionable surface.
 const INTERACTIVE_A11Y_TYPES = new Set<string>([
-  'Button', 'TextField', 'SecureTextField', 'TextView', 'Switch', 'Slider',
-  'Link', 'Cell', 'MenuItem', 'Tab', 'Stepper', 'SegmentedControl',
-  'SearchField', 'Toggle', 'CheckBox', 'RadioButton',
+  'Button',
+  'TextField',
+  'SecureTextField',
+  'TextView',
+  'Switch',
+  'Slider',
+  'Link',
+  'Cell',
+  'MenuItem',
+  'Tab',
+  'Stepper',
+  'SegmentedControl',
+  'SearchField',
+  'Toggle',
+  'CheckBox',
+  'RadioButton',
 ]);
 
 /**
@@ -165,7 +193,9 @@ export function snapshotEnvelopeFailed(envelope: string | null | undefined): boo
   }
 }
 
-async function resolveTestIDViaSnapshot(testID: string): Promise<{ ref: string | null; envelope: string | null; snapshotFailed: boolean }> {
+async function resolveTestIDViaSnapshot(
+  testID: string,
+): Promise<{ ref: string | null; envelope: string | null; snapshotFailed: boolean }> {
   const result = await runNative(['snapshot', '-i']);
   const envelope = result.content?.[0]?.text ?? null;
   const snapshotFailed = snapshotEnvelopeFailed(envelope);
@@ -183,7 +213,7 @@ interface StepResult {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function executeStep(step: BatchStep): Promise<ToolResult> {
@@ -216,18 +246,32 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
           );
         }
         if (step.tap) return runNative(['press', `@${ref}`]);
-        return okResult({ resolved: ref, testID: step.testID, snapshotEnvelopePreviewBytes: envelope?.length ?? 0 });
+        return okResult({
+          resolved: ref,
+          testID: step.testID,
+          snapshotEnvelopePreviewBytes: envelope?.length ?? 0,
+        });
       }
       if (!step.text) return failResult('find requires text or testID');
       const findResult = await fetchFindCandidates(step.text, false);
       if (!findResult.ok) {
-        return failResult(`find: snapshot unavailable for "${step.text}"`, { code: 'SNAPSHOT_UNAVAILABLE', query: step.text });
+        return failResult(`find: snapshot unavailable for "${step.text}"`, {
+          code: 'SNAPSHOT_UNAVAILABLE',
+          query: step.text,
+        });
       }
       if (findResult.candidates.length === 0) {
-        return failResult(`No element matches "${step.text}"`, { code: 'NOT_FOUND', query: step.text });
+        return failResult(`No element matches "${step.text}"`, {
+          code: 'NOT_FOUND',
+          query: step.text,
+        });
       }
       if (step.tap) return pressCandidate(findResult.candidates[0], 'click');
-      return okResult({ ref: findResult.candidates[0].ref, label: findResult.candidates[0].label, testID: findResult.candidates[0].testID });
+      return okResult({
+        ref: findResult.candidates[0].ref,
+        label: findResult.candidates[0].label,
+        testID: findResult.candidates[0].testID,
+      });
     }
     case 'press': {
       if (step.testID) {
@@ -240,9 +284,13 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
           );
         }
         if (!ref) {
-          return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
-            testID: step.testID,
-          });
+          return failResult(
+            `testID "${step.testID}" not found in current UI snapshot`,
+            'TESTID_NOT_FOUND',
+            {
+              testID: step.testID,
+            },
+          );
         }
         return runNative(['press', `@${ref}`]);
       }
@@ -262,13 +310,20 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
           );
         }
         if (!ref) {
-          return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
-            testID: step.testID,
-          });
+          return failResult(
+            `testID "${step.testID}" not found in current UI snapshot`,
+            'TESTID_NOT_FOUND',
+            {
+              testID: step.testID,
+            },
+          );
         }
         return runNative(['fill', `@${ref}`, step.text]);
       }
-      if (!step.ref) return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.');
+      if (!step.ref)
+        return failResult(
+          'fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.',
+        );
       const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
       return runNative(['fill', ref, step.text]);
     }
@@ -325,7 +380,13 @@ function extractData(result: ToolResult): unknown {
 
 export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient' } = args;
+    const {
+      steps,
+      delayMs = 300,
+      screenshotOn = 'failure',
+      continueOnError = false,
+      finalSnapshot: finalSnapshotMode = 'salient',
+    } = args;
 
     if (!steps || steps.length === 0) {
       return failResult('steps array is required and must not be empty');
@@ -350,7 +411,10 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       const result = await Promise.race([
         executeStep(step),
         new Promise<ToolResult>((resolve) => {
-          stepTimer = setTimeout(() => resolve(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)), stepTimeout);
+          stepTimer = setTimeout(
+            () => resolve(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)),
+            stepTimeout,
+          );
         }),
       ]);
       if (stepTimer) clearTimeout(stepTimer);
@@ -368,7 +432,9 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         try {
           const parsed = JSON.parse(result.content[0].text) as { error?: string };
           stepResult.error = parsed.error;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       if (step.action === 'snapshot' && success) {
@@ -387,7 +453,9 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
             if (isOk(ssResult)) {
               stepResult.data = extractData(ssResult);
             }
-          } catch { /* best effort */ }
+          } catch {
+            /* best effort */
+          }
         }
 
         if (continueOnError) {
@@ -402,7 +470,11 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
       if (screenshotOn === 'each' && step.action !== 'screenshot') {
         // B121: route through resize wrapper so per-step captures pay budget.
-        try { await captureAndResizeScreenshot({}); } catch { /* ignore */ }
+        try {
+          await captureAndResizeScreenshot({});
+        } catch {
+          /* ignore */
+        }
       }
 
       if (i < steps.length - 1 && step.action !== 'wait' && delayMs > 0) {
@@ -417,7 +489,9 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         if (isOk(ssResult)) {
           finalSnapshot = extractData(ssResult);
         }
-      } catch { /* best effort */ }
+      } catch {
+        /* best effort */
+      }
     }
 
     // GH #321: skip the implicit trailing snapshot when the caller doesn't want
@@ -429,7 +503,9 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         if (isOk(snapResult)) {
           finalSnapshot = extractData(snapResult);
         }
-      } catch { /* best effort */ }
+      } catch {
+        /* best effort */
+      }
     }
 
     // GH #321: by default return only the actionable surface (compact salient

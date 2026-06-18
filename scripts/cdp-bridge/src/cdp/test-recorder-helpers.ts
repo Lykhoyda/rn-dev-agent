@@ -56,12 +56,18 @@ export function extractActiveRouteForTest(state: unknown): string | null {
       if (typeof s.index === 'number' && Array.isArray(s.routes)) {
         const r = s.routes[s.index];
         if (!r) return null;
-        if (r.state) { s = r.state; depth++; continue; }
+        if (r.state) {
+          s = r.state;
+          depth++;
+          continue;
+        }
         return typeof r.name === 'string' ? r.name : null;
       }
       return null;
     }
-  } catch (e) { /* fall through */ }
+  } catch {
+    /* fall through */
+  }
   return null;
 }
 

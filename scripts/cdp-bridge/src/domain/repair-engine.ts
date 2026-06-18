@@ -29,8 +29,8 @@ export function levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
   // Two-row dynamic programming for O(min(n,m)) memory.
-  let prev = new Array(b.length + 1);
-  let curr = new Array(b.length + 1);
+  let prev = Array.from<number>({ length: b.length + 1 });
+  let curr = Array.from<number>({ length: b.length + 1 });
   for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i;
@@ -164,7 +164,11 @@ export function detectTransportBlind(failedSelector: string, candidates: string[
  *
  * Pure function — exported for unit tests.
  */
-export function replaceIdSelector(body: string, oldId: string, newId: string): { body: string; replacements: number } {
+export function replaceIdSelector(
+  body: string,
+  oldId: string,
+  newId: string,
+): { body: string; replacements: number } {
   // Phase 134.1 (deepsec HIGH: repair writes unescaped testIDs).
   // testIDs come from the running app's snapshot, attacker-controlled in
   // the prompt-injection threat model. Reject any newId that could break
@@ -188,9 +192,17 @@ export function replaceIdSelector(body: string, oldId: string, newId: string): {
   const bare = new RegExp(`^(\\s*)id:\\s*${escapedOld}(\\s*(?:#.*)?)$`);
   for (const line of lines) {
     let m = line.match(dq);
-    if (m) { out.push(`${m[1]}id: "${newId}"${m[2]}`); replacements++; continue; }
+    if (m) {
+      out.push(`${m[1]}id: "${newId}"${m[2]}`);
+      replacements++;
+      continue;
+    }
     m = line.match(sq);
-    if (m) { out.push(`${m[1]}id: '${newId}'${m[2]}`); replacements++; continue; }
+    if (m) {
+      out.push(`${m[1]}id: '${newId}'${m[2]}`);
+      replacements++;
+      continue;
+    }
     m = line.match(bare);
     if (m) {
       // D3: the bare form has no original quote style to preserve, so emit a
@@ -239,9 +251,14 @@ export function extractIdSelectors(body: string): string[] {
   const bare = /^\s*id:\s*([^"'#\s][^#\n]*?)\s*(?:#.*)?$/;
   for (const line of lines) {
     const m = line.match(dq) ?? line.match(sq);
-    if (m) { out.push(m[1]); continue; }
+    if (m) {
+      out.push(m[1]);
+      continue;
+    }
     const b = line.match(bare);
-    if (b) { out.push(b[1].trimEnd()); }
+    if (b) {
+      out.push(b[1].trimEnd());
+    }
   }
   return out;
 }
@@ -257,7 +274,15 @@ export function extractIdSelectors(body: string): string[] {
  * directly.
  */
 export type RepairAttemptResult =
-  | { kind: 'patched'; oldSelector: string; newSelector: string; score: number; oldBody: string; newBody: string; replacements: number }
+  | {
+      kind: 'patched';
+      oldSelector: string;
+      newSelector: string;
+      score: number;
+      oldBody: string;
+      newBody: string;
+      replacements: number;
+    }
   | { kind: 'no-match'; failedSelector: string; bestScore: number | null; reason: string }
   | { kind: 'no-stale-selector'; reason: string };
 
@@ -304,7 +329,11 @@ export function attemptRepair(
         : `No candidate testIDs available — current snapshot has none, or extraction failed.`,
     };
   }
-  const { body: newBody, replacements } = replaceIdSelector(action.body, failedSelector, best.match);
+  const { body: newBody, replacements } = replaceIdSelector(
+    action.body,
+    failedSelector,
+    best.match,
+  );
   return {
     kind: 'patched',
     oldSelector: failedSelector,

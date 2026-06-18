@@ -13,7 +13,7 @@ async function poll(fn, timeoutMs = 12000, intervalMs = 200) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await fn()) return true;
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
   return false;
 }
@@ -87,8 +87,11 @@ describe('CDPClient lifecycle', () => {
       // Network.requestWillBeSent, so the probe times out and falls back to hooks
       const ok = await poll(() => client.helpersInjected, 15000, 300);
       assert.ok(ok, 'Helpers should be injected');
-      assert.equal(client.networkMode, 'hook',
-        'Network mode should be "hook" — probe got no CDP events from fake server');
+      assert.equal(
+        client.networkMode,
+        'hook',
+        'Network mode should be "hook" — probe got no CDP events from fake server',
+      );
     } finally {
       await client.disconnect();
     }
@@ -134,7 +137,7 @@ describe('CDPClient lifecycle', () => {
         },
       );
     } finally {
-      await new Promise(resolve => srv.close(resolve));
+      await new Promise((resolve) => srv.close(resolve));
     }
   });
 });

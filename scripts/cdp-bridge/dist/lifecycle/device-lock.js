@@ -45,7 +45,7 @@ export class DeviceLock {
     constructor(opts) {
         this.platform = opts.platform;
         this.deviceId = opts.deviceId;
-        this.projectRoot = opts.projectRoot ?? (process.env.CLAUDE_USER_CWD ?? process.cwd());
+        this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
         const uid = opts.uid ?? userInfo().uid;
         this.tmpDir = opts.tmpDir ?? tmpdir();
         this.pid = opts.pid ?? process.pid;
@@ -87,7 +87,9 @@ export class DeviceLock {
         try {
             unlinkSync(this.lockPath);
         }
-        catch { /* already gone */ }
+        catch {
+            /* already gone */
+        }
         try {
             this.create();
             return { status: 'acquired', lockPath: this.lockPath };
@@ -114,7 +116,9 @@ export class DeviceLock {
         try {
             writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), 'utf8');
         }
-        catch { /* best-effort */ }
+        catch {
+            /* best-effort */
+        }
     }
     release() {
         if (!this.acquired)
@@ -124,7 +128,9 @@ export class DeviceLock {
             if (holder?.pid === this.pid)
                 unlinkSync(this.lockPath);
         }
-        catch { /* release must never fail shutdown */ }
+        catch {
+            /* release must never fail shutdown */
+        }
         this.acquired = false;
     }
     create() {
@@ -171,10 +177,14 @@ function isValidBody(o) {
     if (typeof o !== 'object' || o === null)
         return false;
     const b = o;
-    return (typeof b.pid === 'number' && Number.isFinite(b.pid) &&
+    return (typeof b.pid === 'number' &&
+        Number.isFinite(b.pid) &&
         (b.platform === 'ios' || b.platform === 'android') &&
-        typeof b.deviceId === 'string' && b.deviceId.length > 0 &&
+        typeof b.deviceId === 'string' &&
+        b.deviceId.length > 0 &&
         typeof b.projectRoot === 'string' &&
-        typeof b.startedAt === 'number' && Number.isFinite(b.startedAt) &&
-        typeof b.lastHeartbeat === 'number' && Number.isFinite(b.lastHeartbeat));
+        typeof b.startedAt === 'number' &&
+        Number.isFinite(b.startedAt) &&
+        typeof b.lastHeartbeat === 'number' &&
+        Number.isFinite(b.lastHeartbeat));
 }

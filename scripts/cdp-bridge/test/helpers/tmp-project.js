@@ -12,7 +12,16 @@
 // handler with `projectRoot: <tmpRoot>`, assert on disk + envelope, then
 // dispose of the tmp tree.
 
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -116,9 +125,7 @@ export function fixtureYaml({
   selectors = ['fab-create-task'],
   tags = ['fixture'],
 } = {}) {
-  const tapLines = selectors.map((sel) =>
-    `  - tapOn:\n      id: "${sel}"`,
-  ).join('\n');
+  const tapLines = selectors.map((sel) => `  - tapOn:\n      id: "${sel}"`).join('\n');
   return [
     `appId: ${bundleId}`,
     '---',

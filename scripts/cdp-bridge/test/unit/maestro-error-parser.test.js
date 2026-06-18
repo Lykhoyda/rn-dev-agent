@@ -5,10 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  parseMaestroFailure,
-  isAutoRepairable,
-} from '../../dist/domain/maestro-error-parser.js';
+import { parseMaestroFailure, isAutoRepairable } from '../../dist/domain/maestro-error-parser.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELECTOR_NOT_FOUND variants
@@ -43,7 +40,7 @@ test('parser: text-keyed selector', () => {
   assert.equal(out.selector, 'Save');
 });
 
-test('parser: generic Element \'X\' not found falls back to selectorKind=unknown', () => {
+test("parser: generic Element 'X' not found falls back to selectorKind=unknown", () => {
   const out = parseMaestroFailure("Element 'mystery-tag' not found in current view");
   assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(out.selectorKind, 'unknown');
@@ -132,10 +129,12 @@ test('parser: case-insensitive — works on upper-case ELEMENT', () => {
 // retries that maestro-runner reports as [INFO] before the auto-retry
 // succeeds; the real failure is the last one before the run exits.
 test('parser: returns LAST match when output contains multiple errors (GH #118)', () => {
-  const out = parseMaestroFailure([
-    "Element with id 'first-failure' not found",
-    "Element with id 'second-failure' not found",
-  ].join('\n'));
+  const out = parseMaestroFailure(
+    [
+      "Element with id 'first-failure' not found",
+      "Element with id 'second-failure' not found",
+    ].join('\n'),
+  );
   assert.equal(out.selector, 'second-failure');
 });
 
@@ -145,13 +144,15 @@ test('parser: GH #118 transient-retry-then-real-failure shape — picks the term
   // the run continues and ultimately fails on a different selector.
   // Pre-fix behavior would auto-repair the transient (already-resolved)
   // selector — wasting a budget slot and missing the real failure.
-  const out = parseMaestroFailure([
-    '[INFO] Tapping on element with id "transient-foo"',
-    '[INFO] Element with id "transient-foo" not found in current screen — retrying',
-    '[INFO] Tapping on element with id "transient-foo"',
-    '[ERROR] Element with id "real-failure" not found',
-    'Test FAILED',
-  ].join('\n'));
+  const out = parseMaestroFailure(
+    [
+      '[INFO] Tapping on element with id "transient-foo"',
+      '[INFO] Element with id "transient-foo" not found in current screen — retrying',
+      '[INFO] Tapping on element with id "transient-foo"',
+      '[ERROR] Element with id "real-failure" not found',
+      'Test FAILED',
+    ].join('\n'),
+  );
   assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(out.selectorKind, 'id');
   assert.equal(out.selector, 'real-failure');
@@ -178,17 +179,11 @@ test('isAutoRepairable: SELECTOR_NOT_FOUND is repairable', () => {
 });
 
 test('isAutoRepairable: TIMEOUT is NOT auto-repairable in phase 1', () => {
-  assert.equal(
-    isAutoRepairable({ kind: 'TIMEOUT', selector: 'x', raw: '' }),
-    false,
-  );
+  assert.equal(isAutoRepairable({ kind: 'TIMEOUT', selector: 'x', raw: '' }), false);
 });
 
 test('isAutoRepairable: ASSERTION_FAILED is NOT auto-repairable in phase 1', () => {
-  assert.equal(
-    isAutoRepairable({ kind: 'ASSERTION_FAILED', selector: 'x', raw: '' }),
-    false,
-  );
+  assert.equal(isAutoRepairable({ kind: 'ASSERTION_FAILED', selector: 'x', raw: '' }), false);
 });
 
 test('isAutoRepairable: UNKNOWN is NOT auto-repairable', () => {
@@ -253,8 +248,10 @@ exit code 1
 // the modern form — silently disabling the L3 self-healing loop. These
 // tests pin the new patterns so a regression would be immediately visible.
 
-test('parser: 1.0.9 shape — id=\'X\' single-quoted', () => {
-  const out = parseMaestroFailure("    ✗ tapOn: id=\"task-mark-all-done\" (12.7s)\n      ╰─ Element not found: id='task-mark-all-done'\n");
+test("parser: 1.0.9 shape — id='X' single-quoted", () => {
+  const out = parseMaestroFailure(
+    '    ✗ tapOn: id="task-mark-all-done" (12.7s)\n      ╰─ Element not found: id=\'task-mark-all-done\'\n',
+  );
   assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(out.selectorKind, 'id');
   assert.equal(out.selector, 'task-mark-all-done');
@@ -267,7 +264,7 @@ test('parser: 1.0.9 shape — id="X" double-quoted', () => {
   assert.equal(out.selector, 'btn-submit');
 });
 
-test('parser: 1.0.9 shape — text=\'X\' single-quoted', () => {
+test("parser: 1.0.9 shape — text='X' single-quoted", () => {
   const out = parseMaestroFailure("Element not found: text='All done'");
   assert.equal(out.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(out.selectorKind, 'text');
@@ -282,7 +279,7 @@ test('parser: 1.0.9 shape — extra whitespace between : and id= tolerated', () 
   assert.equal(out.selector, 'spinner');
 });
 
-test('parser: 1.0.9 shape — embedded opposite quote in id (e.g. user\\\'s-tasks)', () => {
+test("parser: 1.0.9 shape — embedded opposite quote in id (e.g. user\\'s-tasks)", () => {
   // Matched-quote backreference pattern allows the opposite quote inside
   // the value. Same invariant we test for the classic shape (line 176-189).
   const out = parseMaestroFailure(`Element not found: id="say-'hi'-btn"`);
@@ -304,7 +301,11 @@ test('parser: 1.0.9 shape — full realistic maestro-runner 1.0.9 stderr', () =>
   1 steps failing
 ✗ rn-maestro-run 23.8s`;
   const out = parseMaestroFailure(realistic);
-  assert.equal(out.kind, 'SELECTOR_NOT_FOUND', `expected SELECTOR_NOT_FOUND, got ${out.kind} — the 1.0.9 pattern MUST match this verbatim stderr`);
+  assert.equal(
+    out.kind,
+    'SELECTOR_NOT_FOUND',
+    `expected SELECTOR_NOT_FOUND, got ${out.kind} — the 1.0.9 pattern MUST match this verbatim stderr`,
+  );
   assert.equal(out.selectorKind, 'id');
   assert.equal(out.selector, 'task-mark-all-done');
 });
@@ -313,7 +314,9 @@ test('parser: 1.0.9 id= shape has priority over the generic fallback', () => {
   // The 1.0.9 id= pattern is more specific than the catch-all "Element 'X' not found".
   // Pattern order in maestro-error-parser.ts MUST keep id-shape ahead of the fallback.
   // If a regression reorders patterns, this test catches it.
-  const out = parseMaestroFailure("Element not found: id='specific-id'\nAlso seen: Element 'fallback-id' not found");
+  const out = parseMaestroFailure(
+    "Element not found: id='specific-id'\nAlso seen: Element 'fallback-id' not found",
+  );
   assert.equal(out.selectorKind, 'id', 'id= shape must win over fallback when both present');
   assert.equal(out.selector, 'specific-id');
 });

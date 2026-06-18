@@ -15,8 +15,24 @@ import {
 
 function makeSandbox(hook) {
   const sandbox = {
-    Array, Object, JSON, Map, WeakSet, Set, Error, Date, RegExp, Symbol,
-    parseInt, parseFloat, String, Number, Boolean, Promise, setTimeout, clearTimeout,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Set,
+    Error,
+    Date,
+    RegExp,
+    Symbol,
+    parseInt,
+    parseFloat,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    setTimeout,
+    clearTimeout,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
@@ -28,24 +44,38 @@ function makeSandbox(hook) {
 
 function hostRoot(child) {
   const root = { type: null, memoizedProps: {}, child: null, sibling: null, return: null };
-  if (child) { root.child = child; child.return = root; }
+  if (child) {
+    root.child = child;
+    child.return = root;
+  }
   return root;
 }
 function userComp(displayName, props) {
-  return { type: { displayName }, memoizedProps: props || {}, child: null, sibling: null, return: null };
+  return {
+    type: { displayName },
+    memoizedProps: props || {},
+    child: null,
+    sibling: null,
+    return: null,
+  };
 }
 function hostView() {
   return { type: { name: 'RCTView' }, memoizedProps: {}, child: null, sibling: null, return: null };
 }
 
 test('unfiltered getTree walks ALL renderers — finds the app tree even when renderer 1 is a shell', () => {
-  const shellRoot = hostRoot(hostView());                              // renderer 1: LogBox-ish shell
+  const shellRoot = hostRoot(hostView()); // renderer 1: LogBox-ish shell
   const appRoot = hostRoot(userComp('HomeScreen', { testID: 'home' })); // renderer 2: the real app
   const hook = {
-    renderers: new Map([[1, {}], [2, {}]]),
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
     getFiberRoots: (id) =>
-      id === 1 ? new Set([{ current: shellRoot }])
-        : id === 2 ? new Set([{ current: appRoot }])
+      id === 1
+        ? new Set([{ current: shellRoot }])
+        : id === 2
+          ? new Set([{ current: appRoot }])
           : new Set(),
   };
   const sandbox = makeSandbox(hook);
@@ -71,7 +101,11 @@ function graphWithStrike(slug) {
             name: 'Home',
             action_records: [
               { method: 'deep_link', success: false, recorded_at: new Date(now).toISOString() },
-              { method: 'deep_link', success: false, recorded_at: new Date(now - 1000).toISOString() },
+              {
+                method: 'deep_link',
+                success: false,
+                recorded_at: new Date(now - 1000).toISOString(),
+              },
             ],
           },
         ],
@@ -82,7 +116,11 @@ function graphWithStrike(slug) {
 }
 
 function emptyGraph(slug) {
-  return { meta: { project_slug: slug }, navigators: [{ id: 'root', screens: [{ name: 'Home', action_records: [] }] }], all_screens: ['Home'] };
+  return {
+    meta: { project_slug: slug },
+    navigators: [{ id: 'root', screens: [{ name: 'Home', action_records: [] }] }],
+    all_screens: ['Home'],
+  };
 }
 
 test('strike cooldown hydrates per project and does not poison a different project', () => {
@@ -92,13 +130,21 @@ test('strike cooldown hydrates per project and does not poison a different proje
 
   // Switching to a different project must clear A's strikes and rehydrate B's.
   hydrateStrikesFromGraph(emptyGraph('app-b'), 'rootB');
-  assert.equal(isMethodCooledDown('Home', 'deep_link'), false, 'project B must not inherit A cooldown');
+  assert.equal(
+    isMethodCooledDown('Home', 'deep_link'),
+    false,
+    'project B must not inherit A cooldown',
+  );
 });
 
 test('re-hydrating the same project is idempotent (keeps in-memory strikes)', () => {
   _resetStrikesForTest();
   hydrateStrikesFromGraph(graphWithStrike('app-a'), 'rootA');
   hydrateStrikesFromGraph(emptyGraph('app-a'), 'rootA'); // same key → no clear/rehydrate
-  assert.equal(isMethodCooledDown('Home', 'deep_link'), true, 'same-project rehydrate must not wipe strikes');
+  assert.equal(
+    isMethodCooledDown('Home', 'deep_link'),
+    true,
+    'same-project rehydrate must not wipe strikes',
+  );
   _resetStrikesForTest();
 });

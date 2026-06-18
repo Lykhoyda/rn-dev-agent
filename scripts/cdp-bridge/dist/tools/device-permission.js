@@ -60,7 +60,9 @@ async function iosPermission(action, permission, appId) {
 async function androidPermission(action, permission, appId) {
     if (action === 'reset') {
         try {
-            const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], { timeout: EXEC_TIMEOUT });
+            const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], {
+                timeout: EXEC_TIMEOUT,
+            });
             return okResult({ platform: 'android', action: 'reset', appId, output: stdout.trim() });
         }
         catch (e) {
@@ -92,7 +94,9 @@ async function androidPermission(action, permission, appId) {
 async function androidQueryPermission(permission, appId) {
     if (permission === 'all') {
         try {
-            const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+            const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
+                timeout: EXEC_TIMEOUT,
+            });
             if (stdout.includes('Unable to find package')) {
                 return failResult(`Package "${appId}" not installed on device`);
             }
@@ -118,7 +122,9 @@ async function androidQueryPermission(permission, appId) {
         return failResult(`Unknown Android permission: "${permission}". Valid: ${valid}`);
     }
     try {
-        const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], { timeout: EXEC_TIMEOUT });
+        const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
+            timeout: EXEC_TIMEOUT,
+        });
         if (stdout.includes('Unable to find package')) {
             return failResult(`Package "${appId}" not installed on device`);
         }
@@ -162,7 +168,7 @@ async function iosQueryPermission(permission, appId) {
 }
 export function createDevicePermissionHandler() {
     return async (args) => {
-        const platform = args.platform ?? await detectPlatform();
+        const platform = args.platform ?? (await detectPlatform());
         if (!platform)
             return failResult('No iOS simulator or Android device detected');
         // CDP-014: validate platform value before routing. Previously a typo

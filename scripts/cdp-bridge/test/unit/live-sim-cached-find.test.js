@@ -17,7 +17,14 @@ import {
 import { fetchFindCandidates } from '../../dist/tools/device-interact.js';
 
 const NODES = [
-  { ref: '@e0', label: 'Continue', identifier: 'continue-btn', type: 'Button', hittable: true, rect: { x: 10, y: 20, width: 100, height: 40 } },
+  {
+    ref: '@e0',
+    label: 'Continue',
+    identifier: 'continue-btn',
+    type: 'Button',
+    hittable: true,
+    rect: { x: 10, y: 20, width: 100, height: 40 },
+  },
 ];
 
 function envelope(nodes) {
@@ -30,7 +37,12 @@ test('device_find serves from a valid cache without a runner snapshot; re-snapsh
     if (cliArgs[0] === 'snapshot') snapshotDispatches++;
     return Promise.resolve(envelope(NODES));
   });
-  setActiveSessionInMemoryForTest({ name: 't', platform: 'ios', appId: 'com.test', openedAt: 'now' });
+  setActiveSessionInMemoryForTest({
+    name: 't',
+    platform: 'ios',
+    appId: 'com.test',
+    openedAt: 'now',
+  });
 
   try {
     // Prime a clean cache (as a real snapshot would).
@@ -65,7 +77,12 @@ test('device_find with allowCache=false always re-snapshots (no behavior change 
     if (cliArgs[0] === 'snapshot') snapshotDispatches++;
     return Promise.resolve(envelope(NODES));
   });
-  setActiveSessionInMemoryForTest({ name: 't', platform: 'ios', appId: 'com.test', openedAt: 'now' });
+  setActiveSessionInMemoryForTest({
+    name: 't',
+    platform: 'ios',
+    appId: 'com.test',
+    openedAt: 'now',
+  });
 
   try {
     cacheSnapshot('ios', NODES); // even with a valid cache present...

@@ -53,7 +53,12 @@ const PATTERNS = [
     },
     {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
-        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'unknown', selector: m[2], raw }),
+        build: (m, raw) => ({
+            kind: 'SELECTOR_NOT_FOUND',
+            selectorKind: 'unknown',
+            selector: m[2],
+            raw,
+        }),
     },
     {
         re: /Timed out waiting for element with id (['"])((?:(?!\1).)+)\1/i,

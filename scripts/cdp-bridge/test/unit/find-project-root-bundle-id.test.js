@@ -23,10 +23,13 @@ let originalEnvClaudeCwd;
 
 function makeRnProject(dir, pkgName, appJson) {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({
-    name: pkgName,
-    dependencies: { 'react-native': '0.76.0' },
-  }));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: pkgName,
+      dependencies: { 'react-native': '0.76.0' },
+    }),
+  );
   if (appJson) {
     writeFileSync(join(dir, 'app.json'), JSON.stringify(appJson));
   }

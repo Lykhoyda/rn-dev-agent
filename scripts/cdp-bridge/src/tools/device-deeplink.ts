@@ -19,11 +19,9 @@ export interface DeeplinkArgs {
 
 async function openIosDeeplink(url: string): Promise<ToolResult> {
   try {
-    const { stdout, stderr } = await execFile(
-      'xcrun',
-      ['simctl', 'openurl', 'booted', url],
-      { timeout: EXEC_TIMEOUT_MS },
-    );
+    const { stdout, stderr } = await execFile('xcrun', ['simctl', 'openurl', 'booted', url], {
+      timeout: EXEC_TIMEOUT_MS,
+    });
     return okResult({
       opened: true,
       platform: 'ios' as const,
@@ -32,7 +30,11 @@ async function openIosDeeplink(url: string): Promise<ToolResult> {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return failResult(`xcrun simctl openurl failed: ${msg}`, { code: 'DEEPLINK_FAILED', platform: 'ios', url });
+    return failResult(`xcrun simctl openurl failed: ${msg}`, {
+      code: 'DEEPLINK_FAILED',
+      platform: 'ios',
+      url,
+    });
   }
 }
 
@@ -57,7 +59,16 @@ function posixSingleQuote(s: string): string {
 async function openAndroidDeeplink(url: string, packageName?: string): Promise<ToolResult> {
   const serial = getAdbSerial();
   const quotedUrl = posixSingleQuote(url);
-  const args = [...serial, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', quotedUrl];
+  const args = [
+    ...serial,
+    'shell',
+    'am',
+    'start',
+    '-a',
+    'android.intent.action.VIEW',
+    '-d',
+    quotedUrl,
+  ];
   if (packageName) args.push('-n', packageName);
   try {
     const { stdout, stderr } = await execFile('adb', args, { timeout: EXEC_TIMEOUT_MS });
@@ -69,7 +80,11 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
     //   "Warning: Activity not started, unable to resolve Intent"
     //   "No Activity found to handle Intent"
     //   "Status: error"
-    if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
+    if (
+      /Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(
+        output,
+      )
+    ) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
         code: 'DEEPLINK_FAILED',
         platform: 'android',
@@ -85,7 +100,11 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return failResult(`adb am start failed: ${msg}`, { code: 'DEEPLINK_FAILED', platform: 'android', url });
+    return failResult(`adb am start failed: ${msg}`, {
+      code: 'DEEPLINK_FAILED',
+      platform: 'android',
+      url,
+    });
   }
 }
 
@@ -102,10 +121,14 @@ export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null
   } catch {
     return result;
   }
-  const existingMeta = (envelope.meta && typeof envelope.meta === 'object') ? envelope.meta as Record<string, unknown> : {};
-  envelope.meta = outcome === null
-    ? { ...existingMeta, pickerChecked: false }
-    : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+  const existingMeta =
+    envelope.meta && typeof envelope.meta === 'object'
+      ? (envelope.meta as Record<string, unknown>)
+      : {};
+  envelope.meta =
+    outcome === null
+      ? { ...existingMeta, pickerChecked: false }
+      : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
   result.content[0].text = JSON.stringify(envelope);
   return result;
 }
@@ -120,6 +143,7 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     // openAndroidDeeplink covers the shell-metachar layer, but a URL
     // containing a newline or control char would break out of the
     // quoted string entirely. Reject those at the boundary.
+    // oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars before passing URL to adb shell
     if (typeof args.url !== 'string' || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
       return failResult(
         `url contains control characters or newlines — refuse to pass to adb shell (Phase 134.2-followup)`,
@@ -146,9 +170,10 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
         { code: 'NO_DEVICE' },
       );
     }
-    const result = platform === 'ios'
-      ? await openIosDeeplink(args.url)
-      : await openAndroidDeeplink(args.url, args.packageName);
+    const result =
+      platform === 'ios'
+        ? await openIosDeeplink(args.url)
+        : await openAndroidDeeplink(args.url, args.packageName);
     // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
     // success-state suffix). Stateless heuristic; no overhead on short URLs.
     const annotated = annotateDeepLinkDepth(result, { url: args.url });
