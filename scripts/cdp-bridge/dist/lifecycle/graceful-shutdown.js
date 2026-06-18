@@ -1,4 +1,4 @@
-import { logger } from "../logger.js";
+import { logger } from '../logger.js';
 const DEFAULT_TIMEOUT_MS = 3000;
 /**
  * Factory for the process-lifecycle shutdown path. B73/B76/zombie-cleanup (D644).
@@ -26,13 +26,13 @@ export function buildGracefulShutdown(deps) {
                 await deps.getClient().disconnect();
             }
             catch (err) {
-                logger.warn("MCP", `shutdown: disconnect failed: ${err instanceof Error ? err.message : err}`);
+                logger.warn('MCP', `shutdown: disconnect failed: ${err instanceof Error ? err.message : err}`);
             }
             try {
                 deps.stopFastRunnerFn();
             }
             catch (err) {
-                logger.warn("MCP", `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`);
+                logger.warn('MCP', `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`);
             }
         })();
         // Timeout is NOT unref'd: it must keep the event loop alive so it can fire
@@ -42,7 +42,7 @@ export function buildGracefulShutdown(deps) {
         let timeoutHandle = null;
         const timeout = new Promise((resolve) => {
             timeoutHandle = setTimeout(() => {
-                logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
+                logger.warn('MCP', `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
                 resolve();
             }, timeoutMs);
         });

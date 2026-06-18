@@ -1,5 +1,5 @@
-import { okResult, withConnection } from "../utils.js";
-import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
+import { okResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const CANDIDATES_CAP = 10;

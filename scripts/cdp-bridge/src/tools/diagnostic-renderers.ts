@@ -6,8 +6,8 @@
 // Read-only: makes no mutations. Surfaces the raw shape of
 // __REACT_DEVTOOLS_GLOBAL_HOOK__ in a single round-trip.
 
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 interface DiagnosticRenderersArgs {
   /**
@@ -162,8 +162,8 @@ export function createDiagnosticRenderersHandler(getClient: () => CDPClient) {
     if (result.error) {
       return failResult(`cdp_diagnostic_renderers: ${result.error}`);
     }
-    if (typeof result.value !== "string") {
-      return failResult("cdp_diagnostic_renderers: hook probe returned non-string");
+    if (typeof result.value !== 'string') {
+      return failResult('cdp_diagnostic_renderers: hook probe returned non-string');
     }
 
     try {

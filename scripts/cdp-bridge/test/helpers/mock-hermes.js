@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
-import { WebSocketServer } from "ws";
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 
 /**
  * Minimal Hermes stand-in used by multiplexer and CDPClient proxy tests.
@@ -15,18 +15,18 @@ export function makeMockHermes() {
   let activeWs = null;
   const received = [];
 
-  wss.on("connection", (ws) => {
+  wss.on('connection', (ws) => {
     if (activeWs) {
       // Real Hermes would evict the older connection; for tests we just reject.
-      ws.close(4000, "only-one-allowed");
+      ws.close(4000, 'only-one-allowed');
       return;
     }
     activeWs = ws;
-    ws.on("message", (data) => {
+    ws.on('message', (data) => {
       const raw = data.toString();
       received.push(raw);
       const parsed = JSON.parse(raw);
-      if (typeof parsed.id === "number") {
+      if (typeof parsed.id === 'number') {
         ws.send(
           JSON.stringify({
             id: parsed.id,
@@ -35,13 +35,13 @@ export function makeMockHermes() {
         );
       }
     });
-    ws.on("close", () => {
+    ws.on('close', () => {
       activeWs = null;
     });
   });
 
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       resolve({
         port,

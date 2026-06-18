@@ -1,52 +1,52 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import type { CDPClient } from "../cdp-client.js";
-import { findProjectRoot } from "../nav-graph/storage.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { readAppId } from "../project-config.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import type { CDPClient } from '../cdp-client.js';
+import { findProjectRoot } from '../nav-graph/storage.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { readAppId } from '../project-config.js';
 import {
   buildMaestroFlow,
   parseAndValidateFlow,
   isValidBundleId,
   MaestroValidationError,
-} from "../domain/maestro-validator.js";
-import { runFlowParked } from "./maestro-run.js";
+} from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
 
 const execFile = promisify(execFileCb);
 
 const AUTH_ROUTE_PATTERNS = [
-  "login",
-  "signin",
-  "sign_in",
-  "sign-in",
-  "welcome",
-  "register",
-  "signup",
-  "sign_up",
-  "sign-up",
-  "onboarding",
-  "auth",
-  "landing",
+  'login',
+  'signin',
+  'sign_in',
+  'sign-in',
+  'welcome',
+  'register',
+  'signup',
+  'sign_up',
+  'sign-up',
+  'onboarding',
+  'auth',
+  'landing',
 ];
 
 const LOGIN_FLOW_PRIORITY = [
-  "login.yaml",
-  "login.yml",
-  "sign_in.yaml",
-  "sign_in.yml",
-  "signin.yaml",
-  "signin.yml",
-  "auth.yaml",
-  "auth.yml",
-  "flow_start.yaml",
-  "flow_start.yml",
-  "register_user.yaml",
-  "register_user.yml",
-  "register.yaml",
-  "register.yml",
+  'login.yaml',
+  'login.yml',
+  'sign_in.yaml',
+  'sign_in.yml',
+  'signin.yaml',
+  'signin.yml',
+  'auth.yaml',
+  'auth.yml',
+  'flow_start.yaml',
+  'flow_start.yml',
+  'register_user.yaml',
+  'register_user.yml',
+  'register.yaml',
+  'register.yml',
 ];
 
 export interface AutoLoginResult {
@@ -77,10 +77,10 @@ export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
 
   try {
     const expr = client.bridgeDetected
-      ? "__RN_DEV_BRIDGE__.getNavState()"
-      : "__RN_AGENT.getNavState()";
+      ? '__RN_DEV_BRIDGE__.getNavState()'
+      : '__RN_AGENT.getNavState()';
     const result = await client.evaluate(expr);
-    if (result.error || typeof result.value !== "string") return false;
+    if (result.error || typeof result.value !== 'string') return false;
 
     const state = JSON.parse(result.value) as SimplifiedNavState;
     if (state.error) return false;
@@ -95,7 +95,7 @@ export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
 }
 
 function findLoginFlow(projectRoot: string): string | null {
-  const searchDirs = [join(projectRoot, ".maestro", "subflows"), join(projectRoot, ".maestro")];
+  const searchDirs = [join(projectRoot, '.maestro', 'subflows'), join(projectRoot, '.maestro')];
 
   for (const dir of searchDirs) {
     if (!existsSync(dir)) continue;
@@ -124,9 +124,9 @@ function findLoginFlow(projectRoot: string): string | null {
 
 function stripClearState(yamlContent: string): string {
   return yamlContent
-    .split("\n")
+    .split('\n')
     .filter((line) => !/^\s*clearState\s*:\s*true/i.test(line))
-    .join("\n");
+    .join('\n');
 }
 
 export async function handleAutoLogin(
@@ -137,7 +137,7 @@ export async function handleAutoLogin(
 
   const onAuth = await isOnAuthScreen(client);
   if (!onAuth) {
-    return { loggedIn: false, reason: "App is not on an auth screen" };
+    return { loggedIn: false, reason: 'App is not on an auth screen' };
   }
 
   const platform = opts.platform ?? getActiveSession()?.platform;
@@ -153,7 +153,7 @@ export async function handleAutoLogin(
   if (!projectRoot) {
     return {
       loggedIn: false,
-      reason: "Could not find RN project root to scan for Maestro subflows",
+      reason: 'Could not find RN project root to scan for Maestro subflows',
     };
   }
 
@@ -165,7 +165,7 @@ export async function handleAutoLogin(
     };
   }
 
-  const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
+  const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? '';
 
   // Phase 134.1 (deepsec CRITICAL #2): the project-supplied login flow is
   // attacker-controlled in the prompt-injection threat model. Previously
@@ -179,7 +179,7 @@ export async function handleAutoLogin(
   //   3. Inline the validated commands directly into the wrapper (no
   //      `runFlow: file: ...` indirection that would re-load the
   //      unvalidated file from disk at runtime).
-  const originalContent = readFileSync(flowPath, "utf-8");
+  const originalContent = readFileSync(flowPath, 'utf-8');
   const flowContent = stripClearState(originalContent);
 
   let validatedCommands: unknown[];
@@ -213,8 +213,8 @@ export async function handleAutoLogin(
     // clearing in-memory state set by the first launch).
     const first = validatedCommands[0];
     const startsWithLaunchApp =
-      first === "launchApp" ||
-      (typeof first === "object" && first !== null && "launchApp" in first);
+      first === 'launchApp' ||
+      (typeof first === 'object' && first !== null && 'launchApp' in first);
     const wrapperCommands = startsWithLaunchApp
       ? validatedCommands
       : [{ launchApp: null }, ...validatedCommands];
@@ -229,27 +229,27 @@ export async function handleAutoLogin(
     throw err;
   }
 
-  const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
-  writeFileSync(wrapperPath, wrapperContent, "utf-8");
+  const wrapperPath = '/tmp/rn-auto-login-wrapper.yaml';
+  writeFileSync(wrapperPath, wrapperContent, 'utf-8');
 
-  const runnerPath = join(homedir(), ".maestro-runner", "bin", "maestro-runner");
+  const runnerPath = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
   if (!existsSync(runnerPath)) {
     return {
       loggedIn: false,
       reason:
-        "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash",
+        'maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash',
     };
   }
 
   try {
     await runFlowParked(
       () =>
-        execFile(runnerPath, ["--platform", platform, "test", wrapperPath], {
+        execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
           timeout: 120_000,
-          encoding: "utf8",
+          encoding: 'utf8',
         }),
       {
-        platform: platform === "android" ? "android" : "ios",
+        platform: platform === 'android' ? 'android' : 'ios',
         deviceId: getActiveSession()?.deviceId,
       },
     );
@@ -274,14 +274,14 @@ export async function handleAutoLogin(
     return {
       loggedIn: false,
       reason:
-        "Maestro flow completed but app is still on an auth screen. The flow may not have logged in successfully.",
+        'Maestro flow completed but app is still on an auth screen. The flow may not have logged in successfully.',
       flow: flowPath,
     };
   }
 
   return {
     loggedIn: true,
-    reason: "Auto-login via Maestro subflow succeeded",
+    reason: 'Auto-login via Maestro subflow succeeded',
     flow: flowPath,
   };
 }

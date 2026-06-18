@@ -31,33 +31,33 @@
 //   2   invalid arguments
 //   3   network / fetch error
 
-import fs from "node:fs";
-import path from "node:path";
-import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "..");
-const VENDOR_ROOT = path.join(REPO_ROOT, "third_party", "vercel-labs", "agent-skills");
-const ADAPTER_ROOT = path.join(REPO_ROOT, "skills", "rn-best-practices");
+const REPO_ROOT = path.resolve(__dirname, '..');
+const VENDOR_ROOT = path.join(REPO_ROOT, 'third_party', 'vercel-labs', 'agent-skills');
+const ADAPTER_ROOT = path.join(REPO_ROOT, 'skills', 'rn-best-practices');
 
-const UPSTREAM_REPO = "vercel-labs/agent-skills";
-const UPSTREAM_SKILLS = ["react-best-practices", "composition-patterns", "react-native-skills"];
+const UPSTREAM_REPO = 'vercel-labs/agent-skills';
+const UPSTREAM_SKILLS = ['react-best-practices', 'composition-patterns', 'react-native-skills'];
 const RAW_BASE = `https://raw.githubusercontent.com/${UPSTREAM_REPO}`;
 const API_BASE = `https://api.github.com/repos/${UPSTREAM_REPO}`;
 
 // Three checkable rules in v1.0 (per spec §5 Layer 4 scope lock).
 // Maps rule ID → checkerRule slug used by check-vercel-rules.mjs.
 const V1_GREP_CHECKERS = {
-  "react-native-skills/ui-pressable": "no-touchable-new-code",
-  "react-native-skills/list-performance-inline-objects": "no-inline-renderitem-literals",
-  "react-native-skills/rendering-no-falsy-and": "no-falsy-jsx-and",
+  'react-native-skills/ui-pressable': 'no-touchable-new-code',
+  'react-native-skills/list-performance-inline-objects': 'no-inline-renderitem-literals',
+  'react-native-skills/rendering-no-falsy-and': 'no-falsy-jsx-and',
 };
 
 function parseArgs(argv) {
   const args = {
-    mode: "fix",
+    mode: 'fix',
     ref: null,
     acceptMissingLicense: false,
     acceptDelta: false,
@@ -65,13 +65,13 @@ function parseArgs(argv) {
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--check") args.mode = "check";
-    else if (a === "--fix") args.mode = "fix";
-    else if (a === "--ref") args.ref = argv[++i];
-    else if (a === "--accept-missing-license-file") args.acceptMissingLicense = true;
-    else if (a === "--accept-delta") args.acceptDelta = true;
-    else if (a === "--quiet") args.quiet = true;
-    else if (a === "--help" || a === "-h") {
+    if (a === '--check') args.mode = 'check';
+    else if (a === '--fix') args.mode = 'fix';
+    else if (a === '--ref') args.ref = argv[++i];
+    else if (a === '--accept-missing-license-file') args.acceptMissingLicense = true;
+    else if (a === '--accept-delta') args.acceptDelta = true;
+    else if (a === '--quiet') args.quiet = true;
+    else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
     } else {
@@ -103,11 +103,11 @@ Options:
 }
 
 function isValidSha(sha) {
-  return typeof sha === "string" && /^[0-9a-f]{7,40}$/i.test(sha);
+  return typeof sha === 'string' && /^[0-9a-f]{7,40}$/i.test(sha);
 }
 
 function sha256(s) {
-  return createHash("sha256").update(s).digest("hex");
+  return createHash('sha256').update(s).digest('hex');
 }
 
 // Minimal YAML frontmatter parser for skill files. Handles `key: value` lines
@@ -118,7 +118,7 @@ function parseFrontmatter(content) {
   if (!m) return null;
   const fm = {};
   for (const line of m[1].split(/\r?\n/)) {
-    if (!line.trim() || line.startsWith("#")) continue;
+    if (!line.trim() || line.startsWith('#')) continue;
     const kv = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*):\s*(.*)$/);
     if (kv) {
       let v = kv[2].trim();
@@ -134,8 +134,8 @@ function parseFrontmatter(content) {
 async function fetchJson(url) {
   const r = await fetch(url, {
     headers: {
-      "User-Agent": "rn-dev-agent/sync-vercel-skills",
-      Accept: "application/vnd.github+json",
+      'User-Agent': 'rn-dev-agent/sync-vercel-skills',
+      Accept: 'application/vnd.github+json',
     },
   });
   if (!r.ok) throw new Error(`${url} → ${r.status} ${r.statusText}`);
@@ -144,7 +144,7 @@ async function fetchJson(url) {
 
 async function fetchText(url) {
   const r = await fetch(url, {
-    headers: { "User-Agent": "rn-dev-agent/sync-vercel-skills" },
+    headers: { 'User-Agent': 'rn-dev-agent/sync-vercel-skills' },
   });
   if (!r.ok) throw new Error(`${url} → ${r.status} ${r.statusText}`);
   return r.text();
@@ -152,8 +152,8 @@ async function fetchText(url) {
 
 async function fetchExists(url) {
   const r = await fetch(url, {
-    method: "HEAD",
-    headers: { "User-Agent": "rn-dev-agent/sync-vercel-skills" },
+    method: 'HEAD',
+    headers: { 'User-Agent': 'rn-dev-agent/sync-vercel-skills' },
   });
   return r.ok;
 }
@@ -164,8 +164,8 @@ async function listSkillFiles(sha, skill) {
     const url = `${API_BASE}/contents/${dir}?ref=${sha}`;
     const items = await fetchJson(url);
     for (const item of items) {
-      if (item.type === "file") files.push(item.path);
-      else if (item.type === "dir") await walk(item.path);
+      if (item.type === 'file') files.push(item.path);
+      else if (item.type === 'dir') await walk(item.path);
     }
   }
   await walk(`skills/${skill}`);
@@ -173,33 +173,33 @@ async function listSkillFiles(sha, skill) {
 }
 
 async function syncSkill(sha, skill, lock, opts) {
-  const dest = path.join(VENDOR_ROOT, "skills", skill);
+  const dest = path.join(VENDOR_ROOT, 'skills', skill);
   if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
 
   const files = await listSkillFiles(sha, skill);
   for (const fpath of files) {
-    if (fpath.includes("..")) {
+    if (fpath.includes('..')) {
       throw new Error(`path traversal rejected: ${fpath}`);
     }
     const rawUrl = `${RAW_BASE}/${sha}/${fpath}`;
     const content = await fetchText(rawUrl);
     if (!opts.quiet) console.log(`    ${fpath} (${content.length} bytes)`);
-    const relInSkill = fpath.replace(`skills/${skill}/`, "");
+    const relInSkill = fpath.replace(`skills/${skill}/`, '');
     const localPath = path.join(dest, relInSkill);
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
-    fs.writeFileSync(localPath, content, "utf8");
+    fs.writeFileSync(localPath, content, 'utf8');
 
     // Validate frontmatter parses for SKILL.md and rule files (excluding
     // underscore-prefixed files like `_sections.md` which are upstream
     // templates/indexes, not rules).
     const isRule = fpath.match(/\/rules\/(?!_)[^/]+\.md$/);
-    if (fpath.endsWith("SKILL.md") || isRule) {
+    if (fpath.endsWith('SKILL.md') || isRule) {
       const fm = parseFrontmatter(content);
       if (!fm) {
         throw new Error(`frontmatter parse failure: ${fpath}`);
       }
-      if (fpath.endsWith("SKILL.md") && !fm.name) {
+      if (fpath.endsWith('SKILL.md') && !fm.name) {
         throw new Error(`SKILL.md missing 'name' field: ${fpath}`);
       }
     }
@@ -207,16 +207,16 @@ async function syncSkill(sha, skill, lock, opts) {
     lock.files.push({
       path: `skills/${skill}/${relInSkill}`,
       sha256: sha256(content),
-      bytes: Buffer.byteLength(content, "utf8"),
+      bytes: Buffer.byteLength(content, 'utf8'),
     });
   }
 }
 
 function detectPlatform(skillName) {
-  if (skillName === "react-native-skills") return "RN";
-  if (skillName === "react-best-practices") return "web";
-  if (skillName === "composition-patterns") return "both";
-  return "unknown";
+  if (skillName === 'react-native-skills') return 'RN';
+  if (skillName === 'react-best-practices') return 'web';
+  if (skillName === 'composition-patterns') return 'both';
+  return 'unknown';
 }
 
 function buildRulesIndex(lock) {
@@ -228,11 +228,11 @@ function buildRulesIndex(lock) {
     if (!m) continue;
     const [, skillName, ruleSlug] = m;
     const fullPath = path.join(VENDOR_ROOT, f.path);
-    const content = fs.readFileSync(fullPath, "utf8");
+    const content = fs.readFileSync(fullPath, 'utf8');
     const fm = parseFrontmatter(content) || {};
     const id = `${skillName}/${ruleSlug}`;
-    const tags = (fm.tags || "")
-      .split(",")
+    const tags = (fm.tags || '')
+      .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     rules.push({
@@ -240,43 +240,43 @@ function buildRulesIndex(lock) {
       title: fm.title || ruleSlug,
       category: fm.category || skillName,
       platform: detectPlatform(skillName),
-      severity: (fm.impact || "MEDIUM").toUpperCase(),
+      severity: (fm.impact || 'MEDIUM').toUpperCase(),
       confidence: 80,
       triggers: tags,
-      fileGlobs: ["**/*.{tsx,jsx,ts,js}"],
+      fileGlobs: ['**/*.{tsx,jsx,ts,js}'],
       checkerRule: V1_GREP_CHECKERS[id] || null,
       checkable: !!V1_GREP_CHECKERS[id],
       upstream_path: `third_party/vercel-labs/agent-skills/${f.path}`,
-      applicable_when: fm.impactDescription || "",
+      applicable_when: fm.impactDescription || '',
     });
   }
 
   // Custom rn-dev-agent rules
-  const customDir = path.join(ADAPTER_ROOT, "references", "rn-dev-agent");
+  const customDir = path.join(ADAPTER_ROOT, 'references', 'rn-dev-agent');
   if (fs.existsSync(customDir)) {
     for (const file of fs.readdirSync(customDir).sort()) {
-      if (!file.endsWith(".md")) continue;
+      if (!file.endsWith('.md')) continue;
       const fullPath = path.join(customDir, file);
-      const content = fs.readFileSync(fullPath, "utf8");
+      const content = fs.readFileSync(fullPath, 'utf8');
       const fm = parseFrontmatter(content) || {};
-      const ruleSlug = path.basename(file, ".md");
-      const tags = (fm.tags || "")
-        .split(",")
+      const ruleSlug = path.basename(file, '.md');
+      const tags = (fm.tags || '')
+        .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
       rules.push({
         id: `rn-dev-agent/${ruleSlug}`,
         title: fm.title || ruleSlug,
-        category: "rn-dev-agent",
-        platform: "RN",
-        severity: (fm.impact || "MEDIUM").toUpperCase(),
+        category: 'rn-dev-agent',
+        platform: 'RN',
+        severity: (fm.impact || 'MEDIUM').toUpperCase(),
         confidence: 95,
         triggers: tags,
-        fileGlobs: ["**/*.{tsx,jsx}"],
+        fileGlobs: ['**/*.{tsx,jsx}'],
         checkerRule: null,
         checkable: false,
         upstream_path: `skills/rn-best-practices/references/rn-dev-agent/${file}`,
-        applicable_when: fm.impactDescription || "",
+        applicable_when: fm.impactDescription || '',
       });
     }
   }
@@ -292,8 +292,8 @@ async function runFix(args) {
   const licenseExists = await fetchExists(licenseUrl);
   if (!licenseExists && !args.acceptMissingLicense) {
     console.error(`error: upstream lacks LICENSE file at ${licenseUrl}`);
-    console.error("       pass --accept-missing-license-file to override");
-    console.error("       (LICENSE-VENDORED.md must call out the absence)");
+    console.error('       pass --accept-missing-license-file to override');
+    console.error('       (LICENSE-VENDORED.md must call out the absence)');
     process.exit(3);
   }
   if (!licenseExists) {
@@ -301,11 +301,11 @@ async function runFix(args) {
   }
 
   // Previous lockfile delta gate
-  const lockPath = path.join(VENDOR_ROOT, "UPSTREAM.lock.json");
+  const lockPath = path.join(VENDOR_ROOT, 'UPSTREAM.lock.json');
   let prevRuleCount = 0;
   if (fs.existsSync(lockPath)) {
     try {
-      const prev = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+      const prev = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
       prevRuleCount = prev.ruleCounts?.total ?? 0;
     } catch {}
   }
@@ -343,19 +343,19 @@ async function runFix(args) {
       console.error(
         `error: rule count changed by ${(delta * 100).toFixed(0)}% (was ${prevRuleCount}, now ${lock.ruleCounts.total})`,
       );
-      console.error("       pass --accept-delta to override");
+      console.error('       pass --accept-delta to override');
       process.exit(1);
     }
   }
 
   // Write lockfile
-  fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf8");
+  fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n', 'utf8');
   if (!args.quiet) console.log(`  wrote ${path.relative(REPO_ROOT, lockPath)}`);
 
   // Build and write rules.index.json
-  const indexPath = path.join(ADAPTER_ROOT, "rules.index.json");
+  const indexPath = path.join(ADAPTER_ROOT, 'rules.index.json');
   const index = buildRulesIndex(lock);
-  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2) + "\n", "utf8");
+  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2) + '\n', 'utf8');
   if (!args.quiet) {
     const customCount = index.length - lock.ruleCounts.total;
     console.log(
@@ -367,13 +367,13 @@ async function runFix(args) {
 }
 
 async function runCheck(_args) {
-  const lockPath = path.join(VENDOR_ROOT, "UPSTREAM.lock.json");
+  const lockPath = path.join(VENDOR_ROOT, 'UPSTREAM.lock.json');
   if (!fs.existsSync(lockPath)) {
     console.error(`error: ${path.relative(REPO_ROOT, lockPath)} missing`);
-    console.error("       run: node scripts/sync-vercel-skills.mjs --fix --ref <sha>");
+    console.error('       run: node scripts/sync-vercel-skills.mjs --fix --ref <sha>');
     process.exit(1);
   }
-  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
   let mismatches = 0;
   for (const f of lock.files) {
     const fullPath = path.join(VENDOR_ROOT, f.path);
@@ -382,7 +382,7 @@ async function runCheck(_args) {
       mismatches++;
       continue;
     }
-    const content = fs.readFileSync(fullPath, "utf8");
+    const content = fs.readFileSync(fullPath, 'utf8');
     const actual = sha256(content);
     if (actual !== f.sha256) {
       console.error(
@@ -405,9 +405,9 @@ async function runCheck(_args) {
 async function main() {
   const args = parseArgs(process.argv);
 
-  if (args.mode === "fix") {
+  if (args.mode === 'fix') {
     if (!args.ref) {
-      console.error("error: --ref <sha> is required in --fix mode");
+      console.error('error: --ref <sha> is required in --fix mode');
       process.exit(2);
     }
     if (!isValidSha(args.ref)) {

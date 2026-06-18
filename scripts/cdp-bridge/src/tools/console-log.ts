@@ -1,13 +1,13 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
-import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from "./metro-clear-hint.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
+import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from './metro-clear-hint.js';
 
 export function createConsoleLogHandler(getClient: () => CDPClient) {
   return withConnection(
     getClient,
     async (args: { level: string; limit: number; clear: boolean }, client) => {
       if (args.clear) {
-        const clearResult = await client.evaluate(client.helperExpr("clearConsole()"));
+        const clearResult = await client.evaluate(client.helperExpr('clearConsole()'));
         if (clearResult.error) {
           return failResult(`Failed to clear console: ${clearResult.error}`);
         }
@@ -15,7 +15,7 @@ export function createConsoleLogHandler(getClient: () => CDPClient) {
       }
 
       const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
-      const level = args.level ?? "all";
+      const level = args.level ?? 'all';
 
       const opts = JSON.stringify({ level, limit });
       const result = await client.evaluate(client.helperExpr(`getConsole(${opts})`));
@@ -24,8 +24,8 @@ export function createConsoleLogHandler(getClient: () => CDPClient) {
         return failResult(`Console log error: ${result.error}`);
       }
 
-      if (typeof result.value !== "string") {
-        return failResult("Unexpected response from getConsole — expected JSON string");
+      if (typeof result.value !== 'string') {
+        return failResult('Unexpected response from getConsole — expected JSON string');
       }
 
       let parsed: unknown;
@@ -40,13 +40,13 @@ export function createConsoleLogHandler(getClient: () => CDPClient) {
         entries = parsed;
       } else if (
         parsed &&
-        typeof parsed === "object" &&
-        "entries" in parsed &&
+        typeof parsed === 'object' &&
+        'entries' in parsed &&
         Array.isArray((parsed as { entries: unknown[] }).entries)
       ) {
         entries = (parsed as { entries: unknown[] }).entries;
       } else {
-        return failResult("Unexpected response from getConsole — expected array or { entries }");
+        return failResult('Unexpected response from getConsole — expected array or { entries }');
       }
 
       // M11: include hint when buffer has stayed empty for >60s since connect.

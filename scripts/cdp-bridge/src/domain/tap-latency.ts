@@ -2,7 +2,7 @@
 // GH #263: detect a wedged simulator test-runtime from maestro-runner output.
 // Pure, no I/O. Fail-open: unparseable output yields no samples → no hint.
 
-import { parseSteps } from "./maestro-step-parser.js";
+import { parseSteps } from './maestro-step-parser.js';
 
 export const DEFAULT_FLOOR_MS = 1500;
 
@@ -13,7 +13,7 @@ export const DEFAULT_FLOOR_MS = 1500;
  */
 export function parseTapLatencies(output: string): number[] {
   return parseSteps(output)
-    .filter((s) => s.verb === "tapOn" && s.status === "pass")
+    .filter((s) => s.verb === 'tapOn' && s.status === 'pass')
     .map((s) => s.durationMs);
 }
 

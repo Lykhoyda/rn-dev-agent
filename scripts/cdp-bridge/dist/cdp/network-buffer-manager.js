@@ -1,4 +1,4 @@
-import { DeviceBufferManager } from "../ring-buffer.js";
+import { DeviceBufferManager } from '../ring-buffer.js';
 /**
  * B128 (D657): process-scoped DeviceBufferManager for network events.
  *

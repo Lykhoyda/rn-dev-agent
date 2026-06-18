@@ -1,36 +1,36 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { resolveBundleId, readExpoSlug } from "../project-config.js";
-import { chooseMaestroDispatch, shouldWarnFallback } from "./maestro-dispatch.js";
-import { resolveAppFileForClearState } from "./resolve-ios-app-file.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { resolveBundleId, readExpoSlug } from '../project-config.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   buildMaestroFlow,
   parseAndValidateFlow,
   isValidBundleId,
   MaestroValidationError,
-} from "../domain/maestro-validator.js";
-import { outputIndicatesFlowFailure } from "../domain/maestro-error-parser.js";
-import { augmentFailureWithDegradation, resolveFloorMs } from "../domain/tap-latency.js";
+} from '../domain/maestro-validator.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
 import {
   buildStepSummary,
   classifyExecError,
   combineRunnerOutput,
   formatFailureHeadline,
-} from "../domain/maestro-step-parser.js";
-import { stopFastRunner as defaultStopFastRunner } from "../runners/rn-fast-runner-client.js";
-import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from "../runners/release-android-slot.js";
-import { markCdpStale as defaultMarkCdpStale } from "../cdp/recovery.js";
+} from '../domain/maestro-step-parser.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
+import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 
 const execFile = promisify(execFileCb);
 
 export interface FlowParkOpts {
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   deviceId?: string;
   stopFastRunner?: () => void;
   markCdpStale?: () => void;
@@ -48,7 +48,7 @@ export interface FlowParkOpts {
 export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts = {}): Promise<T> {
   const stale = opts.markCdpStale ?? defaultMarkCdpStale;
   try {
-    if (opts.platform === "android") {
+    if (opts.platform === 'android') {
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
       await release({ deviceId: opts.deviceId });
     } else {
@@ -63,7 +63,7 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
 interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   appId?: string;
   appFile?: string;
   timeoutMs?: number;
@@ -84,16 +84,16 @@ interface MaestroRunArgs {
  *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
 const PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
 
-function resolvePlatform(override?: string): "ios" | "android" | null {
-  if (override === "ios" || override === "android") return override;
+function resolvePlatform(override?: string): 'ios' | 'android' | null {
+  if (override === 'ios' || override === 'android') return override;
   const session = getActiveSession();
-  return (session?.platform as "ios" | "android" | undefined) ?? null;
+  return (session?.platform as 'ios' | 'android' | undefined) ?? null;
 }
 
 function resolveAppId(override?: string, platform?: string): string {
   if (override) return override;
-  if (platform) return resolveBundleId(platform) ?? readExpoSlug() ?? "";
-  return readExpoSlug() ?? "";
+  if (platform) return resolveBundleId(platform) ?? readExpoSlug() ?? '';
+  return readExpoSlug() ?? '';
 }
 
 export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<ToolResult> {
@@ -110,7 +110,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
               `— must match ${PARAM_KEY_RE.source} (GH #116).`,
           );
         }
-        if (typeof value !== "string") {
+        if (typeof value !== 'string') {
           return failResult(
             `Refusing to run Maestro: param '${key}' has non-string value (GH #116).`,
           );
@@ -120,13 +120,13 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
 
     const platform = resolvePlatform(args.platform);
     if (!platform) {
-      return failResult("Cannot determine platform. Pass platform or open a device session first.");
+      return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
 
     // B59: tiered dispatch — maestro-runner when viable, Maestro CLI fallback
     // when iOS-only and adb is missing, fail-fast with install hints when neither.
     const dispatch = chooseMaestroDispatch({ platform });
-    if ("error" in dispatch) {
+    if ('error' in dispatch) {
       return failResult(dispatch.error);
     }
 
@@ -150,12 +150,12 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync(args.flowPath, "utf-8");
+        rawYaml = readFileSync(args.flowPath, 'utf-8');
       } catch (err) {
         return failResult(`Failed to read flow file: ${(err as Error).message}`);
       }
     } else {
-      return failResult("Provide either flowPath or inlineYaml.");
+      return failResult('Provide either flowPath or inlineYaml.');
     }
 
     try {
@@ -185,7 +185,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         tmpdir(),
         `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
       );
-      writeFileSync(flowFile, validatedContent, "utf-8");
+      writeFileSync(flowFile, validatedContent, 'utf-8');
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -213,7 +213,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
     const paramArgs: string[] = [];
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
-        paramArgs.push("-e", `${key}=${value}`);
+        paramArgs.push('-e', `${key}=${value}`);
       }
     }
     const finalArgs = [...baseArgs, ...paramArgs];
@@ -228,7 +228,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            { timeout, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
           ),
         { platform, deviceId: getActiveSession()?.deviceId },
       );
@@ -267,7 +267,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       }
       const baseWarnMsg = dispatch.fallbackReason
         ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
-        : "Flow completed with warnings or failures";
+        : 'Flow completed with warnings or failures';
       // GH #263: classify on the FULL output (not the sliced meta.output).
       const warnAug = augmentFailureWithDegradation(
         output,
@@ -287,8 +287,8 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       // timeout boundary. Without this, auto-repair is silently
       // pessimised exactly when devices are slow / under load.
       const errAny = err as { stdout?: unknown; stderr?: unknown };
-      const stdout = typeof errAny?.stdout === "string" ? errAny.stdout : "";
-      const stderr = typeof errAny?.stderr === "string" ? errAny.stderr : "";
+      const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
+      const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
       const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
       const summary = buildStepSummary(combined, { failed: true });

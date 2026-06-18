@@ -34,12 +34,12 @@ export async function probeFreshness(client, timeoutMs = FRESHNESS_PROBE_MS) {
         const result = await Promise.race([
             evalPromise,
             new Promise((resolve) => {
-                probeTimer = setTimeout(() => resolve({ error: "timeout" }), timeoutMs);
+                probeTimer = setTimeout(() => resolve({ error: 'timeout' }), timeoutMs);
             }),
         ]);
         if (probeTimer)
             clearTimeout(probeTimer);
-        if (result.error || typeof result.value !== "number") {
+        if (result.error || typeof result.value !== 'number') {
             return { fresh: false, version: null, probed: true };
         }
         return { fresh: true, version: result.value, probed: true };
@@ -52,7 +52,7 @@ export async function probeFreshness(client, timeoutMs = FRESHNESS_PROBE_MS) {
 }
 export async function recoverFromStaleTarget(client) {
     if (!client.isConnected) {
-        return { recovered: false, reason: "probe-failed", error: "Client not connected" };
+        return { recovered: false, reason: 'probe-failed', error: 'Client not connected' };
     }
     let probe = await probeDev(client, FRESHNESS_PROBE_MS);
     let isStale = !probe.ok;
@@ -63,15 +63,15 @@ export async function recoverFromStaleTarget(client) {
         isStale = !probe.ok;
     }
     if (!isStale) {
-        return { recovered: false, reason: "not-stale" };
+        return { recovered: false, reason: 'not-stale' };
     }
     try {
         await client.softReconnect();
-        return { recovered: true, reason: "reconnected" };
+        return { recovered: true, reason: 'reconnected' };
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { recovered: false, reason: "reconnect-failed", error: msg };
+        return { recovered: false, reason: 'reconnect-failed', error: msg };
     }
 }
 async function probeDev(client, timeoutMs) {
@@ -86,14 +86,14 @@ async function probeDev(client, timeoutMs) {
         const result = await Promise.race([
             evalPromise,
             new Promise((resolve) => {
-                timer = setTimeout(() => resolve({ error: "probe timeout" }), timeoutMs);
+                timer = setTimeout(() => resolve({ error: 'probe timeout' }), timeoutMs);
             }),
         ]);
         if (timer)
             clearTimeout(timer);
         return {
             ok: result.error === undefined && result.value === true,
-            timedOut: result.error === "probe timeout",
+            timedOut: result.error === 'probe timeout',
         };
     }
     catch {

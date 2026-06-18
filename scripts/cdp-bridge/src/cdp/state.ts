@@ -1,10 +1,10 @@
-import { writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { CDPClientState, HermesTarget } from "../types.js";
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { CDPClientState, HermesTarget } from '../types.js';
 
-const CDP_ACTIVE_FLAG = join(tmpdir(), "rn-dev-agent-cdp-active");
-const CDP_SESSION_FILE = join(tmpdir(), "rn-dev-agent-cdp-session.json");
+const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
+const CDP_SESSION_FILE = join(tmpdir(), 'rn-dev-agent-cdp-session.json');
 
 export interface ResettableState {
   setState(v: CDPClientState): void;
@@ -20,7 +20,7 @@ export interface ResettableState {
 }
 
 export function resetState(s: ResettableState): void {
-  s.setState("disconnected");
+  s.setState('disconnected');
   s.setHelpersInjected(false);
   s.setBridgeDetected(false);
   s.setBridgeVersion(null);

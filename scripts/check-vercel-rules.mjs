@@ -33,8 +33,8 @@
 //   2   invalid arguments
 //   3   internal error
 
-import fs from "node:fs";
-import path from "node:path";
+import fs from 'node:fs';
+import path from 'node:path';
 
 // === Rule definitions (v1.0 — 3 grep checkers per spec §5 Layer 4) ===
 //
@@ -43,17 +43,17 @@ import path from "node:path";
 // AST coverage moves to eslint-plugin-rn-dev-agent in v1.1.
 
 function lineOf(content, idx) {
-  return content.slice(0, idx).split("\n").length;
+  return content.slice(0, idx).split('\n').length;
 }
 
 const RULES = [
   {
-    id: "no-touchable-new-code",
-    upstream_id: "react-native-skills/ui-pressable",
-    severity: "warn",
-    description: "Use Pressable instead of Touchable* (Opacity/Highlight/WithoutFeedback).",
+    id: 'no-touchable-new-code',
+    upstream_id: 'react-native-skills/ui-pressable',
+    severity: 'warn',
+    description: 'Use Pressable instead of Touchable* (Opacity/Highlight/WithoutFeedback).',
     upstream_path:
-      "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-pressable.md",
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/ui-pressable.md',
     check(content) {
       const matches = [];
       const re =
@@ -69,12 +69,12 @@ const RULES = [
     },
   },
   {
-    id: "no-inline-renderitem-literals",
-    upstream_id: "react-native-skills/list-performance-inline-objects",
-    severity: "warn",
-    description: "Stabilize renderItem; inline arrow forces re-render of list items.",
+    id: 'no-inline-renderitem-literals',
+    upstream_id: 'react-native-skills/list-performance-inline-objects',
+    severity: 'warn',
+    description: 'Stabilize renderItem; inline arrow forces re-render of list items.',
     upstream_path:
-      "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-inline-objects.md",
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/list-performance-inline-objects.md',
     check(content) {
       const matches = [];
       // Match: renderItem={(...) => ...   (inline arrow)
@@ -83,19 +83,19 @@ const RULES = [
         matches.push({
           line: lineOf(content, m.index),
           col: 1,
-          message: "Inline `renderItem={(item) => ...}`; extract to a `useCallback` outside JSX",
+          message: 'Inline `renderItem={(item) => ...}`; extract to a `useCallback` outside JSX',
         });
       }
       return matches;
     },
   },
   {
-    id: "no-falsy-jsx-and",
-    upstream_id: "react-native-skills/rendering-no-falsy-and",
-    severity: "warn",
+    id: 'no-falsy-jsx-and',
+    upstream_id: 'react-native-skills/rendering-no-falsy-and',
+    severity: 'warn',
     description: 'Use ternary or `> 0` instead of `{x.length && <JSX/>}` (renders "0").',
     upstream_path:
-      "third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md",
+      'third_party/vercel-labs/agent-skills/skills/react-native-skills/rules/rendering-no-falsy-and.md',
     check(content) {
       const matches = [];
       // Match: {someName.length && <JSX
@@ -116,10 +116,10 @@ const RULES = [
 
 function parseArgs(argv) {
   const args = {
-    mode: "changed",
+    mode: 'changed',
     files: [],
-    format: "hook",
-    baselinePath: ".rn-agent/vercel-rules-baseline.json",
+    format: 'hook',
+    baselinePath: '.rn-agent/vercel-rules-baseline.json',
     snapshot: false,
     useBaseline: true,
     max: 1000,
@@ -132,21 +132,21 @@ function parseArgs(argv) {
       args.files.push(a);
       continue;
     }
-    if (a === "--") {
+    if (a === '--') {
       endOfFlags = true;
-    } else if (a === "--changed") args.mode = "changed";
-    else if (a === "--all") args.mode = "all";
-    else if (a === "--ci") args.mode = "ci";
-    else if (a === "--format") args.format = argv[++i];
-    else if (a === "--baseline") args.baselinePath = argv[++i];
-    else if (a === "--baseline-snapshot") args.snapshot = true;
-    else if (a === "--no-baseline") args.useBaseline = false;
-    else if (a === "--max") args.max = parseInt(argv[++i], 10);
-    else if (a === "--quiet") args.quiet = true;
-    else if (a === "--help" || a === "-h") {
+    } else if (a === '--changed') args.mode = 'changed';
+    else if (a === '--all') args.mode = 'all';
+    else if (a === '--ci') args.mode = 'ci';
+    else if (a === '--format') args.format = argv[++i];
+    else if (a === '--baseline') args.baselinePath = argv[++i];
+    else if (a === '--baseline-snapshot') args.snapshot = true;
+    else if (a === '--no-baseline') args.useBaseline = false;
+    else if (a === '--max') args.max = parseInt(argv[++i], 10);
+    else if (a === '--quiet') args.quiet = true;
+    else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
-    } else if (!a.startsWith("--")) {
+    } else if (!a.startsWith('--')) {
       args.files.push(a);
     } else {
       console.error(`unknown flag: ${a}`);
@@ -154,7 +154,7 @@ function parseArgs(argv) {
       process.exit(2);
     }
   }
-  if (!["hook", "json", "sarif"].includes(args.format)) {
+  if (!['hook', 'json', 'sarif'].includes(args.format)) {
     console.error(`error: --format must be one of hook|json|sarif (got: ${args.format})`);
     process.exit(2);
   }
@@ -189,7 +189,7 @@ Other:
 
 function isCheckableFile(filePath) {
   if (!/\.(tsx|jsx|ts|js)$/.test(filePath)) return false;
-  if (filePath.endsWith(".d.ts")) return false;
+  if (filePath.endsWith('.d.ts')) return false;
   if (/(__tests__|\.test\.|\.spec\.|\.config\.)/.test(filePath)) return false;
   if (/node_modules|\/dist\/|\/build\/|\/\.git\/|\/\.next\//.test(filePath)) return false;
   return true;
@@ -208,13 +208,13 @@ function walkAll(root, max, results = []) {
     const full = path.join(root, entry.name);
     if (entry.isDirectory()) {
       if (
-        entry.name === "node_modules" ||
-        entry.name === ".git" ||
-        entry.name === "dist" ||
-        entry.name === "build" ||
-        entry.name === ".next" ||
-        entry.name === "third_party" ||
-        entry.name.startsWith(".")
+        entry.name === 'node_modules' ||
+        entry.name === '.git' ||
+        entry.name === 'dist' ||
+        entry.name === 'build' ||
+        entry.name === '.next' ||
+        entry.name === 'third_party' ||
+        entry.name.startsWith('.')
       )
         continue;
       walkAll(full, max, results);
@@ -228,9 +228,9 @@ function walkAll(root, max, results = []) {
 function readStdinPaths() {
   try {
     if (process.stdin.isTTY) return [];
-    const raw = fs.readFileSync(0, "utf8");
+    const raw = fs.readFileSync(0, 'utf8');
     return raw
-      .split("\n")
+      .split('\n')
       .map((s) => s.trim())
       .filter(Boolean);
   } catch {
@@ -243,7 +243,7 @@ function readStdinPaths() {
 function loadBaseline(baselinePath) {
   if (!fs.existsSync(baselinePath)) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
     return new Set(raw.map((b) => `${b.file}:${b.line}:${b.rule_id}`));
   } catch {
     return null;
@@ -255,7 +255,7 @@ function loadBaseline(baselinePath) {
 function checkFile(filePath, baseline) {
   let content;
   try {
-    content = fs.readFileSync(filePath, "utf8");
+    content = fs.readFileSync(filePath, 'utf8');
   } catch {
     return [];
   }
@@ -282,7 +282,7 @@ function checkFile(filePath, baseline) {
 // === Output formats ===
 
 function formatHook(violations) {
-  if (violations.length === 0) return "";
+  if (violations.length === 0) return '';
   const cwd = process.cwd();
   let out = `Vercel rule violations in last edit:\n`;
   for (const v of violations.slice(0, 8)) {
@@ -297,31 +297,31 @@ function formatHook(violations) {
 }
 
 function formatJson(violations) {
-  return JSON.stringify({ count: violations.length, violations }, null, 2) + "\n";
+  return JSON.stringify({ count: violations.length, violations }, null, 2) + '\n';
 }
 
 function formatSarif(violations) {
   const sarif = {
-    version: "2.1.0",
-    $schema: "https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json",
+    version: '2.1.0',
+    $schema: 'https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json',
     runs: [
       {
         tool: {
           driver: {
-            name: "rn-dev-agent vercel-rules",
-            version: "1.0.0",
-            informationUri: "https://github.com/Lykhoyda/rn-dev-agent",
+            name: 'rn-dev-agent vercel-rules',
+            version: '1.0.0',
+            informationUri: 'https://github.com/Lykhoyda/rn-dev-agent',
             rules: RULES.map((r) => ({
               id: r.id,
               name: r.id,
               shortDescription: { text: r.description },
-              helpUri: `https://github.com/vercel-labs/agent-skills/blob/main/skills/${r.upstream_id.replace("/", "/rules/")}.md`,
+              helpUri: `https://github.com/vercel-labs/agent-skills/blob/main/skills/${r.upstream_id.replace('/', '/rules/')}.md`,
             })),
           },
         },
         results: violations.map((v) => ({
           ruleId: v.rule_id,
-          level: v.severity === "error" ? "error" : "warning",
+          level: v.severity === 'error' ? 'error' : 'warning',
           message: { text: v.message },
           locations: [
             {
@@ -335,7 +335,7 @@ function formatSarif(violations) {
       },
     ],
   };
-  return JSON.stringify(sarif, null, 2) + "\n";
+  return JSON.stringify(sarif, null, 2) + '\n';
 }
 
 // === Main ===
@@ -345,7 +345,7 @@ async function main() {
   const baseline = args.useBaseline && !args.snapshot ? loadBaseline(args.baselinePath) : null;
 
   let filesToCheck;
-  if (args.mode === "all" || args.mode === "ci") {
+  if (args.mode === 'all' || args.mode === 'ci') {
     filesToCheck = walkAll(process.cwd(), args.max);
     if (!args.quiet) console.error(`scanning ${filesToCheck.length} file(s)...`);
   } else if (args.files.length > 0) {
@@ -362,7 +362,7 @@ async function main() {
 
   if (args.snapshot) {
     fs.mkdirSync(path.dirname(args.baselinePath), { recursive: true });
-    fs.writeFileSync(args.baselinePath, JSON.stringify(allViolations, null, 2) + "\n", "utf8");
+    fs.writeFileSync(args.baselinePath, JSON.stringify(allViolations, null, 2) + '\n', 'utf8');
     if (!args.quiet) {
       console.error(
         `✓ wrote ${args.baselinePath} with ${allViolations.length} baseline violations`,
@@ -372,13 +372,13 @@ async function main() {
   }
 
   let output;
-  if (args.format === "json") output = formatJson(allViolations);
-  else if (args.format === "sarif") output = formatSarif(allViolations);
+  if (args.format === 'json') output = formatJson(allViolations);
+  else if (args.format === 'sarif') output = formatSarif(allViolations);
   else output = formatHook(allViolations);
 
   if (output) process.stdout.write(output);
 
-  if (args.mode === "ci" && allViolations.length > 0) process.exit(1);
+  if (args.mode === 'ci' && allViolations.length > 0) process.exit(1);
   process.exit(0);
 }
 

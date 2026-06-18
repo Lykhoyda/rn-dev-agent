@@ -4,18 +4,18 @@ import {
   NETWORK_CB_BUFFERED_SCRIPT,
   NETWORK_HOOK_SCRIPT,
   REACT_READY_PROBE_JS,
-} from "../injected-helpers.js";
-import { logger } from "../logger.js";
-import { setActiveFlag, sleep } from "./state.js";
-import { CDP_TIMEOUT_FAST, timeoutForMethod } from "./timeout-config.js";
-import type { DeviceBufferManager } from "../ring-buffer.js";
-import type { NetworkEntry, EvaluateResult, HermesTarget } from "../types.js";
+} from '../injected-helpers.js';
+import { logger } from '../logger.js';
+import { setActiveFlag, sleep } from './state.js';
+import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
+import type { DeviceBufferManager } from '../ring-buffer.js';
+import type { NetworkEntry, EvaluateResult, HermesTarget } from '../types.js';
 
 export const REACT_READY_TIMEOUT_MS = 30_000;
 export const REACT_READY_POLL_MS = 500;
 
 export interface SetupResult {
-  networkMode: "cdp" | "hook" | "none";
+  networkMode: 'cdp' | 'hook' | 'none';
   helpersInjected: boolean;
   logDomainEnabled: boolean;
   profilerAvailable: boolean;
@@ -52,40 +52,40 @@ export async function performSetup(opts: {
     probeWaits,
   } = opts;
 
-  logger.debug("CDP", "Running setup: Runtime.enable, Debugger.enable...");
-  await send("Runtime.enable", undefined, timeoutForMethod("Runtime.enable"));
-  await send("Debugger.enable", undefined, timeoutForMethod("Debugger.enable"));
+  logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
+  await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
+  await send('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
 
-  let networkMode: "cdp" | "hook" | "none";
+  let networkMode: 'cdp' | 'hook' | 'none';
   // GH #214: track whether the CDP Network domain is actually enabled, so the
   // hook fallback can disable it and avoid double-feeding the buffer.
   let networkDomainEnabled = false;
   try {
-    await send("Network.enable", undefined, timeoutForMethod("Network.enable"));
-    networkMode = "cdp";
+    await send('Network.enable', undefined, timeoutForMethod('Network.enable'));
+    networkMode = 'cdp';
     networkDomainEnabled = true;
   } catch {
-    networkMode = "none";
+    networkMode = 'none';
   }
 
   let logDomainEnabled: boolean;
   try {
-    await send("Log.enable", undefined, timeoutForMethod("Log.enable"));
+    await send('Log.enable', undefined, timeoutForMethod('Log.enable'));
     logDomainEnabled = true;
   } catch {
     logDomainEnabled = false;
   }
 
   const [profilerProbe, heapProbe] = await Promise.allSettled([
-    send("Profiler.enable", undefined, CDP_TIMEOUT_FAST)
-      .then(() => send("Profiler.disable", undefined, CDP_TIMEOUT_FAST))
+    send('Profiler.enable', undefined, CDP_TIMEOUT_FAST)
+      .then(() => send('Profiler.disable', undefined, CDP_TIMEOUT_FAST))
       .then(() => true),
-    send("HeapProfiler.enable", undefined, CDP_TIMEOUT_FAST)
-      .then(() => send("HeapProfiler.disable", undefined, CDP_TIMEOUT_FAST))
+    send('HeapProfiler.enable', undefined, CDP_TIMEOUT_FAST)
+      .then(() => send('HeapProfiler.disable', undefined, CDP_TIMEOUT_FAST))
       .then(() => true),
   ]);
-  const profilerAvailable = profilerProbe.status === "fulfilled" && profilerProbe.value === true;
-  const heapProfilerAvailable = heapProbe.status === "fulfilled" && heapProbe.value === true;
+  const profilerAvailable = profilerProbe.status === 'fulfilled' && profilerProbe.value === true;
+  const heapProfilerAvailable = heapProbe.status === 'fulfilled' && heapProbe.value === true;
 
   clearEventHandlers();
   clearScripts();
@@ -95,7 +95,7 @@ export async function performSetup(opts: {
 
   const helperResult = await evaluate(INJECTED_HELPERS);
   if (helperResult.error) {
-    console.error("CDP: failed to inject helpers:", helperResult.error);
+    console.error('CDP: failed to inject helpers:', helperResult.error);
     return {
       networkMode,
       helpersInjected: false,
@@ -107,7 +107,7 @@ export async function performSetup(opts: {
 
   const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
   if (verify.value !== true) {
-    console.error("CDP: helper injection succeeded but __RN_AGENT not found");
+    console.error('CDP: helper injection succeeded but __RN_AGENT not found');
     return {
       networkMode,
       helpersInjected: false,
@@ -121,17 +121,17 @@ export async function performSetup(opts: {
   // transport can be live-verified without an old-RN app. Also disable the
   // Network domain so CDP events don't double-feed the buffer during seam
   // testing, making live verification vacuous.
-  if (process.env.RN_FORCE_NETWORK_HOOK === "1") {
-    networkMode = "none";
+  if (process.env.RN_FORCE_NETWORK_HOOK === '1') {
+    networkMode = 'none';
     try {
-      await send("Network.disable", undefined, CDP_TIMEOUT_FAST);
+      await send('Network.disable', undefined, CDP_TIMEOUT_FAST);
     } catch {
       /* best-effort */
     }
     networkDomainEnabled = false;
   }
 
-  logger.info("CDP", `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
+  logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
   setActiveFlag(port, connectedTarget);
 
   // D626 (B1 fix): Probe whether Network.enable actually delivers events.
@@ -139,7 +139,7 @@ export async function performSetup(opts: {
   // reload — the fresh JS context needs time to flush the probe fetch through
   // its CDP event channel. Retry once at a longer interval before declaring
   // RN<0.83. Total worst-case wait for legitimate fallback: 500ms + 1500ms.
-  if (networkMode === "cdp") {
+  if (networkMode === 'cdp') {
     networkMode = await probeNetworkDomain({
       evaluate,
       port,
@@ -149,7 +149,7 @@ export async function performSetup(opts: {
     });
   }
 
-  if (networkMode === "none") {
+  if (networkMode === 'none') {
     // GH #214: if the CDP Network domain is still enabled here, the probe fell
     // back to the hook despite Network.enable succeeding — a false negative on
     // RN >= 0.83 where the probe fetch's events flush after the probe window.
@@ -161,7 +161,7 @@ export async function performSetup(opts: {
     // still-running domain.
     if (networkDomainEnabled) {
       try {
-        await send("Network.disable", undefined, CDP_TIMEOUT_FAST);
+        await send('Network.disable', undefined, CDP_TIMEOUT_FAST);
       } catch {
         /* best-effort */
       }
@@ -169,10 +169,10 @@ export async function performSetup(opts: {
     }
     const hookResult = await evaluate(NETWORK_HOOK_SCRIPT);
     if (hookResult.error) {
-      console.error("CDP: failed to inject network hooks:", hookResult.error);
+      console.error('CDP: failed to inject network hooks:', hookResult.error);
     } else {
       await evaluate(NETWORK_CB_BUFFERED_SCRIPT);
-      networkMode = "hook";
+      networkMode = 'hook';
     }
   }
 
@@ -211,7 +211,7 @@ export async function probeNetworkDomain(opts: {
    * waits without changing production behavior.
    */
   waits?: number[];
-}): Promise<"cdp" | "none"> {
+}): Promise<'cdp' | 'none'> {
   const { evaluate, port, networkManager, getDeviceKey } = opts;
   const waits = opts.waits ?? [500, 1500];
   const deviceKey = getDeviceKey();
@@ -221,15 +221,15 @@ export async function probeNetworkDomain(opts: {
     await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
     await new Promise((r) => setTimeout(r, waits[attempt]));
     if (networkManager.size(deviceKey) > bufSizeBefore) {
-      return "cdp";
+      return 'cdp';
     }
   }
 
   logger.info(
-    "CDP",
+    'CDP',
     `Network.enable accepted but no events fired after ${waits.length} attempt(s) — falling back to hooks`,
   );
-  return "none";
+  return 'none';
 }
 
 export async function reinjectHelpers(
@@ -239,7 +239,7 @@ export async function reinjectHelpers(
   await waitForReact(evaluate, waitTimeout ?? REACT_READY_TIMEOUT_MS);
   const helperResult = await evaluate(INJECTED_HELPERS);
   if (helperResult.error) {
-    console.error("CDP: failed to re-inject helpers:", helperResult.error);
+    console.error('CDP: failed to re-inject helpers:', helperResult.error);
     return false;
   }
   const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');

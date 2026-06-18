@@ -16,9 +16,9 @@
  * precedent — allow unit tests to inject resolver/capturer fakes without
  * spawning real `xcrun`/`adb` subprocesses.
  */
-import { execFile, spawn } from "node:child_process";
-import { createWriteStream, unlinkSync } from "node:fs";
-import { promisify } from "node:util";
+import { execFile, spawn } from 'node:child_process';
+import { createWriteStream, unlinkSync } from 'node:fs';
+import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,14 +41,14 @@ export function parseSimctlBootedUDID(jsonText: string): string | null {
     return null;
   }
   const runtimes = data?.devices;
-  if (!runtimes || typeof runtimes !== "object") return null;
+  if (!runtimes || typeof runtimes !== 'object') return null;
   for (const list of Object.values(runtimes)) {
     if (!Array.isArray(list)) continue;
     for (const device of list) {
       if (
         device &&
-        device.state === "Booted" &&
-        typeof device.udid === "string" &&
+        device.state === 'Booted' &&
+        typeof device.udid === 'string' &&
         device.udid.length > 0
       ) {
         return device.udid;
@@ -66,15 +66,15 @@ export function parseSimctlBootedAll(jsonText: string): string[] {
     return [];
   }
   const runtimes = data?.devices;
-  if (!runtimes || typeof runtimes !== "object") return [];
+  if (!runtimes || typeof runtimes !== 'object') return [];
   const udids: string[] = [];
   for (const list of Object.values(runtimes)) {
     if (!Array.isArray(list)) continue;
     for (const device of list) {
       if (
         device &&
-        device.state === "Booted" &&
-        typeof device.udid === "string" &&
+        device.state === 'Booted' &&
+        typeof device.udid === 'string' &&
         device.udid.length > 0
       ) {
         udids.push(device.udid);
@@ -85,7 +85,7 @@ export function parseSimctlBootedAll(jsonText: string): string[] {
 }
 
 async function defaultSimctlBootedJson(): Promise<string> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
+  const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
     timeout: 5000,
     maxBuffer: 1024 * 1024,
   });
@@ -108,11 +108,11 @@ export async function resolveIosUdid(
 const EMU_LINE = /^(emulator-\d+)\s+device\b/;
 
 export function parseAdbDevicesEmu(stdout: string): string | null {
-  const lines = stdout.split("\n");
+  const lines = stdout.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (trimmed.startsWith("List of devices")) continue;
+    if (trimmed.startsWith('List of devices')) continue;
     const match = trimmed.match(EMU_LINE);
     if (match) return match[1];
   }
@@ -121,7 +121,7 @@ export function parseAdbDevicesEmu(stdout: string): string | null {
 
 const defaultIosResolver: RawResolver = async () => {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
+    const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', '-j', 'devices', 'booted'], {
       timeout: 5000,
       maxBuffer: 1024 * 1024,
     });
@@ -138,7 +138,7 @@ export async function resolveBootedIosUdid(): Promise<string | null> {
 
 const defaultAndroidResolver: RawResolver = async () => {
   try {
-    const { stdout } = await execFileAsync("adb", ["devices"], {
+    const { stdout } = await execFileAsync('adb', ['devices'], {
       timeout: 5000,
       maxBuffer: 1024 * 1024,
     });
@@ -152,15 +152,15 @@ const defaultAndroidResolver: RawResolver = async () => {
 // agent-device path infers format. Writing JPEG bytes into a `.png` file
 // (the prior hardcoded `--type=jpeg`) produced a mislabeled image because
 // the downstream sips resize only re-encodes `.jpe?g` paths.
-export function simctlScreenshotType(path: string): "png" | "jpeg" {
-  return /\.png$/i.test(path) ? "png" : "jpeg";
+export function simctlScreenshotType(path: string): 'png' | 'jpeg' {
+  return /\.png$/i.test(path) ? 'png' : 'jpeg';
 }
 
 const defaultIosCapturer: RawCapturer = async (udid, path) => {
   try {
     await execFileAsync(
-      "xcrun",
-      ["simctl", "io", udid, "screenshot", `--type=${simctlScreenshotType(path)}`, path],
+      'xcrun',
+      ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path],
       {
         timeout: 15_000,
         maxBuffer: 1024 * 1024,
@@ -180,14 +180,14 @@ const defaultIosCapturer: RawCapturer = async (udid, path) => {
  * prior single-track version reporting success on stream-finish even when
  * adb exited non-zero afterwards.
  */
-export type CaptureOutcome = "success" | "failure" | "pending";
+export type CaptureOutcome = 'success' | 'failure' | 'pending';
 export function resolveCaptureOutcome(
   streamFinished: boolean,
   procCode: number | null,
 ): CaptureOutcome {
-  if (!streamFinished) return "pending";
-  if (procCode === null) return "pending";
-  return procCode === 0 ? "success" : "failure";
+  if (!streamFinished) return 'pending';
+  if (procCode === null) return 'pending';
+  return procCode === 0 ? 'success' : 'failure';
 }
 
 // Android needs the binary screen bytes piped to a file. execFile can't redirect
@@ -206,8 +206,8 @@ const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
     let settled = false;
     let streamFinished = false;
     let procCode: number | null = null;
-    const proc = spawn("adb", ["-s", emuId, "exec-out", "screencap", "-p"], {
-      stdio: ["ignore", "pipe", "pipe"],
+    const proc = spawn('adb', ['-s', emuId, 'exec-out', 'screencap', '-p'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     const out = createWriteStream(path);
     const cleanupPartial = (): void => {
@@ -232,28 +232,28 @@ const defaultAndroidCapturer: RawCapturer = async (emuId, path) =>
     };
     const maybeSettle = (): void => {
       const outcome = resolveCaptureOutcome(streamFinished, procCode);
-      if (outcome === "pending") return;
-      if (outcome === "failure") {
+      if (outcome === 'pending') return;
+      if (outcome === 'failure') {
         out.destroy();
         cleanupPartial();
       }
-      settle(outcome === "success");
+      settle(outcome === 'success');
     };
     proc.stdout.pipe(out);
-    out.on("finish", () => {
+    out.on('finish', () => {
       streamFinished = true;
       maybeSettle();
     });
-    out.on("error", () => {
+    out.on('error', () => {
       cleanupPartial();
       settle(false);
     });
-    proc.on("error", () => {
+    proc.on('error', () => {
       out.destroy();
       cleanupPartial();
       settle(false);
     });
-    proc.on("close", (code) => {
+    proc.on('close', (code) => {
       procCode = code;
       maybeSettle();
     });
@@ -285,20 +285,20 @@ export function _resetForTest(): void {
   androidCapturer = defaultAndroidCapturer;
 }
 
-export type RawScreenshotFailureReason = "no-device" | "capture-failed";
+export type RawScreenshotFailureReason = 'no-device' | 'capture-failed';
 
 export type RawScreenshotResult =
   | { ok: true; path: string }
   | { ok: false; reason: RawScreenshotFailureReason };
 
 export async function tryRawScreenshot(
-  platform: "ios" | "android",
+  platform: 'ios' | 'android',
   path: string,
 ): Promise<RawScreenshotResult> {
-  const resolver = platform === "ios" ? iosResolver : androidResolver;
-  const capturer = platform === "ios" ? iosCapturer : androidCapturer;
+  const resolver = platform === 'ios' ? iosResolver : androidResolver;
+  const capturer = platform === 'ios' ? iosCapturer : androidCapturer;
   const id = await resolver();
-  if (!id) return { ok: false, reason: "no-device" };
+  if (!id) return { ok: false, reason: 'no-device' };
   const ok = await capturer(id, path);
-  return ok ? { ok: true, path } : { ok: false, reason: "capture-failed" };
+  return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
 }

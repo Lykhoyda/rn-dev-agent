@@ -1,18 +1,18 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { parseSimctlListapps } from "../cdp/discovery.js";
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { parseSimctlListapps } from '../cdp/discovery.js';
 
-const DAEMON_JSON = join(homedir(), ".agent-device", "daemon.json");
-const DAEMON_LOCK = join(homedir(), ".agent-device", "daemon.lock");
+const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
+const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 
 // GH#202 Phase 4: the legacy upstream runner ships as two installed apps.
 export const LEGACY_BUNDLE_IDS = [
-  "com.callstack.agentdevice.runner",
-  "com.callstack.agentdevice.runner.uitests.xctrunner",
+  'com.callstack.agentdevice.runner',
+  'com.callstack.agentdevice.runner.uitests.xctrunner',
 ] as const;
 
 /**
@@ -39,7 +39,7 @@ export interface EradicateLegacyAppsResult {
 // (body is sync execFileSync).
 export async function eradicateLegacyRunnerApps(
   udid: string,
-  deps: Pick<EnsureSingleRunnerDeps, "listApps" | "uninstallApp">,
+  deps: Pick<EnsureSingleRunnerDeps, 'listApps' | 'uninstallApp'>,
 ): Promise<EradicateLegacyAppsResult> {
   const removedApps: string[] = [];
   const warnings: string[] = [];
@@ -79,9 +79,9 @@ export async function eradicateLegacyRunnerApps(
  */
 export function selectLegacyRunnerPids(psOutput: string, udid: string): number[] {
   const pids: number[] = [];
-  for (const line of psOutput.split("\n")) {
-    if (!line.includes("AgentDeviceRunner")) continue;
-    if (line.includes("RnFastRunner")) continue;
+  for (const line of psOutput.split('\n')) {
+    if (!line.includes('AgentDeviceRunner')) continue;
+    if (line.includes('RnFastRunner')) continue;
     if (!udid || !line.includes(udid)) continue;
     const m = line.trim().match(/^(\d+)\b/);
     if (m) pids.push(Number(m[1]));
@@ -125,7 +125,7 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
     listProcesses: () =>
-      execFileSync("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3_000 }),
+      execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -137,8 +137,8 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     },
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync(DAEMON_JSON, "utf8")) as { pid?: unknown };
-        return typeof parsed.pid === "number" ? parsed.pid : null;
+        const parsed = JSON.parse(readFileSync(DAEMON_JSON, 'utf8')) as { pid?: unknown };
+        return typeof parsed.pid === 'number' ? parsed.pid : null;
       } catch {
         return null;
       }
@@ -147,16 +147,16 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     removeFile: (path) => unlinkSync(path),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     listApps: (udid) =>
-      execFileSync("xcrun", ["simctl", "listapps", udid], {
-        encoding: "utf8",
+      execFileSync('xcrun', ['simctl', 'listapps', udid], {
+        encoding: 'utf8',
         timeout: 5_000,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ['ignore', 'pipe', 'ignore'],
       }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync("xcrun", ["simctl", "uninstall", udid, bundleId], {
-        encoding: "utf8",
+      execFileSync('xcrun', ['simctl', 'uninstall', udid, bundleId], {
+        encoding: 'utf8',
         timeout: 10_000,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
     },
   };
@@ -183,7 +183,7 @@ export async function ensureSingleRunner(
 
   if (opts.udid) {
     const t = Date.now();
-    let psOut = "";
+    let psOut = '';
     try {
       psOut = deps.listProcesses();
     } catch (err) {
@@ -191,9 +191,9 @@ export async function ensureSingleRunner(
     }
     for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
       try {
-        deps.kill(pid, "SIGTERM");
+        deps.kill(pid, 'SIGTERM');
         await deps.delay(SIGKILL_GRACE_MS);
-        if (deps.isAlive(pid)) deps.kill(pid, "SIGKILL");
+        if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
         killedPids.push(pid);
       } catch (err) {
         warnings.push(`kill ${pid} failed: ${msg(err)}`);

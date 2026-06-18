@@ -1,4 +1,4 @@
-import { logger } from "../logger.js";
+import { logger } from '../logger.js';
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
@@ -41,7 +41,7 @@ export interface ParentDeathWatchOptions {
  * so a constant 0 fails safe to "parent alive".
  */
 function defaultGetppid(): number {
-  return typeof process.ppid === "number" ? process.ppid : 0;
+  return typeof process.ppid === 'number' ? process.ppid : 0;
 }
 
 /**
@@ -63,7 +63,7 @@ export function startParentDeathWatch(opts: ParentDeathWatchOptions): () => void
       parentWatchTick(getppid, initialPpid, opts.onOrphaned, opts.onHeartbeat);
     } catch (err) {
       logger.warn(
-        "MCP",
+        'MCP',
         `parent-death watch tick failed: ${err instanceof Error ? err.message : err}`,
       );
     }

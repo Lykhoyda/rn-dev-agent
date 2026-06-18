@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 // GH #59 #7 + #60 feature-b: cdp_mmkv tool. Reads/writes the app's MMKV
 // storage from Hermes via NitroModulesProxy, without requiring app-side
@@ -12,8 +12,8 @@ import { okResult, failResult, withConnection } from "../utils.js";
 // expression returns a clear error envelope when Nitro / MMKVFactory
 // isn't available, so callers know the runtime requirement.
 
-export type MmkvAction = "get" | "set" | "delete" | "keys" | "has" | "clear";
-export type MmkvValueType = "string" | "number" | "boolean";
+export type MmkvAction = 'get' | 'set' | 'delete' | 'keys' | 'has' | 'clear';
+export type MmkvValueType = 'string' | 'number' | 'boolean';
 
 export interface MmkvArgs {
   action: MmkvAction;
@@ -36,13 +36,13 @@ export interface MmkvArgs {
  * this readable and matches the style of injected-helpers.ts.
  */
 export function buildMmkvExpression(args: MmkvArgs): string {
-  const instanceId = args.instanceId ?? "mmkv.default";
-  const valueType: MmkvValueType = args.type ?? "string";
+  const instanceId = args.instanceId ?? 'mmkv.default';
+  const valueType: MmkvValueType = args.type ?? 'string';
 
   let actionBody: string;
   switch (args.action) {
-    case "get": {
-      if (typeof args.key !== "string" || args.key.length === 0) {
+    case 'get': {
+      if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'get requires non-empty key' })`;
       }
       // GH #209: `getBoolean` — the spelling on BOTH the Nitro hybrid object
@@ -50,12 +50,12 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       // existed on neither; type=boolean reads were broken since the tool
       // shipped.
       const getMethod =
-        valueType === "number" ? "getNumber" : valueType === "boolean" ? "getBoolean" : "getString";
+        valueType === 'number' ? 'getNumber' : valueType === 'boolean' ? 'getBoolean' : 'getString';
       actionBody = `var v = mmkv.${getMethod}(${JSON.stringify(args.key)}); return JSON.stringify({ value: v === undefined ? null : v });`;
       break;
     }
-    case "set": {
-      if (typeof args.key !== "string" || args.key.length === 0) {
+    case 'set': {
+      if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'set requires non-empty key' })`;
       }
       if (args.value === undefined || args.value === null) {
@@ -64,18 +64,18 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       // MMKV's `set` is overloaded by JS-side type inference; pass the
       // raw literal cast to the requested type.
       let valueLiteral: string;
-      if (valueType === "number") {
+      if (valueType === 'number') {
         valueLiteral = String(Number(args.value));
-      } else if (valueType === "boolean") {
-        valueLiteral = args.value === true || args.value === "true" ? "true" : "false";
+      } else if (valueType === 'boolean') {
+        valueLiteral = args.value === true || args.value === 'true' ? 'true' : 'false';
       } else {
         valueLiteral = JSON.stringify(String(args.value));
       }
       actionBody = `mmkv.set(${JSON.stringify(args.key)}, ${valueLiteral}); return JSON.stringify({ ok: true });`;
       break;
     }
-    case "delete": {
-      if (typeof args.key !== "string" || args.key.length === 0) {
+    case 'delete': {
+      if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'delete requires non-empty key' })`;
       }
       // GH #209: the raw Nitro hybrid object (v4 / 3.0-beta line) exposes
@@ -88,18 +88,18 @@ export function buildMmkvExpression(args: MmkvArgs): string {
       return JSON.stringify({ ok: true });`;
       break;
     }
-    case "has": {
-      if (typeof args.key !== "string" || args.key.length === 0) {
+    case 'has': {
+      if (typeof args.key !== 'string' || args.key.length === 0) {
         return `JSON.stringify({ __agent_error: 'has requires non-empty key' })`;
       }
       actionBody = `var present = mmkv.contains(${JSON.stringify(args.key)}); return JSON.stringify({ present: !!present });`;
       break;
     }
-    case "keys": {
+    case 'keys': {
       actionBody = `var ks = mmkv.getAllKeys(); return JSON.stringify({ keys: ks || [] });`;
       break;
     }
-    case "clear": {
+    case 'clear': {
       actionBody = `mmkv.clearAll(); return JSON.stringify({ cleared: true });`;
       break;
     }
@@ -140,8 +140,8 @@ export function createMmkvHandler(getClient: () => CDPClient) {
     if (result.error) {
       return failResult(`MMKV evaluate error: ${result.error}`);
     }
-    if (typeof result.value !== "string") {
-      return failResult("Unexpected response from MMKV expression (not a string)");
+    if (typeof result.value !== 'string') {
+      return failResult('Unexpected response from MMKV expression (not a string)');
     }
 
     let parsed: unknown;
@@ -151,9 +151,9 @@ export function createMmkvHandler(getClient: () => CDPClient) {
       return failResult(`Could not parse MMKV response: ${result.value.slice(0, 200)}`);
     }
 
-    if (parsed !== null && typeof parsed === "object") {
+    if (parsed !== null && typeof parsed === 'object') {
       const obj = parsed as Record<string, unknown>;
-      if ("__agent_error" in obj) {
+      if ('__agent_error' in obj) {
         return failResult(String(obj.__agent_error));
       }
     }

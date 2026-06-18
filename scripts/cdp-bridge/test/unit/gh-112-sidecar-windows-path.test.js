@@ -9,24 +9,24 @@
 // platform-native path module behavior. Parent-dir resolution on a
 // Windows path is platform-dependent and out of scope — the goal here is
 // only "the basename portion is correctly extracted."
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
-const MOD_PATH = "../../dist/domain/sidecar-io.js";
+const MOD_PATH = '../../dist/domain/sidecar-io.js';
 
-test("sidecarPathFor: POSIX-style path produces expected sidecar path", async () => {
+test('sidecarPathFor: POSIX-style path produces expected sidecar path', async () => {
   const { sidecarPathFor } = await import(MOD_PATH);
-  const result = sidecarPathFor("/Users/me/project/.rn-agent/actions/wizard-create-task.yaml");
-  assert.equal(result, "/Users/me/project/.rn-agent/state/wizard-create-task.state.json");
+  const result = sidecarPathFor('/Users/me/project/.rn-agent/actions/wizard-create-task.yaml');
+  assert.equal(result, '/Users/me/project/.rn-agent/state/wizard-create-task.state.json');
 });
 
-test("sidecarPathFor: .yml extension also handled", async () => {
+test('sidecarPathFor: .yml extension also handled', async () => {
   const { sidecarPathFor } = await import(MOD_PATH);
-  const result = sidecarPathFor("/a/b/actions/short.yml");
-  assert.equal(result, "/a/b/state/short.state.json");
+  const result = sidecarPathFor('/a/b/actions/short.yml');
+  assert.equal(result, '/a/b/state/short.state.json');
 });
 
-test("sidecarPathFor: Windows-style backslash input extracts basename correctly (no embedded path in result)", async () => {
+test('sidecarPathFor: Windows-style backslash input extracts basename correctly (no embedded path in result)', async () => {
   // GH #112: this is the regression case. The buggy code produced a base
   // string containing the entire backslash path, which join() then
   // embedded into a deeply-nested directory tree. The fix's contract is
@@ -35,7 +35,7 @@ test("sidecarPathFor: Windows-style backslash input extracts basename correctly 
   // depend on platform-native dirname/join behavior for Windows inputs
   // on a POSIX test runtime.
   const { sidecarPathFor } = await import(MOD_PATH);
-  const result = sidecarPathFor("C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.yaml");
+  const result = sidecarPathFor('C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.yaml');
   // The trailing segment must be `my-action.state.json`, not the full
   // backslash-containing path.
   assert.match(
@@ -45,17 +45,17 @@ test("sidecarPathFor: Windows-style backslash input extracts basename correctly 
   );
   // The result must NOT contain the entire Windows-style filename glued in.
   assert.ok(
-    !result.includes("C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.state.json"),
+    !result.includes('C:\\Users\\foo\\project\\.rn-agent\\actions\\my-action.state.json'),
     `result still contains the full Windows path: ${result}`,
   );
 });
 
-test("sidecarPathFor: mixed forward+backward slash input extracts basename correctly", async () => {
+test('sidecarPathFor: mixed forward+backward slash input extracts basename correctly', async () => {
   // Defensive: someone hand-builds a path with both separators (e.g.
   // pre-processing wasn't normalized). Should still extract the trailing
   // segment cleanly.
   const { sidecarPathFor } = await import(MOD_PATH);
-  const result = sidecarPathFor("/a/b\\c/d\\my-action.yaml");
+  const result = sidecarPathFor('/a/b\\c/d\\my-action.yaml');
   assert.match(result, /[/\\]my-action\.state\.json$/, `mixed-separator result: ${result}`);
-  assert.ok(!result.includes("a/b\\c/d\\my-action.state.json"));
+  assert.ok(!result.includes('a/b\\c/d\\my-action.state.json'));
 });

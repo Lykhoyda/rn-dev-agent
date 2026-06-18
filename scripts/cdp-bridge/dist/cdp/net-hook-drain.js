@@ -1,5 +1,5 @@
-import { applyNetworkHookEntry } from "./event-handlers.js";
-import { logger } from "../logger.js";
+import { applyNetworkHookEntry } from './event-handlers.js';
+import { logger } from '../logger.js';
 const DRAIN_EXPR = `(function(){
   var b = globalThis.__RN_AGENT_NET_BUF__ || [];
   globalThis.__RN_AGENT_NET_BUF__ = [];
@@ -24,27 +24,27 @@ const DRAIN_EXPR = `(function(){
  * already buffered. Returns the number of entries applied.
  */
 export async function drainNetworkHookBuffer(client) {
-    if (client.networkMode !== "hook")
+    if (client.networkMode !== 'hook')
         return 0;
     try {
         const result = await client.evaluate(DRAIN_EXPR);
-        if (result.error || typeof result.value !== "string")
+        if (result.error || typeof result.value !== 'string')
             return 0;
         const entries = JSON.parse(result.value);
         if (!Array.isArray(entries))
             return 0;
         let applied = 0;
         for (const e of entries) {
-            if (!e || typeof e.t !== "string" || !e.d || typeof e.d.id !== "string")
+            if (!e || typeof e.t !== 'string' || !e.d || typeof e.d.id !== 'string')
                 continue;
-            const atMs = typeof e.ts === "number" ? e.ts : undefined;
+            const atMs = typeof e.ts === 'number' ? e.ts : undefined;
             applyNetworkHookEntry(e.t, e.d, client.networkBufferManager, client.activeDeviceKey, atMs);
             applied++;
         }
         return applied;
     }
     catch (err) {
-        logger.warn("CDP", `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`);
+        logger.warn('CDP', `net-hook drain failed (fail-open): ${err instanceof Error ? err.message : err}`);
         return 0;
     }
 }

@@ -14,33 +14,33 @@
 // never the transitioning-state message. New directories are the EXPECTED
 // case: the tool's own advisories steer agents toward fresh
 // `docs/proof/<slug>/` paths.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
 
-const RAW_MOD = "../../dist/tools/device-screenshot-raw.js";
-const DEVICE_LIST_MOD = "../../dist/tools/device-list.js";
+const RAW_MOD = '../../dist/tools/device-screenshot-raw.js';
+const DEVICE_LIST_MOD = '../../dist/tools/device-list.js';
 
 function makeTmpBase() {
-  return mkdtempSync(join(tmpdir(), "gh265-"));
+  return mkdtempSync(join(tmpdir(), 'gh265-'));
 }
 
 function parseEnvelope(result) {
   return JSON.parse(result.content[0].text);
 }
 
-test("explicit-platform raw path: parent directory is created before the capturer runs (the #265 repro)", async (t) => {
+test('explicit-platform raw path: parent directory is created before the capturer runs (the #265 repro)', async (t) => {
   const raw = await import(RAW_MOD);
   const deviceList = await import(DEVICE_LIST_MOD);
   const base = makeTmpBase();
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  const target = join(base, "docs", "proof", "new-feature", "01.jpg");
+  const target = join(base, 'docs', 'proof', 'new-feature', '01.jpg');
 
   let parentExistedAtCapture = null;
   raw._setForTest({
-    iosResolver: async () => "UDID-265",
+    iosResolver: async () => 'UDID-265',
     // Behaves like real simctl: refuses to write into a missing directory.
     iosCapturer: async (_udid, path) => {
       parentExistedAtCapture = existsSync(dirname(path));
@@ -50,14 +50,14 @@ test("explicit-platform raw path: parent directory is created before the capture
   try {
     const result = await deviceList.captureAndResizeScreenshot({
       path: target,
-      platform: "ios",
+      platform: 'ios',
       platformExplicit: true,
     });
     const envelope = parseEnvelope(result);
     assert.equal(
       parentExistedAtCapture,
       true,
-      "capturer must see the parent directory already created",
+      'capturer must see the parent directory already created',
     );
     assert.equal(envelope.ok, true);
     assert.ok(!result.isError, `expected success, got: ${result.content[0].text}`);
@@ -66,22 +66,22 @@ test("explicit-platform raw path: parent directory is created before the capture
   }
 });
 
-test("mkdir failure (file blocks an intermediate segment): honest target-dir error, no device-state guess, no capture attempt", async (t) => {
+test('mkdir failure (file blocks an intermediate segment): honest target-dir error, no device-state guess, no capture attempt', async (t) => {
   const raw = await import(RAW_MOD);
   const deviceList = await import(DEVICE_LIST_MOD);
   const base = makeTmpBase();
   t.after(() => rmSync(base, { recursive: true, force: true }));
   // A regular FILE occupies the would-be directory segment → mkdir -p ENOTDIR.
-  const blocker = join(base, "blocker");
-  writeFileSync(blocker, "not a directory");
-  const target = join(blocker, "sub", "01.jpg");
+  const blocker = join(base, 'blocker');
+  writeFileSync(blocker, 'not a directory');
+  const target = join(blocker, 'sub', '01.jpg');
 
   let resolverCalls = 0;
   let capturerCalls = 0;
   raw._setForTest({
     iosResolver: async () => {
       resolverCalls++;
-      return "UDID-265";
+      return 'UDID-265';
     },
     iosCapturer: async () => {
       capturerCalls++;
@@ -91,21 +91,21 @@ test("mkdir failure (file blocks an intermediate segment): honest target-dir err
   try {
     const result = await deviceList.captureAndResizeScreenshot({
       path: target,
-      platform: "ios",
+      platform: 'ios',
       platformExplicit: true,
     });
     const envelope = parseEnvelope(result);
     assert.equal(result.isError, true);
-    assert.equal(envelope.code, "SCREENSHOT_FAILED");
+    assert.equal(envelope.code, 'SCREENSHOT_FAILED');
     assert.doesNotMatch(
       envelope.error,
       /transitioning/i,
-      "must not blame device state for a filesystem precondition",
+      'must not blame device state for a filesystem precondition',
     );
-    assert.match(envelope.error, /directory/i, "must name the directory problem");
-    assert.ok(envelope.error.includes(target), "must include the offending path");
-    assert.equal(resolverCalls, 0, "must short-circuit before probing devices");
-    assert.equal(capturerCalls, 0, "must short-circuit before any capture");
+    assert.match(envelope.error, /directory/i, 'must name the directory problem');
+    assert.ok(envelope.error.includes(target), 'must include the offending path');
+    assert.equal(resolverCalls, 0, 'must short-circuit before probing devices');
+    assert.equal(capturerCalls, 0, 'must short-circuit before any capture');
   } finally {
     raw._resetForTest();
   }
@@ -118,36 +118,36 @@ test("mkdir failure (file blocks an intermediate segment): honest target-dir err
 // deriveScreenshotPath so every consumer (mkdir, advisories, all capture
 // tiers) sees the same real path.
 
-test("deriveScreenshotPath: leading ~/ expands to the real home directory", async () => {
+test('deriveScreenshotPath: leading ~/ expands to the real home directory', async () => {
   const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
   assert.equal(
-    deriveScreenshotPath({ path: "~/Desktop/gh265.jpg" }),
-    join(homedir(), "Desktop/gh265.jpg"),
+    deriveScreenshotPath({ path: '~/Desktop/gh265.jpg' }),
+    join(homedir(), 'Desktop/gh265.jpg'),
   );
 });
 
-test("deriveScreenshotPath: unexpandable ~ forms are refused honestly, never a literal ./~ directory", async () => {
+test('deriveScreenshotPath: unexpandable ~ forms are refused honestly, never a literal ./~ directory', async () => {
   const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
-  assert.throws(() => deriveScreenshotPath({ path: "~someuser/gh265.jpg" }), /absolute path/i);
-  assert.throws(() => deriveScreenshotPath({ path: "~" }), /absolute path/i);
+  assert.throws(() => deriveScreenshotPath({ path: '~someuser/gh265.jpg' }), /absolute path/i);
+  assert.throws(() => deriveScreenshotPath({ path: '~' }), /absolute path/i);
 });
 
-test("deriveScreenshotPath: traversal inside a ~/ path is still refused (guard runs on raw input, before expansion)", async () => {
+test('deriveScreenshotPath: traversal inside a ~/ path is still refused (guard runs on raw input, before expansion)', async () => {
   const { deriveScreenshotPath } = await import(DEVICE_LIST_MOD);
-  assert.throws(() => deriveScreenshotPath({ path: "~/../etc/gh265.jpg" }), /traversal/i);
+  assert.throws(() => deriveScreenshotPath({ path: '~/../etc/gh265.jpg' }), /traversal/i);
 });
 
-test("runner path (implicit platform): parent directory exists by the time runAgentDevice dispatches", async (t) => {
+test('runner path (implicit platform): parent directory exists by the time runAgentDevice dispatches', async (t) => {
   const deviceList = await import(DEVICE_LIST_MOD);
   const base = makeTmpBase();
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  const target = join(base, "docs", "diag", "2026-06-12", "01-symptom.jpg");
+  const target = join(base, 'docs', 'diag', '2026-06-12', '01-symptom.jpg');
 
   let parentExistedAtDispatch = null;
   deviceList._setRunAgentDeviceForTest(async () => {
     parentExistedAtDispatch = existsSync(dirname(target));
     return {
-      content: [{ type: "text", text: JSON.stringify({ ok: true, data: { path: target } }) }],
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { path: target } }) }],
     };
   });
   try {
@@ -156,7 +156,7 @@ test("runner path (implicit platform): parent directory exists by the time runAg
     assert.equal(
       parentExistedAtDispatch,
       true,
-      "runner dispatch must see the parent directory already created",
+      'runner dispatch must see the parent directory already created',
     );
     assert.equal(envelope.ok, true);
   } finally {

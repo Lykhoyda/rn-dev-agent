@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import { logger } from "../logger.js";
+import type { CDPClient } from '../cdp-client.js';
+import { logger } from '../logger.js';
 
 const DEFAULT_TIMEOUT_MS = 3000;
 
@@ -39,7 +39,7 @@ export function buildGracefulShutdown(
         await deps.getClient().disconnect();
       } catch (err) {
         logger.warn(
-          "MCP",
+          'MCP',
           `shutdown: disconnect failed: ${err instanceof Error ? err.message : err}`,
         );
       }
@@ -47,7 +47,7 @@ export function buildGracefulShutdown(
         deps.stopFastRunnerFn();
       } catch (err) {
         logger.warn(
-          "MCP",
+          'MCP',
           `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`,
         );
       }
@@ -60,7 +60,7 @@ export function buildGracefulShutdown(
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<void>((resolve) => {
       timeoutHandle = setTimeout(() => {
-        logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
+        logger.warn('MCP', `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
         resolve();
       }, timeoutMs);
     });

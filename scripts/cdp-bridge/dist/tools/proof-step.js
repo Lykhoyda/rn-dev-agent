@@ -1,27 +1,27 @@
-import { okResult, warnResult, withConnection } from "../utils.js";
-import { hasActiveSession } from "../agent-device-wrapper.js";
-import { captureAndResizeScreenshot } from "./device-list.js";
-import { annotateMutationAbsence } from "../verification/mutation-absence.js";
-import { loadVerificationConfig, getCachedProjectRoot } from "../verification/config.js";
-import { fetchFindCandidates } from "./device-interact.js";
+import { okResult, warnResult, withConnection } from '../utils.js';
+import { hasActiveSession } from '../agent-device-wrapper.js';
+import { captureAndResizeScreenshot } from './device-list.js';
+import { annotateMutationAbsence } from '../verification/mutation-absence.js';
+import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
+import { fetchFindCandidates } from './device-interact.js';
 export function createProofStepHandler(getClient, deps = {}) {
     const hasSession = deps.hasSession ?? hasActiveSession;
     const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
     const fetchCandidates = deps.fetchCandidates ?? ((text) => fetchFindCandidates(text, false));
     return withConnection(getClient, async (args, client) => {
         const result = {
-            screenshotPath: "",
+            screenshotPath: '',
         };
         const errors = [];
         // Step 1: Navigate (optional)
         if (args.screen) {
-            const paramsArg = args.params ? JSON.stringify(args.params) : "undefined";
+            const paramsArg = args.params ? JSON.stringify(args.params) : 'undefined';
             const navExpr = `__RN_AGENT.navigateTo(${JSON.stringify(args.screen)}, ${paramsArg})`;
             const navResult = await client.evaluate(navExpr);
             if (navResult.error) {
                 errors.push(`Navigation failed: ${navResult.error}`);
             }
-            else if (typeof navResult.value === "string") {
+            else if (typeof navResult.value === 'string') {
                 try {
                     const parsed = JSON.parse(navResult.value);
                     if (parsed.__agent_error) {
@@ -66,7 +66,7 @@ export function createProofStepHandler(getClient, deps = {}) {
         else if (args.verifyTestID) {
             const treeExpr = `__RN_AGENT.getTree({ testID: ${JSON.stringify(args.verifyTestID)}, maxDepth: 3 })`;
             const treeResult = await client.evaluate(treeExpr);
-            if (treeResult.error || typeof treeResult.value !== "string") {
+            if (treeResult.error || typeof treeResult.value !== 'string') {
                 result.verified = false;
                 result.verifyDetail = `testID "${args.verifyTestID}" not found`;
                 errors.push(result.verifyDetail);
@@ -109,16 +109,16 @@ export function createProofStepHandler(getClient, deps = {}) {
         if (hasSession()) {
             const ssResult = await captureScreenshot({ path: args.screenshotPath });
             if (ssResult.isError) {
-                errors.push("Screenshot failed");
+                errors.push('Screenshot failed');
             }
             else {
-                const text = ssResult.content[0]?.text ?? "";
+                const text = ssResult.content[0]?.text ?? '';
                 const pathMatch = text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i);
                 result.screenshotPath = pathMatch ? pathMatch[0] : text.trim();
             }
         }
         else {
-            errors.push("No device session — screenshot skipped");
+            errors.push('No device session — screenshot skipped');
         }
         if (args.label)
             result.label = args.label;
@@ -143,12 +143,12 @@ export function createProofStepHandler(getClient, deps = {}) {
         const ctx = {
             client,
             screenName,
-            source: "proof_step",
+            source: 'proof_step',
             successShapes: cfg.successShapes,
             mutationMethods: cfg.mutationMethods,
         };
         if (hasFailure) {
-            return annotateMutationAbsence(warnResult(result, errors.join("; ") || "proof_step verification failed"), ctx);
+            return annotateMutationAbsence(warnResult(result, errors.join('; ') || 'proof_step verification failed'), ctx);
         }
         return annotateMutationAbsence(okResult(result), ctx);
     });

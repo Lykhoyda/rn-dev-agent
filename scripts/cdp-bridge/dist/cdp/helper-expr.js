@@ -17,13 +17,13 @@ function validateCall(call) {
     const match = CALL_RE.exec(call);
     if (match) {
         const args = match[1].trim();
-        if (args === "")
+        if (args === '')
             return;
         // `undefined` is the one non-JSON token a call site may emit (store-state's
         // absent path/type, e.g. `getStoreState(undefined, undefined)`). Normalize
         // it to `null` FOR VALIDATION ONLY — both are inert literals; the original
         // (unmodified) `call` is what actually gets interpolated.
-        const forJson = args.replace(/\bundefined\b/g, "null");
+        const forJson = args.replace(/\bundefined\b/g, 'null');
         try {
             JSON.parse(`[${forJson}]`);
             return;

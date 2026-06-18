@@ -1,4 +1,4 @@
-import { okResult, failResult, warnResult, withConnection } from "../utils.js";
+import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 export function createComponentTreeHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         const depth = Math.min(Math.max(args.depth, 1), 12);
@@ -12,24 +12,24 @@ export function createComponentTreeHandler(getClient) {
         if (result.error) {
             return failResult(`Component tree error: ${result.error}`);
         }
-        if (typeof result.value !== "string") {
-            return failResult("Unexpected response from getTree — expected JSON string");
+        if (typeof result.value !== 'string') {
+            return failResult('Unexpected response from getTree — expected JSON string');
         }
         let parsed;
         try {
             parsed = JSON.parse(result.value);
         }
         catch {
-            return failResult("Failed to parse component tree response");
+            return failResult('Failed to parse component tree response');
         }
         if (parsed.error) {
             return failResult(`Component tree error: ${parsed.error}`);
         }
-        if (parsed.warning === "APP_HAS_REDBOX") {
+        if (parsed.warning === 'APP_HAS_REDBOX') {
             return warnResult({
                 message: parsed.message ??
-                    "App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.",
-            }, "APP_HAS_REDBOX");
+                    'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
+            }, 'APP_HAS_REDBOX');
         }
         return okResult(parsed);
     });

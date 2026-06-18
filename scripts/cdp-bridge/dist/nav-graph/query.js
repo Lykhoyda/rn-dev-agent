@@ -1,4 +1,4 @@
-import { isMethodCooledDown } from "./storage.js";
+import { isMethodCooledDown } from './storage.js';
 export function findRouteInGraph(graph, routeName) {
     const candidates = [];
     for (const nav of graph.navigators) {
@@ -100,22 +100,22 @@ function getActiveScreenChain(graph) {
 }
 function actionForKind(kind) {
     switch (kind) {
-        case "tab":
-            return "switch_tab";
-        case "drawer":
-            return "open_drawer";
-        case "stack":
-        case "native-stack":
-            return "navigate";
+        case 'tab':
+            return 'switch_tab';
+        case 'drawer':
+            return 'open_drawer';
+        case 'stack':
+        case 'native-stack':
+            return 'navigate';
         default:
-            return "navigate";
+            return 'navigate';
     }
 }
 function computeStepReliability(screen, kind) {
     const base = screen.reliability_score;
-    if (kind === "tab")
+    if (kind === 'tab')
         return Math.min(base + 10, 100);
-    if (kind === "stack" || kind === "native-stack")
+    if (kind === 'stack' || kind === 'native-stack')
         return base;
     return Math.max(base - 5, 0);
 }
@@ -127,9 +127,9 @@ function detectPrerequisites(graph, targetScreen) {
     for (const screenInPath of location.path) {
         if (AUTH_SCREEN_PATTERNS.test(screenInPath)) {
             prereqs.push({
-                type: "auth",
+                type: 'auth',
                 description: `Path passes through auth screen "${screenInPath}" — login may be required`,
-                check_tool: "cdp_navigation_state",
+                check_tool: 'cdp_navigation_state',
             });
             break;
         }
@@ -140,10 +140,10 @@ function detectPrerequisites(graph, targetScreen) {
     // permission prerequisite.
     if (screen.params_template && /\bpermissions?\b/i.test(screen.params_template)) {
         prereqs.push({
-            type: "permission",
+            type: 'permission',
             description: `Screen "${targetScreen}" may require permissions (params: ${screen.params_template})`,
-            check_tool: "device_permission",
-            check_args: { action: "query" },
+            check_tool: 'device_permission',
+            check_args: { action: 'query' },
         });
     }
     return prereqs;
@@ -163,7 +163,7 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
             total_steps: 0,
             estimated_reliability: 100,
             prerequisites: [],
-            preferred_method: "programmatic",
+            preferred_method: 'programmatic',
             deep_link_available: !!targetDeepLink,
             deep_link_path: targetDeepLink,
         };
@@ -195,12 +195,12 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
             target_screen: screenName,
             navigator_id: nav.id,
             navigator_kind: nav.kind,
-            method: "programmatic",
+            method: 'programmatic',
             note: screen.params_template
                 ? `Navigate to "${screenName}" (requires params: ${screen.params_template})`
-                : nav.kind === "tab"
+                : nav.kind === 'tab'
                     ? `Switch to "${screenName}" tab`
-                    : nav.kind === "drawer"
+                    : nav.kind === 'drawer'
                         ? `Open drawer, select "${screenName}"`
                         : `Navigate to "${screenName}"`,
         });
@@ -211,29 +211,29 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
             target_screen: targetScreen,
             navigator_id: targetNav.id,
             navigator_kind: targetNav.kind,
-            method: "programmatic",
+            method: 'programmatic',
             note: `Navigate to "${targetScreen}"`,
         });
     }
     const deepLinkAvailable = !!targetDeepLink;
     if (deepLinkAvailable && steps.length > 1) {
         steps.unshift({
-            action: "deep_link",
+            action: 'deep_link',
             target_screen: targetScreen,
             navigator_id: targetNav.id,
             navigator_kind: targetNav.kind,
-            method: "deep_link",
+            method: 'deep_link',
             deep_link_path: targetLocation.screen.path,
             note: `Alternative: deep link to "${targetLocation.screen.path}" (may trigger Dev Client picker)`,
         });
     }
     for (const step of steps) {
         if (isMethodCooledDown(step.target_screen, step.method)) {
-            step.note = `[COOLED DOWN] ${step.note ?? ""} — method failed 2+ times recently, consider alternative`;
+            step.note = `[COOLED DOWN] ${step.note ?? ''} — method failed 2+ times recently, consider alternative`;
         }
     }
     let reliability = 100;
-    const programmaticSteps = steps.filter((s) => s.method === "programmatic");
+    const programmaticSteps = steps.filter((s) => s.method === 'programmatic');
     for (const step of programmaticSteps) {
         const nav = graph.navigators.find((n) => n.id === step.navigator_id);
         const screen = nav?.screens.find((s) => s.name === step.target_screen);
@@ -243,13 +243,13 @@ export function buildNavigationPlan(graph, targetScreen, fromScreen) {
     }
     const hasCooledProgrammatic = programmaticSteps.some((s) => isMethodCooledDown(s.target_screen, s.method));
     const prerequisites = detectPrerequisites(graph, targetScreen);
-    let preferredMethod = deepLinkAvailable && programmaticSteps.length >= 2 ? "deep_link" : "programmatic";
+    let preferredMethod = deepLinkAvailable && programmaticSteps.length >= 2 ? 'deep_link' : 'programmatic';
     if (hasCooledProgrammatic) {
-        if (deepLinkAvailable && !isMethodCooledDown(targetScreen, "deep_link")) {
-            preferredMethod = "deep_link";
+        if (deepLinkAvailable && !isMethodCooledDown(targetScreen, 'deep_link')) {
+            preferredMethod = 'deep_link';
         }
-        else if (!isMethodCooledDown(targetScreen, "ui_interaction")) {
-            preferredMethod = "ui_interaction";
+        else if (!isMethodCooledDown(targetScreen, 'ui_interaction')) {
+            preferredMethod = 'ui_interaction';
         }
     }
     return {

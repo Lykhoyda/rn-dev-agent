@@ -1,26 +1,26 @@
-import { runNative } from "../agent-device-wrapper.js";
+import { runNative } from '../agent-device-wrapper.js';
 import {
   buildDirectionalScrollCliArgs,
   buildDirectionalSwipeCliArgs,
   fetchFindCandidates,
   pressCandidate,
-} from "./device-interact.js";
-import { withSession, okResult, failResult } from "../utils.js";
-import type { ToolResult } from "../utils.js";
-import { captureAndResizeScreenshot } from "./device-list.js";
+} from './device-interact.js';
+import { withSession, okResult, failResult } from '../utils.js';
+import type { ToolResult } from '../utils.js';
+import { captureAndResizeScreenshot } from './device-list.js';
 
 export interface BatchStep {
   action:
-    | "find"
-    | "press"
-    | "fill"
-    | "swipe"
-    | "scroll"
-    | "back"
-    | "wait"
-    | "hideKeyboard"
-    | "snapshot"
-    | "screenshot";
+    | 'find'
+    | 'press'
+    | 'fill'
+    | 'swipe'
+    | 'scroll'
+    | 'back'
+    | 'wait'
+    | 'hideKeyboard'
+    | 'snapshot'
+    | 'screenshot';
   text?: string;
   ref?: string;
   /**
@@ -35,7 +35,7 @@ export interface BatchStep {
    */
   testID?: string;
   tap?: boolean;
-  direction?: "up" | "down" | "left" | "right";
+  direction?: 'up' | 'down' | 'left' | 'right';
   ms?: number;
   optional?: boolean;
   /**
@@ -49,7 +49,7 @@ export interface BatchStep {
 export interface BatchArgs {
   steps: BatchStep[];
   delayMs?: number;
-  screenshotOn?: "none" | "failure" | "end" | "each";
+  screenshotOn?: 'none' | 'failure' | 'end' | 'each';
   /**
    * Phase 125: when true, a failed non-optional step is recorded but the
    * batch continues to subsequent steps. Default false preserves the
@@ -65,28 +65,28 @@ export interface BatchArgs {
   //     action-only batches that verify via expect_*/cdp_store_state.
   // An explicit snapshot step or screenshotOn=end still populates the payload;
   // this only governs the IMPLICIT trailing snapshot and its shape.
-  finalSnapshot?: "salient" | "full" | "none";
+  finalSnapshot?: 'salient' | 'full' | 'none';
 }
 
 // GH #321: a11y node types that represent something the agent can act on. Used
 // to compact the batch's final payload to just the actionable surface.
 const INTERACTIVE_A11Y_TYPES = new Set<string>([
-  "Button",
-  "TextField",
-  "SecureTextField",
-  "TextView",
-  "Switch",
-  "Slider",
-  "Link",
-  "Cell",
-  "MenuItem",
-  "Tab",
-  "Stepper",
-  "SegmentedControl",
-  "SearchField",
-  "Toggle",
-  "CheckBox",
-  "RadioButton",
+  'Button',
+  'TextField',
+  'SecureTextField',
+  'TextView',
+  'Switch',
+  'Slider',
+  'Link',
+  'Cell',
+  'MenuItem',
+  'Tab',
+  'Stepper',
+  'SegmentedControl',
+  'SearchField',
+  'Toggle',
+  'CheckBox',
+  'RadioButton',
 ]);
 
 /**
@@ -96,13 +96,13 @@ const INTERACTIVE_A11Y_TYPES = new Set<string>([
  * for unit tests; pure.
  */
 export function salientizeSnapshotData(data: unknown): unknown {
-  if (!data || typeof data !== "object") return data;
+  if (!data || typeof data !== 'object') return data;
   const d = data as { nodes?: Array<Record<string, unknown>> };
   if (!Array.isArray(d.nodes)) return data; // not a node snapshot — leave as-is
   const nodes: Array<Record<string, unknown>> = [];
   for (const n of d.nodes) {
-    const type = typeof n.type === "string" ? n.type : "";
-    const identifier = typeof n.identifier === "string" && n.identifier ? n.identifier : "";
+    const type = typeof n.type === 'string' ? n.type : '';
+    const identifier = typeof n.identifier === 'string' && n.identifier ? n.identifier : '';
     // Fail-safe: keep a node if it's an interactive type OR carries a testID.
     // A custom Pressable can surface as a11y type "Other" — dropping it on type
     // alone would strand the agent ("nothing to tap here") on a real control.
@@ -110,7 +110,7 @@ export function salientizeSnapshotData(data: unknown): unknown {
     const entry: Record<string, unknown> = {};
     if (n.ref) entry.ref = n.ref;
     if (type) entry.type = type;
-    if (typeof n.label === "string" && n.label) entry.label = n.label;
+    if (typeof n.label === 'string' && n.label) entry.label = n.label;
     if (identifier) entry.identifier = identifier;
     if (n.hittable === false) entry.hittable = false; // surface dead controls
     nodes.push(entry);
@@ -167,7 +167,7 @@ interface TreeNode {
 }
 
 function findRefInTree(node: TreeNode, testID: string): string | null {
-  if (node.identifier === testID && typeof node.ref === "string") return node.ref;
+  if (node.identifier === testID && typeof node.ref === 'string') return node.ref;
   if (Array.isArray(node.children)) {
     for (const child of node.children) {
       const hit = findRefInTree(child, testID);
@@ -196,7 +196,7 @@ export function snapshotEnvelopeFailed(envelope: string | null | undefined): boo
 async function resolveTestIDViaSnapshot(
   testID: string,
 ): Promise<{ ref: string | null; envelope: string | null; snapshotFailed: boolean }> {
-  const result = await runNative(["snapshot", "-i"]);
+  const result = await runNative(['snapshot', '-i']);
   const envelope = result.content?.[0]?.text ?? null;
   const snapshotFailed = snapshotEnvelopeFailed(envelope);
   if (snapshotFailed) return { ref: null, envelope, snapshotFailed: true };
@@ -218,7 +218,7 @@ function sleep(ms: number): Promise<void> {
 
 async function executeStep(step: BatchStep): Promise<ToolResult> {
   switch (step.action) {
-    case "find": {
+    case 'find': {
       // Phase 125: testID-keyed find re-resolves via snapshot per call.
       // Phase 128 (post-review #5/#6): distinguish snapshot infrastructure
       // failure from "testID not present" so the user gets the right hint.
@@ -227,7 +227,7 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
         if (snapshotFailed) {
           return failResult(
             `Snapshot failed while resolving testID "${step.testID}" — agent-device unreachable, daemon crashed, or snapshot timed out`,
-            "SNAPSHOT_FAILED",
+            'SNAPSHOT_FAILED',
             {
               testID: step.testID,
               envelope: envelope?.slice(0, 500),
@@ -238,120 +238,120 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
         if (!ref) {
           return failResult(
             `testID "${step.testID}" not found in current UI snapshot`,
-            "TESTID_NOT_FOUND",
+            'TESTID_NOT_FOUND',
             {
               testID: step.testID,
-              hint: "Element may not be on-screen yet (animation? modal not mounted?). Re-snapshot after a short wait, or use device_snapshot directly to inspect the tree.",
+              hint: 'Element may not be on-screen yet (animation? modal not mounted?). Re-snapshot after a short wait, or use device_snapshot directly to inspect the tree.',
             },
           );
         }
-        if (step.tap) return runNative(["press", `@${ref}`]);
+        if (step.tap) return runNative(['press', `@${ref}`]);
         return okResult({
           resolved: ref,
           testID: step.testID,
           snapshotEnvelopePreviewBytes: envelope?.length ?? 0,
         });
       }
-      if (!step.text) return failResult("find requires text or testID");
+      if (!step.text) return failResult('find requires text or testID');
       const findResult = await fetchFindCandidates(step.text, false);
       if (!findResult.ok) {
         return failResult(`find: snapshot unavailable for "${step.text}"`, {
-          code: "SNAPSHOT_UNAVAILABLE",
+          code: 'SNAPSHOT_UNAVAILABLE',
           query: step.text,
         });
       }
       if (findResult.candidates.length === 0) {
         return failResult(`No element matches "${step.text}"`, {
-          code: "NOT_FOUND",
+          code: 'NOT_FOUND',
           query: step.text,
         });
       }
-      if (step.tap) return pressCandidate(findResult.candidates[0], "click");
+      if (step.tap) return pressCandidate(findResult.candidates[0], 'click');
       return okResult({
         ref: findResult.candidates[0].ref,
         label: findResult.candidates[0].label,
         testID: findResult.candidates[0].testID,
       });
     }
-    case "press": {
+    case 'press': {
       if (step.testID) {
         const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
         if (snapshotFailed) {
           return failResult(
             `Snapshot failed while resolving testID "${step.testID}" for press — agent-device unreachable`,
-            "SNAPSHOT_FAILED",
+            'SNAPSHOT_FAILED',
             { testID: step.testID, envelope: envelope?.slice(0, 500) },
           );
         }
         if (!ref) {
           return failResult(
             `testID "${step.testID}" not found in current UI snapshot`,
-            "TESTID_NOT_FOUND",
+            'TESTID_NOT_FOUND',
             {
               testID: step.testID,
             },
           );
         }
-        return runNative(["press", `@${ref}`]);
+        return runNative(['press', `@${ref}`]);
       }
-      if (!step.ref) return failResult("press requires ref or testID");
-      const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
-      return runNative(["press", ref]);
+      if (!step.ref) return failResult('press requires ref or testID');
+      const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
+      return runNative(['press', ref]);
     }
-    case "fill": {
-      if (!step.text) return failResult("fill requires text");
+    case 'fill': {
+      if (!step.text) return failResult('fill requires text');
       if (step.testID) {
         const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
         if (snapshotFailed) {
           return failResult(
             `Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`,
-            "SNAPSHOT_FAILED",
+            'SNAPSHOT_FAILED',
             { testID: step.testID, envelope: envelope?.slice(0, 500) },
           );
         }
         if (!ref) {
           return failResult(
             `testID "${step.testID}" not found in current UI snapshot`,
-            "TESTID_NOT_FOUND",
+            'TESTID_NOT_FOUND',
             {
               testID: step.testID,
             },
           );
         }
-        return runNative(["fill", `@${ref}`, step.text]);
+        return runNative(['fill', `@${ref}`, step.text]);
       }
       if (!step.ref)
         return failResult(
-          "fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.",
+          'fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.',
         );
-      const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
-      return runNative(["fill", ref, step.text]);
+      const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
+      return runNative(['fill', ref, step.text]);
     }
-    case "swipe": {
-      if (!step.direction) return failResult("swipe requires direction");
+    case 'swipe': {
+      if (!step.direction) return failResult('swipe requires direction');
       return runNative(buildDirectionalSwipeCliArgs(step.direction, step.ms));
     }
-    case "scroll": {
-      if (!step.direction) return failResult("scroll requires direction");
+    case 'scroll': {
+      if (!step.direction) return failResult('scroll requires direction');
       // Coordinate form — the raw ['scroll', direction] shape throws in the
       // iOS/Android arg builders and aborted the whole batch.
       return runNative(buildDirectionalScrollCliArgs(step.direction));
     }
-    case "back": {
-      return runNative(["back"]);
+    case 'back': {
+      return runNative(['back']);
     }
-    case "hideKeyboard": {
-      return runNative(["keyboard", "dismiss"]);
+    case 'hideKeyboard': {
+      return runNative(['keyboard', 'dismiss']);
     }
-    case "snapshot": {
-      return runNative(["snapshot", "-i"]);
+    case 'snapshot': {
+      return runNative(['snapshot', '-i']);
     }
-    case "screenshot": {
+    case 'screenshot': {
       // B121: route through the resize wrapper (B120 default maxWidth=800)
       // so batch-step screenshots don't pay native-resolution context cost.
       return captureAndResizeScreenshot({});
     }
-    case "wait": {
+    case 'wait': {
       await sleep(step.ms ?? 500);
       return okResult({ waited: step.ms ?? 500 });
     }
@@ -383,13 +383,13 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
     const {
       steps,
       delayMs = 300,
-      screenshotOn = "failure",
+      screenshotOn = 'failure',
       continueOnError = false,
-      finalSnapshot: finalSnapshotMode = "salient",
+      finalSnapshot: finalSnapshotMode = 'salient',
     } = args;
 
     if (!steps || steps.length === 0) {
-      return failResult("steps array is required and must not be empty");
+      return failResult('steps array is required and must not be empty');
     }
 
     const batchStart = Date.now();
@@ -437,7 +437,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         }
       }
 
-      if (step.action === "snapshot" && success) {
+      if (step.action === 'snapshot' && success) {
         finalSnapshot = extractData(result);
       }
 
@@ -446,7 +446,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       if (!success && !step.optional) {
         // Capture failure screenshot regardless of continueOnError so the
         // diagnostic trail isn't lost.
-        if (screenshotOn === "failure" || screenshotOn === "each") {
+        if (screenshotOn === 'failure' || screenshotOn === 'each') {
           try {
             // B121: route through resize wrapper.
             const ssResult = await captureAndResizeScreenshot({});
@@ -468,7 +468,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         }
       }
 
-      if (screenshotOn === "each" && step.action !== "screenshot") {
+      if (screenshotOn === 'each' && step.action !== 'screenshot') {
         // B121: route through resize wrapper so per-step captures pay budget.
         try {
           await captureAndResizeScreenshot({});
@@ -477,12 +477,12 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
         }
       }
 
-      if (i < steps.length - 1 && step.action !== "wait" && delayMs > 0) {
+      if (i < steps.length - 1 && step.action !== 'wait' && delayMs > 0) {
         await sleep(delayMs);
       }
     }
 
-    if (!failedStep && screenshotOn === "end") {
+    if (!failedStep && screenshotOn === 'end') {
       try {
         // B121: route through resize wrapper.
         const ssResult = await captureAndResizeScreenshot({});
@@ -497,9 +497,9 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
     // GH #321: skip the implicit trailing snapshot when the caller doesn't want
     // it (action-only batches that verify via expect_*/cdp_store_state) — saves a
     // full ~1,450 ms snapshot round-trip.
-    if (!finalSnapshot && !failedStep && finalSnapshotMode !== "none") {
+    if (!finalSnapshot && !failedStep && finalSnapshotMode !== 'none') {
       try {
-        const snapResult = await runNative(["snapshot", "-i"]);
+        const snapResult = await runNative(['snapshot', '-i']);
         if (isOk(snapResult)) {
           finalSnapshot = extractData(snapResult);
         }
@@ -511,7 +511,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
     // GH #321: by default return only the actionable surface (compact salient
     // digest). 'full' keeps the legacy complete node list. A node-shaped payload
     // is required; a screenshot 'end' payload passes through untouched.
-    if (finalSnapshot && finalSnapshotMode === "salient") {
+    if (finalSnapshot && finalSnapshotMode === 'salient') {
       finalSnapshot = salientizeSnapshotData(finalSnapshot);
     }
 
@@ -519,7 +519,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
     if (failedStep) {
       return failResult(
-        `Step ${failedStep.step} failed: ${failedStep.action}${failedStep.error ? " — " + failedStep.error : ""}`,
+        `Step ${failedStep.step} failed: ${failedStep.action}${failedStep.error ? ' — ' + failedStep.error : ''}`,
         {
           steps_completed: failedStep.step - 1,
           total_steps: steps.length,

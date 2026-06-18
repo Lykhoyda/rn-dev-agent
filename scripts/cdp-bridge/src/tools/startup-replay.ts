@@ -1,8 +1,8 @@
-import type { CDPClient } from "../cdp-client.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { handleDevClientPicker } from "./dev-client-picker.js";
-import { resolveBundleId } from "../project-config.js";
-import { terminateApp, launchApp } from "./app-lifecycle.js";
+import type { CDPClient } from '../cdp-client.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { handleDevClientPicker } from './dev-client-picker.js';
+import { resolveBundleId } from '../project-config.js';
+import { terminateApp, launchApp } from './app-lifecycle.js';
 
 export interface StartupReplayResult {
   arrived: boolean;
@@ -55,9 +55,9 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
-      error: "Cannot determine platform. Open a device session first or pass platform explicitly.",
+      error: 'Cannot determine platform. Open a device session first or pass platform explicitly.',
     };
   }
 
@@ -74,10 +74,10 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       error:
-        "Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.",
+        'Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.',
     };
   }
 
@@ -85,17 +85,17 @@ export async function launchAndNavigate(
   let reconnectAttempts = 0;
 
   try {
-    await terminateApp(bundleId, platform as "ios" | "android").catch(() => {
+    await terminateApp(bundleId, platform as 'ios' | 'android').catch(() => {
       /* idempotent */
     });
-    await launchApp(bundleId, platform as "ios" | "android");
+    await launchApp(bundleId, platform as 'ios' | 'android');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       error: `App launch failed: ${msg.slice(0, 200)}`,
     };
@@ -125,11 +125,11 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: "CDP reconnection failed after app launch. Metro may not be running.",
+      error: 'CDP reconnection failed after app launch. Metro may not be running.',
     };
   }
 
@@ -145,11 +145,11 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: "Helpers not injected after app launch. App may still be loading.",
+      error: 'Helpers not injected after app launch. App may still be loading.',
     };
   }
 
@@ -159,15 +159,15 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: "__NAV_REF__ not ready after 12s. NavigationContainer may not have rendered.",
+      error: '__NAV_REF__ not ready after 12s. NavigationContainer may not have rendered.',
     };
   }
 
-  const paramsArg = params ? JSON.stringify(params) : "undefined";
+  const paramsArg = params ? JSON.stringify(params) : 'undefined';
   const navExpr = `
     (function() {
       var navResult = __RN_AGENT.navigateTo(${JSON.stringify(screen)}, ${paramsArg});
@@ -191,16 +191,16 @@ export async function launchAndNavigate(
   `;
 
   const navResult = await client.evaluate(navExpr);
-  if (navResult.error || typeof navResult.value !== "string") {
+  if (navResult.error || typeof navResult.value !== 'string') {
     return {
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: `Navigation evaluate failed: ${navResult.error ?? "unexpected response"}`,
+      error: `Navigation evaluate failed: ${navResult.error ?? 'unexpected response'}`,
     };
   }
 
@@ -216,7 +216,7 @@ export async function launchAndNavigate(
         arrived: false,
         screen,
         current_screen: null,
-        method: "startup_replay_failed",
+        method: 'startup_replay_failed',
         latency_ms: Date.now() - startTime,
         picker_dismissed: pickerDismissed,
         reconnect_attempts: reconnectAttempts,
@@ -228,7 +228,7 @@ export async function launchAndNavigate(
       arrived: parsed.arrived ?? false,
       screen,
       current_screen: parsed.current_screen ?? null,
-      method: "startup_replay",
+      method: 'startup_replay',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
@@ -238,11 +238,11 @@ export async function launchAndNavigate(
       arrived: false,
       screen,
       current_screen: null,
-      method: "startup_replay_failed",
+      method: 'startup_replay_failed',
       latency_ms: Date.now() - startTime,
       picker_dismissed: pickerDismissed,
       reconnect_attempts: reconnectAttempts,
-      error: "Failed to parse navigation result",
+      error: 'Failed to parse navigation result',
     };
   }
 }

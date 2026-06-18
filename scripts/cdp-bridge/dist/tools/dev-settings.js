@@ -1,4 +1,4 @@
-import { okResult, failResult, warnResult, withConnection } from "../utils.js";
+import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
   if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
@@ -37,15 +37,15 @@ export function createDevSettingsHandler(getClient) {
             if (result.error) {
                 return failResult(`Dev settings error: ${result.error}`);
             }
-            if (result.value === "no_method_available") {
+            if (result.value === 'no_method_available') {
                 return warnResult({ action: args.action, executed: false }, `${args.action} not available — all fallback approaches failed.`);
             }
         }
         catch (evalErr) {
             const msg = evalErr instanceof Error ? evalErr.message : String(evalErr);
-            const isDisconnect = msg.includes("WebSocket closed") || msg.includes("WebSocket not connected");
-            if (args.action === "reload" && isDisconnect) {
-                return okResult({ action: args.action, executed: true }, { meta: { note: "Connection will close — use cdp_status to reconnect." } });
+            const isDisconnect = msg.includes('WebSocket closed') || msg.includes('WebSocket not connected');
+            if (args.action === 'reload' && isDisconnect) {
+                return okResult({ action: args.action, executed: true }, { meta: { note: 'Connection will close — use cdp_status to reconnect.' } });
             }
             throw evalErr;
         }

@@ -1,23 +1,23 @@
-import { okResult, failResult, warnResult } from "../utils.js";
-import { handleDevClientPicker, isDevClientPickerShowing } from "./dev-client-picker.js";
-import { PickerBlockingBundleError } from "../cdp/connect.js";
-import { getSessionReloadCount } from "./reload.js";
-import { supportsNativeMultiDebugger } from "../cdp/multiplexer.js";
-import { arbiter } from "../lifecycle/device-arbiter.js";
-import { recoverWedge } from "../cdp/recover-wedge.js";
-import { recoverDetached } from "../cdp/recover-detached.js";
-import { buildNotInstalledAdvice } from "../cdp/app-installed-probe.js";
-import { snapshotHintForBundleId } from "./resolve-ios-app-file.js";
-import { AppDetachedError, enumerateMetroCandidates } from "../cdp/discovery.js";
-import { resolveBridgeProjectRoot, pathMatchesRoot } from "../cdp/metro-cwd.js";
-import { getDeviceSessionHealth } from "./device-session-health.js";
-import { detectIosExternalRunner } from "../runners/external-runner-detect.js";
-import { bridgeEnvState } from "../lifecycle/supervisor-core.js";
+import { okResult, failResult, warnResult } from '../utils.js';
+import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-picker.js';
+import { PickerBlockingBundleError } from '../cdp/connect.js';
+import { getSessionReloadCount } from './reload.js';
+import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
+import { recoverWedge } from '../cdp/recover-wedge.js';
+import { recoverDetached } from '../cdp/recover-detached.js';
+import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
+import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
+import { AppDetachedError, enumerateMetroCandidates } from '../cdp/discovery.js';
+import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
+import { getDeviceSessionHealth } from './device-session-health.js';
+import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
+import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
 export function narrowArchitecture(raw) {
-    return raw === "new" || raw === "old" ? raw : "unknown";
+    return raw === 'new' || raw === 'old' ? raw : 'unknown';
 }
 /**
  * GH #303: flag when the connected Metro is serving a DIFFERENT worktree than
@@ -56,7 +56,7 @@ async function buildStatusResult(client) {
     let hasRedBox = false;
     if (client.helpersInjected) {
         const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
-        if (probeResult.value && typeof probeResult.value === "string") {
+        if (probeResult.value && typeof probeResult.value === 'string') {
             try {
                 const probe = JSON.parse(probeResult.value);
                 if (probe.helpersLoaded) {
@@ -121,9 +121,9 @@ async function buildStatusResult(client) {
             architecture: narrowArchitecture(appInfo?.architecture),
         },
         capabilities: {
-            networkDomain: client.networkMode === "cdp",
+            networkDomain: client.networkMode === 'cdp',
             fiberTree,
-            networkFallback: client.networkMode === "hook",
+            networkFallback: client.networkMode === 'hook',
             bridgeDetected: client.bridgeDetected,
             bridgeVersion: client.bridgeVersion,
             supportsMultipleDebuggers: supportsNativeMultiDebugger(appInfo?.rnVersion),
@@ -132,7 +132,7 @@ async function buildStatusResult(client) {
         domains: {
             runtime: client.isConnected,
             debugger: client.isConnected,
-            network: client.networkMode === "cdp",
+            network: client.networkMode === 'cdp',
             log: client.logDomainEnabled,
             profiler: client.profilerAvailable,
             heapProfiler: client.heapProfilerAvailable,
@@ -153,7 +153,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
     const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
     return async (args) => {
         if (args?.resetArbiter) {
-            const arbiterReset = arbiter.reset("manual via cdp_status");
+            const arbiterReset = arbiter.reset('manual via cdp_status');
             // Best-effort: still report normal status, annotated with what was cleared.
             try {
                 const status = await buildStatusResult(getClient());
@@ -204,7 +204,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                         client = createClient(client.metroPort);
                         setClient(client);
                     }
-                    await client.autoConnect(args.metroPort, args.platform, "status");
+                    await client.autoConnect(args.metroPort, args.platform, 'status');
                 }
             }
             else if (args.platform) {
@@ -212,14 +212,14 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 const currentTarget = client.connectedTarget;
                 const requestedPlatform = args.platform.toLowerCase();
                 const currentPlatform = currentTarget?.platform?.toLowerCase();
-                const titleMatch = `${currentTarget?.title ?? ""} ${currentTarget?.description ?? ""}`
+                const titleMatch = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`
                     .toLowerCase()
                     .includes(requestedPlatform);
                 if (currentPlatform !== requestedPlatform && !titleMatch) {
                     await client.disconnect();
                     client = createClient(client.metroPort);
                     setClient(client);
-                    await client.autoConnect(args.metroPort, args.platform, "status");
+                    await client.autoConnect(args.metroPort, args.platform, 'status');
                 }
             }
             const status = await buildStatusResult(client);
@@ -231,7 +231,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                     await client.softReconnect();
                     if (client.helpersInjected) {
                         const retryResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
-                        if (retryResult.value && typeof retryResult.value === "string") {
+                        if (retryResult.value && typeof retryResult.value === 'string') {
                             try {
                                 const retryProbe = JSON.parse(retryResult.value);
                                 if (retryProbe.appInfo?.__DEV__ === true) {
@@ -252,7 +252,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                                     status.cdp.bundleId = client.connectedTarget?.description ?? null;
                                     status.capabilities.fiberTree = retryProbe.fiberTree;
                                     devRecovered = true;
-                                    autoRecoveredMessage = "Reconnected to correct JS context";
+                                    autoRecoveredMessage = 'Reconnected to correct JS context';
                                 }
                             }
                             catch {
@@ -292,11 +292,11 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                         status.cdp.bundleId = client.connectedTarget?.description ?? null;
                     }
                     else {
-                        const hint = wedge.reason === "flow-active"
-                            ? "A Maestro flow is running — skipped re-foreground recovery. Wait for the flow to finish, then retry."
-                            : wedge.reason === "budget-exhausted"
-                                ? "Wedge-recovery budget exhausted this session. Try cdp_restart(hardReset=true)."
-                                : "Re-foreground recovery did not clear the wedge. Try cdp_restart(hardReset=true).";
+                        const hint = wedge.reason === 'flow-active'
+                            ? 'A Maestro flow is running — skipped re-foreground recovery. Wait for the flow to finish, then retry.'
+                            : wedge.reason === 'budget-exhausted'
+                                ? 'Wedge-recovery budget exhausted this session. Try cdp_restart(hardReset=true).'
+                                : 'Re-foreground recovery did not clear the wedge. Try cdp_restart(hardReset=true).';
                         return warnResult(status, `Debugger paused / app backgrounded. ${hint}`);
                     }
                 }
@@ -313,7 +313,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 !client.helpersInjected &&
                 !status.app.hasRedBox &&
                 status.app.errorCount === 0) {
-                return warnResult(status, "CDP connected but app helpers not injected and no JS errors captured. The app may have crashed natively before __RN_AGENT loaded (e.g. missing native module, failed bundle fetch). Call cdp_native_errors to inspect the platform log.");
+                return warnResult(status, 'CDP connected but app helpers not injected and no JS errors captured. The app may have crashed natively before __RN_AGENT loaded (e.g. missing native module, failed bundle fetch). Call cdp_native_errors to inspect the platform log.');
             }
             // GH #303: the connected Metro serves a different worktree than this session.
             const mismatch = computeMetroMismatch({
@@ -337,9 +337,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 // active device session. If the caller explicitly pinned a non-iOS platform,
                 // do NOT cold-restart the iOS session they didn't ask about — surface the
                 // detached state instead.
-                const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== "ios";
+                const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== 'ios';
                 const recovery = callerPinnedNonIos
-                    ? { recovered: false, reason: "unsupported-platform", attempt: 0 }
+                    ? { recovered: false, reason: 'unsupported-platform', attempt: 0 }
                     : await recoverDetachedFn(getClient(), { snapshotHint: snapshotHintForBundleId });
                 if (recovery.recovered) {
                     // GH #208 review (Gemini F2): never let a post-reconnect status read throw
@@ -354,27 +354,27 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 // GH #262: the bundle is CONFIRMED missing (e.g. simulator erased) —
                 // the generic "relaunch manually / hardReset" hints below can never
                 // work. Return the distinct code with install advice instead.
-                if (recovery.reason === "app-not-installed") {
-                    return failResult(`${message} ${buildNotInstalledAdvice(recovery.udid ?? "booted", recovery.appId ?? "the app", recovery.snapshotHint ?? null)}`, "APP_NOT_INSTALLED", {
+                if (recovery.reason === 'app-not-installed') {
+                    return failResult(`${message} ${buildNotInstalledAdvice(recovery.udid ?? 'booted', recovery.appId ?? 'the app', recovery.snapshotHint ?? null)}`, 'APP_NOT_INSTALLED', {
                         reconnect: getClient().reconnectState,
                         autoConnect: getClient().autoConnectState,
                         bridge: bridgeEnvState(process.env),
                         recovery,
                     });
                 }
-                const detachedHint = recovery.reason === "flow-active"
-                    ? "A Maestro flow is running — skipped auto-relaunch. Wait for the flow to finish, then retry cdp_status."
-                    : recovery.reason === "opted-out"
-                        ? "Auto-relaunch is disabled (RN_AUTO_RELAUNCH_ON_DETACH=0). Relaunch the app manually, or call cdp_restart(hardReset=true)."
-                        : recovery.reason === "budget-exhausted"
-                            ? "Auto-relaunch budget exhausted this session. Relaunch the app manually, or call cdp_restart(hardReset=true)."
-                            : recovery.reason === "no-session"
-                                ? "No active device session to relaunch from. Relaunch the app on the simulator, or call cdp_restart(hardReset=true)."
-                                : recovery.reason === "unsupported-platform"
-                                    ? "Auto-relaunch is iOS-only here. Relaunch the app on the device, then retry cdp_status."
-                                    : "Auto-relaunch did not restore the app. Relaunch it manually, or call cdp_restart(hardReset=true).";
-                const errSuffix = recovery.error ? ` (relaunch error: ${recovery.error})` : "";
-                return failResult(`${message} ${detachedHint}${errSuffix}`, "APP_DETACHED", {
+                const detachedHint = recovery.reason === 'flow-active'
+                    ? 'A Maestro flow is running — skipped auto-relaunch. Wait for the flow to finish, then retry cdp_status.'
+                    : recovery.reason === 'opted-out'
+                        ? 'Auto-relaunch is disabled (RN_AUTO_RELAUNCH_ON_DETACH=0). Relaunch the app manually, or call cdp_restart(hardReset=true).'
+                        : recovery.reason === 'budget-exhausted'
+                            ? 'Auto-relaunch budget exhausted this session. Relaunch the app manually, or call cdp_restart(hardReset=true).'
+                            : recovery.reason === 'no-session'
+                                ? 'No active device session to relaunch from. Relaunch the app on the simulator, or call cdp_restart(hardReset=true).'
+                                : recovery.reason === 'unsupported-platform'
+                                    ? 'Auto-relaunch is iOS-only here. Relaunch the app on the device, then retry cdp_status.'
+                                    : 'Auto-relaunch did not restore the app. Relaunch it manually, or call cdp_restart(hardReset=true).';
+                const errSuffix = recovery.error ? ` (relaunch error: ${recovery.error})` : '';
+                return failResult(`${message} ${detachedHint}${errSuffix}`, 'APP_DETACHED', {
                     reconnect: getClient().reconnectState,
                     autoConnect: getClient().autoConnectState,
                     bridge: bridgeEnvState(process.env),
@@ -410,7 +410,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 }
                 if (pickerResult &&
                     !pickerResult.dismissed &&
-                    pickerResult.reason.includes("could not find")) {
+                    pickerResult.reason.includes('could not find')) {
                     return failResult(`${message}. ${pickerResult.reason}`);
                 }
             }
@@ -420,7 +420,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             // GH #208 (RC1): carry the reconnect attempt count so a connect failure
             // during a reconnect storm reads as "attempt N/30", not a dead end.
             return pickerBlocking
-                ? failResult(message, "PICKER_BLOCKING", {
+                ? failResult(message, 'PICKER_BLOCKING', {
                     autoConnect: getClient().autoConnectState,
                     bridge: bridgeEnvState(process.env),
                 })

@@ -1,76 +1,76 @@
-import { redact } from "../util/redact.js";
+import { redact } from '../util/redact.js';
 const CLIP_LIMIT = 16000;
 const INTERACTION = new Set([
-    "device_press",
-    "device_fill",
-    "device_swipe",
-    "device_scroll",
-    "device_longpress",
-    "device_pinch",
-    "device_back",
-    "device_batch",
-    "device_scrollintoview",
-    "cdp_interact",
-    "device_focus_next",
-    "device_pick_date",
-    "device_pick_value",
-    "device_deeplink",
+    'device_press',
+    'device_fill',
+    'device_swipe',
+    'device_scroll',
+    'device_longpress',
+    'device_pinch',
+    'device_back',
+    'device_batch',
+    'device_scrollintoview',
+    'cdp_interact',
+    'device_focus_next',
+    'device_pick_date',
+    'device_pick_value',
+    'device_deeplink',
 ]);
-const NAVIGATION = new Set(["cdp_navigation_state", "cdp_nav_graph", "cdp_navigate"]);
+const NAVIGATION = new Set(['cdp_navigation_state', 'cdp_nav_graph', 'cdp_navigate']);
 const INTROSPECTION = new Set([
-    "cdp_component_tree",
-    "cdp_component_state",
-    "cdp_store_state",
-    "device_snapshot",
-    "device_screenshot",
-    "cdp_network_log",
-    "cdp_network_body",
-    "cdp_console_log",
-    "cdp_error_log",
-    "cdp_native_errors",
-    "cdp_diagnostic_renderers",
-    "cdp_object_inspect",
-    "cdp_heap_usage",
-    "collect_logs",
+    'cdp_component_tree',
+    'cdp_component_state',
+    'cdp_store_state',
+    'device_snapshot',
+    'device_screenshot',
+    'cdp_network_log',
+    'cdp_network_body',
+    'cdp_console_log',
+    'cdp_error_log',
+    'cdp_native_errors',
+    'cdp_diagnostic_renderers',
+    'cdp_object_inspect',
+    'cdp_heap_usage',
+    'collect_logs',
 ]);
 const LIFECYCLE = new Set([
-    "cdp_status",
-    "cdp_connect",
-    "cdp_disconnect",
-    "cdp_targets",
-    "cdp_reload",
-    "cdp_restart",
-    "cdp_dev_settings",
-    "cdp_open_devtools",
-    "device_list",
-    "observe",
+    'cdp_status',
+    'cdp_connect',
+    'cdp_disconnect',
+    'cdp_targets',
+    'cdp_reload',
+    'cdp_restart',
+    'cdp_dev_settings',
+    'cdp_open_devtools',
+    'device_list',
+    'observe',
 ]);
 const TESTING = new Set([
-    "maestro_run",
-    "maestro_generate",
-    "maestro_test_all",
-    "cdp_run_action",
-    "cdp_repair_action",
-    "proof_step",
-    "cross_platform_verify",
-    "cdp_auto_login",
-    "expect_redux",
-    "expect_route",
-    "expect_visible_by_testid",
-    "expect_text",
+    'maestro_run',
+    'maestro_generate',
+    'maestro_test_all',
+    'cdp_run_action',
+    'cdp_repair_action',
+    'proof_step',
+    'cross_platform_verify',
+    'cdp_auto_login',
+    'expect_redux',
+    'expect_route',
+    'expect_visible_by_testid',
+    'expect_text',
 ]);
 export function classifyFamily(tool) {
     if (INTERACTION.has(tool))
-        return "interaction";
+        return 'interaction';
     if (NAVIGATION.has(tool))
-        return "navigation";
+        return 'navigation';
     if (INTROSPECTION.has(tool))
-        return "introspection";
+        return 'introspection';
     if (LIFECYCLE.has(tool))
-        return "lifecycle";
+        return 'lifecycle';
     if (TESTING.has(tool))
-        return "testing";
-    return "other";
+        return 'testing';
+    return 'other';
 }
 export function clipThenRedact(args, payload) {
     let redactedArgs;
@@ -93,7 +93,7 @@ export function clipThenRedact(args, payload) {
         }
         let clipped = payload;
         let truncated = false;
-        if (typeof json === "string" && json.length > CLIP_LIMIT) {
+        if (typeof json === 'string' && json.length > CLIP_LIMIT) {
             clipped = { _clipped: json.slice(0, CLIP_LIMIT) };
             truncated = true;
         }
@@ -107,11 +107,11 @@ export function clipThenRedact(args, payload) {
     }
 }
 export function unwrapResult(result) {
-    if (!result || typeof result !== "object")
+    if (!result || typeof result !== 'object')
         return undefined;
     const env = result;
     const text = env.content?.[0]?.text;
-    if (typeof text !== "string")
+    if (typeof text !== 'string')
         return undefined;
     try {
         return JSON.parse(text);
@@ -121,13 +121,13 @@ export function unwrapResult(result) {
     }
 }
 export function summarize(tool, _family, args, ok) {
-    const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? "";
+    const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? '';
     const head = target ? `${tool} ${String(target).slice(0, 60)}` : tool;
     return ok ? head : `${head} ✗`;
 }
 export function mapObservation(seq, o) {
     const family = classifyFamily(o.tool);
-    const ok = o.status === "PASS";
+    const ok = o.status === 'PASS';
     const unwrapped = unwrapResult(o.result);
     const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
     const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
@@ -153,7 +153,7 @@ export function mapObservation(seq, o) {
             message = String(redact({ m: raw }).m);
         }
         catch {
-            message = "[REDACTED:error]";
+            message = '[REDACTED:error]';
         }
         event.error = { message };
     }

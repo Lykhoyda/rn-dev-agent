@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 // Safe by construction: argv arrays only, never shell strings.
 // Shared lifecycle ops extracted from startup-replay.ts so device_reset_state
 // can report per-step status (terminate vs launch) instead of one combined call.
@@ -14,16 +14,16 @@ const LAUNCH_TIMEOUT_MS = 15_000;
  * an iOS app that wasn't running).
  */
 export async function terminateApp(bundleId, platform) {
-    if (platform === "ios") {
-        await execFile("xcrun", ["simctl", "terminate", "booted", bundleId], {
+    if (platform === 'ios') {
+        await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {
             timeout: TERMINATE_TIMEOUT_MS,
-            encoding: "utf8",
+            encoding: 'utf8',
         });
     }
     else {
-        await execFile("adb", ["shell", "am", "force-stop", bundleId], {
+        await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
             timeout: TERMINATE_TIMEOUT_MS,
-            encoding: "utf8",
+            encoding: 'utf8',
         });
     }
 }
@@ -40,19 +40,19 @@ export async function terminateApp(bundleId, platform) {
  * without spawning adb.
  */
 export function buildAndroidLaunchArgv(bundleId) {
-    if (typeof bundleId !== "string" || bundleId.length === 0) {
-        throw new Error("buildAndroidLaunchArgv: bundleId is required");
+    if (typeof bundleId !== 'string' || bundleId.length === 0) {
+        throw new Error('buildAndroidLaunchArgv: bundleId is required');
     }
     return [
-        "shell",
-        "am",
-        "start",
-        "-W",
-        "-a",
-        "android.intent.action.MAIN",
-        "-c",
-        "android.intent.category.LAUNCHER",
-        "-p",
+        'shell',
+        'am',
+        'start',
+        '-W',
+        '-a',
+        'android.intent.action.MAIN',
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '-p',
         bundleId,
     ];
 }
@@ -62,16 +62,16 @@ export function buildAndroidLaunchArgv(bundleId) {
  * Throws on failure.
  */
 export async function launchApp(bundleId, platform) {
-    if (platform === "ios") {
-        await execFile("xcrun", ["simctl", "launch", "booted", bundleId], {
+    if (platform === 'ios') {
+        await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
             timeout: LAUNCH_TIMEOUT_MS,
-            encoding: "utf8",
+            encoding: 'utf8',
         });
     }
     else {
-        await execFile("adb", buildAndroidLaunchArgv(bundleId), {
+        await execFile('adb', buildAndroidLaunchArgv(bundleId), {
             timeout: LAUNCH_TIMEOUT_MS,
-            encoding: "utf8",
+            encoding: 'utf8',
         });
     }
 }

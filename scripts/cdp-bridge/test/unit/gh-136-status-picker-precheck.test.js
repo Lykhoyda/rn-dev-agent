@@ -5,11 +5,11 @@
 //
 // The tests below track call order in a shared `events` array so we can
 // assert the sequence directly — `pickerProbe` must precede `autoConnect`.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { createMockClient } from "../helpers/mock-cdp-client.js";
-import { expectOk } from "../helpers/result-helpers.js";
-import { createStatusHandler } from "../../dist/tools/status.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { expectOk } from '../helpers/result-helpers.js';
+import { createStatusHandler } from '../../dist/tools/status.js';
 import {
   _setRunAgentDeviceForTest,
   _resetRunAgentDeviceForTest,
@@ -17,7 +17,7 @@ import {
   _resetHasSessionForTest,
   _setFetchCandidatesForTest,
   _resetFetchCandidatesForTest,
-} from "../../dist/tools/dev-client-picker.js";
+} from '../../dist/tools/dev-client-picker.js';
 
 function makeStatusProbe(extraAppInfo = {}) {
   return JSON.stringify({
@@ -29,14 +29,14 @@ function makeStatusProbe(extraAppInfo = {}) {
   });
 }
 
-test("cdp_status: picker probe runs BEFORE autoConnect when not connected", async () => {
+test('cdp_status: picker probe runs BEFORE autoConnect when not connected', async () => {
   const events = [];
   _setHasSessionForTest(true);
   let probeCount = 0;
   _setFetchCandidatesForTest(async (_text) => {
     // Only record the first probe call; subsequent PICKER_INDICATORS loop
     // calls are part of the same probe sweep and must not double-push the event.
-    if (probeCount === 0) events.push("pickerProbe");
+    if (probeCount === 0) events.push('pickerProbe');
     probeCount++;
     // Picker is gone — no candidates. precheck dismisses without any further work.
     return { ok: true, candidates: [] };
@@ -45,10 +45,10 @@ test("cdp_status: picker probe runs BEFORE autoConnect when not connected", asyn
     _isConnected: false,
     _helpersInjected: true,
     autoConnect: async () => {
-      events.push("autoConnect");
+      events.push('autoConnect');
       client._isConnected = true;
       client._helpersInjected = true;
-      return "connected";
+      return 'connected';
     },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
@@ -61,7 +61,7 @@ test("cdp_status: picker probe runs BEFORE autoConnect when not connected", asyn
     expectOk(await handler({}));
     assert.deepEqual(
       events,
-      ["pickerProbe", "autoConnect"],
+      ['pickerProbe', 'autoConnect'],
       `events out of order: ${JSON.stringify(events)}`,
     );
   } finally {
@@ -70,11 +70,11 @@ test("cdp_status: picker probe runs BEFORE autoConnect when not connected", asyn
   }
 });
 
-test("cdp_status: picker probe is skipped when already connected", async () => {
+test('cdp_status: picker probe is skipped when already connected', async () => {
   let pickerProbed = false;
   _setHasSessionForTest(true);
   _setFetchCandidatesForTest(async (text) => {
-    if (text === "Development servers" || text === "DEVELOPMENT SERVERS") {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
       pickerProbed = true;
       return { ok: true, candidates: [] };
     }
@@ -92,7 +92,7 @@ test("cdp_status: picker probe is skipped when already connected", async () => {
       () => client,
     );
     expectOk(await handler({}));
-    assert.equal(pickerProbed, false, "connected client should NOT trigger picker probe");
+    assert.equal(pickerProbed, false, 'connected client should NOT trigger picker probe');
   } finally {
     _resetFetchCandidatesForTest();
     _resetHasSessionForTest();

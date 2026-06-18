@@ -1,12 +1,12 @@
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { homedir } from "node:os";
-import { createHash } from "node:crypto";
-import { failResult } from "./utils.js";
-import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from "./runners/rn-fast-runner-client.js";
-import { resolveBootedIosUdid } from "./tools/device-screenshot-raw.js";
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from "./fast-runner-ref-map.js";
-import { resolveBundleId } from "./project-config.js";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { failResult } from './utils.js';
+import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
+import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
+import { resolveBundleId } from './project-config.js';
 /**
  * CDP-015: derive a per-user, per-project session file path. The previous
  * fixed `/tmp/rn-dev-agent-session.json` location bled state across repos,
@@ -23,19 +23,19 @@ import { resolveBundleId } from "./project-config.js";
  */
 function getStateDir() {
     if (process.env.XDG_STATE_HOME) {
-        return join(process.env.XDG_STATE_HOME, "rn-dev-agent");
+        return join(process.env.XDG_STATE_HOME, 'rn-dev-agent');
     }
-    if (process.platform === "darwin") {
-        return join(homedir(), "Library", "Application Support", "rn-dev-agent");
+    if (process.platform === 'darwin') {
+        return join(homedir(), 'Library', 'Application Support', 'rn-dev-agent');
     }
-    return join(homedir(), ".rn-dev-agent");
+    return join(homedir(), '.rn-dev-agent');
 }
 function getSessionFilePath() {
-    const projectId = createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+    const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
     return join(getStateDir(), `session-${projectId}.json`);
 }
 const SESSION_FILE = getSessionFilePath();
-const LEGACY_SESSION_FILE = "/tmp/rn-dev-agent-session.json";
+const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 let activeSession = null;
 // CDP-015: load session, refusing to follow symlinks (defends against the
 // classic /tmp/<predictable-name> -> arbitrary-write attack). On failure
@@ -46,7 +46,7 @@ function readSessionSafely(path) {
         const stat = lstatSync(path);
         if (stat.isSymbolicLink())
             return null; // refuse to follow
-        const raw = readFileSync(path, "utf8");
+        const raw = readFileSync(path, 'utf8');
         return JSON.parse(raw);
     }
     catch {
@@ -63,7 +63,7 @@ if (!activeSession) {
         activeSession = legacy;
         try {
             mkdirSync(dirname(SESSION_FILE), { recursive: true });
-            writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: "utf8", mode: 0o600 });
+            writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
         }
         catch {
             /* migration is best-effort */
@@ -80,7 +80,7 @@ export function setActiveSession(info) {
     try {
         mkdirSync(dirname(SESSION_FILE), { recursive: true });
         const tmpPath = `${SESSION_FILE}.tmp.${process.pid}`;
-        writeFileSync(tmpPath, JSON.stringify(info), { encoding: "utf8", mode: 0o600 });
+        writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
         renameSync(tmpPath, SESSION_FILE);
     }
     catch {
@@ -170,10 +170,10 @@ export function listCachedSnapshots() {
 // not found`) when both iOS and Android were booted simultaneously.
 export function getAdbSerial() {
     const session = getActiveSession();
-    if (session?.platform === "android" && session.deviceId)
-        return ["-s", session.deviceId];
+    if (session?.platform === 'android' && session.deviceId)
+        return ['-s', session.deviceId];
     if (process.env.ANDROID_SERIAL)
-        return ["-s", process.env.ANDROID_SERIAL];
+        return ['-s', process.env.ANDROID_SERIAL];
     return [];
 }
 // --- iOS short-circuit: route every supported command through rn-fast-runner ---
@@ -194,34 +194,34 @@ export function getAdbSerial() {
 // handlers). Coordinate-based gestures: the Swift `.swipe` case is tvOS-only;
 // iOS coordinate-form swipes/scrolls use `.drag`.
 const RN_FAST_RUNNER_COMMANDS = new Set([
-    "snapshot",
-    "tap",
-    "press",
-    "fill",
-    "type",
-    "back",
-    "screenshot",
-    "keyboard",
-    "swipe",
-    "scroll",
-    "longpress",
-    "pinch",
+    'snapshot',
+    'tap',
+    'press',
+    'fill',
+    'type',
+    'back',
+    'screenshot',
+    'keyboard',
+    'swipe',
+    'scroll',
+    'longpress',
+    'pinch',
 ]);
 // GH #321: verbs that can change what's on screen, so a cached snapshot can no
 // longer be trusted for targeting after one runs. snapshot/screenshot are reads
 // and are deliberately absent.
 const SNAPSHOT_MUTATING_VERBS = new Set([
-    "tap",
-    "press",
-    "fill",
-    "type",
-    "back",
-    "keyboard",
-    "swipe",
-    "scroll",
-    "drag",
-    "longpress",
-    "pinch",
+    'tap',
+    'press',
+    'fill',
+    'type',
+    'back',
+    'keyboard',
+    'swipe',
+    'scroll',
+    'drag',
+    'longpress',
+    'pinch',
 ]);
 export function getCachedScreenRect() {
     return getScreenRect();
@@ -230,43 +230,43 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
     const cmd = cliArgs[0];
     const positionals = positionalArgs(cliArgs);
     switch (cmd) {
-        case "press":
-        case "tap": {
+        case 'press':
+        case 'tap': {
             const ref = positionals[0];
-            if (ref && ref.startsWith("@")) {
+            if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
-                    return { command: "tap", _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
+                    return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
                 }
-                return { command: "tap", x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
+                return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
             }
             const [xS, yS] = positionals;
             const x = Number(xS), y = Number(yS);
             if (Number.isNaN(x) || Number.isNaN(y)) {
                 throw new Error(`buildRunIOSArgs: tap requires a @ref or numeric x, y`);
             }
-            return { command: "tap", x, y, ...(bundleId ? { bundleId } : {}) };
+            return { command: 'tap', x, y, ...(bundleId ? { bundleId } : {}) };
         }
-        case "fill":
-        case "type": {
+        case 'fill':
+        case 'type': {
             // The Swift runner's `.type` command focuses an input at x/y AND types
             // in one call (see RnFastRunnerTests+CommandExecution.swift:429-468 —
             // `textInputAt(app:, x:, y:)` falls back to `focusedTextInput`). So no
             // separate tap is needed: pass coords + text together.
             const ref = positionals[0];
-            const text = positionals.slice(1).join(" ");
-            const delayRaw = optionValue(cliArgs, "--delay-ms");
+            const text = positionals.slice(1).join(' ');
+            const delayRaw = optionValue(cliArgs, '--delay-ms');
             const delayMs = delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
             const extra = {};
             if (delayMs !== undefined)
                 extra.delayMs = delayMs;
-            if (cliArgs.includes("--clear-first"))
+            if (cliArgs.includes('--clear-first'))
                 extra.clearFirst = true;
-            if (ref && ref.startsWith("@")) {
+            if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
                     return {
-                        command: "type",
+                        command: 'type',
                         _staleRef: ref,
                         text,
                         ...extra,
@@ -274,7 +274,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                     };
                 }
                 return {
-                    command: "type",
+                    command: 'type',
                     x: center.x,
                     y: center.y,
                     text,
@@ -282,18 +282,18 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                     ...(bundleId ? { bundleId } : {}),
                 };
             }
-            return { command: "type", text, ...extra, ...(bundleId ? { bundleId } : {}) };
+            return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
         }
-        case "snapshot":
-            return { command: "snapshot", interactiveOnly: true, ...(bundleId ? { bundleId } : {}) };
-        case "back":
-            return { command: "back", ...(bundleId ? { bundleId } : {}) };
-        case "screenshot":
-            return { command: "screenshot", ...(bundleId ? { bundleId } : {}) };
-        case "keyboard":
-            return { command: "dismissKeyboard", ...(bundleId ? { bundleId } : {}) };
-        case "swipe":
-        case "scroll": {
+        case 'snapshot':
+            return { command: 'snapshot', interactiveOnly: true, ...(bundleId ? { bundleId } : {}) };
+        case 'back':
+            return { command: 'back', ...(bundleId ? { bundleId } : {}) };
+        case 'screenshot':
+            return { command: 'screenshot', ...(bundleId ? { bundleId } : {}) };
+        case 'keyboard':
+            return { command: 'dismissKeyboard', ...(bundleId ? { bundleId } : {}) };
+        case 'swipe':
+        case 'scroll': {
             // Coordinate-based gesture. The Swift `.swipe` is tvOS-only; iOS
             // coord-form gestures use `.drag`. CLI shapes seen:
             //   ['swipe',  x1, y1, x2, y2, durationMs?]
@@ -307,7 +307,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: ${cmd} requires four numeric coordinates`);
             }
             const args = {
-                command: "drag",
+                command: 'drag',
                 x: x1,
                 y: y1,
                 x2,
@@ -321,7 +321,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             }
             return args;
         }
-        case "longpress": {
+        case 'longpress': {
             // CLI shape: ['longpress', x, y, durationMs?]
             const [xS, yS, durationS] = positionals;
             const x = Number(xS), y = Number(yS);
@@ -329,7 +329,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: longpress requires numeric x, y`);
             }
             const args = {
-                command: "longPress",
+                command: 'longPress',
                 x,
                 y,
                 ...(bundleId ? { bundleId } : {}),
@@ -341,7 +341,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             }
             return args;
         }
-        case "pinch": {
+        case 'pinch': {
             // CLI shape: ['pinch', scale, x?, y?]
             const [scaleS, xS, yS] = positionals;
             const scale = Number(scaleS);
@@ -349,7 +349,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 throw new Error(`buildRunIOSArgs: pinch requires numeric scale`);
             }
             const args = {
-                command: "pinch",
+                command: 'pinch',
                 scale,
                 ...(bundleId ? { bundleId } : {}),
             };
@@ -363,7 +363,7 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             return args;
         }
         default:
-            throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? "<empty>"}"`);
+            throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
 }
 function optionValue(cliArgs, flag) {
@@ -371,7 +371,7 @@ function optionValue(cliArgs, flag) {
     if (i === -1)
         return undefined;
     const value = cliArgs[i + 1];
-    return value && !value.startsWith("-") ? value : undefined;
+    return value && !value.startsWith('-') ? value : undefined;
 }
 // Extract positional args, dropping flag tokens AND their values (`--count 3`,
 // `--pattern xy`). A naive `filter(a => !a.startsWith('--'))` strips the flag
@@ -381,9 +381,9 @@ function positionalArgs(cliArgs) {
     const out = [];
     for (let i = 1; i < cliArgs.length; i++) {
         const a = cliArgs[i];
-        if (a.startsWith("-")) {
+        if (a.startsWith('-')) {
             const value = cliArgs[i + 1];
-            if (value && !value.startsWith("-"))
+            if (value && !value.startsWith('-'))
                 i++;
             continue;
         }
@@ -396,54 +396,54 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
     const positionals = positionalArgs(cliArgs);
     const withBundle = bundleId ? { bundleId } : {};
     switch (cmd) {
-        case "press":
-        case "tap": {
+        case 'press':
+        case 'tap': {
             const ref = positionals[0];
-            if (ref && ref.startsWith("@")) {
+            if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)
-                    return { command: "tap", _staleRef: ref, ...withBundle };
-                return { command: "tap", x: center.x, y: center.y, ...withBundle };
+                    return { command: 'tap', _staleRef: ref, ...withBundle };
+                return { command: 'tap', x: center.x, y: center.y, ...withBundle };
             }
             const [xS, yS] = positionals;
             const x = Number(xS), y = Number(yS);
             if (Number.isNaN(x) || Number.isNaN(y)) {
                 throw new Error(`buildRunAndroidArgs: tap requires a @ref or numeric x, y`);
             }
-            return { command: "tap", x, y, ...withBundle };
+            return { command: 'tap', x, y, ...withBundle };
         }
-        case "fill":
-        case "type": {
+        case 'fill':
+        case 'type': {
             const ref = positionals[0];
-            const text = positionals.slice(1).join(" ");
-            if (ref && ref.startsWith("@")) {
+            const text = positionals.slice(1).join(' ');
+            if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)
-                    return { command: "type", _staleRef: ref, text, ...withBundle };
-                return { command: "type", x: center.x, y: center.y, text, ...withBundle };
+                    return { command: 'type', _staleRef: ref, text, ...withBundle };
+                return { command: 'type', x: center.x, y: center.y, text, ...withBundle };
             }
-            return { command: "type", text: positionals.join(" "), ...withBundle };
+            return { command: 'type', text: positionals.join(' '), ...withBundle };
         }
-        case "snapshot":
-            return { command: "snapshot", interactiveOnly: true, ...withBundle };
-        case "back":
-            return { command: "back", ...withBundle };
-        case "screenshot":
-            return { command: "screenshot", outPath: optionValue(cliArgs, "--out"), ...withBundle };
-        case "keyboard":
-        case "dismissKeyboard":
-            return { command: "dismissKeyboard", ...withBundle };
+        case 'snapshot':
+            return { command: 'snapshot', interactiveOnly: true, ...withBundle };
+        case 'back':
+            return { command: 'back', ...withBundle };
+        case 'screenshot':
+            return { command: 'screenshot', outPath: optionValue(cliArgs, '--out'), ...withBundle };
+        case 'keyboard':
+        case 'dismissKeyboard':
+            return { command: 'dismissKeyboard', ...withBundle };
         // `find` is intentionally NOT handled here — `device_find` is a TS orchestrator
         // on Android (mirrors iOS), built on top of runAndroid('snapshot') + findInLatestSnapshot.
-        case "swipe":
-        case "scroll":
-        case "drag": {
+        case 'swipe':
+        case 'scroll':
+        case 'drag': {
             const [x1S, y1S, x2S, y2S, durationS] = positionals;
             const x1 = Number(x1S), y1 = Number(y1S), x2 = Number(x2S), y2 = Number(y2S);
             if ([x1, y1, x2, y2].some((n) => Number.isNaN(n))) {
                 throw new Error(`buildRunAndroidArgs: ${cmd} requires four numeric coordinates`);
             }
-            const args = { command: "drag", x1, y1, x2, y2, ...withBundle };
+            const args = { command: 'drag', x1, y1, x2, y2, ...withBundle };
             if (durationS !== undefined) {
                 const n = Number(durationS);
                 if (!Number.isNaN(n))
@@ -451,15 +451,15 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             }
             return args;
         }
-        case "longpress": {
+        case 'longpress': {
             const [target, yOrDuration, durationMaybe] = positionals;
-            if (target?.startsWith("@")) {
+            if (target?.startsWith('@')) {
                 const center = refCenter(target);
                 if (!center)
-                    return { command: "longPress", _staleRef: target, ...withBundle };
+                    return { command: 'longPress', _staleRef: target, ...withBundle };
                 const duration = Number(yOrDuration);
                 return {
-                    command: "longPress",
+                    command: 'longPress',
                     x: center.x,
                     y: center.y,
                     ...(Number.isNaN(duration) ? {} : { durationMs: duration }),
@@ -468,9 +468,9 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             }
             const x = Number(target), y = Number(yOrDuration);
             if (Number.isNaN(x) || Number.isNaN(y)) {
-                throw new Error("buildRunAndroidArgs: longpress requires numeric x, y or a @ref");
+                throw new Error('buildRunAndroidArgs: longpress requires numeric x, y or a @ref');
             }
-            const args = { command: "longPress", x, y, ...withBundle };
+            const args = { command: 'longPress', x, y, ...withBundle };
             if (durationMaybe !== undefined) {
                 const n = Number(durationMaybe);
                 if (!Number.isNaN(n))
@@ -478,13 +478,13 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             }
             return args;
         }
-        case "pinch": {
+        case 'pinch': {
             const [scaleS, xS, yS] = positionals;
             const scale = Number(scaleS);
             if (Number.isNaN(scale)) {
-                throw new Error("buildRunAndroidArgs: pinch requires numeric scale");
+                throw new Error('buildRunAndroidArgs: pinch requires numeric scale');
             }
-            const args = { command: "pinch", scale, ...withBundle };
+            const args = { command: 'pinch', scale, ...withBundle };
             if (xS !== undefined && yS !== undefined) {
                 const x = Number(xS), y = Number(yS);
                 if (!Number.isNaN(x))
@@ -495,28 +495,28 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             return args;
         }
         default:
-            throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? "<empty>"}"`);
+            throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
 }
 // #210: pure decision for the iOS device_* auto-spawn. Cold-build-safe — only auto-starts
 // when a prebuilt .xctestrun exists; a missing rig or no device returns an actionable error
 // instead of a silent multi-minute xcodebuild.
 export function decideRunnerSpawn(input) {
-    if (input.liveness === "alive")
-        return { action: "proceed" };
+    if (input.liveness === 'alive')
+        return { action: 'proceed' };
     if (!input.deviceId) {
         return {
-            action: "error",
-            message: "rn-fast-runner not started and no booted iOS simulator found. Boot a simulator and run `device_snapshot action=open appId=<your.app.id> platform=ios` first.",
+            action: 'error',
+            message: 'rn-fast-runner not started and no booted iOS simulator found. Boot a simulator and run `device_snapshot action=open appId=<your.app.id> platform=ios` first.',
         };
     }
     if (!input.prebuilt) {
         return {
-            action: "error",
-            message: "rn-fast-runner not started and not prebuilt. Run `device_snapshot action=open appId=<your.app.id> platform=ios` first (one-time cold build, ~minutes), then retry — or pre-build once with `xcodebuild build-for-testing` (see plugin Prerequisites).",
+            action: 'error',
+            message: 'rn-fast-runner not started and not prebuilt. Run `device_snapshot action=open appId=<your.app.id> platform=ios` first (one-time cold build, ~minutes), then retry — or pre-build once with `xcodebuild build-for-testing` (see plugin Prerequisites).',
         };
     }
-    return { action: "spawn", deviceId: input.deviceId };
+    return { action: 'spawn', deviceId: input.deviceId };
 }
 // #210: orchestrate probe → gate → spawn → RE-VERIFY → structured result. ensureFastRunner
 // swallows start errors, so the re-probe is what turns a failed spawn into a clean message
@@ -527,17 +527,17 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     const prebuilt = deps.prebuilt ?? (() => hasBuiltTestProduct(derivedDataPathForRunner()));
     const liveness = await probe();
     const decision = decideRunnerSpawn({ liveness, prebuilt: prebuilt(), deviceId });
-    if (decision.action === "proceed")
+    if (decision.action === 'proceed')
         return { ok: true };
-    if (decision.action === "error")
+    if (decision.action === 'error')
         return { ok: false, message: decision.message };
     await ensure(decision.deviceId, bundleId);
     const after = await probe();
-    if (after === "alive")
+    if (after === 'alive')
         return { ok: true };
     return {
         ok: false,
-        message: "rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.",
+        message: 'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
     };
 }
 export async function ensureFastRunner(deviceId, bundleId) {
@@ -548,9 +548,9 @@ export async function ensureFastRunner(deviceId, bundleId) {
     // before failing. /health responds in ms when healthy, so the happy path is
     // cheap; only a wedged runner pays the 2s probe timeout (vs. 10s per command).
     const liveness = await probeFastRunnerLiveness();
-    if (liveness === "alive")
+    if (liveness === 'alive')
         return;
-    if (liveness === "stale") {
+    if (liveness === 'stale') {
         await reapStaleFastRunner();
     }
     try {
@@ -593,7 +593,7 @@ export async function runNative(cliArgs, opts = {}) {
     // the seam (Codex review conf 90).
     if (!_testSeamFused) {
         _testSeamFused = true;
-        _testSeamFuseBlownBy = cliArgs[0] ?? "<empty>";
+        _testSeamFuseBlownBy = cliArgs[0] ?? '<empty>';
     }
     // GH #321 (live-sim speedup): a screen-mutating verb invalidates the snapshot
     // cache so a subsequent device_find re-snapshots instead of targeting against
@@ -608,17 +608,17 @@ export async function runNative(cliArgs, opts = {}) {
     // is started lazily — if no session has cold-launched it yet, we surface
     // a clear failure so the agent can call device_snapshot action=open.
     const targetPlatform = opts.platform ?? activeSession?.platform;
-    if (targetPlatform === "ios" && !opts.skipSession && RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
-        const appId = activeSession?.appId ?? resolveBundleId("ios") ?? undefined;
+    if (targetPlatform === 'ios' && !opts.skipSession && RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
+        const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
         // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
         // it here; the gate is only for verbs that genuinely require the XCUITest runner.
-        if (cliArgs[0] !== "screenshot") {
+        if (cliArgs[0] !== 'screenshot') {
             const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
-            const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? "");
+            const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
             if (!ready.ok)
-                return failResult(ready.message, "RN_FAST_RUNNER_DOWN");
+                return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
         }
-        const { runIOS } = await import("./runners/rn-fast-runner-client.js");
+        const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
         return runIOS(ios);
     }
@@ -627,57 +627,57 @@ export async function runNative(cliArgs, opts = {}) {
     // UIAutomator's `By.text()` returns regex-match semantics while findInLatestSnapshot
     // returns exact-or-substring; routing through the runner would diverge from iOS (D1217).
     const RN_ANDROID_RUNNER_COMMANDS = new Set([
-        "snapshot",
-        "tap",
-        "press",
-        "fill",
-        "type",
-        "back",
-        "screenshot",
-        "keyboard",
-        "swipe",
-        "scroll",
-        "drag",
-        "longpress",
-        "pinch",
+        'snapshot',
+        'tap',
+        'press',
+        'fill',
+        'type',
+        'back',
+        'screenshot',
+        'keyboard',
+        'swipe',
+        'scroll',
+        'drag',
+        'longpress',
+        'pinch',
     ]);
     // eradicate-agent-device Phase 2 Task 9: when the operator explicitly disables the
     // Android runner (RN_ANDROID_RUNNER=0), return an actionable error instead of
     // silently falling through to NO_NATIVE_ROUTE. There is no agent-device fallback.
-    if (targetPlatform === "android" &&
-        process.env.RN_ANDROID_RUNNER === "0" &&
+    if (targetPlatform === 'android' &&
+        process.env.RN_ANDROID_RUNNER === '0' &&
         !opts.skipSession &&
         RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
-        return failResult('In-tree Android runner is the only device backend; the agent-device fallback was removed (eradicate-agent-device). Unset RN_ANDROID_RUNNER (or set it to anything but "0") to use it.', "RUNNER_DISABLED");
+        return failResult('In-tree Android runner is the only device backend; the agent-device fallback was removed (eradicate-agent-device). Unset RN_ANDROID_RUNNER (or set it to anything but "0") to use it.', 'RUNNER_DISABLED');
     }
-    if (targetPlatform === "android" &&
-        process.env.RN_ANDROID_RUNNER !== "0" &&
+    if (targetPlatform === 'android' &&
+        process.env.RN_ANDROID_RUNNER !== '0' &&
         !opts.skipSession &&
         RN_ANDROID_RUNNER_COMMANDS.has(cliArgs[0])) {
-        const appId = activeSession?.appId ?? resolveBundleId("android") ?? undefined;
+        const appId = activeSession?.appId ?? resolveBundleId('android') ?? undefined;
         // Parity with the iOS short-circuit: ensure the runner is up before dispatch so
         // a cold device_* gets a clear RN_ANDROID_RUNNER_DOWN rather than a buried
         // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
         // fallback (like iOS simctl) — don't gate it on the runner.
-        if (cliArgs[0] !== "screenshot") {
-            const { resolveAndroidSerial, startAndroidRunner } = await import("./runners/rn-android-runner-client.js");
+        if (cliArgs[0] !== 'screenshot') {
+            const { resolveAndroidSerial, startAndroidRunner } = await import('./runners/rn-android-runner-client.js');
             const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
             if (!serial) {
-                return failResult("No Android device resolved (none booted, or multiple — pass deviceId / set ANDROID_SERIAL).", "RN_ANDROID_RUNNER_DOWN");
+                return failResult('No Android device resolved (none booted, or multiple — pass deviceId / set ANDROID_SERIAL).', 'RN_ANDROID_RUNNER_DOWN');
             }
             try {
                 await startAndroidRunner(serial, appId);
             }
             catch (err) {
-                return failResult(`rn-android-runner did not start: ${err instanceof Error ? err.message : String(err)}`, "RN_ANDROID_RUNNER_DOWN");
+                return failResult(`rn-android-runner did not start: ${err instanceof Error ? err.message : String(err)}`, 'RN_ANDROID_RUNNER_DOWN');
             }
         }
-        const { runAndroid } = await import("./runners/rn-android-runner-client.js");
+        const { runAndroid } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
         return runAndroid({ ...android, deviceId: activeSession?.deviceId });
     }
     // No native route for this verb (open/close/devices/find are handled by their
     // own native tools; interaction verbs route via the iOS/Android short-circuits
     // above). The agent-device daemon + CLI tiers were removed (eradicate-agent-device).
-    return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
+    return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, 'NO_NATIVE_ROUTE');
 }

@@ -1,4 +1,4 @@
-import type { ToolResult } from "../utils.js";
+import type { ToolResult } from '../utils.js';
 
 // GH #61 / D688+: shared envelope-augmentation helper for verification-fidelity
 // detectors. Mutates the JSON-stringified envelope inside `result.content[0]`
@@ -32,7 +32,7 @@ export function attachVerificationWarning<T extends BaseVerificationWarning>(
       meta?: Record<string, unknown>;
     };
     env.meta = { ...env.meta, verification_warning: warning };
-    return { content: [{ type: "text" as const, text: JSON.stringify(env) }] };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(env) }] };
   } catch {
     return result;
   }

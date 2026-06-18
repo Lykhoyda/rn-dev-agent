@@ -1,20 +1,20 @@
-import WebSocket from "ws";
-import { RingBuffer, makeDeviceKey } from "./ring-buffer.js";
-import { getNetworkBufferManager } from "./cdp/network-buffer-manager.js";
-import { MetroEventsClient } from "./metro/events-client.js";
-import { CDPMultiplexer } from "./cdp/multiplexer.js";
-import { detectBridge } from "./bridge-detector.js";
-import { logger } from "./logger.js";
-import { performSetup, reinjectHelpers as reinjectHelpersFn } from "./cdp/setup.js";
-import { resetState, setActiveFlag, clearActiveFlag, sleep } from "./cdp/state.js";
-import { defaultTimeout, timeoutForMethod } from "./cdp/timeout-config.js";
-import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from "./cdp/transport.js";
-import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from "./cdp/event-handlers.js";
-import { discoverForList } from "./cdp/discovery.js";
-import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from "./cdp/helper-expr.js";
-import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from "./cdp/connect.js";
-import { resolveAutoConnect } from "./project-config.js";
-import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from "./cdp/reconnection.js";
+import WebSocket from 'ws';
+import { RingBuffer, makeDeviceKey } from './ring-buffer.js';
+import { getNetworkBufferManager } from './cdp/network-buffer-manager.js';
+import { MetroEventsClient } from './metro/events-client.js';
+import { CDPMultiplexer } from './cdp/multiplexer.js';
+import { detectBridge } from './bridge-detector.js';
+import { logger } from './logger.js';
+import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
+import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
+import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
+import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from './cdp/transport.js';
+import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from './cdp/event-handlers.js';
+import { discoverForList } from './cdp/discovery.js';
+import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from './cdp/helper-expr.js';
+import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
+import { resolveAutoConnect } from './project-config.js';
+import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
 export class CDPClient {
     ws = null;
     msgId = 0;
@@ -31,7 +31,7 @@ export class CDPClient {
     reconnecting = false;
     disposed = false;
     _helpersInjected = false;
-    _networkMode = "none";
+    _networkMode = 'none';
     _isPaused = false;
     _connectedTarget = null;
     // M11 / Phase 108: timestamp (ms) of the current CDP connection; null when disconnected.
@@ -39,7 +39,7 @@ export class CDPClient {
     // prolonged empty results. Reset alongside _connectedTarget via buildResettableState.
     _connectedAt = null;
     _timeNowFn;
-    _state = "disconnected";
+    _state = 'disconnected';
     _connectionGeneration = 0;
     _softReconnectRequested = false;
     _bgPollTimer = null;
@@ -85,7 +85,7 @@ export class CDPClient {
         return this._state;
     }
     get isConnected() {
-        return !this.disposed && this._state === "connected" && this.ws?.readyState === WebSocket.OPEN;
+        return !this.disposed && this._state === 'connected' && this.ws?.readyState === WebSocket.OPEN;
     }
     get isPaused() {
         return this._isPaused;
@@ -204,8 +204,8 @@ export class CDPClient {
         }
         return ok;
     }
-    async autoConnect(portHint, filtersOrPlatform, intent = "default") {
-        const filters = typeof filtersOrPlatform === "string"
+    async autoConnect(portHint, filtersOrPlatform, intent = 'default') {
+        const filters = typeof filtersOrPlatform === 'string'
             ? { platform: filtersOrPlatform }
             : (filtersOrPlatform ?? {});
         return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
@@ -263,7 +263,7 @@ export class CDPClient {
     }
     async _doStartProxy(opts) {
         if (!this._connectedTarget) {
-            throw new Error("startProxy requires an active CDP connection — call autoConnect first");
+            throw new Error('startProxy requires an active CDP connection — call autoConnect first');
         }
         const hermesUrl = this._connectedTarget.webSocketDebuggerUrl;
         const multiplexer = new CDPMultiplexer({ hermesUrl, ...opts });
@@ -275,7 +275,7 @@ export class CDPClient {
         // in the path, the multiplexer rejects the WebSocket upgrade.
         // The token itself never appears in logs.
         this._proxyUrl = `ws://127.0.0.1:${port}/${multiplexer.token}`;
-        logger.info("CDP", `Proxy started on ws://127.0.0.1:${port}/<token>, soft-reconnecting current session`);
+        logger.info('CDP', `Proxy started on ws://127.0.0.1:${port}/<token>, soft-reconnecting current session`);
         try {
             // B132: call `_softReconnectDirect` instead of `this.softReconnect()`. The
             // wrapper would observe _proxyUrl just set above and try to suspend the
@@ -314,7 +314,7 @@ export class CDPClient {
         this._proxyDesired = false;
         if (!this._proxyUrl)
             return;
-        logger.info("CDP", `Stopping proxy at ${this._proxyUrl}`);
+        logger.info('CDP', `Stopping proxy at ${this._proxyUrl}`);
         const mux = this._multiplexer;
         this._proxyUrl = null;
         this._multiplexer = null;
@@ -380,10 +380,10 @@ export class CDPClient {
             return;
         try {
             await this.startProxy();
-            logger.info("CDP", "Proxy auto-resumed after reconnect");
+            logger.info('CDP', 'Proxy auto-resumed after reconnect');
         }
         catch (err) {
-            logger.warn("CDP", `Proxy auto-resume failed — clearing desired flag. Run cdp_open_devtools to retry: ${err instanceof Error ? err.message : err}`);
+            logger.warn('CDP', `Proxy auto-resume failed — clearing desired flag. Run cdp_open_devtools to retry: ${err instanceof Error ? err.message : err}`);
             this._proxyDesired = false;
         }
     }
@@ -429,7 +429,7 @@ export class CDPClient {
             }
             this.ws = null;
         }
-        this.rejectAllPending(new Error("Client disconnected"));
+        this.rejectAllPending(new Error('Client disconnected'));
     }
     get effectivePlatform() {
         return this._connectedTarget?.platform ?? null;
@@ -439,7 +439,7 @@ export class CDPClient {
             return this.evaluateAsync(expression);
         }
         const timeout = defaultTimeout(this.effectivePlatform);
-        const result = (await this.sendWithTimeout("Runtime.evaluate", {
+        const result = (await this.sendWithTimeout('Runtime.evaluate', {
             expression,
             returnByValue: true,
         }, timeout));
@@ -447,7 +447,7 @@ export class CDPClient {
             return {
                 error: result.exceptionDetails.text ??
                     result.exceptionDetails.exception?.description ??
-                    "Unknown evaluation error",
+                    'Unknown evaluation error',
             };
         }
         return { value: result?.result?.value };
@@ -457,7 +457,7 @@ export class CDPClient {
         // Values are JSON-serialized inside Hermes to handle non-serializable objects
         // A deferred cleanup timer ensures the slot is removed even if the caller times out
         const timeout = defaultTimeout(this.effectivePlatform);
-        const slot = "__rn_agent_async_" + ++this.slotId + "_" + Date.now();
+        const slot = '__rn_agent_async_' + ++this.slotId + '_' + Date.now();
         const ASYNC_CLEANUP_MS = timeout * 2;
         const wrapper = `(function() {
       function safeVal(v) {
@@ -472,7 +472,7 @@ export class CDPClient {
       }
       setTimeout(function() { delete globalThis['${slot}']; }, ${ASYNC_CLEANUP_MS});
     })()`;
-        const initResult = (await this.sendWithTimeout("Runtime.evaluate", {
+        const initResult = (await this.sendWithTimeout('Runtime.evaluate', {
             expression: wrapper,
             returnByValue: true,
         }, timeout));
@@ -480,7 +480,7 @@ export class CDPClient {
             return {
                 error: initResult.exceptionDetails.text ??
                     initResult.exceptionDetails.exception?.description ??
-                    "Unknown evaluation error",
+                    'Unknown evaluation error',
             };
         }
         // B45 fix: Use absolute deadline to guarantee total wall-clock stays within timeout.
@@ -491,17 +491,17 @@ export class CDPClient {
             if (remaining < 500)
                 break;
             const pollTimeout = Math.min(remaining - 100, 1500);
-            const check = (await this.sendWithTimeout("Runtime.evaluate", {
+            const check = (await this.sendWithTimeout('Runtime.evaluate', {
                 expression: `globalThis['${slot}']`,
                 returnByValue: true,
             }, pollTimeout));
             const val = check?.result?.value;
-            if (val && typeof val === "object") {
-                void this.sendWithTimeout("Runtime.evaluate", {
+            if (val && typeof val === 'object') {
+                void this.sendWithTimeout('Runtime.evaluate', {
                     expression: `delete globalThis['${slot}']`,
                     returnByValue: true,
                 }, 1000).catch(() => { });
-                if ("e" in val)
+                if ('e' in val)
                     return { error: String(val.e) };
                 try {
                     return { value: JSON.parse(val.v) };
@@ -512,11 +512,11 @@ export class CDPClient {
             }
             await sleep(100);
         }
-        void this.sendWithTimeout("Runtime.evaluate", {
+        void this.sendWithTimeout('Runtime.evaluate', {
             expression: `delete globalThis['${slot}']`,
             returnByValue: true,
         }, 1000).catch(() => { });
-        return { error: "Promise did not resolve within " + timeout + "ms" };
+        return { error: 'Promise did not resolve within ' + timeout + 'ms' };
     }
     async send(method, params) {
         return this.sendWithTimeout(method, params, timeoutForMethod(method, this.effectivePlatform));
@@ -555,7 +555,7 @@ export class CDPClient {
                 .then((r) => {
                 this._bridgeDetected = r.present;
                 this._bridgeVersion = r.version;
-                logger.debug("CDP", `Bridge detection: present=${r.present}, version=${r.version}`);
+                logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`);
             })
                 .catch(() => { });
         }

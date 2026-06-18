@@ -1,7 +1,7 @@
-import WebSocket from "ws";
+import WebSocket from 'ws';
 export function sendWithTimeout(ws, pending, nextId, method, params, ms) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-        return Promise.reject(new Error("WebSocket not connected"));
+        return Promise.reject(new Error('WebSocket not connected'));
     }
     return new Promise((resolve, reject) => {
         const id = nextId();
@@ -12,7 +12,7 @@ export function sendWithTimeout(ws, pending, nextId, method, params, ms) {
         pending.set(id, { resolve: resolve, reject, timer });
         try {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
-                throw new Error("WebSocket closed between check and send");
+                throw new Error('WebSocket closed between check and send');
             }
             ws.send(JSON.stringify({ id, method, params }));
         }
@@ -33,8 +33,8 @@ export function rejectAllPending(pending, reason) {
 export function handleMessage(data, pending, eventHandlers, onConsoleHook) {
     try {
         const msg = JSON.parse(data.toString());
-        if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
-            console.error("CDP: unexpected message shape, ignoring");
+        if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) {
+            console.error('CDP: unexpected message shape, ignoring');
             return;
         }
         if (msg.id !== undefined && pending.has(msg.id)) {
@@ -52,12 +52,12 @@ export function handleMessage(data, pending, eventHandlers, onConsoleHook) {
             const handler = eventHandlers.get(msg.method);
             if (handler)
                 handler(msg.params);
-            if (msg.method === "Runtime.consoleAPICalled" && onConsoleHook) {
+            if (msg.method === 'Runtime.consoleAPICalled' && onConsoleHook) {
                 onConsoleHook(msg.params);
             }
         }
     }
     catch (err) {
-        console.error("CDP: malformed message:", err instanceof Error ? err.message : err);
+        console.error('CDP: malformed message:', err instanceof Error ? err.message : err);
     }
 }

@@ -1,38 +1,38 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult } from "../utils.js";
-import { detectPlatform } from "./platform-utils.js";
-import { getAdbSerial } from "../agent-device-wrapper.js";
-import { annotateDeepLinkDepth } from "../verification/deep-link-depth.js";
-import { isValidBundleId } from "../domain/maestro-validator.js";
-import { clearDevClientPickerIfPresent, type PickerOutcome } from "./dev-client-picker.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult } from '../utils.js';
+import { detectPlatform } from './platform-utils.js';
+import { getAdbSerial } from '../agent-device-wrapper.js';
+import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
+import { clearDevClientPickerIfPresent, type PickerOutcome } from './dev-client-picker.js';
 
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
 
 export interface DeeplinkArgs {
   url: string;
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   packageName?: string;
 }
 
 async function openIosDeeplink(url: string): Promise<ToolResult> {
   try {
-    const { stdout, stderr } = await execFile("xcrun", ["simctl", "openurl", "booted", url], {
+    const { stdout, stderr } = await execFile('xcrun', ['simctl', 'openurl', 'booted', url], {
       timeout: EXEC_TIMEOUT_MS,
     });
     return okResult({
       opened: true,
-      platform: "ios" as const,
+      platform: 'ios' as const,
       url,
       output: (stdout || stderr).trim() || undefined,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return failResult(`xcrun simctl openurl failed: ${msg}`, {
-      code: "DEEPLINK_FAILED",
-      platform: "ios",
+      code: 'DEEPLINK_FAILED',
+      platform: 'ios',
       url,
     });
   }
@@ -61,17 +61,17 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
   const quotedUrl = posixSingleQuote(url);
   const args = [
     ...serial,
-    "shell",
-    "am",
-    "start",
-    "-a",
-    "android.intent.action.VIEW",
-    "-d",
+    'shell',
+    'am',
+    'start',
+    '-a',
+    'android.intent.action.VIEW',
+    '-d',
     quotedUrl,
   ];
-  if (packageName) args.push("-n", packageName);
+  if (packageName) args.push('-n', packageName);
   try {
-    const { stdout, stderr } = await execFile("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile('adb', args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     // adb am start returns exit 0 even when the intent fails to resolve. Check for
     // the full range of failure signals that show up in stdout:
@@ -86,14 +86,14 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
       )
     ) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
-        code: "DEEPLINK_FAILED",
-        platform: "android",
+        code: 'DEEPLINK_FAILED',
+        platform: 'android',
         url,
       });
     }
     return okResult({
       opened: true,
-      platform: "android" as const,
+      platform: 'android' as const,
       url,
       packageName,
       output: output || undefined,
@@ -101,8 +101,8 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return failResult(`adb am start failed: ${msg}`, {
-      code: "DEEPLINK_FAILED",
-      platform: "android",
+      code: 'DEEPLINK_FAILED',
+      platform: 'android',
       url,
     });
   }
@@ -122,7 +122,7 @@ export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null
     return result;
   }
   const existingMeta =
-    envelope.meta && typeof envelope.meta === "object"
+    envelope.meta && typeof envelope.meta === 'object'
       ? (envelope.meta as Record<string, unknown>)
       : {};
   envelope.meta =
@@ -136,7 +136,7 @@ export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null
 export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<ToolResult> {
   return async (args) => {
     if (!args.url || args.url.length === 0) {
-      return failResult("url is required", { code: "INVALID_ARGS" });
+      return failResult('url is required', { code: 'INVALID_ARGS' });
     }
     // Phase 134.2-followup (deepsec HIGH revalidation 20260512193352):
     // `url` flows into the adb shell command line. POSIX-quoting in
@@ -144,14 +144,14 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     // containing a newline or control char would break out of the
     // quoted string entirely. Reject those at the boundary.
     // oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars before passing URL to adb shell
-    if (typeof args.url !== "string" || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
+    if (typeof args.url !== 'string' || /[\u0000-\u001F\u0085\u2028\u2029]/.test(args.url)) {
       return failResult(
         `url contains control characters or newlines — refuse to pass to adb shell (Phase 134.2-followup)`,
-        { code: "INVALID_ARGS" },
+        { code: 'INVALID_ARGS' },
       );
     }
     if (args.url.length > 4096) {
-      return failResult("url too long (max 4096 chars)", { code: "INVALID_ARGS" });
+      return failResult('url too long (max 4096 chars)', { code: 'INVALID_ARGS' });
     }
     // Phase 134.2 (deepsec HIGH): `packageName` reaches `adb shell am start
     // -n <packageName>`, where the remote Android shell re-interprets argv.
@@ -160,18 +160,18 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     if (args.packageName !== undefined && !isValidBundleId(args.packageName)) {
       return failResult(
         `Invalid packageName "${String(args.packageName).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`,
-        { code: "INVALID_PACKAGE_NAME" },
+        { code: 'INVALID_PACKAGE_NAME' },
       );
     }
     const platform = args.platform ?? (await detectPlatform());
     if (!platform) {
       return failResult(
-        "No iOS simulator or Android device detected. Pass platform explicitly or boot a device.",
-        { code: "NO_DEVICE" },
+        'No iOS simulator or Android device detected. Pass platform explicitly or boot a device.',
+        { code: 'NO_DEVICE' },
       );
     }
     const result =
-      platform === "ios"
+      platform === 'ios'
         ? await openIosDeeplink(args.url)
         : await openAndroidDeeplink(args.url, args.packageName);
     // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
@@ -179,8 +179,8 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     const annotated = annotateDeepLinkDepth(result, { url: args.url });
     // GH #136 sub-3: the picker can appear after a deep link. Best-effort
     // dismiss on Android (no-op when no session is open); never fail the deeplink.
-    if (platform === "android" && !annotated.isError) {
-      const outcome = await clearDevClientPickerIfPresent("android").catch(() => null);
+    if (platform === 'android' && !annotated.isError) {
+      const outcome = await clearDevClientPickerIfPresent('android').catch(() => null);
       return annotatePicker(annotated, outcome);
     }
     return annotated;

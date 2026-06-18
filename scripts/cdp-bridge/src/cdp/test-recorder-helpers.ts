@@ -44,8 +44,8 @@ export function extractActiveRouteForTest(state: unknown): string | null {
     let depth = 0;
     while (s && depth < 20) {
       // Shape #1: plugin's __RN_AGENT.getNavState() format
-      if (typeof s.routeName === "string") {
-        if (s.nested && typeof s.nested === "object") {
+      if (typeof s.routeName === 'string') {
+        if (s.nested && typeof s.nested === 'object') {
           s = s.nested;
           depth++;
           continue;
@@ -53,7 +53,7 @@ export function extractActiveRouteForTest(state: unknown): string | null {
         return s.routeName;
       }
       // Shape #2: React Navigation's native state format
-      if (typeof s.index === "number" && Array.isArray(s.routes)) {
+      if (typeof s.index === 'number' && Array.isArray(s.routes)) {
         const r = s.routes[s.index];
         if (!r) return null;
         if (r.state) {
@@ -61,7 +61,7 @@ export function extractActiveRouteForTest(state: unknown): string | null {
           depth++;
           continue;
         }
-        return typeof r.name === "string" ? r.name : null;
+        return typeof r.name === 'string' ? r.name : null;
       }
       return null;
     }

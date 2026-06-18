@@ -6,9 +6,9 @@
 // backgrounded). The latter is the most common cause of CDP wedges during
 // agent-device runs and deserves a specific, actionable recovery hint.
 
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { formatConnectFailureMessage } from "../../dist/cdp/connect.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { formatConnectFailureMessage } from '../../dist/cdp/connect.js';
 
 test('connect: every handshake fails → generic "Failed to connect after N" (B154)', () => {
   const msg = formatConnectFailureMessage(
@@ -20,8 +20,8 @@ test('connect: every handshake fails → generic "Failed to connect after N" (B1
       { handshakeOk: false, probeTimedOut: false },
       { handshakeOk: false, probeTimedOut: false },
     ],
-    "com.example.app",
-    "WebSocket handshake failed",
+    'com.example.app',
+    'WebSocket handshake failed',
   );
   assert.match(msg, /Failed to connect after 5 attempts/);
   // The probe-timeout-specific recovery hint MUST NOT appear when no
@@ -31,7 +31,7 @@ test('connect: every handshake fails → generic "Failed to connect after N" (B1
   assert.doesNotMatch(msg, /simctl terminate/);
 });
 
-test("connect: every handshake ok but probe timed out → JS-thread-paused message (B154)", () => {
+test('connect: every handshake ok but probe timed out → JS-thread-paused message (B154)', () => {
   const msg = formatConnectFailureMessage(
     5,
     [
@@ -41,8 +41,8 @@ test("connect: every handshake ok but probe timed out → JS-thread-paused messa
       { handshakeOk: true, probeTimedOut: true },
       { handshakeOk: true, probeTimedOut: true },
     ],
-    "com.rndevagent.testapp",
-    "Target failed pre-flight probe (1+1) — likely a dead JS context",
+    'com.rndevagent.testapp',
+    'Target failed pre-flight probe (1+1) — likely a dead JS context',
   );
   assert.match(msg, /CDP probe timeout after 5 attempts/);
   assert.match(msg, /WebSocket handshake succeeded/);
@@ -55,7 +55,7 @@ test("connect: every handshake ok but probe timed out → JS-thread-paused messa
   assert.match(msg, /simctl launch booted com\.rndevagent\.testapp/);
 });
 
-test("connect: mixed (some handshakes fail, some probe ok) → fall back to generic message (B154)", () => {
+test('connect: mixed (some handshakes fail, some probe ok) → fall back to generic message (B154)', () => {
   // If even one attempt couldn't handshake, the persistent state isn't
   // "JS paused" — Metro / inspector connectivity itself was flaky.
   const msg = formatConnectFailureMessage(
@@ -67,8 +67,8 @@ test("connect: mixed (some handshakes fail, some probe ok) → fall back to gene
       { handshakeOk: true, probeTimedOut: true },
       { handshakeOk: true, probeTimedOut: true },
     ],
-    "com.example.app",
-    "Target failed pre-flight probe (1+1) — likely a dead JS context",
+    'com.example.app',
+    'Target failed pre-flight probe (1+1) — likely a dead JS context',
   );
   assert.match(msg, /Failed to connect after 5 attempts/);
   assert.doesNotMatch(msg, /simctl terminate/);
@@ -85,7 +85,7 @@ test('connect: 1006 close code adds the "another debugger" hint to generic messa
       { handshakeOk: false, probeTimedOut: false },
     ],
     null,
-    "WebSocket closed with code 1006",
+    'WebSocket closed with code 1006',
   );
   assert.match(msg, /Failed to connect after 5 attempts/);
   assert.match(msg, /Another debugger may be connected/);
@@ -102,7 +102,7 @@ test('connect: probe-timeout with null bundleId falls back to "<bundleId>" place
       { handshakeOk: true, probeTimedOut: true },
     ],
     null,
-    "pre-flight probe",
+    'pre-flight probe',
   );
   // No bundle in the target.description → still produce an actionable hint
   // shape, but with a placeholder users can edit.
@@ -110,11 +110,11 @@ test('connect: probe-timeout with null bundleId falls back to "<bundleId>" place
   assert.match(msg, /CDP probe timeout/);
 });
 
-test("connect: zero attempts (defensive) → generic message, no false probe-timeout claim", () => {
+test('connect: zero attempts (defensive) → generic message, no false probe-timeout claim', () => {
   // attempts.length === 0 would mean the loop short-circuited before any
   // iteration ran (caller error). Helper must not claim "all handshakes
   // succeeded" in that degenerate case.
-  const msg = formatConnectFailureMessage(0, [], "com.example.app", null);
+  const msg = formatConnectFailureMessage(0, [], 'com.example.app', null);
   assert.match(msg, /Failed to connect after 0 attempts/);
   assert.doesNotMatch(msg, /simctl/);
 });

@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   runNative,
   setActiveSession,
@@ -9,38 +9,38 @@ import {
   ensureRunnerForCommand,
   cacheSnapshot,
   getAdbSerial,
-} from "../agent-device-wrapper.js";
-import { stopFastRunner } from "../runners/rn-fast-runner-client.js";
+} from '../agent-device-wrapper.js';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import {
   stopAndroidRunner,
   resolveAndroidSerial,
   startAndroidRunner,
-} from "../runners/rn-android-runner-client.js";
-import { resolveIosUdid } from "./device-screenshot-raw.js";
-import { markCdpStale } from "../cdp/recovery.js";
+} from '../runners/rn-android-runner-client.js';
+import { resolveIosUdid } from './device-screenshot-raw.js';
+import { markCdpStale } from '../cdp/recovery.js';
 import {
   detectAndroidExternalRunner,
   detectIosExternalRunner,
   foreignRunnerNotice,
-} from "../runners/external-runner-detect.js";
-import { ensureSingleRunner } from "../runners/ensure-single-runner.js";
-import { suppressIOSAutocorrect } from "../runners/suppress-ios-autocorrect.js";
-import { resetWedgeRecoveryCounter } from "../cdp/recover-wedge.js";
-import { resetDetachedRecoveryCounter } from "../cdp/recover-detached.js";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { resolveBundleId } from "../project-config.js";
-import { isValidBundleId } from "../domain/maestro-validator.js";
-import { logger } from "../logger.js";
+} from '../runners/external-runner-detect.js';
+import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
+import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
+import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { resolveBundleId } from '../project-config.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
+import { logger } from '../logger.js';
 import {
   isAgentDeviceRunnerSentinel,
   recoverFromRunnerLeak,
   type RunnerLeakNode,
-} from "./runner-leak-recovery.js";
-import { DeviceLock } from "../lifecycle/device-lock.js";
-import type { DeviceLockResult, DeviceLockBody } from "../lifecycle/device-lock.js";
-import { arbiter } from "../lifecycle/device-arbiter.js";
-import { closeDeviceSession } from "./device-session-close.js";
+} from './runner-leak-recovery.js';
+import { DeviceLock } from '../lifecycle/device-lock.js';
+import type { DeviceLockResult, DeviceLockBody } from '../lifecycle/device-lock.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
+import { closeDeviceSession } from './device-session-close.js';
 
 const execFile = promisify(execFileCb);
 
@@ -49,7 +49,7 @@ let activeDeviceLock: DeviceLock | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 function acquireDeviceLockForSession(
-  platform: "ios" | "android",
+  platform: 'ios' | 'android',
   deviceId: string,
   appId: string,
 ): DeviceLockResult {
@@ -60,7 +60,7 @@ function acquireDeviceLockForSession(
   const result = lock.acquire();
   // Only manage a heartbeat for a REAL exclusive lock — a degraded (fs-error)
   // acquire is unmanaged, so there is nothing to refresh or release.
-  if (result.status === "acquired" && !result.degraded) {
+  if (result.status === 'acquired' && !result.degraded) {
     activeDeviceLock = lock;
     heartbeatTimer = setInterval(() => lock.touch(), HEARTBEAT_MS);
     // Don't keep the event loop alive solely for the heartbeat (mirrors bgPoll).
@@ -81,16 +81,16 @@ export function releaseDeviceLockForSession(): void {
 }
 
 export function deviceBusyMessage(deviceId: string, holder: DeviceLockBody): string {
-  const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
+  const label = holder.platform === 'android' ? 'Emulator/device' : 'Simulator';
   return (
     `${label} ${deviceId} is already owned by another rn-dev-agent bridge ` +
     `(PID ${holder.pid}, project ${holder.projectRoot}` +
-    `${holder.appId ? `, app ${holder.appId}` : ""}). ` +
+    `${holder.appId ? `, app ${holder.appId}` : ''}). ` +
     `Close that session or target a different simulator.`
   );
 }
 
-type SnapshotAction = "open" | "close" | "snapshot";
+type SnapshotAction = 'open' | 'close' | 'snapshot';
 
 interface SnapshotArgs {
   action: SnapshotAction;
@@ -122,8 +122,8 @@ export async function isAppRunning(
     android?: (bundleId: string) => Promise<boolean>;
   },
 ): Promise<boolean> {
-  const p = (platform ?? "ios").toLowerCase();
-  if (p === "android") {
+  const p = (platform ?? 'ios').toLowerCase();
+  if (p === 'android') {
     return (probes?.android ?? defaultAndroidProbe)(bundleId);
   }
   return (probes?.ios ?? defaultIOSProbe)(bundleId);
@@ -131,9 +131,9 @@ export async function isAppRunning(
 
 async function defaultIOSProbe(bundleId: string): Promise<boolean> {
   try {
-    const { stdout } = await execFile("xcrun", ["simctl", "spawn", "booted", "launchctl", "list"], {
+    const { stdout } = await execFile('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], {
       timeout: 5000,
-      encoding: "utf8",
+      encoding: 'utf8',
     });
     // launchctl list outputs lines like "<pid>  <status>  UIKitApplication:<bundleId>[...]"
     return stdout.includes(`UIKitApplication:${bundleId}`);
@@ -144,9 +144,9 @@ async function defaultIOSProbe(bundleId: string): Promise<boolean> {
 
 async function defaultAndroidProbe(bundleId: string): Promise<boolean> {
   try {
-    const { stdout } = await execFile("adb", ["shell", "pidof", bundleId], {
+    const { stdout } = await execFile('adb', ['shell', 'pidof', bundleId], {
       timeout: 3000,
-      encoding: "utf8",
+      encoding: 'utf8',
     });
     return stdout.trim().length > 0;
   } catch {
@@ -156,19 +156,19 @@ async function defaultAndroidProbe(bundleId: string): Promise<boolean> {
 
 export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<ToolResult> {
   return async (args) => {
-    const action = args.action ?? "snapshot";
+    const action = args.action ?? 'snapshot';
 
-    if (action === "open") {
+    if (action === 'open') {
       let appId = args.appId;
       let autoDetected = false;
 
       if (!appId) {
-        const platform = args.platform ?? "ios";
+        const platform = args.platform ?? 'ios';
         appId = resolveBundleId(platform) ?? undefined;
         if (!appId) {
           return failResult(
             'appId is required for action=open (e.g. "com.example.app"). ' +
-              "Could not auto-detect from app.json — provide appId explicitly.",
+              'Could not auto-detect from app.json — provide appId explicitly.',
           );
         }
         autoDetected = true;
@@ -183,19 +183,19 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       if (!isValidBundleId(appId)) {
         return failResult(
           `Invalid appId "${String(appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`,
-          "INVALID_APPID",
+          'INVALID_APPID',
         );
       }
 
       // Refuse Expo Go — the in-tree device runner needs a Dev Client or
       // standalone build and cannot drive Expo Go.
-      const EXPO_GO_BUNDLES = ["host.exp.Exponent", "host.exp.exponent"];
+      const EXPO_GO_BUNDLES = ['host.exp.Exponent', 'host.exp.exponent'];
       if (EXPO_GO_BUNDLES.includes(appId)) {
         return failResult(
-          "Expo Go is not supported — the in-tree device runner needs a Dev Client or standalone build. " +
-            "Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.",
+          'Expo Go is not supported — the in-tree device runner needs a Dev Client or standalone build. ' +
+            'Use CDP tools (cdp_component_tree, cdp_store_state, cdp_evaluate) + device_screenshot instead.',
           {
-            hint: "Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.",
+            hint: 'Use cdp_evaluate for JS-level interactions. device_screenshot works without a session.',
           },
         );
       }
@@ -205,33 +205,33 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       // A device_snapshot action=open with `platform` OMITTED still opens an
       // iOS session, so normalize here and gate the iOS-only lock on this rather
       // than checking raw args.platform directly (which would silently skip the lock when omitted).
-      const platform = (args.platform ?? "ios").toLowerCase();
-      const lockPlatform: "ios" | "android" = platform === "android" ? "android" : "ios";
+      const platform = (args.platform ?? 'ios').toLowerCase();
+      const lockPlatform: 'ios' | 'android' = platform === 'android' ? 'android' : 'ios';
 
       // GH#202 Phase 2 Task 4: resolve device id NATIVELY (no agent-device).
       const deviceId =
-        lockPlatform === "android"
+        lockPlatform === 'android'
           ? await resolveAndroidSerial(args.deviceId)
           : await resolveIosUdid(args.deviceId);
       if (!deviceId) {
         return failResult(
           `No booted ${platform} device found (or multiple booted — pass deviceId explicitly).`,
-          "NOT_CONNECTED",
+          'NOT_CONNECTED',
         );
       }
 
       // GH#202 Phase 1.5 / Task 4: acquire the lock BEFORE any side-effect.
       // On conflict, nothing has been launched yet — no teardown needed.
       const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
-      if (lockResult.status === "conflict") {
+      if (lockResult.status === 'conflict') {
         return failResult(deviceBusyMessage(deviceId, lockResult.holder), {
-          code: "DEVICE_BUSY",
+          code: 'DEVICE_BUSY',
           holder: lockResult.holder,
         });
       }
       if (lockResult.degraded) {
         logger.warn(
-          "rn-device",
+          'rn-device',
           `Device-ownership lock unavailable (fs error) for ${deviceId} — ` +
             `cross-bridge contention protection is off this session.`,
         );
@@ -246,14 +246,14 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           releaseDeviceLockForSession();
           return failResult(
             `attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`,
-            "NOT_CONNECTED",
+            'NOT_CONNECTED',
           );
         }
       }
 
       // Ensure runner + launch. Any failure releases the lock before returning.
       try {
-        if (lockPlatform === "ios") {
+        if (lockPlatform === 'ios') {
           // ensureRunnerForCommand re-probes liveness and returns a clean
           // {ok:false,message} when the XCUITest rig can't come up (ensureFastRunner
           // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
@@ -261,13 +261,13 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           const ready = await ensureRunnerForCommand(deviceId, appId);
           if (!ready.ok) {
             releaseDeviceLockForSession();
-            return failResult(ready.message, "RN_FAST_RUNNER_DOWN");
+            return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
           }
           // A bare simctl launch foregrounds a running PID without relaunch —
           // safe whether or not attachOnly; ignore errors (app may be frontmost).
-          await execFile("xcrun", ["simctl", "launch", deviceId, appId], {
+          await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
             timeout: 10_000,
-            encoding: "utf8",
+            encoding: 'utf8',
           }).catch(() => {
             /* already frontmost is OK */
           });
@@ -275,25 +275,25 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           await startAndroidRunner(deviceId, appId);
           if (!args.attachOnly) {
             await execFile(
-              "adb",
+              'adb',
               [
-                "-s",
+                '-s',
                 deviceId,
-                "shell",
-                "monkey",
-                "-p",
+                'shell',
+                'monkey',
+                '-p',
                 appId,
-                "-c",
-                "android.intent.category.LAUNCHER",
-                "1",
+                '-c',
+                'android.intent.category.LAUNCHER',
+                '1',
               ],
-              { timeout: 10_000, encoding: "utf8" },
+              { timeout: 10_000, encoding: 'utf8' },
             );
           }
         }
       } catch (err) {
         releaseDeviceLockForSession();
-        const code = lockPlatform === "ios" ? "RN_FAST_RUNNER_DOWN" : "RN_ANDROID_RUNNER_DOWN";
+        const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
         return failResult(
           `Failed to start device runner: ${err instanceof Error ? err.message : String(err)}`,
           code,
@@ -319,28 +319,28 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       // known here (device-open), so scope-kill any stale AgentDeviceRunner
       // targeting THIS simulator and clear orphaned daemon lock files.
       // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
-      if (process.env.RN_DEVICE_KILL_LEGACY !== "0" && platform === "ios" && deviceId) {
+      if (process.env.RN_DEVICE_KILL_LEGACY !== '0' && platform === 'ios' && deviceId) {
         try {
           const r = await ensureSingleRunner({ udid: deviceId });
           if (r.killedPids.length) {
             logger.info(
-              "rn-device",
-              `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(", ")} on ${deviceId}`,
+              'rn-device',
+              `ensureSingleRunner: killed stale runner PID(s) ${r.killedPids.join(', ')} on ${deviceId}`,
             );
           }
           if (r.removedFiles.length) {
-            logger.info("rn-device", `ensureSingleRunner: removed ${r.removedFiles.join(", ")}`);
+            logger.info('rn-device', `ensureSingleRunner: removed ${r.removedFiles.join(', ')}`);
           }
           if (r.removedApps.length) {
             logger.info(
-              "rn-device",
-              `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(", ")} from ${deviceId}`,
+              'rn-device',
+              `ensureSingleRunner: uninstalled legacy runner app(s) ${r.removedApps.join(', ')} from ${deviceId}`,
             );
           }
-          for (const w of r.warnings) logger.warn("rn-device", w);
+          for (const w of r.warnings) logger.warn('rn-device', w);
         } catch (err) {
           logger.warn(
-            "rn-device",
+            'rn-device',
             `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
@@ -350,13 +350,13 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       // agent-device processes that would contend for input + focus with
       // our rn-android-runner. Fires by default (Task 11 flipped the
       // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
-      if (platform === "android" && process.env.RN_ANDROID_RUNNER !== "0") {
+      if (platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
         detectAndroidExternalRunner(undefined, getAdbSerial())
           .then((warning) => {
             if (!warning) return;
-            logger.warn("rn-device", warning.message);
+            logger.warn('rn-device', warning.message);
             for (const line of warning.processLines) {
-              logger.warn("rn-device", `  ${line.trim()}`);
+              logger.warn('rn-device', `  ${line.trim()}`);
             }
           })
           .catch(() => {
@@ -364,7 +364,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           });
       }
 
-      if (platform === "ios") {
+      if (platform === 'ios') {
         // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
         // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
         // Fire-and-forget: a hung simctl must never stall session-open (up to
@@ -372,7 +372,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         suppressIOSAutocorrect(deviceId)
           .then((sup) => {
             if (sup.warnings.length)
-              logger.info("rn-device", `suppressIOSAutocorrect: ${sup.warnings.join("; ")}`);
+              logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
           })
           .catch(() => {
             /* fail-open: never block session-open on keyboard prefs */
@@ -387,7 +387,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       // open); its ≤2s latency is surfaced in meta.timings_ms.
       let foreign: ReturnType<typeof foreignRunnerNotice> = null;
       let foreignDetectMs: number | undefined;
-      if (platform === "ios" && process.env.RN_IOS_FOREIGN_WARN !== "0") {
+      if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
         const flowHeld = arbiter.snapshot.flowLeaseHeldBy !== null;
         if (!flowHeld) {
           const t0 = Date.now();
@@ -396,9 +396,9 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           foreign = foreignRunnerNotice(detection, false);
         }
         if (foreign) {
-          logger.warn("rn-device", foreign.warning);
+          logger.warn('rn-device', foreign.warning);
           for (const line of foreign.meta.foreignRunner.processLines) {
-            logger.warn("rn-device", `  ${line}`);
+            logger.warn('rn-device', `  ${line}`);
           }
         }
       }
@@ -410,7 +410,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           foreign ? foreign.warning : null,
         ]
           .filter(Boolean)
-          .join("; ");
+          .join('; ');
         const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
         if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
         return warnResult(data, warning, meta);
@@ -418,7 +418,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       return okResult(data);
     }
 
-    if (action === "close") {
+    if (action === 'close') {
       return closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -432,7 +432,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
     // action === 'snapshot'
     if (!getActiveSession()) {
       return failResult('No device session open. Call device_snapshot with action="open" first.', {
-        hint: "Provide appId and platform to start a session.",
+        hint: 'Provide appId and platform to start a session.',
       });
     }
 
@@ -468,7 +468,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // fast-runner; otherwise omitted so recovery falls back to the
           // existing tiers.
           reacquire:
-            session?.platform === "ios" && session?.appId && session?.deviceId
+            session?.platform === 'ios' && session?.appId && session?.deviceId
               ? () => reacquireIosTargetApp(session.appId!, session.deviceId!)
               : undefined,
         },
@@ -482,13 +482,13 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         // ~47s STALE_TARGET timeout that prompted this issue.
         markCdpStale();
         return wrapWithMeta(recovery.result, {
-          recovered: "agent-device-runner-leak",
+          recovered: 'agent-device-runner-leak',
           recoveryTier: recovery.tier,
         });
       }
 
       return failResult(runnerLeakFailureMessage(recovery.reason, session), {
-        code: "RUNNER_LEAK",
+        code: 'RUNNER_LEAK',
         recoveryReason: recovery.reason,
         hint: runnerLeakFailureHint(recovery.reason, session),
       });
@@ -503,7 +503,7 @@ export function runnerLeakFailureMessage(
   reason: string | undefined,
   session: { appId?: string } | null,
 ): string {
-  if (reason === "no-session-context" && session && !session.appId) {
+  if (reason === 'no-session-context' && session && !session.appId) {
     return "device_snapshot returned AgentDeviceRunner's own UI tree, but auto-recovery cannot run because the active session has no stored appId. This usually means the session was opened by a plugin version from before B119 / GH #35 landed.";
   }
   return "device_snapshot returned AgentDeviceRunner's own UI tree instead of the target app (B119 / GH #35 — agent-device daemon dropped appBundleId on dispatch). Auto-recovery did not restore the target.";
@@ -513,10 +513,10 @@ export function runnerLeakFailureHint(
   reason: string | undefined,
   session: { appId?: string } | null,
 ): string {
-  if (reason === "no-session-context" && session && !session.appId) {
-    return "Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.";
+  if (reason === 'no-session-context' && session && !session.appId) {
+    return 'Run device_snapshot action=close, then action=open appId=<your.bundle.id> platform=ios to start a session that supports auto-recovery.';
   }
-  return "Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.";
+  return 'Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.';
 }
 
 /**
@@ -538,9 +538,9 @@ async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<T
     /* best-effort — may already be dead */
   }
   try {
-    await execFile("xcrun", ["simctl", "launch", "booted", appId], {
+    await execFile('xcrun', ['simctl', 'launch', 'booted', appId], {
       timeout: 5000,
-      encoding: "utf8",
+      encoding: 'utf8',
     });
   } catch {
     /* best-effort — the sentinel re-check covers a failed foreground */
@@ -554,7 +554,7 @@ async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<T
 }
 
 async function rawSnapshot(): Promise<ToolResult> {
-  return runNative(["snapshot", "-i"]);
+  return runNative(['snapshot', '-i']);
 }
 
 function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
@@ -604,7 +604,7 @@ function wrapWithMeta(result: ToolResult, meta: Record<string, unknown>): ToolRe
       meta?: Record<string, unknown>;
     };
     envelope.meta = { ...envelope.meta, ...meta };
-    return { content: [{ type: "text" as const, text: JSON.stringify(envelope) }] };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
   } catch {
     return result;
   }
@@ -626,9 +626,9 @@ export async function reopenSessionForRecovery(
   // first), so there is no self-DEVICE_BUSY. This replaces the old
   // agent-device `open` RPC + envelope/UDID_RE parse.
   return createDeviceSnapshotHandler()({
-    action: "open",
+    action: 'open',
     appId,
-    platform: platform as SnapshotArgs["platform"],
+    platform: platform as SnapshotArgs['platform'],
     attachOnly,
     sessionName: recoveryName,
   });

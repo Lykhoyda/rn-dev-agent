@@ -1,4 +1,5 @@
 {
+  "singleQuote": true,
   "ignorePatterns": [
     "node_modules/",
     "dist/",

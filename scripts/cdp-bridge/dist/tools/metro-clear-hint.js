@@ -7,8 +7,8 @@
 // a mismatched bundle is running. Source: metro-mcp troubleshooting
 // "Empty Results or Stale Data" (top-3 issue).
 export const METRO_CLEAR_HINT_THRESHOLD_MS = 60_000;
-export const METRO_CLEAR_HINT_TEXT = "If results stay empty, try restarting Metro with `npx expo start --clear` " +
-    "or `npx react-native start --reset-cache`. The MCP will reconnect automatically.";
+export const METRO_CLEAR_HINT_TEXT = 'If results stay empty, try restarting Metro with `npx expo start --clear` ' +
+    'or `npx react-native start --reset-cache`. The MCP will reconnect automatically.';
 /**
  * Decide whether to include the Metro --clear hint in a tool result.
  *

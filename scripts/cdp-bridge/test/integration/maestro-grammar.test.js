@@ -20,29 +20,29 @@
 // Gracefully skips when `maestro` is not installed — CI machines without
 // the JDK-based CLI should not be forced to install it just to run this
 // guard. Local dev machines that ship Maestro flows will exercise it.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 
 function maestroAvailable() {
-  const r = spawnSync("which", ["maestro"], { encoding: "utf8" });
+  const r = spawnSync('which', ['maestro'], { encoding: 'utf8' });
   return r.status === 0 && r.stdout.trim().length > 0;
 }
 
 function captureHelp() {
-  const r = spawnSync("maestro", ["test", "--help"], {
-    encoding: "utf8",
+  const r = spawnSync('maestro', ['test', '--help'], {
+    encoding: 'utf8',
     timeout: 30_000,
   });
   // Maestro's CLI writes its Usage line to stdout; version info goes to
   // stderr. The `--help` handler in clikt-based CLIs typically exits 0
   // but some versions exit 1 — accept either as long as stdout contains
   // the usage block.
-  const text = (r.stdout ?? "") + "\n" + (r.stderr ?? "");
+  const text = (r.stdout ?? '') + '\n' + (r.stderr ?? '');
   return { text, status: r.status };
 }
 
-test("B59 grammar guard: `maestro test` subcommand exists", { skip: !maestroAvailable() }, () => {
+test('B59 grammar guard: `maestro test` subcommand exists', { skip: !maestroAvailable() }, () => {
   const { text } = captureHelp();
   assert.match(
     text,
@@ -52,7 +52,7 @@ test("B59 grammar guard: `maestro test` subcommand exists", { skip: !maestroAvai
 });
 
 test(
-  "B59 grammar guard: --platform flag our code uses is still documented",
+  'B59 grammar guard: --platform flag our code uses is still documented',
   { skip: !maestroAvailable() },
   () => {
     // Our dispatch builds `['test', '--platform', platform, flowFile]`.
@@ -74,7 +74,7 @@ test(
 );
 
 test(
-  "B59 grammar guard: --device-type flag must NOT exist (pre-ship bug regression)",
+  'B59 grammar guard: --device-type flag must NOT exist (pre-ship bug regression)',
   { skip: !maestroAvailable() },
   () => {
     // This is the exact bug Gemini (conf 97) + Codex (conf 98) caught on
@@ -95,17 +95,17 @@ test(
 );
 
 test(
-  "B59 grammar guard: `maestro` accepts --platform ios without parse error (smoke)",
+  'B59 grammar guard: `maestro` accepts --platform ios without parse error (smoke)',
   { skip: !maestroAvailable() },
   () => {
     // Sanity smoke: invoke maestro with our exact argv prefix against a
     // non-existent flow. The flag must parse cleanly — the CLI must reach
     // the "flow file not found" branch, not fail at "Unknown option."
-    const r = spawnSync("maestro", ["test", "--platform", "ios", "/tmp/__does-not-exist__.yaml"], {
-      encoding: "utf8",
+    const r = spawnSync('maestro', ['test', '--platform', 'ios', '/tmp/__does-not-exist__.yaml'], {
+      encoding: 'utf8',
       timeout: 15_000,
     });
-    const combined = (r.stdout ?? "") + "\n" + (r.stderr ?? "");
+    const combined = (r.stdout ?? '') + '\n' + (r.stderr ?? '');
     assert.doesNotMatch(
       combined,
       /Unknown option/,
@@ -122,13 +122,13 @@ test(
   },
 );
 
-test("B59 grammar guard: when `maestro` is missing, all guards skip cleanly", () => {
+test('B59 grammar guard: when `maestro` is missing, all guards skip cleanly', () => {
   // Meta-test: documents that this whole file is opt-in. The `skip:
   // !maestroAvailable()` guard on each test above fires when maestro
   // isn't installed. This test verifies the detection primitive itself
   // works — any machine that runs the suite sees a truthy/falsy answer.
   const avail = maestroAvailable();
-  assert.equal(typeof avail, "boolean");
+  assert.equal(typeof avail, 'boolean');
   // No maestro-specific assertions here — the point is documenting the
   // skip contract for future readers.
 });

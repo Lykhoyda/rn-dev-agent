@@ -12,10 +12,10 @@
 // These tests build synthetic fiber trees in a VM sandbox and verify
 // the walk-up + duck-type detection + side-effect call all work.
 
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import vm from "node:vm";
-import { INJECTED_HELPERS } from "../../dist/injected-helpers.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 /**
  * Build a sandbox + fiber root + run __RN_AGENT.interact, returning the
@@ -71,7 +71,7 @@ function linkFiber(parent, child) {
 // Happy path — FormProvider ancestor with a duck-typed UseFormReturn
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("setFieldValue: walks up to FormProvider, calls setValue with name + value + default options", () => {
+test('setFieldValue: walks up to FormProvider, calls setValue with name + value + default options', () => {
   const setValueCalls = [];
   const formReturn = {
     setValue(name, value, options) {
@@ -80,36 +80,36 @@ test("setFieldValue: walks up to FormProvider, calls setValue with name + value 
     getValues() {
       return {};
     },
-    control: { _formValues: { email: "" } },
+    control: { _formValues: { email: '' } },
   };
 
   const result = runInteract(
     () => {
       // root → FormProvider (the value-carrying Provider) → wrapper → anchor.
       const root = {
-        type: { displayName: "App" },
+        type: { displayName: 'App' },
         memoizedProps: {},
         child: null,
         sibling: null,
         return: null,
       };
       const provider = {
-        type: { displayName: "FormProvider" },
+        type: { displayName: 'FormProvider' },
         memoizedProps: { value: formReturn },
         child: null,
         sibling: null,
         return: null,
       };
       const wrapper = {
-        type: { displayName: "View" },
+        type: { displayName: 'View' },
         memoizedProps: {},
         child: null,
         sibling: null,
         return: null,
       };
       const anchor = {
-        type: { displayName: "Pressable" },
-        memoizedProps: { testID: "email-field" },
+        type: { displayName: 'Pressable' },
+        memoizedProps: { testID: 'email-field' },
         child: null,
         sibling: null,
         return: null,
@@ -119,25 +119,25 @@ test("setFieldValue: walks up to FormProvider, calls setValue with name + value 
       linkFiber(wrapper, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "email-field", name: "email", value: "a@b.com" },
+    { action: 'setFieldValue', testID: 'email-field', name: 'email', value: 'a@b.com' },
   );
 
   assert.equal(result.success, true);
-  assert.equal(result.action, "setFieldValue");
-  assert.equal(result.name, "email");
-  assert.equal(result.value, "a@b.com");
+  assert.equal(result.action, 'setFieldValue');
+  assert.equal(result.name, 'email');
+  assert.equal(result.value, 'a@b.com');
   assert.equal(setValueCalls.length, 1);
   // JSON-roundtrip to coerce sandbox-side Objects to Node-side Objects,
   // so assert/strict's prototype check doesn't reject structurally-equal
   // values for not being reference-equal across the VM boundary.
   assert.deepEqual(JSON.parse(JSON.stringify(setValueCalls[0])), {
-    name: "email",
-    value: "a@b.com",
+    name: 'email',
+    value: 'a@b.com',
     options: { shouldValidate: true, shouldDirty: true },
   });
 });
 
-test("setFieldValue: shouldValidate=false and shouldDirty=false pass through verbatim", () => {
+test('setFieldValue: shouldValidate=false and shouldDirty=false pass through verbatim', () => {
   const setValueCalls = [];
   const formReturn = {
     setValue(name, value, options) {
@@ -152,7 +152,7 @@ test("setFieldValue: shouldValidate=false and shouldDirty=false pass through ver
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       const provider = {
-        type: { displayName: "FormProvider" },
+        type: { displayName: 'FormProvider' },
         memoizedProps: { value: formReturn },
         child: null,
         sibling: null,
@@ -160,7 +160,7 @@ test("setFieldValue: shouldValidate=false and shouldDirty=false pass through ver
       };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "f" },
+        memoizedProps: { testID: 'f' },
         child: null,
         sibling: null,
         return: null,
@@ -170,10 +170,10 @@ test("setFieldValue: shouldValidate=false and shouldDirty=false pass through ver
       return root;
     },
     {
-      action: "setFieldValue",
-      testID: "f",
-      name: "n",
-      value: "v",
+      action: 'setFieldValue',
+      testID: 'f',
+      name: 'n',
+      value: 'v',
       shouldValidate: false,
       shouldDirty: false,
     },
@@ -186,7 +186,7 @@ test("setFieldValue: shouldValidate=false and shouldDirty=false pass through ver
   });
 });
 
-test("setFieldValue: numeric and boolean values pass through unchanged (no coercion)", () => {
+test('setFieldValue: numeric and boolean values pass through unchanged (no coercion)', () => {
   const calls = [];
   const formReturn = {
     setValue(n, v, _o) {
@@ -200,7 +200,7 @@ test("setFieldValue: numeric and boolean values pass through unchanged (no coerc
   function buildTree() {
     const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
     const provider = {
-      type: { displayName: "FormProvider" },
+      type: { displayName: 'FormProvider' },
       memoizedProps: { value: formReturn },
       child: null,
       sibling: null,
@@ -208,7 +208,7 @@ test("setFieldValue: numeric and boolean values pass through unchanged (no coerc
     };
     const anchor = {
       type: {},
-      memoizedProps: { testID: "f" },
+      memoizedProps: { testID: 'f' },
       child: null,
       sibling: null,
       return: null,
@@ -217,15 +217,15 @@ test("setFieldValue: numeric and boolean values pass through unchanged (no coerc
     linkFiber(provider, anchor);
     return root;
   }
-  runInteract(buildTree, { action: "setFieldValue", testID: "f", name: "age", value: 42 });
-  runInteract(buildTree, { action: "setFieldValue", testID: "f", name: "opt-in", value: true });
+  runInteract(buildTree, { action: 'setFieldValue', testID: 'f', name: 'age', value: 42 });
+  runInteract(buildTree, { action: 'setFieldValue', testID: 'f', name: 'opt-in', value: true });
   assert.deepEqual(calls, [
-    { v: 42, type: "number" },
-    { v: true, type: "boolean" },
+    { v: 42, type: 'number' },
+    { v: true, type: 'boolean' },
   ]);
 });
 
-test("setFieldValue: nearest FormProvider wins (nested forms behave like React context)", () => {
+test('setFieldValue: nearest FormProvider wins (nested forms behave like React context)', () => {
   const outerCalls = [];
   const innerCalls = [];
   const outer = {
@@ -250,14 +250,14 @@ test("setFieldValue: nearest FormProvider wins (nested forms behave like React c
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       const outerProvider = {
-        type: { displayName: "FormProvider" },
+        type: { displayName: 'FormProvider' },
         memoizedProps: { value: outer },
         child: null,
         sibling: null,
         return: null,
       };
       const innerProvider = {
-        type: { displayName: "FormProvider" },
+        type: { displayName: 'FormProvider' },
         memoizedProps: { value: inner },
         child: null,
         sibling: null,
@@ -265,7 +265,7 @@ test("setFieldValue: nearest FormProvider wins (nested forms behave like React c
       };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "inner-field" },
+        memoizedProps: { testID: 'inner-field' },
         child: null,
         sibling: null,
         return: null,
@@ -275,25 +275,25 @@ test("setFieldValue: nearest FormProvider wins (nested forms behave like React c
       linkFiber(innerProvider, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "inner-field", name: "x", value: "1" },
+    { action: 'setFieldValue', testID: 'inner-field', name: 'x', value: '1' },
   );
 
   assert.equal(result.success, true);
-  assert.equal(innerCalls.length, 1, "closest provider should win");
-  assert.equal(outerCalls.length, 0, "outer provider should not see the call");
+  assert.equal(innerCalls.length, 1, 'closest provider should win');
+  assert.equal(outerCalls.length, 0, 'outer provider should not see the call');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Failure paths
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("setFieldValue: missing opts.name returns clear error (does NOT walk the tree)", () => {
+test('setFieldValue: missing opts.name returns clear error (does NOT walk the tree)', () => {
   const result = runInteract(
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "f" },
+        memoizedProps: { testID: 'f' },
         child: null,
         sibling: null,
         return: null,
@@ -301,29 +301,29 @@ test("setFieldValue: missing opts.name returns clear error (does NOT walk the tr
       linkFiber(root, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "f", value: "x" },
+    { action: 'setFieldValue', testID: 'f', value: 'x' },
   );
 
   assert.match(result.error, /requires opts\.name/);
-  assert.equal(result.testID, "f");
+  assert.equal(result.testID, 'f');
 });
 
-test("setFieldValue: no FormProvider ancestor returns actionable hint", () => {
+test('setFieldValue: no FormProvider ancestor returns actionable hint', () => {
   // A tree with no Provider whose value duck-types as UseFormReturn.
   const result = runInteract(
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       // A Provider whose value is NOT a form return — must be ignored.
       const wrongProvider = {
-        type: { displayName: "ThemeProvider" },
-        memoizedProps: { value: { theme: "dark" } },
+        type: { displayName: 'ThemeProvider' },
+        memoizedProps: { value: { theme: 'dark' } },
         child: null,
         sibling: null,
         return: null,
       };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "f" },
+        memoizedProps: { testID: 'f' },
         child: null,
         sibling: null,
         return: null,
@@ -332,17 +332,17 @@ test("setFieldValue: no FormProvider ancestor returns actionable hint", () => {
       linkFiber(wrongProvider, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "f", name: "email", value: "x" },
+    { action: 'setFieldValue', testID: 'f', name: 'email', value: 'x' },
   );
 
   assert.match(result.error, /no FormProvider ancestor/);
   assert.match(result.hint, /not wrapped in <FormProvider/);
 });
 
-test("setFieldValue: setValue throwing is caught + surfaced with the thrown message", () => {
+test('setFieldValue: setValue throwing is caught + surfaced with the thrown message', () => {
   const formReturn = {
     setValue() {
-      throw new Error("field does not exist on the form");
+      throw new Error('field does not exist on the form');
     },
     getValues() {
       return {};
@@ -353,7 +353,7 @@ test("setFieldValue: setValue throwing is caught + surfaced with the thrown mess
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       const provider = {
-        type: { displayName: "FormProvider" },
+        type: { displayName: 'FormProvider' },
         memoizedProps: { value: formReturn },
         child: null,
         sibling: null,
@@ -361,7 +361,7 @@ test("setFieldValue: setValue throwing is caught + surfaced with the thrown mess
       };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "f" },
+        memoizedProps: { testID: 'f' },
         child: null,
         sibling: null,
         return: null,
@@ -370,14 +370,14 @@ test("setFieldValue: setValue throwing is caught + surfaced with the thrown mess
       linkFiber(provider, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "f", name: "bogus", value: "x" },
+    { action: 'setFieldValue', testID: 'f', name: 'bogus', value: 'x' },
   );
 
   assert.match(result.error, /setValue threw: field does not exist/);
-  assert.equal(result.name, "bogus");
+  assert.equal(result.name, 'bogus');
 });
 
-test("setFieldValue: duck-type rejects a Provider whose value lacks setValue (not a form return)", () => {
+test('setFieldValue: duck-type rejects a Provider whose value lacks setValue (not a form return)', () => {
   // Critical: many context Providers have `value` objects with `getValues`
   // or `control` look-alike fields. The duck-type MUST require ALL three
   // (setValue + getValues + control) before assuming it's a form return.
@@ -392,7 +392,7 @@ test("setFieldValue: duck-type rejects a Provider whose value lacks setValue (no
     () => {
       const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
       const provider = {
-        type: { displayName: "PartialFormProvider" },
+        type: { displayName: 'PartialFormProvider' },
         memoizedProps: { value: partialForm },
         child: null,
         sibling: null,
@@ -400,7 +400,7 @@ test("setFieldValue: duck-type rejects a Provider whose value lacks setValue (no
       };
       const anchor = {
         type: {},
-        memoizedProps: { testID: "f" },
+        memoizedProps: { testID: 'f' },
         child: null,
         sibling: null,
         return: null,
@@ -409,7 +409,7 @@ test("setFieldValue: duck-type rejects a Provider whose value lacks setValue (no
       linkFiber(provider, anchor);
       return root;
     },
-    { action: "setFieldValue", testID: "f", name: "x", value: "y" },
+    { action: 'setFieldValue', testID: 'f', name: 'x', value: 'y' },
   );
 
   assert.match(result.error, /no FormProvider ancestor/);

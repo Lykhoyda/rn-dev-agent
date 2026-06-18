@@ -10,8 +10,8 @@
 export const METRO_CLEAR_HINT_THRESHOLD_MS = 60_000;
 
 export const METRO_CLEAR_HINT_TEXT =
-  "If results stay empty, try restarting Metro with `npx expo start --clear` " +
-  "or `npx react-native start --reset-cache`. The MCP will reconnect automatically.";
+  'If results stay empty, try restarting Metro with `npx expo start --clear` ' +
+  'or `npx react-native start --reset-cache`. The MCP will reconnect automatically.';
 
 export interface HintDeps {
   /** Timestamp (ms since epoch) of the CDP connection. Null when disconnected. */

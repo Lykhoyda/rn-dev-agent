@@ -1,15 +1,15 @@
 // Audit batch B6 — (1) unfiltered getTree() must walk ALL renderers (not just
 // the first, typically the LogBox shell); (2) nav-graph strike state must be
 // per-project and rehydrate when the project changes.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import vm from "node:vm";
-import { INJECTED_HELPERS } from "../../dist/injected-helpers.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import {
   hydrateStrikesFromGraph,
   isMethodCooledDown,
   _resetStrikesForTest,
-} from "../../dist/nav-graph/storage.js";
+} from '../../dist/nav-graph/storage.js';
 
 // ── unfiltered getTree multi-renderer ──────────────────────────────────
 
@@ -60,12 +60,12 @@ function userComp(displayName, props) {
   };
 }
 function hostView() {
-  return { type: { name: "RCTView" }, memoizedProps: {}, child: null, sibling: null, return: null };
+  return { type: { name: 'RCTView' }, memoizedProps: {}, child: null, sibling: null, return: null };
 }
 
-test("unfiltered getTree walks ALL renderers — finds the app tree even when renderer 1 is a shell", () => {
+test('unfiltered getTree walks ALL renderers — finds the app tree even when renderer 1 is a shell', () => {
   const shellRoot = hostRoot(hostView()); // renderer 1: LogBox-ish shell
-  const appRoot = hostRoot(userComp("HomeScreen", { testID: "home" })); // renderer 2: the real app
+  const appRoot = hostRoot(userComp('HomeScreen', { testID: 'home' })); // renderer 2: the real app
   const hook = {
     renderers: new Map([
       [1, {}],
@@ -79,12 +79,12 @@ test("unfiltered getTree walks ALL renderers — finds the app tree even when re
           : new Set(),
   };
   const sandbox = makeSandbox(hook);
-  const out = JSON.parse(vm.runInContext("__RN_AGENT.getTree({})", sandbox));
-  assert.ok(out.tree, "tree present");
+  const out = JSON.parse(vm.runInContext('__RN_AGENT.getTree({})', sandbox));
+  assert.ok(out.tree, 'tree present');
   const serialized = JSON.stringify(out.tree);
-  assert.ok(serialized.includes("HomeScreen"), "app component from renderer 2 must be present");
-  assert.ok(serialized.includes("home"), "app testID from renderer 2 must be present");
-  assert.ok(out.rootsSeeded >= 2, "seeded all renderers");
+  assert.ok(serialized.includes('HomeScreen'), 'app component from renderer 2 must be present');
+  assert.ok(serialized.includes('home'), 'app testID from renderer 2 must be present');
+  assert.ok(out.rootsSeeded >= 2, 'seeded all renderers');
 });
 
 // ── per-project strike state ───────────────────────────────────────────
@@ -95,14 +95,14 @@ function graphWithStrike(slug) {
     meta: { project_slug: slug },
     navigators: [
       {
-        id: "root",
+        id: 'root',
         screens: [
           {
-            name: "Home",
+            name: 'Home',
             action_records: [
-              { method: "deep_link", success: false, recorded_at: new Date(now).toISOString() },
+              { method: 'deep_link', success: false, recorded_at: new Date(now).toISOString() },
               {
-                method: "deep_link",
+                method: 'deep_link',
                 success: false,
                 recorded_at: new Date(now - 1000).toISOString(),
               },
@@ -111,40 +111,40 @@ function graphWithStrike(slug) {
         ],
       },
     ],
-    all_screens: ["Home"],
+    all_screens: ['Home'],
   };
 }
 
 function emptyGraph(slug) {
   return {
     meta: { project_slug: slug },
-    navigators: [{ id: "root", screens: [{ name: "Home", action_records: [] }] }],
-    all_screens: ["Home"],
+    navigators: [{ id: 'root', screens: [{ name: 'Home', action_records: [] }] }],
+    all_screens: ['Home'],
   };
 }
 
-test("strike cooldown hydrates per project and does not poison a different project", () => {
+test('strike cooldown hydrates per project and does not poison a different project', () => {
   _resetStrikesForTest();
-  hydrateStrikesFromGraph(graphWithStrike("app-a"), "rootA");
-  assert.equal(isMethodCooledDown("Home", "deep_link"), true, "project A Home/deep_link is cooled");
+  hydrateStrikesFromGraph(graphWithStrike('app-a'), 'rootA');
+  assert.equal(isMethodCooledDown('Home', 'deep_link'), true, 'project A Home/deep_link is cooled');
 
   // Switching to a different project must clear A's strikes and rehydrate B's.
-  hydrateStrikesFromGraph(emptyGraph("app-b"), "rootB");
+  hydrateStrikesFromGraph(emptyGraph('app-b'), 'rootB');
   assert.equal(
-    isMethodCooledDown("Home", "deep_link"),
+    isMethodCooledDown('Home', 'deep_link'),
     false,
-    "project B must not inherit A cooldown",
+    'project B must not inherit A cooldown',
   );
 });
 
-test("re-hydrating the same project is idempotent (keeps in-memory strikes)", () => {
+test('re-hydrating the same project is idempotent (keeps in-memory strikes)', () => {
   _resetStrikesForTest();
-  hydrateStrikesFromGraph(graphWithStrike("app-a"), "rootA");
-  hydrateStrikesFromGraph(emptyGraph("app-a"), "rootA"); // same key → no clear/rehydrate
+  hydrateStrikesFromGraph(graphWithStrike('app-a'), 'rootA');
+  hydrateStrikesFromGraph(emptyGraph('app-a'), 'rootA'); // same key → no clear/rehydrate
   assert.equal(
-    isMethodCooledDown("Home", "deep_link"),
+    isMethodCooledDown('Home', 'deep_link'),
     true,
-    "same-project rehydrate must not wipe strikes",
+    'same-project rehydrate must not wipe strikes',
   );
   _resetStrikesForTest();
 });

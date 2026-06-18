@@ -1,10 +1,10 @@
 export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey) {
-    eventHandlers.set("Runtime.consoleAPICalled", (params) => {
+    eventHandlers.set('Runtime.consoleAPICalled', (params) => {
         const p = params;
         const text = p.args
-            ?.map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? "")))
-            .join(" ") ?? "";
-        if (text.startsWith("__RN_NET__:"))
+            ?.map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? '')))
+            .join(' ') ?? '';
+        if (text.startsWith('__RN_NET__:'))
             return;
         buffers.console.push({
             level: p.type,
@@ -12,16 +12,16 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
             timestamp: new Date().toISOString(),
         });
     });
-    eventHandlers.set("Network.requestWillBeSent", (params) => {
+    eventHandlers.set('Network.requestWillBeSent', (params) => {
         const p = params;
         buffers.network.push(getDeviceKey(), {
             id: p.requestId,
-            method: p.request?.method ?? "GET",
-            url: p.request?.url ?? "",
+            method: p.request?.method ?? 'GET',
+            url: p.request?.url ?? '',
             timestamp: new Date().toISOString(),
         });
     });
-    eventHandlers.set("Network.responseReceived", (params) => {
+    eventHandlers.set('Network.responseReceived', (params) => {
         const p = params;
         const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
@@ -29,7 +29,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
         }
     });
-    eventHandlers.set("Network.loadingFailed", (params) => {
+    eventHandlers.set('Network.loadingFailed', (params) => {
         const p = params;
         const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
@@ -37,7 +37,7 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
             entry.duration_ms = Date.now() - new Date(entry.timestamp).getTime();
         }
     });
-    eventHandlers.set("Debugger.scriptParsed", (params) => {
+    eventHandlers.set('Debugger.scriptParsed', (params) => {
         const p = params;
         if (p.scriptId && p.url) {
             buffers.scripts.set(p.scriptId, {
@@ -48,21 +48,21 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
             });
         }
     });
-    eventHandlers.set("Log.entryAdded", (params) => {
+    eventHandlers.set('Log.entryAdded', (params) => {
         const p = params;
         const e = p.entry;
         if (!e)
             return;
         buffers.log.push({
-            source: e.source ?? "other",
-            level: e.level ?? "info",
-            text: e.text ?? "",
+            source: e.source ?? 'other',
+            level: e.level ?? 'info',
+            text: e.text ?? '',
             timestamp: e.timestamp ? new Date(e.timestamp).toISOString() : new Date().toISOString(),
             url: e.url,
             lineNumber: e.lineNumber,
         });
     });
-    eventHandlers.set("Network.loadingFinished", (params) => {
+    eventHandlers.set('Network.loadingFinished', (params) => {
         const p = params;
         const entry = buffers.network.getByKey(getDeviceKey(), p.requestId);
         if (entry) {
@@ -70,10 +70,10 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
             entry.bodySize = p.encodedDataLength;
         }
     });
-    eventHandlers.set("Debugger.paused", async () => {
+    eventHandlers.set('Debugger.paused', async () => {
         setIsPaused(true);
         try {
-            await sendFn("Debugger.resume");
+            await sendFn('Debugger.resume');
         }
         catch {
             // Best effort auto-resume
@@ -90,18 +90,18 @@ export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, s
  * same request id twice — the getByKey guard prevents a second push.
  */
 export function applyNetworkHookEntry(type, data, networkManager, deviceKey, atMs) {
-    if (type === "request") {
+    if (type === 'request') {
         // Dedup: skip if this id is already in the buffer (double-reporting guard).
         if (networkManager.getByKey(deviceKey, data.id))
             return;
         networkManager.push(deviceKey, {
             id: data.id,
-            method: data.method ?? "GET",
-            url: data.url ?? "",
+            method: data.method ?? 'GET',
+            url: data.url ?? '',
             timestamp: new Date(atMs ?? Date.now()).toISOString(),
         });
     }
-    else if (type === "response") {
+    else if (type === 'response') {
         const entry = networkManager.getByKey(deviceKey, data.id);
         if (entry) {
             entry.status = data.status;
@@ -110,19 +110,19 @@ export function applyNetworkHookEntry(type, data, networkManager, deviceKey, atM
     }
 }
 export function parseNetworkHookMessage(params, networkMode, networkManager, deviceKey) {
-    if (networkMode !== "hook")
+    if (networkMode !== 'hook')
         return;
     const p = params;
     const firstArg = p.args?.[0]?.value;
-    if (typeof firstArg !== "string" || !firstArg.startsWith("__RN_NET__:"))
+    if (typeof firstArg !== 'string' || !firstArg.startsWith('__RN_NET__:'))
         return;
     try {
-        const parts = firstArg.split(":");
+        const parts = firstArg.split(':');
         const type = parts[1];
-        const data = JSON.parse(parts.slice(2).join(":"));
+        const data = JSON.parse(parts.slice(2).join(':'));
         applyNetworkHookEntry(type, data, networkManager, deviceKey);
     }
     catch (err) {
-        console.error("CDP: malformed network hook message dropped:", typeof firstArg === "string" ? firstArg.slice(0, 100) : typeof firstArg, err instanceof Error ? err.message : "");
+        console.error('CDP: malformed network hook message dropped:', typeof firstArg === 'string' ? firstArg.slice(0, 100) : typeof firstArg, err instanceof Error ? err.message : '');
     }
 }

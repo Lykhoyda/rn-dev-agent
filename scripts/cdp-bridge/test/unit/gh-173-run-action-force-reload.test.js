@@ -14,11 +14,11 @@
 //      on: forceReload=true (default) bumps the sidecar BEFORE the run;
 //      forceReload=false leaves the sidecar untouched.
 
-import { test, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
-import { createRunActionHandler } from "../../dist/tools/run-action.js";
-import { acknowledgeExternalEdit, loadAction } from "../../dist/domain/action-store.js";
-import { createTmpProject, fixtureYaml } from "../helpers/tmp-project.js";
+import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRunActionHandler } from '../../dist/tools/run-action.js';
+import { acknowledgeExternalEdit, loadAction } from '../../dist/domain/action-store.js';
+import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
 let project;
 
@@ -34,24 +34,24 @@ afterEach(() => {
 // Helper-level: acknowledgeExternalEdit side effect
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("acknowledgeExternalEdit: refreshes sidecar lastSeenMtimeMs to YAML current mtime", () => {
-  const id = "demo";
+test('acknowledgeExternalEdit: refreshes sidecar lastSeenMtimeMs to YAML current mtime', () => {
+  const id = 'demo';
   project.seedAction(id, fixtureYaml({ id }));
   const loaded = loadAction(project.root, id);
-  assert.ok(loaded, "fixture should load");
+  assert.ok(loaded, 'fixture should load');
   const baseline = loaded.state.lastSeenMtimeMs;
 
-  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ["edited-by-human"] }));
+  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ['edited-by-human'] }));
   const editedYaml = loadAction(project.root, id);
   assert.ok(
     editedYaml.state.lastSeenMtimeMs === baseline,
-    "sidecar mtime is still pre-edit (the bug surface)",
+    'sidecar mtime is still pre-edit (the bug surface)',
   );
 
   const acknowledged = acknowledgeExternalEdit(editedYaml);
   assert.ok(
     acknowledged.state.lastSeenMtimeMs > baseline,
-    "returned action.state.lastSeenMtimeMs advanced",
+    'returned action.state.lastSeenMtimeMs advanced',
   );
 
   // Persisted to disk — the next loadAction sees the new mtime.
@@ -59,12 +59,12 @@ test("acknowledgeExternalEdit: refreshes sidecar lastSeenMtimeMs to YAML current
   assert.equal(
     reloaded.state.lastSeenMtimeMs,
     acknowledged.state.lastSeenMtimeMs,
-    "sidecar JSON was rewritten with the new mtime",
+    'sidecar JSON was rewritten with the new mtime',
   );
 });
 
-test("acknowledgeExternalEdit: no-op when sidecar already matches YAML mtime", () => {
-  const id = "demo";
+test('acknowledgeExternalEdit: no-op when sidecar already matches YAML mtime', () => {
+  const id = 'demo';
   project.seedAction(id, fixtureYaml({ id }));
   const loaded = loadAction(project.root, id);
   const sidecarBefore = project.readSidecar(id);
@@ -72,9 +72,9 @@ test("acknowledgeExternalEdit: no-op when sidecar already matches YAML mtime", (
   const acknowledged = acknowledgeExternalEdit(loaded);
 
   // The returned action is the SAME object reference — no copy, no write.
-  assert.equal(acknowledged, loaded, "returns the input action unchanged when no edit happened");
+  assert.equal(acknowledged, loaded, 'returns the input action unchanged when no edit happened');
   const sidecarAfter = project.readSidecar(id);
-  assert.deepEqual(sidecarAfter, sidecarBefore, "sidecar JSON is byte-identical");
+  assert.deepEqual(sidecarAfter, sidecarBefore, 'sidecar JSON is byte-identical');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,14 +90,14 @@ test("acknowledgeExternalEdit: no-op when sidecar already matches YAML mtime", (
  */
 function fakeMaestroPassWithSnapshot(snapshot) {
   return async () => {
-    snapshot.midRunMtime = project.readSidecar("demo").lastSeenMtimeMs;
+    snapshot.midRunMtime = project.readSidecar('demo').lastSeenMtimeMs;
     return {
       content: [
         {
-          type: "text",
+          type: 'text',
           text: JSON.stringify({
             ok: true,
-            data: { passed: true, output: "pass", flowFile: "x", platform: "ios" },
+            data: { passed: true, output: 'pass', flowFile: 'x', platform: 'ios' },
           }),
         },
       ],
@@ -109,16 +109,16 @@ function fakeRepairUnused() {
   // The repair handler is never called on a passing first attempt, so a
   // throw here would catch any regression that incorrectly routes through it.
   return async () => {
-    throw new Error("repair should not be called on a passing flow");
+    throw new Error('repair should not be called on a passing flow');
   };
 }
 
-test("cdp_run_action: forceReload=true (default) acknowledges the human edit BEFORE maestro runs", async () => {
-  const id = "demo";
+test('cdp_run_action: forceReload=true (default) acknowledges the human edit BEFORE maestro runs', async () => {
+  const id = 'demo';
   project.seedAction(id, fixtureYaml({ id }));
   const baselineMtime = project.readSidecar(id).lastSeenMtimeMs;
 
-  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ["user-edited"] }));
+  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ['user-edited'] }));
 
   const snapshot = {};
   const handler = createRunActionHandler({
@@ -127,7 +127,7 @@ test("cdp_run_action: forceReload=true (default) acknowledges the human edit BEF
   });
   // Default forceReload (omitted) — should be true.
   const result = await handler({ actionId: id, projectRoot: project.root });
-  assert.equal(result.isError, undefined, "run should succeed");
+  assert.equal(result.isError, undefined, 'run should succeed');
 
   // The discriminating assertion: at the moment maestroRun fired, the
   // sidecar's lastSeenMtimeMs had ALREADY advanced past baseline. A
@@ -140,7 +140,7 @@ test("cdp_run_action: forceReload=true (default) acknowledges the human edit BEF
   );
 });
 
-test("cdp_run_action: forceReload=false on externally-edited YAML preserves strict Phase 129 behavior (run fails)", async () => {
+test('cdp_run_action: forceReload=false on externally-edited YAML preserves strict Phase 129 behavior (run fails)', async () => {
   // Companion to the forceReload=true test: with strict mode, the human
   // edit is NOT acknowledged before the run, so the downstream
   // persistRun flow (which uses saveActionWithCAS + atomicWriter) sees
@@ -149,12 +149,12 @@ test("cdp_run_action: forceReload=false on externally-edited YAML preserves stri
   // it's the right behavior when the human intends to protect offline
   // edits, the wrong behavior when they're actively composing. The
   // forceReload flag lets the caller pick.
-  const id = "demo";
+  const id = 'demo';
   project.seedAction(id, fixtureYaml({ id }));
   const baselineSidecar = project.readSidecar(id);
   const baselineMtime = baselineSidecar.lastSeenMtimeMs;
 
-  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ["user-edited"] }));
+  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ['user-edited'] }));
 
   const snapshot = {};
   const handler = createRunActionHandler({
@@ -162,7 +162,7 @@ test("cdp_run_action: forceReload=false on externally-edited YAML preserves stri
     repairAction: fakeRepairUnused(),
   });
   const result = await handler({ actionId: id, projectRoot: project.root, forceReload: false });
-  assert.equal(result.isError, true, "strict mode should refuse to persist over a stale sidecar");
+  assert.equal(result.isError, true, 'strict mode should refuse to persist over a stale sidecar');
 
   // The discriminating assertion: at the moment maestroRun fired, the
   // sidecar's lastSeenMtimeMs was STILL at baseline (no pre-run bump).

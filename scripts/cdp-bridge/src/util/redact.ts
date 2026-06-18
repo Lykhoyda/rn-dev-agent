@@ -1,7 +1,7 @@
-import { homedir } from "node:os";
+import { homedir } from 'node:os';
 
 const HOME = homedir();
-const HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+const HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
 
 const SECRET_PATTERNS = [
   /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
@@ -45,16 +45,16 @@ function redactString(value: string): string {
   // e.g. a PEM private key's -----END----- marker — so the pattern would never
   // match and the key body would leak through. Apply every pattern to the full
   // string first, then clip what remains.
-  let result = value.replace(HOME_RE, "~");
+  let result = value.replace(HOME_RE, '~');
   KEYED_SECRET_RE.lastIndex = 0;
-  result = result.replace(KEYED_SECRET_RE, "$1[REDACTED_SECRET]");
+  result = result.replace(KEYED_SECRET_RE, '$1[REDACTED_SECRET]');
   for (const pattern of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
-    result = result.replace(pattern, "[REDACTED_SECRET]");
+    result = result.replace(pattern, '[REDACTED_SECRET]');
   }
   for (const pattern of PII_PATTERNS) {
     pattern.lastIndex = 0;
-    result = result.replace(pattern, "[PII_REDACTED]");
+    result = result.replace(pattern, '[PII_REDACTED]');
   }
   if (result.length > MAX_STRING_LENGTH) {
     result = result.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${result.length}]`;
@@ -65,13 +65,13 @@ function redactString(value: string): string {
 function redactValue(value: unknown, path: string): unknown {
   if (value === null || value === undefined) return value;
 
-  if (typeof value === "string") return redactString(value);
+  if (typeof value === 'string') return redactString(value);
 
   if (Array.isArray(value)) {
     return value.map((item, i) => redactValue(item, `${path}[${i}]`));
   }
 
-  if (typeof value === "object") {
+  if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(obj)) {
@@ -80,7 +80,7 @@ function redactValue(value: unknown, path: string): unknown {
         // Redact regardless of value type — an object/array value under an
         // auth-named key (e.g. credentials: { user, pass }) must not be
         // recursed into, or inner secrets leak when they match no pattern.
-        result[key] = Array.isArray(val) ? "[REDACTED:array]" : `[REDACTED:${typeof val}]`;
+        result[key] = Array.isArray(val) ? '[REDACTED:array]' : `[REDACTED:${typeof val}]`;
       } else {
         result[key] = redactValue(val, fullPath);
       }
@@ -92,5 +92,5 @@ function redactValue(value: unknown, path: string): unknown {
 }
 
 export function redact(data: Record<string, unknown>): Record<string, unknown> {
-  return redactValue(data, "") as Record<string, unknown>;
+  return redactValue(data, '') as Record<string, unknown>;
 }

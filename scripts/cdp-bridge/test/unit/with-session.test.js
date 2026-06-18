@@ -1,16 +1,16 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { withSession, okResult } from "../../dist/utils.js";
-import { parseEnvelope } from "../helpers/result-helpers.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { withSession, okResult } from '../../dist/utils.js';
+import { parseEnvelope } from '../helpers/result-helpers.js';
 
 // withSession depends on hasActiveSession() from agent-device-wrapper.
 // Since we can't easily mock ESM imports, we test the behavior by importing
 // the session management functions and controlling state directly.
-import { setActiveSession, clearActiveSession } from "../../dist/agent-device-wrapper.js";
+import { setActiveSession, clearActiveSession } from '../../dist/agent-device-wrapper.js';
 
 // ── withSession guard ─────────────────────────────────────────────────
 
-test("withSession returns failResult when no active session", async () => {
+test('withSession returns failResult when no active session', async () => {
   clearActiveSession();
   const handler = withSession(async () => okResult({ done: true }));
   const result = await handler({});
@@ -19,10 +19,10 @@ test("withSession returns failResult when no active session", async () => {
   assert.match(env.error, /No device session open/);
 });
 
-test("withSession calls handler when session is active", async () => {
+test('withSession calls handler when session is active', async () => {
   setActiveSession({
-    name: "test-session",
-    platform: "ios",
+    name: 'test-session',
+    platform: 'ios',
     openedAt: new Date().toISOString(),
   });
   try {
@@ -36,10 +36,10 @@ test("withSession calls handler when session is active", async () => {
   }
 });
 
-test("withSession passes args through to handler", async () => {
+test('withSession passes args through to handler', async () => {
   setActiveSession({
-    name: "test-session",
-    platform: "android",
+    name: 'test-session',
+    platform: 'android',
     openedAt: new Date().toISOString(),
   });
   try {
@@ -48,22 +48,22 @@ test("withSession passes args through to handler", async () => {
       receivedArgs = args;
       return okResult({ ok: true });
     });
-    await handler({ text: "hello", ref: "@1" });
-    assert.deepEqual(receivedArgs, { text: "hello", ref: "@1" });
+    await handler({ text: 'hello', ref: '@1' });
+    assert.deepEqual(receivedArgs, { text: 'hello', ref: '@1' });
   } finally {
     clearActiveSession();
   }
 });
 
-test("withSession propagates handler errors", async () => {
+test('withSession propagates handler errors', async () => {
   setActiveSession({
-    name: "test-session",
-    platform: "ios",
+    name: 'test-session',
+    platform: 'ios',
     openedAt: new Date().toISOString(),
   });
   try {
     const handler = withSession(async () => {
-      throw new Error("handler exploded");
+      throw new Error('handler exploded');
     });
     await assert.rejects(() => handler({}), /handler exploded/);
   } finally {

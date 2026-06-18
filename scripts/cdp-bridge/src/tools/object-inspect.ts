@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 interface PropertyDescriptor {
   name: string;
@@ -26,11 +26,11 @@ export function createObjectInspectHandler(getClient: () => CDPClient) {
       const maxProps = Math.min(Math.max(args.maxProperties ?? 20, 1), 100);
 
       try {
-        const evalResult = (await client.send("Runtime.evaluate", {
+        const evalResult = (await client.send('Runtime.evaluate', {
           expression: args.expression,
           returnByValue: false,
           generatePreview: true,
-          objectGroup: "rn-agent-inspect",
+          objectGroup: 'rn-agent-inspect',
         })) as {
           result?: {
             type: string;
@@ -49,7 +49,7 @@ export function createObjectInspectHandler(getClient: () => CDPClient) {
         }
 
         const obj = evalResult.result;
-        if (!obj) return failResult("No result from expression");
+        if (!obj) return failResult('No result from expression');
 
         if (!obj.objectId) {
           return okResult({
@@ -63,7 +63,7 @@ export function createObjectInspectHandler(getClient: () => CDPClient) {
         const inspected = await inspectObject(client, obj.objectId, depth, maxProps);
 
         try {
-          await client.send("Runtime.releaseObjectGroup", { objectGroup: "rn-agent-inspect" });
+          await client.send('Runtime.releaseObjectGroup', { objectGroup: 'rn-agent-inspect' });
         } catch {
           /* best effort cleanup */
         }
@@ -77,7 +77,7 @@ export function createObjectInspectHandler(getClient: () => CDPClient) {
         });
       } catch (err) {
         try {
-          await client.send("Runtime.releaseObjectGroup", { objectGroup: "rn-agent-inspect" });
+          await client.send('Runtime.releaseObjectGroup', { objectGroup: 'rn-agent-inspect' });
         } catch {
           /* cleanup */
         }
@@ -101,7 +101,7 @@ async function inspectObject(
     hasChildren?: boolean;
   }>
 > {
-  const result = (await client.send("Runtime.getProperties", {
+  const result = (await client.send('Runtime.getProperties', {
     objectId,
     ownProperties: true,
     generatePreview: true,
@@ -126,7 +126,7 @@ async function inspectObject(
   for (const p of props) {
     const v = p.value;
     if (!v) {
-      results.push({ name: p.name, type: "accessor", description: "[getter/setter]" });
+      results.push({ name: p.name, type: 'accessor', description: '[getter/setter]' });
       continue;
     }
 
@@ -136,9 +136,9 @@ async function inspectObject(
       description: v.description ?? (v.value !== undefined ? String(v.value) : undefined),
     };
 
-    if (v.type === "object" && v.objectId && v.subtype !== "null") {
+    if (v.type === 'object' && v.objectId && v.subtype !== 'null') {
       entry.hasChildren = true;
-      entry.description = v.className ?? v.description ?? "[object]";
+      entry.description = v.className ?? v.description ?? '[object]';
       if (depth > 0) {
         const objectId = v.objectId;
         childFetches.push(

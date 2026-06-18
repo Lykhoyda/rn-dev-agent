@@ -1,37 +1,37 @@
-import { createWriteStream, mkdirSync, existsSync, type WriteStream } from "node:fs";
-import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { createWriteStream, mkdirSync, existsSync, type WriteStream } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
 
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 const configuredLevel: LogLevel = (process.env.LOG_LEVEL ??
   process.env.RN_DEV_AGENT_LOG_LEVEL ??
-  "warn") as LogLevel;
+  'warn') as LogLevel;
 
 function resolveLogPath(): string | null {
-  if (configuredLevel !== "debug" && configuredLevel !== "info") return null;
+  if (configuredLevel !== 'debug' && configuredLevel !== 'info') return null;
 
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
   if (pluginData) {
     try {
       if (!existsSync(pluginData)) mkdirSync(pluginData, { recursive: true });
-      return join(pluginData, "cdp-bridge.log");
+      return join(pluginData, 'cdp-bridge.log');
     } catch {
       /* fall through */
     }
   }
 
-  const fallbackDir = join(homedir(), ".claude", "logs");
+  const fallbackDir = join(homedir(), '.claude', 'logs');
   try {
     if (!existsSync(fallbackDir)) mkdirSync(fallbackDir, { recursive: true });
-    return join(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+    return join(fallbackDir, 'rn-dev-agent-cdp-bridge.log');
   } catch {
     /* fall through */
   }
 
-  return join(tmpdir(), "rn-dev-agent-cdp-bridge.log");
+  return join(tmpdir(), 'rn-dev-agent-cdp-bridge.log');
 }
 
 const logFilePath = resolveLogPath();
@@ -45,8 +45,8 @@ function getLogStream(): WriteStream | null {
   if (!logFilePath) return null;
   if (!logStream) {
     try {
-      logStream = createWriteStream(logFilePath, { flags: "a" });
-      logStream.on("error", () => {
+      logStream = createWriteStream(logFilePath, { flags: 'a' });
+      logStream.on('error', () => {
         /* disk error — drop best-effort logs */
       });
     } catch {
@@ -69,16 +69,16 @@ function writeLog(level: LogLevel, tag: string, msg: string): void {
   if (!shouldLog(level)) return;
   const formatted = formatMessage(level, tag, msg);
 
-  if (level === "error" || level === "warn") {
+  if (level === 'error' || level === 'warn') {
     console.error(formatted);
-  } else if (configuredLevel === "debug" || configuredLevel === "info") {
+  } else if (configuredLevel === 'debug' || configuredLevel === 'info') {
     console.error(formatted);
   }
 
   const stream = getLogStream();
   if (stream) {
     try {
-      stream.write(formatted + "\n");
+      stream.write(formatted + '\n');
     } catch {
       /* best-effort */
     }
@@ -86,10 +86,10 @@ function writeLog(level: LogLevel, tag: string, msg: string): void {
 }
 
 export const logger = {
-  debug: (tag: string, msg: string) => writeLog("debug", tag, msg),
-  info: (tag: string, msg: string) => writeLog("info", tag, msg),
-  warn: (tag: string, msg: string) => writeLog("warn", tag, msg),
-  error: (tag: string, msg: string) => writeLog("error", tag, msg),
+  debug: (tag: string, msg: string) => writeLog('debug', tag, msg),
+  info: (tag: string, msg: string) => writeLog('info', tag, msg),
+  warn: (tag: string, msg: string) => writeLog('warn', tag, msg),
+  error: (tag: string, msg: string) => writeLog('error', tag, msg),
   get logFilePath(): string | null {
     return logFilePath;
   },

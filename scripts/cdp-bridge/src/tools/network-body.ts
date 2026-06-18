@@ -1,13 +1,13 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
-import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export function createNetworkBodyHandler(getClient: () => CDPClient) {
   return withConnection(
     getClient,
     async (args: { requestId: string; maxLength?: number; device?: string }, client) => {
       if (!args.requestId) {
-        return failResult("requestId is required. Use cdp_network_log to find request IDs.");
+        return failResult('requestId is required. Use cdp_network_log to find request IDs.');
       }
 
       const scope = args.device ?? client.activeDeviceKey;
@@ -21,16 +21,16 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
       const maxLen = args.maxLength ?? 10000;
 
       // CDP path: Network.getResponseBody (RN 0.83+)
-      if (client.networkMode === "cdp") {
+      if (client.networkMode === 'cdp') {
         try {
-          const result = (await client.send("Network.getResponseBody", {
+          const result = (await client.send('Network.getResponseBody', {
             requestId: args.requestId,
           })) as {
             body?: string;
             base64Encoded?: boolean;
           };
 
-          let body = result.body ?? "";
+          let body = result.body ?? '';
           const truncated = body.length > maxLen;
           if (truncated) body = body.slice(0, maxLen);
 
@@ -40,18 +40,18 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
               url: entry.url,
               status: entry.status,
               base64Encoded: result.base64Encoded ?? false,
-              bodyLength: (result.body ?? "").length,
+              bodyLength: (result.body ?? '').length,
               body,
-              source: "cdp",
+              source: 'cdp',
             },
             { truncated },
           );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          if (msg.includes("No resource with given identifier") || msg.includes("No data found")) {
+          if (msg.includes('No resource with given identifier') || msg.includes('No data found')) {
             return failResult(
               `Response body not available for ${args.requestId}. The response may not have finished loading.`,
-              { hint: "Check that the request has bodyAvailable: true in cdp_network_log output." },
+              { hint: 'Check that the request has bodyAvailable: true in cdp_network_log output.' },
             );
           }
           return failResult(`Failed to get response body: ${msg}`);
@@ -66,7 +66,7 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
       // request IDs are dot-separated decimal numbers like "12345.67" — then pass via
       // JSON.stringify into the cache lookup. The validator below makes the injection
       // surface unreachable.
-      if (client.networkMode === "hook") {
+      if (client.networkMode === 'hook') {
         if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.requestId)) {
           return failResult(
             `Invalid requestId shape: expected alphanumeric / ./_/- (e.g. CDP id "12345.67" or test fixture "hook-req1"); got ${String(args.requestId).slice(0, 80)}`,
@@ -83,19 +83,19 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
           }
 
           const parsed = JSON.parse(String(result.value)) as { error?: string; body?: string };
-          if (parsed.error === "no_cache") {
+          if (parsed.error === 'no_cache') {
             return failResult(
-              "Response body cache not available. The network hook may not have been injected yet.",
-              { hint: "Make a request first, then query its body." },
+              'Response body cache not available. The network hook may not have been injected yet.',
+              { hint: 'Make a request first, then query its body.' },
             );
           }
-          if (parsed.error === "not_found") {
+          if (parsed.error === 'not_found') {
             return failResult(
               `Response body for ${args.requestId} not in cache. It may have been evicted (cache holds last 50 bodies) or the request failed.`,
             );
           }
 
-          let body = parsed.body ?? "";
+          let body = parsed.body ?? '';
           const truncated = body.length > maxLen;
           if (truncated) body = body.slice(0, maxLen);
 
@@ -105,9 +105,9 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
               url: entry.url,
               status: entry.status,
               base64Encoded: false,
-              bodyLength: (parsed.body ?? "").length,
+              bodyLength: (parsed.body ?? '').length,
               body,
-              source: "hook",
+              source: 'hook',
             },
             { truncated },
           );
@@ -119,8 +119,8 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
       }
 
       return failResult(
-        "Network monitoring is not active. Neither CDP Network domain nor hook fallback is enabled.",
-        { hint: "Call cdp_status to check network capabilities." },
+        'Network monitoring is not active. Neither CDP Network domain nor hook fallback is enabled.',
+        { hint: 'Call cdp_status to check network capabilities.' },
       );
     },
   );

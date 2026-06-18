@@ -1,12 +1,12 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-import { isInViewport, decideScrollDirection } from "../../../dist/tools/device-interact.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { isInViewport, decideScrollDirection } from '../../../dist/tools/device-interact.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEVICE_INTERACT_PATH = resolve(__dirname, "../../../src/tools/device-interact.ts");
+const DEVICE_INTERACT_PATH = resolve(__dirname, '../../../src/tools/device-interact.ts');
 
 // Task 7 (GH #105 / rn-device iOS-MVP): TS implementation of `scrollintoview`
 // orchestration. Pure rect-intersection helpers used by device_scrollintoview
@@ -25,38 +25,38 @@ const DEVICE_INTERACT_PATH = resolve(__dirname, "../../../src/tools/device-inter
 
 const screen = { x: 0, y: 0, width: 393, height: 852 };
 
-test("isInViewport: visible element returns true", () => {
+test('isInViewport: visible element returns true', () => {
   const visible = { x: 16, y: 100, width: 361, height: 44 };
   assert.equal(isInViewport(visible, screen), true);
 });
 
-test("isInViewport: element fully below viewport returns false", () => {
+test('isInViewport: element fully below viewport returns false', () => {
   const belowFold = { x: 16, y: 1000, width: 361, height: 44 };
   assert.equal(isInViewport(belowFold, screen), false);
 });
 
-test("decideScrollDirection: returns null when element already visible", () => {
+test('decideScrollDirection: returns null when element already visible', () => {
   const visible = { x: 16, y: 100, width: 361, height: 44 };
   assert.equal(decideScrollDirection(visible, screen), null);
 });
 
-test("decideScrollDirection: element below viewport → swipe up to reveal", () => {
+test('decideScrollDirection: element below viewport → swipe up to reveal', () => {
   const belowFold = { x: 16, y: 1000, width: 361, height: 44 };
-  assert.equal(decideScrollDirection(belowFold, screen), "up");
+  assert.equal(decideScrollDirection(belowFold, screen), 'up');
 });
 
-test("decideScrollDirection: element above viewport → swipe down to reveal", () => {
+test('decideScrollDirection: element above viewport → swipe down to reveal', () => {
   // Negative y → element scrolled past top edge. Swipe-down (finger top-to-
   // bottom) drags content back down into view.
   const aboveTop = { x: 16, y: -200, width: 361, height: 44 };
-  assert.equal(decideScrollDirection(aboveTop, screen), "down");
+  assert.equal(decideScrollDirection(aboveTop, screen), 'down');
 });
 
-test("scrollintoview: Android runner env uses snapshot/swipe orchestrator", async () => {
+test('scrollintoview: Android runner env uses snapshot/swipe orchestrator', async () => {
   const previous = process.env.RN_ANDROID_RUNNER;
   delete process.env.RN_ANDROID_RUNNER;
   try {
-    const source = readFileSync(DEVICE_INTERACT_PATH, "utf8");
+    const source = readFileSync(DEVICE_INTERACT_PATH, 'utf8');
     assert.match(source, /session\?\.platform === ['"]android['"]/);
     assert.match(source, /RN_ANDROID_RUNNER !== ['"]0['"]/);
     assert.doesNotMatch(source, /runAgentDevice\(\[['"]scrollintoview['"]/);

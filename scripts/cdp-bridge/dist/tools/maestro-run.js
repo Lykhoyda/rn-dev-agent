@@ -1,20 +1,20 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { resolveBundleId, readExpoSlug } from "../project-config.js";
-import { chooseMaestroDispatch, shouldWarnFallback } from "./maestro-dispatch.js";
-import { resolveAppFileForClearState } from "./resolve-ios-app-file.js";
-import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from "../domain/maestro-validator.js";
-import { outputIndicatesFlowFailure } from "../domain/maestro-error-parser.js";
-import { augmentFailureWithDegradation, resolveFloorMs } from "../domain/tap-latency.js";
-import { buildStepSummary, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from "../domain/maestro-step-parser.js";
-import { stopFastRunner as defaultStopFastRunner } from "../runners/rn-fast-runner-client.js";
-import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from "../runners/release-android-slot.js";
-import { markCdpStale as defaultMarkCdpStale } from "../cdp/recovery.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { resolveBundleId, readExpoSlug } from '../project-config.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
+import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
+import { buildStepSummary, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from '../domain/maestro-step-parser.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
+import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 const execFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
@@ -27,7 +27,7 @@ const execFile = promisify(execFileCb);
 export async function runFlowParked(run, opts = {}) {
     const stale = opts.markCdpStale ?? defaultMarkCdpStale;
     try {
-        if (opts.platform === "android") {
+        if (opts.platform === 'android') {
             const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
             await release({ deviceId: opts.deviceId });
         }
@@ -45,7 +45,7 @@ export async function runFlowParked(run, opts = {}) {
  *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
 const PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
 function resolvePlatform(override) {
-    if (override === "ios" || override === "android")
+    if (override === 'ios' || override === 'android')
         return override;
     const session = getActiveSession();
     return session?.platform ?? null;
@@ -54,8 +54,8 @@ function resolveAppId(override, platform) {
     if (override)
         return override;
     if (platform)
-        return resolveBundleId(platform) ?? readExpoSlug() ?? "";
-    return readExpoSlug() ?? "";
+        return resolveBundleId(platform) ?? readExpoSlug() ?? '';
+    return readExpoSlug() ?? '';
 }
 export function createMaestroRunHandler() {
     return async (args) => {
@@ -69,19 +69,19 @@ export function createMaestroRunHandler() {
                     return failResult(`Refusing to run Maestro: invalid param key '${String(key).slice(0, 60)}' ` +
                         `— must match ${PARAM_KEY_RE.source} (GH #116).`);
                 }
-                if (typeof value !== "string") {
+                if (typeof value !== 'string') {
                     return failResult(`Refusing to run Maestro: param '${key}' has non-string value (GH #116).`);
                 }
             }
         }
         const platform = resolvePlatform(args.platform);
         if (!platform) {
-            return failResult("Cannot determine platform. Pass platform or open a device session first.");
+            return failResult('Cannot determine platform. Pass platform or open a device session first.');
         }
         // B59: tiered dispatch — maestro-runner when viable, Maestro CLI fallback
         // when iOS-only and adb is missing, fail-fast with install hints when neither.
         const dispatch = chooseMaestroDispatch({ platform });
-        if ("error" in dispatch) {
+        if ('error' in dispatch) {
             return failResult(dispatch.error);
         }
         // Phase 134.1 (deepsec CRITICAL #4): both inlineYaml and flowPath
@@ -104,14 +104,14 @@ export function createMaestroRunHandler() {
                 return failResult(`Flow file not found: ${args.flowPath}`);
             }
             try {
-                rawYaml = readFileSync(args.flowPath, "utf-8");
+                rawYaml = readFileSync(args.flowPath, 'utf-8');
             }
             catch (err) {
                 return failResult(`Failed to read flow file: ${err.message}`);
             }
         }
         else {
-            return failResult("Provide either flowPath or inlineYaml.");
+            return failResult('Provide either flowPath or inlineYaml.');
         }
         try {
             // GH #186: when running a saved flow FILE, resolve+inline any runFlow file
@@ -132,7 +132,7 @@ export function createMaestroRunHandler() {
             // calls (parallel test invocations could overwrite each other's
             // validated content between writeFileSync and execFile).
             flowFile = join(tmpdir(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-            writeFileSync(flowFile, validatedContent, "utf-8");
+            writeFileSync(flowFile, validatedContent, 'utf-8');
         }
         catch (err) {
             if (err instanceof MaestroValidationError) {
@@ -154,7 +154,7 @@ export function createMaestroRunHandler() {
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
-                paramArgs.push("-e", `${key}=${value}`);
+                paramArgs.push('-e', `${key}=${value}`);
             }
         }
         const finalArgs = [...baseArgs, ...paramArgs];
@@ -164,7 +164,7 @@ export function createMaestroRunHandler() {
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            { timeout, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
+            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
             // combineRunnerOutput (not .trim()) so the step parser's leading-indent
             // anchor (B212) still sees the FIRST step line's indent — see GH #312.
             const output = combineRunnerOutput(stdout, stderr);
@@ -198,7 +198,7 @@ export function createMaestroRunHandler() {
             }
             const baseWarnMsg = dispatch.fallbackReason
                 ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
-                : "Flow completed with warnings or failures";
+                : 'Flow completed with warnings or failures';
             // GH #263: classify on the FULL output (not the sliced meta.output).
             const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
             return warnResult(warnAug.meta, warnAug.message);
@@ -214,8 +214,8 @@ export function createMaestroRunHandler() {
             // timeout boundary. Without this, auto-repair is silently
             // pessimised exactly when devices are slow / under load.
             const errAny = err;
-            const stdout = typeof errAny?.stdout === "string" ? errAny.stdout : "";
-            const stderr = typeof errAny?.stderr === "string" ? errAny.stderr : "";
+            const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
+            const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
             const combined = combineRunnerOutput(stdout, stderr);
             const { timedOut, outputTruncated } = classifyExecError(err);
             const summary = buildStepSummary(combined, { failed: true });

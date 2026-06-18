@@ -1,8 +1,8 @@
 export type FillVerifyOutcome =
-  | "verified-exact"
-  | "verified-transformed"
-  | "corrupted"
-  | "unverifiable";
+  | 'verified-exact'
+  | 'verified-transformed'
+  | 'corrupted'
+  | 'unverifiable';
 
 export interface FillVerifyInput {
   text: string;
@@ -25,20 +25,20 @@ const HALF = 0.5;
  */
 export function classifyFillVerification(input: FillVerifyInput): FillVerifyOutcome {
   const { text, valueAfter, priorValueAfter } = input;
-  if (valueAfter === null) return "unverifiable";
-  if (valueAfter === text) return "verified-exact";
-  if (text.length === 0) return "corrupted";
+  if (valueAfter === null) return 'unverifiable';
+  if (valueAfter === text) return 'verified-exact';
+  if (text.length === 0) return 'corrupted';
   if (valueAfter.length > 0 && valueAfter.length >= HALF * text.length)
-    return "verified-transformed";
+    return 'verified-transformed';
   if (
     priorValueAfter !== undefined &&
     priorValueAfter !== null &&
-    valueAfter !== "" &&
+    valueAfter !== '' &&
     valueAfter === priorValueAfter
   ) {
-    return "verified-transformed";
+    return 'verified-transformed';
   }
-  return "corrupted";
+  return 'corrupted';
 }
 
 export interface ResolveTestIdOpts {
@@ -55,7 +55,7 @@ const SNAPSHOT_REF_TOKEN = /^e\d+$/; // fast-runner-ref-map mints `e${counter}`
  */
 export function resolveJsTestId(ref: string, opts: ResolveTestIdOpts = {}): string | null {
   if (opts.explicitTestId && opts.explicitTestId.length > 0) return opts.explicitTestId;
-  const stripped = ref.replace(/^@/, "");
+  const stripped = ref.replace(/^@/, '');
   if (stripped.length === 0) return null;
   if (SNAPSHOT_REF_TOKEN.test(stripped))
     return opts.cachedIdentifier && opts.cachedIdentifier.length > 0 ? opts.cachedIdentifier : null;
@@ -64,9 +64,9 @@ export function resolveJsTestId(ref: string, opts: ResolveTestIdOpts = {}): stri
 }
 
 export type NativeRetypeDecision =
-  | { action: "accept" }
-  | { action: "retype"; delayMs: number }
-  | { action: "escalate" };
+  | { action: 'accept' }
+  | { action: 'retype'; delayMs: number }
+  | { action: 'escalate' };
 
 const RETYPE_DELAY_MS = 40;
 
@@ -76,9 +76,9 @@ export function decideNativeRetype(
   attemptsSoFar: number,
   maxAttempts: number,
 ): NativeRetypeDecision {
-  if (outcome !== "corrupted") return { action: "accept" };
-  if (attemptsSoFar >= maxAttempts) return { action: "escalate" };
-  return { action: "retype", delayMs: RETYPE_DELAY_MS };
+  if (outcome !== 'corrupted') return { action: 'accept' };
+  if (attemptsSoFar >= maxAttempts) return { action: 'escalate' };
+  return { action: 'retype', delayMs: RETYPE_DELAY_MS };
 }
 
 export interface EvaluateSeam {
@@ -105,8 +105,8 @@ async function readInputValueOnce(
   testID: string,
 ): Promise<{ value: string | null; controlled: boolean } | null> {
   try {
-    const r = await deps.evaluate("__RN_AGENT.readInputValue(" + JSON.stringify(testID) + ")");
-    if (!r.error && typeof r.value === "string") {
+    const r = await deps.evaluate('__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')');
+    if (!r.error && typeof r.value === 'string') {
       const read = JSON.parse(r.value) as {
         value?: string | null;
         controlled?: boolean;
@@ -165,11 +165,11 @@ export async function attemptJsFill(
   let probe: Record<string, unknown>;
   try {
     const expr =
-      "__RN_AGENT.interact(" +
-      JSON.stringify({ action: "typeText", testID, text, verify: true }) +
-      ")";
+      '__RN_AGENT.interact(' +
+      JSON.stringify({ action: 'typeText', testID, text, verify: true }) +
+      ')';
     const r = await deps.evaluate(expr);
-    if (r.error || typeof r.value !== "string") return { handled: false };
+    if (r.error || typeof r.value !== 'string') return { handled: false };
     probe = JSON.parse(r.value) as Record<string, unknown>;
   } catch {
     return { handled: false };
@@ -178,7 +178,7 @@ export async function attemptJsFill(
   if (probe.controlled === undefined) return { handled: false };
   if (probe.handlerCalled === false || probe.handlerCalled === undefined) return { handled: false };
 
-  const valueBefore = typeof probe.valueBefore === "string" ? probe.valueBefore : null;
+  const valueBefore = typeof probe.valueBefore === 'string' ? probe.valueBefore : null;
   const settled = await settleRead(deps, testID, text, valueBefore);
   return {
     handled: true,
@@ -189,6 +189,6 @@ export async function attemptJsFill(
     }),
     valueAfter: settled.value,
     controlled: settled.controlled,
-    handler: typeof probe.handlerCalled === "string" ? probe.handlerCalled : undefined,
+    handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,
   };
 }

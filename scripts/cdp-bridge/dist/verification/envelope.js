@@ -7,7 +7,7 @@ export function attachVerificationWarning(result, warning) {
             return result;
         const env = JSON.parse(text);
         env.meta = { ...env.meta, verification_warning: warning };
-        return { content: [{ type: "text", text: JSON.stringify(env) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(env) }] };
     }
     catch {
         return result;

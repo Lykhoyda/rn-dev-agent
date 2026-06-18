@@ -1,7 +1,7 @@
-import type { CDPClient } from "../cdp-client.js";
-import type { NetworkEntry } from "../types.js";
-import { okResult, withConnection } from "../utils.js";
-import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
+import type { CDPClient } from '../cdp-client.js';
+import type { NetworkEntry } from '../types.js';
+import { okResult, withConnection } from '../utils.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export interface WaitForNetworkArgs {
   url_pattern: string;

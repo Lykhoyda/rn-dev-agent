@@ -1,9 +1,9 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { findProjectRoot } from "../../dist/nav-graph/storage.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { findProjectRoot } from '../../dist/nav-graph/storage.js';
 
 // B134: findProjectRoot() must find an RN project in these layouts:
 // 1. cwd IS the RN project (direct hit)
@@ -15,10 +15,10 @@ import { findProjectRoot } from "../../dist/nav-graph/storage.js";
 function makeRnProject(dir) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "package.json"),
+    join(dir, 'package.json'),
     JSON.stringify({
-      name: "test-rn",
-      dependencies: { "react-native": "0.76.0" },
+      name: 'test-rn',
+      dependencies: { 'react-native': '0.76.0' },
     }),
   );
 }
@@ -26,7 +26,7 @@ function makeRnProject(dir) {
 function makeNonRnDir(dir, withPackageJson = false) {
   mkdirSync(dir, { recursive: true });
   if (withPackageJson) {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "plain", dependencies: {} }));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'plain', dependencies: {} }));
   }
 }
 
@@ -57,8 +57,8 @@ function withEnv(envPatches, fn) {
   }
 }
 
-test("findProjectRoot: cwd IS an RN project → returns cwd", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-direct-"));
+test('findProjectRoot: cwd IS an RN project → returns cwd', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-direct-'));
   try {
     makeRnProject(tmp);
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
@@ -67,7 +67,7 @@ test("findProjectRoot: cwd IS an RN project → returns cwd", () => {
         // On macOS /tmp is a symlink to /private/tmp — the resolved path may start
         // with /private. Either answer is correct as long as it ends with the unique suffix.
         assert.ok(
-          result && result.endsWith(tmp.split("/").pop()),
+          result && result.endsWith(tmp.split('/').pop()),
           `expected result to end with tmp suffix, got ${result}`,
         );
       });
@@ -77,18 +77,18 @@ test("findProjectRoot: cwd IS an RN project → returns cwd", () => {
   }
 });
 
-test("findProjectRoot: cwd is inside an RN project → walks up to find it", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-walkup-"));
+test('findProjectRoot: cwd is inside an RN project → walks up to find it', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-walkup-'));
   try {
     const rnRoot = tmp;
     makeRnProject(rnRoot);
-    const nestedCwd = join(rnRoot, "src", "components");
+    const nestedCwd = join(rnRoot, 'src', 'components');
     mkdirSync(nestedCwd, { recursive: true });
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(nestedCwd, () => {
         const result = findProjectRoot();
         assert.ok(
-          result && result.endsWith(tmp.split("/").pop()),
+          result && result.endsWith(tmp.split('/').pop()),
           `expected walk-up result to end with tmp suffix, got ${result}`,
         );
       });
@@ -98,16 +98,16 @@ test("findProjectRoot: cwd is inside an RN project → walks up to find it", () 
   }
 });
 
-test("B134: findProjectRoot finds RN project as sibling of cwd (plugin-repo ↔ workspace layout)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-sibling-"));
+test('B134: findProjectRoot finds RN project as sibling of cwd (plugin-repo ↔ workspace layout)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-sibling-'));
   try {
     // tmp/
     //   plugin-repo/        (cwd — no package.json at root)
     //   workspace-repo/
     //     test-app/         (RN project, 2 levels deep from tmp)
-    const pluginRepo = join(tmp, "plugin-repo");
-    const workspaceRepo = join(tmp, "workspace-repo");
-    const testApp = join(workspaceRepo, "test-app");
+    const pluginRepo = join(tmp, 'plugin-repo');
+    const workspaceRepo = join(tmp, 'workspace-repo');
+    const testApp = join(workspaceRepo, 'test-app');
     makeNonRnDir(pluginRepo, false);
     makeNonRnDir(workspaceRepo, false);
     makeRnProject(testApp);
@@ -115,8 +115,8 @@ test("B134: findProjectRoot finds RN project as sibling of cwd (plugin-repo ↔ 
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
-        assert.ok(result, "expected non-null result from sibling scan");
-        assert.ok(result.endsWith("test-app"), `expected to find test-app, got ${result}`);
+        assert.ok(result, 'expected non-null result from sibling scan');
+        assert.ok(result.endsWith('test-app'), `expected to find test-app, got ${result}`);
       });
     });
   } finally {
@@ -124,14 +124,14 @@ test("B134: findProjectRoot finds RN project as sibling of cwd (plugin-repo ↔ 
   }
 });
 
-test("B134: findProjectRoot finds RN project as direct sibling (not nested)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-flat-sibling-"));
+test('B134: findProjectRoot finds RN project as direct sibling (not nested)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-flat-sibling-'));
   try {
     // tmp/
     //   plugin-repo/   (cwd)
     //   test-app/      (RN project, direct sibling)
-    const pluginRepo = join(tmp, "plugin-repo");
-    const testApp = join(tmp, "test-app");
+    const pluginRepo = join(tmp, 'plugin-repo');
+    const testApp = join(tmp, 'test-app');
     makeNonRnDir(pluginRepo, false);
     makeRnProject(testApp);
 
@@ -139,7 +139,7 @@ test("B134: findProjectRoot finds RN project as direct sibling (not nested)", ()
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
         assert.ok(
-          result && result.endsWith("test-app"),
+          result && result.endsWith('test-app'),
           `expected direct sibling match, got ${result}`,
         );
       });
@@ -149,20 +149,20 @@ test("B134: findProjectRoot finds RN project as direct sibling (not nested)", ()
   }
 });
 
-test("findProjectRoot: RN_PROJECT_ROOT env takes precedence over cascade", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-env-"));
+test('findProjectRoot: RN_PROJECT_ROOT env takes precedence over cascade', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-env-'));
   try {
     // Explicit RN project in env; random cwd elsewhere.
-    const rnRoot = join(tmp, "explicit-root");
+    const rnRoot = join(tmp, 'explicit-root');
     makeRnProject(rnRoot);
-    const elsewhere = join(tmp, "elsewhere");
+    const elsewhere = join(tmp, 'elsewhere');
     mkdirSync(elsewhere);
 
     withEnv({ RN_PROJECT_ROOT: rnRoot, CLAUDE_USER_CWD: null }, () => {
       withCwd(elsewhere, () => {
         const result = findProjectRoot();
         assert.ok(
-          result && result.endsWith("explicit-root"),
+          result && result.endsWith('explicit-root'),
           `expected env override, got ${result}`,
         );
       });
@@ -172,8 +172,8 @@ test("findProjectRoot: RN_PROJECT_ROOT env takes precedence over cascade", () =>
   }
 });
 
-test("findProjectRoot: no false positive inside a controlled RN-free tree", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-null-"));
+test('findProjectRoot: no false positive inside a controlled RN-free tree', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-null-'));
   try {
     // Controlled layout — nothing under `tmp/` is an RN project:
     //   tmp/outer/
@@ -186,13 +186,13 @@ test("findProjectRoot: no false positive inside a controlled RN-free tree", () =
     //     tree (because we know our tree has no RN project).
     // This catches real false positives — if Pass 2/3 accidentally matched
     // a non-RN dir inside our tree, this test would fail.
-    const outer = join(tmp, "outer");
-    const inner = join(outer, "inner");
+    const outer = join(tmp, 'outer');
+    const inner = join(outer, 'inner');
     mkdirSync(inner, { recursive: true });
     // Also create some non-RN clutter to exercise the skip logic.
-    makeNonRnDir(join(outer, ".hidden-thing"), true);
-    makeNonRnDir(join(outer, "node_modules"), false);
-    makeNonRnDir(join(outer, "plain-non-rn"), true);
+    makeNonRnDir(join(outer, '.hidden-thing'), true);
+    makeNonRnDir(join(outer, 'node_modules'), false);
+    makeNonRnDir(join(outer, 'plain-non-rn'), true);
 
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(inner, () => {
@@ -200,7 +200,7 @@ test("findProjectRoot: no false positive inside a controlled RN-free tree", () =
         if (result !== null) {
           // If we got a path back, it MUST be from outside our tree —
           // nothing inside tmp/ is an RN project.
-          const resolvedTmp = tmp.replace(/^\/tmp\//, "/private/tmp/");
+          const resolvedTmp = tmp.replace(/^\/tmp\//, '/private/tmp/');
           assert.ok(
             !result.startsWith(tmp) && !result.startsWith(resolvedTmp),
             `false positive inside controlled tree: ${result}`,
@@ -213,8 +213,8 @@ test("findProjectRoot: no false positive inside a controlled RN-free tree", () =
   }
 });
 
-test("B134: sibling-scan is breadth-first — direct sibling RN wins over grandchild RN", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-bfs-"));
+test('B134: sibling-scan is breadth-first — direct sibling RN wins over grandchild RN', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-bfs-'));
   try {
     // tmp/
     //   plugin-repo/                    (cwd)
@@ -223,10 +223,10 @@ test("B134: sibling-scan is breadth-first — direct sibling RN wins over grandc
     //   zzz-real/                       (RN, direct sibling, alphabetically later)
     // Direct-sibling RN (zzz-real) must win over grandchild (aaa-wrapper/nested-rn)
     // because breadth-first traversal checks all direct siblings before recursing.
-    const pluginRepo = join(tmp, "plugin-repo");
-    const aaaWrapper = join(tmp, "aaa-wrapper");
-    const nestedRn = join(aaaWrapper, "nested-rn");
-    const zzzReal = join(tmp, "zzz-real");
+    const pluginRepo = join(tmp, 'plugin-repo');
+    const aaaWrapper = join(tmp, 'aaa-wrapper');
+    const nestedRn = join(aaaWrapper, 'nested-rn');
+    const zzzReal = join(tmp, 'zzz-real');
     makeNonRnDir(pluginRepo, false);
     makeNonRnDir(aaaWrapper, false);
     makeRnProject(nestedRn);
@@ -235,9 +235,9 @@ test("B134: sibling-scan is breadth-first — direct sibling RN wins over grandc
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
-        assert.ok(result, "expected to find an RN project");
+        assert.ok(result, 'expected to find an RN project');
         assert.ok(
-          result.endsWith("zzz-real"),
+          result.endsWith('zzz-real'),
           `breadth-first should pick direct sibling over grandchild, got ${result}`,
         );
       });
@@ -247,8 +247,8 @@ test("B134: sibling-scan is breadth-first — direct sibling RN wins over grandc
   }
 });
 
-test("B134: sibling-scan pick is alphabetically deterministic across readdir order", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-det-"));
+test('B134: sibling-scan pick is alphabetically deterministic across readdir order', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-det-'));
   try {
     // tmp/
     //   plugin-repo/     (cwd)
@@ -256,17 +256,17 @@ test("B134: sibling-scan pick is alphabetically deterministic across readdir ord
     //   mmm-rn/          (RN, middle)
     //   zzz-rn/          (RN, last)
     // Expected: aaa-rn wins regardless of OS readdir ordering.
-    const pluginRepo = join(tmp, "plugin-repo");
+    const pluginRepo = join(tmp, 'plugin-repo');
     makeNonRnDir(pluginRepo, false);
-    makeRnProject(join(tmp, "aaa-rn"));
-    makeRnProject(join(tmp, "mmm-rn"));
-    makeRnProject(join(tmp, "zzz-rn"));
+    makeRnProject(join(tmp, 'aaa-rn'));
+    makeRnProject(join(tmp, 'mmm-rn'));
+    makeRnProject(join(tmp, 'zzz-rn'));
 
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
         assert.ok(
-          result && result.endsWith("aaa-rn"),
+          result && result.endsWith('aaa-rn'),
           `alphabetical first should win, got ${result}`,
         );
       });
@@ -276,18 +276,18 @@ test("B134: sibling-scan pick is alphabetically deterministic across readdir ord
   }
 });
 
-test("B134: findProjectRoot skips node_modules and dotfiles during scan (perf + correctness)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "fpr-skip-"));
+test('B134: findProjectRoot skips node_modules and dotfiles during scan (perf + correctness)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'fpr-skip-'));
   try {
     // tmp/
     //   plugin-repo/   (cwd)
     //   node_modules/fake-rn-project/  (should be SKIPPED even though it looks like RN)
     //   .hidden/fake-rn-project/        (should be SKIPPED)
     //   real-app/                       (RN project, should be FOUND)
-    const pluginRepo = join(tmp, "plugin-repo");
-    const nodeModulesFake = join(tmp, "node_modules", "fake-rn-project");
-    const hiddenFake = join(tmp, ".hidden", "fake-rn-project");
-    const realApp = join(tmp, "real-app");
+    const pluginRepo = join(tmp, 'plugin-repo');
+    const nodeModulesFake = join(tmp, 'node_modules', 'fake-rn-project');
+    const hiddenFake = join(tmp, '.hidden', 'fake-rn-project');
+    const realApp = join(tmp, 'real-app');
     makeNonRnDir(pluginRepo, false);
     makeRnProject(nodeModulesFake);
     makeRnProject(hiddenFake);
@@ -296,10 +296,10 @@ test("B134: findProjectRoot skips node_modules and dotfiles during scan (perf + 
     withEnv({ RN_PROJECT_ROOT: null, CLAUDE_USER_CWD: null }, () => {
       withCwd(pluginRepo, () => {
         const result = findProjectRoot();
-        assert.ok(result, "expected to find real-app");
-        assert.ok(!result.includes("node_modules"), `should skip node_modules, got ${result}`);
-        assert.ok(!result.includes(".hidden"), `should skip dotfiles, got ${result}`);
-        assert.ok(result.endsWith("real-app"), `expected real-app, got ${result}`);
+        assert.ok(result, 'expected to find real-app');
+        assert.ok(!result.includes('node_modules'), `should skip node_modules, got ${result}`);
+        assert.ok(!result.includes('.hidden'), `should skip dotfiles, got ${result}`);
+        assert.ok(result.endsWith('real-app'), `expected real-app, got ${result}`);
       });
     });
   } finally {

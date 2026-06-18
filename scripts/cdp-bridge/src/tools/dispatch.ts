@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 export function createDispatchHandler(getClient: () => CDPClient) {
   return withConnection(
@@ -9,7 +9,7 @@ export function createDispatchHandler(getClient: () => CDPClient) {
       client,
     ) => {
       let payload: unknown = args.payload;
-      if (typeof args.payloadJson === "string") {
+      if (typeof args.payloadJson === 'string') {
         try {
           payload = JSON.parse(args.payloadJson);
         } catch (e) {
@@ -29,8 +29,8 @@ export function createDispatchHandler(getClient: () => CDPClient) {
         return failResult(`Dispatch error: ${result.error}`);
       }
 
-      if (typeof result.value !== "string") {
-        return failResult("Unexpected response from dispatchAction");
+      if (typeof result.value !== 'string') {
+        return failResult('Unexpected response from dispatchAction');
       }
 
       let parsed: unknown;
@@ -40,9 +40,9 @@ export function createDispatchHandler(getClient: () => CDPClient) {
         return okResult({ raw: result.value });
       }
 
-      if (parsed !== null && typeof parsed === "object") {
+      if (parsed !== null && typeof parsed === 'object') {
         const obj = parsed as Record<string, unknown>;
-        if ("__agent_error" in obj) {
+        if ('__agent_error' in obj) {
           return failResult(String(obj.__agent_error));
         }
       }

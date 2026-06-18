@@ -15,16 +15,16 @@
  * See workspace `docs/ROADMAP.md` Phase 134.1 + proposed D1212 for the
  * default-deny rationale.
  */
-import yaml from "yaml";
-import { join, dirname, isAbsolute, sep } from "node:path";
-import { readFileSync, realpathSync } from "node:fs";
+import yaml from 'yaml';
+import { join, dirname, isAbsolute, sep } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
 
 // ── Errors ──────────────────────────────────────────────────────────
 
 export class MaestroValidationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "MaestroValidationError";
+    this.name = 'MaestroValidationError';
   }
 }
 
@@ -41,7 +41,7 @@ const BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
 const BUNDLE_ID_MAX_LEN = 256;
 
 export function isValidBundleId(s: unknown): s is string {
-  if (typeof s !== "string") return false;
+  if (typeof s !== 'string') return false;
   if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN) return false;
   return BUNDLE_ID_RE.test(s);
 }
@@ -62,7 +62,7 @@ const UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
 const SCALAR_MAX_LEN = 4096;
 
 export function isSafeMaestroScalar(s: unknown): s is string {
-  if (typeof s !== "string") return false;
+  if (typeof s !== 'string') return false;
   if (s.length > SCALAR_MAX_LEN) return false;
   if (UNSAFE_SCALAR_RE.test(s)) return false;
   // NOTE: we don't reject `---` as a substring. The actual document-separator
@@ -76,57 +76,57 @@ export function isSafeMaestroScalar(s: unknown): s is string {
 // ── Command allowlist ───────────────────────────────────────────────
 
 const ALLOWED_COMMANDS = new Set<string>([
-  "launchApp",
-  "tapOn",
-  "doubleTapOn",
-  "longPressOn",
-  "assertVisible",
-  "assertNotVisible",
-  "inputText",
-  "eraseText",
-  "scroll",
-  "scrollUntilVisible",
-  "swipe",
+  'launchApp',
+  'tapOn',
+  'doubleTapOn',
+  'longPressOn',
+  'assertVisible',
+  'assertNotVisible',
+  'inputText',
+  'eraseText',
+  'scroll',
+  'scrollUntilVisible',
+  'swipe',
   // Multi-LLM review caught these: test-recorder-generators emits the
   // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
   // top-level commands. Without these in the allowlist, every recorded
   // action containing a swipe would be refused at replay time. The
   // deepsec attack vector (newline-injected direction) is already
   // mitigated by isSafeMaestroScalar catching the embedded newline.
-  "swipeUp",
-  "swipeDown",
-  "swipeLeft",
-  "swipeRight",
-  "back",
-  "pressKey",
-  "openLink",
-  "waitForAnimationToEnd",
-  "extendedWaitUntil",
-  "hideKeyboard",
-  "takeScreenshot",
-  "clearState",
-  "addMedia",
-  "copyTextFrom",
-  "pasteText",
-  "travel",
-  "setLocation",
-  "setAirplaneMode",
-  "killApp",
-  "stopApp",
-  "tap",
+  'swipeUp',
+  'swipeDown',
+  'swipeLeft',
+  'swipeRight',
+  'back',
+  'pressKey',
+  'openLink',
+  'waitForAnimationToEnd',
+  'extendedWaitUntil',
+  'hideKeyboard',
+  'takeScreenshot',
+  'clearState',
+  'addMedia',
+  'copyTextFrom',
+  'pasteText',
+  'travel',
+  'setLocation',
+  'setAirplaneMode',
+  'killApp',
+  'stopApp',
+  'tap',
   // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
   // dev-client picker). Validated specially (validateRunFlowValue) so nested
   // `commands` get full command-level allowlist checks, and {file} refs are
   // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
   // through generic validateValue, which would miss nested denied commands.
-  "runFlow",
+  'runFlow',
 ]);
 
 const DENIED_COMMANDS = new Set<string>([
-  "runScript",
-  "evalScript",
-  "startRecording",
-  "stopRecording",
+  'runScript',
+  'evalScript',
+  'startRecording',
+  'stopRecording',
 ]);
 
 // ── Builder ─────────────────────────────────────────────────────────
@@ -139,21 +139,21 @@ export type MaestroCommand = Record<string, unknown>;
 
 export function buildMaestroFlow(opts: MaestroFlowOptions, commands: unknown[]): string {
   if (opts.appId !== undefined) {
-    assertValidBundleId(opts.appId, "appId header");
+    assertValidBundleId(opts.appId, 'appId header');
   }
   for (const cmd of commands) {
     validateCommand(cmd);
   }
-  const headerYaml = opts.appId ? yaml.stringify({ appId: opts.appId }) : "";
+  const headerYaml = opts.appId ? yaml.stringify({ appId: opts.appId }) : '';
   const bodyYaml = yaml.stringify(commands);
   return `${headerYaml}---\n${bodyYaml}`;
 }
 
 function validateCommand(cmd: unknown): void {
   if (cmd === null || cmd === undefined) {
-    throw new MaestroValidationError("Command is null/undefined");
+    throw new MaestroValidationError('Command is null/undefined');
   }
-  if (typeof cmd === "string") {
+  if (typeof cmd === 'string') {
     if (!isSafeMaestroScalar(cmd)) {
       throw new MaestroValidationError(
         `Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`,
@@ -167,13 +167,13 @@ function validateCommand(cmd: unknown): void {
     }
     return;
   }
-  if (typeof cmd !== "object") {
+  if (typeof cmd !== 'object') {
     throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
   }
   const keys = Object.keys(cmd as Record<string, unknown>);
   if (keys.length !== 1) {
     throw new MaestroValidationError(
-      `Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`,
+      `Command must have exactly one root key, got ${keys.length}: ${keys.join(', ')}`,
     );
   }
   const key = keys[0];
@@ -183,7 +183,7 @@ function validateCommand(cmd: unknown): void {
   if (!ALLOWED_COMMANDS.has(key)) {
     throw new MaestroValidationError(`Command not in allowlist: ${key}`);
   }
-  if (key === "runFlow") {
+  if (key === 'runFlow') {
     validateRunFlowValue((cmd as Record<string, unknown>)[key]);
     return;
   }
@@ -198,7 +198,7 @@ function validateCommand(cmd: unknown): void {
  * `runScript` slip through as a plain scalar key/value.
  */
 function validateRunFlowValue(v: unknown): void {
-  if (typeof v === "string") {
+  if (typeof v === 'string') {
     if (!isSafeMaestroScalar(v)) {
       throw new MaestroValidationError(
         `Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`,
@@ -206,17 +206,17 @@ function validateRunFlowValue(v: unknown): void {
     }
     return;
   }
-  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
     throw new MaestroValidationError(
-      `runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`,
+      `runFlow value must be a file string or an object, got ${Array.isArray(v) ? 'array' : typeof v}`,
     );
   }
   const obj = v as Record<string, unknown>;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
+  if ('file' in obj && (typeof obj.file !== 'string' || !isSafeMaestroScalar(obj.file))) {
     throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
   }
-  if ("when" in obj) validateValue(obj.when);
-  if ("commands" in obj) {
+  if ('when' in obj) validateValue(obj.when);
+  if ('commands' in obj) {
     if (!Array.isArray(obj.commands)) {
       throw new MaestroValidationError(`runFlow.commands must be an array`);
     }
@@ -224,7 +224,7 @@ function validateRunFlowValue(v: unknown): void {
   }
   // Any other keys (env/label/config) are validated as generic safe values.
   for (const [k, val] of Object.entries(obj)) {
-    if (k === "file" || k === "when" || k === "commands") continue;
+    if (k === 'file' || k === 'when' || k === 'commands') continue;
     if (!isSafeMaestroScalar(k)) {
       throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
     }
@@ -234,8 +234,8 @@ function validateRunFlowValue(v: unknown): void {
 
 function validateValue(v: unknown): void {
   if (v === null || v === undefined) return;
-  if (typeof v === "boolean" || typeof v === "number") return;
-  if (typeof v === "string") {
+  if (typeof v === 'boolean' || typeof v === 'number') return;
+  if (typeof v === 'string') {
     if (!isSafeMaestroScalar(v)) {
       throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
     }
@@ -245,7 +245,7 @@ function validateValue(v: unknown): void {
     for (const item of v) validateValue(item);
     return;
   }
-  if (typeof v === "object") {
+  if (typeof v === 'object') {
     for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
       if (!isSafeMaestroScalar(key)) {
         throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
@@ -293,15 +293,15 @@ export interface ParseAndValidateOptions {
 // Returns null for non-runFlow OR malformed runFlow (which validateCommand then
 // rejects), so expandRunFlows passes those through untouched.
 function asRunFlow(cmd: unknown): { file?: string; when?: unknown; commands?: unknown[] } | null {
-  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd)) return null;
+  if (!cmd || typeof cmd !== 'object' || Array.isArray(cmd)) return null;
   const keys = Object.keys(cmd as Record<string, unknown>);
-  if (keys.length !== 1 || keys[0] !== "runFlow") return null;
+  if (keys.length !== 1 || keys[0] !== 'runFlow') return null;
   const v = (cmd as Record<string, unknown>).runFlow;
-  if (typeof v === "string") return { file: v };
-  if (v && typeof v === "object" && !Array.isArray(v)) {
+  if (typeof v === 'string') return { file: v };
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
     const o = v as Record<string, unknown>;
     return {
-      file: typeof o.file === "string" ? o.file : undefined,
+      file: typeof o.file === 'string' ? o.file : undefined,
       when: o.when,
       commands: Array.isArray(o.commands) ? o.commands : undefined,
     };
@@ -321,7 +321,7 @@ function resolveRunFlowTarget(file: string, opts: ParseAndValidateOptions): stri
   if (isAbsolute(file)) {
     throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
   }
-  if (file.split(/[\\/]/).includes("..")) {
+  if (file.split(/[\\/]/).includes('..')) {
     throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
   }
   if (!/\.ya?ml$/i.test(file)) {
@@ -368,7 +368,7 @@ export function expandRunFlows(commands: unknown[], opts: ParseAndValidateOption
       if (visited.has(resolved)) {
         throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
       }
-      const readFile = opts.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
+      const readFile = opts.readFileFn ?? ((p: string) => readFileSync(p, 'utf8'));
       let subText: string;
       try {
         subText = readFile(resolved);
@@ -413,7 +413,7 @@ export function parseAndValidateFlow(
     throw new MaestroValidationError(`YAML parse error: ${(err as Error).message}`);
   }
   if (docs.length === 0) {
-    throw new MaestroValidationError("Empty Maestro flow");
+    throw new MaestroValidationError('Empty Maestro flow');
   }
 
   let appId: string | undefined;
@@ -422,12 +422,12 @@ export function parseAndValidateFlow(
     body = docs[0].toJS();
   } else {
     const header = docs[0].toJS() ?? {};
-    if (header && typeof header === "object" && "appId" in header) {
+    if (header && typeof header === 'object' && 'appId' in header) {
       if (opts.rejectHeader) {
-        throw new MaestroValidationError("Header (appId) not allowed in this context");
+        throw new MaestroValidationError('Header (appId) not allowed in this context');
       }
       const rawAppId = (header as Record<string, unknown>).appId;
-      assertValidBundleId(rawAppId, "parsed flow header");
+      assertValidBundleId(rawAppId, 'parsed flow header');
       appId = rawAppId;
     }
     body = docs[docs.length - 1].toJS();

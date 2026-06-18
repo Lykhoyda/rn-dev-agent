@@ -5,13 +5,13 @@
 // be in an error state. Truthful contract: success: false at the helper layer,
 // failResult (isError) at the tool layer, with action_executed kept to distinguish
 // "dispatched but handler threw" from "couldn't dispatch".
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import vm from "node:vm";
-import { INJECTED_HELPERS } from "../../dist/injected-helpers.js";
-import { createMockClient } from "../helpers/mock-cdp-client.js";
-import { expectFail } from "../helpers/result-helpers.js";
-import { createInteractHandler } from "../../dist/tools/interact.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { expectFail } from '../helpers/result-helpers.js';
+import { createInteractHandler } from '../../dist/tools/interact.js';
 
 function createSandbox(opts = {}) {
   const sandbox = {
@@ -68,51 +68,51 @@ function buildFiber(spec, parent = null) {
   return fiber;
 }
 
-test("#250 helper: a throwing onPress reports success:false with action_executed + handler_error", () => {
+test('#250 helper: a throwing onPress reports success:false with action_executed + handler_error', () => {
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          testID: "crash-btn",
+          testID: 'crash-btn',
           onPress: () => {
-            throw new Error("Cannot update unmounted component");
+            throw new Error('Cannot update unmounted component');
           },
         },
       },
     ],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(sandbox.__RN_AGENT.interact({ action: "press", testID: "crash-btn" }));
+  const result = JSON.parse(sandbox.__RN_AGENT.interact({ action: 'press', testID: 'crash-btn' }));
   assert.equal(result.success, false);
   assert.equal(result.action_executed, true);
   assert.match(result.handler_error, /unmounted component/);
 });
 
-test("#250 helper: a non-throwing onPress still reports success:true (regression guard)", () => {
+test('#250 helper: a non-throwing onPress still reports success:true (regression guard)', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { testID: "ok-btn", onPress: () => {} } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { testID: 'ok-btn', onPress: () => {} } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(sandbox.__RN_AGENT.interact({ action: "press", testID: "ok-btn" }));
+  const result = JSON.parse(sandbox.__RN_AGENT.interact({ action: 'press', testID: 'ok-btn' }));
   assert.equal(result.success, true);
 });
 
-test("#250 tool layer: action_executed + handler_error maps to failResult, not warnResult", async () => {
+test('#250 tool layer: action_executed + handler_error maps to failResult, not warnResult', async () => {
   const client = createMockClient({
     evaluate: async () => ({
       value: JSON.stringify({
         success: false,
         action_executed: true,
-        handler_error: "onPress threw an error",
-        testID: "crash-btn",
+        handler_error: 'onPress threw an error',
+        testID: 'crash-btn',
       }),
     }),
   });
   const handler = createInteractHandler(() => client);
-  const result = await handler({ action: "press", testID: "crash-btn", animated: false });
+  const result = await handler({ action: 'press', testID: 'crash-btn', animated: false });
   assert.equal(result.isError, true);
   const error = expectFail(result);
   assert.match(error, /handler threw/);

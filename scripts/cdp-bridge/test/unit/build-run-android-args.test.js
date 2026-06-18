@@ -1,14 +1,14 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WRAPPER_PATH = resolve(__dirname, "../../src/agent-device-wrapper.ts");
-const source = readFileSync(WRAPPER_PATH, "utf8");
+const WRAPPER_PATH = resolve(__dirname, '../../src/agent-device-wrapper.ts');
+const source = readFileSync(WRAPPER_PATH, 'utf8');
 
-test("buildRunAndroidArgs maps Android MVP verbs", () => {
+test('buildRunAndroidArgs maps Android MVP verbs', () => {
   const normalized = source.replace(/'/g, '"');
   for (const fragment of [
     'case "press":',
@@ -29,7 +29,7 @@ test("buildRunAndroidArgs maps Android MVP verbs", () => {
   }
 });
 
-test("buildRunAndroidArgs includes stale-ref sentinel and screenshot out path", () => {
+test('buildRunAndroidArgs includes stale-ref sentinel and screenshot out path', () => {
   assert.match(source, /_staleRef: ref/);
   assert.match(source, /_staleRef: target/);
   assert.match(source, /outPath: optionValue\(cliArgs, ['"]--out['"]\)/);

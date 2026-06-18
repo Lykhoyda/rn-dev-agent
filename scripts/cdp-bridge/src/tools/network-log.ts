@@ -1,7 +1,7 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, withConnection } from "../utils.js";
-import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from "./metro-clear-hint.js";
-import { drainNetworkHookBuffer } from "../cdp/net-hook-drain.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, withConnection } from '../utils.js';
+import { shouldShowMetroClearHint, METRO_CLEAR_HINT_TEXT } from './metro-clear-hint.js';
+import { drainNetworkHookBuffer } from '../cdp/net-hook-drain.js';
 
 export interface NetworkLogArgs {
   limit: number;
@@ -19,7 +19,7 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
     await drainNetworkHookBuffer(client);
 
     if (args.clear) {
-      client.networkBufferManager.clear(scope === "all" ? undefined : scope);
+      client.networkBufferManager.clear(scope === 'all' ? undefined : scope);
       return okResult({ cleared: true, device: scope });
     }
 
@@ -56,13 +56,13 @@ export function createNetworkLogHandler(getClient: () => CDPClient) {
     // otherwise truncated could never be true on the unfiltered path.
     const totalMatches = hasFilters
       ? matches.length
-      : scope === "all"
+      : scope === 'all'
         ? client.networkBufferManager.totalSize
         : client.networkBufferManager.size(scope);
     const sliced = matches.length > limit ? matches.slice(-limit) : matches;
     const truncated = totalMatches > sliced.length;
 
-    const lastEventAt = scope === "all" ? null : client.networkBufferManager.getLastPush(scope);
+    const lastEventAt = scope === 'all' ? null : client.networkBufferManager.getLastPush(scope);
     const hint = shouldShowMetroClearHint(
       { connectedAt: client.connectedAt, lastEventAt: lastEventAt ?? null, now: client.now },
       sliced.length === 0,

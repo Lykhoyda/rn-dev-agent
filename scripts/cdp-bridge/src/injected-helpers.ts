@@ -2151,7 +2151,7 @@ export const EARLY_EXIT_EMPTY_STREAK = 3;
 export function findAllRootFibersForTest(
   hook: DevToolsHookLike | null | undefined,
 ): Array<{ rendererId: number; fiber: unknown }> {
-  if (!hook || typeof hook.getFiberRoots !== "function") return [];
+  if (!hook || typeof hook.getFiberRoots !== 'function') return [];
   const out: Array<{ rendererId: number; fiber: unknown }> = [];
   let emptyStreak = 0;
   for (let ri = 1; ri <= MAX_RENDERER_IDS; ri++) {

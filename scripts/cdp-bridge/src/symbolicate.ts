@@ -1,4 +1,4 @@
-import type { ErrorEntry } from "./types.js";
+import type { ErrorEntry } from './types.js';
 
 interface StackFrame {
   methodName: string;
@@ -14,11 +14,11 @@ const SYMBOLICATE_TIMEOUT_MS = 3000;
 
 export function parseHermesStack(rawStack: string): StackFrame[] {
   const frames: StackFrame[] = [];
-  for (const line of rawStack.split("\n")) {
+  for (const line of rawStack.split('\n')) {
     const match = HERMES_AT_RE.exec(line) || HERMES_ATSIGN_RE.exec(line);
     if (match) {
       frames.push({
-        methodName: match[1] || "<anonymous>",
+        methodName: match[1] || '<anonymous>',
         file: match[2],
         lineNumber: parseInt(match[3], 10),
         column: parseInt(match[4], 10),
@@ -31,7 +31,7 @@ export function parseHermesStack(rawStack: string): StackFrame[] {
 function formatSymbolicatedStack(frames: StackFrame[]): string {
   return frames
     .map((f) => `  at ${f.methodName} (${f.file}:${f.lineNumber}:${f.column})`)
-    .join("\n");
+    .join('\n');
 }
 
 export async function symbolicateErrors(
@@ -53,8 +53,8 @@ export async function symbolicateErrors(
   const timer = setTimeout(() => ctrl.abort(), SYMBOLICATE_TIMEOUT_MS);
   try {
     const resp = await fetch(`http://127.0.0.1:${metroPort}/symbolicate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stack: allFrames }),
       signal: ctrl.signal,
     });

@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, basename } from "node:path";
+import { execFileSync } from 'node:child_process';
+import { existsSync, cpSync, rmSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
 /**
  * GH#201: true when the flow clears app state. Two Maestro forms both uninstall
  * (and so need `--app-file` to reinstall on maestro-runner):
@@ -21,12 +21,12 @@ function defaultSnapshotApp(appPath) {
         // clearState flow would accumulate full .app copies in $TMPDIR until OS
         // reaping (PR #276 review). Concurrent same-app flows can't race: the
         // arbiter makes the flow plane exclusive.
-        const destDir = join(tmpdir(), "rn-appfile-snapshots");
+        const destDir = join(tmpdir(), 'rn-appfile-snapshots');
         const dest = join(destDir, basename(appPath));
         rmSync(dest, { recursive: true, force: true });
         mkdirSync(destDir, { recursive: true });
         try {
-            execFileSync("cp", ["-Rc", appPath, dest], { timeout: 30_000, stdio: "ignore" });
+            execFileSync('cp', ['-Rc', appPath, dest], { timeout: 30_000, stdio: 'ignore' });
         }
         catch {
             cpSync(appPath, dest, { recursive: true });
@@ -69,13 +69,13 @@ export function resolveIosAppFile(bundleId, deps = {}) {
 export function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAppFile, deps) {
     if (explicitAppFile)
         return { ok: true, appFile: explicitAppFile };
-    if (platform !== "ios" || !flowUsesClearState(flowText))
+    if (platform !== 'ios' || !flowUsesClearState(flowText))
         return { ok: true };
     if (!headerAppId) {
         return {
             ok: false,
-            error: "Flow uses clearState on iOS but no appId is known to locate the .app. " +
-                "Add `appId:` to the flow header or pass appFile=<path-to-.app>.",
+            error: 'Flow uses clearState on iOS but no appId is known to locate the .app. ' +
+                'Add `appId:` to the flow header or pass appFile=<path-to-.app>.',
         };
     }
     const appFile = resolveIosAppFile(headerAppId, deps) ?? undefined;
@@ -83,15 +83,15 @@ export function resolveAppFileForClearState(platform, flowText, headerAppId, exp
         return {
             ok: false,
             error: `Flow uses clearState on iOS but no built .app could be located for ${headerAppId}. ` +
-                "Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).",
+                'Pass appFile=<path-to-.app> (e.g. <DerivedData>/Build/Products/Debug-iphonesimulator/<App>.app).',
         };
     }
     return { ok: true, appFile };
 }
 function defaultGetAppContainer(bundleId) {
     try {
-        const out = execFileSync("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
-            encoding: "utf8",
+        const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], {
+            encoding: 'utf8',
             timeout: 5_000,
         }).trim();
         return out || null;
@@ -107,10 +107,10 @@ const SNAPSHOT_SCAN_CAP = 10;
 const SNAPSHOT_SCAN_BUDGET_MS = 3000;
 const PLUTIL_TIMEOUT_MS = 2000;
 function defaultListSnapshots() {
-    const dir = join(tmpdir(), "rn-appfile-snapshots");
+    const dir = join(tmpdir(), 'rn-appfile-snapshots');
     try {
         return readdirSync(dir)
-            .filter((name) => name.endsWith(".app"))
+            .filter((name) => name.endsWith('.app'))
             .map((name) => join(dir, name));
     }
     catch {
@@ -119,7 +119,7 @@ function defaultListSnapshots() {
 }
 function defaultReadBundleId(appPath, timeoutMs) {
     try {
-        const out = execFileSync("plutil", ["-extract", "CFBundleIdentifier", "raw", join(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+        const out = execFileSync('plutil', ['-extract', 'CFBundleIdentifier', 'raw', join(appPath, 'Info.plist')], { timeout: timeoutMs, encoding: 'utf8' });
         return out.trim() || null;
     }
     catch {

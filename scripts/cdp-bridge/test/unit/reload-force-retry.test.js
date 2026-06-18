@@ -1,6 +1,6 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { captureClientState, forceReconnect } from "../../dist/tools/reload.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { captureClientState, forceReconnect } from '../../dist/tools/reload.js';
 
 // Mock CDPClient with the surface forceReconnect / captureClientState consume.
 // `autoConnectImpl` runs on the NEW client created via createClient() — not the old one.
@@ -38,9 +38,9 @@ function makeMockClient(opts = {}) {
         if (result && result.connectedTarget !== undefined) {
           connectedTarget = result.connectedTarget;
         }
-        return result?.message ?? "connected";
+        return result?.message ?? 'connected';
       }
-      return "connected";
+      return 'connected';
     },
   };
 
@@ -49,20 +49,20 @@ function makeMockClient(opts = {}) {
 
 // ── captureClientState ─────────────────────────────────────────────────
 
-test("captureClientState: captures port, platform, bundleId from connectedTarget", () => {
+test('captureClientState: captures port, platform, bundleId from connectedTarget', () => {
   const { client } = makeMockClient({
     port: 19000,
-    target: { id: "page-1", platform: "android", description: "com.example.app" },
+    target: { id: 'page-1', platform: 'android', description: 'com.example.app' },
     proxyDesired: true,
   });
   const captured = captureClientState(client);
   assert.equal(captured.port, 19000);
-  assert.equal(captured.platform, "android");
-  assert.equal(captured.bundleId, "com.example.app");
+  assert.equal(captured.platform, 'android');
+  assert.equal(captured.bundleId, 'com.example.app');
   assert.equal(captured.proxyWasActive, true);
 });
 
-test("captureClientState: handles null connectedTarget", () => {
+test('captureClientState: handles null connectedTarget', () => {
   const { client } = makeMockClient({ port: 8081, target: null });
   const captured = captureClientState(client);
   assert.equal(captured.port, 8081);
@@ -71,27 +71,27 @@ test("captureClientState: handles null connectedTarget", () => {
   assert.equal(captured.proxyWasActive, false);
 });
 
-test("captureClientState: target without description yields undefined bundleId", () => {
+test('captureClientState: target without description yields undefined bundleId', () => {
   const { client } = makeMockClient({
-    target: { id: "page-1", platform: "ios" },
+    target: { id: 'page-1', platform: 'ios' },
   });
   const captured = captureClientState(client);
-  assert.equal(captured.platform, "ios");
+  assert.equal(captured.platform, 'ios');
   assert.equal(captured.bundleId, undefined);
 });
 
 // ── forceReconnect helper ──────────────────────────────────────────────
 
-test("forceReconnect: happy path — disposes old, creates fresh, autoConnects, returns ok", async () => {
+test('forceReconnect: happy path — disposes old, creates fresh, autoConnects, returns ok', async () => {
   const { client: oldClient, calls: oldCalls } = makeMockClient({
     port: 8081,
-    target: { id: "old-1", platform: "ios", description: "com.app" },
+    target: { id: 'old-1', platform: 'ios', description: 'com.app' },
     proxyDesired: false,
   });
   const { client: newClient, calls: newCalls } = makeMockClient({
     port: 8081,
     autoConnectImpl: async () => ({
-      connectedTarget: { id: "new-1", platform: "ios", description: "com.app" },
+      connectedTarget: { id: 'new-1', platform: 'ios', description: 'com.app' },
     }),
   });
 
@@ -106,20 +106,20 @@ test("forceReconnect: happy path — disposes old, creates fresh, autoConnects, 
 
   assert.equal(result.ok, true);
   assert.equal(result.platformMatched, true);
-  assert.equal(result.finalPlatform, "ios");
-  assert.equal(oldCalls.disconnect, 1, "old client disconnected once");
-  assert.equal(newCalls.autoConnect, 1, "new client autoConnect called once");
-  assert.equal(current, newClient, "setClient swapped to new instance");
+  assert.equal(result.finalPlatform, 'ios');
+  assert.equal(oldCalls.disconnect, 1, 'old client disconnected once');
+  assert.equal(newCalls.autoConnect, 1, 'new client autoConnect called once');
+  assert.equal(current, newClient, 'setClient swapped to new instance');
 });
 
-test("forceReconnect: passes { platform, bundleId } and NO targetId to autoConnect", async () => {
+test('forceReconnect: passes { platform, bundleId } and NO targetId to autoConnect', async () => {
   const { client: oldClient } = makeMockClient({
     port: 8081,
-    target: { id: "stale-target-id", platform: "android", description: "com.example" },
+    target: { id: 'stale-target-id', platform: 'android', description: 'com.example' },
   });
   const { client: newClient, calls: newCalls } = makeMockClient({
     autoConnectImpl: async () => ({
-      connectedTarget: { id: "fresh-id", platform: "android", description: "com.example" },
+      connectedTarget: { id: 'fresh-id', platform: 'android', description: 'com.example' },
     }),
   });
 
@@ -135,25 +135,25 @@ test("forceReconnect: passes { platform, bundleId } and NO targetId to autoConne
   );
 
   const filters = newCalls.lastFilters;
-  assert.equal(filters.platform, "android");
-  assert.equal(filters.bundleId, "com.example");
+  assert.equal(filters.platform, 'android');
+  assert.equal(filters.bundleId, 'com.example');
   assert.equal(
     filters.targetId,
     undefined,
-    "targetId must NOT be forwarded — changes after rebuild",
+    'targetId must NOT be forwarded — changes after rebuild',
   );
 });
 
-test("forceReconnect: autoConnect rejects → returns ok:false with reason and orphan-replaces", async () => {
+test('forceReconnect: autoConnect rejects → returns ok:false with reason and orphan-replaces', async () => {
   const { client: oldClient } = makeMockClient({
     port: 8081,
-    target: { id: "p", platform: "ios" },
+    target: { id: 'p', platform: 'ios' },
   });
   // First instance rejects on autoConnect; second is the orphan-replacement.
   const instances = [
     makeMockClient({
       autoConnectImpl: async () => {
-        throw new Error("discovery failed");
+        throw new Error('discovery failed');
       },
     }).client,
     makeMockClient({ port: 8081 }).client,
@@ -173,8 +173,8 @@ test("forceReconnect: autoConnect rejects → returns ok:false with reason and o
 
   assert.equal(result.ok, false);
   assert.match(result.reason, /discovery failed/);
-  assert.equal(createIdx, 2, "createClient called twice — attempt + orphan-replace");
-  assert.equal(current, instances[1], "setClient installed the replacement instance");
+  assert.equal(createIdx, 2, 'createClient called twice — attempt + orphan-replace');
+  assert.equal(current, instances[1], 'setClient installed the replacement instance');
 });
 
 // tick() is synchronous in node:test MockTimers (no tickAsync until 22.6+);
@@ -183,12 +183,12 @@ async function drainMicrotasks(rounds = 5) {
   for (let i = 0; i < rounds; i++) await Promise.resolve();
 }
 
-test("forceReconnect: autoConnect hangs → 10s timeout fires, orphan disposed, fresh client installed", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+test('forceReconnect: autoConnect hangs → 10s timeout fires, orphan disposed, fresh client installed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
 
   const { client: oldClient } = makeMockClient({
     port: 8081,
-    target: { id: "p", platform: "ios" },
+    target: { id: 'p', platform: 'ios' },
   });
 
   const hangingInstance = makeMockClient({
@@ -221,28 +221,28 @@ test("forceReconnect: autoConnect hangs → 10s timeout fires, orphan disposed, 
   const result = await promise;
   assert.equal(result.ok, false);
   assert.match(result.reason, /force_reconnect timeout/);
-  assert.equal(hangingInstance.calls.disconnect, 1, "orphan (hung) instance was disposed");
-  assert.equal(createIdx, 2, "createClient called twice — attempt + orphan-replace");
+  assert.equal(hangingInstance.calls.disconnect, 1, 'orphan (hung) instance was disposed');
+  assert.equal(createIdx, 2, 'createClient called twice — attempt + orphan-replace');
   assert.equal(
     current,
     replacementInstance.client,
-    "final installed client is the replacement, not the orphan",
+    'final installed client is the replacement, not the orphan',
   );
 
   t.mock.timers.reset();
 });
 
-test("forceReconnect: disconnect() hangs >2s → still proceeds to install fresh client", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+test('forceReconnect: disconnect() hangs >2s → still proceeds to install fresh client', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
 
   const { client: oldClient } = makeMockClient({
     port: 8081,
-    target: { id: "p", platform: "ios" },
+    target: { id: 'p', platform: 'ios' },
     disconnectImpl: () => new Promise(() => {}),
   });
   const { client: newClient } = makeMockClient({
     autoConnectImpl: async () => ({
-      connectedTarget: { id: "new", platform: "ios" },
+      connectedTarget: { id: 'new', platform: 'ios' },
     }),
   });
 
@@ -263,20 +263,20 @@ test("forceReconnect: disconnect() hangs >2s → still proceeds to install fresh
   await drainMicrotasks();
 
   const result = await promise;
-  assert.equal(result.ok, true, "force-reconnect proceeded despite hanging disconnect");
-  assert.equal(current, newClient, "fresh client installed");
+  assert.equal(result.ok, true, 'force-reconnect proceeded despite hanging disconnect');
+  assert.equal(current, newClient, 'fresh client installed');
 
   t.mock.timers.reset();
 });
 
-test("forceReconnect: platform mismatch surfaces in result (recovered to wrong platform)", async () => {
+test('forceReconnect: platform mismatch surfaces in result (recovered to wrong platform)', async () => {
   const { client: oldClient } = makeMockClient({
     port: 8081,
-    target: { id: "p", platform: "ios", description: "com.app" },
+    target: { id: 'p', platform: 'ios', description: 'com.app' },
   });
   const { client: newClient } = makeMockClient({
     autoConnectImpl: async () => ({
-      connectedTarget: { id: "q", platform: "android", description: "com.app" },
+      connectedTarget: { id: 'q', platform: 'android', description: 'com.app' },
     }),
   });
 
@@ -292,18 +292,18 @@ test("forceReconnect: platform mismatch surfaces in result (recovered to wrong p
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.platformMatched, false, "iOS captured but recovered onto Android");
-  assert.equal(result.finalPlatform, "android");
+  assert.equal(result.platformMatched, false, 'iOS captured but recovered onto Android');
+  assert.equal(result.finalPlatform, 'android');
 });
 
-test("forceReconnect: captured platform=undefined → platformMatched=true regardless", async () => {
+test('forceReconnect: captured platform=undefined → platformMatched=true regardless', async () => {
   const { client: oldClient } = makeMockClient({
     port: 8081,
     target: null,
   });
   const { client: newClient } = makeMockClient({
     autoConnectImpl: async () => ({
-      connectedTarget: { id: "q", platform: "android" },
+      connectedTarget: { id: 'q', platform: 'android' },
     }),
   });
 
@@ -316,6 +316,6 @@ test("forceReconnect: captured platform=undefined → platformMatched=true regar
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.platformMatched, true, "no captured platform → no constraint to match");
-  assert.equal(result.finalPlatform, "android");
+  assert.equal(result.platformMatched, true, 'no captured platform → no constraint to match');
+  assert.equal(result.finalPlatform, 'android');
 });

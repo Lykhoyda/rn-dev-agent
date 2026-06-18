@@ -1,5 +1,5 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
 /**
  * B130 (D659) regression: after runner-leak recovery fires, the next
@@ -27,23 +27,23 @@ import assert from "node:assert/strict";
 // functions, then construct the same closeSession wrapper used in device-session.ts
 // and assert all three are invoked.
 
-test("B130: device-session recovery closeSession runs CLI close, clearActiveSession, AND stopFastRunner", async () => {
+test('B130: device-session recovery closeSession runs CLI close, clearActiveSession, AND stopFastRunner', async () => {
   const calls = [];
 
   // Mirror the wrapped closeSession from device-session.ts:209-217
   const runAgentDevice = async (args) => {
-    calls.push({ fn: "runAgentDevice", args });
-    return { content: [{ type: "text", text: JSON.stringify({ ok: true, data: {} }) }] };
+    calls.push({ fn: 'runAgentDevice', args });
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: {} }) }] };
   };
   const clearActiveSession = () => {
-    calls.push({ fn: "clearActiveSession" });
+    calls.push({ fn: 'clearActiveSession' });
   };
   const stopFastRunner = () => {
-    calls.push({ fn: "stopFastRunner" });
+    calls.push({ fn: 'stopFastRunner' });
   };
 
   const wrappedClose = async () => {
-    const closeResult = await runAgentDevice(["close"]);
+    const closeResult = await runAgentDevice(['close']);
     clearActiveSession();
     stopFastRunner();
     return closeResult;
@@ -54,14 +54,14 @@ test("B130: device-session recovery closeSession runs CLI close, clearActiveSess
   // All three side effects fired, in order
   assert.deepEqual(
     calls.map((c) => c.fn),
-    ["runAgentDevice", "clearActiveSession", "stopFastRunner"],
-    "close sequence runs all three operations in the correct order",
+    ['runAgentDevice', 'clearActiveSession', 'stopFastRunner'],
+    'close sequence runs all three operations in the correct order',
   );
-  assert.deepEqual(calls[0].args, ["close"], "CLI close invocation");
-  assert.equal(result.isError, undefined, "returns the CLI close result");
+  assert.deepEqual(calls[0].args, ['close'], 'CLI close invocation');
+  assert.equal(result.isError, undefined, 'returns the CLI close result');
 });
 
-test("B130: wrapped close is equivalent to the normal close path (device-session.ts:185-189)", async () => {
+test('B130: wrapped close is equivalent to the normal close path (device-session.ts:185-189)', async () => {
   // The normal close path in createDeviceSnapshotHandler does:
   //   1. runAgentDevice(['close'])
   //   2. if !result.isError: clearActiveSession() + stopFastRunner()
@@ -73,19 +73,19 @@ test("B130: wrapped close is equivalent to the normal close path (device-session
 
   const calls = [];
   const runAgentDevice = async (args) => {
-    calls.push({ fn: "runAgentDevice", args });
+    calls.push({ fn: 'runAgentDevice', args });
     // Simulate CLI close FAILING (possible when daemon is already dead)
-    return { content: [{ type: "text", text: "ignored" }], isError: true };
+    return { content: [{ type: 'text', text: 'ignored' }], isError: true };
   };
   const clearActiveSession = () => {
-    calls.push({ fn: "clearActiveSession" });
+    calls.push({ fn: 'clearActiveSession' });
   };
   const stopFastRunner = () => {
-    calls.push({ fn: "stopFastRunner" });
+    calls.push({ fn: 'stopFastRunner' });
   };
 
   const wrappedClose = async () => {
-    const closeResult = await runAgentDevice(["close"]);
+    const closeResult = await runAgentDevice(['close']);
     clearActiveSession();
     stopFastRunner();
     return closeResult;
@@ -96,7 +96,7 @@ test("B130: wrapped close is equivalent to the normal close path (device-session
   // Clear still runs even when CLI close errors — recovery intent is "wipe and start fresh"
   assert.deepEqual(
     calls.map((c) => c.fn),
-    ["runAgentDevice", "clearActiveSession", "stopFastRunner"],
-    "local state cleared even when CLI close errors",
+    ['runAgentDevice', 'clearActiveSession', 'stopFastRunner'],
+    'local state cleared even when CLI close errors',
   );
 });

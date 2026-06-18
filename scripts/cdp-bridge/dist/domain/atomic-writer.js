@@ -34,8 +34,8 @@
 //
 // Test seam: the public API is on a single exported object so tests can
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
-import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, } from "node:fs";
-import { dirname, basename } from "node:path";
+import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, } from 'node:fs';
+import { dirname, basename } from 'node:path';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
 // the actual YAML mtime exceeds `projectedMtimeMs` and step 5 happens
@@ -106,7 +106,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
         ...state,
         lastSeenMtimeMs: projectedMtimeMs,
     };
-    atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n");
+    atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
     atomicWriter._rename(sidecarTmp, sidecarPath);
     // Step 3+4: YAML, atomic rename.
     atomicWriter._writeFile(yamlTmp, yamlContent);
@@ -135,7 +135,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
         ...state,
         lastSeenMtimeMs: finalMtimeMs,
     };
-    atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n");
+    atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n');
     atomicWriter._rename(sidecarTmp, sidecarPath);
     return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
@@ -192,7 +192,7 @@ function cleanupOrphans(yamlPath, sidecarPath) {
 export const atomicWriter = {
     /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
     _writeFile(path, content) {
-        writeFileSync(path, content, "utf8");
+        writeFileSync(path, content, 'utf8');
     },
     /** Underlying `fs.renameSync(from, to)`. */
     _rename(from, to) {

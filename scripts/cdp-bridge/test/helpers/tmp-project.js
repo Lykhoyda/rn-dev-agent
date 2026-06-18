@@ -21,14 +21,14 @@ import {
   existsSync,
   statSync,
   utimesSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 export function createTmpProject() {
-  const root = mkdtempSync(join(tmpdir(), "rn-agent-test-"));
-  const actionsDir = join(root, ".rn-agent", "actions");
-  const stateDir = join(root, ".rn-agent", "state");
+  const root = mkdtempSync(join(tmpdir(), 'rn-agent-test-'));
+  const actionsDir = join(root, '.rn-agent', 'actions');
+  const stateDir = join(root, '.rn-agent', 'state');
   mkdirSync(actionsDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
 
@@ -56,7 +56,7 @@ export function createTmpProject() {
     seedAction(id, yamlText, state) {
       const yamlPath = join(actionsDir, `${id}.yaml`);
       const statePath = join(stateDir, `${id}.state.json`);
-      writeFileSync(yamlPath, yamlText, "utf8");
+      writeFileSync(yamlPath, yamlText, 'utf8');
       const yamlMtimeMs = statSync(yamlPath).mtimeMs;
       const stateBlob = state ?? freshFixtureState(yamlMtimeMs);
       // If caller passed state without an explicit lastSeenMtimeMs (or
@@ -66,7 +66,7 @@ export function createTmpProject() {
       if (!stateBlob.lastSeenMtimeMs) {
         stateBlob.lastSeenMtimeMs = yamlMtimeMs;
       }
-      writeFileSync(statePath, JSON.stringify(stateBlob, null, 2) + "\n", "utf8");
+      writeFileSync(statePath, JSON.stringify(stateBlob, null, 2) + '\n', 'utf8');
       return { yamlPath, statePath, mtimeMs: yamlMtimeMs };
     },
 
@@ -77,20 +77,20 @@ export function createTmpProject() {
      */
     simulateHumanEdit(id, newYaml) {
       const yamlPath = join(actionsDir, `${id}.yaml`);
-      writeFileSync(yamlPath, newYaml, "utf8");
+      writeFileSync(yamlPath, newYaml, 'utf8');
       // Force mtime forward by 5 seconds — defeats fs mtime granularity.
       const future = new Date(Date.now() + 5_000);
       utimesSync(yamlPath, future, future);
     },
 
     readYaml(id) {
-      return readFileSync(join(actionsDir, `${id}.yaml`), "utf8");
+      return readFileSync(join(actionsDir, `${id}.yaml`), 'utf8');
     },
 
     readSidecar(id) {
       const path = join(stateDir, `${id}.state.json`);
       if (!existsSync(path)) return null;
-      return JSON.parse(readFileSync(path, "utf8"));
+      return JSON.parse(readFileSync(path, 'utf8'));
     },
 
     yamlExists(id) {
@@ -118,27 +118,27 @@ export function createTmpProject() {
  * fixture for repair tests; callers pick which selectors to embed.
  */
 export function fixtureYaml({
-  id = "test-action",
-  intent = "test fixture",
-  bundleId = "com.test.app",
-  status = "experimental",
-  selectors = ["fab-create-task"],
-  tags = ["fixture"],
+  id = 'test-action',
+  intent = 'test fixture',
+  bundleId = 'com.test.app',
+  status = 'experimental',
+  selectors = ['fab-create-task'],
+  tags = ['fixture'],
 } = {}) {
-  const tapLines = selectors.map((sel) => `  - tapOn:\n      id: "${sel}"`).join("\n");
+  const tapLines = selectors.map((sel) => `  - tapOn:\n      id: "${sel}"`).join('\n');
   return [
     `appId: ${bundleId}`,
-    "---",
+    '---',
     `# id: ${id}`,
     `# intent: ${intent}`,
-    `# tags: [${tags.join(", ")}]`,
-    "# mutates: false",
+    `# tags: [${tags.join(', ')}]`,
+    '# mutates: false',
     `# status: ${status}`,
-    "",
-    "- launchApp",
+    '',
+    '- launchApp',
     tapLines,
-    "",
-  ].join("\n");
+    '',
+  ].join('\n');
 }
 
 /**
@@ -149,7 +149,7 @@ export function freshFixtureState(lastSeenMtimeMs = 0) {
   return {
     schemaVersion: 1,
     revision: 1,
-    updatedAt: "2026-05-04T00:00:00.000Z",
+    updatedAt: '2026-05-04T00:00:00.000Z',
     lastSeenMtimeMs,
     runHistory: [],
     repairHistory: [],

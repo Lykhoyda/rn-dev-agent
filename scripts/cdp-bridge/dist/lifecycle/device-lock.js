@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync, writeFileSync, } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
 const DEFAULT_STALE_MS = 90_000;
 function defaultProcessAlive(pid) {
     try {
@@ -59,19 +59,19 @@ export class DeviceLock {
     acquire() {
         try {
             this.create();
-            return { status: "acquired", lockPath: this.lockPath };
+            return { status: 'acquired', lockPath: this.lockPath };
         }
         catch (err) {
             if (!isEexist(err)) {
                 // Infra error (not ownership contention) → fail-open, UNMANAGED.
                 // `acquired` stays false so touch()/release() no-op; the caller is
                 // told via `degraded` that cross-bridge protection is off this session.
-                return { status: "acquired", lockPath: this.lockPath, degraded: true };
+                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
             }
         }
         const holder = this.readExisting();
         if (holder && !isDeviceLockStale(holder, this.clock(), this.processAlive, this.staleMs)) {
-            return { status: "conflict", lockPath: this.lockPath, holder };
+            return { status: 'conflict', lockPath: this.lockPath, holder };
         }
         // Stale/dead/unreadable holder → reclaim. Narrow the steal-a-fresh-lock
         // window: re-read immediately before unlink and bail if a DIFFERENT,
@@ -82,7 +82,7 @@ export class DeviceLock {
         if (before &&
             (holder === null || before.pid !== holder.pid || before.startedAt !== holder.startedAt) &&
             !isDeviceLockStale(before, this.clock(), this.processAlive, this.staleMs)) {
-            return { status: "conflict", lockPath: this.lockPath, holder: before };
+            return { status: 'conflict', lockPath: this.lockPath, holder: before };
         }
         try {
             unlinkSync(this.lockPath);
@@ -92,16 +92,16 @@ export class DeviceLock {
         }
         try {
             this.create();
-            return { status: "acquired", lockPath: this.lockPath };
+            return { status: 'acquired', lockPath: this.lockPath };
         }
         catch (err) {
             if (!isEexist(err)) {
-                return { status: "acquired", lockPath: this.lockPath, degraded: true };
+                return { status: 'acquired', lockPath: this.lockPath, degraded: true };
             }
             const raced = this.readExisting();
             return raced
-                ? { status: "conflict", lockPath: this.lockPath, holder: raced }
-                : { status: "acquired", lockPath: this.lockPath, degraded: true };
+                ? { status: 'conflict', lockPath: this.lockPath, holder: raced }
+                : { status: 'acquired', lockPath: this.lockPath, degraded: true };
         }
     }
     touch() {
@@ -114,7 +114,7 @@ export class DeviceLock {
             return;
         holder.lastHeartbeat = this.clock();
         try {
-            writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
+            writeFileSync(this.lockPath, JSON.stringify(holder, null, 2), 'utf8');
         }
         catch {
             /* best-effort */
@@ -136,7 +136,7 @@ export class DeviceLock {
     create() {
         if (!existsSync(this.tmpDir))
             mkdirSync(this.tmpDir, { recursive: true });
-        const fd = openSync(this.lockPath, "wx"); // atomic exclusive create — throws EEXIST if present
+        const fd = openSync(this.lockPath, 'wx'); // atomic exclusive create — throws EEXIST if present
         try {
             const now = this.clock();
             const body = {
@@ -158,7 +158,7 @@ export class DeviceLock {
     }
     readExisting() {
         try {
-            const parsed = JSON.parse(readFileSync(this.lockPath, "utf8"));
+            const parsed = JSON.parse(readFileSync(this.lockPath, 'utf8'));
             if (!isValidBody(parsed))
                 return null;
             if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
@@ -171,20 +171,20 @@ export class DeviceLock {
     }
 }
 function isEexist(err) {
-    return typeof err === "object" && err !== null && err.code === "EEXIST";
+    return typeof err === 'object' && err !== null && err.code === 'EEXIST';
 }
 function isValidBody(o) {
-    if (typeof o !== "object" || o === null)
+    if (typeof o !== 'object' || o === null)
         return false;
     const b = o;
-    return (typeof b.pid === "number" &&
+    return (typeof b.pid === 'number' &&
         Number.isFinite(b.pid) &&
-        (b.platform === "ios" || b.platform === "android") &&
-        typeof b.deviceId === "string" &&
+        (b.platform === 'ios' || b.platform === 'android') &&
+        typeof b.deviceId === 'string' &&
         b.deviceId.length > 0 &&
-        typeof b.projectRoot === "string" &&
-        typeof b.startedAt === "number" &&
+        typeof b.projectRoot === 'string' &&
+        typeof b.startedAt === 'number' &&
         Number.isFinite(b.startedAt) &&
-        typeof b.lastHeartbeat === "number" &&
+        typeof b.lastHeartbeat === 'number' &&
         Number.isFinite(b.lastHeartbeat));
 }

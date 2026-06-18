@@ -1,4 +1,4 @@
-import { detectIosExternalRunner } from "../runners/external-runner-detect.js";
+import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 /**
  * GH#186 / #202 Phase 6: TTL-cached wrapper over detectIosExternalRunner so
  * the per-call arbiter check costs one `ps` scan per window, not per tool
@@ -78,6 +78,6 @@ export function foreignGateUdid() {
  * keep working (documented as ALSO disabling the refusal). */
 export function foreignGateEnabled(env = process.env) {
     if (env.RN_IOS_FOREIGN_GUARD !== undefined)
-        return env.RN_IOS_FOREIGN_GUARD !== "0";
-    return env.RN_IOS_FOREIGN_WARN !== "0";
+        return env.RN_IOS_FOREIGN_GUARD !== '0';
+    return env.RN_IOS_FOREIGN_WARN !== '0';
 }

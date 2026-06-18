@@ -1,6 +1,6 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import { viteSingleFile } from "vite-plugin-singlefile";
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { viteSingleFile } from 'vite-plugin-singlefile';
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
   // target: 'esnext' — this is an internal, localhost-only dev tool viewed in
@@ -8,8 +8,8 @@ export default defineConfig({
   // sidesteps an esbuild 0.28 regression that refuses to transform destructuring
   // to vite's default old-browser baseline (the GHSA-gv7w-rqvm-qjhr fix bump).
   build: {
-    target: "esnext",
-    outDir: "../../../dist/observability/web-dist",
+    target: 'esnext',
+    outDir: '../../../dist/observability/web-dist',
     emptyOutDir: true,
     assetsInlineLimit: 100000000,
   },

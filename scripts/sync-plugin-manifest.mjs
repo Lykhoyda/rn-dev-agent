@@ -15,20 +15,20 @@
 // Run via `npm run version-packages` (which chains `changeset version` →
 // this script → `sync-versions.sh --fix`).
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(__dirname);
 
-const synthPkgPath = join(REPO_ROOT, ".claude-plugin", "package.json");
-const pluginJsonPath = join(REPO_ROOT, ".claude-plugin", "plugin.json");
-const marketplaceJsonPath = join(REPO_ROOT, ".claude-plugin", "marketplace.json");
+const synthPkgPath = join(REPO_ROOT, '.claude-plugin', 'package.json');
+const pluginJsonPath = join(REPO_ROOT, '.claude-plugin', 'plugin.json');
+const marketplaceJsonPath = join(REPO_ROOT, '.claude-plugin', 'marketplace.json');
 
-const synth = JSON.parse(readFileSync(synthPkgPath, "utf-8"));
+const synth = JSON.parse(readFileSync(synthPkgPath, 'utf-8'));
 const newVersion = synth.version;
-if (typeof newVersion !== "string" || !/^\d+\.\d+\.\d+/.test(newVersion)) {
+if (typeof newVersion !== 'string' || !/^\d+\.\d+\.\d+/.test(newVersion)) {
   console.error(
     `sync-plugin-manifest: synthetic package .claude-plugin/package.json ` +
       `has invalid version ${JSON.stringify(newVersion)} — expected semver.`,
@@ -36,16 +36,16 @@ if (typeof newVersion !== "string" || !/^\d+\.\d+\.\d+/.test(newVersion)) {
   process.exit(1);
 }
 
-const plugin = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
-const marketplace = JSON.parse(readFileSync(marketplaceJsonPath, "utf-8"));
+const plugin = JSON.parse(readFileSync(pluginJsonPath, 'utf-8'));
+const marketplace = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8'));
 
 const oldPluginVersion = plugin.version;
 plugin.version = newVersion;
-writeFileSync(pluginJsonPath, JSON.stringify(plugin, null, 2) + "\n", "utf-8");
+writeFileSync(pluginJsonPath, JSON.stringify(plugin, null, 2) + '\n', 'utf-8');
 
 // marketplace.json carries the version on `plugins[0].version` (per the
 // marketplace schema — every entry is a plugin spec keyed by name).
-const pluginEntry = (marketplace.plugins ?? []).find((p) => p.name === "rn-dev-agent");
+const pluginEntry = (marketplace.plugins ?? []).find((p) => p.name === 'rn-dev-agent');
 if (!pluginEntry) {
   console.error(
     `sync-plugin-manifest: marketplace.json has no plugins[].name === 'rn-dev-agent' entry`,
@@ -54,7 +54,7 @@ if (!pluginEntry) {
 }
 const _oldMarketplaceVersion = pluginEntry.version;
 pluginEntry.version = newVersion;
-writeFileSync(marketplaceJsonPath, JSON.stringify(marketplace, null, 2) + "\n", "utf-8");
+writeFileSync(marketplaceJsonPath, JSON.stringify(marketplace, null, 2) + '\n', 'utf-8');
 
 console.log(
   `sync-plugin-manifest: ${oldPluginVersion} → ${newVersion} ` + `(plugin.json + marketplace.json)`,

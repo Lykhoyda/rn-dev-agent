@@ -28,10 +28,10 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 
-import { okResult, failResult } from "../utils.js";
-import type { ToolResult } from "../utils.js";
-import type { ToolErrorCode } from "../types.js";
-import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from "../domain/action-store.js";
+import { okResult, failResult } from '../utils.js';
+import type { ToolResult } from '../utils.js';
+import type { ToolErrorCode } from '../types.js';
+import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
 import {
   type RunRecord,
   type AutoRepairOutcome,
@@ -39,16 +39,16 @@ import {
   type ActionFailureCode,
   appendRunRecord,
   shouldAutoPromoteToActive,
-} from "../domain/reusable-action.js";
+} from '../domain/reusable-action.js';
 import {
   parseMaestroFailure,
   isAutoRepairable,
   type MaestroFailure,
-} from "../domain/maestro-error-parser.js";
-import { createMaestroRunHandler } from "./maestro-run.js";
-import { createRepairActionHandler } from "./repair-action.js";
-import { isValidActionId } from "../domain/path-safety.js";
-import { classifyRouteDriftAfterFailure } from "../nav-graph/route-sequence.js";
+} from '../domain/maestro-error-parser.js';
+import { createMaestroRunHandler } from './maestro-run.js';
+import { createRepairActionHandler } from './repair-action.js';
+import { isValidActionId } from '../domain/path-safety.js';
+import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
 
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
@@ -62,15 +62,15 @@ function classifyFailure(failure: MaestroFailure): {
   toolCode: ToolErrorCode | undefined;
 } {
   switch (failure.kind) {
-    case "SELECTOR_NOT_FOUND":
-      return { actionCode: "SELECTOR_NOT_FOUND", toolCode: "TESTID_NOT_FOUND" };
-    case "TIMEOUT":
-      return { actionCode: "TIMEOUT", toolCode: undefined };
-    case "ASSERTION_FAILED":
-      return { actionCode: "STATE_MISMATCH", toolCode: "ASSERTION_FAILED" };
-    case "UNKNOWN":
+    case 'SELECTOR_NOT_FOUND':
+      return { actionCode: 'SELECTOR_NOT_FOUND', toolCode: 'TESTID_NOT_FOUND' };
+    case 'TIMEOUT':
+      return { actionCode: 'TIMEOUT', toolCode: undefined };
+    case 'ASSERTION_FAILED':
+      return { actionCode: 'STATE_MISMATCH', toolCode: 'ASSERTION_FAILED' };
+    case 'UNKNOWN':
     default:
-      return { actionCode: "UNKNOWN", toolCode: undefined };
+      return { actionCode: 'UNKNOWN', toolCode: undefined };
   }
 }
 
@@ -83,7 +83,7 @@ export interface RunActionArgs {
    */
   projectRoot?: string;
   /** Force a specific platform; otherwise auto-detected. */
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   /**
    * Auto-repair on SELECTOR_NOT_FOUND failures. Default true. Pass
    * `false` for explicit opt-out (e.g. `--no-auto-repair` from the
@@ -96,7 +96,7 @@ export interface RunActionArgs {
    * RunRecord trigger annotation. Default 'agent'. CI calls should pass
    * 'ci'; human-driven invocations 'human'.
    */
-  trigger?: "agent" | "ci" | "human";
+  trigger?: 'agent' | 'ci' | 'human';
   /**
    * GH #116: per-flow parameter bindings forwarded to maestro_run as
    * `-e KEY=VALUE` pairs. Keys must match Maestro's env-style convention
@@ -128,7 +128,7 @@ interface MaestroEnvelope {
 
 function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelope {
   try {
-    return JSON.parse(toolResult.content?.[0]?.text ?? "{}") as MaestroEnvelope;
+    return JSON.parse(toolResult.content?.[0]?.text ?? '{}') as MaestroEnvelope;
   } catch {
     return { ok: false, error: `Unparseable ${toolName} envelope` };
   }
@@ -142,10 +142,10 @@ function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelop
  * — that's the failure mode auto-repair is most valuable for.
  */
 function readMaestroOutput(env: MaestroEnvelope): string {
-  if (typeof env.data?.output === "string") return env.data.output;
+  if (typeof env.data?.output === 'string') return env.data.output;
   const metaOutput = (env.meta as { output?: unknown } | undefined)?.output;
-  if (typeof metaOutput === "string") return metaOutput;
-  return env.error ?? "";
+  if (typeof metaOutput === 'string') return metaOutput;
+  return env.error ?? '';
 }
 
 /**
@@ -167,25 +167,25 @@ function mapRefusedReason(
   repairCode: string | undefined,
   repairError: string,
 ): AutoRepairRefusedReason {
-  if (repairCode === "SNAPSHOT_FAILED") return "SNAPSHOT_FAILED";
+  if (repairCode === 'SNAPSHOT_FAILED') return 'SNAPSHOT_FAILED';
   // RUNNER_LEAK = the snapshot returned the Agent Device Runner's own UI rather
   // than the target app. That is structurally a snapshot-infra failure (a known,
   // actionable focus-stealing condition), NOT a transport/contract bug — bucket
   // it with SNAPSHOT_FAILED so MTTR analytics surface it instead of hiding it
   // under INTERNAL_ERROR.
-  if (repairCode === "RUNNER_LEAK") return "SNAPSHOT_FAILED";
+  if (repairCode === 'RUNNER_LEAK') return 'SNAPSHOT_FAILED';
   // GH #317: rn-fast-runner saw the selector but Maestro/WDA could not. Surface
   // it as its own reason (NOT INTERNAL_ERROR) so MTTR sees transport-blindness.
-  if (repairCode === "TRANSPORT_BLIND") return "TRANSPORT_BLIND";
-  if (repairCode === "TESTID_NOT_FOUND") return "NO_MATCH";
-  if (repairCode === "STALE_TARGET") {
-    if (/repair budget/i.test(repairError)) return "BUDGET_EXHAUSTED";
-    return "EXTERNAL_EDIT";
+  if (repairCode === 'TRANSPORT_BLIND') return 'TRANSPORT_BLIND';
+  if (repairCode === 'TESTID_NOT_FOUND') return 'NO_MATCH';
+  if (repairCode === 'STALE_TARGET') {
+    if (/repair budget/i.test(repairError)) return 'BUDGET_EXHAUSTED';
+    return 'EXTERNAL_EDIT';
   }
   // Unknown / unmapped — map to INTERNAL_ERROR (NOT NO_MATCH) so MTTR
   // doesn't conflate transport / contract bugs with "screen state
   // legitimately doesn't have the testID".
-  return "INTERNAL_ERROR";
+  return 'INTERNAL_ERROR';
 }
 
 /**
@@ -211,8 +211,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const repairAction = deps.repairAction ?? createRepairActionHandler();
   const getLiveRoute = deps.getLiveRoute ?? (async () => null);
   return async (args: RunActionArgs): Promise<ToolResult> => {
-    if (!args.actionId || typeof args.actionId !== "string") {
-      return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
+    if (!args.actionId || typeof args.actionId !== 'string') {
+      return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
     }
     // Phase 134.3 (deepsec HIGH path-traversal): same chokepoint as
     // cdp_repair_action — actionId flows into the .rn-agent/actions/
@@ -220,7 +220,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     if (!isValidActionId(args.actionId)) {
       return failResult(
         `Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ (no "..") and be <= 64 chars`,
-        "BAD_FILENAME",
+        'BAD_FILENAME',
       );
     }
 
@@ -229,9 +229,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     if (!loaded) {
       return failResult(
         `cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`,
-        "NO_PROJECT_ROOT",
+        'NO_PROJECT_ROOT',
         {
-          hint: "Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.",
+          hint: 'Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir.',
         },
       );
     }
@@ -243,7 +243,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
     const autoRepairEnabled = args.autoRepair !== false;
-    const trigger: "agent" | "ci" | "human" = args.trigger ?? "agent";
+    const trigger: 'agent' | 'ci' | 'human' = args.trigger ?? 'agent';
     const timeoutMs = args.timeoutMs ?? 120_000;
     const t0 = Date.now();
 
@@ -266,7 +266,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         params: args.params,
       });
       const firstAttemptMs = Date.now() - tBeforeFirst;
-      const firstEnv = parseEnvelope(firstResult, "maestro_run");
+      const firstEnv = parseEnvelope(firstResult, 'maestro_run');
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
 
@@ -274,13 +274,13 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         // Happy path — append RunRecord with no auto-repair.
         const autoRepair: AutoRepairOutcome = {
           attempted: false,
-          outcome: "skipped",
+          outcome: 'skipped',
           phases: { firstAttemptMs },
         };
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
-          status: "pass",
+          status: 'pass',
           trigger,
           autoRepair,
         });
@@ -304,31 +304,31 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // skip repair. Live route is fetched within a bounded budget (best-effort;
       // the default fetcher is a no-op until index.ts wires a CDP-backed one).
       const expectedSeq = action.metadata.expectedRouteSequence;
-      if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
+      if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
         const liveRoute = await getLiveRoute().catch(() => null);
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
         if (drift.isDrift) {
           const autoRepair: AutoRepairOutcome = {
             attempted: false,
-            outcome: "refused",
-            refusedReason: "ROUTE_DRIFT",
+            outcome: 'refused',
+            refusedReason: 'ROUTE_DRIFT',
             phases: { firstAttemptMs },
           };
           await persistRun(args.actionId, projectRoot, {
             timestamp: new Date().toISOString(),
             durationMs: Date.now() - t0,
-            status: "fail",
-            failureCode: "ROUTE_DRIFT",
-            failureDetail: drift.reason ?? "route drift",
+            status: 'fail',
+            failureCode: 'ROUTE_DRIFT',
+            failureDetail: drift.reason ?? 'route drift',
             trigger,
             autoRepair,
           });
           return failResult(
             `cdp_run_action: ${args.actionId} hit structural route-drift — ${drift.reason}. The flow changed shape; re-record the action. Auto-repair skipped (it only fixes stale selectors, not inserted/changed screens).`,
-            "ROUTE_DRIFT",
+            'ROUTE_DRIFT',
             {
               actionId: args.actionId,
-              failureKind: "ROUTE_DRIFT",
+              failureKind: 'ROUTE_DRIFT',
               liveRoute: drift.liveRoute,
               expectedRouteSequence: expectedSeq,
               autoRepair,
@@ -345,21 +345,21 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         const autoRepair: AutoRepairOutcome = autoRepairEnabled
           ? {
               attempted: false,
-              outcome: "skipped",
-              refusedReason: "NOT_REPAIRABLE_KIND",
+              outcome: 'skipped',
+              refusedReason: 'NOT_REPAIRABLE_KIND',
               phases: { firstAttemptMs },
             }
           : {
               attempted: false,
-              outcome: "refused",
-              refusedReason: "USER_DISABLED",
+              outcome: 'refused',
+              refusedReason: 'USER_DISABLED',
               phases: { firstAttemptMs },
             };
         const { actionCode, toolCode } = classifyFailure(failure);
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
-          status: "fail",
+          status: 'fail',
           failureCode: actionCode,
           failureDetail: firstOutput.slice(0, 500),
           trigger,
@@ -371,19 +371,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           autoRepair,
           firstAttemptOutput: firstOutput.slice(0, 500),
         };
-        const message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " — failure not auto-repairable" : " — auto-repair disabled"}`;
+        const message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}`;
         return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
       }
 
       // ─── SELECTOR_NOT_FOUND with auto-repair enabled ─────────────────
-      if (failure.kind !== "SELECTOR_NOT_FOUND") {
+      if (failure.kind !== 'SELECTOR_NOT_FOUND') {
         // Defensive: isAutoRepairable should already exclude non-selector
         // failures, but TS doesn't narrow through `isAutoRepairable`.
         // PR #115 review (Codex conf 80): bare `throw` here was uncaught
         // — now lands in the outer catch and becomes a structured
         // failResult + persisted RunRecord.
         throw new Error(
-          "Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure",
+          'Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure',
         );
       }
 
@@ -395,33 +395,33 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
       });
       const repairMs = Date.now() - tBeforeRepair;
-      const repairEnv = parseEnvelope(repairResult, "cdp_repair_action");
+      const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
       const repairPatched =
         repairEnv.ok === true && (repairEnv.data as { patched?: boolean })?.patched === true;
 
       if (!repairPatched) {
         const refusedReason = mapRefusedReason(
           (repairEnv as { code?: string }).code,
-          repairEnv.error ?? "",
+          repairEnv.error ?? '',
         );
         const autoRepair: AutoRepairOutcome = {
           attempted: true,
-          outcome: "refused",
+          outcome: 'refused',
           refusedReason,
           phases: { firstAttemptMs, repairMs },
         };
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
-          status: "fail",
-          failureCode: "SELECTOR_NOT_FOUND",
+          status: 'fail',
+          failureCode: 'SELECTOR_NOT_FOUND',
           failureDetail: firstOutput.slice(0, 500),
           trigger,
           autoRepair,
         });
         return failResult(
-          `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND; auto-repair refused (${refusedReason}): ${repairEnv.error ?? "unknown"}`,
-          refusedReason === "TRANSPORT_BLIND" ? "TRANSPORT_BLIND" : "TESTID_NOT_FOUND",
+          `cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND; auto-repair refused (${refusedReason}): ${repairEnv.error ?? 'unknown'}`,
+          refusedReason === 'TRANSPORT_BLIND' ? 'TRANSPORT_BLIND' : 'TESTID_NOT_FOUND',
           {
             actionId: args.actionId,
             autoRepair,
@@ -447,20 +447,20 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
-          status: "fail",
-          failureCode: "UNKNOWN",
-          failureDetail: "action disappeared between repair and retry",
+          status: 'fail',
+          failureCode: 'UNKNOWN',
+          failureDetail: 'action disappeared between repair and retry',
           trigger,
           autoRepair: {
             attempted: true,
-            outcome: "refused",
-            refusedReason: "INTERNAL_ERROR",
+            outcome: 'refused',
+            refusedReason: 'INTERNAL_ERROR',
             phases: { firstAttemptMs, repairMs },
           },
         });
         return failResult(
           `cdp_run_action: action disappeared between repair and retry — investigate filesystem`,
-          "NO_PROJECT_ROOT",
+          'NO_PROJECT_ROOT',
         );
       }
 
@@ -472,7 +472,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         params: args.params,
       });
       const retryMs = Date.now() - tBeforeRetry;
-      const retryEnv = parseEnvelope(retryResult, "maestro_run");
+      const retryEnv = parseEnvelope(retryResult, 'maestro_run');
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
 
@@ -498,7 +498,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         try {
           const retryFailure = parseMaestroFailure(retryOutput);
           if (
-            retryFailure.kind === "SELECTOR_NOT_FOUND" &&
+            retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
             retryFailure.selector &&
             retryFailure.selector !== repairData.newSelector
           ) {
@@ -511,12 +511,12 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       const autoRepair: AutoRepairOutcome = {
         attempted: true,
-        outcome: retryPassed ? "passed" : "failed",
+        outcome: retryPassed ? 'passed' : 'failed',
         diff: {
           selector: {
             from: repairData.oldSelector,
             to: repairData.newSelector,
-            ...(typeof repairScore === "number" ? { score: repairScore } : {}),
+            ...(typeof repairScore === 'number' ? { score: repairScore } : {}),
           },
         },
         phases: { firstAttemptMs, repairMs, retryMs },
@@ -527,8 +527,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       await persistRun(args.actionId, projectRoot, {
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - t0,
-        status: retryPassed ? "pass" : "fail",
-        failureCode: retryPassed ? undefined : "SELECTOR_NOT_FOUND",
+        status: retryPassed ? 'pass' : 'fail',
+        failureCode: retryPassed ? undefined : 'SELECTOR_NOT_FOUND',
         failureDetail: retryPassed ? undefined : retryOutput.slice(0, 500),
         trigger,
         autoRepair,
@@ -548,7 +548,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       return failResult(
         `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}). Retry output suggests a deeper screen change — manual investigation needed.`,
-        "TESTID_NOT_FOUND",
+        'TESTID_NOT_FOUND',
         {
           actionId: args.actionId,
           autoRepair,
@@ -566,15 +566,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const msg = err instanceof Error ? err.message : String(err);
       const autoRepair: AutoRepairOutcome = {
         attempted: false,
-        outcome: "refused",
-        refusedReason: "INTERNAL_ERROR",
+        outcome: 'refused',
+        refusedReason: 'INTERNAL_ERROR',
       };
       try {
         await persistRun(args.actionId, projectRoot, {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
-          status: "fail",
-          failureCode: "UNKNOWN",
+          status: 'fail',
+          failureCode: 'UNKNOWN',
           failureDetail: `Internal error: ${msg.slice(0, 400)}`,
           trigger,
           autoRepair,
@@ -619,7 +619,7 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
     const fresh = loadAction(projectRoot, actionId);
     if (!fresh) {
       console.error(
-        `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? "n/a"})`,
+        `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,
       );
       return;
     }
@@ -629,7 +629,7 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
     // persistRun is the single chokepoint both success paths reach, so the
     // promotion rides the same atomic CAS write as the RunRecord append.
     const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record)
-      ? { ...fresh.metadata, status: "active" as const }
+      ? { ...fresh.metadata, status: 'active' as const }
       : fresh.metadata;
     const next = {
       ...fresh,

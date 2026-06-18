@@ -1,5 +1,5 @@
-import type { ToolResult } from "../utils.js";
-import { okResult } from "../utils.js";
+import type { ToolResult } from '../utils.js';
+import { okResult } from '../utils.js';
 
 export interface CloseDeviceSessionDeps {
   hasActiveSession: () => boolean;
@@ -23,7 +23,7 @@ export interface CloseDeviceSessionDeps {
  */
 export function isBenignSessionGoneError(result: ToolResult): boolean {
   if (!result.isError) return false;
-  const text = result.content?.[0]?.text ?? "";
+  const text = result.content?.[0]?.text ?? '';
   let envelope: { error?: string; code?: string; meta?: { code?: string } };
   try {
     envelope = JSON.parse(text) as { error?: string; code?: string; meta?: { code?: string } };
@@ -33,13 +33,13 @@ export function isBenignSessionGoneError(result: ToolResult): boolean {
     // because its raw text mentions the phrase.
     return false;
   }
-  if ((envelope.meta?.code ?? envelope.code) === "SESSION_NOT_FOUND") return true;
-  return /no active session|session not found/i.test(envelope.error ?? "");
+  if ((envelope.meta?.code ?? envelope.code) === 'SESSION_NOT_FOUND') return true;
+  return /no active session|session not found/i.test(envelope.error ?? '');
 }
 
 export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<ToolResult> {
   if (!deps.hasActiveSession()) {
-    return okResult({ closed: true, message: "No active session to close" });
+    return okResult({ closed: true, message: 'No active session to close' });
   }
 
   const result = await deps.closeUnderlyingSession();
@@ -61,7 +61,7 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
       closed: true,
       sessionAlreadyGone: true,
       message:
-        "Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.",
+        'Underlying device session was already gone (likely torn down by a Maestro flow); cleared local session state.',
     });
   }
 

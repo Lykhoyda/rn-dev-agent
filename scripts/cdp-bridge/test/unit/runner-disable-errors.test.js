@@ -1,19 +1,19 @@
 // Phase 2 Task 9: RN_ANDROID_RUNNER=0 must produce an explicit RUNNER_DISABLED
 // error (not fall through to NO_NATIVE_ROUTE). Source-regex asserts over the
 // TS source so the gate is enforced at the dispatch level, not just in docs.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(__dirname, "../../src/agent-device-wrapper.ts"), "utf-8");
-const typesSrc = readFileSync(join(__dirname, "../../src/types.ts"), "utf-8");
+const src = readFileSync(join(__dirname, '../../src/agent-device-wrapper.ts'), 'utf-8');
+const typesSrc = readFileSync(join(__dirname, '../../src/types.ts'), 'utf-8');
 
 // ── RUNNER_DISABLED must be in the ToolErrorCode union ──────────────────────
 
-test("RUNNER_DISABLED is a member of the ToolErrorCode union in types.ts", () => {
+test('RUNNER_DISABLED is a member of the ToolErrorCode union in types.ts', () => {
   assert.match(
     typesSrc,
     /['"]?RUNNER_DISABLED['"]?/,
@@ -23,11 +23,11 @@ test("RUNNER_DISABLED is a member of the ToolErrorCode union in types.ts", () =>
 
 // ── Dispatcher must have an explicit RUNNER_DISABLED branch ─────────────────
 
-test("runNative has an explicit RUNNER_DISABLED branch for RN_ANDROID_RUNNER=0", () => {
+test('runNative has an explicit RUNNER_DISABLED branch for RN_ANDROID_RUNNER=0', () => {
   assert.match(
     src,
     /RUNNER_DISABLED/,
-    "agent-device-wrapper.ts must contain a RUNNER_DISABLED error branch",
+    'agent-device-wrapper.ts must contain a RUNNER_DISABLED error branch',
   );
 });
 
@@ -40,7 +40,7 @@ test("RUNNER_DISABLED branch is gated on RN_ANDROID_RUNNER === '0'", () => {
   );
 });
 
-test("RUNNER_DISABLED branch is scoped to Android platform and runner commands", () => {
+test('RUNNER_DISABLED branch is scoped to Android platform and runner commands', () => {
   // Ensure the branch is platform-scoped (android) and command-set-scoped
   assert.match(
     src,
@@ -50,7 +50,7 @@ test("RUNNER_DISABLED branch is scoped to Android platform and runner commands",
   assert.match(
     src,
     /RN_ANDROID_RUNNER_COMMANDS\.has\(cliArgs\[0\]\)/,
-    "The RUNNER_DISABLED gate must check RN_ANDROID_RUNNER_COMMANDS",
+    'The RUNNER_DISABLED gate must check RN_ANDROID_RUNNER_COMMANDS',
   );
 });
 

@@ -1,9 +1,9 @@
-import { test, beforeEach } from "node:test";
-import assert from "node:assert/strict";
-import { withConnection, okResult, failResult } from "../../dist/utils.js";
-import { resetActiveSessionInMemoryForTest } from "../../dist/agent-device-wrapper.js";
-import { createMockClient } from "../helpers/mock-cdp-client.js";
-import { parseEnvelope } from "../helpers/result-helpers.js";
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { withConnection, okResult, failResult } from '../../dist/utils.js';
+import { resetActiveSessionInMemoryForTest } from '../../dist/agent-device-wrapper.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { parseEnvelope } from '../helpers/result-helpers.js';
 
 // Test isolation: clear the in-memory agent-device session pointer (without
 // unlinking the on-disk file, which would break a developer's live MCP run).
@@ -16,7 +16,7 @@ beforeEach(() => {
 
 // ── Happy path ────────────────────────────────────────────────────────
 
-test("withConnection passes args and client to handler when already connected", async () => {
+test('withConnection passes args and client to handler when already connected', async () => {
   let receivedArgs, receivedClient;
   const client = createMockClient({
     evaluate: async () => ({ value: 13 }),
@@ -29,15 +29,15 @@ test("withConnection passes args and client to handler when already connected", 
       return okResult({ done: true });
     },
   );
-  const result = await handler({ foo: "bar" });
-  assert.deepEqual(receivedArgs, { foo: "bar" });
+  const result = await handler({ foo: 'bar' });
+  assert.deepEqual(receivedArgs, { foo: 'bar' });
   assert.equal(receivedClient, client);
   assert.equal(parseEnvelope(result).ok, true);
 });
 
 // ── Auto-connect when disconnected ────────────────────────────────────
 
-test("withConnection auto-connects when client is disconnected", async () => {
+test('withConnection auto-connects when client is disconnected', async () => {
   let autoConnectCalled = false;
   const client = createMockClient({
     _isConnected: false,
@@ -61,11 +61,11 @@ test("withConnection auto-connects when client is disconnected", async () => {
 
 // ── Auto-connect failure ──────────────────────────────────────────────
 
-test("withConnection returns failResult when autoConnect throws", async () => {
+test('withConnection returns failResult when autoConnect throws', async () => {
   const client = createMockClient({
     _isConnected: false,
     async autoConnect() {
-      throw new Error("Metro not running");
+      throw new Error('Metro not running');
     },
   });
 
@@ -81,7 +81,7 @@ test("withConnection returns failResult when autoConnect throws", async () => {
 
 // ── Helpers not injected — waits then succeeds ────────────────────────
 
-test("withConnection waits for helpers to be injected", async () => {
+test('withConnection waits for helpers to be injected', async () => {
   const client = createMockClient({
     _helpersInjected: false,
     evaluate: async () => ({ value: 13 }),
@@ -101,7 +101,7 @@ test("withConnection waits for helpers to be injected", async () => {
 
 // ── Active 1-shot re-inject when passive wait expires (D###) ──────────
 
-test("withConnection actively re-injects helpers when passive wait expires", async () => {
+test('withConnection actively re-injects helpers when passive wait expires', async () => {
   let reinjectCalled = 0;
   const client = createMockClient({
     _helpersInjected: false,
@@ -123,14 +123,14 @@ test("withConnection actively re-injects helpers when passive wait expires", asy
   assert.equal(
     reinjectCalled,
     1,
-    "reinjectHelpers should fire exactly once after passive wait expires",
+    'reinjectHelpers should fire exactly once after passive wait expires',
   );
   const env = parseEnvelope(result);
   assert.equal(env.ok, true);
   assert.deepEqual(env.data, { recovered: true });
 });
 
-test("withConnection returns actionable HELPERS_NOT_INJECTED error when active re-inject also fails", async () => {
+test('withConnection returns actionable HELPERS_NOT_INJECTED error when active re-inject also fails', async () => {
   let reinjectCalled = 0;
   const client = createMockClient({
     _helpersInjected: false,
@@ -147,21 +147,21 @@ test("withConnection returns actionable HELPERS_NOT_INJECTED error when active r
     async () => okResult({ unreachable: true }),
   );
   const result = await handler({});
-  assert.equal(reinjectCalled, 1, "reinjectHelpers should still be attempted once");
+  assert.equal(reinjectCalled, 1, 'reinjectHelpers should still be attempted once');
   const env = parseEnvelope(result);
   assert.equal(env.ok, false);
-  assert.equal(env.code, "HELPERS_NOT_INJECTED");
-  assert.match(env.error, /device_\* tools/, "error must guide caller to fallback path");
-  assert.match(env.error, /cdp_reload/, "error must mention cdp_reload as escape hatch");
+  assert.equal(env.code, 'HELPERS_NOT_INJECTED');
+  assert.match(env.error, /device_\* tools/, 'error must guide caller to fallback path');
+  assert.match(env.error, /cdp_reload/, 'error must mention cdp_reload as escape hatch');
 });
 
-test("withConnection skips active re-inject when not connected", async () => {
+test('withConnection skips active re-inject when not connected', async () => {
   let reinjectCalled = 0;
   const client = createMockClient({
     _isConnected: false,
     _helpersInjected: false,
     async autoConnect() {
-      throw new Error("Metro not running");
+      throw new Error('Metro not running');
     },
     async reinjectHelpers() {
       reinjectCalled++;
@@ -174,13 +174,13 @@ test("withConnection skips active re-inject when not connected", async () => {
     async () => okResult({}),
   );
   const result = await handler({});
-  assert.equal(reinjectCalled, 0, "reinjectHelpers must NOT be attempted when autoConnect failed");
+  assert.equal(reinjectCalled, 0, 'reinjectHelpers must NOT be attempted when autoConnect failed');
   assert.equal(parseEnvelope(result).ok, false);
 });
 
 // ── requireHelpers: false skips helper check ──────────────────────────
 
-test("withConnection skips helper check when requireHelpers is false", async () => {
+test('withConnection skips helper check when requireHelpers is false', async () => {
   const client = createMockClient({
     _helpersInjected: false,
     evaluate: async () => ({ value: undefined }),
@@ -197,7 +197,7 @@ test("withConnection skips helper check when requireHelpers is false", async () 
 
 // ── Handler error: WebSocket disconnect → retry ───────────────────────
 
-test("withConnection retries after WebSocket disconnect", async () => {
+test('withConnection retries after WebSocket disconnect', async () => {
   let callCount = 0;
   const client = createMockClient({
     evaluate: async () => ({ value: 13 }),
@@ -208,7 +208,7 @@ test("withConnection retries after WebSocket disconnect", async () => {
     async () => {
       callCount++;
       if (callCount === 1) {
-        throw new Error("WebSocket closed unexpectedly");
+        throw new Error('WebSocket closed unexpectedly');
       }
       return okResult({ retried: true });
     },
@@ -221,7 +221,7 @@ test("withConnection retries after WebSocket disconnect", async () => {
 
 // ── Handler error: non-disconnect error ───────────────────────────────
 
-test("withConnection returns failResult for non-disconnect errors", async () => {
+test('withConnection returns failResult for non-disconnect errors', async () => {
   const client = createMockClient({
     evaluate: async () => ({ value: 13 }),
   });
@@ -229,7 +229,7 @@ test("withConnection returns failResult for non-disconnect errors", async () => 
   const handler = withConnection(
     () => client,
     async () => {
-      throw new Error("Unexpected null reference");
+      throw new Error('Unexpected null reference');
     },
   );
   const result = await handler({});
@@ -240,12 +240,12 @@ test("withConnection returns failResult for non-disconnect errors", async () => 
 
 // ── Stale helper detection via B63 ────────────────────────────────────
 
-test("withConnection re-injects helpers when handler returns __RN_AGENT not defined", async () => {
+test('withConnection re-injects helpers when handler returns __RN_AGENT not defined', async () => {
   let callCount = 0;
   let reinjectCount = 0;
   const client = createMockClient({
     evaluate: async (expr) => {
-      if (expr.includes("typeof globalThis.__RN_AGENT")) {
+      if (expr.includes('typeof globalThis.__RN_AGENT')) {
         // D502 proactive freshness check: return version number (helpers are alive)
         // B63 stale detection probe: after handler returns stale error, probe fails
         // The B63 path calls this AFTER the handler returned a stale indicator
@@ -269,13 +269,13 @@ test("withConnection re-injects helpers when handler returns __RN_AGENT not defi
     async () => {
       callCount++;
       if (callCount === 1) {
-        return failResult("__RN_AGENT is not defined");
+        return failResult('__RN_AGENT is not defined');
       }
       return okResult({ recovered: true });
     },
   );
   const result = await handler({});
-  assert.ok(reinjectCount >= 1, "reinjectHelpers should have been called");
-  assert.equal(callCount, 2, "handler should have been called twice (original + retry)");
+  assert.ok(reinjectCount >= 1, 'reinjectHelpers should have been called');
+  assert.equal(callCount, 2, 'handler should have been called twice (original + retry)');
   assert.equal(parseEnvelope(result).ok, true);
 });

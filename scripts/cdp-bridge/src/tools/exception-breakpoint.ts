@@ -1,19 +1,19 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 export function createExceptionBreakpointHandler(getClient: () => CDPClient) {
   return withConnection(
     getClient,
-    async (args: { state: "none" | "uncaught" | "all"; durationMs?: number }, client) => {
-      const state = args.state ?? "uncaught";
+    async (args: { state: 'none' | 'uncaught' | 'all'; durationMs?: number }, client) => {
+      const state = args.state ?? 'uncaught';
       const duration = args.durationMs
         ? Math.min(Math.max(args.durationMs, 1000), 30000)
         : undefined;
 
-      const savedHandler = client["eventHandlers"].get("Debugger.paused");
+      const savedHandler = client['eventHandlers'].get('Debugger.paused');
 
       try {
-        await client.send("Debugger.setPauseOnExceptions", { state });
+        await client.send('Debugger.setPauseOnExceptions', { state });
 
         if (!duration) {
           return okResult({
@@ -41,8 +41,8 @@ export function createExceptionBreakpointHandler(getClient: () => CDPClient) {
             }>;
           };
 
-          if (p.reason === "exception" || p.reason === "promiseRejection") {
-            const desc = p.data?.description ?? p.data?.value ?? "Unknown exception";
+          if (p.reason === 'exception' || p.reason === 'promiseRejection') {
+            const desc = p.data?.description ?? p.data?.value ?? 'Unknown exception';
             const topFrame = p.callFrames?.[0];
             caught.push({
               message: String(desc).slice(0, 500),
@@ -53,37 +53,37 @@ export function createExceptionBreakpointHandler(getClient: () => CDPClient) {
                 ?.slice(0, 5)
                 .map(
                   (f) =>
-                    `  at ${f.functionName || "(anonymous)"} (${f.url ?? "?"}:${f.location?.lineNumber ?? "?"})`,
+                    `  at ${f.functionName || '(anonymous)'} (${f.url ?? '?'}:${f.location?.lineNumber ?? '?'})`,
                 )
-                .join("\n"),
+                .join('\n'),
             });
           }
 
           try {
-            await client.send("Debugger.resume", undefined);
+            await client.send('Debugger.resume', undefined);
           } catch {
             /* best effort */
           }
         };
 
-        client["eventHandlers"].set("Debugger.paused", captureHandler);
+        client['eventHandlers'].set('Debugger.paused', captureHandler);
 
         await new Promise((r) => setTimeout(r, duration));
 
-        await client.send("Debugger.setPauseOnExceptions", { state: "none" });
+        await client.send('Debugger.setPauseOnExceptions', { state: 'none' });
 
         // CDP-006: when no prior handler existed, the temporary capture
         // handler must be DELETED (not left in place) — otherwise later
         // debugging/profiling flows inherit a stale pause handler that
         // resumes unrelated pauses.
         if (savedHandler) {
-          client["eventHandlers"].set("Debugger.paused", savedHandler);
+          client['eventHandlers'].set('Debugger.paused', savedHandler);
         } else {
-          client["eventHandlers"].delete("Debugger.paused");
+          client['eventHandlers'].delete('Debugger.paused');
         }
 
         return okResult({
-          state: "none",
+          state: 'none',
           durationMs: duration,
           exceptionsCount: caught.length,
           exceptions: caught,
@@ -92,12 +92,12 @@ export function createExceptionBreakpointHandler(getClient: () => CDPClient) {
         // CDP-006: same restore/delete guard on the error path so a thrown
         // capture doesn't leak the temporary handler either.
         if (savedHandler) {
-          client["eventHandlers"].set("Debugger.paused", savedHandler);
+          client['eventHandlers'].set('Debugger.paused', savedHandler);
         } else {
-          client["eventHandlers"].delete("Debugger.paused");
+          client['eventHandlers'].delete('Debugger.paused');
         }
         try {
-          await client.send("Debugger.setPauseOnExceptions", { state: "none" });
+          await client.send('Debugger.setPauseOnExceptions', { state: 'none' });
         } catch {
           /* cleanup */
         }

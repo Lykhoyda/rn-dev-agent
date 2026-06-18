@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
 export function createEvaluateHandler(getClient: () => CDPClient) {
   return withConnection(

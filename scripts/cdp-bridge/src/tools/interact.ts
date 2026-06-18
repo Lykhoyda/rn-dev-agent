@@ -1,7 +1,7 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, withConnection } from "../utils.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, withConnection } from '../utils.js';
 
-type InteractAction = "press" | "longPress" | "typeText" | "scroll" | "setFieldValue";
+type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
 interface InteractArgs {
   action: InteractAction;
@@ -21,19 +21,19 @@ interface InteractArgs {
 export function createInteractHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: InteractArgs, client) => {
     if (!args.testID && !args.accessibilityLabel) {
-      return failResult("Either testID or accessibilityLabel is required");
+      return failResult('Either testID or accessibilityLabel is required');
     }
-    if (args.action === "typeText" && args.text === undefined) {
-      return failResult("text parameter is required for typeText action");
+    if (args.action === 'typeText' && args.text === undefined) {
+      return failResult('text parameter is required for typeText action');
     }
-    if (args.action === "setFieldValue") {
+    if (args.action === 'setFieldValue') {
       if (args.name === undefined || args.name.length === 0) {
         return failResult(
-          "name parameter is required for setFieldValue action — the React Hook Form field name",
+          'name parameter is required for setFieldValue action — the React Hook Form field name',
         );
       }
       if (args.value === undefined) {
-        return failResult("value parameter is required for setFieldValue action");
+        return failResult('value parameter is required for setFieldValue action');
       }
     }
 
@@ -55,8 +55,8 @@ export function createInteractHandler(getClient: () => CDPClient) {
       return failResult(`Interact error: ${result.error}`);
     }
 
-    if (typeof result.value !== "string") {
-      return failResult("Unexpected response from interact — expected JSON string");
+    if (typeof result.value !== 'string') {
+      return failResult('Unexpected response from interact — expected JSON string');
     }
 
     let parsed: Record<string, unknown>;
@@ -80,7 +80,7 @@ export function createInteractHandler(getClient: () => CDPClient) {
       return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {
         actionExecuted: true,
         handlerError: parsed.handler_error,
-        hint: "The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.",
+        hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
       });
     }
 

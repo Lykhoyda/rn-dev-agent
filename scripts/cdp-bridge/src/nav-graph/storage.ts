@@ -6,9 +6,9 @@ import {
   readdirSync,
   lstatSync,
   mkdirSync,
-} from "node:fs";
-import { join, dirname } from "node:path";
-import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+} from 'node:fs';
+import { join, dirname } from 'node:path';
+import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 import type {
   NavGraph,
   NavGraphMeta,
@@ -22,22 +22,22 @@ import type {
   RawNavTopology,
   RawNavigator,
   RawRoute,
-} from "./types.js";
+} from './types.js';
 
-const RN_AGENT_DIR = ".rn-agent";
-const GRAPH_FILENAME = "nav-graph.yaml";
-const LEGACY_GRAPH_FILENAME = ".rn-nav-graph.yaml";
+const RN_AGENT_DIR = '.rn-agent';
+const GRAPH_FILENAME = 'nav-graph.yaml';
+const LEGACY_GRAPH_FILENAME = '.rn-nav-graph.yaml';
 
 function isRnProject(dir: string): boolean {
-  const pkgPath = join(dir, "package.json");
+  const pkgPath = join(dir, 'package.json');
   if (!existsSync(pkgPath)) return false;
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    return !!(deps["react-native"] || deps["expo"]);
+    return !!(deps['react-native'] || deps['expo']);
   } catch {
     return false;
   }
@@ -70,7 +70,7 @@ function scanForRnProject(rootDir: string, maxDepth: number): string | null {
   // Pass 1 at this level: check all direct children for an RN project.
   const subdirs: string[] = [];
   for (const name of entries) {
-    if (name.startsWith(".") || name === "node_modules") continue;
+    if (name.startsWith('.') || name === 'node_modules') continue;
     const full = join(rootDir, name);
     try {
       const stat = lstatSync(full);
@@ -107,7 +107,7 @@ function collectRnProjects(rootDir: string, maxDepth: number, out: string[]): vo
   entries.sort();
   const subdirs: string[] = [];
   for (const name of entries) {
-    if (name.startsWith(".") || name === "node_modules") continue;
+    if (name.startsWith('.') || name === 'node_modules') continue;
     const full = join(rootDir, name);
     try {
       const stat = lstatSync(full);
@@ -135,18 +135,18 @@ function collectRnProjects(rootDir: string, maxDepth: number, out: string[]): vo
 // bundleId-matching. They gracefully fall back to the current alphabetical
 // sibling pick.
 export function readProjectBundleId(projectRoot: string): string | null {
-  const appJsonPath = join(projectRoot, "app.json");
+  const appJsonPath = join(projectRoot, 'app.json');
   if (!existsSync(appJsonPath)) return null;
   try {
-    const raw = JSON.parse(readFileSync(appJsonPath, "utf-8")) as {
+    const raw = JSON.parse(readFileSync(appJsonPath, 'utf-8')) as {
       expo?: { ios?: { bundleIdentifier?: string }; android?: { package?: string } };
       ios?: { bundleIdentifier?: string };
       android?: { package?: string };
     };
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
-    if (typeof iosId === "string" && iosId.length > 0) return iosId;
-    if (typeof androidId === "string" && androidId.length > 0) return androidId;
+    if (typeof iosId === 'string' && iosId.length > 0) return iosId;
+    if (typeof androidId === 'string' && androidId.length > 0) return androidId;
     return null;
   } catch {
     return null;
@@ -197,7 +197,7 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join(dir, "..");
+      const parent = join(dir, '..');
       if (parent === dir) break;
       dir = parent;
     }
@@ -209,7 +209,7 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
   // is provided, collect all candidates and prefer the match. Otherwise
   // stop at the first hit (legacy behavior).
   const cwd = process.cwd();
-  const parentOfCwd = join(cwd, "..");
+  const parentOfCwd = join(cwd, '..');
 
   if (targetBundleId) {
     const all: string[] = [];
@@ -235,14 +235,14 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
 
 function getProjectSlug(projectRoot: string): string {
   try {
-    const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8")) as {
+    const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8')) as {
       name?: string;
     };
-    if (pkg.name && typeof pkg.name === "string") return pkg.name;
+    if (pkg.name && typeof pkg.name === 'string') return pkg.name;
   } catch {
     /* fall through */
   }
-  return projectRoot.split("/").pop() ?? "unknown";
+  return projectRoot.split('/').pop() ?? 'unknown';
 }
 
 export function getGraphPath(projectRoot: string): string {
@@ -261,7 +261,7 @@ export function readGraph(projectRoot: string): NavGraph | null {
       if (!existsSync(legacyPath)) return null;
       filePath = legacyPath;
     }
-    const raw = yamlParse(readFileSync(filePath, "utf-8")) as { nav_graph?: NavGraph } | null;
+    const raw = yamlParse(readFileSync(filePath, 'utf-8')) as { nav_graph?: NavGraph } | null;
     if (!raw || !raw.nav_graph) return null;
     hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
     return raw.nav_graph;
@@ -275,7 +275,7 @@ export function writeGraph(projectRoot: string, graph: NavGraph): string {
   mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml = yamlStringify({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync(tmpPath, yaml, "utf-8");
+  writeFileSync(tmpPath, yaml, 'utf-8');
   renameSync(tmpPath, filePath);
   return filePath;
 }
@@ -289,7 +289,7 @@ function buildScreen(raw: RawRoute, isActive: boolean): NavScreen {
   };
   if (raw.path) screen.path = raw.path;
   if (raw.params_schema && raw.params_schema.length > 0) {
-    screen.params_template = `{ ${raw.params_schema.join(", ")} }`;
+    screen.params_template = `{ ${raw.params_schema.join(', ')} }`;
   }
   if (raw.is_initial) screen.initial = true;
   if (raw.is_modal) screen.is_modal = true;
@@ -440,7 +440,7 @@ export function _resetStrikesForTest(): void {
 }
 
 export function hydrateStrikesFromGraph(graph: NavGraph, projectKey?: string): void {
-  const key = projectKey ?? graph.meta?.project_slug ?? "";
+  const key = projectKey ?? graph.meta?.project_slug ?? '';
   if (hydratedProjectKey === key) return;
   // Switched projects (or first hydrate): drop the previous project's strikes so
   // colliding screen+method keys across apps don't cross-contaminate.
@@ -501,7 +501,7 @@ function updateStrike(screen: string, method: NavMethod, success: boolean): Stri
 
   if (success) {
     strikeMap.delete(key);
-    return { screen, method, consecutive_failures: 0, last_failure_at: "" };
+    return { screen, method, consecutive_failures: 0, last_failure_at: '' };
   }
 
   const now = new Date().toISOString();

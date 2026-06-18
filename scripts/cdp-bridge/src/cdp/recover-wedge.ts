@@ -1,22 +1,22 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import type { CDPClient } from "../cdp-client.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { stopFastRunner as defaultStopFastRunner } from "../runners/rn-fast-runner-client.js";
-import { arbiter } from "../lifecycle/device-arbiter.js";
-import { probeFreshness } from "./recovery.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import type { CDPClient } from '../cdp-client.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
+import { probeFreshness } from './recovery.js';
 
 const execFile = promisify(execFileCb);
 const DEFAULT_MAX_PER_SESSION = 3;
 const FOREGROUND_SETTLE_MS = 800;
 
 export type WedgeReason =
-  | "recovered"
-  | "still-wedged"
-  | "no-session"
-  | "flow-active"
-  | "unsupported-platform"
-  | "budget-exhausted";
+  | 'recovered'
+  | 'still-wedged'
+  | 'no-session'
+  | 'flow-active'
+  | 'unsupported-platform'
+  | 'budget-exhausted';
 
 export interface WedgeRecoveryResult {
   recovered: boolean;
@@ -45,7 +45,7 @@ async function defaultLaunchApp(udid: string, appId: string): Promise<void> {
   // Bare `simctl launch` (NO --terminate-running-process): empirically foregrounds
   // an already-running backgrounded app with the SAME pid, preserving JS state —
   // which resumes the paused JS thread. terminate+launch destroys state (hardReset).
-  await execFile("xcrun", ["simctl", "launch", udid, appId], { timeout: 10_000 });
+  await execFile('xcrun', ['simctl', 'launch', udid, appId], { timeout: 10_000 });
 }
 
 /**
@@ -68,17 +68,17 @@ export async function recoverWedge(
 
   // No-op early returns — these must NOT consume the budget.
   if (isFlowActive()) {
-    return { recovered: false, reason: "flow-active", attempt: attempts };
+    return { recovered: false, reason: 'flow-active', attempt: attempts };
   }
   const session = (deps.getSession ?? getActiveSession)();
   if (!session?.deviceId || !session?.appId) {
-    return { recovered: false, reason: "no-session", attempt: attempts };
+    return { recovered: false, reason: 'no-session', attempt: attempts };
   }
-  if ((session.platform ?? "ios") !== "ios") {
-    return { recovered: false, reason: "unsupported-platform", attempt: attempts };
+  if ((session.platform ?? 'ios') !== 'ios') {
+    return { recovered: false, reason: 'unsupported-platform', attempt: attempts };
   }
   if (attempts >= max) {
-    return { recovered: false, reason: "budget-exhausted", attempt: attempts };
+    return { recovered: false, reason: 'budget-exhausted', attempt: attempts };
   }
 
   // A real, side-effecting attempt.
@@ -108,7 +108,7 @@ export async function recoverWedge(
 
   if (await probeAlive()) {
     attempts = 0; // success bounds CONSECUTIVE wedges, not lifetime
-    return { recovered: true, reason: "recovered", attempt };
+    return { recovered: true, reason: 'recovered', attempt };
   }
-  return { recovered: false, reason: "still-wedged", attempt };
+  return { recovered: false, reason: 'still-wedged', attempt };
 }

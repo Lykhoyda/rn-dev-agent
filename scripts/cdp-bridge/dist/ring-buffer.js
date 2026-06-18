@@ -66,14 +66,14 @@ export class RingBuffer {
         return this.count;
     }
 }
-export const NO_DEVICE_KEY = "noport-notarget";
+export const NO_DEVICE_KEY = 'noport-notarget';
 /**
  * Build a stable device key from (metroPort, targetId) for `DeviceBufferManager`.
  * Falls back to a sentinel string when either is null, so events captured before
  * a target is selected still have a valid bucket.
  */
 export function makeDeviceKey(port, targetId) {
-    return `${port ?? "noport"}-${targetId ?? "notarget"}`;
+    return `${port ?? 'noport'}-${targetId ?? 'notarget'}`;
 }
 /**
  * Per-device circular buffer manager (M4 / Phase 90 Tier 2).
@@ -121,7 +121,7 @@ export class DeviceBufferManager {
      * returned in per-device insertion order and then concatenated.
      */
     getLast(deviceKey, n) {
-        if (deviceKey !== "all") {
+        if (deviceKey !== 'all') {
             return this.buffers.get(deviceKey)?.getLast(n) ?? [];
         }
         const merged = [];
@@ -135,7 +135,7 @@ export class DeviceBufferManager {
     }
     /** Filter items (single device or `'all'`) by `predicate`. */
     filter(deviceKey, predicate) {
-        if (deviceKey !== "all") {
+        if (deviceKey !== 'all') {
             return this.buffers.get(deviceKey)?.filter(predicate) ?? [];
         }
         const merged = [];
@@ -153,7 +153,7 @@ export class DeviceBufferManager {
      * to be extremely rare, but still first-hit wins.
      */
     getByKey(deviceKey, key) {
-        if (deviceKey !== "all") {
+        if (deviceKey !== 'all') {
             return this.buffers.get(deviceKey)?.getByKey(key);
         }
         for (const buf of this.buffers.values()) {

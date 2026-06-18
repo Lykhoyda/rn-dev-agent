@@ -12,9 +12,9 @@ import {
   type RepairRecord,
   appendRepairRecord,
   shouldDemoteAfterRepair,
-} from "./reusable-action.js";
-import { withBody, withMetadata } from "./action-store.js";
-import { isSafeMaestroScalar } from "./maestro-validator.js";
+} from './reusable-action.js';
+import { withBody, withMetadata } from './action-store.js';
+import { isSafeMaestroScalar } from './maestro-validator.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Levenshtein-based fuzzy matching
@@ -111,7 +111,7 @@ export function extractAllTestIDs(snapshotEnvelope: string): string[] {
     const nodes = env.data?.nodes;
     if (Array.isArray(nodes)) {
       for (const n of nodes) {
-        if (typeof n.identifier === "string" && n.identifier.length > 0) out.add(n.identifier);
+        if (typeof n.identifier === 'string' && n.identifier.length > 0) out.add(n.identifier);
       }
       return Array.from(out);
     }
@@ -126,7 +126,7 @@ export function extractAllTestIDs(snapshotEnvelope: string): string[] {
 }
 
 function walkTree(node: SnapshotNodeTree, acc: Set<string>): void {
-  if (typeof node.identifier === "string" && node.identifier.length > 0) acc.add(node.identifier);
+  if (typeof node.identifier === 'string' && node.identifier.length > 0) acc.add(node.identifier);
   if (Array.isArray(node.children)) {
     for (const child of node.children) walkTree(child, acc);
   }
@@ -178,7 +178,7 @@ export function replaceIdSelector(
   if (!isSafeMaestroScalar(newId)) {
     return { body, replacements: 0 };
   }
-  const lines = body.split("\n");
+  const lines = body.split('\n');
   const out: string[] = [];
   let replacements = 0;
   // Match the line-trimmed `id: <quoted-or-bare><oldId>`, preserving leading
@@ -186,7 +186,7 @@ export function replaceIdSelector(
   // shapes (double / single / bare) keep this in lockstep with
   // extractIdSelectors and the maestro-error-parser matched-quote grammar:
   // a double-quoted value may contain `'` and vice-versa.
-  const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const dq = new RegExp(`^(\\s*)id:\\s*"${escapedOld}"(\\s*(?:#.*)?)$`);
   const sq = new RegExp(`^(\\s*)id:\\s*'${escapedOld}'(\\s*(?:#.*)?)$`);
   const bare = new RegExp(`^(\\s*)id:\\s*${escapedOld}(\\s*(?:#.*)?)$`);
@@ -216,14 +216,14 @@ export function replaceIdSelector(
         ? `"${newId}"`
         : !newId.includes("'")
           ? `'${newId}'`
-          : `"${newId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+          : `"${newId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
       out.push(`${m[1]}id: ${quoted}${m[2]}`);
       replacements++;
       continue;
     }
     out.push(line);
   }
-  return { body: out.join("\n"), replacements };
+  return { body: out.join('\n'), replacements };
 }
 
 /**
@@ -236,7 +236,7 @@ export function replaceIdSelector(
  */
 export function extractIdSelectors(body: string): string[] {
   const out: string[] = [];
-  const lines = body.split("\n");
+  const lines = body.split('\n');
   // Mirror the maestro-error-parser matched-quote grammar (PR #115) so the
   // failure parser and this extractor agree on what a testID is. Previously
   // the char class `[^"'\s]` rejected any testID containing a quote (e.g.
@@ -275,7 +275,7 @@ export function extractIdSelectors(body: string): string[] {
  */
 export type RepairAttemptResult =
   | {
-      kind: "patched";
+      kind: 'patched';
       oldSelector: string;
       newSelector: string;
       score: number;
@@ -283,8 +283,8 @@ export type RepairAttemptResult =
       newBody: string;
       replacements: number;
     }
-  | { kind: "no-match"; failedSelector: string; bestScore: number | null; reason: string }
-  | { kind: "no-stale-selector"; reason: string };
+  | { kind: 'no-match'; failedSelector: string; bestScore: number | null; reason: string }
+  | { kind: 'no-stale-selector'; reason: string };
 
 /**
  * Attempt to repair a single stale selector. Pure function over
@@ -308,7 +308,7 @@ export function attemptRepair(
   const inBody = extractIdSelectors(action.body).includes(failedSelector);
   if (!inBody) {
     return {
-      kind: "no-stale-selector",
+      kind: 'no-stale-selector',
       reason: `failedSelector "${failedSelector}" was not found in the action body. The selector hint may be wrong, or the body has already been patched.`,
     };
   }
@@ -321,7 +321,7 @@ export function attemptRepair(
       .map((c) => similarityScore(failedSelector, c))
       .reduce((m, s) => Math.max(m, s), 0);
     return {
-      kind: "no-match",
+      kind: 'no-match',
       failedSelector,
       bestScore: filtered.length ? naive : null,
       reason: filtered.length
@@ -335,7 +335,7 @@ export function attemptRepair(
     best.match,
   );
   return {
-    kind: "patched",
+    kind: 'patched',
     oldSelector: failedSelector,
     newSelector: best.match,
     score: best.score,
@@ -354,19 +354,19 @@ export function attemptRepair(
  */
 export function applyRepair(
   action: ReusableAction,
-  result: Extract<RepairAttemptResult, { kind: "patched" }>,
+  result: Extract<RepairAttemptResult, { kind: 'patched' }>,
   now: () => Date = () => new Date(),
   agentReasoning?: string,
 ): ReusableAction {
   const repaired = withBody(action, result.newBody);
   // Demote status: active → experimental on repair (D1206).
   const newMetadata = shouldDemoteAfterRepair(action.metadata)
-    ? { ...action.metadata, status: "experimental" as const }
+    ? { ...action.metadata, status: 'experimental' as const }
     : action.metadata;
   const withNewMeta = withMetadata(repaired, newMetadata);
   const repairRecord: RepairRecord = {
     timestamp: now().toISOString(),
-    failureCode: "SELECTOR_NOT_FOUND",
+    failureCode: 'SELECTOR_NOT_FOUND',
     diff: {
       selector: { from: result.oldSelector, to: result.newSelector },
     },

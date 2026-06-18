@@ -8,10 +8,10 @@
 // trim+lowercase → substring) with a structured Ambiguous error when the
 // chosen tier has >1 hit. testID stays strict + early-return. getTree filter
 // gains accessibilityLabel as a third matched field.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import vm from "node:vm";
-import { INJECTED_HELPERS } from "../../dist/injected-helpers.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 function createSandbox(opts = {}) {
   const sandbox = {
@@ -74,42 +74,42 @@ function buildFiber(spec, parent = null) {
 
 // ── interact() — testID strict equality (regression guard) ──────────────
 
-test("interact: testID exact match still works (strict ===)", () => {
+test('interact: testID exact match still works (strict ===)', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { testID: "continue-btn", onPress: () => {} } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { testID: 'continue-btn', onPress: () => {} } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", testID: "continue-btn" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'continue-btn' }),
   );
   assert.equal(result.success, true);
-  assert.equal(result.testID, "continue-btn");
+  assert.equal(result.testID, 'continue-btn');
 });
 
-test("interact: testID case-mismatch still fails (testID stays strict)", () => {
+test('interact: testID case-mismatch still fails (testID stays strict)', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { testID: "Continue-Btn", onPress: () => {} } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { testID: 'Continue-Btn', onPress: () => {} } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", testID: "continue-btn" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'continue-btn' }),
   );
-  assert.equal(result.error, "Component not found");
+  assert.equal(result.error, 'Component not found');
 });
 
 // ── interact() — accessibilityLabel tier 1: exact match ─────────────────
 
-test("interact: accessibilityLabel exact === match presses", () => {
+test('interact: accessibilityLabel exact === match presses', () => {
   let pressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue",
+          accessibilityLabel: 'Continue',
           onPress: () => {
             pressed = true;
           },
@@ -119,7 +119,7 @@ test("interact: accessibilityLabel exact === match presses", () => {
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
   assert.equal(result.success, true);
   assert.equal(pressed, true);
@@ -127,15 +127,15 @@ test("interact: accessibilityLabel exact === match presses", () => {
 
 // ── interact() — tier 2: normalized match (trim + collapse-ws + lowercase) ──
 
-test("interact: accessibilityLabel matches across trailing whitespace", () => {
+test('interact: accessibilityLabel matches across trailing whitespace', () => {
   let pressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue ",
+          accessibilityLabel: 'Continue ',
           onPress: () => {
             pressed = true;
           },
@@ -145,21 +145,21 @@ test("interact: accessibilityLabel matches across trailing whitespace", () => {
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
   assert.equal(result.success, true);
   assert.equal(pressed, true);
 });
 
-test("interact: accessibilityLabel matches case-insensitively", () => {
+test('interact: accessibilityLabel matches case-insensitively', () => {
   let pressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue",
+          accessibilityLabel: 'Continue',
           onPress: () => {
             pressed = true;
           },
@@ -169,21 +169,21 @@ test("interact: accessibilityLabel matches case-insensitively", () => {
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'continue' }),
   );
   assert.equal(result.success, true);
   assert.equal(pressed, true);
 });
 
-test("interact: accessibilityLabel matches across collapsed inner whitespace", () => {
+test('interact: accessibilityLabel matches across collapsed inner whitespace', () => {
   let pressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Sign  In",
+          accessibilityLabel: 'Sign  In',
           onPress: () => {
             pressed = true;
           },
@@ -193,7 +193,7 @@ test("interact: accessibilityLabel matches across collapsed inner whitespace", (
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "sign in" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'sign in' }),
   );
   assert.equal(result.success, true);
   assert.equal(pressed, true);
@@ -201,15 +201,15 @@ test("interact: accessibilityLabel matches across collapsed inner whitespace", (
 
 // ── interact() — tier 3: substring contains ─────────────────────────────
 
-test("interact: accessibilityLabel substring fallback presses single match", () => {
+test('interact: accessibilityLabel substring fallback presses single match', () => {
   let pressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue button",
+          accessibilityLabel: 'Continue button',
           onPress: () => {
             pressed = true;
           },
@@ -219,7 +219,7 @@ test("interact: accessibilityLabel substring fallback presses single match", () 
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
   assert.equal(result.success, true);
   assert.equal(pressed, true);
@@ -227,25 +227,25 @@ test("interact: accessibilityLabel substring fallback presses single match", () 
 
 // ── interact() — tier-priority: exact wins over later tiers (no false ambiguity) ──
 
-test("interact: exact match wins over substring sibling — no ambiguity", () => {
+test('interact: exact match wins over substring sibling — no ambiguity', () => {
   let pressedExact = false;
   let pressedSubstring = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue",
+          accessibilityLabel: 'Continue',
           onPress: () => {
             pressedExact = true;
           },
         },
       },
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue button",
+          accessibilityLabel: 'Continue button',
           onPress: () => {
             pressedSubstring = true;
           },
@@ -255,59 +255,59 @@ test("interact: exact match wins over substring sibling — no ambiguity", () =>
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
-  assert.equal(result.success, true, result.error || "should succeed");
-  assert.equal(pressedExact, true, "exact tier should take priority");
-  assert.equal(pressedSubstring, false, "substring sibling must not fire");
+  assert.equal(result.success, true, result.error || 'should succeed');
+  assert.equal(pressedExact, true, 'exact tier should take priority');
+  assert.equal(pressedSubstring, false, 'substring sibling must not fire');
 });
 
 // ── interact() — ambiguity error when chosen tier has >1 match ──────────
 
-test("interact: two exact matches return Ambiguous error with both descriptors", () => {
+test('interact: two exact matches return Ambiguous error with both descriptors', () => {
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
-        props: { accessibilityLabel: "Continue", testID: "a", onPress: () => {} },
+        name: 'Pressable',
+        props: { accessibilityLabel: 'Continue', testID: 'a', onPress: () => {} },
       },
       {
-        name: "Pressable",
-        props: { accessibilityLabel: "Continue", testID: "b", onPress: () => {} },
+        name: 'Pressable',
+        props: { accessibilityLabel: 'Continue', testID: 'b', onPress: () => {} },
       },
     ],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
-  assert.equal(result.error, "Ambiguous component match");
+  assert.equal(result.error, 'Ambiguous component match');
   assert.equal(result.count, 2);
   assert.equal(result.matches.length, 2);
-  assert.deepEqual(result.matches.map((m) => m.testID).sort(), ["a", "b"]);
+  assert.deepEqual(result.matches.map((m) => m.testID).sort(), ['a', 'b']);
   assert.match(result.hint, /Add a testID/);
 });
 
-test("interact: substring tier ambiguity returns error (does not silently pick first)", () => {
+test('interact: substring tier ambiguity returns error (does not silently pick first)', () => {
   let firstPressed = false;
   let secondPressed = false;
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue button",
+          accessibilityLabel: 'Continue button',
           onPress: () => {
             firstPressed = true;
           },
         },
       },
       {
-        name: "Pressable",
+        name: 'Pressable',
         props: {
-          accessibilityLabel: "Continue link",
+          accessibilityLabel: 'Continue link',
           onPress: () => {
             secondPressed = true;
           },
@@ -317,66 +317,66 @@ test("interact: substring tier ambiguity returns error (does not silently pick f
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
-  assert.equal(result.error, "Ambiguous component match");
+  assert.equal(result.error, 'Ambiguous component match');
   assert.equal(firstPressed, false);
   assert.equal(secondPressed, false);
 });
 
 // ── interact() — not-found shape includes new hint ──────────────────────
 
-test("interact: accessibilityLabel no match returns Component not found with tiered hint", () => {
+test('interact: accessibilityLabel no match returns Component not found with tiered hint', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { accessibilityLabel: "Cancel", onPress: () => {} } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { accessibilityLabel: 'Cancel', onPress: () => {} } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
-  assert.equal(result.error, "Component not found");
+  assert.equal(result.error, 'Component not found');
   assert.match(result.hint, /exact, case\/whitespace-normalized, and substring/);
   assert.match(result.hint, /cdp_component_tree/);
 });
 
 // ── interact() — non-string accessibilityLabel values must not crash ────
 
-test("interact: handles falsy/non-string accessibilityLabel values without crashing", () => {
+test('interact: handles falsy/non-string accessibilityLabel values without crashing', () => {
   const root = buildFiber({
-    name: "App",
+    name: 'App',
     children: [
-      { name: "Pressable", props: { accessibilityLabel: false, onPress: () => {} } },
-      { name: "Pressable", props: { accessibilityLabel: null, onPress: () => {} } },
-      { name: "Pressable", props: { accessibilityLabel: "", onPress: () => {} } },
-      { name: "Pressable", props: { accessibilityLabel: "Continue", onPress: () => {} } },
+      { name: 'Pressable', props: { accessibilityLabel: false, onPress: () => {} } },
+      { name: 'Pressable', props: { accessibilityLabel: null, onPress: () => {} } },
+      { name: 'Pressable', props: { accessibilityLabel: '', onPress: () => {} } },
+      { name: 'Pressable', props: { accessibilityLabel: 'Continue', onPress: () => {} } },
     ],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: "press", accessibilityLabel: "Continue" }),
+    sandbox.__RN_AGENT.interact({ action: 'press', accessibilityLabel: 'Continue' }),
   );
   assert.equal(result.success, true);
 });
 
 // ── getTree() — filter now matches accessibilityLabel ───────────────────
 
-test("getTree: filter matches accessibilityLabel (the Home tab case)", () => {
+test('getTree: filter matches accessibilityLabel (the Home tab case)', () => {
   const root = buildFiber({
-    name: "NavigationContainer",
+    name: 'NavigationContainer',
     children: [
       {
-        name: "BottomTabItem",
-        props: { accessibilityLabel: "Home" },
+        name: 'BottomTabItem',
+        props: { accessibilityLabel: 'Home' },
       },
       {
-        name: "BottomTabItem",
-        props: { accessibilityLabel: "Settings" },
+        name: 'BottomTabItem',
+        props: { accessibilityLabel: 'Settings' },
       },
     ],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: "Home", maxDepth: 4 }));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'Home', maxDepth: 4 }));
   assert.notEqual(
     result.tree,
     null,
@@ -384,49 +384,49 @@ test("getTree: filter matches accessibilityLabel (the Home tab case)", () => {
   );
 });
 
-test("getTree: filter against name + testID still works (regression)", () => {
+test('getTree: filter against name + testID still works (regression)', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "CartBadge", props: { testID: "cart-badge" } }],
+    name: 'App',
+    children: [{ name: 'CartBadge', props: { testID: 'cart-badge' } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const byName = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: "CartBadge", maxDepth: 4 }));
+  const byName = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'CartBadge', maxDepth: 4 }));
   assert.notEqual(byName.tree, null);
-  const byTestID = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: "cart-badge", maxDepth: 4 }));
+  const byTestID = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'cart-badge', maxDepth: 4 }));
   assert.notEqual(byTestID.tree, null);
 });
 
-test("getTree: filter is case-insensitive on accessibilityLabel", () => {
+test('getTree: filter is case-insensitive on accessibilityLabel', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { accessibilityLabel: "Submit Form" } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { accessibilityLabel: 'Submit Form' } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: "submit", maxDepth: 4 }));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'submit', maxDepth: 4 }));
   assert.notEqual(result.tree, null);
 });
 
-test("getTree: filter with no match returns tree:null with rootsSeeded count", () => {
+test('getTree: filter with no match returns tree:null with rootsSeeded count', () => {
   const root = buildFiber({
-    name: "App",
-    children: [{ name: "Pressable", props: { accessibilityLabel: "Cancel" } }],
+    name: 'App',
+    children: [{ name: 'Pressable', props: { accessibilityLabel: 'Cancel' } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: "NotPresent", maxDepth: 4 }));
+  const result = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'NotPresent', maxDepth: 4 }));
   assert.equal(result.tree, null);
-  assert.ok(typeof result.rootsSeeded === "number");
+  assert.ok(typeof result.rootsSeeded === 'number');
 });
 
 // ── source-grep regression guard: ensure helper code doesn't drift ──────
 
-test("source guard: interact() has tiered match scaffolding", () => {
+test('source guard: interact() has tiered match scaffolding', () => {
   assert.match(INJECTED_HELPERS, /var exactMatches = \[\];/);
   assert.match(INJECTED_HELPERS, /var normMatches = \[\];/);
   assert.match(INJECTED_HELPERS, /var containsMatches = \[\];/);
   assert.match(INJECTED_HELPERS, /Ambiguous component match/);
 });
 
-test("source guard: getTree filter checks accessibilityLabel", () => {
+test('source guard: getTree filter checks accessibilityLabel', () => {
   assert.match(INJECTED_HELPERS, /matchesLabel/);
   assert.match(INJECTED_HELPERS, /matchesName \|\| matchesTestID \|\| matchesLabel/);
 });

@@ -1,4 +1,4 @@
-import type { ToolResult } from "../utils.js";
+import type { ToolResult } from '../utils.js';
 
 export interface RunnerLeakNode {
   ref?: string;
@@ -7,9 +7,9 @@ export interface RunnerLeakNode {
   type?: string;
 }
 
-const RUNNER_APP_LABEL = "AgentDeviceRunner";
-const RUNNER_VISIBLE_TEXT = "Agent Device Runner";
-const RUNNER_FINGERPRINT_IDENTIFIERS = new Set(["Logo", "PoweredBy"]);
+const RUNNER_APP_LABEL = 'AgentDeviceRunner';
+const RUNNER_VISIBLE_TEXT = 'Agent Device Runner';
+const RUNNER_FINGERPRINT_IDENTIFIERS = new Set(['Logo', 'PoweredBy']);
 const SMALL_TREE_THRESHOLD = 12;
 
 /**
@@ -79,18 +79,18 @@ const DAEMON_SETTLE_MS = 600;
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export type RecoveryTier = "reacquire" | "attach-only" | "full-relaunch";
+export type RecoveryTier = 'reacquire' | 'attach-only' | 'full-relaunch';
 
 export interface RecoveryOutcome {
   recovered: boolean;
   result: ToolResult;
   tier?: RecoveryTier;
   reason?:
-    | "no-session-context"
-    | "wrong-platform"
-    | "already-attempted"
-    | "still-sentinel"
-    | "reopen-failed";
+    | 'no-session-context'
+    | 'wrong-platform'
+    | 'already-attempted'
+    | 'still-sentinel'
+    | 'reopen-failed';
 }
 
 /**
@@ -118,13 +118,13 @@ export async function recoverFromRunnerLeak(
   deps: RecoveryDeps,
 ): Promise<RecoveryOutcome> {
   if (ctx.alreadyRecovered) {
-    return { recovered: false, result: emptyResult(), reason: "already-attempted" };
+    return { recovered: false, result: emptyResult(), reason: 'already-attempted' };
   }
-  if ((ctx.platform ?? "ios").toLowerCase() !== "ios") {
-    return { recovered: false, result: emptyResult(), reason: "wrong-platform" };
+  if ((ctx.platform ?? 'ios').toLowerCase() !== 'ios') {
+    return { recovered: false, result: emptyResult(), reason: 'wrong-platform' };
   }
   if (!ctx.appId) {
-    return { recovered: false, result: emptyResult(), reason: "no-session-context" };
+    return { recovered: false, result: emptyResult(), reason: 'no-session-context' };
   }
 
   const sleep = deps.sleep ?? defaultSleep;
@@ -135,31 +135,31 @@ export async function recoverFromRunnerLeak(
   // existing tiers if it doesn't clear the sentinel).
   if (deps.reacquire) {
     const tier0 = await attemptReacquireCycle(deps, sleep);
-    if (tier0.phase === "success") {
-      return { recovered: true, result: tier0.result, tier: "reacquire" };
+    if (tier0.phase === 'success') {
+      return { recovered: true, result: tier0.result, tier: 'reacquire' };
     }
   }
 
   // Tier 1: attachOnly reopen — preserves app state when it works.
   const tier1 = await attemptRecoveryCycle(ctx, deps, true, sleep);
-  if (tier1.phase === "success") {
-    return { recovered: true, result: tier1.result, tier: "attach-only" };
+  if (tier1.phase === 'success') {
+    return { recovered: true, result: tier1.result, tier: 'attach-only' };
   }
 
   // Tier 2: full app relaunch — destructive but resets daemon state cleanly.
   const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep);
-  if (tier2.phase === "success") {
-    return { recovered: true, result: tier2.result, tier: "full-relaunch" };
+  if (tier2.phase === 'success') {
+    return { recovered: true, result: tier2.result, tier: 'full-relaunch' };
   }
 
-  if (tier2.phase === "sentinel") {
-    return { recovered: false, result: tier2.result, reason: "still-sentinel" };
+  if (tier2.phase === 'sentinel') {
+    return { recovered: false, result: tier2.result, reason: 'still-sentinel' };
   }
-  return { recovered: false, result: tier2.result, reason: "reopen-failed" };
+  return { recovered: false, result: tier2.result, reason: 'reopen-failed' };
 }
 
 interface RecoveryCycleResult {
-  phase: "reopen-failed" | "snapshot-failed" | "sentinel" | "success";
+  phase: 'reopen-failed' | 'snapshot-failed' | 'sentinel' | 'success';
   result: ToolResult;
 }
 
@@ -169,17 +169,17 @@ async function attemptReacquireCycle(
 ): Promise<RecoveryCycleResult> {
   const reacqResult = await deps.reacquire!();
   if (reacqResult.isError) {
-    return { phase: "reopen-failed", result: reacqResult };
+    return { phase: 'reopen-failed', result: reacqResult };
   }
   await sleep(DAEMON_SETTLE_MS);
   const retryResult = await deps.resnapshot();
   if (retryResult.isError) {
-    return { phase: "snapshot-failed", result: retryResult };
+    return { phase: 'snapshot-failed', result: retryResult };
   }
   if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
-    return { phase: "sentinel", result: retryResult };
+    return { phase: 'sentinel', result: retryResult };
   }
-  return { phase: "success", result: retryResult };
+  return { phase: 'success', result: retryResult };
 }
 
 async function attemptRecoveryCycle(
@@ -193,25 +193,25 @@ async function attemptRecoveryCycle(
 
   const reopenResult = await deps.openSession({
     appId: ctx.appId!,
-    platform: "ios",
+    platform: 'ios',
     sessionName: ctx.sessionName,
     attachOnly,
   });
   if (reopenResult.isError) {
-    return { phase: "reopen-failed", result: reopenResult };
+    return { phase: 'reopen-failed', result: reopenResult };
   }
 
   const retryResult = await deps.resnapshot();
   if (retryResult.isError) {
-    return { phase: "snapshot-failed", result: retryResult };
+    return { phase: 'snapshot-failed', result: retryResult };
   }
 
   if (isAgentDeviceRunnerSentinel(deps.parseNodes(retryResult))) {
-    return { phase: "sentinel", result: retryResult };
+    return { phase: 'sentinel', result: retryResult };
   }
-  return { phase: "success", result: retryResult };
+  return { phase: 'success', result: retryResult };
 }
 
 function emptyResult(): ToolResult {
-  return { content: [{ type: "text" as const, text: "" }] };
+  return { content: [{ type: 'text' as const, text: '' }] };
 }

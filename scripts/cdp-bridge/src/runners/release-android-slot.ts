@@ -1,15 +1,15 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { stopAndroidRunner } from "./rn-android-runner-client.js";
-import { getAdbSerial } from "../agent-device-wrapper.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { stopAndroidRunner } from './rn-android-runner-client.js';
+import { getAdbSerial } from '../agent-device-wrapper.js';
 
 const execFile = promisify(execFileCb);
 
-const DAEMON_JSON = join(homedir(), ".agent-device", "daemon.json");
-const DAEMON_LOCK = join(homedir(), ".agent-device", "daemon.lock");
+const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
+const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
 const SIGKILL_GRACE_MS = 500;
 const ADB_TIMEOUT_MS = 5_000;
@@ -20,8 +20,8 @@ const ADB_TIMEOUT_MS = 5_000;
 // We force-stop ONLY these — never a foreign UIAutomator2 package (that overreach
 // is what killed the MCP server in the #237 repro's `pkill -f agent-device`).
 export const OWNED_PACKAGES = [
-  "dev.lykhoyda.rndevagent.androidrunner.test",
-  "dev.lykhoyda.rndevagent.androidrunner",
+  'dev.lykhoyda.rndevagent.androidrunner.test',
+  'dev.lykhoyda.rndevagent.androidrunner',
 ] as const;
 
 /**
@@ -62,16 +62,16 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
   return {
     stopOwnRunner: (deviceId) => stopAndroidRunner(deviceId),
     adbForceStop: async (pkg, serial) => {
-      await execFile("adb", [...serial, "shell", "am", "force-stop", pkg], {
+      await execFile('adb', [...serial, 'shell', 'am', 'force-stop', pkg], {
         timeout: ADB_TIMEOUT_MS,
-        encoding: "utf8",
+        encoding: 'utf8',
       });
     },
-    resolveSerial: (deviceId) => (deviceId ? ["-s", deviceId] : getAdbSerial()),
+    resolveSerial: (deviceId) => (deviceId ? ['-s', deviceId] : getAdbSerial()),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync(DAEMON_JSON, "utf8")) as { pid?: unknown };
-        return typeof parsed.pid === "number" ? parsed.pid : null;
+        const parsed = JSON.parse(readFileSync(DAEMON_JSON, 'utf8')) as { pid?: unknown };
+        return typeof parsed.pid === 'number' ? parsed.pid : null;
       } catch {
         return null;
       }
@@ -89,7 +89,7 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
     fileExists: (p) => existsSync(p),
     removeFile: (p) => unlinkSync(p),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
+    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== '0',
     now: () => Date.now(),
   };
 }
@@ -159,9 +159,9 @@ export async function releaseAndroidInteractionSlot(
           keepFiles = true;
         } else {
           try {
-            deps.kill(pid, "SIGTERM");
+            deps.kill(pid, 'SIGTERM');
             await deps.delay(SIGKILL_GRACE_MS);
-            if (deps.isAlive(pid)) deps.kill(pid, "SIGKILL");
+            if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
             killedDaemonPids.push(pid);
           } catch (err) {
             warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);

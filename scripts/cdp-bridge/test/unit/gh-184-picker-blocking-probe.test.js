@@ -6,23 +6,23 @@
 // connectToTarget opens a real WebSocket, so — following the repo convention
 // for formatConnectFailureMessage/stickyPlatformFilters — the decision logic is
 // extracted into pure helpers tested here without spinning a socket.
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
-import { probeReactReachable } from "../../dist/cdp/setup.js";
-import { shouldRunPickerProbe, PickerBlockingBundleError } from "../../dist/cdp/connect.js";
+import { probeReactReachable } from '../../dist/cdp/setup.js';
+import { shouldRunPickerProbe, PickerBlockingBundleError } from '../../dist/cdp/connect.js';
 
-const hermes = { id: "a", title: "X", vm: "Hermes", webSocketDebuggerUrl: "ws://x" };
+const hermes = { id: 'a', title: 'X', vm: 'Hermes', webSocketDebuggerUrl: 'ws://x' };
 const cpp = {
-  id: "b",
-  title: "React Native Bridgeless [C++ connection]",
+  id: 'b',
+  title: 'React Native Bridgeless [C++ connection]',
   vm: "don't know",
-  webSocketDebuggerUrl: "ws://y",
+  webSocketDebuggerUrl: 'ws://y',
 };
 
 // ── probeReactReachable ─────────────────────────────────────────────────
 
-test("probeReactReachable returns true as soon as React reports ready", async () => {
+test('probeReactReachable returns true as soon as React reports ready', async () => {
   let calls = 0;
   const evaluate = async () => {
     calls++;
@@ -33,19 +33,19 @@ test("probeReactReachable returns true as soon as React reports ready", async ()
   assert.ok(calls >= 2);
 });
 
-test("probeReactReachable returns false when React never readies within budget", async () => {
+test('probeReactReachable returns false when React never readies within budget', async () => {
   const start = Date.now();
   const ok = await probeReactReachable(async () => ({ value: false }), 80, 10);
   assert.equal(ok, false);
-  assert.ok(Date.now() - start >= 80, "waited at least the budget");
-  assert.ok(Date.now() - start < 2000, "returned promptly, not after the 30s setup wait");
+  assert.ok(Date.now() - start >= 80, 'waited at least the budget');
+  assert.ok(Date.now() - start < 2000, 'returned promptly, not after the 30s setup wait');
 });
 
-test("probeReactReachable tolerates a throwing evaluate then success", async () => {
+test('probeReactReachable tolerates a throwing evaluate then success', async () => {
   let calls = 0;
   const evaluate = async () => {
     calls++;
-    if (calls < 2) throw new Error("not ready");
+    if (calls < 2) throw new Error('not ready');
     return { value: true };
   };
   assert.equal(await probeReactReachable(evaluate, 1000, 5), true);
@@ -53,23 +53,23 @@ test("probeReactReachable tolerates a throwing evaluate then success", async () 
 
 // ── shouldRunPickerProbe (the vm/intent gate) ───────────────────────────
 
-test("shouldRunPickerProbe only fires for status intent on a non-Hermes target", () => {
-  assert.equal(shouldRunPickerProbe("status", cpp), true, "status + non-Hermes → probe");
+test('shouldRunPickerProbe only fires for status intent on a non-Hermes target', () => {
+  assert.equal(shouldRunPickerProbe('status', cpp), true, 'status + non-Hermes → probe');
   assert.equal(
-    shouldRunPickerProbe("status", hermes),
+    shouldRunPickerProbe('status', hermes),
     false,
-    "status + Hermes → skip (legit slow build)",
+    'status + Hermes → skip (legit slow build)',
   );
-  assert.equal(shouldRunPickerProbe("default", cpp), false, "default intent → never probe");
-  assert.equal(shouldRunPickerProbe("default", hermes), false);
+  assert.equal(shouldRunPickerProbe('default', cpp), false, 'default intent → never probe');
+  assert.equal(shouldRunPickerProbe('default', hermes), false);
 });
 
 // ── PickerBlockingBundleError shape ─────────────────────────────────────
 
-test("PickerBlockingBundleError is an Error carrying the target + an actionable message", () => {
+test('PickerBlockingBundleError is an Error carrying the target + an actionable message', () => {
   const err = new PickerBlockingBundleError(cpp);
   assert.ok(err instanceof Error);
-  assert.equal(err.name, "PickerBlockingBundleError");
+  assert.equal(err.name, 'PickerBlockingBundleError');
   assert.equal(err.target, cpp);
   assert.match(err.message, /picker/i);
   assert.match(err.message, /Metro|select|retry/i);

@@ -1,5 +1,5 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
 
@@ -10,9 +10,9 @@ const execFile = promisify(execFileCb);
  * intentionally EXCLUDED — it alters app behavior, not the predictive bar.
  */
 export const IOS_KEYBOARD_PREF_KEYS: ReadonlyArray<readonly [string, string, string]> = [
-  ["KeyboardAutocorrection", "-bool", "false"],
-  ["KeyboardPrediction", "-bool", "false"],
-  ["KeyboardShowPredictionBar", "-bool", "false"],
+  ['KeyboardAutocorrection', '-bool', 'false'],
+  ['KeyboardPrediction', '-bool', 'false'],
+  ['KeyboardShowPredictionBar', '-bool', 'false'],
 ];
 
 export interface SuppressDeps {
@@ -26,7 +26,7 @@ export interface SuppressResult {
 }
 
 function defaultDeps(): SuppressDeps {
-  return { run: (args) => execFile("xcrun", args, { timeout: 5_000 }) };
+  return { run: (args) => execFile('xcrun', args, { timeout: 5_000 }) };
 }
 
 /** Best-effort, fail-open, scoped to `udid`. Never throws. */
@@ -40,7 +40,7 @@ export async function suppressIOSAutocorrect(
   const t = Date.now();
   for (const [key, type, value] of IOS_KEYBOARD_PREF_KEYS) {
     try {
-      await deps.run(["simctl", "spawn", udid, "defaults", "write", "-g", key, type, value]);
+      await deps.run(['simctl', 'spawn', udid, 'defaults', 'write', '-g', key, type, value]);
     } catch (err) {
       warnings.push(
         `defaults write -g ${key}: ${err instanceof Error ? err.message : String(err)}`,

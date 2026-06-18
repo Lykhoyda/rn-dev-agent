@@ -17,14 +17,14 @@
  * cross into the filesystem boundary — same chokepoint discipline as
  * Phase 134.1/134.2 (isValidBundleId for adb shell args).
  */
-import { resolve, sep } from "node:path";
+import { resolve, sep } from 'node:path';
 
 // ── Errors ──────────────────────────────────────────────────────────
 
 export class PathTraversalError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "PathTraversalError";
+    this.name = 'PathTraversalError';
   }
 }
 
@@ -39,12 +39,12 @@ const ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const ACTION_ID_MAX_LEN = 64;
 
 export function isValidActionId(s: unknown): s is string {
-  if (typeof s !== "string") return false;
+  if (typeof s !== 'string') return false;
   if (s.length === 0 || s.length > ACTION_ID_MAX_LEN) return false;
   // Belt-and-suspenders: even though `<id>.yaml` has no path separator, never
   // allow a `..` segment in the slug — keeps the "deliberately exclude `..`"
   // contract literally true regardless of how the id is later joined.
-  if (s.includes("..")) return false;
+  if (s.includes('..')) return false;
   return ACTION_ID_RE.test(s);
 }
 
@@ -94,7 +94,7 @@ export function isWithinDir(child: string, baseDir: string): boolean {
 // crafted relative path that escapes the project dir.
 
 export function pathHasTraversal(p: unknown): boolean {
-  if (typeof p !== "string") return false;
+  if (typeof p !== 'string') return false;
   // POSIX `..` segment, Windows `..` segment, URL-encoded `..`.
   return /(^|[\\/])\.\.([\\/]|$)/.test(p) || /%2e%2e/i.test(p);
 }

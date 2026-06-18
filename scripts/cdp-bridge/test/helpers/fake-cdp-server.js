@@ -1,5 +1,5 @@
-import http from "node:http";
-import { WebSocketServer } from "ws";
+import http from 'node:http';
+import { WebSocketServer } from 'ws';
 
 /**
  * Start a fake CDP server that speaks the Chrome DevTools Protocol.
@@ -22,24 +22,24 @@ export async function startFakeCDP(preferredPort = 0) {
   const clients = new Set();
 
   const server = http.createServer((req, res) => {
-    if (req.url === "/status") {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("packager-status:running");
+    if (req.url === '/status') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('packager-status:running');
       return;
     }
 
-    if (req.url === "/json/list") {
+    if (req.url === '/json/list') {
       const port = /** @type {import('net').AddressInfo} */ (server.address()).port;
       const targets = [
         {
-          id: "page1",
-          title: "React Native (Hermes)",
-          vm: "Hermes",
+          id: 'page1',
+          title: 'React Native (Hermes)',
+          vm: 'Hermes',
           webSocketDebuggerUrl: `ws://127.0.0.1:${port}/debugger/page1`,
-          description: "com.testapp",
+          description: 'com.testapp',
         },
       ];
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(targets));
       return;
     }
@@ -48,16 +48,16 @@ export async function startFakeCDP(preferredPort = 0) {
     res.end();
   });
 
-  const wss = new WebSocketServer({ server, path: "/debugger/page1" });
+  const wss = new WebSocketServer({ server, path: '/debugger/page1' });
 
-  wss.on("connection", (ws) => {
+  wss.on('connection', (ws) => {
     clients.add(ws);
 
-    ws.on("close", () => {
+    ws.on('close', () => {
       clients.delete(ws);
     });
 
-    ws.on("message", (data) => {
+    ws.on('message', (data) => {
       let msg;
       try {
         msg = JSON.parse(data.toString());
@@ -70,8 +70,8 @@ export async function startFakeCDP(preferredPort = 0) {
       let result;
       if (responses.has(method)) {
         result = responses.get(method)(params);
-      } else if (method === "Runtime.evaluate") {
-        result = { result: { type: "boolean", value: true } };
+      } else if (method === 'Runtime.evaluate') {
+        result = { result: { type: 'boolean', value: true } };
       } else {
         result = {};
       }
@@ -83,8 +83,8 @@ export async function startFakeCDP(preferredPort = 0) {
   });
 
   await new Promise((resolve, reject) => {
-    server.listen(preferredPort, "127.0.0.1", () => resolve(undefined));
-    server.once("error", reject);
+    server.listen(preferredPort, '127.0.0.1', () => resolve(undefined));
+    server.once('error', reject);
   });
 
   const { port } = /** @type {import('net').AddressInfo} */ (server.address());

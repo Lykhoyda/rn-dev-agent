@@ -1,6 +1,6 @@
-import { okResult, failResult, withConnection } from "../utils.js";
-import { annotateMutationAbsence } from "../verification/mutation-absence.js";
-import { loadVerificationConfig, getCachedProjectRoot } from "../verification/config.js";
+import { okResult, failResult, withConnection } from '../utils.js';
+import { annotateMutationAbsence } from '../verification/mutation-absence.js';
+import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
 /**
  * GH #91: extract the topmost active route name from a getNavState() payload.
  * Both `routeName` (top-level convenience) and `routes[index].name` (full
@@ -9,17 +9,17 @@ import { loadVerificationConfig, getCachedProjectRoot } from "../verification/co
  */
 export function extractActiveScreen(parsed) {
     const direct = parsed.routeName;
-    if (typeof direct === "string" && direct.length > 0)
+    if (typeof direct === 'string' && direct.length > 0)
         return direct;
     const routes = parsed.routes;
     if (Array.isArray(routes) && routes.length > 0) {
-        const idx = typeof parsed.index === "number" ? parsed.index : routes.length - 1;
+        const idx = typeof parsed.index === 'number' ? parsed.index : routes.length - 1;
         const active = routes[Math.max(0, Math.min(idx, routes.length - 1))];
         const name = active?.name;
-        if (typeof name === "string")
+        if (typeof name === 'string')
             return name;
         const path = active?.path;
-        if (typeof path === "string")
+        if (typeof path === 'string')
             return path;
     }
     return null;
@@ -32,8 +32,8 @@ export function extractActiveScreen(parsed) {
  */
 export async function readLiveRoute(client) {
     try {
-        const result = await client.evaluate(client.helperExpr("getNavState()"));
-        if (typeof result.value !== "string")
+        const result = await client.evaluate(client.helperExpr('getNavState()'));
+        if (typeof result.value !== 'string')
             return null;
         const parsed = JSON.parse(result.value);
         if (parsed.error)
@@ -46,12 +46,12 @@ export async function readLiveRoute(client) {
 }
 export function createNavigationStateHandler(getClient) {
     return withConnection(getClient, async (_args, client) => {
-        const result = await client.evaluate(client.helperExpr("getNavState()"));
+        const result = await client.evaluate(client.helperExpr('getNavState()'));
         if (result.error) {
             return failResult(`Navigation state error: ${result.error}`);
         }
-        if (typeof result.value !== "string") {
-            return failResult("Unexpected response from getNavState — expected JSON string");
+        if (typeof result.value !== 'string') {
+            return failResult('Unexpected response from getNavState — expected JSON string');
         }
         let parsed;
         try {
@@ -67,7 +67,7 @@ export function createNavigationStateHandler(getClient) {
         return annotateMutationAbsence(okResult(parsed), {
             client,
             screenName: extractActiveScreen(parsed),
-            source: "cdp_navigation_state",
+            source: 'cdp_navigation_state',
             successShapes: cfg.successShapes,
             mutationMethods: cfg.mutationMethods,
         });

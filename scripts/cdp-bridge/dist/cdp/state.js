@@ -1,10 +1,10 @@
-import { writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-const CDP_ACTIVE_FLAG = join(tmpdir(), "rn-dev-agent-cdp-active");
-const CDP_SESSION_FILE = join(tmpdir(), "rn-dev-agent-cdp-session.json");
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const CDP_ACTIVE_FLAG = join(tmpdir(), 'rn-dev-agent-cdp-active');
+const CDP_SESSION_FILE = join(tmpdir(), 'rn-dev-agent-cdp-session.json');
 export function resetState(s) {
-    s.setState("disconnected");
+    s.setState('disconnected');
     s.setHelpersInjected(false);
     s.setBridgeDetected(false);
     s.setBridgeVersion(null);

@@ -2125,7 +2125,7 @@ export const REACT_READY_PROBE_JS = `(function() {
 export const MAX_RENDERER_IDS = 20;
 export const EARLY_EXIT_EMPTY_STREAK = 3;
 export function findAllRootFibersForTest(hook) {
-    if (!hook || typeof hook.getFiberRoots !== "function")
+    if (!hook || typeof hook.getFiberRoots !== 'function')
         return [];
     const out = [];
     let emptyStreak = 0;

@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
-import { logger } from "../logger.js";
-import type { HermesTarget, MetroCandidate } from "../types.js";
-import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from "./metro-cwd.js";
+import { execFileSync } from 'node:child_process';
+import { logger } from '../logger.js';
+import type { HermesTarget, MetroCandidate } from '../types.js';
+import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
 
 /**
  * GH #208 (RC2): thrown by `discover()` when Metro IS reachable but advertises
@@ -22,12 +22,12 @@ export class AppDetachedError extends Error {
   constructor(port: number, runningPorts: number[] = [port]) {
     super(
       `Metro is up on port ${port}` +
-        (runningPorts.length > 1 ? ` (also running: ${runningPorts.join(", ")})` : "") +
+        (runningPorts.length > 1 ? ` (also running: ${runningPorts.join(', ')})` : '') +
         ` but advertises 0 Hermes debug targets — the app isn't attached ` +
         `(it may be on the Expo dev launcher, backgrounded, or crashed). Relaunch the app, ` +
         `or call cdp_status to auto-relaunch and reconnect.`,
     );
-    this.name = "AppDetachedError";
+    this.name = 'AppDetachedError';
     this.port = port;
     this.runningPorts = runningPorts;
   }
@@ -60,7 +60,7 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
       try {
         const resp = await fetch(`http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
         const text = await resp.text();
-        return text.includes("packager-status:running") ? p : null;
+        return text.includes('packager-status:running') ? p : null;
       } catch {
         return null;
       } finally {
@@ -91,16 +91,16 @@ export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {
     .filter(
       (t) =>
         !!t.webSocketDebuggerUrl &&
-        !t.title?.includes("Experimental") &&
-        (t.vm === "Hermes" ||
-          t.title?.includes("React Native") ||
-          t.description?.includes("React Native")),
+        !t.title?.includes('Experimental') &&
+        (t.vm === 'Hermes' ||
+          t.title?.includes('React Native') ||
+          t.description?.includes('React Native')),
     )
     .map((t) => ({
       ...t,
       webSocketDebuggerUrl: t.webSocketDebuggerUrl
-        ?.replace(/\[::1\]/g, "127.0.0.1")
-        ?.replace(/\[::\]/g, "127.0.0.1"),
+        ?.replace(/\[::1\]/g, '127.0.0.1')
+        ?.replace(/\[::\]/g, '127.0.0.1'),
     }));
 }
 
@@ -115,7 +115,7 @@ export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {
 export function parseSimctlListapps(stdout: string): Set<string> {
   const ids = new Set<string>();
   const TOP_LEVEL = /^    "([A-Za-z0-9._-]+)"\s*=\s*\{/;
-  for (const line of stdout.split("\n")) {
+  for (const line of stdout.split('\n')) {
     const m = line.match(TOP_LEVEL);
     if (m) ids.add(m[1]);
   }
@@ -124,15 +124,15 @@ export function parseSimctlListapps(stdout: string): Set<string> {
 
 function readAndroidPackages(): Set<string> | null {
   try {
-    const out = execFileSync("adb", ["shell", "pm", "list", "packages"], {
+    const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
       timeout: 3000,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
     return new Set(
       out
-        .split("\n")
-        .map((line) => line.replace("package:", "").trim())
+        .split('\n')
+        .map((line) => line.replace('package:', '').trim())
         .filter(Boolean),
     );
   } catch {
@@ -142,10 +142,10 @@ function readAndroidPackages(): Set<string> | null {
 
 function readIOSPackages(): Set<string> | null {
   try {
-    const out = execFileSync("xcrun", ["simctl", "listapps", "booted"], {
+    const out = execFileSync('xcrun', ['simctl', 'listapps', 'booted'], {
       timeout: 5000,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
     return parseSimctlListapps(out);
   } catch {
@@ -180,7 +180,7 @@ export interface PlatformInferenceReaders {
  */
 export function inferPlatformFromDeviceName(
   deviceName: string | undefined,
-): "ios" | "android" | null {
+): 'ios' | 'android' | null {
   if (!deviceName) return null;
   const name = deviceName.toLowerCase();
 
@@ -191,14 +191,14 @@ export function inferPlatformFromDeviceName(
   // emulator, Pixel, Galaxy, OnePlus, API N) are unlikely to appear in iOS
   // device names the other direction.
   const iosPatterns = /\biphone\b|\bipad\b|\bipod\b|\bios\b/i;
-  if (iosPatterns.test(name)) return "ios";
+  if (iosPatterns.test(name)) return 'ios';
 
   // Android patterns: emulator names (`sdk_gphone`, `emulator`), physical
   // device families (`Pixel`, `Galaxy`, `OnePlus`), the literal `android`, or
   // the `API N` suffix Metro appends on emulators.
   const androidPatterns =
     /sdk_gphone|emulator|\bpixel\b|\bgalaxy\b|\boneplus\b|\bandroid\b|\bapi\s+\d+\b/i;
-  if (androidPatterns.test(name)) return "android";
+  if (androidPatterns.test(name)) return 'android';
 
   return null;
 }
@@ -221,23 +221,23 @@ export function inferPlatforms(
       continue;
     }
 
-    const desc = t.description ?? "";
+    const desc = t.description ?? '';
     const inAndroid = androidPackages?.has(desc) ?? false;
     const inIOS = iosPackages?.has(desc) ?? false;
 
     if (inAndroid && !inIOS) {
-      t.platform = "android";
+      t.platform = 'android';
     } else if (inIOS && !inAndroid) {
-      t.platform = "ios";
+      t.platform = 'ios';
     } else if (inAndroid && inIOS) {
       // Ambiguous — same bundleId installed on both. Default to iOS but mark
       // for downstream so callers can notice and pass targetId/bundleId filter.
-      t.platform = "ios";
+      t.platform = 'ios';
       t.ambiguousPlatform = true;
     } else {
       // No information (adb/simctl both failed, or target bundle unknown) —
       // default to iOS to preserve prior behavior for iOS-only setups.
-      t.platform = "ios";
+      t.platform = 'ios';
     }
   }
 }
@@ -263,7 +263,7 @@ export function selectTarget(
 ): SelectTargetResult {
   // Legacy single-string signature kept for back-compat; new callers pass an object.
   const filters: SelectTargetFilters =
-    typeof filtersOrPlatform === "string"
+    typeof filtersOrPlatform === 'string'
       ? { platform: filtersOrPlatform }
       : (filtersOrPlatform ?? {});
 
@@ -277,7 +277,7 @@ export function selectTarget(
     if (idMatched.length === 0) {
       return {
         targets: [],
-        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(", ")}`,
+        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
       };
     }
     filteredTargets = idMatched;
@@ -288,12 +288,12 @@ export function selectTarget(
   if (filters.bundleId) {
     const bundleLower = filters.bundleId.toLowerCase();
     const bundleMatched = filteredTargets.filter(
-      (t) => (t.description ?? "").toLowerCase() === bundleLower,
+      (t) => (t.description ?? '').toLowerCase() === bundleLower,
     );
     if (bundleMatched.length === 0) {
       return {
         targets: [],
-        warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? "?").join(", ")}`,
+        warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? '?').join(', ')}`,
       };
     }
     filteredTargets = bundleMatched;
@@ -304,7 +304,7 @@ export function selectTarget(
     let platformMatched = filteredTargets.filter((t) => t.platform === pf);
     if (platformMatched.length === 0) {
       platformMatched = filteredTargets.filter((t) => {
-        const haystack = `${t.title ?? ""} ${t.description ?? ""} ${t.vm ?? ""}`.toLowerCase();
+        const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
         return haystack.includes(pf);
       });
     }
@@ -312,7 +312,7 @@ export function selectTarget(
       filteredTargets = platformMatched;
     } else {
       warnings.push(
-        `Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? "?"}]`).join(", ")}). Connecting to best available target.`,
+        `Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`,
       );
     }
   }
@@ -323,11 +323,11 @@ export function selectTarget(
   const prefLower = filters.preferredBundleId?.toLowerCase();
   if (prefLower && filteredTargets.length > 1) {
     const preferred = filteredTargets.filter(
-      (t) => (t.description ?? "").toLowerCase() === prefLower,
+      (t) => (t.description ?? '').toLowerCase() === prefLower,
     );
     if (preferred.length > 0 && preferred.length < filteredTargets.length) {
       logger.info(
-        "CDP",
+        'CDP',
         `Auto-selected target by preferredBundleId "${filters.preferredBundleId}" (${preferred.length} of ${filteredTargets.length})`,
       );
       filteredTargets = preferred;
@@ -338,18 +338,18 @@ export function selectTarget(
   // Tie-break 1: preferredBundleId-matched targets win.
   // Tie-break 2: lexicographic by full id (eliminates JS sort stability dependency).
   const sorted = [...filteredTargets].sort((a, b) => {
-    const aPage = parseInt(a.id?.split("-")[1] ?? "0", 10);
-    const bPage = parseInt(b.id?.split("-")[1] ?? "0", 10);
+    const aPage = parseInt(a.id?.split('-')[1] ?? '0', 10);
+    const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
     if (aPage !== bPage) return bPage - aPage;
     if (prefLower) {
-      const aPref = (a.description ?? "").toLowerCase() === prefLower ? 1 : 0;
-      const bPref = (b.description ?? "").toLowerCase() === prefLower ? 1 : 0;
+      const aPref = (a.description ?? '').toLowerCase() === prefLower ? 1 : 0;
+      const bPref = (b.description ?? '').toLowerCase() === prefLower ? 1 : 0;
       if (aPref !== bPref) return bPref - aPref;
     }
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
-  return { targets: sorted, warning: warnings.length > 0 ? warnings.join(" | ") : undefined };
+  return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
 }
 
 export interface AttachedPort {
@@ -399,7 +399,7 @@ export function selectMetroPort(
   if (ctx.preferredBundleId) {
     const pref = ctx.preferredBundleId.toLowerCase();
     const prefPorts = attached.filter((a) =>
-      a.targets.some((t) => (t.description ?? "").toLowerCase() === pref),
+      a.targets.some((t) => (t.description ?? '').toLowerCase() === pref),
     );
     if (prefPorts.length === 1) return { port: prefPorts[0].port };
   }
@@ -410,9 +410,9 @@ export function selectMetroPort(
   const list = attached
     .map((a) => {
       const cwd = ctx.cwdForPort(a.port);
-      return `:${a.port}${cwd ? ` (${cwd})` : ""}`;
+      return `:${a.port}${cwd ? ` (${cwd})` : ''}`;
     })
-    .join(", ");
+    .join(', ');
   return {
     port: chosen,
     warning: `Multiple live Metros with an attached app: ${list}. Picked :${chosen}. Pass metroPort explicitly to choose a different worktree.`,
@@ -430,7 +430,7 @@ export async function discover(
   platformFilterOrFilters?: string | SelectTargetFilters,
 ): Promise<DiscoveryResult> {
   const filters: SelectTargetFilters =
-    typeof platformFilterOrFilters === "string"
+    typeof platformFilterOrFilters === 'string'
       ? { platform: platformFilterOrFilters }
       : (platformFilterOrFilters ?? {});
   const ports = [...new Set([currentPort, ...DEFAULT_PORTS])];
@@ -440,8 +440,8 @@ export async function discover(
   if (filters.bundleId) hints.push(`bundleId=${filters.bundleId}`);
   if (filters.preferredBundleId) hints.push(`preferredBundleId=${filters.preferredBundleId}`);
   logger.debug(
-    "CDP",
-    `Discovering Metro on ports: ${ports.join(", ")}${hints.length ? ` (${hints.join(", ")})` : ""}`,
+    'CDP',
+    `Discovering Metro on ports: ${ports.join(', ')}${hints.length ? ` (${hints.join(', ')})` : ''}`,
   );
 
   // GH #303: probe ALL candidate ports, then prefer one with an attached Hermes
@@ -449,9 +449,9 @@ export async function discover(
   const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (runningPorts.length === 0) {
     throw new Error(
-      "Metro not found on ports " +
-        ports.join(", ") +
-        ". Is the dev server running? Try: npx expo start or npx react-native start",
+      'Metro not found on ports ' +
+        ports.join(', ') +
+        '. Is the dev server running? Try: npx expo start or npx react-native start',
     );
   }
 
@@ -462,7 +462,7 @@ export async function discover(
         const valid = filterValidTargets(raw).filter((t) => {
           try {
             const { hostname } = new URL(t.webSocketDebuggerUrl!);
-            return hostname === "127.0.0.1" || hostname === "localhost";
+            return hostname === '127.0.0.1' || hostname === 'localhost';
           } catch {
             return false;
           }
@@ -483,18 +483,18 @@ export async function discover(
     preferredBundleId: filters.preferredBundleId,
     cwdForPort: (p) => cwdForPort(p),
   });
-  logger.info("CDP", `Metro selected on port ${metroPort} (running: ${runningPorts.join(", ")})`);
+  logger.info('CDP', `Metro selected on port ${metroPort} (running: ${runningPorts.join(', ')})`);
 
   const validTargets = attached.find((pp) => pp.port === metroPort)!.targets;
 
   inferPlatforms(validTargets);
 
   const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
-  const warning = [portWarning, selectWarning].filter(Boolean).join(" | ") || undefined;
+  const warning = [portWarning, selectWarning].filter(Boolean).join(' | ') || undefined;
 
   logger.debug(
-    "CDP",
-    `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? "?"})`).join(", ")}`,
+    'CDP',
+    `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`,
   );
 
   return { port: metroPort, targets: sorted, warning };
@@ -510,7 +510,7 @@ export async function discoverForList(
   // selected. No cwd auto-pick needed here — just attached-preference.
   const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (running.length === 0) {
-    throw new Error("Metro not found on ports " + ports.join(", "));
+    throw new Error('Metro not found on ports ' + ports.join(', '));
   }
   let chosen = running[0];
   let targets: HermesTarget[] = [];

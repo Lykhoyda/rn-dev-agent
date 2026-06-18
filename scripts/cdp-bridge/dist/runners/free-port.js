@@ -1,9 +1,9 @@
-import { createServer } from "node:net";
+import { createServer } from 'node:net';
 export function isPortFree(port) {
     return new Promise((resolve) => {
         const srv = createServer();
-        srv.once("error", () => resolve(false));
-        srv.listen({ port, host: "127.0.0.1" }, () => srv.close(() => resolve(true)));
+        srv.once('error', () => resolve(false));
+        srv.listen({ port, host: '127.0.0.1' }, () => srv.close(() => resolve(true)));
     });
 }
 /**
@@ -18,17 +18,17 @@ export function findFreePort(preferred) {
     return new Promise((resolve, reject) => {
         const tryListen = (port, fallbackToAny) => {
             const srv = createServer();
-            srv.once("error", (err) => {
-                if (fallbackToAny && err.code === "EADDRINUSE")
+            srv.once('error', (err) => {
+                if (fallbackToAny && err.code === 'EADDRINUSE')
                     tryListen(0, false);
                 else
                     reject(err);
             });
-            srv.listen({ port, host: "127.0.0.1" }, () => {
+            srv.listen({ port, host: '127.0.0.1' }, () => {
                 const addr = srv.address();
-                const chosen = typeof addr === "object" && addr ? addr.port : 0;
+                const chosen = typeof addr === 'object' && addr ? addr.port : 0;
                 if (!chosen) {
-                    srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
+                    srv.close(() => reject(new Error('findFreePort: OS returned port 0')));
                     return;
                 }
                 srv.close(() => resolve(chosen));

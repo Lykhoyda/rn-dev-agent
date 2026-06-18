@@ -1,6 +1,6 @@
-export type NavigatorKind = "stack" | "tab" | "drawer" | "native-stack" | "unknown";
+export type NavigatorKind = 'stack' | 'tab' | 'drawer' | 'native-stack' | 'unknown';
 
-export type NavLibrary = "expo-router" | "react-navigation" | "unknown";
+export type NavLibrary = 'expo-router' | 'react-navigation' | 'unknown';
 
 export interface NavScreen {
   name: string;
@@ -23,7 +23,7 @@ export interface NavNavigator {
   active_screen: string | null;
   parent_screen?: string;
   is_visited: boolean;
-  source: "runtime" | "linking" | "both";
+  source: 'runtime' | 'linking' | 'both';
 }
 
 export interface NavGraphMeta {
@@ -64,7 +64,7 @@ export interface RawNavigator {
   active_route_name?: string | null;
   initial_route_name?: string;
   is_visited: boolean;
-  source: "runtime" | "linking" | "both";
+  source: 'runtime' | 'linking' | 'both';
 }
 
 export interface RawNavTopology {
@@ -78,10 +78,10 @@ export interface RawNavTopology {
 
 // --- Phase B: Navigation Planning ---
 
-export type NavMethod = "programmatic" | "deep_link" | "ui_interaction";
+export type NavMethod = 'programmatic' | 'deep_link' | 'ui_interaction';
 
 export interface NavigationStep {
-  action: "switch_tab" | "push" | "navigate" | "open_drawer" | "go_back" | "deep_link";
+  action: 'switch_tab' | 'push' | 'navigate' | 'open_drawer' | 'go_back' | 'deep_link';
   target_screen: string;
   navigator_id: string;
   navigator_kind: NavigatorKind;
@@ -104,7 +104,7 @@ export interface NavigationPlan {
 }
 
 export interface NavigationPrerequisite {
-  type: "auth" | "permission" | "state";
+  type: 'auth' | 'permission' | 'state';
   description: string;
   check_tool?: string;
   check_args?: Record<string, unknown>;
@@ -155,12 +155,12 @@ export interface StalenessCheck {
   scanned_at_commit?: string;
   current_commit?: string;
   nav_files_changed: string[];
-  recommendation: "ok" | "rescan_recommended" | "rescan_required";
+  recommendation: 'ok' | 'rescan_recommended' | 'rescan_required';
 }
 
 export interface PlaybookEntry {
   context: string;
-  platform: "ios" | "android" | "both";
+  platform: 'ios' | 'android' | 'both';
   use: string;
   avoid?: string;
   reason: string;

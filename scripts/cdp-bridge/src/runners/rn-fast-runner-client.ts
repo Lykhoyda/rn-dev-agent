@@ -1,12 +1,12 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
-import { join } from "node:path";
-import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from "node:fs";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult } from "../utils.js";
-import type { FastRunnerState } from "../types.js";
-import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from "../fast-runner-ref-map.js";
-import { isPortFree } from "./free-port.js";
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
+import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult } from '../utils.js';
+import type { FastRunnerState } from '../types.js';
+import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
+import { isPortFree } from './free-port.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -15,8 +15,8 @@ const READY_TIMEOUT_MS = 30_000;
 // ready-signal timeout is widened for the build path.
 const BUILD_READY_TIMEOUT_MS = 360_000;
 const HTTP_TIMEOUT_MS = 10_000;
-const STATE_FILE = "/tmp/rn-fast-runner-state.json";
-const FAST_RUNNER_PROJECT = join(import.meta.dirname, "..", "..", "..", "rn-fast-runner");
+const STATE_FILE = '/tmp/rn-fast-runner-state.json';
+const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast-runner');
 
 // --- READY-signal parser (pure, testable without xcodebuild) ---
 //
@@ -56,25 +56,25 @@ export function parseReadySignal(buf: string): ReadySignalResult | null {
 }
 
 export function createReadySignalParser(): ReadySignalParser {
-  let pending = "";
+  let pending = '';
   let seenReady = false;
   return {
     feed(chunk: string): ReadySignalResult | null {
       pending += chunk;
       // Process complete lines only; keep the trailing partial line buffered.
       let nl: number;
-      while ((nl = pending.indexOf("\n")) !== -1) {
-        const line = pending.slice(0, nl).replace(/\r$/, "");
+      while ((nl = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, nl).replace(/\r$/, '');
         pending = pending.slice(nl + 1);
         // Failure markers may appear anywhere — check first.
-        if (line.includes("RN_FAST_RUNNER_LISTENER_FAILED")) {
-          return { error: "RN_FAST_RUNNER_LISTENER_FAILED" };
+        if (line.includes('RN_FAST_RUNNER_LISTENER_FAILED')) {
+          return { error: 'RN_FAST_RUNNER_LISTENER_FAILED' };
         }
-        if (line.includes("RN_FAST_RUNNER_PORT_NOT_SET")) {
-          return { error: "RN_FAST_RUNNER_PORT_NOT_SET" };
+        if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
+          return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
         }
         if (!seenReady) {
-          if (line.includes("RN_FAST_RUNNER_LISTENER_READY")) {
+          if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
             seenReady = true;
           }
           continue;
@@ -98,7 +98,7 @@ let runnerState: FastRunnerState | null = null;
 
 try {
   if (existsSync(STATE_FILE)) {
-    const raw = JSON.parse(readFileSync(STATE_FILE, "utf-8")) as FastRunnerState;
+    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as FastRunnerState;
     try {
       process.kill(raw.pid, 0);
       runnerState = raw;
@@ -161,16 +161,16 @@ interface RunnerXcodebuildArgsOptions {
  * self-install on first use (D1219 follow-up).
  */
 export function resolveRunnerXcodebuildArgs(opts: RunnerXcodebuildArgsOptions): string[] {
-  const action = opts.hasBuiltTestProduct ? "test-without-building" : "test";
+  const action = opts.hasBuiltTestProduct ? 'test-without-building' : 'test';
   return [
     action,
-    "-project",
+    '-project',
     opts.projectPath,
-    "-scheme",
+    '-scheme',
     opts.scheme,
-    "-destination",
+    '-destination',
     `platform=iOS Simulator,id=${opts.deviceId}`,
-    "-derivedDataPath",
+    '-derivedDataPath',
     opts.derivedDataPath,
     `-only-testing:${opts.onlyTesting}`,
   ];
@@ -179,9 +179,9 @@ export function resolveRunnerXcodebuildArgs(opts: RunnerXcodebuildArgsOptions): 
 /** True when a prior build-for-testing left a .xctestrun under DerivedData. */
 export function hasBuiltTestProduct(derivedDataPath: string): boolean {
   try {
-    const productsDir = join(derivedDataPath, "Build", "Products");
+    const productsDir = join(derivedDataPath, 'Build', 'Products');
     if (!existsSync(productsDir)) return false;
-    return readdirSync(productsDir).some((entry) => entry.endsWith(".xctestrun"));
+    return readdirSync(productsDir).some((entry) => entry.endsWith('.xctestrun'));
   } catch {
     return false;
   }
@@ -189,7 +189,7 @@ export function hasBuiltTestProduct(derivedDataPath: string): boolean {
 
 /** #210: the DerivedData path the runner builds into — used to check hasBuiltTestProduct before auto-spawn. */
 export function derivedDataPathForRunner(): string {
-  return join(FAST_RUNNER_PROJECT, "build", "DerivedData");
+  return join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
 }
 
 // --- Lifecycle ---
@@ -214,7 +214,7 @@ export async function startFastRunner(
   const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
 
   return new Promise((resolve, reject) => {
-    const projectPath = join(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
+    const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
 
     if (!existsSync(projectPath)) {
       reject(new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`));
@@ -225,19 +225,19 @@ export async function startFastRunner(
     const built = hasBuiltTestProduct(derivedDataPath);
     const args = resolveRunnerXcodebuildArgs({
       projectPath,
-      scheme: "RnFastRunner",
+      scheme: 'RnFastRunner',
       deviceId,
       derivedDataPath,
-      onlyTesting: "RnFastRunnerUITests/RnFastRunnerTests/testCommand",
+      onlyTesting: 'RnFastRunnerUITests/RnFastRunnerTests/testCommand',
       hasBuiltTestProduct: built,
     });
 
-    const child = spawn("xcodebuild", args, {
+    const child = spawn('xcodebuild', args, {
       env: {
         ...process.env,
         RN_FAST_RUNNER_PORT: String(desired),
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     runnerProcess = child;
@@ -245,8 +245,8 @@ export async function startFastRunner(
     let resolved = false;
     const readyTimeoutMs = built ? READY_TIMEOUT_MS : BUILD_READY_TIMEOUT_MS;
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      const phase = built ? "" : " (cold build — first run compiles the runner)";
+      child.kill('SIGTERM');
+      const phase = built ? '' : ' (cold build — first run compiles the runner)';
       reject(
         new Error(`Fast runner did not become ready within ${readyTimeoutMs / 1000}s${phase}`),
       );
@@ -258,7 +258,7 @@ export async function startFastRunner(
       if (!result) return;
       resolved = true;
       clearTimeout(timer);
-      if ("error" in result) {
+      if ('error' in result) {
         reject(new Error(`Fast runner failed to start: ${result.error}`));
         return;
       }
@@ -271,22 +271,22 @@ export async function startFastRunner(
       };
       runnerState = state;
       try {
-        writeFileSync(STATE_FILE, JSON.stringify(state), "utf-8");
+        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
       } catch {
         /* ignore */
       }
       resolve(state);
     };
 
-    child.stdout!.setEncoding("utf-8");
-    child.stdout!.on("data", handleChunk);
+    child.stdout!.setEncoding('utf-8');
+    child.stdout!.on('data', handleChunk);
 
-    child.stderr!.setEncoding("utf-8");
-    child.stderr!.on("data", () => {
+    child.stderr!.setEncoding('utf-8');
+    child.stderr!.on('data', () => {
       /* xcodebuild is noisy — ignore stderr */
     });
 
-    child.on("error", (err) => {
+    child.on('error', (err) => {
       clearTimeout(timer);
       if (runnerProcess === child) {
         runnerProcess = null;
@@ -295,7 +295,7 @@ export async function startFastRunner(
       reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
-    child.on("exit", (code) => {
+    child.on('exit', (code) => {
       if (runnerProcess === child) {
         runnerProcess = null;
         runnerState = null;
@@ -313,11 +313,11 @@ export async function startFastRunner(
 
 export function stopFastRunner(): void {
   if (runnerProcess) {
-    runnerProcess.kill("SIGTERM");
+    runnerProcess.kill('SIGTERM');
     runnerProcess = null;
   } else if (runnerState?.pid) {
     try {
-      process.kill(runnerState.pid, "SIGTERM");
+      process.kill(runnerState.pid, 'SIGTERM');
     } catch {
       /* already dead */
     }
@@ -355,7 +355,7 @@ export async function fastSwipe(
   y2: number,
   durationMs?: number,
 ): Promise<FastRunnerResponse> {
-  const body: Record<string, unknown> = { command: "drag", x: x1, y: y1, x2, y2 };
+  const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
   if (durationMs != null) body.durationMs = durationMs;
   const resp = await postCommand(body);
   return resp as unknown as FastRunnerResponse;
@@ -394,7 +394,7 @@ export async function fastHealthCheck(): Promise<boolean> {
 // helper is the explicit action — SIGTERM, wait 500ms, SIGKILL if
 // still alive. Callers compose: probe → (stale ? reap : …) → act.
 
-export type FastRunnerLiveness = "alive" | "stale" | "dead";
+export type FastRunnerLiveness = 'alive' | 'stale' | 'dead';
 
 export interface StateSnapshot {
   pid: number;
@@ -488,19 +488,19 @@ export async function probeFastRunnerLiveness(
   const timeoutMs = deps.timeoutMs ?? 2000;
 
   const state = getState();
-  if (!state) return "dead";
+  if (!state) return 'dead';
 
   if (!processAlive(state.pid)) {
     clearState();
-    return "dead";
+    return 'dead';
   }
 
   try {
     const res = await httpProbe(state.port, timeoutMs);
-    if (res.ok && res.status === 200 && res.bodyOk === true) return "alive";
-    return "stale";
+    if (res.ok && res.status === 200 && res.bodyOk === true) return 'alive';
+    return 'stale';
   } catch {
-    return "stale";
+    return 'stale';
   }
 }
 
@@ -516,14 +516,14 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   if (!state) return;
 
   try {
-    sendSignal(state.pid, "SIGTERM");
+    sendSignal(state.pid, 'SIGTERM');
   } catch {
     /* already dead */
   }
   await sleep(graceMs);
   if (processAlive(state.pid)) {
     try {
-      sendSignal(state.pid, "SIGKILL");
+      sendSignal(state.pid, 'SIGKILL');
     } catch {
       /* race: died between checks */
     }
@@ -542,22 +542,22 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
 
 export interface RunIOSArgs {
   command:
-    | "snapshot"
-    | "tap"
-    | "swipe"
-    | "drag"
-    | "longPress"
-    | "pinch"
-    | "findText"
-    | "type"
-    | "dismissKeyboard"
-    | "screenshot"
-    | "back"
-    | "scroll"
-    | "pressHome"
-    | "appState"
-    | "activate"
-    | "terminate";
+    | 'snapshot'
+    | 'tap'
+    | 'swipe'
+    | 'drag'
+    | 'longPress'
+    | 'pinch'
+    | 'findText'
+    | 'type'
+    | 'dismissKeyboard'
+    | 'screenshot'
+    | 'back'
+    | 'scroll'
+    | 'pressHome'
+    | 'appState'
+    | 'activate'
+    | 'terminate';
   bundleId?: string;
   x?: number;
   y?: number;
@@ -565,7 +565,7 @@ export interface RunIOSArgs {
   y2?: number;
   text?: string;
   durationMs?: number;
-  direction?: "up" | "down" | "left" | "right";
+  direction?: 'up' | 'down' | 'left' | 'right';
   scale?: number;
   interactiveOnly?: boolean;
   compact?: boolean;
@@ -619,7 +619,7 @@ export function _setHttpTimeoutForTest(ms: number | null): void {
 // returning the success-shaped message we depend on, and large trees take a
 // while to serialize), so they get a window wider than that internal cap.
 // Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
-const SLOW_RUNNER_COMMANDS = new Set(["type", "snapshot", "screenshot"]);
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
 function commandTimeoutMs(command: unknown): number {
   if (httpTimeoutOverrideMs !== null) return httpTimeoutOverrideMs;
   return SLOW_RUNNER_COMMANDS.has(command as string) ? 35_000 : HTTP_TIMEOUT_MS;
@@ -629,7 +629,7 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   const state = runnerState;
   if (!state) {
     throw new Error(
-      "rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).",
+      'rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).',
     );
   }
   const controller = new AbortController();
@@ -637,14 +637,14 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     return resp.json() as Promise<RunnerResponse>;
   } catch (err) {
-    if ((err as { name?: string } | undefined)?.name === "AbortError") {
+    if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`,
       );
@@ -668,7 +668,7 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     const refId = n.index !== undefined ? `e${n.index}` : `e${synthCounter++}`;
     const flat: FlatNode = {
       ref: `@${refId}`,
-      type: n.type ?? "",
+      type: n.type ?? '',
       rect: n.rect,
     };
     if (n.label !== undefined) flat.label = n.label;
@@ -687,10 +687,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args._staleRef) {
     return failResult(
       `Element at ref ${args._staleRef} no longer hittable — UI re-rendered since snapshot`,
-      "STALE_REF",
+      'STALE_REF',
       {
         cachedMetadata: getCachedMetadata(args._staleRef),
-        hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.",
+        hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
       },
     );
   }
@@ -714,7 +714,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   const resp = await postCommand(body);
   if (!resp.ok) {
-    const message = resp.error?.message ?? "runner returned !ok with no error";
+    const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
     // GH #105 iOS-MVP follow-up: XCUIElement.typeText() runs its own internal
     // snapshot/quiescence synchronization that bypasses skipPostEventQuiescence
@@ -726,9 +726,9 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     // timeout shape as success for the type command and surface a meta marker
     // so callers can audit telemetry. Any other error remains a failure.
     if (
-      args.command === "type" &&
-      typeof message === "string" &&
-      message.includes("main thread execution timed out")
+      args.command === 'type' &&
+      typeof message === 'string' &&
+      message.includes('main thread execution timed out')
     ) {
       return okResult(
         { typed: true, text: args.text },
@@ -743,7 +743,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   // Snapshot post-processing: feed the ref map so future press/fill calls
   // can resolve @refs without a separate fetch.
-  if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
+  if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
     const data = resp.data as { nodes?: RunnerSnapshotNode[]; tree?: unknown };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);

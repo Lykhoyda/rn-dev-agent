@@ -3,15 +3,15 @@
 // dead-ends the one tool meant to diagnose+recover. Instead it preempts the
 // storm via softReconnect (the existing 3s softReconnectRequested handshake),
 // getting one fresh, real connection attempt.
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { createMockClient } from "../helpers/mock-cdp-client.js";
-import { expectOk } from "../helpers/result-helpers.js";
-import { createStatusHandler } from "../../dist/tools/status.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { expectOk } from '../helpers/result-helpers.js';
+import { createStatusHandler } from '../../dist/tools/status.js';
 import {
   _setHasSessionForTest,
   _resetHasSessionForTest,
-} from "../../dist/tools/dev-client-picker.js";
+} from '../../dist/tools/dev-client-picker.js';
 
 function makeStatusProbe(extraAppInfo = {}) {
   return JSON.stringify({
@@ -23,24 +23,24 @@ function makeStatusProbe(extraAppInfo = {}) {
   });
 }
 
-test("cdp_status preempts an active reconnect storm via softReconnect, not bare autoConnect", async () => {
+test('cdp_status preempts an active reconnect storm via softReconnect, not bare autoConnect', async () => {
   _setHasSessionForTest(false); // keep the dev-client picker out of the path
   const events = [];
   const client = createMockClient({
     _isConnected: false,
     _helpersInjected: true,
-    reconnectState: { active: true, lastAttempt: "2026-06-07T00:00:00.000Z", attemptCount: 12 },
+    reconnectState: { active: true, lastAttempt: '2026-06-07T00:00:00.000Z', attemptCount: 12 },
     autoConnect: async () => {
-      events.push("autoConnect");
+      events.push('autoConnect');
       client._isConnected = true;
       client._helpersInjected = true;
-      return "connected";
+      return 'connected';
     },
     softReconnect: async () => {
-      events.push("softReconnect");
+      events.push('softReconnect');
       client._isConnected = true;
       client._helpersInjected = true;
-      return "reconnected";
+      return 'reconnected';
     },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
@@ -53,15 +53,15 @@ test("cdp_status preempts an active reconnect storm via softReconnect, not bare 
     expectOk(await handler({}));
     assert.deepEqual(
       events,
-      ["softReconnect"],
-      "a reconnect storm must be preempted via softReconnect, never bare autoConnect",
+      ['softReconnect'],
+      'a reconnect storm must be preempted via softReconnect, never bare autoConnect',
     );
   } finally {
     _resetHasSessionForTest();
   }
 });
 
-test("cdp_status uses autoConnect (not softReconnect) when disconnected with no active storm", async () => {
+test('cdp_status uses autoConnect (not softReconnect) when disconnected with no active storm', async () => {
   _setHasSessionForTest(false);
   const events = [];
   const client = createMockClient({
@@ -69,16 +69,16 @@ test("cdp_status uses autoConnect (not softReconnect) when disconnected with no 
     _helpersInjected: true,
     reconnectState: { active: false, lastAttempt: null, attemptCount: 0 },
     autoConnect: async () => {
-      events.push("autoConnect");
+      events.push('autoConnect');
       client._isConnected = true;
       client._helpersInjected = true;
-      return "connected";
+      return 'connected';
     },
     softReconnect: async () => {
-      events.push("softReconnect");
+      events.push('softReconnect');
       client._isConnected = true;
       client._helpersInjected = true;
-      return "reconnected";
+      return 'reconnected';
     },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
@@ -91,8 +91,8 @@ test("cdp_status uses autoConnect (not softReconnect) when disconnected with no 
     expectOk(await handler({}));
     assert.deepEqual(
       events,
-      ["autoConnect"],
-      "a normal disconnected status should use autoConnect",
+      ['autoConnect'],
+      'a normal disconnected status should use autoConnect',
     );
   } finally {
     _resetHasSessionForTest();

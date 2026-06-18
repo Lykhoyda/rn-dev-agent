@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   existsSync,
@@ -10,12 +10,12 @@ import {
   unlinkSync,
   writeFileSync,
   writeSync,
-} from "node:fs";
-import { tmpdir, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+} from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
+const DEFAULT_PROCESS_NAME_NEEDLE = 'cdp-bridge';
 // GH #182: heartbeat-staleness window. A healthy bridge refreshes lastHeartbeat
 // well within this (index.ts touches every ~30s); a wedged bridge stops, so its
 // lock becomes reclaimable. Matches device-lock.ts's 90s.
@@ -41,14 +41,14 @@ export interface LockfileOptions {
 }
 
 export interface LockAcquired {
-  status: "acquired";
+  status: 'acquired';
   lockPath: string;
   /** GH#251: an fs infra error (not contention) made the exclusive create impossible — single-instance protection is off this session, but the bridge still starts (fail-open, mirrors DeviceLock). */
   degraded?: boolean;
 }
 
 export interface LockConflict {
-  status: "conflict";
+  status: 'conflict';
   lockPath: string;
   pid: number;
   projectRoot: string;
@@ -93,9 +93,9 @@ function defaultProcessAlive(pid: number): boolean {
  */
 export function defaultProcessName(pid: number): string | null {
   try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "args="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1000,
     });
     return out.trim() || null;
@@ -112,9 +112,9 @@ export function defaultProcessName(pid: number): string | null {
  */
 export function defaultProcessParent(pid: number): number | null {
   try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "ppid="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1000,
     });
     const ppid = parseInt(out.trim(), 10);
@@ -134,11 +134,11 @@ export function defaultProcessParent(pid: number): number | null {
  * holder as reparented (livePpid !== 0) and stole its lock.
  */
 export function defaultSelfPpid(): number {
-  return typeof process.ppid === "number" ? process.ppid : 0;
+  return typeof process.ppid === 'number' ? process.ppid : 0;
 }
 
 function hashProjectRoot(projectRoot: string): string {
-  return createHash("md5").update(resolve(projectRoot)).digest("hex").slice(0, 8);
+  return createHash('md5').update(resolve(projectRoot)).digest('hex').slice(0, 8);
 }
 
 /**
@@ -176,7 +176,7 @@ export class Lockfile {
       uid,
       tmpDir,
       pid: opts.pid ?? process.pid,
-      version: opts.version ?? "",
+      version: opts.version ?? '',
       clock: opts.clock ?? Date.now,
       processAlive: opts.processAlive ?? defaultProcessAlive,
       processName: opts.processName ?? defaultProcessName,
@@ -200,10 +200,10 @@ export class Lockfile {
     try {
       this.writeLock();
       this.acquired = true;
-      return { status: "acquired", lockPath: this.lockPath };
+      return { status: 'acquired', lockPath: this.lockPath };
     } catch (err) {
       if (!isEexist(err)) {
-        return { status: "acquired", lockPath: this.lockPath, degraded: true };
+        return { status: 'acquired', lockPath: this.lockPath, degraded: true };
       }
     }
 
@@ -235,21 +235,21 @@ export class Lockfile {
     try {
       this.writeLock();
       this.acquired = true;
-      return { status: "acquired", lockPath: this.lockPath };
+      return { status: 'acquired', lockPath: this.lockPath };
     } catch (err) {
       if (!isEexist(err)) {
-        return { status: "acquired", lockPath: this.lockPath, degraded: true };
+        return { status: 'acquired', lockPath: this.lockPath, degraded: true };
       }
       const raced = this.readExisting();
       return raced
         ? this.conflictOf(raced)
-        : { status: "acquired", lockPath: this.lockPath, degraded: true };
+        : { status: 'acquired', lockPath: this.lockPath, degraded: true };
     }
   }
 
   private conflictOf(body: LockFileBody): LockConflict {
     return {
-      status: "conflict",
+      status: 'conflict',
       lockPath: this.lockPath,
       pid: body.pid,
       projectRoot: body.projectRoot,
@@ -290,7 +290,7 @@ export class Lockfile {
     if (!body || body.pid !== this.opts.pid) return false; // usurped → caller should exit
     body.lastHeartbeat = this.opts.clock();
     try {
-      writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
     } catch {
       // Best-effort: a failed heartbeat just means the lock may look stale sooner.
     }
@@ -300,7 +300,7 @@ export class Lockfile {
   private readExisting(): LockFileBody | null {
     if (!existsSync(this.lockPath)) return null;
     try {
-      const raw = readFileSync(this.lockPath, "utf8");
+      const raw = readFileSync(this.lockPath, 'utf8');
       const parsed = JSON.parse(raw) as unknown;
       if (!isValidLockBody(parsed)) return null;
       return parsed;
@@ -329,7 +329,7 @@ export class Lockfile {
     // A null live lookup fails safe (treated as live, never reclaimed).
     const livePpid = this.opts.processParent(body.pid);
     if (livePpid !== null) {
-      if (typeof body.ppid === "number") {
+      if (typeof body.ppid === 'number') {
         if (livePpid !== body.ppid) return false; // parent changed → orphaned
       } else if (livePpid === 1) {
         // Pre-0.39 lock with no recorded PPID: best-effort legacy reclaim. PPID 1
@@ -343,7 +343,7 @@ export class Lockfile {
     // no longer refreshing) — reclaim. Skipped for pre-0.39 locks with no
     // lastHeartbeat (they fall back to the mtime check above).
     if (
-      typeof body.lastHeartbeat === "number" &&
+      typeof body.lastHeartbeat === 'number' &&
       this.opts.clock() - body.lastHeartbeat > this.opts.staleMs
     ) {
       return false;
@@ -376,7 +376,7 @@ export class Lockfile {
       mkdirSync(dir, { recursive: true });
     }
     // GH#251: atomic exclusive create — throws EEXIST if another bridge won the race.
-    const fd = openSync(this.lockPath, "wx");
+    const fd = openSync(this.lockPath, 'wx');
     try {
       writeSync(fd, JSON.stringify(body, null, 2));
     } finally {
@@ -386,16 +386,16 @@ export class Lockfile {
 }
 
 function isEexist(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: string }).code === "EEXIST";
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EEXIST';
 }
 
 function isValidLockBody(obj: unknown): obj is LockFileBody {
-  if (typeof obj !== "object" || obj === null) return false;
+  if (typeof obj !== 'object' || obj === null) return false;
   const o = obj as Record<string, unknown>;
   return (
-    typeof o.pid === "number" &&
-    typeof o.projectRoot === "string" &&
-    typeof o.startedAt === "number"
+    typeof o.pid === 'number' &&
+    typeof o.projectRoot === 'string' &&
+    typeof o.startedAt === 'number'
   );
 }
 
@@ -422,5 +422,5 @@ export function formatLockConflictMessage(conflict: LockConflict): string {
     ``,
     `Running two MCPs in the same project causes missed events and state flicker.`,
     `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`,
-  ].join("\n");
+  ].join('\n');
 }

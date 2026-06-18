@@ -1,4 +1,4 @@
-import { attachVerificationWarning } from "./envelope.js";
+import { attachVerificationWarning } from './envelope.js';
 // GH #91 / D688: mutation-absence detector. Catches the IX-2950 verification-
 // fidelity failure where an agent reaches a "success-shape" screen
 // (OrderConfirmation, AddPolicySuccess, ...) via deep-link or state-injection
@@ -33,7 +33,7 @@ const MAX_PENDING_AGE_MS = 2_000;
 // Suffix-match against the LAST path segment so both Expo Router
 // (/orders/[id]/confirmation) and React Navigation (OrderConfirmation) work.
 const SUCCESS_SHAPE_REGEX = /(success|done|added|complete|completed|confirmation)$/i;
-const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 // Codex review conf 90: cap regex input length to bound evaluation cost on the
 // cdp_navigate / cdp_navigation_state / proof_step hot path. The success-shape
 // match only cares about the END of the string, so slicing the tail keeps the
@@ -47,12 +47,12 @@ const stateByDevice = new Map();
  * lowercase already so the regex stays simple.
  */
 export function normalizeRouteName(raw) {
-    if (!raw || typeof raw !== "string")
+    if (!raw || typeof raw !== 'string')
         return null;
     const trimmed = raw.trim();
     if (!trimmed)
         return null;
-    const segments = trimmed.split("/").filter(Boolean);
+    const segments = trimmed.split('/').filter(Boolean);
     const candidate = segments.length > 0 ? segments[segments.length - 1] : trimmed;
     // Slice the tail rather than the head — success-shape matching cares about
     // the end of the string, so any input over MAX_NAME_LENGTH still has its
@@ -80,7 +80,7 @@ export function countWindowedMutations(client, windowMs, now, methods = MUTATION
     // Filter by the broader "is mutation" predicate first so we can also
     // compute last_mutation_age_ms from the same scan.
     const allMutations = client.networkBufferManager.filter(deviceKey, (entry) => {
-        const method = (entry.method ?? "").toUpperCase();
+        const method = (entry.method ?? '').toUpperCase();
         if (!methods.has(method))
             return false;
         // Skip failed mutations (>= 400). For pending entries (status === undefined),
@@ -120,7 +120,7 @@ export function annotateMutationAbsence(result, ctx) {
     // were considered (Codex) but the spec only cares about the topmost route
     // for the success-shape match — keeping signature == name is simpler and
     // dodges param-only-rerender false positives.
-    const signature = ctx.screenName ?? "";
+    const signature = ctx.screenName ?? '';
     const prev = stateByDevice.get(deviceKey);
     if (!prev) {
         // First observation primes; never warns. (Reduces the "user navigates
@@ -145,8 +145,8 @@ export function annotateMutationAbsence(result, ctx) {
         ? `Most recent mutation was ${lastMutationAgeMs}ms ago — outside the ${windowMs}ms window. If this is an optimistic UI flow, the mutation may have completed before the screen change observation; consider running the verification immediately after navigation.`
         : `Success-shape screen reached without a preceding write request in the last ${windowMs}ms. If the path under verification involves a server-side mutation, the user-flow may not have actually executed (deep-link bypass, state injection, or pre-existing state matching the success shape). Use cdp_network_log to confirm whether the expected mutation actually fired.`;
     const warning = {
-        code: "MUTATION_ABSENCE",
-        screen: ctx.screenName ?? "unknown",
+        code: 'MUTATION_ABSENCE',
+        screen: ctx.screenName ?? 'unknown',
         source: ctx.source,
         window_ms: windowMs,
         mutations_observed: 0,

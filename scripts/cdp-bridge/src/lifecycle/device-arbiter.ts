@@ -1,10 +1,10 @@
-import { failResult } from "../utils.js";
-import type { ToolResult } from "../utils.js";
-import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from "./foreign-flow-gate.js";
-import type { ForeignFlowGate } from "./foreign-flow-gate.js";
-import type { IosExternalRunnerWarning } from "../runners/external-runner-detect.js";
+import { failResult } from '../utils.js';
+import type { ToolResult } from '../utils.js';
+import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
+import type { ForeignFlowGate } from './foreign-flow-gate.js';
+import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
 
-export type Plane = "introspection" | "interaction" | "flow";
+export type Plane = 'introspection' | 'interaction' | 'flow';
 
 export interface Lease {
   plane: Plane;
@@ -21,7 +21,7 @@ export interface AcquireOk {
 }
 export interface AcquireBusy {
   ok: false;
-  code: "BUSY_FLOW_ACTIVE";
+  code: 'BUSY_FLOW_ACTIVE';
   holder: Holder | null;
 }
 export type AcquireResult = AcquireOk | AcquireBusy;
@@ -52,14 +52,14 @@ export class DeviceSessionArbiter {
   }
 
   tryAcquire(plane: Plane, tool: string): AcquireResult {
-    if (plane === "flow") {
+    if (plane === 'flow') {
       if (this.flowLeaseHeldBy !== null || this.ops.size > 0) {
-        return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
       }
       return this.grant(plane, tool, true);
     }
     if (this.flowLeaseHeldBy !== null) {
-      return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+      return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
     }
     return this.grant(plane, tool, false);
   }
@@ -141,72 +141,72 @@ export const arbiter = new DeviceSessionArbiter();
 // (cdp_auto_login runs a Maestro subflow; cdp_reload/restart relaunch the app —
 // none may interleave with a running flow.)
 const FLOW_TOOLS = new Set<string>([
-  "maestro_run",
-  "maestro_test_all",
-  "cdp_run_action",
-  "cdp_auto_login",
-  "cdp_reload",
-  "cdp_restart",
+  'maestro_run',
+  'maestro_test_all',
+  'cdp_run_action',
+  'cdp_auto_login',
+  'cdp_reload',
+  'cdp_restart',
 ]);
 // interaction: anything that mutates device/app state — gestures AND
 // state-mutating CDP calls (navigate/dispatch/set_shared_value/mmkv write).
 // These are writes, deliberately NOT "introspection".
 const INTERACTION_TOOLS = new Set<string>([
-  "device_screenshot",
-  "device_snapshot",
-  "device_find",
-  "device_press",
-  "device_fill",
-  "device_swipe",
-  "device_back",
-  "device_longpress",
-  "device_scroll",
-  "device_scrollintoview",
-  "device_pinch",
-  "device_permission",
-  "device_reset_state",
-  "device_deeplink",
-  "device_accept_system_dialog",
-  "device_dismiss_system_dialog",
-  "device_record",
-  "device_pick_value",
-  "device_pick_date",
-  "device_focus_next",
-  "device_batch",
-  "cdp_interact",
-  "cdp_repair_action",
-  "cross_platform_verify",
-  "proof_step",
-  "cdp_navigate",
-  "cdp_dispatch",
-  "cdp_set_shared_value",
-  "cdp_mmkv",
+  'device_screenshot',
+  'device_snapshot',
+  'device_find',
+  'device_press',
+  'device_fill',
+  'device_swipe',
+  'device_back',
+  'device_longpress',
+  'device_scroll',
+  'device_scrollintoview',
+  'device_pinch',
+  'device_permission',
+  'device_reset_state',
+  'device_deeplink',
+  'device_accept_system_dialog',
+  'device_dismiss_system_dialog',
+  'device_record',
+  'device_pick_value',
+  'device_pick_date',
+  'device_focus_next',
+  'device_batch',
+  'cdp_interact',
+  'cdp_repair_action',
+  'cross_platform_verify',
+  'proof_step',
+  'cdp_navigate',
+  'cdp_dispatch',
+  'cdp_set_shared_value',
+  'cdp_mmkv',
 ]);
 // introspection: genuinely read-only CDP/state queries.
 const INTROSPECTION_TOOLS = new Set<string>([
-  "cdp_evaluate",
-  "cdp_component_tree",
-  "cdp_component_state",
-  "cdp_diagnostic_renderers",
-  "cdp_navigation_state",
-  "cdp_nav_graph",
-  "cdp_store_state",
-  "cdp_network_log",
-  "cdp_network_body",
-  "cdp_wait_for_network",
-  "cdp_console_log",
-  "cdp_error_log",
-  "cdp_native_errors",
-  "cdp_metro_events",
-  "cdp_heap_usage",
-  "cdp_cpu_profile",
-  "cdp_object_inspect",
-  "cdp_exception_breakpoint",
-  "collect_logs",
-  "expect_redux",
-  "expect_route",
-  "expect_visible_by_testid",
-  "expect_text",
+  'cdp_evaluate',
+  'cdp_component_tree',
+  'cdp_component_state',
+  'cdp_diagnostic_renderers',
+  'cdp_navigation_state',
+  'cdp_nav_graph',
+  'cdp_store_state',
+  'cdp_network_log',
+  'cdp_network_body',
+  'cdp_wait_for_network',
+  'cdp_console_log',
+  'cdp_error_log',
+  'cdp_native_errors',
+  'cdp_metro_events',
+  'cdp_heap_usage',
+  'cdp_cpu_profile',
+  'cdp_object_inspect',
+  'cdp_exception_breakpoint',
+  'collect_logs',
+  'expect_redux',
+  'expect_route',
+  'expect_visible_by_testid',
+  'expect_text',
 ]);
 
 // Everything else is UNARBITRATED (planeForTool → null): cdp_status (the health
@@ -216,9 +216,9 @@ const INTROSPECTION_TOOLS = new Set<string>([
 // tool not listed in any Set above defaults here (unarbitrated) — add it to a Set
 // if it touches the device.
 export function planeForTool(name: string): Plane | null {
-  if (FLOW_TOOLS.has(name)) return "flow";
-  if (INTERACTION_TOOLS.has(name)) return "interaction";
-  if (INTROSPECTION_TOOLS.has(name)) return "introspection";
+  if (FLOW_TOOLS.has(name)) return 'flow';
+  if (INTERACTION_TOOLS.has(name)) return 'interaction';
+  if (INTROSPECTION_TOOLS.has(name)) return 'introspection';
   return null;
 }
 
@@ -226,7 +226,7 @@ export function planeForTool(name: string): Plane | null {
 // UNLEASED while a flow owns the device instead of refusing. device_screenshot falls back
 // to `xcrun simctl io screenshot` / `adb screencap`, which cannot conflict with a Maestro/WDA
 // flow. The handler MUST consult `arbiter.flowActive` and take the raw path when true.
-const FLOW_FALLBACK_TOOLS = new Set<string>(["device_screenshot"]);
+const FLOW_FALLBACK_TOOLS = new Set<string>(['device_screenshot']);
 
 /** GH#186: WDA teardown after our own flow takes seconds; within this window
  * the detector cannot distinguish our dying driver from a foreign one. */
@@ -245,11 +245,11 @@ function foreignRefusal(
 ): ToolResult {
   return failResult(
     `Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator ` +
-      `(${warning.processLines[0] ?? "detected via ps"}). L1 introspection stays safe — use ` +
+      `(${warning.processLines[0] ?? 'detected via ps'}). L1 introspection stays safe — use ` +
       `cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot ` +
       `for pixels (simctl fallback). Retry taps/flows after the foreign run completes. ` +
       `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`,
-    "BUSY_FOREIGN_FLOW",
+    'BUSY_FOREIGN_FLOW',
     { foreignRunner: warning, conflict: true, timings_ms: { foreignScan: scanMs } },
   );
 }
@@ -284,7 +284,7 @@ export function arbiterWrap(
     // and not within the teardown grace of our own just-released flow (the
     // dying driver still matches the detector; a fresh scan can't tell).
     if (
-      plane !== "introspection" &&
+      plane !== 'introspection' &&
       !inst.flowActive &&
       inst.msSinceFlowReleased >= FOREIGN_GRACE_MS &&
       enabled()
@@ -312,7 +312,7 @@ export function arbiterWrap(
         // tool only fails tryAcquire on a flow today, but this survives arbiter changes).
         return await handler(...args);
       }
-      const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : "a Maestro flow";
+      const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : 'a Maestro flow';
       return failResult(
         `Refusing ${name}: blocked by ${who} on this device — reads and taps can't interleave ` +
           `with a running Maestro flow. Retry after it completes; if it appears stuck, ` +

@@ -8,33 +8,33 @@
 // - maestro_run appends -e KEY=VALUE args to the maestro-runner argv
 // - cdp_run_action forwards params to the first maestro_run call
 // - cdp_run_action forwards params to the post-repair retry maestro_run call
-import { test, mock } from "node:test";
-import assert from "node:assert/strict";
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
 
-const RUN_ACTION_PATH = "../../dist/tools/run-action.js";
+const RUN_ACTION_PATH = '../../dist/tools/run-action.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // maestro_run key validation (kept lightweight — invokes the handler with
 // inline mocks rather than booting the full dispatch tier)
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("maestro_run: rejects malformed param keys (shell-injection guard)", async () => {
-  const { createMaestroRunHandler } = await import("../../dist/tools/maestro-run.js");
+test('maestro_run: rejects malformed param keys (shell-injection guard)', async () => {
+  const { createMaestroRunHandler } = await import('../../dist/tools/maestro-run.js');
   const handler = createMaestroRunHandler();
   // Bad keys: lowercase, leading digit, contains `=`, `-`, space, etc.
   const badKeys = [
-    "lowercase",
-    "1STARTS_WITH_DIGIT",
-    "KEY=INJECTED",
-    "--FLAG_INJECTED",
-    "WITH SPACE",
+    'lowercase',
+    '1STARTS_WITH_DIGIT',
+    'KEY=INJECTED',
+    '--FLAG_INJECTED',
+    'WITH SPACE',
   ];
   for (const key of badKeys) {
     const result = await handler({
-      inlineYaml: "appId: com.test.app\n---\n- launchApp",
-      params: { [key]: "value" },
-      platform: "ios",
-      appId: "com.test.app",
+      inlineYaml: 'appId: com.test.app\n---\n- launchApp',
+      params: { [key]: 'value' },
+      platform: 'ios',
+      appId: 'com.test.app',
     });
     assert.equal(result.isError, true, `expected refusal for key="${key}"`);
     const env = JSON.parse(result.content[0].text);
@@ -43,34 +43,34 @@ test("maestro_run: rejects malformed param keys (shell-injection guard)", async 
   }
 });
 
-test("maestro_run: rejects non-string param values", async () => {
-  const { createMaestroRunHandler } = await import("../../dist/tools/maestro-run.js");
+test('maestro_run: rejects non-string param values', async () => {
+  const { createMaestroRunHandler } = await import('../../dist/tools/maestro-run.js');
   const handler = createMaestroRunHandler();
   const result = await handler({
-    inlineYaml: "appId: com.test.app\n---\n- launchApp",
+    inlineYaml: 'appId: com.test.app\n---\n- launchApp',
     params: { VALID_KEY: 42 }, // intentionally non-string
-    platform: "ios",
-    appId: "com.test.app",
+    platform: 'ios',
+    appId: 'com.test.app',
   });
   assert.equal(result.isError, true);
   const env = JSON.parse(result.content[0].text);
   assert.match(env.error, /non-string value/i);
 });
 
-test("maestro_run: accepts well-formed params (key passes regex, value is string)", async () => {
+test('maestro_run: accepts well-formed params (key passes regex, value is string)', async () => {
   // We only verify the validation gate passes — execution-tier mocking
   // would need to stub child_process which is brittle. The successful
   // refusal cases above prove the key regex; this test proves a clean
   // case doesn't trip the same guard.
-  const { createMaestroRunHandler } = await import("../../dist/tools/maestro-run.js");
+  const { createMaestroRunHandler } = await import('../../dist/tools/maestro-run.js');
   const handler = createMaestroRunHandler();
   // Use an invalid bundle ID so the call still fails fast (before exec)
   // but AFTER the param validation. That confirms params passed the gate.
   const result = await handler({
-    inlineYaml: "appId: com.test.app\n---\n- launchApp",
-    params: { TITLE: "Buy milk", PRIORITY: "high", _UNDERSCORED: "ok", WITH123: "ok" },
-    platform: "ios",
-    appId: "com.test.app",
+    inlineYaml: 'appId: com.test.app\n---\n- launchApp',
+    params: { TITLE: 'Buy milk', PRIORITY: 'high', _UNDERSCORED: 'ok', WITH123: 'ok' },
+    platform: 'ios',
+    appId: 'com.test.app',
   });
   // Either: passes param validation and fails later for an env reason
   // (no booted simulator / maestro-runner not installed), OR succeeds.
@@ -94,14 +94,14 @@ test("maestro_run: accepts well-formed params (key passes regex, value is string
 // cdp_run_action forwards params to BOTH maestro_run call sites
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("cdp_run_action: forwards params to first maestro_run call", async () => {
+test('cdp_run_action: forwards params to first maestro_run call', async () => {
   const { createRunActionHandler } = await import(RUN_ACTION_PATH);
   const calls = [];
   const fakeMaestroRun = mock.fn(async (args) => {
     calls.push(args);
     return {
       content: [
-        { type: "text", text: JSON.stringify({ ok: true, data: { passed: true, output: "" } }) },
+        { type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: '' } }) },
       ],
     };
   });
@@ -112,9 +112,9 @@ test("cdp_run_action: forwards params to first maestro_run call", async () => {
   // mock, then assert handler behavior degrades cleanly when the action
   // doesn't exist.
   const result = await handler({
-    actionId: "nonexistent-action",
-    params: { TITLE: "hello" },
-    projectRoot: "/tmp/does-not-exist-" + Math.random(),
+    actionId: 'nonexistent-action',
+    params: { TITLE: 'hello' },
+    projectRoot: '/tmp/does-not-exist-' + Math.random(),
   });
   // Handler should fail fast with NO_PROJECT_ROOT or similar — that's
   // fine. We just need to confirm that IF maestro_run had been invoked,
@@ -122,27 +122,27 @@ test("cdp_run_action: forwards params to first maestro_run call", async () => {
   assert.equal(result.isError, true);
 });
 
-test("cdp_run_action: when reaching maestro_run, the params are passed through", async () => {
+test('cdp_run_action: when reaching maestro_run, the params are passed through', async () => {
   // Use a real temp project so the action LOADS but maestro_run is stubbed.
-  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const { tmpdir } = await import("node:os");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
   const { createRunActionHandler } = await import(RUN_ACTION_PATH);
 
-  const root = mkdtempSync(join(tmpdir(), "gh116-"));
-  mkdirSync(join(root, ".rn-agent", "actions"), { recursive: true });
+  const root = mkdtempSync(join(tmpdir(), 'gh116-'));
+  mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
   writeFileSync(
-    join(root, ".rn-agent", "actions", "sample.yaml"),
+    join(root, '.rn-agent', 'actions', 'sample.yaml'),
     [
-      "appId: com.test.app",
-      "---",
-      "# id: sample",
-      "# intent: a sample action",
-      "# status: experimental",
-      "# mutates: false",
-      "- launchApp",
-      "- inputText: ${TITLE}",
-    ].join("\n"),
+      'appId: com.test.app',
+      '---',
+      '# id: sample',
+      '# intent: a sample action',
+      '# status: experimental',
+      '# mutates: false',
+      '- launchApp',
+      '- inputText: ${TITLE}',
+    ].join('\n'),
   );
 
   const calls = [];
@@ -151,8 +151,8 @@ test("cdp_run_action: when reaching maestro_run, the params are passed through",
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify({ ok: true, data: { passed: true, output: "pass" } }),
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }),
         },
       ],
     };
@@ -160,10 +160,10 @@ test("cdp_run_action: when reaching maestro_run, the params are passed through",
 
   const handler = createRunActionHandler({ maestroRun: fakeMaestroRun });
   const _result = await handler({
-    actionId: "sample",
+    actionId: 'sample',
     projectRoot: root,
-    platform: "ios",
-    params: { TITLE: "Buy milk", PRIORITY: "high" },
+    platform: 'ios',
+    params: { TITLE: 'Buy milk', PRIORITY: 'high' },
   });
 
   // The handler should have invoked maestro_run at least once with our params.
@@ -171,40 +171,40 @@ test("cdp_run_action: when reaching maestro_run, the params are passed through",
   const firstCall = calls[0];
   assert.deepEqual(
     firstCall.params,
-    { TITLE: "Buy milk", PRIORITY: "high" },
+    { TITLE: 'Buy milk', PRIORITY: 'high' },
     `params not forwarded; firstCall: ${JSON.stringify(firstCall)}`,
   );
-  assert.equal(firstCall.flowPath.endsWith("sample.yaml"), true);
+  assert.equal(firstCall.flowPath.endsWith('sample.yaml'), true);
 
   // Cleanup
-  const { rmSync } = await import("node:fs");
+  const { rmSync } = await import('node:fs');
   rmSync(root, { recursive: true, force: true });
 });
 
-test("cdp_run_action: params are also threaded into the post-repair retry call (if a retry happens)", async () => {
+test('cdp_run_action: params are also threaded into the post-repair retry call (if a retry happens)', async () => {
   // Stub maestro_run to fail with SELECTOR_NOT_FOUND on the first call
   // and pass on the second. The cdp_run_action handler should invoke
   // maestro_run twice; the SECOND call should ALSO carry the same params.
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const { tmpdir } = await import("node:os");
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
   const { createRunActionHandler } = await import(RUN_ACTION_PATH);
 
-  const root = mkdtempSync(join(tmpdir(), "gh116-retry-"));
-  mkdirSync(join(root, ".rn-agent", "actions"), { recursive: true });
+  const root = mkdtempSync(join(tmpdir(), 'gh116-retry-'));
+  mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
   writeFileSync(
-    join(root, ".rn-agent", "actions", "sample.yaml"),
+    join(root, '.rn-agent', 'actions', 'sample.yaml'),
     [
-      "appId: com.test.app",
-      "---",
-      "# id: sample",
-      "# intent: a sample action",
-      "# status: experimental",
-      "# mutates: false",
-      "- launchApp",
-      "- tapOn:",
+      'appId: com.test.app',
+      '---',
+      '# id: sample',
+      '# intent: a sample action',
+      '# status: experimental',
+      '# mutates: false',
+      '- launchApp',
+      '- tapOn:',
       '    id: "missing-btn"',
-    ].join("\n"),
+    ].join('\n'),
   );
 
   const calls = [];
@@ -216,10 +216,10 @@ test("cdp_run_action: params are also threaded into the post-repair retry call (
       return {
         content: [
           {
-            type: "text",
+            type: 'text',
             text: JSON.stringify({
               ok: true, // maestro_run wrapper returns ok:true with passed:false on warn
-              data: { passed: false, output: "== SELECTOR_NOT_FOUND tapOn id=missing-btn ==" },
+              data: { passed: false, output: '== SELECTOR_NOT_FOUND tapOn id=missing-btn ==' },
             }),
           },
         ],
@@ -228,8 +228,8 @@ test("cdp_run_action: params are also threaded into the post-repair retry call (
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify({ ok: true, data: { passed: true, output: "pass" } }),
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'pass' } }),
         },
       ],
     };
@@ -245,16 +245,16 @@ test("cdp_run_action: params are also threaded into the post-repair retry call (
   // the contract.
   const handler = createRunActionHandler({ maestroRun: fakeMaestroRun });
   await handler({
-    actionId: "sample",
+    actionId: 'sample',
     projectRoot: root,
-    platform: "ios",
-    params: { TITLE: "retry-test" },
+    platform: 'ios',
+    params: { TITLE: 'retry-test' },
     autoRepair: false, // disable repair so we don't depend on the engine
   });
 
   // At minimum, the first call must have the params.
   assert.ok(calls.length >= 1);
-  assert.deepEqual(calls[0].params, { TITLE: "retry-test" });
+  assert.deepEqual(calls[0].params, { TITLE: 'retry-test' });
 
   rmSync(root, { recursive: true, force: true });
 });

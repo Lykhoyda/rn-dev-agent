@@ -1,12 +1,12 @@
-import type { CDPClient } from "../cdp-client.js";
-import { okResult, failResult, warnResult, type ToolResult } from "../utils.js";
-import { detectPlatform } from "./platform-utils.js";
-import { createDevicePermissionHandler } from "./device-permission.js";
-import { isValidBundleId } from "../domain/maestro-validator.js";
-import { buildMmkvExpression } from "./mmkv.js";
-import { terminateApp, launchApp } from "./app-lifecycle.js";
-import { handleDevClientPicker } from "./dev-client-picker.js";
-import { waitForNavigationReady } from "./startup-replay.js";
+import type { CDPClient } from '../cdp-client.js';
+import { okResult, failResult, warnResult, type ToolResult } from '../utils.js';
+import { detectPlatform } from './platform-utils.js';
+import { createDevicePermissionHandler } from './device-permission.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
+import { buildMmkvExpression } from './mmkv.js';
+import { terminateApp, launchApp } from './app-lifecycle.js';
+import { handleDevClientPicker } from './dev-client-picker.js';
+import { waitForNavigationReady } from './startup-replay.js';
 
 // GH #60 Feature-c / D687: device_reset_state composes the 4-step preflight
 // (permissions → storage → terminate → launch+reconnect) into a single MCP
@@ -20,7 +20,7 @@ import { waitForNavigationReady } from "./startup-replay.js";
 // 3. Terminate before launch (idempotent on both platforms).
 // 4. Reconnect only if waitForReady — caller can opt out for faster return.
 
-type PermissionAction = "revoke" | "reset";
+type PermissionAction = 'revoke' | 'reset';
 
 export interface PermissionSpec {
   name: string;
@@ -29,7 +29,7 @@ export interface PermissionSpec {
 
 export interface DeviceResetStateArgs {
   appId: string;
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   permissions?: Array<string | PermissionSpec>;
   storageKeys?: string[];
   mmkvInstanceId?: string;
@@ -39,13 +39,13 @@ export interface DeviceResetStateArgs {
 }
 
 type StepName =
-  | "permission"
-  | "storage"
-  | "terminate"
-  | "launch"
-  | "reconnect"
-  | "helpers"
-  | "nav_ready";
+  | 'permission'
+  | 'storage'
+  | 'terminate'
+  | 'launch'
+  | 'reconnect'
+  | 'helpers'
+  | 'nav_ready';
 
 interface StepResult {
   step: StepName;
@@ -63,19 +63,19 @@ const POST_LAUNCH_SETTLE_MS = 1_000;
 const HELPERS_DEADLINE_MS = 15_000;
 const NAV_READY_TIMEOUT_MS = 12_000;
 
-function normalizePermissions(input: DeviceResetStateArgs["permissions"]): PermissionSpec[] {
+function normalizePermissions(input: DeviceResetStateArgs['permissions']): PermissionSpec[] {
   if (!input || input.length === 0) return [];
   return input.map((p) =>
-    typeof p === "string"
-      ? { name: p, action: "revoke" as const }
-      : { name: p.name, action: p.action ?? "revoke" },
+    typeof p === 'string'
+      ? { name: p, action: 'revoke' as const }
+      : { name: p.name, action: p.action ?? 'revoke' },
   );
 }
 
 async function runPermissionSteps(
   permissions: PermissionSpec[],
   appId: string,
-  platform: "ios" | "android",
+  platform: 'ios' | 'android',
 ): Promise<StepResult[]> {
   const handler = createDevicePermissionHandler();
   const results: StepResult[] = [];
@@ -83,7 +83,7 @@ async function runPermissionSteps(
     const start = Date.now();
     try {
       const r = await handler({
-        action: perm.action ?? "revoke",
+        action: perm.action ?? 'revoke',
         permission: perm.name,
         appId,
         platform,
@@ -91,18 +91,18 @@ async function runPermissionSteps(
       const failed = r.isError === true;
       const parsed = failed ? safeParseError(r) : undefined;
       results.push({
-        step: "permission",
+        step: 'permission',
         target: perm.name,
-        action: perm.action ?? "revoke",
+        action: perm.action ?? 'revoke',
         ok: !failed,
         durationMs: Date.now() - start,
         ...(failed ? { code: parsed?.code, error: parsed?.error } : {}),
       });
     } catch (e: unknown) {
       results.push({
-        step: "permission",
+        step: 'permission',
         target: perm.name,
-        action: perm.action ?? "revoke",
+        action: perm.action ?? 'revoke',
         ok: false,
         durationMs: Date.now() - start,
         error: e instanceof Error ? e.message : String(e),
@@ -121,13 +121,13 @@ async function runStorageSteps(
   for (const key of keys) {
     const start = Date.now();
     try {
-      const expr = buildMmkvExpression({ action: "delete", key, instanceId });
+      const expr = buildMmkvExpression({ action: 'delete', key, instanceId });
       const evalResult = await client.evaluate(expr);
       if (evalResult.error) {
         results.push({
-          step: "storage",
+          step: 'storage',
           target: key,
-          action: "delete",
+          action: 'delete',
           ok: false,
           durationMs: Date.now() - start,
           error: evalResult.error,
@@ -136,19 +136,19 @@ async function runStorageSteps(
       }
       // Expression returns JSON; check for __agent_error sentinel.
       const raw =
-        typeof evalResult.value === "string" ? evalResult.value : JSON.stringify(evalResult.value);
+        typeof evalResult.value === 'string' ? evalResult.value : JSON.stringify(evalResult.value);
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
       } catch {
         parsed = null;
       }
-      const obj = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-      if (obj && typeof obj.__agent_error === "string") {
+      const obj = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+      if (obj && typeof obj.__agent_error === 'string') {
         results.push({
-          step: "storage",
+          step: 'storage',
           target: key,
-          action: "delete",
+          action: 'delete',
           ok: false,
           durationMs: Date.now() - start,
           error: obj.__agent_error,
@@ -156,17 +156,17 @@ async function runStorageSteps(
         continue;
       }
       results.push({
-        step: "storage",
+        step: 'storage',
         target: key,
-        action: "delete",
+        action: 'delete',
         ok: true,
         durationMs: Date.now() - start,
       });
     } catch (e: unknown) {
       results.push({
-        step: "storage",
+        step: 'storage',
         target: key,
-        action: "delete",
+        action: 'delete',
         ok: false,
         durationMs: Date.now() - start,
         error: e instanceof Error ? e.message : String(e),
@@ -176,14 +176,14 @@ async function runStorageSteps(
   return results;
 }
 
-async function runTerminateStep(appId: string, platform: "ios" | "android"): Promise<StepResult> {
+async function runTerminateStep(appId: string, platform: 'ios' | 'android'): Promise<StepResult> {
   const start = Date.now();
   try {
     await terminateApp(appId, platform);
-    return { step: "terminate", target: appId, ok: true, durationMs: Date.now() - start };
+    return { step: 'terminate', target: appId, ok: true, durationMs: Date.now() - start };
   } catch (e: unknown) {
     return {
-      step: "terminate",
+      step: 'terminate',
       target: appId,
       ok: false,
       durationMs: Date.now() - start,
@@ -192,14 +192,14 @@ async function runTerminateStep(appId: string, platform: "ios" | "android"): Pro
   }
 }
 
-async function runLaunchStep(appId: string, platform: "ios" | "android"): Promise<StepResult> {
+async function runLaunchStep(appId: string, platform: 'ios' | 'android'): Promise<StepResult> {
   const start = Date.now();
   try {
     await launchApp(appId, platform);
-    return { step: "launch", target: appId, ok: true, durationMs: Date.now() - start };
+    return { step: 'launch', target: appId, ok: true, durationMs: Date.now() - start };
   } catch (e: unknown) {
     return {
-      step: "launch",
+      step: 'launch',
       target: appId,
       ok: false,
       durationMs: Date.now() - start,
@@ -219,7 +219,7 @@ async function runReconnectStep(
     try {
       await client.softReconnect();
       return {
-        step: { step: "reconnect", ok: true, durationMs: Date.now() - start },
+        step: { step: 'reconnect', ok: true, durationMs: Date.now() - start },
         reconnected: true,
       };
     } catch (err) {
@@ -228,7 +228,7 @@ async function runReconnectStep(
       } else {
         return {
           step: {
-            step: "reconnect",
+            step: 'reconnect',
             ok: false,
             durationMs: Date.now() - start,
             error: err instanceof Error ? err.message : String(err),
@@ -240,10 +240,10 @@ async function runReconnectStep(
   }
   return {
     step: {
-      step: "reconnect",
+      step: 'reconnect',
       ok: false,
       durationMs: Date.now() - start,
-      error: "reconnect attempts exhausted",
+      error: 'reconnect attempts exhausted',
     },
     reconnected: false,
   };
@@ -260,7 +260,7 @@ async function runHelpersStep(
   const ok = client.helpersInjected;
   return {
     step: {
-      step: "helpers",
+      step: 'helpers',
       ok,
       durationMs: Date.now() - start,
       ...(ok ? {} : { error: `helpers not injected within ${HELPERS_DEADLINE_MS}ms` }),
@@ -273,7 +273,7 @@ async function runNavReadyStep(client: CDPClient): Promise<StepResult> {
   const start = Date.now();
   const ready = await waitForNavigationReady(client, NAV_READY_TIMEOUT_MS);
   return {
-    step: "nav_ready",
+    step: 'nav_ready',
     ok: ready,
     durationMs: Date.now() - start,
     ...(ready ? {} : { error: `nav ref not ready within ${NAV_READY_TIMEOUT_MS}ms` }),
@@ -291,7 +291,7 @@ export function cdpTargetMatchesApp(client: CDPClient, appId: string): boolean {
   if (!client.isConnected) return false;
   const target = client.connectedTarget;
   if (!target) return false;
-  const haystack = `${target.description ?? ""} ${target.title ?? ""}`.toLowerCase();
+  const haystack = `${target.description ?? ''} ${target.title ?? ''}`.toLowerCase();
   if (haystack.length === 0) return false;
   return haystack.includes(appId.toLowerCase());
 }
@@ -311,8 +311,8 @@ export function createDeviceResetStateHandler(
   getClient: () => CDPClient,
 ): (args: DeviceResetStateArgs) => Promise<ToolResult> {
   return async (args) => {
-    if (!args.appId || typeof args.appId !== "string") {
-      return failResult("appId is required.", "DEVICE_RESET_INVALID_ARGS");
+    if (!args.appId || typeof args.appId !== 'string') {
+      return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
     }
     // Phase 134.2 (deepsec HIGH): appId flows into permission/terminate/
     // launch helpers, which on Android reach `adb shell pm/am`. Validate
@@ -321,14 +321,14 @@ export function createDeviceResetStateHandler(
     if (!isValidBundleId(args.appId)) {
       return failResult(
         `Invalid appId "${String(args.appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`,
-        "DEVICE_RESET_INVALID_APPID",
+        'DEVICE_RESET_INVALID_APPID',
       );
     }
     const platform = args.platform ?? (await detectPlatform());
-    if (platform !== "ios" && platform !== "android") {
+    if (platform !== 'ios' && platform !== 'android') {
       return failResult(
-        "No iOS simulator or Android device detected. Pass platform explicitly.",
-        "DEVICE_RESET_INVALID_ARGS",
+        'No iOS simulator or Android device detected. Pass platform explicitly.',
+        'DEVICE_RESET_INVALID_ARGS',
       );
     }
 
@@ -355,14 +355,14 @@ export function createDeviceResetStateHandler(
       if (!client.isConnected) {
         for (const key of storageKeys) {
           steps.push({
-            step: "storage",
+            step: 'storage',
             target: key,
-            action: "delete",
+            action: 'delete',
             ok: false,
             durationMs: 0,
-            code: "CDP_NOT_CONNECTED",
+            code: 'CDP_NOT_CONNECTED',
             error:
-              "CDP not connected — storage keys skipped. Connect first to clear MMKV before terminate.",
+              'CDP not connected — storage keys skipped. Connect first to clear MMKV before terminate.',
           });
         }
       } else if (!cdpTargetMatchesApp(client, args.appId)) {
@@ -370,15 +370,15 @@ export function createDeviceResetStateHandler(
         // belong to args.appId — otherwise we silently delete keys from a
         // sibling app in monorepos / multi-simulator workflows.
         const target = client.connectedTarget;
-        const desc = target?.description ?? target?.title ?? target?.id ?? "?";
+        const desc = target?.description ?? target?.title ?? target?.id ?? '?';
         for (const key of storageKeys) {
           steps.push({
-            step: "storage",
+            step: 'storage',
             target: key,
-            action: "delete",
+            action: 'delete',
             ok: false,
             durationMs: 0,
-            code: "CDP_TARGET_APP_MISMATCH",
+            code: 'CDP_TARGET_APP_MISMATCH',
             error: `CDP target "${desc}" does not appear to belong to ${args.appId} — storage skipped to avoid wrong-app deletion. Reconnect to ${args.appId} (cdp_connect bundleId=...) first.`,
           });
         }
@@ -417,7 +417,7 @@ export function createDeviceResetStateHandler(
       }
     }
 
-    const skipped = steps.filter((s) => s.code === "CDP_NOT_CONNECTED").length;
+    const skipped = steps.filter((s) => s.code === 'CDP_NOT_CONNECTED').length;
     const okCount = steps.filter((s) => s.ok).length;
     const failed = steps.filter((s) => !s.ok).length - skipped;
     const summary = {
@@ -444,8 +444,8 @@ export function createDeviceResetStateHandler(
     // failed — not when launch itself failed or reconnect was never reached.
     if (reconnectAttempted && !reconnected) {
       return failResult(
-        "Reset state ran but CDP reconnect failed. Device IS reset; call cdp_status to retry the connection.",
-        "DEVICE_RESET_RECONNECT_FAILED",
+        'Reset state ran but CDP reconnect failed. Device IS reset; call cdp_status to retry the connection.',
+        'DEVICE_RESET_RECONNECT_FAILED',
         { steps, summary, appId: args.appId, platform },
       );
     }
@@ -456,7 +456,7 @@ export function createDeviceResetStateHandler(
     return warnResult(
       data,
       `Reset completed with ${failed} failed step(s). See steps[] for per-step diagnostics.`,
-      { code: "DEVICE_RESET_STATE_PARTIAL" },
+      { code: 'DEVICE_RESET_STATE_PARTIAL' },
     );
   };
 }

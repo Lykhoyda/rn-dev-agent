@@ -1,7 +1,7 @@
-import type { FastRunnerLiveness } from "../runners/rn-fast-runner-client.js";
-import type { SessionState } from "../types.js";
-import { getActiveSession as defaultGetActiveSession } from "../agent-device-wrapper.js";
-import { probeFastRunnerLiveness } from "../runners/rn-fast-runner-client.js";
+import type { FastRunnerLiveness } from '../runners/rn-fast-runner-client.js';
+import type { SessionState } from '../types.js';
+import { getActiveSession as defaultGetActiveSession } from '../agent-device-wrapper.js';
+import { probeFastRunnerLiveness } from '../runners/rn-fast-runner-client.js';
 
 export interface DeviceSessionHealth {
   sessionOpen: boolean;
@@ -24,17 +24,17 @@ export async function getDeviceSessionHealth(
   const probe = deps.probeLiveness ?? probeFastRunnerLiveness;
 
   const session = getSession();
-  if (!session) return { sessionOpen: false, rnFastRunner: "dead" };
+  if (!session) return { sessionOpen: false, rnFastRunner: 'dead' };
 
-  const health: DeviceSessionHealth = { sessionOpen: true, rnFastRunner: "dead" };
+  const health: DeviceSessionHealth = { sessionOpen: true, rnFastRunner: 'dead' };
   if (session.appId) health.appId = session.appId;
   if (session.deviceId) health.deviceId = session.deviceId;
 
-  if (session.platform === "ios") {
+  if (session.platform === 'ios') {
     try {
       health.rnFastRunner = await probe();
     } catch {
-      health.rnFastRunner = "dead";
+      health.rnFastRunner = 'dead';
     }
     if (deps.detectForeign) {
       try {

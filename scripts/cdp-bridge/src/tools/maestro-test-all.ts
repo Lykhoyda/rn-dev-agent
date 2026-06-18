@@ -1,26 +1,26 @@
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { getActiveSession } from "../agent-device-wrapper.js";
-import { findProjectRoot } from "../nav-graph/storage.js";
-import { chooseMaestroDispatch, shouldWarnFallback } from "./maestro-dispatch.js";
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { findProjectRoot } from '../nav-graph/storage.js';
+import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
 import {
   buildMaestroFlow,
   parseAndValidateFlow,
   MaestroValidationError,
-} from "../domain/maestro-validator.js";
-import { runFlowParked } from "./maestro-run.js";
-import { outputIndicatesFlowFailure } from "../domain/maestro-error-parser.js";
-import { resolveAppFileForClearState } from "./resolve-ios-app-file.js";
+} from '../domain/maestro-validator.js';
+import { runFlowParked } from './maestro-run.js';
+import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 
 const execFile = promisify(execFileCb);
 
 interface MaestroTestAllArgs {
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   flowDir?: string;
   pattern?: string;
   timeoutPerFlow?: number;
@@ -38,7 +38,7 @@ function discoverFlows(dir: string, pattern?: string): string[] {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir, { recursive: true }) as string[];
   const yamls = files
-    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
     .map((f) => join(dir, f))
     .sort();
 
@@ -53,7 +53,7 @@ function discoverFlows(dir: string, pattern?: string): string[] {
     }
     let re: RegExp;
     try {
-      re = new RegExp(pattern, "i");
+      re = new RegExp(pattern, 'i');
     } catch {
       return yamls;
     }
@@ -65,24 +65,24 @@ function discoverFlows(dir: string, pattern?: string): string[] {
 export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Promise<ToolResult> {
   return async (args) => {
     const platform = (args.platform ?? getActiveSession()?.platform) as
-      | "ios"
-      | "android"
+      | 'ios'
+      | 'android'
       | undefined;
     if (!platform) {
-      return failResult("Cannot determine platform. Pass platform or open a device session first.");
+      return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
 
     // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
     // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
     const dispatch = chooseMaestroDispatch({ platform });
-    if ("error" in dispatch) {
+    if ('error' in dispatch) {
       return failResult(dispatch.error);
     }
 
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
     if (!flowDir) {
-      return failResult("Cannot determine project root. Pass flowDir explicitly.");
+      return failResult('Cannot determine project root. Pass flowDir explicitly.');
     }
 
     const flows = discoverFlows(flowDir, args.pattern);
@@ -98,7 +98,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
     let failed = 0;
 
     for (const flow of flows) {
-      const name = flow.replace(flowDir + "/", "");
+      const name = flow.replace(flowDir + '/', '');
       const start = Date.now();
 
       // Phase 134.1 (deepsec CRITICAL #5): read + validate every
@@ -111,7 +111,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       let safeFlowFile: string;
       let appFile: string | undefined;
       try {
-        const yamlText = readFileSync(flow, "utf-8");
+        const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText);
         const canonical = buildMaestroFlow(
           parsed.appId !== undefined ? { appId: parsed.appId } : {},
@@ -121,7 +121,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
           tmpdir(),
           `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`,
         );
-        writeFileSync(safeFlowFile, canonical, "utf-8");
+        writeFileSync(safeFlowFile, canonical, 'utf-8');
         // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
         // the app, which maestro-runner can only do given --app-file.
         const appFileResolution = resolveAppFileForClearState(
@@ -163,12 +163,12 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
           () =>
             execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), {
               timeout,
-              encoding: "utf8",
+              encoding: 'utf8',
               maxBuffer: 10 * 1024 * 1024,
             }),
           { platform, deviceId: getActiveSession()?.deviceId },
         );
-        const output = (stdout + "\n" + stderr).trim();
+        const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the
         // authoritative pass signal. The secondary scan keys on Maestro's own
         // status LINES (GH#249: a bare `FAILED` substring false-flagged passing

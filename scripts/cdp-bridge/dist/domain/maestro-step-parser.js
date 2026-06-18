@@ -2,14 +2,14 @@
 // GH #211: structure maestro_run results from maestro-runner stdout. Pure, no
 // I/O, fail-open: unparseable output yields []. Generalizes the #263 step-line
 // parser (tap-latency.ts derives parseTapLatencies from parseSteps).
-import { parseMaestroFailure } from "./maestro-error-parser.js";
+import { parseMaestroFailure } from './maestro-error-parser.js';
 // Strip ANSI SGR/color escape sequences. execFile output is usually un-colored
 // (child stdout is a pipe, not a TTY) but maestro-runner is not guaranteed to
 // honor that, and a glyph-anchored match breaks on a colored `✓`. Built via
 // fromCharCode(27) (ESC) to keep a raw control char out of the source/regex.
-const ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
 export function stripAnsi(s) {
-    return s.replace(ANSI_RE, "");
+    return s.replace(ANSI_RE, '');
 }
 // `<indent>{✓|✗} <name> (N.Ns)` — the leading `[ \t]+` anchors on the runner's
 // line shape: real steps are indented with spaces (live renderer: 4 spaces,
@@ -30,7 +30,7 @@ const STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
 // message and defeat the sliced `output` field.
 const MAX_FIELD = 200;
 function cap(s) {
-    return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "…" : s;
+    return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + '…' : s;
 }
 // Cap the returned steps so a pathological run (a multi-MB stdout/stderr with
 // many step-shaped log lines) can't bloat the MCP response past the `output`
@@ -45,20 +45,20 @@ const MAX_STEPS = 1000;
 // terminated output); leading BLANK LINES are stripped with a start-anchored
 // `^[\r\n]+` that cannot backtrack and never touches a content line's indent.
 export function combineRunnerOutput(stdout, stderr) {
-    return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
+    return (stdout + '\n' + stderr).replace(/^[\r\n]+/, '').trimEnd();
 }
 export function parseSteps(output) {
-    if (!output || typeof output !== "string")
+    if (!output || typeof output !== 'string')
         return [];
     const steps = [];
     let index = 0;
-    for (const raw of stripAnsi(output).split("\n")) {
+    for (const raw of stripAnsi(output).split('\n')) {
         const m = STEP_RE.exec(raw);
         if (!m)
             continue;
         const name = m[2];
-        const verb = cap(name.split(/\s+/)[0].replace(/:$/, ""));
-        if (verb === "rn-maestro-run")
+        const verb = cap(name.split(/\s+/)[0].replace(/:$/, ''));
+        if (verb === 'rn-maestro-run')
             continue; // belt-and-suspenders vs a future summary format
         const seconds = Number(m[3]);
         if (!Number.isFinite(seconds))
@@ -67,7 +67,7 @@ export function parseSteps(output) {
             index: index++,
             name: cap(name),
             verb,
-            status: m[1] === "✓" ? "pass" : "fail",
+            status: m[1] === '✓' ? 'pass' : 'fail',
             durationMs: Math.round(seconds * 1000),
         });
     }
@@ -79,7 +79,7 @@ export function parseSteps(output) {
 // the last parsed step is then the recovery ✓.
 export function findFailedStep(steps) {
     const last = steps.length ? steps[steps.length - 1] : null;
-    return last && last.status === "fail" ? last : null;
+    return last && last.status === 'fail' ? last : null;
 }
 export function lastObservedStep(steps) {
     return steps.length ? steps[steps.length - 1] : null;
@@ -89,9 +89,9 @@ export function lastObservedStep(steps) {
 // must not be re-embedded into the result (it would defeat the output slice).
 export function summarizeReason(output) {
     const f = parseMaestroFailure(output);
-    if (f.kind === "UNKNOWN")
+    if (f.kind === 'UNKNOWN')
         return null;
-    const selector = "selector" in f ? (f.selector ?? null) : null;
+    const selector = 'selector' in f ? (f.selector ?? null) : null;
     return { kind: f.kind, selector: selector === null ? null : cap(selector) };
 }
 // failedStep/reason are populated ONLY when the run's terminal verdict is fail
@@ -114,7 +114,7 @@ export function buildStepSummary(output, opts) {
 export function classifyExecError(err) {
     const e = err;
     const killed = e?.killed === true;
-    const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+    const overflow = e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
     return { timedOut: killed && !overflow, outputTruncated: overflow };
 }
 // Headline for a failed maestro_run, built from STRUCTURED data so it never
@@ -124,21 +124,21 @@ export function classifyExecError(err) {
 // lives in the bounded `output` field.
 export function formatFailureHeadline(summary, cls, fallbackMsg) {
     if (cls.timedOut) {
-        return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ""}`;
+        return `Maestro flow timed out${summary.lastStep ? ` after step "${summary.lastStep.name}"` : ''}`;
     }
     if (cls.outputTruncated) {
-        return "Maestro flow output exceeded the 10MB buffer";
+        return 'Maestro flow output exceeded the 10MB buffer';
     }
     if (summary.failedStep) {
         const r = summary.reason;
-        const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ""})` : "";
+        const reasonStr = r ? ` (${r.kind}${r.selector ? `: ${r.selector}` : ''})` : '';
         return `Maestro flow failed at step "${summary.failedStep.name}"${reasonStr}`;
     }
     // No terminal ✗ step line (e.g. it was truncated) but a recognizable error
     // string survived — prefer the structured, raw-free reason over the raw msg.
     if (summary.reason) {
         const r = summary.reason;
-        return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ""})`;
+        return `Maestro flow failed (${r.kind}${r.selector ? `: ${r.selector}` : ''})`;
     }
     return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }

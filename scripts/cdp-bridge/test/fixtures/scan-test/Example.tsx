@@ -1,5 +1,5 @@
-import React from "react";
-import { View, Text, Pressable } from "react-native";
+import React from 'react';
+import { View, Text, Pressable } from 'react-native';
 
 export function Example() {
   return (
@@ -8,7 +8,7 @@ export function Example() {
       <Pressable testID="submit-btn" onPress={() => {}}>
         <Text>Submit</Text>
       </Pressable>
-      <View testID={"dynamic-view"}>
+      <View testID={'dynamic-view'}>
         <Text>No testID here</Text>
       </View>
     </View>

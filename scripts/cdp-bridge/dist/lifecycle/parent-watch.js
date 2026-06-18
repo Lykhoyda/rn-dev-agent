@@ -1,4 +1,4 @@
-import { logger } from "../logger.js";
+import { logger } from '../logger.js';
 const DEFAULT_INTERVAL_MS = 10_000;
 /**
  * GH #182: one tick of the parent-death watch. Compares the bridge's *current* PPID
@@ -27,7 +27,7 @@ export function parentWatchTick(getppid, initialPpid, onOrphaned, onHeartbeat) {
  * so a constant 0 fails safe to "parent alive".
  */
 function defaultGetppid() {
-    return typeof process.ppid === "number" ? process.ppid : 0;
+    return typeof process.ppid === 'number' ? process.ppid : 0;
 }
 /**
  * GH #182: belt-and-suspenders host-death detection. The existing stdin-EOF + signal
@@ -48,7 +48,7 @@ export function startParentDeathWatch(opts) {
             parentWatchTick(getppid, initialPpid, opts.onOrphaned, opts.onHeartbeat);
         }
         catch (err) {
-            logger.warn("MCP", `parent-death watch tick failed: ${err instanceof Error ? err.message : err}`);
+            logger.warn('MCP', `parent-death watch tick failed: ${err instanceof Error ? err.message : err}`);
         }
     }, opts.intervalMs ?? DEFAULT_INTERVAL_MS);
     interval.unref?.();

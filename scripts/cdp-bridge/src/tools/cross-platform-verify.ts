@@ -1,38 +1,38 @@
-import { readFileSync, readdirSync, lstatSync } from "node:fs";
-import { join, extname } from "node:path";
-import { getCachedSnapshot } from "../agent-device-wrapper.js";
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { pathHasTraversal } from "../domain/path-safety.js";
+import { readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { join, extname } from 'node:path';
+import { getCachedSnapshot } from '../agent-device-wrapper.js';
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { pathHasTraversal } from '../domain/path-safety.js';
 
 interface VerifyArgs {
   elements?: string[];
   scanDir?: string;
-  matchBy?: "testID" | "label" | "any";
+  matchBy?: 'testID' | 'label' | 'any';
 }
 
 interface ElementResult {
   element: string;
-  ios: "FOUND" | "MISSING" | "NO_SNAPSHOT";
-  android: "FOUND" | "MISSING" | "NO_SNAPSHOT";
+  ios: 'FOUND' | 'MISSING' | 'NO_SNAPSHOT';
+  android: 'FOUND' | 'MISSING' | 'NO_SNAPSHOT';
   match: boolean;
 }
 
 export function findElement(
   nodes: { ref: string; label?: string; identifier?: string; type?: string }[],
   query: string,
-  matchBy: "testID" | "label" | "any",
+  matchBy: 'testID' | 'label' | 'any',
 ): boolean {
   const q = query.toLowerCase();
   return nodes.some((n) => {
-    if (matchBy === "testID") return n.identifier?.toLowerCase() === q;
-    if (matchBy === "label") return n.label?.toLowerCase().includes(q) ?? false;
+    if (matchBy === 'testID') return n.identifier?.toLowerCase() === q;
+    if (matchBy === 'label') return n.label?.toLowerCase().includes(q) ?? false;
     return n.identifier?.toLowerCase() === q || (n.label?.toLowerCase().includes(q) ?? false);
   });
 }
 
 const TESTID_RE = /testID\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
-const SCAN_EXTENSIONS = new Set([".tsx", ".jsx", ".ts", ".js"]);
+const SCAN_EXTENSIONS = new Set(['.tsx', '.jsx', '.ts', '.js']);
 
 export function discoverTestIDs(dir: string): string[] {
   const ids = new Set<string>();
@@ -45,7 +45,7 @@ export function discoverTestIDs(dir: string): string[] {
       return;
     }
     for (const entry of entries) {
-      if (entry === "node_modules" || entry.startsWith(".")) continue;
+      if (entry === 'node_modules' || entry.startsWith('.')) continue;
       const full = join(d, entry);
       try {
         const st = lstatSync(full);
@@ -55,7 +55,7 @@ export function discoverTestIDs(dir: string): string[] {
           continue;
         }
         if (!SCAN_EXTENSIONS.has(extname(entry))) continue;
-        const src = readFileSync(full, "utf8");
+        const src = readFileSync(full, 'utf8');
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id) ids.add(id);
@@ -96,19 +96,19 @@ export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promis
     }
 
     if (!elements || elements.length === 0) {
-      return failResult("Provide elements[] or scanDir to discover testIDs from source.");
+      return failResult('Provide elements[] or scanDir to discover testIDs from source.');
     }
 
-    const matchBy = args.matchBy ?? "any";
-    const iosSnap = getCachedSnapshot("ios");
-    const androidSnap = getCachedSnapshot("android");
+    const matchBy = args.matchBy ?? 'any';
+    const iosSnap = getCachedSnapshot('ios');
+    const androidSnap = getCachedSnapshot('android');
 
     if (!iosSnap && !androidSnap) {
       return failResult(
-        "No cached snapshots for either platform. Run device_snapshot on iOS and Android first, " +
-          "then call this tool to compare.",
+        'No cached snapshots for either platform. Run device_snapshot on iOS and Android first, ' +
+          'then call this tool to compare.',
         {
-          hint: "Workflow: open iOS session → device_snapshot → switch to Android → device_snapshot → cross_platform_verify",
+          hint: 'Workflow: open iOS session → device_snapshot → switch to Android → device_snapshot → cross_platform_verify',
         },
       );
     }
@@ -118,36 +118,36 @@ export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promis
     let androidFound = 0;
 
     for (const el of elements) {
-      const iosStatus: ElementResult["ios"] = !iosSnap
-        ? "NO_SNAPSHOT"
+      const iosStatus: ElementResult['ios'] = !iosSnap
+        ? 'NO_SNAPSHOT'
         : findElement(iosSnap.nodes, el, matchBy)
-          ? "FOUND"
-          : "MISSING";
-      const androidStatus: ElementResult["android"] = !androidSnap
-        ? "NO_SNAPSHOT"
+          ? 'FOUND'
+          : 'MISSING';
+      const androidStatus: ElementResult['android'] = !androidSnap
+        ? 'NO_SNAPSHOT'
         : findElement(androidSnap.nodes, el, matchBy)
-          ? "FOUND"
-          : "MISSING";
+          ? 'FOUND'
+          : 'MISSING';
 
-      if (iosStatus === "FOUND") iosFound++;
-      if (androidStatus === "FOUND") androidFound++;
+      if (iosStatus === 'FOUND') iosFound++;
+      if (androidStatus === 'FOUND') androidFound++;
 
       results.push({
         element: el,
         ios: iosStatus,
         android: androidStatus,
-        match: iosStatus === "FOUND" && androidStatus === "FOUND",
+        match: iosStatus === 'FOUND' && androidStatus === 'FOUND',
       });
     }
 
     const missing = results.filter(
-      (r) => !r.match || r.ios === "MISSING" || r.android === "MISSING",
+      (r) => !r.match || r.ios === 'MISSING' || r.android === 'MISSING',
     );
     const total = elements.length;
     const allMatch = missing.length === 0 && iosSnap != null && androidSnap != null;
 
     const summary = {
-      verdict: allMatch ? "PASS" : "FAIL",
+      verdict: allMatch ? 'PASS' : 'FAIL',
       total,
       iosFound,
       androidFound,
@@ -160,7 +160,7 @@ export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promis
     };
 
     if (!iosSnap || !androidSnap) {
-      const missingPlatform = !iosSnap ? "ios" : "android";
+      const missingPlatform = !iosSnap ? 'ios' : 'android';
       return warnResult(
         summary,
         `No snapshot cached for ${missingPlatform}. Run device_snapshot on ${missingPlatform} first for a complete comparison.`,
@@ -174,10 +174,10 @@ export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promis
       // stays a warning (partial coverage); this differ-branch is a real failure.
       const missingLines = missing
         .map((m) => `  ${m.element}: iOS=${m.ios}, Android=${m.android}`)
-        .join("\n");
+        .join('\n');
       return failResult(
         `Cross-platform verification FAILED — ${missing.length}/${total} elements differ:\n${missingLines}`,
-        "CROSS_PLATFORM_MISMATCH",
+        'CROSS_PLATFORM_MISMATCH',
         { summary },
       );
     }

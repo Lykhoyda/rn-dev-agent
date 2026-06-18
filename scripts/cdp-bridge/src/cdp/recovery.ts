@@ -1,5 +1,5 @@
-import type { CDPClient } from "../cdp-client.js";
-import type { EvaluateResult } from "../types.js";
+import type { CDPClient } from '../cdp-client.js';
+import type { EvaluateResult } from '../types.js';
 
 const FRESHNESS_PROBE_MS = 2000;
 const STALE_RETRY_DELAY_MS = 500;
@@ -50,11 +50,11 @@ export async function probeFreshness(
     const result = await Promise.race([
       evalPromise,
       new Promise<EvaluateResult>((resolve) => {
-        probeTimer = setTimeout(() => resolve({ error: "timeout" }), timeoutMs);
+        probeTimer = setTimeout(() => resolve({ error: 'timeout' }), timeoutMs);
       }),
     ]);
     if (probeTimer) clearTimeout(probeTimer);
-    if (result.error || typeof result.value !== "number") {
+    if (result.error || typeof result.value !== 'number') {
       return { fresh: false, version: null, probed: true };
     }
     return { fresh: true, version: result.value, probed: true };
@@ -66,13 +66,13 @@ export async function probeFreshness(
 
 export interface StaleRecoveryResult {
   recovered: boolean;
-  reason: "fresh" | "not-stale" | "reconnected" | "reconnect-failed" | "probe-failed";
+  reason: 'fresh' | 'not-stale' | 'reconnected' | 'reconnect-failed' | 'probe-failed';
   error?: string;
 }
 
 export async function recoverFromStaleTarget(client: CDPClient): Promise<StaleRecoveryResult> {
   if (!client.isConnected) {
-    return { recovered: false, reason: "probe-failed", error: "Client not connected" };
+    return { recovered: false, reason: 'probe-failed', error: 'Client not connected' };
   }
 
   let probe = await probeDev(client, FRESHNESS_PROBE_MS);
@@ -86,15 +86,15 @@ export async function recoverFromStaleTarget(client: CDPClient): Promise<StaleRe
   }
 
   if (!isStale) {
-    return { recovered: false, reason: "not-stale" };
+    return { recovered: false, reason: 'not-stale' };
   }
 
   try {
     await client.softReconnect();
-    return { recovered: true, reason: "reconnected" };
+    return { recovered: true, reason: 'reconnected' };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { recovered: false, reason: "reconnect-failed", error: msg };
+    return { recovered: false, reason: 'reconnect-failed', error: msg };
   }
 }
 
@@ -113,13 +113,13 @@ async function probeDev(
     const result = await Promise.race([
       evalPromise,
       new Promise<EvaluateResult>((resolve) => {
-        timer = setTimeout(() => resolve({ error: "probe timeout" }), timeoutMs);
+        timer = setTimeout(() => resolve({ error: 'probe timeout' }), timeoutMs);
       }),
     ]);
     if (timer) clearTimeout(timer);
     return {
       ok: result.error === undefined && result.value === true,
-      timedOut: result.error === "probe timeout",
+      timedOut: result.error === 'probe timeout',
     };
   } catch {
     if (timer) clearTimeout(timer);

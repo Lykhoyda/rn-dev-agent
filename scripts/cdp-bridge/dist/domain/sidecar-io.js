@@ -4,9 +4,9 @@
 // `<project>/.rn-agent/state/<id>.state.json`. Lightweight wrapper —
 // schema validation happens here so corrupted files surface a clear
 // error rather than crashing downstream consumers.
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { freshRuntimeState } from "./reusable-action.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { freshRuntimeState } from './reusable-action.js';
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath) {
     // <project>/.rn-agent/actions/<id>.yaml → <project>/.rn-agent/state/<id>.state.json
@@ -23,9 +23,9 @@ export function sidecarPathFor(yamlFilePath) {
     // misbehave. Explicit `[/\\]` split is platform-agnostic at the source.
     const dir = dirname(yamlFilePath);
     const parent = dirname(dir);
-    const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
+    const filename = yamlFilePath.replace(/\.ya?ml$/i, '.state.json');
     const base = filename.split(/[\\/]/).pop();
-    return join(parent, "state", base);
+    return join(parent, 'state', base);
 }
 /**
  * Load a sidecar from disk. If absent or unreadable/corrupt, returns a
@@ -36,21 +36,21 @@ export function loadOrInitSidecar(yamlFilePath, now = () => new Date()) {
     const path = sidecarPathFor(yamlFilePath);
     if (existsSync(path)) {
         try {
-            const text = readFileSync(path, "utf8");
+            const text = readFileSync(path, 'utf8');
             const parsed = JSON.parse(text);
             // Minimal schema validation — required scalars present.
             if (parsed &&
                 parsed.schemaVersion === 1 &&
-                typeof parsed.revision === "number" &&
-                typeof parsed.updatedAt === "string" &&
+                typeof parsed.revision === 'number' &&
+                typeof parsed.updatedAt === 'string' &&
                 Array.isArray(parsed.runHistory) &&
                 Array.isArray(parsed.repairHistory) &&
-                typeof parsed.stats === "object") {
+                typeof parsed.stats === 'object') {
                 // A sidecar missing lastSeenMtimeMs (e.g. written before the field
                 // existed) would silently disable the human-edit guard, since
                 // yamlEditedSinceLastSeen compares against undefined. Re-seed just that
                 // field from the YAML's mtime — preserves run/repair history.
-                if (typeof parsed.lastSeenMtimeMs !== "number") {
+                if (typeof parsed.lastSeenMtimeMs !== 'number') {
                     try {
                         parsed.lastSeenMtimeMs = statSync(yamlFilePath).mtimeMs;
                     }
@@ -87,7 +87,7 @@ export function saveSidecar(yamlFilePath, state) {
     const parentDir = dirname(path);
     if (!existsSync(parentDir))
         mkdirSync(parentDir, { recursive: true });
-    writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+    writeFileSync(path, JSON.stringify(state, null, 2) + '\n', 'utf8');
     return { path };
 }
 /**

@@ -1,25 +1,25 @@
-import type { ToolResult } from "../utils.js";
-import { okResult, failResult, warnResult } from "../utils.js";
-import { runMaestroInline, yamlEscape } from "../maestro-invoke.js";
-import { detectPlatform } from "./platform-utils.js";
+import type { ToolResult } from '../utils.js';
+import { okResult, failResult, warnResult } from '../utils.js';
+import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
+import { detectPlatform } from './platform-utils.js';
 
 // iOS dialog button labels. Note: "Don't Allow" uses U+2019 typographic apostrophe,
 // not ASCII '. We emit both spellings so the first-matching Maestro step wins.
 const APOSTROPHE_ASCII = "'";
-const APOSTROPHE_CURLY = "\u2019";
+const APOSTROPHE_CURLY = '\u2019';
 
 const ACCEPT_LABELS_IOS = [
-  "Allow",
-  "Allow Once",
-  "Allow While Using App",
-  "OK",
-  "Open",
-  "Continue",
-  "Yes",
-  "Accept",
+  'Allow',
+  'Allow Once',
+  'Allow While Using App',
+  'OK',
+  'Open',
+  'Continue',
+  'Yes',
+  'Accept',
 ];
 
-const DISMISS_LABELS_IOS_BASE = ["Cancel", "No", "Deny", "Not Now", "Reject"];
+const DISMISS_LABELS_IOS_BASE = ['Cancel', 'No', 'Deny', 'Not Now', 'Reject'];
 
 const DISMISS_LABELS_IOS = [
   ...DISMISS_LABELS_IOS_BASE,
@@ -28,21 +28,21 @@ const DISMISS_LABELS_IOS = [
 ];
 
 const ACCEPT_LABELS_ANDROID = [
-  "Allow",
-  "ALLOW",
-  "While using the app",
-  "Only this time",
-  "OK",
-  "Open",
-  "Continue",
-  "Yes",
+  'Allow',
+  'ALLOW',
+  'While using the app',
+  'Only this time',
+  'OK',
+  'Open',
+  'Continue',
+  'Yes',
 ];
 
-const DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now"];
+const DISMISS_LABELS_ANDROID = ['Deny', 'DENY', 'Cancel', 'CANCEL', 'No', 'Not now'];
 
 export interface SystemDialogArgs {
   label?: string;
-  platform?: "ios" | "android";
+  platform?: 'ios' | 'android';
   timeoutMs?: number;
 }
 
@@ -52,7 +52,7 @@ const PER_LABEL_TIMEOUT_MS = 4_000;
 
 async function tapSystemDialog(
   labels: string[],
-  platform: "ios" | "android",
+  platform: 'ios' | 'android',
   totalTimeoutMs: number,
   slug: string,
 ): Promise<ToolResult> {
@@ -69,7 +69,7 @@ async function tapSystemDialog(
       return warnResult(
         { tapped: false, platform, triedLabels: labels, attempts },
         `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`,
-        { code: "DIALOG_NOT_FOUND" },
+        { code: 'DIALOG_NOT_FOUND' },
       );
     }
     const yaml = `- tapOn:\n    text: "${yamlEscape(label)}"`;
@@ -86,8 +86,8 @@ async function tapSystemDialog(
 
   return warnResult(
     { tapped: false, platform, triedLabels: labels, attempts },
-    "No matching system dialog button found. The dialog may not be visible yet, or the button label differs from known variants. Call device_screenshot to verify the dialog is up, or pass a specific label.",
-    { code: "DIALOG_NOT_FOUND" },
+    'No matching system dialog button found. The dialog may not be visible yet, or the button label differs from known variants. Call device_screenshot to verify the dialog is up, or pass a specific label.',
+    { code: 'DIALOG_NOT_FOUND' },
   );
 }
 
@@ -108,13 +108,13 @@ export function createDeviceAcceptSystemDialogHandler(): (
   return async (args) => {
     const platform = args.platform ?? (await detectPlatform());
     if (!platform) {
-      return failResult("No device detected. Pass platform or boot a device first.", {
-        code: "NO_DEVICE",
+      return failResult('No device detected. Pass platform or boot a device first.', {
+        code: 'NO_DEVICE',
       });
     }
-    const defaults = platform === "ios" ? ACCEPT_LABELS_IOS : ACCEPT_LABELS_ANDROID;
+    const defaults = platform === 'ios' ? ACCEPT_LABELS_IOS : ACCEPT_LABELS_ANDROID;
     const labels = pickLabels(args.label, defaults);
-    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15_000, "sys-accept");
+    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15_000, 'sys-accept');
   };
 }
 
@@ -124,12 +124,12 @@ export function createDeviceDismissSystemDialogHandler(): (
   return async (args) => {
     const platform = args.platform ?? (await detectPlatform());
     if (!platform) {
-      return failResult("No device detected. Pass platform or boot a device first.", {
-        code: "NO_DEVICE",
+      return failResult('No device detected. Pass platform or boot a device first.', {
+        code: 'NO_DEVICE',
       });
     }
-    const defaults = platform === "ios" ? DISMISS_LABELS_IOS : DISMISS_LABELS_ANDROID;
+    const defaults = platform === 'ios' ? DISMISS_LABELS_IOS : DISMISS_LABELS_ANDROID;
     const labels = pickLabels(args.label, defaults);
-    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15_000, "sys-dismiss");
+    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15_000, 'sys-dismiss');
   };
 }

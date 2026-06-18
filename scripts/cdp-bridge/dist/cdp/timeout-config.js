@@ -7,17 +7,17 @@ export const CDP_TIMEOUT_SLOW = 30000;
 // round-trip missed the timeout. 2× multiplier for Android puts p95 back inside budget.
 const ANDROID_MULTIPLIER = 2;
 const METHOD_TIMEOUTS = new Map([
-    ["Runtime.getHeapUsage", CDP_TIMEOUT_FAST],
-    ["Log.enable", CDP_TIMEOUT_FAST],
-    ["Log.disable", CDP_TIMEOUT_FAST],
-    ["HeapProfiler.takeHeapSnapshot", CDP_TIMEOUT_SLOW],
-    ["HeapProfiler.startTrackingHeapObjects", CDP_TIMEOUT_SLOW],
-    ["Profiler.start", CDP_TIMEOUT_SLOW],
-    ["Profiler.stop", CDP_TIMEOUT_SLOW],
-    ["Network.getResponseBody", CDP_TIMEOUT_SLOW],
+    ['Runtime.getHeapUsage', CDP_TIMEOUT_FAST],
+    ['Log.enable', CDP_TIMEOUT_FAST],
+    ['Log.disable', CDP_TIMEOUT_FAST],
+    ['HeapProfiler.takeHeapSnapshot', CDP_TIMEOUT_SLOW],
+    ['HeapProfiler.startTrackingHeapObjects', CDP_TIMEOUT_SLOW],
+    ['Profiler.start', CDP_TIMEOUT_SLOW],
+    ['Profiler.stop', CDP_TIMEOUT_SLOW],
+    ['Network.getResponseBody', CDP_TIMEOUT_SLOW],
 ]);
 function applyPlatformMultiplier(base, platform) {
-    return platform === "android" ? base * ANDROID_MULTIPLIER : base;
+    return platform === 'android' ? base * ANDROID_MULTIPLIER : base;
 }
 export function timeoutForMethod(method, platform) {
     const base = METHOD_TIMEOUTS.get(method) ?? CDP_TIMEOUT_MS;

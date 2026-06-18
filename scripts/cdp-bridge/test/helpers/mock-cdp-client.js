@@ -1,4 +1,4 @@
-import { RingBuffer, DeviceBufferManager, makeDeviceKey } from "../../dist/ring-buffer.js";
+import { RingBuffer, DeviceBufferManager, makeDeviceKey } from '../../dist/ring-buffer.js';
 
 /**
  * Creates a mock CDPClient that satisfies the interface used by tool handlers
@@ -29,7 +29,7 @@ export function createMockClient(overrides = {}) {
       return client._isPaused;
     },
     get state() {
-      return client._isConnected ? "connected" : "disconnected";
+      return client._isConnected ? 'connected' : 'disconnected';
     },
     get metroPort() {
       return client._metroPort;
@@ -107,13 +107,13 @@ export function createMockClient(overrides = {}) {
     _isPaused: false,
     _metroPort: 8081,
     _connectedTarget: {
-      id: "page1",
-      title: "React Native (Hermes)",
-      vm: "Hermes",
-      webSocketDebuggerUrl: "ws://127.0.0.1:8081/debugger/page1",
-      platform: "ios",
+      id: 'page1',
+      title: 'React Native (Hermes)',
+      vm: 'Hermes',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/debugger/page1',
+      platform: 'ios',
     },
-    _networkMode: "cdp",
+    _networkMode: 'cdp',
     _metroEventsClient: null,
     _proxyUrl: null,
     _proxyMultiplexer: null,
@@ -124,7 +124,7 @@ export function createMockClient(overrides = {}) {
     _heapProfilerAvailable: true,
     _scripts: new Map(),
     _connectionGeneration: 1,
-    _autoConnectState: { enabled: true, source: "default" },
+    _autoConnectState: { enabled: true, source: 'default' },
     // M11 defaults: connectedAt=1_000_000 and timeNowFn returning 1_000_000
     // means "just connected, 0ms elapsed" — hint should NOT fire by default.
     // Tests that want the hint to fire override _timeNowFn to a later value.
@@ -144,7 +144,7 @@ export function createMockClient(overrides = {}) {
     async autoConnect(_port, _platform) {
       client._isConnected = true;
       client._helpersInjected = true;
-      return "connected";
+      return 'connected';
     },
 
     async disconnect() {
@@ -163,7 +163,7 @@ export function createMockClient(overrides = {}) {
       // mock multiplexer now exposes a `token` field so open-devtools.ts can
       // build the token-bearing DevTools URL.
       if (client._proxyUrl) return client._proxyUrl;
-      const mockToken = "mock-test-token-AbCdEf1234567890_dashOk";
+      const mockToken = 'mock-test-token-AbCdEf1234567890_dashOk';
       client._proxyUrl = `ws://127.0.0.1:45678/${mockToken}`;
       client._proxyMultiplexer = {
         port: 45678,

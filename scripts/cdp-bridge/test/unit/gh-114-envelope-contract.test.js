@@ -18,9 +18,9 @@
 // each producer emits for a class of event, then run every consumer parser
 // against it. If either side drifts, the test fails before users do.
 
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { findRefByTestID, snapshotEnvelopeFailed } from "../../dist/tools/device-batch.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { findRefByTestID, snapshotEnvelopeFailed } from '../../dist/tools/device-batch.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Producer fixtures — canonical envelopes each dispatch tier emits.
@@ -38,29 +38,29 @@ const IN_TREE_IOS_SNAPSHOT_OK = {
   data: {
     nodes: [
       {
-        ref: "@e0",
-        type: "Application",
+        ref: '@e0',
+        type: 'Application',
         rect: { x: 0, y: 0, width: 393, height: 852 },
-        label: "TaskApp",
-        identifier: "",
+        label: 'TaskApp',
+        identifier: '',
         enabled: true,
         hittable: false,
       },
       {
-        ref: "@e7",
-        type: "Button",
+        ref: '@e7',
+        type: 'Button',
         rect: { x: 320, y: 720, width: 56, height: 56 },
-        label: "Create task",
-        identifier: "fab-create-task",
+        label: 'Create task',
+        identifier: 'fab-create-task',
         enabled: true,
         hittable: true,
       },
       {
-        ref: "@e8",
-        type: "StaticText",
+        ref: '@e8',
+        type: 'StaticText',
         rect: { x: 16, y: 60, width: 200, height: 24 },
-        label: "Tasks",
-        identifier: "header-title",
+        label: 'Tasks',
+        identifier: 'header-title',
         enabled: true,
         hittable: false,
       },
@@ -77,20 +77,20 @@ const IN_TREE_ANDROID_SNAPSHOT_OK = {
   data: {
     nodes: [
       {
-        ref: "@e0",
-        type: "FrameLayout",
+        ref: '@e0',
+        type: 'FrameLayout',
         rect: { x: 0, y: 0, width: 1080, height: 2400 },
-        label: "",
-        identifier: "",
+        label: '',
+        identifier: '',
         enabled: true,
         hittable: false,
       },
       {
-        ref: "@e12",
-        type: "Button",
+        ref: '@e12',
+        type: 'Button',
         rect: { x: 800, y: 2000, width: 168, height: 168 },
-        label: "Create task",
-        identifier: "fab-create-task",
+        label: 'Create task',
+        identifier: 'fab-create-task',
         enabled: true,
         hittable: true,
       },
@@ -104,7 +104,7 @@ const IN_TREE_ANDROID_SNAPSHOT_OK = {
 const LEGACY_DAEMON_SNAPSHOT_OK = {
   ok: true,
   data: {
-    nodes: [{ ref: "el-0", identifier: "fab-create-task", label: "Create task" }],
+    nodes: [{ ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' }],
   },
 };
 
@@ -114,7 +114,7 @@ const LEGACY_DAEMON_SNAPSHOT_OK = {
 const LEGACY_CLI_SNAPSHOT_OK = {
   ok: true,
   data: {
-    nodes: [{ ref: "el-0", identifier: "fab-create-task", label: "Create task" }],
+    nodes: [{ ref: 'el-0', identifier: 'fab-create-task', label: 'Create task' }],
   },
 };
 
@@ -125,14 +125,14 @@ const LEGACY_FAST_RUNNER_SNAPSHOT_OK_NESTED = {
   ok: true,
   data: {
     tree: {
-      ref: "app-0",
-      identifier: "",
-      label: "Application",
+      ref: 'app-0',
+      identifier: '',
+      label: 'Application',
       children: [
         {
-          ref: "btn-7",
-          identifier: "fab-create-task",
-          label: "Create task",
+          ref: 'btn-7',
+          identifier: 'fab-create-task',
+          label: 'Create task',
           children: [],
         },
       ],
@@ -147,19 +147,19 @@ const LEGACY_FAST_RUNNER_SNAPSHOT_OK_NESTED = {
 // failResult shape `{ok:false, error: string, code: string}` instead.
 const IN_TREE_RUNNER_FAILURE_APP_NOT_RUNNING = {
   ok: false,
-  error: "app not running",
-  code: "APP_NOT_RUNNING",
+  error: 'app not running',
+  code: 'APP_NOT_RUNNING',
 };
 
 const LEGACY_DAEMON_FAILURE_NO_DEVICE = {
   ok: false,
-  error: "No iOS simulator booted",
+  error: 'No iOS simulator booted',
 };
 
 const LEGACY_CLI_FAILURE_WITH_CODE = {
   ok: false,
-  error: "agent-device CLI exited with code 1",
-  code: "CLI_SPAWN_FAILED",
+  error: 'agent-device CLI exited with code 1',
+  code: 'CLI_SPAWN_FAILED',
 };
 
 // iOS-specific: XCUIElement.typeText quiescence-timeout shim. The text
@@ -171,7 +171,7 @@ const LEGACY_CLI_FAILURE_WITH_CODE = {
 // a successful fill to SNAPSHOT_FAILED otherwise.
 const IOS_TYPETEXT_RUNNER_TIMEOUT_SHIM = {
   ok: true,
-  data: { typed: true, text: "hello" },
+  data: { typed: true, text: 'hello' },
   meta: { sideEffectSucceeded: true, runnerTimeoutShim: true },
 };
 
@@ -187,43 +187,43 @@ const IN_TREE_SNAPSHOT_OK_EMPTY = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SUCCESS_ENVELOPES_WITH_TARGET = [
-  { name: "in-tree iOS (flat nodes)", env: IN_TREE_IOS_SNAPSHOT_OK, expectedRef: "@e7" },
-  { name: "in-tree Android (flat nodes)", env: IN_TREE_ANDROID_SNAPSHOT_OK, expectedRef: "@e12" },
-  { name: "legacy daemon (flat nodes)", env: LEGACY_DAEMON_SNAPSHOT_OK, expectedRef: "el-0" },
-  { name: "legacy CLI (flat nodes)", env: LEGACY_CLI_SNAPSHOT_OK, expectedRef: "el-0" },
+  { name: 'in-tree iOS (flat nodes)', env: IN_TREE_IOS_SNAPSHOT_OK, expectedRef: '@e7' },
+  { name: 'in-tree Android (flat nodes)', env: IN_TREE_ANDROID_SNAPSHOT_OK, expectedRef: '@e12' },
+  { name: 'legacy daemon (flat nodes)', env: LEGACY_DAEMON_SNAPSHOT_OK, expectedRef: 'el-0' },
+  { name: 'legacy CLI (flat nodes)', env: LEGACY_CLI_SNAPSHOT_OK, expectedRef: 'el-0' },
   {
-    name: "legacy fast-runner (nested)",
+    name: 'legacy fast-runner (nested)',
     env: LEGACY_FAST_RUNNER_SNAPSHOT_OK_NESTED,
-    expectedRef: "btn-7",
+    expectedRef: 'btn-7',
   },
 ];
 
 for (const { name, env, expectedRef } of SUCCESS_ENVELOPES_WITH_TARGET) {
   test(`findRefByTestID: ${name} — resolves testID 'fab-create-task' to ${expectedRef}`, () => {
-    const ref = findRefByTestID(JSON.stringify(env), "fab-create-task");
+    const ref = findRefByTestID(JSON.stringify(env), 'fab-create-task');
     assert.equal(ref, expectedRef);
   });
 }
 
-test("findRefByTestID: in-tree snapshot with empty nodes — returns null (testID not present)", () => {
-  const ref = findRefByTestID(JSON.stringify(IN_TREE_SNAPSHOT_OK_EMPTY), "fab-create-task");
+test('findRefByTestID: in-tree snapshot with empty nodes — returns null (testID not present)', () => {
+  const ref = findRefByTestID(JSON.stringify(IN_TREE_SNAPSHOT_OK_EMPTY), 'fab-create-task');
   assert.equal(ref, null);
 });
 
-test("findRefByTestID: in-tree snapshot with present nodes but no match — returns null", () => {
-  const ref = findRefByTestID(JSON.stringify(IN_TREE_IOS_SNAPSHOT_OK), "nonexistent-testid");
+test('findRefByTestID: in-tree snapshot with present nodes but no match — returns null', () => {
+  const ref = findRefByTestID(JSON.stringify(IN_TREE_IOS_SNAPSHOT_OK), 'nonexistent-testid');
   assert.equal(ref, null);
 });
 
 const FAILURE_ENVELOPES = [
-  { name: "in-tree runner failure (object error)", env: IN_TREE_RUNNER_FAILURE_APP_NOT_RUNNING },
-  { name: "legacy daemon failure (string error)", env: LEGACY_DAEMON_FAILURE_NO_DEVICE },
-  { name: "legacy CLI failure (error + code)", env: LEGACY_CLI_FAILURE_WITH_CODE },
+  { name: 'in-tree runner failure (object error)', env: IN_TREE_RUNNER_FAILURE_APP_NOT_RUNNING },
+  { name: 'legacy daemon failure (string error)', env: LEGACY_DAEMON_FAILURE_NO_DEVICE },
+  { name: 'legacy CLI failure (error + code)', env: LEGACY_CLI_FAILURE_WITH_CODE },
 ];
 
 for (const { name, env } of FAILURE_ENVELOPES) {
   test(`findRefByTestID: ${name} — returns null (refuses to scan failed snapshot)`, () => {
-    const ref = findRefByTestID(JSON.stringify(env), "fab-create-task");
+    const ref = findRefByTestID(JSON.stringify(env), 'fab-create-task');
     assert.equal(ref, null);
   });
 }
@@ -238,13 +238,13 @@ for (const { name, env } of SUCCESS_ENVELOPES_WITH_TARGET) {
   });
 }
 
-test("snapshotEnvelopeFailed: empty-nodes success is NOT a failure (element not present is different)", () => {
+test('snapshotEnvelopeFailed: empty-nodes success is NOT a failure (element not present is different)', () => {
   // Critical contract: handlers depend on this distinction to route
   // SNAPSHOT_FAILED vs TESTID_NOT_FOUND correctly (Phase 128 #5/#6).
   assert.equal(snapshotEnvelopeFailed(JSON.stringify(IN_TREE_SNAPSHOT_OK_EMPTY)), false);
 });
 
-test("snapshotEnvelopeFailed: iOS typeText runner-timeout shim is NOT a failure", () => {
+test('snapshotEnvelopeFailed: iOS typeText runner-timeout shim is NOT a failure', () => {
   // The shim shape carries ok:true + meta.runnerTimeoutShim. Treating
   // it as failure would route every successful iOS fill to
   // SNAPSHOT_FAILED — would visibly break the iOS device_fill smoke test.
@@ -261,34 +261,34 @@ for (const { name, env } of FAILURE_ENVELOPES) {
 // Edge cases — what the parsers do under malformed / null input
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("snapshotEnvelopeFailed: null/undefined input → true (treat missing as failed)", () => {
+test('snapshotEnvelopeFailed: null/undefined input → true (treat missing as failed)', () => {
   assert.equal(snapshotEnvelopeFailed(null), true);
   assert.equal(snapshotEnvelopeFailed(undefined), true);
 });
 
-test("snapshotEnvelopeFailed: empty string → true", () => {
-  assert.equal(snapshotEnvelopeFailed(""), true);
+test('snapshotEnvelopeFailed: empty string → true', () => {
+  assert.equal(snapshotEnvelopeFailed(''), true);
 });
 
-test("snapshotEnvelopeFailed: malformed JSON → true (the parser cannot vouch for the snapshot)", () => {
-  assert.equal(snapshotEnvelopeFailed("not-json"), true);
-  assert.equal(snapshotEnvelopeFailed("{ truncated"), true);
+test('snapshotEnvelopeFailed: malformed JSON → true (the parser cannot vouch for the snapshot)', () => {
+  assert.equal(snapshotEnvelopeFailed('not-json'), true);
+  assert.equal(snapshotEnvelopeFailed('{ truncated'), true);
 });
 
-test("findRefByTestID: malformed JSON → null (no ref to extract)", () => {
-  assert.equal(findRefByTestID("not-json", "any-testid"), null);
+test('findRefByTestID: malformed JSON → null (no ref to extract)', () => {
+  assert.equal(findRefByTestID('not-json', 'any-testid'), null);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cross-producer parity — same logical event, structurally compatible output
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("parity: in-tree iOS and in-tree Android emit structurally identical flat-nodes shape", () => {
+test('parity: in-tree iOS and in-tree Android emit structurally identical flat-nodes shape', () => {
   // Both runners should expose the same `{ok, data: {nodes: [{ref, identifier, label}]}}`
   // shape so handlers can be platform-agnostic. A divergence here
   // (e.g. Android renaming `identifier` to `accessibilityId`) would
   // silently break the iOS-tested handlers on Android.
   const iosKeys = Object.keys(IN_TREE_IOS_SNAPSHOT_OK.data.nodes[0]).sort();
   const androidKeys = Object.keys(IN_TREE_ANDROID_SNAPSHOT_OK.data.nodes[0]).sort();
-  assert.deepEqual(iosKeys, androidKeys, "iOS and Android flat-node keys must match");
+  assert.deepEqual(iosKeys, androidKeys, 'iOS and Android flat-node keys must match');
 });

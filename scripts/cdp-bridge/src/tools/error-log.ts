@@ -1,26 +1,26 @@
-import type { CDPClient } from "../cdp-client.js";
-import type { ErrorEntry } from "../types.js";
-import { okResult, failResult, withConnection } from "../utils.js";
-import { symbolicateErrors } from "../symbolicate.js";
+import type { CDPClient } from '../cdp-client.js';
+import type { ErrorEntry } from '../types.js';
+import { okResult, failResult, withConnection } from '../utils.js';
+import { symbolicateErrors } from '../symbolicate.js';
 
 export function createErrorLogHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: { clear: boolean }, client) => {
     if (args.clear) {
-      const clearResult = await client.evaluate(client.helperExpr("clearErrors()"));
+      const clearResult = await client.evaluate(client.helperExpr('clearErrors()'));
       if (clearResult.error) {
         return failResult(`Failed to clear errors: ${clearResult.error}`);
       }
       return okResult({ cleared: true });
     }
 
-    const result = await client.evaluate(client.helperExpr("getErrors()"));
+    const result = await client.evaluate(client.helperExpr('getErrors()'));
 
     if (result.error) {
       return failResult(`Error log error: ${result.error}`);
     }
 
-    if (typeof result.value !== "string") {
-      return failResult("Unexpected response from getErrors — expected JSON string");
+    if (typeof result.value !== 'string') {
+      return failResult('Unexpected response from getErrors — expected JSON string');
     }
 
     let parsed: unknown;
@@ -31,7 +31,7 @@ export function createErrorLogHandler(getClient: () => CDPClient) {
     }
 
     if (!Array.isArray(parsed)) {
-      return failResult("Unexpected response from getErrors — expected array");
+      return failResult('Unexpected response from getErrors — expected array');
     }
 
     if (parsed.length === 0) {
@@ -39,7 +39,7 @@ export function createErrorLogHandler(getClient: () => CDPClient) {
         { errors: [], count: 0 },
         {
           meta: {
-            hint: "No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)",
+            hint: 'No JS errors captured. If the app crashed, the error may be native — check: adb logcat -b crash (Android) or xcrun simctl spawn booted log stream (iOS)',
           },
         },
       );

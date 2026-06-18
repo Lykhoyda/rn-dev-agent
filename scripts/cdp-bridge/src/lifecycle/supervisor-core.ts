@@ -1,10 +1,10 @@
 export type JsonRpcId = string | number;
 
 export type SupervisorAction =
-  | { kind: "toWorker"; line: string }
-  | { kind: "toClient"; line: string }
-  | { kind: "spawn" }
-  | { kind: "exit"; code: number };
+  | { kind: 'toWorker'; line: string }
+  | { kind: 'toClient'; line: string }
+  | { kind: 'spawn' }
+  | { kind: 'exit'; code: number };
 
 export interface SupervisorCoreOpts {
   maxRespawns?: number;
@@ -39,12 +39,12 @@ function parseLine(line: string): ParsedMsg | null {
 }
 
 export function workerExitDetail(code: number | null, signal: string | null): string {
-  return signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
+  return signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
 }
 
 export function workerDeathErrorLine(id: JsonRpcId, detail: string): string {
   return JSON.stringify({
-    jsonrpc: "2.0",
+    jsonrpc: '2.0',
     id,
     error: {
       code: -32000,
@@ -58,13 +58,13 @@ export function terminalErrorLine(
   lastExit: string | null,
   logPath: string | null = null,
 ): string {
-  const where = logPath ? `Check ${logPath}` : "Set LOG_LEVEL=info and check the bridge log";
+  const where = logPath ? `Check ${logPath}` : 'Set LOG_LEVEL=info and check the bridge log';
   return JSON.stringify({
-    jsonrpc: "2.0",
+    jsonrpc: '2.0',
     id,
     error: {
       code: -32000,
-      message: `rn-dev-agent bridge worker is crash-looping (last: ${lastExit ?? "unknown"}); restart budget exhausted. ${where}, then restart the Claude Code session.`,
+      message: `rn-dev-agent bridge worker is crash-looping (last: ${lastExit ?? 'unknown'}); restart budget exhausted. ${where}, then restart the Claude Code session.`,
     },
   });
 }
@@ -77,8 +77,8 @@ export function bridgeEnvState(env: NodeJS.ProcessEnv): {
   lastWorkerExit: string | null;
 } {
   return {
-    supervised: env.RN_BRIDGE_SUPERVISED === "1",
-    workerRestarts: Number(env.RN_BRIDGE_RESTARTS ?? "0") || 0,
+    supervised: env.RN_BRIDGE_SUPERVISED === '1',
+    workerRestarts: Number(env.RN_BRIDGE_RESTARTS ?? '0') || 0,
     lastWorkerExit: env.RN_BRIDGE_LAST_EXIT ?? null,
   };
 }
@@ -107,7 +107,7 @@ export class SupervisorCore {
   private readonly windowMs: number;
   private readonly now: () => number;
 
-  private mode: "running" | "restarting" | "terminal" = "running";
+  private mode: 'running' | 'restarting' | 'terminal' = 'running';
   private cachedInitialize: string | null = null;
   private cachedInitialized: string | null = null;
   private initializeId: JsonRpcId | null = null;
@@ -136,20 +136,20 @@ export class SupervisorCore {
     return this.totalRestarts;
   }
 
-  get state(): "running" | "restarting" | "terminal" {
+  get state(): 'running' | 'restarting' | 'terminal' {
     return this.mode;
   }
 
   onClientLine(line: string): SupervisorAction[] {
     const msg = parseLine(line);
-    if (msg?.method === "initialize") {
+    if (msg?.method === 'initialize') {
       this.cachedInitialize = line;
       this.initializeId = msg.id ?? null;
     }
-    if (msg?.method === "notifications/initialized") this.cachedInitialized = line;
-    if (this.mode === "terminal") {
+    if (msg?.method === 'notifications/initialized') this.cachedInitialized = line;
+    if (this.mode === 'terminal') {
       if (msg?.id !== undefined && !msg.isResponse) {
-        return [{ kind: "toClient", line: terminalErrorLine(msg.id, this.lastExit, this.logPath) }];
+        return [{ kind: 'toClient', line: terminalErrorLine(msg.id, this.lastExit, this.logPath) }];
       }
       return [];
     }
@@ -159,29 +159,29 @@ export class SupervisorCore {
     // a death error AND a queued replay: two responses for one JSON-RPC id.
     // `initialized` is cache-only here: the replay path delivers it after
     // the handshake response; queueing it too would send it twice.
-    if (this.mode === "restarting") {
-      if (msg?.method !== "notifications/initialized") this.queue.push(line);
+    if (this.mode === 'restarting') {
+      if (msg?.method !== 'notifications/initialized') this.queue.push(line);
       return [];
     }
     // initialize stays OUT of the pending-set: on worker death it is replayed
     // to the fresh worker (and its answer forwarded if the client never got
     // one) — a -32000 "retry" for it would wedge the MCP handshake.
-    if (msg?.id !== undefined && !msg.isResponse && msg.method !== "initialize")
+    if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize')
       this.pending.add(msg.id);
-    return [{ kind: "toWorker", line }];
+    return [{ kind: 'toWorker', line }];
   }
 
   onWorkerLine(line: string): SupervisorAction[] {
     const msg = parseLine(line);
     if (msg?.isResponse && msg.id !== undefined && msg.id === this.replaySwallowId) {
       this.replaySwallowId = null;
-      this.mode = "running";
+      this.mode = 'running';
       // Strict MCP ordering: the cached `initialized` notification follows
       // the fresh worker's initialize RESPONSE — never precedes it — then
       // the queued client traffic drains.
       const after: SupervisorAction[] = [];
       if (this.cachedInitialized !== null)
-        after.push({ kind: "toWorker", line: this.cachedInitialized });
+        after.push({ kind: 'toWorker', line: this.cachedInitialized });
       return [...after, ...this.drainQueue()];
     }
     if (msg?.isResponse && msg.id !== undefined && msg.id === this.replayForwardId) {
@@ -189,8 +189,8 @@ export class SupervisorCore {
       // real handshake response: forward it, then release queued traffic.
       this.replayForwardId = null;
       this.initializeAnswered = true;
-      this.mode = "running";
-      return [{ kind: "toClient", line }, ...this.drainQueue()];
+      this.mode = 'running';
+      return [{ kind: 'toClient', line }, ...this.drainQueue()];
     }
     // Pending-set + swallow logic key on CLIENT request ids. This bridge
     // server sends zero server-initiated requests today (no sampling/roots/
@@ -199,7 +199,7 @@ export class SupervisorCore {
       this.pending.delete(msg.id);
       if (msg.id === this.initializeId) this.initializeAnswered = true;
     }
-    return [{ kind: "toClient", line }];
+    return [{ kind: 'toClient', line }];
   }
 
   /** SIGUSR2 hot-reload exits 1 — without this one-shot flag the requested
@@ -214,10 +214,10 @@ export class SupervisorCore {
     signal: string | null,
     shutdownRequested: boolean,
   ): SupervisorAction[] {
-    if (shutdownRequested) return [{ kind: "exit", code: 0 }];
+    if (shutdownRequested) return [{ kind: 'exit', code: 0 }];
     this.lastExit = workerExitDetail(code, signal);
     const errors: SupervisorAction[] = [...this.pending].map((id) => ({
-      kind: "toClient",
+      kind: 'toClient',
       line: workerDeathErrorLine(id, this.lastExit as string),
     }));
     this.pending.clear();
@@ -226,22 +226,22 @@ export class SupervisorCore {
       // burn the anti-crash-loop budget — the exit was intentional.
       this.hotReloadPending = false;
       this.totalRestarts += 1;
-      this.mode = "restarting";
-      return [...errors, { kind: "spawn" }];
+      this.mode = 'restarting';
+      return [...errors, { kind: 'spawn' }];
     }
     // Unexpected-but-clean end: mirror it. Something intentionally finished
     // the worker (not a crash); respawning would fight that intent.
-    if (code === 0 && !signal) return [...errors, { kind: "exit", code: 0 }];
+    if (code === 0 && !signal) return [...errors, { kind: 'exit', code: 0 }];
     const t = this.now();
     this.respawnTimes = this.respawnTimes.filter((ts) => t - ts < this.windowMs);
     if (this.respawnTimes.length >= this.maxRespawns) {
-      this.mode = "terminal";
+      this.mode = 'terminal';
       // initialize is exempt from pending (replayable), so a worker that
       // crash-loops to exhaustion before EVER answering it would otherwise go
       // terminal silently — the MCP host would hang on the handshake.
       if (this.initializeId !== null && !this.initializeAnswered) {
         errors.push({
-          kind: "toClient",
+          kind: 'toClient',
           line: terminalErrorLine(this.initializeId, this.lastExit, this.logPath),
         });
       }
@@ -249,9 +249,9 @@ export class SupervisorCore {
       // (they're not in pending, so the loop above missed them) and drop them.
       for (const queued of this.queue) {
         const msg = parseLine(queued);
-        if (msg?.id !== undefined && !msg.isResponse && msg.method !== "initialize") {
+        if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize') {
           errors.push({
-            kind: "toClient",
+            kind: 'toClient',
             line: terminalErrorLine(msg.id, this.lastExit, this.logPath),
           });
         }
@@ -261,18 +261,18 @@ export class SupervisorCore {
     }
     this.respawnTimes.push(t);
     this.totalRestarts += 1;
-    this.mode = "restarting";
-    return [...errors, { kind: "spawn" }];
+    this.mode = 'restarting';
+    return [...errors, { kind: 'spawn' }];
   }
 
   onSpawned(): SupervisorAction[] {
-    if (this.mode !== "restarting") return [];
+    if (this.mode !== 'restarting') return [];
     if (this.cachedInitialize !== null && this.initializeId !== null) {
       // Only the `initialize` request replays here; the mode stays
       // `restarting` until the fresh worker answers it, so no client traffic
       // can reach a pre-handshake worker. The cached `initialized`
       // notification follows the response (strict MCP handshake ordering).
-      const replay: SupervisorAction[] = [{ kind: "toWorker", line: this.cachedInitialize }];
+      const replay: SupervisorAction[] = [{ kind: 'toWorker', line: this.cachedInitialize }];
       if (this.initializeAnswered) {
         // Claude Code already has its initialize response — the fresh
         // worker's duplicate must be swallowed; initialized + queue follow.
@@ -284,7 +284,7 @@ export class SupervisorCore {
       }
       return replay;
     }
-    this.mode = "running";
+    this.mode = 'running';
     return this.drainQueue();
   }
 
@@ -292,9 +292,9 @@ export class SupervisorCore {
     const flushed = this.queue.map((queued): SupervisorAction => {
       // Delivery is the moment a request becomes failable — pending from here.
       const msg = parseLine(queued);
-      if (msg?.id !== undefined && !msg.isResponse && msg.method !== "initialize")
+      if (msg?.id !== undefined && !msg.isResponse && msg.method !== 'initialize')
         this.pending.add(msg.id);
-      return { kind: "toWorker", line: queued };
+      return { kind: 'toWorker', line: queued };
     });
     this.queue = [];
     return flushed;
