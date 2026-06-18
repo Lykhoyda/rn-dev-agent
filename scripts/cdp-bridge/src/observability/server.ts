@@ -12,6 +12,11 @@ export interface E2eServerDeps {
   triggerRun: (pattern?: string) => Promise<unknown>;
   listRuns: () => Promise<unknown[]>;
   loadRun: (id: string) => Promise<unknown | null>;
+  listActions: () => Promise<unknown[]>;
+  runAction: (
+    actionId: string,
+    params?: Record<string, string>,
+  ) => Promise<{ ok: boolean; output?: string; error?: string; missingParams?: string[] }>;
 }
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +88,8 @@ export class ObservabilityServer {
     if (url === '/api/e2e/runs') return void this.e2eListRuns(res);
     const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
     if (runById) return void this.e2eLoadRun(runById[1], res);
+    if (url === '/api/e2e/actions') return void this.e2eListActions(res);
+    if (url === '/api/e2e/actions/run') return void this.e2eRunAction(req, res);
     if (url === '/') return this.index(res);
     res.writeHead(404);
     res.end();
@@ -270,6 +277,78 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, run);
+    } catch (err) {
+      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async e2eListActions(res: ServerResponse): Promise<void> {
+    if (!this.e2e) {
+      this.json(res, 501, { error: 'e2e not configured' });
+      return;
+    }
+    try {
+      const actions = await this.e2e.listActions();
+      this.json(res, 200, actions);
+    } catch (err) {
+      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async e2eRunAction(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.e2e) {
+      this.json(res, 501, { error: 'e2e not configured' });
+      return;
+    }
+    if (req.method?.toUpperCase() === 'GET') {
+      this.json(res, 405, { error: 'method not allowed' });
+      return;
+    }
+    const check = isPostAllowed(
+      { method: req.method, headers: req.headers as Record<string, string | string[] | undefined> },
+      this.e2e.token,
+    );
+    if (!check.ok) {
+      this.json(res, check.status, { error: check.reason });
+      return;
+    }
+    let body = '';
+    await new Promise<void>((resolve, reject) => {
+      let bytes = 0;
+      req.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 65536) {
+          req.destroy();
+          reject(new Error('body too large'));
+          return;
+        }
+        body += chunk.toString();
+      });
+      req.on('end', resolve);
+      req.on('error', reject);
+    });
+    let parsed: { actionId?: string; params?: Record<string, string> } = {};
+    try {
+      parsed = JSON.parse(body) as { actionId?: string; params?: Record<string, string> };
+    } catch {
+      this.json(res, 400, { error: 'invalid json body' });
+      return;
+    }
+    if (!parsed.actionId || typeof parsed.actionId !== 'string' || !parsed.actionId.trim()) {
+      this.json(res, 400, { error: 'actionId is required' });
+      return;
+    }
+    try {
+      const result = await this.e2e.runAction(parsed.actionId, parsed.params);
+      if (result.missingParams && result.missingParams.length > 0) {
+        this.json(res, 400, result);
+        return;
+      }
+      if (!result.ok) {
+        this.json(res, 500, result);
+        return;
+      }
+      this.json(res, 200, result);
     } catch (err) {
       this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }

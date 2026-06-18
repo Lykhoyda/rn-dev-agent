@@ -81,6 +81,9 @@ import { probeAppInstalled } from './cdp/app-installed-probe.js';
 import { findProjectRoot } from './nav-graph/storage.js';
 import { makeCsrfToken } from './observability/e2e-csrf.js';
 import { loadIndex, loadRunRecord } from './domain/e2e-run.js';
+import { listActions } from './domain/action-inventory.js';
+import { loadAction } from './domain/action-store.js';
+import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
@@ -1518,11 +1521,41 @@ const triggerE2eRun = async (pattern) => {
     }
 };
 const projectRootFor = () => findProjectRoot() ?? process.cwd();
+const runActionHandler = createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) });
 setObserveE2eDeps({
     token: e2eCsrfToken,
     triggerRun: triggerE2eRun,
     listRuns: async () => loadIndex(projectRootFor()),
     loadRun: async (id) => loadRunRecord(projectRootFor(), id),
+    listActions: async () => listActions(projectRootFor()),
+    runAction: async (actionId, params) => {
+        const root = projectRootFor();
+        const action = loadAction(root, actionId);
+        if (!action)
+            return { ok: false, error: `action not found: ${actionId}` };
+        const required = action.metadata.params ?? [];
+        if (required.length > 0) {
+            const config = loadE2eConfig(root);
+            const resolved = resolveParams(config, actionId, required);
+            if (!resolved.ok)
+                return { ok: false, missingParams: resolved.missing };
+            params = resolved.params;
+        }
+        const L = arbiter.tryAcquire('flow', `observe-run-action:${actionId}`);
+        if (!L.ok)
+            return { ok: false, error: 'device busy' };
+        try {
+            const result = await runActionHandler({ actionId, params, trigger: 'human' });
+            const text = result.content?.[0]?.text ?? '';
+            return { ok: true, output: text };
+        }
+        catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+        finally {
+            arbiter.release(L.lease);
+        }
+    },
 });
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
