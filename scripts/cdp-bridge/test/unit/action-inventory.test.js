@@ -6,7 +6,10 @@ import { tmpdir } from 'node:os';
 import { listActions } from '../../dist/domain/action-inventory.js';
 
 function makeProject() {
-  const root = join(tmpdir(), `action-inv-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const root = join(
+    tmpdir(),
+    `action-inv-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
   return root;
 }
@@ -26,7 +29,11 @@ test('listActions returns correct summaries sorted by id', async () => {
   const root = makeProject();
   try {
     writeAction(root, 'beta-flow');
-    writeAction(root, 'alpha-flow', '# mutates: true\n# appId: com.example.app\n# params: [USER, PASS]\n');
+    writeAction(
+      root,
+      'alpha-flow',
+      '# mutates: true\n# appId: com.example.app\n# params: [USER, PASS]\n',
+    );
     const result = await listActions(root);
     assert.equal(result.length, 2);
     assert.equal(result[0].id, 'alpha-flow');
@@ -48,7 +55,10 @@ test('listActions skips unparseable files and continues', async () => {
   const root = makeProject();
   try {
     writeAction(root, 'good-action');
-    writeFileSync(join(root, '.rn-agent', 'actions', 'bad-action.yaml'), 'not: yaml: with: no: m7: header\n');
+    writeFileSync(
+      join(root, '.rn-agent', 'actions', 'bad-action.yaml'),
+      'not: yaml: with: no: m7: header\n',
+    );
     const result = await listActions(root);
     assert.equal(result.length, 1);
     assert.equal(result[0].id, 'good-action');
