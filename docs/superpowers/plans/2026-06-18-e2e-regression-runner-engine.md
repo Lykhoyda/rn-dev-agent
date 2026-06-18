@@ -10,18 +10,30 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-18-e2e-regression-runner-design.md`
 
+## Amendments applied from the multi-LLM plan review (Codex + Claude, 2026-06-18)
+
+The first plan draft was reviewed before any code (per the repo's "review the plan with other LLMs" step). Gemini failed to respond this run; Codex + Claude converged with source-verified findings. Six blockers + should-fixes are folded in below:
+
+1. **Frozen lock was non-executable (BLOCKER).** `loadAction().body` returns only the step lines — `splitYaml` (`action-store.ts:67`) excludes the pre-`---` `appId:` top section. Fix: **freeze the raw action file verbatim** (`readFileSync(action.filePath)`), not `action.body`, and separate lock metadata from the flow with an explicit sentinel line. The Task 7 fixture is now a realistic `appId:`/`---`/`#header`/steps action.
+2. **Locked-test parser fragility (BLOCKER).** `lastIndexOf('\n#')` mis-splits when the flow body contains `#` comments. Fix: split on the sentinel `# e2e-locked-flow-below`.
+3. **Parser test fixtures classified as UNKNOWN (BLOCKER).** Real `parseMaestroFailure` (`maestro-error-parser.ts:52-95`) requires **quoted** selectors (`id='X'`). Fixtures now use real Maestro output strings.
+4. **Production wiring gap (BLOCKER).** The shipped tool never probed Metro/app/UDID nor reloaded. Fix: Task 9 registers the handler with **real `preflightCheck` + `runReload` defaults built in `index.ts`** (where the module-private `getClient`/`setClient`/`createClient` live).
+5. **TypeScript blockers.** New error codes weren't in `ToolErrorCode`; `SessionState` was imported from the wrong module. Fix: extend `ToolErrorCode` (Task 7 step 1); import `SessionState` from `../types.js`.
+6. **Params (BLOCKER vs spec).** v1 has no params source, so **lock refuses param-needing actions** (`PARAMS_UNSUPPORTED`) and the suite **skips** any it encounters — never sends empty `-e KEY=`, never counts a param-gap as a regression.
+7. **Should-fixes folded in:** empty suite → `warnResult` (no false-green record); single-slot request written **before** the preflight `await` + `updatedAt`-staleness in `isRunActive` (PID-reuse can't wedge it); discover `.yaml` only; reload failure → warn, not crash; honor `requested → running` + per-test progress; startup recovery runs in `main()` (worker), not the supervisor; `/lock-e2e` frontmatter mirrors `run-action.md`.
+
 ## Global Constraints
 
-- **Node >= 22 LTS.** TypeScript `strict`. ESM with explicit `.js` import extensions. Use `import type { ... }` for type-only imports (project convention). No unnecessary comments. Single-quote style (oxfmt enforced).
-- **Tests live at `scripts/cdp-bridge/test/unit/<name>.test.js`** (top-level only — CI glob `test/unit/*.test.js` is non-recursive, B217). Framework: `node:test` + `node:assert/strict`. Import the code-under-test from **`../../dist/<path>.js`** (compiled), never from `src/`.
-- **Build before test:** `npm run build` (runs `tsc`) compiles `src/ → dist/`. `dist/` is tracked in git and must be rebuilt + committed.
-- **Test commands** (run from `scripts/cdp-bridge/`): full = `npm test`; single file = `npm run build && node --test 'test/unit/<name>.test.js'`.
-- **Changeset:** package name is `rn-dev-agent-cdp`; add a `.changeset/<slug>.md` (`minor` bump for this feature).
-- **Path safety:** any id → path must pass `assertValidActionId(id, ctx)` and `assertWithinDir(file, baseDir)` (from `domain/path-safety.js`).
-- **projectRoot is threaded explicitly** (arg), falling back to `findProjectRoot()` (from `nav-graph/storage.js`) then `process.cwd()`.
-- **Lease rule:** flow-running tools go in `FLOW_TOOLS` (arbiter leases them); *core* functions never acquire a lease and call `createMaestroRunHandler()` directly.
-- **MCP results** use `okResult`/`failResult`/`warnResult` from `utils.js` (envelope `{ ok, data?, error?, code?, meta? }` serialized into `content[0].text`).
-- **v1 scope:** strict-on-booted, no isolation, no native rebuild, no HTTP endpoint/web page (those are Plan 2).
+- **Node >= 22 LTS.** TypeScript `strict`. ESM with explicit `.js` import extensions. `import type { ... }` for type-only imports. No unnecessary comments. Single-quote style (oxfmt).
+- **Tests live at `scripts/cdp-bridge/test/unit/<name>.test.js`** (top-level only — CI glob `test/unit/*.test.js` is non-recursive, B217). Framework: `node:test` + `node:assert/strict`. Import code-under-test from **`../../dist/<path>.js`** (compiled), never `src/`.
+- **Build before test:** `npm run build` (tsc) compiles `src/ → dist/`. `dist/` is tracked and must be rebuilt + committed.
+- **Commands** (from `scripts/cdp-bridge/`): full = `npm test`; single = `npm run build && node --test 'test/unit/<name>.test.js'`.
+- **Changeset:** package `rn-dev-agent-cdp`; `.changeset/<slug>.md` (`minor`).
+- **Path safety:** any id → path passes `assertValidActionId(id, ctx)` + `assertWithinDir(file, baseDir)` (`domain/path-safety.js`).
+- **projectRoot** threaded explicitly; fallback `findProjectRoot()` (`nav-graph/storage.js`) then `process.cwd()`.
+- **Lease rule:** flow-running tools go in `FLOW_TOOLS`; *core* functions never lease and call `createMaestroRunHandler()` directly.
+- **MCP results** use `okResult`/`failResult`/`warnResult` from `utils.js`. `failResult`'s code arg is typed `ToolErrorCode` — new codes must be added to that union (Task 7).
+- **v1 scope:** strict-on-booted, no isolation, no native rebuild, no HTTP endpoint/web page (Plan 2), param-free locked tests only.
 
 ---
 
@@ -29,17 +41,18 @@
 
 | File | Responsibility |
 |---|---|
-| `src/domain/e2e-test.ts` | `LockedE2eTest` type; serialize/parse the frozen file header; path helpers; freeze/load/discover IO |
-| `src/domain/e2e-run.ts` | `E2eRunRecord` + result types; `classifyFlowResult` (treat-as-regression); verdict; `diffNewlyFailing`; record + index persistence; `lastGreenRunId` |
+| `src/domain/e2e-test.ts` | `LockedE2eTest`; serialize/parse the frozen file (sentinel split); path helpers; freeze (raw flow) / load / discover |
+| `src/domain/e2e-run.ts` | `E2eRunRecord` + result types; `classifyFlowResult`; `computeVerdict`; `diffNewlyFailing`; record + index persistence; `lastGreenRunId` |
 | `src/domain/e2e-run-request.ts` | Durable run-request + status state machine; `recoverInterruptedRequests` |
-| `src/e2e/git-info.ts` | `getGitInfo()` — sha + dirty (injectable exec) |
-| `src/e2e/preflight.ts` | `preflight()` gate (Metro/app/runner) + `probeMetro()` |
-| `src/tools/lock-e2e-test.ts` | `lockE2eTestCore` + `createLockE2eTestHandler` (verify strict pass → freeze) |
-| `src/tools/run-e2e-suite.ts` | `runE2eSuiteCore` + `createRunE2eSuiteHandler` (preflight → reload → loop → classify → record) |
-| `src/index.ts` (modify) | register both tools; wire startup interrupted-recovery |
+| `src/e2e/git-info.ts` | `getGitInfo()` (injectable exec) |
+| `src/e2e/preflight.ts` | `preflight()` gate + `probeMetro()` |
+| `src/tools/lock-e2e-test.ts` | `lockE2eTestCore` + `createLockE2eTestHandler` |
+| `src/tools/run-e2e-suite.ts` | `runE2eSuiteCore` + `createRunE2eSuiteHandler` |
+| `src/index.ts` (modify) | extend `ToolErrorCode` callers; register both tools with real preflight/reload deps; startup interrupted-recovery |
+| `src/types.ts` (modify) | extend `ToolErrorCode` union |
 | `src/lifecycle/device-arbiter.ts` (modify) | add both tool names to `FLOW_TOOLS` |
-| `commands/lock-e2e.md` | `/lock-e2e <action>` convenience command |
-| `.gitignore` (modify) | ignore `.rn-agent/state/e2e-runs/` (machine state); locked tests under `.rn-agent/e2e/` stay tracked |
+| `commands/lock-e2e.md` | `/lock-e2e <action>` command |
+| `.gitignore` (modify) | ignore `.rn-agent/state/e2e-runs/`; keep `.rn-agent/e2e/` tracked |
 
 ---
 
@@ -50,8 +63,8 @@
 - Test: `scripts/cdp-bridge/test/unit/e2e-test-serialize.test.js`
 
 **Interfaces:**
-- Produces: `interface LockedE2eTest { id: string; intent: string; sourceActionId: string; lockedAt: string; lockedGitSha: string | null; sourceContentHash: string; status: 'locked'; params?: string[]; appId?: string; body: string; filePath: string }`
-- Produces: `serializeLockedTest(meta: Omit<LockedE2eTest,'filePath'>): string`, `parseLockedTest(text: string, filePath: string): LockedE2eTest | null`, `e2eDirFor(projectRoot: string): string`, `e2ePathFor(projectRoot: string, id: string): string`
+- Produces: `interface LockedE2eTest { id: string; intent: string; sourceActionId: string; lockedAt: string; lockedGitSha: string | null; sourceContentHash: string; status: 'locked'; params?: string[]; appId?: string; flow: string; filePath: string }`
+- Produces: `serializeLockedTest(meta: Omit<LockedE2eTest,'filePath'>): string` (lock-comment header + `# e2e-locked-flow-below` sentinel + `flow`); `parseLockedTest(text: string, filePath: string): LockedE2eTest | null` (split on sentinel); `e2eDirFor(projectRoot): string`; `e2ePathFor(projectRoot, id): string`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -69,26 +82,31 @@ const META = {
   lockedGitSha: 'abc1234',
   sourceContentHash: 'deadbeef',
   status: 'locked',
-  params: ['PRODUCT_ID'],
+  params: undefined,
   appId: 'com.example.shop',
-  body: 'appId: com.example.shop\n- launchApp\n- tapOn: "Add"\n',
+  // a realistic flow: appId top section, separator, M7 comments, AND a '#' comment in the body
+  flow: 'appId: com.example.shop\n---\n# id: add-to-cart\n- launchApp\n# tap the add button\n- tapOn: "Add"\n',
 };
 
-test('serialize → parse round-trips all lock fields', () => {
+test('serialize → parse round-trips lock fields and preserves the full executable flow', () => {
   const text = serializeLockedTest(META);
   const parsed = parseLockedTest(text, '/x/.rn-agent/e2e/add-to-cart.yaml');
   assert.equal(parsed.id, 'add-to-cart');
   assert.equal(parsed.sourceActionId, 'add-to-cart');
   assert.equal(parsed.lockedGitSha, 'abc1234');
   assert.equal(parsed.sourceContentHash, 'deadbeef');
-  assert.deepEqual(parsed.params, ['PRODUCT_ID']);
   assert.equal(parsed.appId, 'com.example.shop');
-  assert.match(parsed.body, /launchApp/);
   assert.equal(parsed.filePath, '/x/.rn-agent/e2e/add-to-cart.yaml');
+  // BLOCKER-1: flow must still contain the executable appId header + separator
+  assert.match(parsed.flow, /^appId: com\.example\.shop$/m);
+  assert.match(parsed.flow, /^---$/m);
+  // BLOCKER-4: a '#' comment INSIDE the body must not corrupt the split
+  assert.match(parsed.flow, /# tap the add button/);
+  assert.match(parsed.flow, /tapOn: "Add"/);
 });
 
-test('parseLockedTest returns null when lock header is missing', () => {
-  assert.equal(parseLockedTest('- launchApp\n', '/x/y.yaml'), null);
+test('parseLockedTest returns null when the lock header is missing', () => {
+  assert.equal(parseLockedTest('appId: com.x\n---\n- launchApp\n', '/x/y.yaml'), null);
 });
 
 test('e2ePathFor rejects path traversal', () => {
@@ -105,7 +123,7 @@ Expected: FAIL — `Cannot find module '../../dist/domain/e2e-test.js'`
 
 ```typescript
 // src/domain/e2e-test.ts
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 
 export interface LockedE2eTest {
@@ -118,9 +136,11 @@ export interface LockedE2eTest {
   status: 'locked';
   params?: string[];
   appId?: string;
-  body: string;
+  flow: string;
   filePath: string;
 }
+
+const FLOW_SENTINEL = '# e2e-locked-flow-below';
 
 export function e2eDirFor(projectRoot: string): string {
   return join(projectRoot, '.rn-agent', 'e2e');
@@ -135,34 +155,37 @@ export function e2ePathFor(projectRoot: string, id: string): string {
 }
 
 export function serializeLockedTest(meta: Omit<LockedE2eTest, 'filePath'>): string {
-  const lines = [
-    `# e2e-locked-test: true`,
+  const header = [
+    '# e2e-locked-test: true',
     `# id: ${meta.id}`,
     `# intent: ${meta.intent}`,
     `# sourceActionId: ${meta.sourceActionId}`,
     `# lockedAt: ${meta.lockedAt}`,
     `# lockedGitSha: ${meta.lockedGitSha ?? ''}`,
     `# sourceContentHash: ${meta.sourceContentHash}`,
-    `# status: locked`,
+    '# status: locked',
   ];
-  if (meta.appId) lines.push(`# appId: ${meta.appId}`);
-  if (meta.params?.length) lines.push(`# params: ${meta.params.join(', ')}`);
-  return `${lines.join('\n')}\n${meta.body}`;
+  if (meta.appId) header.push(`# appId: ${meta.appId}`);
+  if (meta.params?.length) header.push(`# params: ${meta.params.join(', ')}`);
+  header.push(FLOW_SENTINEL);
+  return `${header.join('\n')}\n${meta.flow}`;
 }
 
 export function parseLockedTest(text: string, filePath: string): LockedE2eTest | null {
   if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text)) return null;
+  const sentinelIdx = text.indexOf(FLOW_SENTINEL);
+  if (sentinelIdx < 0) return null;
+  const headerText = text.slice(0, sentinelIdx);
+  const flowStart = text.indexOf('\n', sentinelIdx);
+  const flow = flowStart >= 0 ? text.slice(flowStart + 1) : '';
   const field = (k: string): string | undefined => {
-    const m = text.match(new RegExp(`^#\\s*${k}:\\s*(.*)$`, 'm'));
+    const m = headerText.match(new RegExp(`^#\\s*${k}:\\s*(.*)$`, 'm'));
     const v = m?.[1]?.trim();
     return v ? v : undefined;
   };
   const id = field('id');
   const intent = field('intent');
   if (!id || !intent) return null;
-  const headerEnd = text.lastIndexOf('\n#');
-  const bodyStart = text.indexOf('\n', headerEnd + 1);
-  const body = bodyStart >= 0 ? text.slice(bodyStart + 1) : '';
   const paramsRaw = field('params');
   return {
     id,
@@ -174,7 +197,7 @@ export function parseLockedTest(text: string, filePath: string): LockedE2eTest |
     status: 'locked',
     params: paramsRaw ? paramsRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     appId: field('appId'),
-    body,
+    flow,
     filePath,
   };
 }
@@ -189,20 +212,20 @@ Expected: PASS (3 tests)
 
 ```bash
 git add scripts/cdp-bridge/src/domain/e2e-test.ts scripts/cdp-bridge/dist/domain/e2e-test.js scripts/cdp-bridge/test/unit/e2e-test-serialize.test.js
-git commit -m "feat(e2e): locked-test serialize/parse + path helpers"
+git commit -m "feat(e2e): locked-test serialize/parse (sentinel split) + path helpers"
 ```
 
 ---
 
-## Task 2: Locked-test freeze / load / discover IO
+## Task 2: Locked-test freeze (raw flow) / load / discover IO
 
 **Files:**
 - Modify: `scripts/cdp-bridge/src/domain/e2e-test.ts`
 - Test: `scripts/cdp-bridge/test/unit/e2e-test-io.test.js`
 
 **Interfaces:**
-- Consumes: `LockedE2eTest`, `e2ePathFor`, `e2eDirFor` (Task 1); `createHash` (node:crypto)
-- Produces: `freezeLockedTest(projectRoot, source, ctx): LockedE2eTest` where `source = { id, intent, sourceActionId, body, params?, appId? }` and `ctx = { gitSha: string | null; now: () => Date }`; `loadLockedTest(projectRoot, id): LockedE2eTest | null`; `discoverLockedTests(projectRoot): string[]` (ids, sorted); `hashBody(body: string): string`
+- Consumes: `LockedE2eTest`, `serializeLockedTest`, `parseLockedTest`, `e2ePathFor`, `e2eDirFor` (Task 1); `createHash` (node:crypto)
+- Produces: `LockSource = { id; intent; sourceActionId; flow: string; params?: string[]; appId?: string }`; `freezeLockedTest(projectRoot, source: LockSource, ctx: { gitSha: string | null; now: () => Date }): LockedE2eTest`; `loadLockedTest(projectRoot, id): LockedE2eTest | null`; `discoverLockedTests(projectRoot): string[]` (ids, sorted, `.yaml` only); `hashBody(s: string): string`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -210,7 +233,7 @@ git commit -m "feat(e2e): locked-test serialize/parse + path helpers"
 // test/unit/e2e-test-io.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -220,40 +243,35 @@ import {
   hashBody,
 } from '../../dist/domain/e2e-test.js';
 
-function tmpProject() {
-  return mkdtempSync(join(tmpdir(), 'e2e-io-'));
-}
-const SRC = {
-  id: 'login',
-  intent: 'Log in',
-  sourceActionId: 'login',
-  body: 'appId: com.x\n- launchApp\n',
-  params: ['EMAIL'],
-  appId: 'com.x',
-};
+const FLOW = 'appId: com.x\n---\n# id: login\n- launchApp\n';
+const SRC = { id: 'login', intent: 'Log in', sourceActionId: 'login', flow: FLOW, appId: 'com.x' };
 const CTX = { gitSha: 'sha123', now: () => new Date('2026-06-18T00:00:00Z') };
 
-test('freeze writes a parseable file and returns metadata', () => {
-  const root = tmpProject();
+test('freeze writes an executable, parseable file and returns metadata', () => {
+  const root = mkdtempSync(join(tmpdir(), 'e2e-io-'));
   try {
     const locked = freezeLockedTest(root, SRC, CTX);
     assert.equal(locked.id, 'login');
-    assert.equal(locked.sourceContentHash, hashBody(SRC.body));
+    assert.equal(locked.sourceContentHash, hashBody(FLOW));
     const onDisk = readFileSync(join(root, '.rn-agent', 'e2e', 'login.yaml'), 'utf8');
     assert.match(onDisk, /# e2e-locked-test: true/);
+    assert.match(onDisk, /^appId: com\.x$/m); // executable header preserved
     const reloaded = loadLockedTest(root, 'login');
-    assert.equal(reloaded.intent, 'Log in');
     assert.equal(reloaded.lockedGitSha, 'sha123');
+    assert.match(reloaded.flow, /- launchApp/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('discoverLockedTests lists ids sorted; load returns null for missing', () => {
-  const root = tmpProject();
+test('discoverLockedTests lists .yaml ids sorted, ignores .yml; load null for missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'e2e-io-'));
   try {
     freezeLockedTest(root, { ...SRC, id: 'bbb' }, CTX);
     freezeLockedTest(root, { ...SRC, id: 'aaa' }, CTX);
+    // a stray .yml must NOT be discovered (freeze only writes .yaml)
+    mkdirSync(join(root, '.rn-agent', 'e2e'), { recursive: true });
+    writeFileSync(join(root, '.rn-agent', 'e2e', 'ccc.yml'), '# e2e-locked-test: true\n', 'utf8');
     assert.deepEqual(discoverLockedTests(root), ['aaa', 'bbb']);
     assert.equal(loadLockedTest(root, 'missing'), null);
   } finally {
@@ -270,18 +288,19 @@ Expected: FAIL — `freezeLockedTest is not a function`
 - [ ] **Step 3: Write minimal implementation** (append to `src/domain/e2e-test.ts`)
 
 ```typescript
+import { dirname } from 'node:path';
 import { mkdirSync, writeFileSync, renameSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-export function hashBody(body: string): string {
-  return createHash('sha256').update(body).digest('hex');
+export function hashBody(s: string): string {
+  return createHash('sha256').update(s).digest('hex');
 }
 
 export interface LockSource {
   id: string;
   intent: string;
   sourceActionId: string;
-  body: string;
+  flow: string;
   params?: string[];
   appId?: string;
 }
@@ -299,15 +318,14 @@ export function freezeLockedTest(
     sourceActionId: source.sourceActionId,
     lockedAt: ctx.now().toISOString(),
     lockedGitSha: ctx.gitSha,
-    sourceContentHash: hashBody(source.body),
+    sourceContentHash: hashBody(source.flow),
     status: 'locked',
     params: source.params,
     appId: source.appId,
-    body: source.body,
+    flow: source.flow,
   };
-  const text = serializeLockedTest(meta);
   const tmp = `${filePath}.tmp`;
-  writeFileSync(tmp, text, 'utf8');
+  writeFileSync(tmp, serializeLockedTest(meta), 'utf8');
   renameSync(tmp, filePath);
   return { ...meta, filePath };
 }
@@ -322,8 +340,8 @@ export function discoverLockedTests(projectRoot: string): string[] {
   const dir = e2eDirFor(projectRoot);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
-    .map((f) => f.replace(/\.ya?ml$/i, ''))
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => f.replace(/\.yaml$/, ''))
     .sort();
 }
 ```
@@ -337,7 +355,7 @@ Expected: PASS (2 tests)
 
 ```bash
 git add scripts/cdp-bridge/src/domain/e2e-test.ts scripts/cdp-bridge/dist/domain/e2e-test.js scripts/cdp-bridge/test/unit/e2e-test-io.test.js
-git commit -m "feat(e2e): freeze/load/discover locked tests"
+git commit -m "feat(e2e): freeze raw flow / load / discover locked tests"
 ```
 
 ---
@@ -350,8 +368,8 @@ git commit -m "feat(e2e): freeze/load/discover locked tests"
 
 **Interfaces:**
 - Consumes: `parseMaestroFailure` from `domain/maestro-error-parser.js`
-- Produces types: `E2eVerdict = 'green' | 'red' | 'setup_error'`; `E2eResultClassification = 'pass' | 'regression' | 'infra'`; `E2eFlowResult`; `E2eRunRecord`
-- Produces fns: `classifyFlowResult(input): E2eFlowResult` where `input = { testId, intent, passed, durationMs, output }`; `computeVerdict(results): E2eVerdict`; `diffNewlyFailing(current: E2eRunRecord, previousGreen: E2eRunRecord | null): string[]`
+- Produces: `E2eVerdict = 'green' | 'red' | 'setup_error'`; `E2eResultClassification = 'pass' | 'regression' | 'infra' | 'skipped'`; `E2eFlowResult`; `E2eRunRecord` (with `totals: { total; passed; failed; skipped }`)
+- Produces fns: `classifyFlowResult(input): E2eFlowResult`; `skippedResult(testId, intent, reason): E2eFlowResult`; `computeVerdict(results): E2eVerdict` (red iff a non-skipped result failed); `diffNewlyFailing(current, previousGreen): string[]` (excludes skipped)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -361,45 +379,53 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyFlowResult,
+  skippedResult,
   computeVerdict,
   diffNewlyFailing,
 } from '../../dist/domain/e2e-run.js';
 
-test('passed flow → pass classification', () => {
-  const r = classifyFlowResult({ testId: 'a', intent: 'A', passed: true, durationMs: 10, output: '' });
+test('passed flow → pass', () => {
+  const r = classifyFlowResult({ testId: 'a', intent: 'A', passed: true, durationMs: 10, output: 'Flow PASSED' });
   assert.equal(r.classification, 'pass');
-  assert.equal(r.failureKind, undefined);
 });
 
-test('selector-not-found failure → regression', () => {
+test('real maestro selector-not-found output → regression', () => {
   const r = classifyFlowResult({
     testId: 'a', intent: 'A', passed: false, durationMs: 10,
-    output: 'Element not found: id: submitButton',
+    output: "Element not found: id='submitButton'",
   });
   assert.equal(r.classification, 'regression');
   assert.equal(r.failureKind, 'SELECTOR_NOT_FOUND');
 });
 
-test('timeout failure → still red, annotated as infra', () => {
+test('real maestro timeout output → still red, annotated infra', () => {
   const r = classifyFlowResult({
     testId: 'a', intent: 'A', passed: false, durationMs: 99,
-    output: 'Timed out waiting for ...',
+    output: "Timed out waiting for element with id 'spinner'",
   });
   assert.equal(r.passed, false);
   assert.equal(r.failureKind, 'TIMEOUT');
   assert.equal(r.infraAnnotation, 'likely-infrastructure (timeout)');
 });
 
-test('computeVerdict: any failure → red; all pass → green', () => {
-  const pass = { classification: 'pass', passed: true };
-  const fail = { classification: 'infra', passed: false };
-  assert.equal(computeVerdict([pass, pass]), 'green');
-  assert.equal(computeVerdict([pass, fail]), 'red');
+test('skippedResult is neither pass nor fail for the verdict', () => {
+  const s = skippedResult('p', 'P', 'needs params');
+  assert.equal(s.classification, 'skipped');
+  assert.equal(computeVerdict([{ classification: 'pass', passed: true }, s]), 'green');
 });
 
-test('diffNewlyFailing: failing now but passing in last green', () => {
-  const prev = { results: [{ testId: 'a', passed: true }, { testId: 'b', passed: true }] };
-  const cur = { results: [{ testId: 'a', passed: false }, { testId: 'b', passed: true }] };
+test('computeVerdict: any non-skipped failure → red', () => {
+  assert.equal(computeVerdict([{ classification: 'pass', passed: true }]), 'green');
+  assert.equal(computeVerdict([{ classification: 'infra', passed: false }]), 'red');
+});
+
+test('diffNewlyFailing ignores skipped + finds newly-broken', () => {
+  const prev = { results: [{ testId: 'a', passed: true, classification: 'pass' }, { testId: 'b', passed: true, classification: 'pass' }] };
+  const cur = { results: [
+    { testId: 'a', passed: false, classification: 'regression' },
+    { testId: 'b', passed: true, classification: 'pass' },
+    { testId: 'c', passed: false, classification: 'skipped' },
+  ] };
   assert.deepEqual(diffNewlyFailing(cur, prev), ['a']);
   assert.deepEqual(diffNewlyFailing(cur, null), ['a']);
 });
@@ -417,7 +443,7 @@ Expected: FAIL — module not found
 import { parseMaestroFailure } from './maestro-error-parser.js';
 
 export type E2eVerdict = 'green' | 'red' | 'setup_error';
-export type E2eResultClassification = 'pass' | 'regression' | 'infra';
+export type E2eResultClassification = 'pass' | 'regression' | 'infra' | 'skipped';
 
 export interface E2eFlowResult {
   testId: string;
@@ -440,7 +466,7 @@ export interface E2eRunRecord {
   platform: string;
   deviceId: string | null;
   metroReloaded: boolean;
-  totals: { total: number; passed: number; failed: number };
+  totals: { total: number; passed: number; failed: number; skipped: number };
   verdict: E2eVerdict;
   results: E2eFlowResult[];
   previousGreenRunId: string | null;
@@ -476,19 +502,28 @@ export function classifyFlowResult(input: {
   };
 }
 
-export function computeVerdict(results: Array<{ passed: boolean }>): E2eVerdict {
-  return results.some((r) => !r.passed) ? 'red' : 'green';
+export function skippedResult(testId: string, intent: string, reason: string): E2eFlowResult {
+  return {
+    testId,
+    intent,
+    passed: false,
+    durationMs: 0,
+    classification: 'skipped',
+    infraAnnotation: reason,
+  };
+}
+
+export function computeVerdict(results: Array<{ passed: boolean; classification: E2eResultClassification }>): E2eVerdict {
+  return results.some((r) => !r.passed && r.classification !== 'skipped') ? 'red' : 'green';
 }
 
 export function diffNewlyFailing(
-  current: { results: Array<{ testId: string; passed: boolean }> },
+  current: { results: Array<{ testId: string; passed: boolean; classification: E2eResultClassification }> },
   previousGreen: { results: Array<{ testId: string; passed: boolean }> } | null,
 ): string[] {
-  const wasPassing = new Set(
-    (previousGreen?.results ?? []).filter((r) => r.passed).map((r) => r.testId),
-  );
+  const wasPassing = new Set((previousGreen?.results ?? []).filter((r) => r.passed).map((r) => r.testId));
   return current.results
-    .filter((r) => !r.passed && (previousGreen === null || wasPassing.has(r.testId)))
+    .filter((r) => !r.passed && r.classification !== 'skipped' && (previousGreen === null || wasPassing.has(r.testId)))
     .map((r) => r.testId);
 }
 ```
@@ -496,13 +531,13 @@ export function diffNewlyFailing(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test 'test/unit/e2e-run-classify.test.js'`
-Expected: PASS (5 tests)
+Expected: PASS (6 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/cdp-bridge/src/domain/e2e-run.ts scripts/cdp-bridge/dist/domain/e2e-run.js scripts/cdp-bridge/test/unit/e2e-run-classify.test.js
-git commit -m "feat(e2e): run-result classification, verdict, newly-failing diff"
+git commit -m "feat(e2e): result classification (real maestro patterns), verdict, diff"
 ```
 
 ---
@@ -515,7 +550,7 @@ git commit -m "feat(e2e): run-result classification, verdict, newly-failing diff
 
 **Interfaces:**
 - Consumes: `E2eRunRecord` (Task 3)
-- Produces: `e2eRunsDirFor(projectRoot): string`; `writeRunRecord(projectRoot, rec: E2eRunRecord): void` (writes `<runId>.json` + updates `index.json`, bounded 100, newest-first); `loadIndex(projectRoot): E2eRunIndexEntry[]`; `loadRunRecord(projectRoot, runId): E2eRunRecord | null`; `lastGreenRunId(projectRoot): string | null`; type `E2eRunIndexEntry = { runId; finishedAt; verdict; totals }`
+- Produces: `e2eRunsDirFor(projectRoot): string`; `writeRunRecord(projectRoot, rec): void` (writes `<runId>.json` + updates `index.json`, bounded 100 newest-first); `loadIndex(projectRoot): E2eRunIndexEntry[]`; `loadRunRecord(projectRoot, runId): E2eRunRecord | null`; `lastGreenRunId(projectRoot): string | null`; `E2eRunIndexEntry = { runId; finishedAt; verdict; totals }`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -526,18 +561,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  writeRunRecord,
-  loadIndex,
-  loadRunRecord,
-  lastGreenRunId,
-} from '../../dist/domain/e2e-run.js';
+import { writeRunRecord, loadIndex, loadRunRecord, lastGreenRunId } from '../../dist/domain/e2e-run.js';
 
 function rec(runId, verdict) {
+  const failed = verdict === 'green' ? 0 : 1;
   return {
-    runId, startedAt: '2026-06-18T00:00:00Z', finishedAt: '2026-06-18T00:01:00Z',
-    durationMs: 60000, gitSha: 'x', gitDirty: false, platform: 'ios', deviceId: 'udid',
-    metroReloaded: true, totals: { total: 1, passed: verdict === 'green' ? 1 : 0, failed: verdict === 'green' ? 0 : 1 },
+    runId, startedAt: '2026-06-18T00:00:00Z', finishedAt: '2026-06-18T00:01:00Z', durationMs: 60000,
+    gitSha: 'x', gitDirty: false, platform: 'ios', deviceId: 'udid', metroReloaded: true,
+    totals: { total: 1, passed: 1 - failed, failed, skipped: 0 },
     verdict, results: [], previousGreenRunId: null,
   };
 }
@@ -545,14 +576,14 @@ function rec(runId, verdict) {
 test('writeRunRecord persists record + index; lastGreenRunId finds newest green', () => {
   const root = mkdtempSync(join(tmpdir(), 'e2e-store-'));
   try {
-    writeRunRecord(root, rec('r1', 'green'));
-    writeRunRecord(root, rec('r2', 'red'));
-    writeRunRecord(root, rec('r3', 'green'));
+    writeRunRecord(root, rec('run-1', 'green'));
+    writeRunRecord(root, rec('run-2', 'red'));
+    writeRunRecord(root, rec('run-3', 'green'));
     const idx = loadIndex(root);
     assert.equal(idx.length, 3);
-    assert.equal(idx[0].runId, 'r3'); // newest-first
-    assert.equal(loadRunRecord(root, 'r2').verdict, 'red');
-    assert.equal(lastGreenRunId(root), 'r3');
+    assert.equal(idx[0].runId, 'run-3');
+    assert.equal(loadRunRecord(root, 'run-2').verdict, 'red');
+    assert.equal(lastGreenRunId(root), 'run-3');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -575,7 +606,7 @@ export interface E2eRunIndexEntry {
   runId: string;
   finishedAt: string;
   verdict: E2eVerdict;
-  totals: { total: number; passed: number; failed: number };
+  totals: { total: number; passed: number; failed: number; skipped: number };
 }
 
 const INDEX_MAX = 100;
@@ -632,7 +663,7 @@ export function lastGreenRunId(projectRoot: string): string | null {
 }
 ```
 
-Note: `runId` must be a slug accepted by `assertValidActionId` (regex `^[A-Za-z0-9][A-Za-z0-9_.-]*$`). Task 8/10 generate it as `run-<ISO-compact>-<rand>` using only those chars.
+Note: `runId` must satisfy `assertValidActionId` (`^[A-Za-z0-9][A-Za-z0-9_.-]*$`). Task 8 `makeRunId` emits only those chars. The index read-modify-write is serialized in practice by the exclusive flow lease (see NITs).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -655,7 +686,7 @@ git commit -m "feat(e2e): suite-run record + index persistence"
 - Test: `scripts/cdp-bridge/test/unit/e2e-run-request.test.js`
 
 **Interfaces:**
-- Produces: `E2eRunStatus = 'requested' | 'reloading' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'`; `E2eRunRequest`; `writeRequest(projectRoot, req): void`; `updateRequest(projectRoot, runId, patch): E2eRunRequest | null`; `loadRequest(projectRoot, runId): E2eRunRequest | null`; `listRequests(projectRoot): E2eRunRequest[]`; `recoverInterruptedRequests(projectRoot, isPidAlive: (pid: number) => boolean, now: () => Date): string[]` (marks non-terminal requests with dead pid as `interrupted`, returns affected runIds)
+- Produces: `E2eRunStatus = 'requested' | 'reloading' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'`; `E2eRunRequest`; `writeRequest`/`updateRequest`/`loadRequest`/`listRequests`; `recoverInterruptedRequests(projectRoot, isPidAlive, now): string[]`; `TERMINAL_STATUSES: ReadonlySet<E2eRunStatus>` (exported — reused by the guard in Task 9)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -678,7 +709,7 @@ function req(runId, status, pid) {
   return { runId, status, pid, createdAt: '2026-06-18T00:00:00Z', updatedAt: '2026-06-18T00:00:00Z' };
 }
 
-test('write → update → load reflects status transitions', () => {
+test('write → update → load reflects status + progress transitions', () => {
   const root = mkdtempSync(join(tmpdir(), 'e2e-req-'));
   try {
     writeRequest(root, req('run-1', 'requested', process.pid));
@@ -691,7 +722,7 @@ test('write → update → load reflects status transitions', () => {
   }
 });
 
-test('recover marks running-with-dead-pid as interrupted; leaves live + terminal alone', () => {
+test('recover marks running-with-dead-pid interrupted; leaves live + terminal alone', () => {
   const root = mkdtempSync(join(tmpdir(), 'e2e-req-'));
   try {
     writeRequest(root, req('dead', 'running', 99999));
@@ -741,7 +772,12 @@ export interface E2eRunRequest {
   progress?: { total: number; completed: number; lastTestId?: string };
 }
 
-const TERMINAL: ReadonlySet<E2eRunStatus> = new Set(['done', 'failed', 'cancelled', 'interrupted']);
+export const TERMINAL_STATUSES: ReadonlySet<E2eRunStatus> = new Set([
+  'done',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
 
 function requestsDir(projectRoot: string): string {
   return join(e2eRunsDirFor(projectRoot), 'requests');
@@ -801,7 +837,7 @@ export function recoverInterruptedRequests(
 ): string[] {
   const affected: string[] = [];
   for (const r of listRequests(projectRoot)) {
-    if (TERMINAL.has(r.status)) continue;
+    if (TERMINAL_STATUSES.has(r.status)) continue;
     if (isPidAlive(r.pid)) continue;
     writeRequest(projectRoot, { ...r, status: 'interrupted', updatedAt: now().toISOString() });
     affected.push(r.runId);
@@ -832,8 +868,8 @@ git commit -m "feat(e2e): durable run-request + interrupted recovery"
 - Test: `scripts/cdp-bridge/test/unit/e2e-preflight.test.js`
 
 **Interfaces:**
-- Produces: `getGitInfo(projectRoot, exec?): { sha: string | null; dirty: boolean }` where `exec = (cmd, args) => string`
-- Produces: `preflight(input): { ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string }` where `input = { platform; udid: string | null; appId?: string; metroReachable: boolean; appInstalled: boolean | null }`
+- Produces: `getGitInfo(projectRoot, exec?): { sha: string | null; dirty: boolean }`
+- Produces: `preflight(input): { ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string }` where `input = { platform; udid: string | null; appId?: string; metroReachable: boolean; appInstalled: boolean | null }`; `probeMetro(port, timeoutMs?): Promise<boolean>`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -845,13 +881,12 @@ import { getGitInfo } from '../../dist/e2e/git-info.js';
 import { preflight } from '../../dist/e2e/preflight.js';
 
 test('getGitInfo parses sha + dirty from injected exec', () => {
-  const exec = (_cmd, args) =>
-    args[0] === 'rev-parse' ? 'abc1234\n' : ' M file.ts\n';
+  const exec = (_cmd, args) => (args.includes('rev-parse') ? 'abc1234\n' : ' M file.ts\n');
   assert.deepEqual(getGitInfo('/x', exec), { sha: 'abc1234', dirty: true });
 });
 
-test('getGitInfo: clean tree → dirty false; failure → sha null', () => {
-  const clean = (_c, args) => (args[0] === 'rev-parse' ? 'def5678\n' : '');
+test('getGitInfo: clean → dirty false; failure → sha null', () => {
+  const clean = (_c, args) => (args.includes('rev-parse') ? 'def5678\n' : '');
   assert.deepEqual(getGitInfo('/x', clean), { sha: 'def5678', dirty: false });
   const boom = () => { throw new Error('not a git repo'); };
   assert.deepEqual(getGitInfo('/x', boom), { sha: null, dirty: false });
@@ -864,11 +899,10 @@ test('preflight ok when metro up + app installed', () => {
   );
 });
 
-test('preflight SETUP_ERROR when metro down or no device or app missing', () => {
+test('preflight SETUP_ERROR for metro down / no device / app missing; null app tolerated', () => {
   assert.equal(preflight({ platform: 'ios', udid: 'u', metroReachable: false, appInstalled: true }).code, 'SETUP_ERROR');
   assert.equal(preflight({ platform: 'ios', udid: null, metroReachable: true, appInstalled: true }).code, 'SETUP_ERROR');
   assert.equal(preflight({ platform: 'ios', udid: 'u', metroReachable: true, appInstalled: false }).code, 'SETUP_ERROR');
-  // unknown (null) app-installed is tolerated (probe couldn't tell)
   assert.equal(preflight({ platform: 'ios', udid: 'u', metroReachable: true, appInstalled: null }).ok, true);
 });
 ```
@@ -915,9 +949,7 @@ export interface PreflightInput {
   appInstalled: boolean | null;
 }
 
-export type PreflightResult =
-  | { ok: true }
-  | { ok: false; code: 'SETUP_ERROR'; detail: string };
+export type PreflightResult = { ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string };
 
 export function preflight(input: PreflightInput): PreflightResult {
   if (!input.metroReachable) {
@@ -934,12 +966,18 @@ export function preflight(input: PreflightInput): PreflightResult {
 
 export function probeMetro(port: number, timeoutMs = 1500): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = request({ host: '127.0.0.1', port, path: '/status', method: 'GET', timeout: timeoutMs }, (res) => {
-      res.resume();
-      resolve((res.statusCode ?? 500) < 500);
-    });
+    const req = request(
+      { host: '127.0.0.1', port, path: '/status', method: 'GET', timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        resolve((res.statusCode ?? 500) < 500);
+      },
+    );
     req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
     req.end();
   });
 }
@@ -959,42 +997,62 @@ git commit -m "feat(e2e): git-info + pre-flight gate building blocks"
 
 ---
 
-## Task 7: Lock tool (`cdp_lock_e2e_test`)
+## Task 7: Lock tool (`cdp_lock_e2e_test`) + ToolErrorCode + FLOW_TOOLS + registration
 
 **Files:**
+- Modify: `scripts/cdp-bridge/src/types.ts` (extend `ToolErrorCode`)
 - Create: `scripts/cdp-bridge/src/tools/lock-e2e-test.ts`
-- Modify: `scripts/cdp-bridge/src/index.ts` (register tool)
-- Modify: `scripts/cdp-bridge/src/lifecycle/device-arbiter.ts` (add to `FLOW_TOOLS`)
+- Modify: `scripts/cdp-bridge/src/lifecycle/device-arbiter.ts` (`FLOW_TOOLS`)
+- Modify: `scripts/cdp-bridge/src/index.ts` (register)
 - Test: `scripts/cdp-bridge/test/unit/lock-e2e-test.test.js`
 
 **Interfaces:**
-- Consumes: `loadAction` (`domain/action-store.js`); `freezeLockedTest`, `loadLockedTest` (`domain/e2e-test.js`); `getGitInfo` (`e2e/git-info.js`); `getActiveSession` (`agent-device-wrapper.js`); `createMaestroRunHandler` (`tools/maestro-run.js`); `okResult`/`failResult` (`utils.js`)
-- Produces: `lockE2eTestCore(args, deps): Promise<ToolResult>` and `createLockE2eTestHandler(deps?)`. `args = { actionId: string; relock?: boolean; projectRoot?: string }`. `deps = { maestroRun?; loadAction?; getGitInfo?; getSession?; now? }` (all injectable for tests)
+- Consumes: `loadAction` (`domain/action-store.js`); `freezeLockedTest`, `loadLockedTest` (`domain/e2e-test.js`); `getGitInfo` (`e2e/git-info.js`); `getActiveSession` (`agent-device-wrapper.js`); `SessionState` (`types.js`); `createMaestroRunHandler` (`tools/maestro-run.js`); `okResult`/`failResult`/`ToolResult` (`utils.js`)
+- Produces: `lockE2eTestCore(args, deps): Promise<ToolResult>`; `createLockE2eTestHandler(deps?)`. `args = { actionId; relock?; projectRoot? }`. `deps = { maestroRun?; loadAction?; readActionFile?; getGitInfo?; getSession?; now? }`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Extend `ToolErrorCode`** — add the E2E codes to the union in `src/types.ts` (after the existing entries, before the union closes):
+
+```typescript
+  // E2E regression runner (2026-06-18)
+  | 'NOT_FOUND'
+  | 'ALREADY_LOCKED'
+  | 'STRICT_RUN_FAILED'
+  | 'PARAMS_UNSUPPORTED'
+  | 'SETUP_ERROR'
+  | 'NO_E2E_TESTS'
+  | 'E2E_RUN_ACTIVE'
+  | 'E2E_RUN_CRASHED'
+```
+
+Build to confirm the union still compiles: `cd scripts/cdp-bridge && npm run build` → expect success.
+
+- [ ] **Step 2: Write the failing test**
 
 ```javascript
 // test/unit/lock-e2e-test.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lockE2eTestCore } from '../../dist/tools/lock-e2e-test.js';
 
-function parse(result) { return JSON.parse(result.content[0].text); }
+function parse(r) { return JSON.parse(r.content[0].text); }
 
-function seedAction(root, id) {
+// REALISTIC action format: appId top section, '---', M7 header comments, steps.
+function seedAction(root, id, params = '') {
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
+  const header = [`# id: ${id}`, '# intent: do a thing', '# status: active', '# appId: com.x'];
+  if (params) header.push(`# params: ${params}`);
   writeFileSync(
     join(dir, `${id}.yaml`),
-    `# id: ${id}\n# intent: do a thing\n# status: active\n# appId: com.x\nappId: com.x\n- launchApp\n`,
+    `appId: com.x\n---\n${header.join('\n')}\n- launchApp\n`,
     'utf8',
   );
 }
 const okMaestro = async () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow PASSED' } }) }] });
-const failMaestro = async () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'Element not found: id: x', meta: { output: 'Element not found: id: x' } }) }], isError: true });
+const failMaestro = async () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: false, error: "Element not found: id='x'", meta: { output: "Element not found: id='x'" } }) }], isError: true });
 const deps = (maestroRun) => ({
   maestroRun,
   getGitInfo: () => ({ sha: 'sha1', dirty: false }),
@@ -1002,14 +1060,17 @@ const deps = (maestroRun) => ({
   now: () => new Date('2026-06-18T00:00:00Z'),
 });
 
-test('strict pass → freezes a locked test', async () => {
+test('strict pass → freezes an EXECUTABLE locked test (appId preserved)', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lock-'));
   try {
     seedAction(root, 'login');
     const res = parse(await lockE2eTestCore({ actionId: 'login', projectRoot: root }, deps(okMaestro)));
     assert.equal(res.ok, true);
     assert.equal(res.data.locked, true);
-    assert.ok(existsSync(join(root, '.rn-agent', 'e2e', 'login.yaml')));
+    const frozen = readFileSync(join(root, '.rn-agent', 'e2e', 'login.yaml'), 'utf8');
+    assert.match(frozen, /^appId: com\.x$/m); // BLOCKER-1: executable
+    assert.match(frozen, /^---$/m);
+    assert.match(frozen, /- launchApp/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1021,21 +1082,33 @@ test('strict fail → refuses, no file written', async () => {
     seedAction(root, 'login');
     const res = parse(await lockE2eTestCore({ actionId: 'login', projectRoot: root }, deps(failMaestro)));
     assert.equal(res.ok, false);
-    assert.match(res.error, /pass.*strict/i);
+    assert.equal(res.code, 'STRICT_RUN_FAILED');
     assert.equal(existsSync(join(root, '.rn-agent', 'e2e', 'login.yaml')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('already locked → refuses unless relock', async () => {
+test('param-needing action → refused PARAMS_UNSUPPORTED (no maestro run)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lock-'));
+  try {
+    seedAction(root, 'login', 'EMAIL');
+    let called = false;
+    const res = parse(await lockE2eTestCore({ actionId: 'login', projectRoot: root }, deps(async () => { called = true; return okMaestro(); })));
+    assert.equal(res.code, 'PARAMS_UNSUPPORTED');
+    assert.equal(called, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('already locked → refused unless relock', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lock-'));
   try {
     seedAction(root, 'login');
     await lockE2eTestCore({ actionId: 'login', projectRoot: root }, deps(okMaestro));
     const dup = parse(await lockE2eTestCore({ actionId: 'login', projectRoot: root }, deps(okMaestro)));
-    assert.equal(dup.ok, false);
-    assert.match(dup.error, /already locked/i);
+    assert.equal(dup.code, 'ALREADY_LOCKED');
     const re = parse(await lockE2eTestCore({ actionId: 'login', projectRoot: root, relock: true }, deps(okMaestro)));
     assert.equal(re.ok, true);
   } finally {
@@ -1043,27 +1116,27 @@ test('already locked → refuses unless relock', async () => {
   }
 });
 
-test('missing action → refuses', async () => {
+test('missing action → NOT_FOUND', async () => {
   const root = mkdtempSync(join(tmpdir(), 'lock-'));
   try {
     const res = parse(await lockE2eTestCore({ actionId: 'nope', projectRoot: root }, deps(okMaestro)));
-    assert.equal(res.ok, false);
-    assert.match(res.error, /not found/i);
+    assert.equal(res.code, 'NOT_FOUND');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test 'test/unit/lock-e2e-test.test.js'`
 Expected: FAIL — module not found
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 4: Write minimal implementation**
 
 ```typescript
 // src/tools/lock-e2e-test.ts
+import { readFileSync } from 'node:fs';
 import { loadAction } from '../domain/action-store.js';
 import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
@@ -1072,7 +1145,7 @@ import { createMaestroRunHandler } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
-import type { SessionState } from '../agent-device-wrapper.js';
+import type { SessionState } from '../types.js';
 
 export interface LockE2eTestArgs {
   actionId: string;
@@ -1083,6 +1156,7 @@ export interface LockE2eTestArgs {
 export interface LockE2eTestDeps {
   maestroRun?: (args: Record<string, unknown>) => Promise<ToolResult>;
   loadAction?: typeof loadAction;
+  readActionFile?: (path: string) => string;
   getGitInfo?: (projectRoot: string) => { sha: string | null; dirty: boolean };
   getSession?: () => SessionState | null;
   now?: () => Date;
@@ -1096,9 +1170,10 @@ function readPassed(result: ToolResult): { passed: boolean; output: string } {
       error?: string;
       meta?: { output?: string };
     };
-    const passed = env.ok === true && env.data?.passed === true;
-    const output = env.data?.output ?? env.meta?.output ?? env.error ?? '';
-    return { passed, output };
+    return {
+      passed: env.ok === true && env.data?.passed === true,
+      output: env.data?.output ?? env.meta?.output ?? env.error ?? '',
+    };
   } catch {
     return { passed: false, output: 'unparseable maestro result' };
   }
@@ -1107,6 +1182,7 @@ function readPassed(result: ToolResult): { passed: boolean; output: string } {
 export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDeps = {}): Promise<ToolResult> {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
+  const readFile = deps.readActionFile ?? ((p: string) => readFileSync(p, 'utf8'));
   const getGit = deps.getGitInfo ?? realGetGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => new Date());
@@ -1115,6 +1191,13 @@ export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDe
   const action = load(projectRoot, args.actionId);
   if (!action) return failResult(`Action '${args.actionId}' not found`, 'NOT_FOUND');
 
+  if (action.metadata.params?.length) {
+    return failResult(
+      `'${args.actionId}' needs params (${action.metadata.params.join(', ')}). Param-needing tests are not supported in v1 — a params source (.rn-agent/e2e.config.json) lands in a later phase.`,
+      'PARAMS_UNSUPPORTED',
+    );
+  }
+
   if (!args.relock && loadLockedTest(projectRoot, args.actionId)) {
     return failResult(`'${args.actionId}' is already locked — pass relock:true to re-lock`, 'ALREADY_LOCKED');
   }
@@ -1122,11 +1205,7 @@ export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDe
   const session = getSession();
   const platform = (session?.platform as 'ios' | 'android' | undefined) ?? undefined;
 
-  const result = await maestroRun({
-    flowPath: action.filePath,
-    platform,
-    params: paramsFromMetadata(action.metadata.params),
-  });
+  const result = await maestroRun({ flowPath: action.filePath, platform });
   const { passed, output } = readPassed(result);
   if (!passed) {
     return failResult(
@@ -1143,8 +1222,7 @@ export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDe
       id: action.metadata.id,
       intent: action.metadata.intent,
       sourceActionId: action.metadata.id,
-      body: action.body,
-      params: action.metadata.params,
+      flow: readFile(action.filePath),
       appId: action.metadata.appId,
     },
     { gitSha: git.sha, now },
@@ -1159,23 +1237,19 @@ export async function lockE2eTestCore(args: LockE2eTestArgs, deps: LockE2eTestDe
   });
 }
 
-function paramsFromMetadata(params?: string[]): Record<string, string> | undefined {
-  return params?.length ? Object.fromEntries(params.map((p) => [p, ''])) : undefined;
-}
-
 export function createLockE2eTestHandler(deps: LockE2eTestDeps = {}) {
   return (args: LockE2eTestArgs): Promise<ToolResult> => lockE2eTestCore(args, deps);
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test 'test/unit/lock-e2e-test.test.js'`
-Expected: PASS (4 tests)
+Expected: PASS (5 tests)
 
-- [ ] **Step 5: Register the tool + mark it a flow tool**
+- [ ] **Step 6: Register + mark flow tool**
 
-In `src/lifecycle/device-arbiter.ts`, add the two new tool names to the `FLOW_TOOLS` set literal:
+In `src/lifecycle/device-arbiter.ts`, add the two names to the `FLOW_TOOLS` set literal:
 
 ```typescript
 const FLOW_TOOLS = new Set<string>([
@@ -1190,14 +1264,14 @@ const FLOW_TOOLS = new Set<string>([
 ]);
 ```
 
-In `src/index.ts`, near the other `trackedTool(...)` registrations, add (mirror the existing call shape; import `z` is already in scope, and import the handler at the top of the file):
+In `src/index.ts`, add the import + `trackedTool` registration (mirror the existing call shape; `z` is already in scope):
 
 ```typescript
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 // ...
 trackedTool(
   'cdp_lock_e2e_test',
-  'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes.',
+  'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.',
   {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
     relock: z.boolean().optional().describe('Overwrite an existing locked test'),
@@ -1207,29 +1281,27 @@ trackedTool(
 );
 ```
 
-- [ ] **Step 6: Build + full suite, then commit**
+- [ ] **Step 7: Full suite, then commit**
 
 Run: `cd scripts/cdp-bridge && npm test`
-Expected: PASS (whole suite incl. the new file)
+Expected: PASS (whole suite)
 
 ```bash
-git add scripts/cdp-bridge/src/tools/lock-e2e-test.ts scripts/cdp-bridge/src/index.ts scripts/cdp-bridge/src/lifecycle/device-arbiter.ts scripts/cdp-bridge/dist scripts/cdp-bridge/test/unit/lock-e2e-test.test.js
-git commit -m "feat(e2e): cdp_lock_e2e_test — verify strict pass, freeze locked test"
+git add scripts/cdp-bridge/src/types.ts scripts/cdp-bridge/src/tools/lock-e2e-test.ts scripts/cdp-bridge/src/index.ts scripts/cdp-bridge/src/lifecycle/device-arbiter.ts scripts/cdp-bridge/dist scripts/cdp-bridge/test/unit/lock-e2e-test.test.js
+git commit -m "feat(e2e): cdp_lock_e2e_test — strict gate, freeze executable flow, param-free guard"
 ```
 
 ---
 
-## Task 8: Suite orchestrator core (discover → run → classify → record)
+## Task 8: Suite orchestrator core (discover → reload → run → classify → record)
 
 **Files:**
 - Create: `scripts/cdp-bridge/src/tools/run-e2e-suite.ts`
 - Test: `scripts/cdp-bridge/test/unit/run-e2e-suite-core.test.js`
 
 **Interfaces:**
-- Consumes: `discoverLockedTests`, `loadLockedTest` (`domain/e2e-test.js`); `classifyFlowResult`, `computeVerdict`, `diffNewlyFailing`, `writeRunRecord`, `loadRunRecord`, `lastGreenRunId` (`domain/e2e-run.js`); `getGitInfo`; `getActiveSession`; `createMaestroRunHandler`
-- Produces: `runE2eSuiteCore(args, deps): Promise<ToolResult>`; `makeRunId(now: () => Date, rand: () => string): string`. `args = { pattern?; projectRoot?; deviceId? }`. `deps` injects every collaborator (maestroRun, discover, load, writeRunRecord, lastGreenRunId, loadRunRecord, getGitInfo, getSession, now, makeRunId, runReload, preflightCheck) — defaults wire the real ones.
-
-This task covers the **happy path only** (preflight assumed ok, reload skipped). Task 9 adds preflight + reload + single-slot + request lifecycle.
+- Consumes: `discoverLockedTests`, `loadLockedTest` (`domain/e2e-test.js`); `classifyFlowResult`, `skippedResult`, `computeVerdict`, `diffNewlyFailing`, `writeRunRecord`, `loadRunRecord`, `lastGreenRunId` (`domain/e2e-run.js`); `getGitInfo`; `getActiveSession`; `createMaestroRunHandler`
+- Produces: `runE2eSuiteCore(args, deps): Promise<ToolResult>`; `makeRunId(now, rand): string`. `deps` injects: `discover, load, maestroRun, getGitInfo, getSession, now, makeRunId, runReload?, onProgress?`. No preflight here (handler owns it — Task 9). `runReload` is wrapped so a throw degrades to `metroReloaded:false`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1244,28 +1316,29 @@ import { runE2eSuiteCore, makeRunId } from '../../dist/tools/run-e2e-suite.js';
 import { loadIndex } from '../../dist/domain/e2e-run.js';
 
 function parse(r) { return JSON.parse(r.content[0].text); }
-const passEnv = (out = 'Flow PASSED') => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: out } }) }] });
+const passEnv = () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow PASSED' } }) }] });
 const failEnv = (out) => ({ content: [{ type: 'text', text: JSON.stringify({ ok: false, error: out, meta: { output: out } }) }], isError: true });
 
-function baseDeps(root, maestroByTest) {
+function lockedFixture(id, params) {
+  return { id, intent: `do ${id}`, flow: 'appId: com.x\n---\n- launchApp\n', params, appId: 'com.x', filePath: `/x/${id}.yaml`, status: 'locked', sourceActionId: id, lockedAt: '', lockedGitSha: null, sourceContentHash: '' };
+}
+function baseDeps(ids, maestroByPath, loadOverride) {
   return {
-    discover: () => ['login', 'checkout'],
-    load: (_root, id) => ({ id, intent: `do ${id}`, body: '- launchApp\n', params: [], appId: 'com.x', filePath: `/x/${id}.yaml`, status: 'locked', sourceActionId: id, lockedAt: '', lockedGitSha: null, sourceContentHash: '' }),
-    maestroRun: async (a) => maestroByTest(a.flowPath),
+    discover: () => ids,
+    load: loadOverride ?? ((_root, id) => lockedFixture(id)),
+    maestroRun: async (a) => maestroByPath(a.flowPath),
     getGitInfo: () => ({ sha: 's', dirty: false }),
     getSession: () => ({ name: 's', platform: 'ios', deviceId: 'udid', appId: 'com.x', openedAt: '' }),
     now: () => new Date('2026-06-18T00:00:00Z'),
     makeRunId: () => 'run-test-1',
     runReload: async () => false,
-    preflightCheck: async () => ({ ok: true }),
   };
 }
 
 test('all pass → verdict green, record persisted', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
-    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(root, () => passEnv())));
-    assert.equal(res.ok, true);
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(['login', 'checkout'], () => passEnv())));
     assert.equal(res.data.verdict, 'green');
     assert.equal(res.data.totals.passed, 2);
     assert.equal(loadIndex(root)[0].verdict, 'green');
@@ -1274,35 +1347,46 @@ test('all pass → verdict green, record persisted', async () => {
   }
 });
 
-test('one selector failure → verdict red, classified regression, newlyFailing listed', async () => {
+test('selector failure (real maestro string) → red + regression', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
-    const byTest = (fp) => (fp.includes('checkout') ? failEnv('Element not found: id: payBtn') : passEnv());
-    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(root, byTest)));
+    const byPath = (fp) => (fp.includes('checkout') ? failEnv("Element not found: id='payBtn'") : passEnv());
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(['login', 'checkout'], byPath)));
     assert.equal(res.data.verdict, 'red');
-    assert.equal(res.data.totals.failed, 1);
-    const checkout = res.data.results.find((r) => r.testId === 'checkout');
-    assert.equal(checkout.classification, 'regression');
+    assert.equal(res.data.results.find((r) => r.testId === 'checkout').classification, 'regression');
+    assert.deepEqual(res.data.newlyFailing, ['checkout']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('empty suite → green with zero totals + a note', async () => {
+test('param-needing locked test → skipped, not counted as failed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
-    const deps = { ...baseDeps(root, () => passEnv()), discover: () => [] };
-    const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
+    const load = (_root, id) => lockedFixture(id, id === 'paid' ? ['EMAIL'] : undefined);
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps(['free', 'paid'], () => passEnv(), load)));
     assert.equal(res.data.verdict, 'green');
-    assert.equal(res.data.totals.total, 0);
+    assert.equal(res.data.totals.skipped, 1);
+    assert.equal(res.data.results.find((r) => r.testId === 'paid').classification, 'skipped');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('makeRunId produces a path-safe slug', () => {
-  const id = makeRunId(() => new Date('2026-06-18T12:34:56Z'), () => 'ab12');
-  assert.match(id, /^run-[0-9TZ-]+-ab12$/);
+test('empty suite → warn, NO record written', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'suite-'));
+  try {
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, baseDeps([], () => passEnv())));
+    assert.equal(res.ok, true);
+    assert.equal(res.data.totals.total, 0);
+    assert.equal(loadIndex(root).length, 0); // no false-green record
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('makeRunId is a path-safe slug', () => {
+  assert.match(makeRunId(() => new Date('2026-06-18T12:34:56Z'), () => 'ab12'), /^run-[0-9TZ-]+-ab12$/);
 });
 ```
 
@@ -1318,6 +1402,7 @@ Expected: FAIL — module not found
 import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
 import {
   classifyFlowResult,
+  skippedResult,
   computeVerdict,
   diffNewlyFailing,
   writeRunRecord,
@@ -1330,9 +1415,9 @@ import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { okResult } from '../utils.js';
+import { okResult, warnResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
-import type { SessionState } from '../agent-device-wrapper.js';
+import type { SessionState } from '../types.js';
 
 export interface RunE2eSuiteArgs {
   pattern?: string;
@@ -1349,12 +1434,11 @@ export interface RunE2eSuiteDeps {
   now?: () => Date;
   makeRunId?: (now: () => Date, rand: () => string) => string;
   runReload?: () => Promise<boolean>;
-  preflightCheck?: () => Promise<{ ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string }>;
+  onProgress?: (completed: number, total: number, lastTestId: string) => void;
 }
 
 export function makeRunId(now: () => Date, rand: () => string): string {
-  const stamp = now().toISOString().replace(/[:.]/g, '-');
-  return `run-${stamp}-${rand()}`;
+  return `run-${now().toISOString().replace(/[:.]/g, '-')}-${rand()}`;
 }
 
 function readMaestro(result: ToolResult): { passed: boolean; output: string } {
@@ -1376,13 +1460,12 @@ function readMaestro(result: ToolResult): { passed: boolean; output: string } {
 
 function filterByPattern(ids: string[], pattern?: string): string[] {
   if (!pattern || pattern.length > 256) return ids;
-  let re: RegExp;
   try {
-    re = new RegExp(pattern, 'i');
+    const re = new RegExp(pattern, 'i');
+    return ids.filter((id) => re.test(id));
   } catch {
     return ids;
   }
-  return ids.filter((id) => re.test(id));
 }
 
 export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDeps = {}): Promise<ToolResult> {
@@ -1396,6 +1479,15 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
   const mkRunId = deps.makeRunId ?? makeRunId;
   const rand = (): string => Math.random().toString(36).slice(2, 8);
 
+  const ids = filterByPattern(discover(projectRoot), args.pattern);
+  if (ids.length === 0) {
+    return warnResult(
+      { runId: null, verdict: 'green', totals: { total: 0, passed: 0, failed: 0, skipped: 0 }, results: [], newlyFailing: [] },
+      'No locked e2e tests found — lock one with cdp_lock_e2e_test',
+      { code: 'NO_E2E_TESTS' },
+    );
+  }
+
   const runId = mkRunId(now, rand);
   const startedAt = now().toISOString();
   const startMs = now().getTime();
@@ -1404,39 +1496,38 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
   const deviceId = args.deviceId ?? session?.deviceId ?? null;
   const git = getGit(projectRoot);
 
-  const metroReloaded = deps.runReload ? await deps.runReload() : false;
+  let metroReloaded = false;
+  if (deps.runReload) {
+    try {
+      metroReloaded = await deps.runReload();
+    } catch {
+      metroReloaded = false;
+    }
+  }
 
-  const ids = filterByPattern(discover(projectRoot), args.pattern);
   const results: E2eFlowResult[] = [];
   for (const id of ids) {
     const locked = load(projectRoot, id);
     if (!locked) continue;
+    if (locked.params?.length) {
+      results.push(skippedResult(id, locked.intent, 'needs params (unsupported in v1)'));
+      deps.onProgress?.(results.length, ids.length, id);
+      continue;
+    }
     const t0 = now().getTime();
-    const result = await maestroRun({
-      flowPath: locked.filePath,
-      platform: platform as 'ios' | 'android',
-      params: paramsFor(locked.params),
-    });
+    const result = await maestroRun({ flowPath: locked.filePath, platform: platform as 'ios' | 'android' });
     const { passed, output } = readMaestro(result);
-    results.push(
-      classifyFlowResult({
-        testId: id,
-        intent: locked.intent,
-        passed,
-        durationMs: now().getTime() - t0,
-        output,
-      }),
-    );
+    results.push(classifyFlowResult({ testId: id, intent: locked.intent, passed, durationMs: now().getTime() - t0, output }));
+    deps.onProgress?.(results.length, ids.length, id);
   }
 
   const verdict = computeVerdict(results);
   const prevGreenId = lastGreenRunId(projectRoot);
   const prevGreen = prevGreenId ? loadRunRecord(projectRoot, prevGreenId) : null;
-  const finishedAt = now().toISOString();
   const record: E2eRunRecord = {
     runId,
     startedAt,
-    finishedAt,
+    finishedAt: now().toISOString(),
     durationMs: now().getTime() - startMs,
     gitSha: git.sha,
     gitDirty: git.dirty,
@@ -1445,8 +1536,9 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
     metroReloaded,
     totals: {
       total: results.length,
-      passed: results.filter((r) => r.passed).length,
-      failed: results.filter((r) => !r.passed).length,
+      passed: results.filter((r) => r.classification === 'pass').length,
+      failed: results.filter((r) => !r.passed && r.classification !== 'skipped').length,
+      skipped: results.filter((r) => r.classification === 'skipped').length,
     },
     verdict,
     results,
@@ -1463,36 +1555,32 @@ export async function runE2eSuiteCore(args: RunE2eSuiteArgs, deps: RunE2eSuiteDe
     metroReloaded,
   });
 }
-
-function paramsFor(params?: string[]): Record<string, string> | undefined {
-  return params?.length ? Object.fromEntries(params.map((p) => [p, ''])) : undefined;
-}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test 'test/unit/run-e2e-suite-core.test.js'`
-Expected: PASS (4 tests)
+Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/cdp-bridge/src/tools/run-e2e-suite.ts scripts/cdp-bridge/dist scripts/cdp-bridge/test/unit/run-e2e-suite-core.test.js
-git commit -m "feat(e2e): suite orchestrator core (discover/run/classify/record)"
+git commit -m "feat(e2e): suite orchestrator core (skip params, empty-warn, real-pattern classify)"
 ```
 
 ---
 
-## Task 9: Orchestrator pre-flight + reload + single-slot guard + request lifecycle + tool registration
+## Task 9: Orchestrator handler — preflight, single-slot guard (staleness), request lifecycle, real wiring + startup recovery
 
 **Files:**
-- Modify: `scripts/cdp-bridge/src/tools/run-e2e-suite.ts` (add the handler wrapper)
-- Modify: `scripts/cdp-bridge/src/index.ts` (register tool + startup recovery)
+- Modify: `scripts/cdp-bridge/src/tools/run-e2e-suite.ts` (handler wrapper)
+- Modify: `scripts/cdp-bridge/src/index.ts` (register with real deps + startup recovery)
 - Test: `scripts/cdp-bridge/test/unit/run-e2e-suite-guard.test.js`
 
 **Interfaces:**
-- Consumes: Task 8 `runE2eSuiteCore`; `writeRequest`/`updateRequest`/`loadRequest`/`listRequests` (`domain/e2e-run-request.js`)
-- Produces: `createRunE2eSuiteHandler(deps?)` that wraps `runE2eSuiteCore` with: (a) a single-slot guard (refuse `E2E_RUN_ACTIVE` if a non-terminal request exists for a live pid), (b) a durable request written before/updated during/after, (c) a pre-flight gate returning `SETUP_ERROR`. Produces `isRunActive(projectRoot, isPidAlive): boolean`.
+- Consumes: Task 8 `runE2eSuiteCore`; `writeRequest`/`updateRequest`/`listRequests`/`TERMINAL_STATUSES` (`domain/e2e-run-request.js`)
+- Produces: `createRunE2eSuiteHandler(deps?)`; `isRunActive(projectRoot, isPidAlive, now, staleMs?): boolean` (active = non-terminal AND pid alive AND `updatedAt` within `staleMs`)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1507,11 +1595,12 @@ import { createRunE2eSuiteHandler } from '../../dist/tools/run-e2e-suite.js';
 import { writeRequest, loadRequest } from '../../dist/domain/e2e-run-request.js';
 
 function parse(r) { return JSON.parse(r.content[0].text); }
+const NOW_ISO = '2026-06-18T00:00:00.000Z';
 const baseDeps = (over = {}) => ({
   discover: () => [],
   getGitInfo: () => ({ sha: 's', dirty: false }),
   getSession: () => ({ name: 's', platform: 'ios', deviceId: 'udid', appId: 'com.x', openedAt: '' }),
-  now: () => new Date('2026-06-18T00:00:00Z'),
+  now: () => new Date(NOW_ISO),
   makeRunId: () => 'run-guard-1',
   runReload: async () => false,
   preflightCheck: async () => ({ ok: true }),
@@ -1519,36 +1608,46 @@ const baseDeps = (over = {}) => ({
   ...over,
 });
 
-test('pre-flight failure → SETUP_ERROR, no run', async () => {
+test('pre-flight failure → SETUP_ERROR; request marked failed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'guard-'));
   try {
     const handler = createRunE2eSuiteHandler(baseDeps({ preflightCheck: async () => ({ ok: false, code: 'SETUP_ERROR', detail: 'Metro down' }) }));
     const res = parse(await handler({ projectRoot: root }));
-    assert.equal(res.ok, false);
     assert.equal(res.code, 'SETUP_ERROR');
+    assert.equal(loadRequest(root, 'run-guard-1').status, 'failed');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('single-slot guard → refuses when a live run is in progress', async () => {
+test('single-slot guard refuses a fresh live run in progress', async () => {
   const root = mkdtempSync(join(tmpdir(), 'guard-'));
   try {
-    writeRequest(root, { runId: 'run-existing', status: 'running', pid: process.pid, createdAt: '', updatedAt: '' });
+    writeRequest(root, { runId: 'run-existing', status: 'running', pid: process.pid, createdAt: NOW_ISO, updatedAt: NOW_ISO });
     const handler = createRunE2eSuiteHandler(baseDeps({ isPidAlive: (pid) => pid === process.pid }));
     const res = parse(await handler({ projectRoot: root }));
-    assert.equal(res.ok, false);
     assert.equal(res.code, 'E2E_RUN_ACTIVE');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('happy path → writes request and ends in done', async () => {
+test('STALE running request (old updatedAt) does NOT wedge the guard', async () => {
   const root = mkdtempSync(join(tmpdir(), 'guard-'));
   try {
-    const handler = createRunE2eSuiteHandler(baseDeps());
+    writeRequest(root, { runId: 'run-stale', status: 'running', pid: process.pid, createdAt: '2020-01-01T00:00:00Z', updatedAt: '2020-01-01T00:00:00Z' });
+    const handler = createRunE2eSuiteHandler(baseDeps({ isPidAlive: () => true }));
     const res = parse(await handler({ projectRoot: root }));
+    assert.equal(res.ok, true); // stale holder ignored, run proceeds
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('happy path → ends in done', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'guard-'));
+  try {
+    const res = parse(await createRunE2eSuiteHandler(baseDeps())({ projectRoot: root }));
     assert.equal(res.ok, true);
     assert.equal(loadRequest(root, 'run-guard-1').status, 'done');
   } finally {
@@ -1565,21 +1664,29 @@ Expected: FAIL — `createRunE2eSuiteHandler is not a function`
 - [ ] **Step 3: Write minimal implementation** (append to `src/tools/run-e2e-suite.ts`)
 
 ```typescript
-import {
-  writeRequest,
-  updateRequest,
-  listRequests,
-} from '../domain/e2e-run-request.js';
+import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES } from '../domain/e2e-run-request.js';
 import { failResult } from '../utils.js';
+
+const STALE_MS = 15 * 60_000;
 
 export interface RunE2eSuiteHandlerDeps extends RunE2eSuiteDeps {
   isPidAlive?: (pid: number) => boolean;
+  preflightCheck?: () => Promise<{ ok: true } | { ok: false; code: 'SETUP_ERROR'; detail: string }>;
 }
 
-const TERMINAL = new Set(['done', 'failed', 'cancelled', 'interrupted']);
-
-export function isRunActive(projectRoot: string, isPidAlive: (pid: number) => boolean): boolean {
-  return listRequests(projectRoot).some((r) => !TERMINAL.has(r.status) && isPidAlive(r.pid));
+export function isRunActive(
+  projectRoot: string,
+  isPidAlive: (pid: number) => boolean,
+  now: () => Date,
+  staleMs: number = STALE_MS,
+): boolean {
+  const nowMs = now().getTime();
+  return listRequests(projectRoot).some((r) => {
+    if (TERMINAL_STATUSES.has(r.status)) return false;
+    if (!isPidAlive(r.pid)) return false;
+    const age = nowMs - new Date(r.updatedAt).getTime();
+    return Number.isFinite(age) && age < staleMs;
+  });
 }
 
 function defaultPidAlive(pid: number): boolean {
@@ -1596,37 +1703,43 @@ export function createRunE2eSuiteHandler(deps: RunE2eSuiteHandlerDeps = {}) {
     const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
     const isPidAlive = deps.isPidAlive ?? defaultPidAlive;
     const now = deps.now ?? (() => new Date());
+    const preflightCheck = deps.preflightCheck ?? (async () => ({ ok: true as const }));
 
-    if (isRunActive(projectRoot, isPidAlive)) {
+    if (isRunActive(projectRoot, isPidAlive, now)) {
       return failResult('An e2e run is already in progress', 'E2E_RUN_ACTIVE');
     }
 
-    const preflightCheck =
-      deps.preflightCheck ?? (async () => ({ ok: true as const }));
-    const pre = await preflightCheck();
-    if (!pre.ok) return failResult(pre.detail, 'SETUP_ERROR');
-
     const rand = (): string => Math.random().toString(36).slice(2, 8);
     const runId = (deps.makeRunId ?? makeRunId)(now, rand);
-    const ts = now().toISOString();
+    // SF9: persist the request BEFORE the preflight await so the guard window is closed.
     writeRequest(projectRoot, {
       runId,
-      status: 'running',
+      status: 'requested',
       pid: process.pid,
-      createdAt: ts,
-      updatedAt: ts,
+      createdAt: now().toISOString(),
+      updatedAt: now().toISOString(),
       pattern: args.pattern,
     });
 
+    const pre = await preflightCheck();
+    if (!pre.ok) {
+      updateRequest(projectRoot, runId, { status: 'failed', updatedAt: now().toISOString() });
+      return failResult(pre.detail, 'SETUP_ERROR');
+    }
+
+    updateRequest(projectRoot, runId, { status: 'running', updatedAt: now().toISOString() });
     try {
-      // reuse the same runId so request + record line up
-      const result = await runE2eSuiteCore(args, { ...deps, makeRunId: () => runId });
+      const result = await runE2eSuiteCore(args, {
+        ...deps,
+        makeRunId: () => runId,
+        onProgress: (completed, total, lastTestId) =>
+          updateRequest(projectRoot, runId, { updatedAt: now().toISOString(), progress: { total, completed, lastTestId } }),
+      });
       updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
       return result;
     } catch (err) {
       updateRequest(projectRoot, runId, { status: 'failed', updatedAt: now().toISOString() });
-      const msg = err instanceof Error ? err.message : String(err);
-      return failResult(`e2e run crashed: ${msg}`, 'E2E_RUN_CRASHED');
+      return failResult(`e2e run crashed: ${err instanceof Error ? err.message : String(err)}`, 'E2E_RUN_CRASHED');
     }
   };
 }
@@ -1635,16 +1748,49 @@ export function createRunE2eSuiteHandler(deps: RunE2eSuiteHandlerDeps = {}) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd scripts/cdp-bridge && npm run build && node --test 'test/unit/run-e2e-suite-guard.test.js'`
-Expected: PASS (3 tests)
+Expected: PASS (4 tests)
 
-- [ ] **Step 5: Register the tool + startup recovery**
+- [ ] **Step 5: Register with REAL preflight + reload deps + startup recovery (`src/index.ts`)**
 
-In `src/index.ts`, add the import + `trackedTool` registration (it's already in `FLOW_TOOLS` from Task 7):
+Add imports:
 
 ```typescript
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
-// ...
+import { preflight, probeMetro } from './e2e/preflight.js';
+import { resolveIosUdid } from './tools/device-screenshot-raw.js';
+import { probeAppInstalled } from './cdp/app-installed-probe.js';
+import { createReloadHandler } from './tools/reload.js';
+```
+
+Build the real deps (where `getClient`/`setClient`/`createClient` + `getActiveSession` are in scope) and register:
+
+```typescript
+const e2ePreflight = async () => {
+  const session = getActiveSession();
+  const platform = session?.platform ?? 'ios';
+  const metroReachable = await probeMetro(getClient().metroPort);
+  let udid: string | null;
+  let appInstalled: boolean | null = null;
+  if (platform === 'android') {
+    udid = session?.deviceId ?? null; // v1: android preflight is device-presence only
+  } else {
+    udid = (await resolveIosUdid(session?.deviceId)) ?? null;
+    appInstalled = udid && session?.appId ? await probeAppInstalled(udid, session.appId) : null;
+  }
+  return preflight({ platform, udid, appId: session?.appId, metroReachable, appInstalled });
+};
+
+const e2eReload = async (): Promise<boolean> => {
+  if (!getClient().isConnected) return false;
+  try {
+    const r = await createReloadHandler(getClient, setClient, createClient)({ full: true });
+    return JSON.parse(r.content[0].text)?.ok === true;
+  } catch {
+    return false;
+  }
+};
+
 trackedTool(
   'cdp_run_e2e_suite',
   'Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.',
@@ -1653,11 +1799,11 @@ trackedTool(
     projectRoot: z.string().optional(),
     deviceId: z.string().optional(),
   },
-  createRunE2eSuiteHandler(),
+  createRunE2eSuiteHandler({ preflightCheck: e2ePreflight, runReload: e2eReload }),
 );
 ```
 
-Then, in the server startup path (after `findProjectRoot()` is available — mirror where other one-time startup work runs), add the interrupted-run sweep:
+In `main()` (the worker entrypoint, after the server is wired — NOT the supervisor), add the interrupted-run sweep:
 
 ```typescript
 {
@@ -1673,71 +1819,70 @@ Then, in the server startup path (after `findProjectRoot()` is available — mir
 }
 ```
 
-- [ ] **Step 6: Build + full suite, then commit**
+- [ ] **Step 6: Full suite, then commit**
 
 Run: `cd scripts/cdp-bridge && npm test`
 Expected: PASS (whole suite)
 
 ```bash
 git add scripts/cdp-bridge/src/tools/run-e2e-suite.ts scripts/cdp-bridge/src/index.ts scripts/cdp-bridge/dist scripts/cdp-bridge/test/unit/run-e2e-suite-guard.test.js
-git commit -m "feat(e2e): cdp_run_e2e_suite handler — preflight, single-slot, request lifecycle, startup recovery"
+git commit -m "feat(e2e): cdp_run_e2e_suite handler — real preflight/reload wiring, staleness guard, lifecycle, recovery"
 ```
 
 ---
 
-## Task 10: Wiring — `/lock-e2e` command, .gitignore, changeset, docs
+## Task 10: Wiring — `/lock-e2e` command, .gitignore, changeset
 
 **Files:**
 - Create: `commands/lock-e2e.md`
 - Modify: `.gitignore`
 - Create: `.changeset/e2e-regression-runner-engine.md`
-- Modify: `CLAUDE.md` (tool count + one-line mention) — optional but keep counts honest
 
-- [ ] **Step 1: Create the `/lock-e2e` command** (mirror the frontmatter of an existing command such as `commands/run-action.md`; verify keys against that file)
+- [ ] **Step 1: Create the `/lock-e2e` command** (frontmatter mirrors `commands/run-action.md`: `command`, `description`, `argument-hint`, `allowed-tools`)
 
 ```markdown
 ---
-description: Promote a verified action into a frozen, locked e2e regression test (runs it strict once; freezes only on pass).
+command: lock-e2e
+description: Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair) via cdp_lock_e2e_test and freezes it to .rn-agent/e2e/<id>.yaml only if it passes. v1 supports param-free actions only.
+argument-hint: <action-name> [--relock]
+allowed-tools: Read, mcp__plugin_rn-dev-agent_cdp__cdp_lock_e2e_test
 ---
 
-Lock the action **$1** into a locked e2e test.
+Lock the action into a locked e2e test: $ARGUMENTS
 
 Steps:
-1. Call the `cdp_lock_e2e_test` MCP tool with `actionId: "$1"` (add `relock: true` if the user asked to re-lock).
+1. Call `cdp_lock_e2e_test` with `actionId` = the first positional arg (add `relock: true` if `--relock` is present).
 2. If it returns `STRICT_RUN_FAILED`, tell the user the action must pass a strict (no-repair) run first — offer to run `cdp_run_action` to repair it, then retry the lock.
-3. On success, report the frozen file path and that it will now be included in `cdp_run_e2e_suite`.
+3. If it returns `PARAMS_UNSUPPORTED`, explain that v1 supports param-free tests only.
+4. On success, report the frozen file path and that it will now be included in `cdp_run_e2e_suite`.
 ```
 
-- [ ] **Step 2: Ignore run records (keep locked tests tracked)**
-
-Add to `.gitignore`:
+- [ ] **Step 2: Ignore run records (keep locked tests tracked)** — add to `.gitignore`:
 
 ```gitignore
 # E2E regression run records (machine state); locked tests under .rn-agent/e2e/ stay tracked
 .rn-agent/state/e2e-runs/
 ```
 
-- [ ] **Step 3: Add a changeset**
+- [ ] **Step 3: Add a changeset** — `.changeset/e2e-regression-runner-engine.md`:
 
 ```markdown
 ---
 "rn-dev-agent-cdp": minor
 ---
 
-feat(e2e): regression runner engine — `cdp_lock_e2e_test` promotes a verified action into a frozen locked e2e test, and `cdp_run_e2e_suite` runs all locked tests strict (no auto-repair) on the booted sim, persisting a suite-run report with verdict, per-test classification (regression vs infra), and a newly-failing-since-last-green diff. Engine only; observe page + HTTP trigger land in a follow-up.
+feat(e2e): regression runner engine — `cdp_lock_e2e_test` promotes a verified (param-free) action into a frozen, executable locked e2e test, and `cdp_run_e2e_suite` runs all locked tests strict (no auto-repair) on the booted sim, persisting a suite-run report with verdict, per-test classification (regression vs infra, params skipped), and a newly-failing-since-last-green diff. Engine only; observe page + CSRF HTTP trigger land in a follow-up.
 ```
 
 - [ ] **Step 4: Full build + suite + lint/format**
 
-Run: `cd scripts/cdp-bridge && npm test`
-Expected: PASS (entire suite)
-Run (repo root): `npm run lint && npm run format:check` (oxlint + oxfmt gate)
-Expected: clean
+Run: `cd scripts/cdp-bridge && npm test` → expect PASS (entire suite)
+Run (repo root): `npm run lint && npm run format:check` → expect clean
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add commands/lock-e2e.md .gitignore .changeset/e2e-regression-runner-engine.md CLAUDE.md scripts/cdp-bridge/dist
+git add commands/lock-e2e.md .gitignore .changeset/e2e-regression-runner-engine.md scripts/cdp-bridge/dist
 git commit -m "feat(e2e): /lock-e2e command, gitignore run records, changeset"
 ```
 
@@ -1745,23 +1890,29 @@ git commit -m "feat(e2e): /lock-e2e command, gitignore run records, changeset"
 
 ## Manual device verification (after Task 10)
 
-Not a unit test — run once on the booted simulator with Metro up:
+**Verification tooling (per maintainer):** drive the RN app on the **simulator** via the plugin's own `device_*` / `cdp_*` MCP tools (not `xcrun`/`adb` directly). Any **browser** navigation — i.e. the observe web UI in Plan 2 — is done with **Claude Chrome** browser automation (`mcp__claude-in-chrome__*`), not a headless driver. Plan 1 is engine-only, so its verification is entirely simulator/MCP-tool based; the Claude-Chrome step applies when Plan 2's Regression page exists.
 
-1. Lock a known-good action: invoke `cdp_lock_e2e_test { actionId: "<an-existing-passing-action>" }`. Confirm `.rn-agent/e2e/<id>.yaml` appears with the `# e2e-locked-test: true` header.
-2. Run the suite: invoke `cdp_run_e2e_suite {}`. Confirm `verdict: green`, a record at `.rn-agent/state/e2e-runs/<runId>.json`, and an `index.json` entry.
-3. Introduce drift (rename a `testID` in the app or edit the locked YAML's selector to something absent), re-run: confirm `verdict: red`, the test classified `regression`, and it appears in `newlyFailing`. Confirm the locked file was **not** auto-repaired (its selector is unchanged).
-4. Stop Metro and run the suite: confirm `SETUP_ERROR` (not a misleading red/green).
+Run once on the booted simulator with Metro up:
+
+1. Lock a known-good **param-free** action: `cdp_lock_e2e_test { actionId: "<id>" }`. Confirm `.rn-agent/e2e/<id>.yaml` appears, contains the `# e2e-locked-test: true` header **and** an executable `appId:` / `---` / steps body.
+2. `cdp_run_e2e_suite {}` → `verdict: green`, a record at `.rn-agent/state/e2e-runs/<runId>.json`, an `index.json` entry.
+3. Introduce drift (rename a `testID` in the app), re-run → `verdict: red`, the test `classification: regression`, present in `newlyFailing`; the locked file is **unchanged** (no auto-repair).
+4. Stop Metro, run → `SETUP_ERROR` (proves the real preflight wiring from Task 9).
+5. Try locking a param-needing action → `PARAMS_UNSUPPORTED`.
 
 ---
 
-## Self-Review (completed by author)
+## Self-Review (completed by author, post-amendment)
 
-- **Spec coverage:** lifecycle/lock gate → Task 7; strict-on-booted run → Tasks 8–9; treat-as-regression + pre-flight SETUP_ERROR → Tasks 3, 6, 9; suite-run record + diff-vs-last-green → Tasks 3–4, 8; durable request + interrupted recovery → Tasks 5, 9; locked-test freeze format → Tasks 1–2; FLOW_TOOLS lease → Task 7; gitignore/changeset/command → Task 10. **Deferred to Plan 2 (per spec):** CSRF HTTP endpoint + observe Regression page; params from `.rn-agent/e2e.config.json` (v1 sends empty values → param-needing tests should be authored param-free or will surface as failures until Plan 2 — noted as a known v1 limitation); in-page Promote/Re-lock buttons + `cdp_list_e2e_tests` (v1.1).
-- **Placeholder scan:** none — every step has real code/commands.
-- **Type consistency:** `LockedE2eTest`, `E2eRunRecord`, `E2eFlowResult`, `E2eRunRequest`, `runE2eSuiteCore`/`createRunE2eSuiteHandler`, `lockE2eTestCore`, `freezeLockedTest`, `writeRunRecord`, `recoverInterruptedRequests` used consistently across tasks. Maestro envelope parsed identically in Tasks 7 & 8 (`readPassed`/`readMaestro`).
+- **Spec coverage:** lock gate (param-free) → Task 7; strict-on-booted run → Tasks 8–9; treat-as-regression + pre-flight SETUP_ERROR (real wiring) → Tasks 6, 9; suite-run record + diff-vs-last-green → Tasks 3–4, 8; durable request + interrupted recovery + staleness → Tasks 5, 9; executable frozen flow + robust parse → Tasks 1–2, 7; FLOW_TOOLS lease → Task 7; gitignore/changeset/command → Task 10.
+- **Placeholder scan:** none.
+- **Type consistency:** `LockedE2eTest.flow` (renamed from `body`) used in Tasks 1/2/7/8; `E2eResultClassification` incl. `'skipped'` (Task 3) honored in `computeVerdict`/`diffNewlyFailing`/Task 8; `totals.skipped` in Tasks 3/4/8; `SessionState` imported from `../types.js` in Tasks 7/8; error codes added to `ToolErrorCode` (Task 7) before first use; maestro envelope parsed identically (`readPassed`/`readMaestro`) in Tasks 7/8 incl. `meta.output` timeout path.
+- **Review amendments:** all 6 blockers + should-fixes from the multi-LLM review are folded in (see "Amendments applied" at top).
 
 ## Known v1 limitations (carried to Plan 2)
 
-- **Params:** locked tests requiring `${VAR}` get empty values in v1 (no `e2e.config.json` yet) — they may fail until Plan 2 adds the params source + redaction. Author v1 locked tests to be self-contained.
-- **No HTTP trigger / page:** drive via the MCP tools (or `/lock-e2e`) until Plan 2.
-- **Concurrency:** a suite run holds the exclusive flow lease (stop-the-world) — expected on a single booted sim.
+- **Param-needing tests unsupported** (lock refuses, suite skips) until the `.rn-agent/e2e.config.json` params source ships.
+- **No HTTP trigger / page** — drive via the MCP tools (or `/lock-e2e`).
+- **`runFlow:` file-refs** in a locked flow may break (relative paths resolve against `.rn-agent/e2e/`); author self-contained flows. (Plan 2 can expand refs at freeze time.)
+- **Android preflight** is device-presence only (no app-installed probe) in v1.
+- **Concurrency:** a run holds the exclusive flow lease (stop-the-world) — expected on one booted sim. The durable request guard is the cross-restart/Plan-2-HTTP backstop.
