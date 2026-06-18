@@ -70,6 +70,20 @@ function appOf(events: AgentEvent[]): string | undefined {
   return undefined;
 }
 
+interface ActionSummary {
+  id: string;
+  intent: string;
+  status: string;
+  params?: string[];
+  mutates?: boolean;
+  appId?: string;
+}
+
+interface ActionRunState {
+  running: boolean;
+  result?: { ok: boolean; output?: string; error?: string; missingParams?: string[] };
+}
+
 interface E2eProgress {
   completed: number;
   total: number;
@@ -112,6 +126,8 @@ function App(): JSX.Element {
   const [e2eRunning, setE2eRunning] = useState(false);
   const [e2eResult, setE2eResult] = useState<E2eRunResult | null>(null);
   const [e2eHistory, setE2eHistory] = useState<E2eRunIndexEntry[]>([]);
+  const [actions, setActions] = useState<ActionSummary[]>([]);
+  const [actionStates, setActionStates] = useState<Record<string, ActionRunState>>({});
   const maxSeqRef = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -124,8 +140,41 @@ function App(): JSX.Element {
     }
   };
 
+  const fetchActions = async (): Promise<void> => {
+    try {
+      const r = await fetch('/api/e2e/actions');
+      if (r.ok) setActions((await r.json()) as ActionSummary[]);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const runAction = async (actionId: string): Promise<void> => {
+    setActionStates((prev) => ({ ...prev, [actionId]: { running: true } }));
+    try {
+      const r = await fetch('/api/e2e/actions/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': (window as unknown as { __E2E_CSRF__?: string }).__E2E_CSRF__ ?? '',
+        },
+        body: JSON.stringify({ actionId }),
+      });
+      const result = (await r.json()) as ActionRunState['result'];
+      setActionStates((prev) => ({ ...prev, [actionId]: { running: false, result } }));
+    } catch {
+      setActionStates((prev) => ({
+        ...prev,
+        [actionId]: { running: false, result: { ok: false, error: 'network error' } },
+      }));
+    }
+  };
+
   useEffect(() => {
-    if (view === 'regression') void fetchE2eHistory();
+    if (view === 'regression') {
+      void fetchE2eHistory();
+      void fetchActions();
+    }
   }, [view]);
 
   const runE2eSuite = async (): Promise<void> => {
@@ -341,6 +390,72 @@ function App(): JSX.Element {
         </div>
       ) : (
         <div className="reg-container">
+          <div className="actions-panel">
+            <div className="pane-head">Actions</div>
+            {actions.length === 0 ? (
+              <div className="empty">No actions found</div>
+            ) : (
+              <table className="reg-table actions-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Intent</th>
+                    <th>Status</th>
+                    <th>Params</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {actions.map((a) => {
+                    const st = actionStates[a.id];
+                    return (
+                      <tr key={a.id}>
+                        <td className="reg-testid">{a.id}</td>
+                        <td className="actions-intent">{a.intent}</td>
+                        <td>
+                          <span className={`reg-badge actions-status-${a.status}`}>{a.status}</span>
+                          {a.mutates && (
+                            <span className="actions-mutates" title="mutates state">
+                              M
+                            </span>
+                          )}
+                        </td>
+                        <td className="actions-params">
+                          {a.params && a.params.length > 0
+                            ? a.params.map((p) => (
+                                <span key={p} className="actions-param-chip">
+                                  {p}
+                                </span>
+                              ))
+                            : null}
+                        </td>
+                        <td className="actions-run-cell">
+                          <button
+                            className="actions-run-btn"
+                            disabled={st?.running}
+                            onClick={() => void runAction(a.id)}
+                          >
+                            {st?.running ? '…' : 'Run'}
+                          </button>
+                          {st?.result && (
+                            <span
+                              className={st.result.ok ? 'actions-result-ok' : 'actions-result-fail'}
+                            >
+                              {st.result.ok
+                                ? '✓'
+                                : st.result.missingParams
+                                  ? `Missing params: ${st.result.missingParams.join(', ')}`
+                                  : (st.result.error ?? 'failed')}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
           <div className="reg-panel">
             <div className="reg-header">
               <button
@@ -507,6 +622,21 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .reg-badge-regression { background: #2d1a1a; color: #f7768e; }
 .reg-badge-infra { background: #2d2a1a; color: #e0af68; }
 .reg-badge-skipped { background: #1f2335; color: #787c99; }
+.actions-panel { background: #16161e; border: 1px solid #2a2b3d; border-radius: 6px; overflow: auto; }
+.actions-table { width: 100%; }
+.actions-intent { color: #a9b1d6; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actions-params { display: flex; gap: 4px; flex-wrap: wrap; }
+.actions-param-chip { background: #1f2335; color: #7aa2f7; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.actions-mutates { background: #2d2a1a; color: #e0af68; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: 700; margin-left: 4px; }
+.actions-status-active { background: #1a2d1a; color: #9ece6a; }
+.actions-status-experimental { background: #2d2a1a; color: #e0af68; }
+.actions-status-deprecated { background: #1f2335; color: #787c99; }
+.actions-run-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.actions-run-btn { background: #283457; color: #c0caf5; border: 1px solid #2a2b3d; border-radius: 4px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 11px; }
+.actions-run-btn:hover:not(:disabled) { background: #3b4261; }
+.actions-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.actions-result-ok { color: #9ece6a; font-size: 11px; font-weight: 600; }
+.actions-result-fail { color: #f7768e; font-size: 11px; }
 `;
 
 const style = document.createElement('style');
