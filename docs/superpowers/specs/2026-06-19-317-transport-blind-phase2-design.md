@@ -63,10 +63,10 @@ Parse the action's YAML body into `ReplayStep[]` by reading the body with the ex
 Concrete `ReplayDispatch` that calls the **underlying handler functions** — `createInteractHandler(getClient)` (press/typeText), `createComponentTreeHandler(getClient)` (isVisible by testID filter) — not the wrapped MCP tools, so the whole replay runs under the single arbiter lease `cdp_run_action` already holds (composite-tool rule). `launch` uses the existing simctl-launch helper.
 
 ### `isTransportBlindViaCdp(getClient, failedSelector): Promise<boolean>`
-Query the component tree filtered by `failedSelector`; `true` iff the testID is present. The CDP-tree oracle.
+The CDP-tree oracle. **Exact-match required, not "filter returned something."** `cdp_component_tree`'s `filter` is a broad **case-insensitive substring** match across component name / testID / nativeID / accessibilityLabel, so a filtered hit is NOT proof of presence — a substring, label, or component-name coincidence would route genuine drift into CDP replay. The oracle therefore parses the returned nodes and returns `true` only when some node's `testID` (or `nativeID`) is **verbatim equal** to `failedSelector` (case-sensitive — testIDs are case-sensitive, consistent with Phase 1's `detectTransportBlind`). Same-key equality, never substring.
 
 ### Telemetry — `RunRecord`
-Add `transport: 'maestro' | 'cdp-js'` so fallback runs are visible in run history and the observe UI; the existing `autoRepair`/outcome fields reflect the CDP replay outcome.
+Add an **optional** `transport?: 'cdp-js'`, recorded **only on fallback runs**. Maestro (healthy) runs omit the field entirely, so existing run-history JSON and any consumers/snapshots are unchanged — this is what preserves the byte-for-byte healthy-path guarantee in the acceptance criteria. Absence of the field ⇒ maestro. The existing `autoRepair`/outcome fields reflect the CDP replay outcome.
 
 ## Step → CDP mapping (complete for all 7 current actions)
 
@@ -83,6 +83,8 @@ Add `transport: 'maestro' | 'cdp-js'` so fallback runs are visible in run histor
 ## Error handling / fidelity (safety rules)
 
 - **Unsupported step type → hard `UNSUPPORTED_STEP` error; never a silent pass.** A regression runner that skips steps and reports green is worse than useless. This is non-negotiable.
+- **Handler-level verdict semantics (honest labeling).** A CDP/JS replay calls the component's React handler directly, bypassing native interaction gates a real tap (or WDA) enforces: `disabled` controls, overlays / `pointerEvents:'none'`, off-screen position, gesture-responder arbitration, keyboard focus. A CDP-replay pass therefore means *"the handlers fired and the asserted state was reached,"* NOT *"a user could physically perform this."* Fallback verdicts carry `transport:'cdp-js'` precisely so they are never mistaken for native-fidelity passes; the diagnostic message says so.
+- **Disabled / non-interactable guard.** Before `press`/`type`, the dispatch inspects the target node's props for `disabled === true` or `accessibilityState.disabled === true` (and `pointerEvents:'none'` where readable) and **fails the step** instead of firing the handler — so a CDP replay cannot silently "pass" by pressing a control a user couldn't. Best-effort: limited to props observable in the fiber tree (it cannot detect an opaque sibling overlay that isn't expressed as a prop — a known limitation of handler-level replay, documented under Risks).
 - `assertVisible` "visible" = testID present in the fiber tree (rendered), **not** pixel visibility. Documented approximation; adequate for actions, which assert state milestones.
 - A testID genuinely absent mid-replay (a real tap/assert target missing) → **genuine failure**, reported as a normal flow failure — *not* relabeled transport-blind.
 - `inputText` with no prior `tapOn`, or CDP not connected → error. Never fabricate a verdict.
@@ -94,9 +96,10 @@ Pure / handler-level with mocks — alongside existing tests in `scripts/cdp-bri
 
 1. **Step parser** — YAML subset → typed steps; `${VAR}` interpolation; nested `runFlow.commands`.
 2. **Replay engine** (mock dispatch): each step → correct op; `runFlow` when-visible true→recurse / false→skip; `inputText` targets `lastTapped`; `assertVisible` present→pass / absent→fail; unsupported step → `UNSUPPORTED_STEP`; real-missing testID → fail (not blind).
-3. **Detection oracle** — testID present → `true`; absent → `false`; empty tree → `false`.
-4. **Handler-level** — maestro fails `SELECTOR_NOT_FOUND` + testID in CDP tree → replay invoked → pass; `RunRecord.transport === 'cdp-js'`; maestro fails + testID **absent** → existing repair path, replay NOT invoked.
-5. **Device verification** — replay an existing action (`cycle-task-priority`, then a mutating one like `toggle-theme`) on the iOS 26.5 sim end-to-end → **PASS via CDP/JS**. This is the real proof the phase exists for.
+3. **Detection oracle (exact-match)** — exact testID present → `true`; testID **absent** → `false`; empty tree → `false`; a node matching `failedSelector` only as a **substring / accessibilityLabel / component-name** (no verbatim testID) → `false` (must not misfire on the broad filter).
+4. **Handler-level** — maestro fails `SELECTOR_NOT_FOUND` + exact testID in CDP tree → replay invoked → pass; `RunRecord.transport === 'cdp-js'`; a healthy maestro **pass** persists **no** `transport` field (byte-for-byte guarantee); maestro fails + testID **absent** → existing repair path, replay NOT invoked.
+5. **Negative (no false green)** — a target whose props mark it `disabled` / `accessibilityState.disabled` → the dispatch **fails the step**, does not fire the handler, run reported **fail** — proving CDP replay cannot silently pass an invalid interaction.
+6. **Device verification** — replay an existing action (`cycle-task-priority`, then a mutating one like `toggle-theme`) on the iOS 26.5 sim end-to-end → **PASS via CDP/JS**. This is the real proof the phase exists for.
 
 ## Acceptance criteria
 
@@ -111,6 +114,7 @@ Pure / handler-level with mocks — alongside existing tests in `scripts/cdp-bri
 ## Notes / risks
 
 - **Fiber-presence ≠ pixel-visibility.** A testID can be mounted but off-screen; `assertVisible` would pass. Accepted for actions (state-milestone asserts). If this bites, a later refinement can check layout/measure — out of scope now.
+- **Handler-level replay can't see opaque native gates.** The disabled-guard catches `disabled`/`pointerEvents` expressed as props, but an opaque sibling overlay, a native modal intercepting touches, or a gesture-responder that would steal the touch are NOT expressed on the target node — so a CDP press can fire a handler a real finger couldn't reach. This is the inherent limit of handler-level replay; the `transport:'cdp-js'` label + honest verdict semantics are the mitigation, not a claim of native equivalence. A flow that genuinely depends on native-gesture fidelity should run on iOS 18 (full WDA) rather than the 26.x fallback.
 - **`inputText` focus model.** Maestro types into the focused field; we approximate "focused" as "last `tapOn`ed testID." Holds for the tap-then-type pattern every current action uses; documented as a constraint of the supported subset.
 - **`launchApp` foregrounding.** `simctl launch` of an already-running app foregrounds it with the same pid (resuming JS) — same mechanism the Phase 2b wedge-recovery already relies on.
 - The reactive trigger keeps the ~40s doomed maestro attempt on 26.x; intentional (zero risk to the healthy path). A proactive probe is a later, redesign-free optimization.
