@@ -36,10 +36,7 @@ export function resolveParams(
   return { ok: true, params: merged };
 }
 
-export function secretValuesFor(
-  config: E2eConfig,
-  params: Record<string, string>,
-): string[] {
+export function secretValuesFor(config: E2eConfig, params: Record<string, string>): string[] {
   const names = new Set(config.secretParams ?? []);
   return Object.entries(params)
     .filter(([k, v]) => names.has(k) && v !== '')
