@@ -57,9 +57,9 @@ test("scrollintoview: Android runner env uses snapshot/swipe orchestrator", asyn
   delete process.env.RN_ANDROID_RUNNER;
   try {
     const source = readFileSync(DEVICE_INTERACT_PATH, "utf8");
-    assert.match(source, /session\?\.platform === 'android'/);
-    assert.match(source, /RN_ANDROID_RUNNER !== '0'/);
-    assert.doesNotMatch(source, /runAgentDevice\(\['scrollintoview'/);
+    assert.match(source, /session\?\.platform === ['"]android['"]/);
+    assert.match(source, /RN_ANDROID_RUNNER !== ['"]0['"]/);
+    assert.doesNotMatch(source, /runAgentDevice\(\[['"]scrollintoview['"]/);
   } finally {
     if (previous === undefined) delete process.env.RN_ANDROID_RUNNER;
     else process.env.RN_ANDROID_RUNNER = previous;
