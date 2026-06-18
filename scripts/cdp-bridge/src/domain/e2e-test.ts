@@ -1,4 +1,6 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { mkdirSync, writeFileSync, renameSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 
 export interface LockedE2eTest {
@@ -44,6 +46,59 @@ export function serializeLockedTest(meta: Omit<LockedE2eTest, 'filePath'>): stri
   if (meta.params?.length) header.push(`# params: ${meta.params.join(', ')}`);
   header.push(FLOW_SENTINEL);
   return `${header.join('\n')}\n${meta.flow}`;
+}
+
+export function hashBody(s: string): string {
+  return createHash('sha256').update(s).digest('hex');
+}
+
+export interface LockSource {
+  id: string;
+  intent: string;
+  sourceActionId: string;
+  flow: string;
+  params?: string[];
+  appId?: string;
+}
+
+export function freezeLockedTest(
+  projectRoot: string,
+  source: LockSource,
+  ctx: { gitSha: string | null; now: () => Date },
+): LockedE2eTest {
+  const filePath = e2ePathFor(projectRoot, source.id);
+  mkdirSync(dirname(filePath), { recursive: true });
+  const meta: Omit<LockedE2eTest, 'filePath'> = {
+    id: source.id,
+    intent: source.intent,
+    sourceActionId: source.sourceActionId,
+    lockedAt: ctx.now().toISOString(),
+    lockedGitSha: ctx.gitSha,
+    sourceContentHash: hashBody(source.flow),
+    status: 'locked',
+    params: source.params,
+    appId: source.appId,
+    flow: source.flow,
+  };
+  const tmp = `${filePath}.tmp`;
+  writeFileSync(tmp, serializeLockedTest(meta), 'utf8');
+  renameSync(tmp, filePath);
+  return { ...meta, filePath };
+}
+
+export function loadLockedTest(projectRoot: string, id: string): LockedE2eTest | null {
+  const filePath = e2ePathFor(projectRoot, id);
+  if (!existsSync(filePath)) return null;
+  return parseLockedTest(readFileSync(filePath, 'utf8'), filePath);
+}
+
+export function discoverLockedTests(projectRoot: string): string[] {
+  const dir = e2eDirFor(projectRoot);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => f.replace(/\.yaml$/, ''))
+    .sort();
 }
 
 export function parseLockedTest(text: string, filePath: string): LockedE2eTest | null {
