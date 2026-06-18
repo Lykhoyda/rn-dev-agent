@@ -153,7 +153,8 @@ v1 is **stop-the-world by nature** — the suite runs on the same booted sim you
 
 ## Phasing
 
-- **v1 (this spec):** promotion/lock lifecycle + strict-on-booted regression runner + Regression page + persistence + crash recovery.
+- **v1 (this spec):** promotion/lock lifecycle (**tool/CLI-only**: `cdp_lock_e2e_test` / `/lock-e2e`) + strict-on-booted regression runner + Regression page (Run + results + history) + persistence + crash recovery.
+- **v1.1:** in-page Promote-to-e2e / Re-lock buttons + `cdp_list_e2e_tests`; run cancellation.
 - **Phase 2:** isolated sim (provisioning + UDID threading incl. the `get_app_container booted` site + no-`setActiveSession` handling).
 - **Phase 3:** UDID-aware arbiter + multi-session (keep working during a run).
 - **Later:** native rebuild option, Android, scheduling/run-on-save, bundle-change detection, flaky-retry, cancellation.
@@ -171,8 +172,8 @@ Both independently chose **C over A**. Findings that shaped this spec:
 - **D. The control endpoint is RCE-shaped.** → CSRF + Origin/method/Content-Type guards, never GET.
 - **E. Supervisor restarts lose in-memory state.** → durable on-disk run-request + interrupted recovery.
 
-## Open questions (minor — for spec review)
+## Resolved decisions (spec review, 2026-06-18 — "proceed")
 
-1. **Git tracking:** commit `.rn-agent/e2e/` locked tests (shareable regression baselines) but gitignore `.rn-agent/state/e2e-runs/` (machine state)? Recommended: yes.
-2. **Re-lock / list surface:** expose `cdp_list_e2e_tests` + a UI "Promote to e2e" / "Re-lock" button now, or CLI-only (`/lock-e2e <action>`) in v1?
-3. **Backend/test-data isolation:** out of scope (device isolation ≠ DB isolation); locked tests own their setup/state. Confirm acceptable for v1.
+1. **Git tracking:** **commit** `.rn-agent/e2e/` locked tests (shareable, meaningful regression baselines); **gitignore** `.rn-agent/state/e2e-runs/` run records (machine state). The plan adds the `.gitignore` entry.
+2. **Re-lock / list surface:** v1 promotion is **tool/CLI-only** (`cdp_lock_e2e_test` / `/lock-e2e <action>`, with `relock: true` for re-lock). In-page **Promote-to-e2e / Re-lock buttons** + `cdp_list_e2e_tests` are **v1.1** — keeps the first cut focused on the run path.
+3. **Backend/test-data isolation:** **out of scope for v1** (device isolation ≠ DB isolation); locked tests own their own setup/state.
