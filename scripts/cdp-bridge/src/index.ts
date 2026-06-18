@@ -112,6 +112,7 @@ import {
 } from './observability/live-device.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema } from './tools/observe.js';
+import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -2142,6 +2143,17 @@ trackedTool(
   // and the drift branch could never fire, silently routing screen-change
   // failures into fuzzy selector repair.
   createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) }),
+);
+
+trackedTool(
+  'cdp_lock_e2e_test',
+  'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.',
+  {
+    actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
+    relock: z.boolean().optional().describe('Overwrite an existing locked test'),
+    projectRoot: z.string().optional(),
+  },
+  createLockE2eTestHandler(),
 );
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end

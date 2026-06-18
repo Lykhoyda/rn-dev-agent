@@ -100,6 +100,8 @@ const FLOW_TOOLS = new Set([
     'cdp_auto_login',
     'cdp_reload',
     'cdp_restart',
+    'cdp_lock_e2e_test',
+    'cdp_run_e2e_suite',
 ]);
 // interaction: anything that mutates device/app state — gestures AND
 // state-mutating CDP calls (navigate/dispatch/set_shared_value/mmkv write).
