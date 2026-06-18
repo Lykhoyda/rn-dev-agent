@@ -251,15 +251,18 @@ export function createRunE2eSuiteHandler(deps: RunE2eSuiteHandlerDeps = {}) {
     }
 
     updateRequest(projectRoot, runId, { status: 'running', updatedAt: now().toISOString() });
+    const externalOnProgress = deps.onProgress;
     try {
       const result = await runE2eSuiteCore(args, {
         ...deps,
         makeRunId: () => runId,
-        onProgress: (completed, total, lastTestId) =>
+        onProgress: (completed, total, lastTestId) => {
           updateRequest(projectRoot, runId, {
             updatedAt: now().toISOString(),
             progress: { total, completed, lastTestId },
-          }),
+          });
+          externalOnProgress?.(completed, total, lastTestId);
+        },
       });
       updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
       return result;

@@ -92,3 +92,29 @@ test('happy path → ends in done', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('external onProgress is invoked when a test completes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'guard-'));
+  try {
+    const calls = [];
+    const lockedFixture = (id) => ({
+      id, intent: `do ${id}`, flow: 'appId: com.x\n---\n- launchApp\n',
+      params: undefined, appId: 'com.x', filePath: `/x/${id}.yaml`,
+      status: 'locked', sourceActionId: id, lockedAt: '', lockedGitSha: null, sourceContentHash: '',
+    });
+    const passEnv = () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow PASSED' } }) }] });
+    const deps = baseDeps({
+      discover: () => ['smoke'],
+      load: (_r, id) => lockedFixture(id),
+      maestroRun: async () => passEnv(),
+      onProgress: (completed, total, lastTestId) => calls.push({ completed, total, lastTestId }),
+    });
+    await createRunE2eSuiteHandler(deps)({ projectRoot: root });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].completed, 1);
+    assert.equal(calls[0].total, 1);
+    assert.equal(calls[0].lastTestId, 'smoke');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
