@@ -111,7 +111,7 @@ import {
   buildLiveDeps,
 } from './observability/live-device.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
-import { observeHandler, observeSchema } from './tools/observe.js';
+import { observeHandler, observeSchema, setObserveE2eDeps } from './tools/observe.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
@@ -119,6 +119,11 @@ import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
 import { probeAppInstalled } from './cdp/app-installed-probe.js';
 import { findProjectRoot } from './nav-graph/storage.js';
+import { makeCsrfToken } from './observability/e2e-csrf.js';
+import { loadIndex, loadRunRecord } from './domain/e2e-run.js';
+import { listActions } from './domain/action-inventory.js';
+import { loadAction } from './domain/action-store.js';
+import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -2187,6 +2192,13 @@ const e2eReload = async (): Promise<boolean> => {
   }
 };
 
+const e2eSuiteHandler = createRunE2eSuiteHandler({
+  preflightCheck: e2ePreflight,
+  runReload: e2eReload,
+  onProgress: (c: number, t: number, id: string) =>
+    recorder.push({ type: 'e2e-progress', completed: c, total: t, lastTestId: id }),
+});
+
 trackedTool(
   'cdp_run_e2e_suite',
   'Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.',
@@ -2195,8 +2207,70 @@ trackedTool(
     projectRoot: z.string().optional(),
     deviceId: z.string().optional(),
   },
-  createRunE2eSuiteHandler({ preflightCheck: e2ePreflight, runReload: e2eReload }),
+  e2eSuiteHandler,
 );
+
+const e2eCsrfToken = makeCsrfToken();
+
+const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
+  const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
+  if (!L.ok) return { ok: false, error: 'a flow is already running', code: L.code };
+  try {
+    const r = await e2eSuiteHandler({ pattern });
+    const env = JSON.parse(r.content[0].text) as {
+      ok?: boolean;
+      data?: { runId?: string | null; verdict?: string | null };
+    };
+    recorder.push({
+      type: 'e2e-done',
+      runId: env.data?.runId ?? null,
+      verdict: env.data?.verdict ?? null,
+    });
+    return env;
+  } finally {
+    arbiter.release(L.lease);
+  }
+};
+
+const projectRootFor = (): string => findProjectRoot() ?? process.cwd();
+
+const runActionHandler = createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) });
+
+setObserveE2eDeps({
+  token: e2eCsrfToken,
+  triggerRun: triggerE2eRun,
+  listRuns: async () => loadIndex(projectRootFor()),
+  loadRun: async (id: string) => loadRunRecord(projectRootFor(), id),
+  listActions: async () => listActions(projectRootFor()),
+  runAction: async (actionId: string, params?: Record<string, string>) => {
+    const root = projectRootFor();
+    const action = loadAction(root, actionId);
+    if (!action) return { ok: false as const, error: `action not found: ${actionId}` };
+    const required = action.metadata.params ?? [];
+    if (required.length > 0) {
+      const config = loadE2eConfig(root);
+      const resolved = resolveParams(config, actionId, required);
+      if (!resolved.ok) return { ok: false as const, missingParams: resolved.missing };
+      params = resolved.params;
+    }
+    const L = arbiter.tryAcquire('flow', `observe-run-action:${actionId}`);
+    if (!L.ok) return { ok: false as const, error: 'device busy' };
+    try {
+      const result = await runActionHandler({
+        actionId,
+        params,
+        platform: (getActiveSession()?.platform ?? 'ios') as 'ios' | 'android',
+        trigger: 'human',
+      });
+      const text = result.content?.[0]?.text ?? '';
+      return { ok: true as const, output: text };
+    } catch (e: unknown) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      arbiter.release(L.lease);
+    }
+  },
+});
 
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in

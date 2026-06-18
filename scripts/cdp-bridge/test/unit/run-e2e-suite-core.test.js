@@ -6,6 +6,15 @@ import { join } from 'node:path';
 import { runE2eSuiteCore, makeRunId } from '../../dist/tools/run-e2e-suite.js';
 import { loadIndex } from '../../dist/domain/e2e-run.js';
 
+function failEnvWithOutput(out) {
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify({ ok: false, error: out, meta: { output: out } }) },
+    ],
+    isError: true,
+  };
+}
+
 function parse(r) {
   return JSON.parse(r.content[0].text);
 }
@@ -94,24 +103,80 @@ test('selector failure (real maestro string) → red + regression', async () => 
   }
 });
 
-test('param-needing locked test → skipped, not counted as failed', async () => {
+test('param-needing locked test + no config → skipped with missing-param reason', async () => {
   const root = mkdtempSync(join(tmpdir(), 'suite-'));
   try {
     let maestroCalls = 0;
     const load = (_root, id) => lockedFixture(id, id === 'paid' ? ['EMAIL'] : undefined);
-    const deps = baseDeps(
-      ['free', 'paid'],
-      () => {
-        maestroCalls++;
-        return passEnv();
-      },
-      load,
-    );
+    const deps = {
+      ...baseDeps(
+        ['free', 'paid'],
+        () => {
+          maestroCalls++;
+          return passEnv();
+        },
+        load,
+      ),
+      loadConfig: () => ({}),
+    };
     const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
     assert.equal(res.data.verdict, 'green');
     assert.equal(res.data.totals.skipped, 1);
-    assert.equal(res.data.results.find((r) => r.testId === 'paid').classification, 'skipped');
+    const paidResult = res.data.results.find((r) => r.testId === 'paid');
+    assert.equal(paidResult.classification, 'skipped');
+    assert.ok(
+      paidResult.infraAnnotation?.includes('EMAIL'),
+      'infraAnnotation should mention missing param',
+    );
     assert.equal(maestroCalls, 1, 'maestroRun called only for free, not for paid');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('param-needing locked test + config values → runs, maestroRun receives params', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'suite-'));
+  try {
+    let capturedArgs = null;
+    const load = (_root, id) => lockedFixture(id, id === 'paid' ? ['EMAIL'] : undefined);
+    const deps = {
+      ...baseDeps(['free', 'paid'], () => passEnv(), load),
+      maestroRun: async (args) => {
+        capturedArgs = args;
+        return passEnv();
+      },
+      loadConfig: () => ({ defaults: { params: { EMAIL: 'test@example.com' } } }),
+    };
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
+    assert.equal(res.data.verdict, 'green');
+    assert.equal(res.data.totals.passed, 2);
+    assert.equal(res.data.totals.skipped, 0);
+    assert.ok(capturedArgs !== null, 'maestroRun must have been called for paid');
+    assert.deepEqual(capturedArgs.params, { EMAIL: 'test@example.com' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('param-needing test + config + maestro fail → secret value redacted in errorExcerpt', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'suite-'));
+  try {
+    const secretValue = 'hunter2';
+    const load = (_root, id) => lockedFixture(id, id === 'secure' ? ['PASSWORD'] : undefined);
+    const deps = {
+      ...baseDeps(['secure'], () => failEnvWithOutput(`auth failed: pass=${secretValue}`), load),
+      loadConfig: () => ({
+        defaults: { params: { PASSWORD: secretValue } },
+        secretParams: ['PASSWORD'],
+      }),
+    };
+    const res = parse(await runE2eSuiteCore({ projectRoot: root }, deps));
+    const secureResult = res.data.results.find((r) => r.testId === 'secure');
+    assert.ok(secureResult, 'secure result should exist');
+    assert.notEqual(secureResult.classification, 'skipped', 'should have run, not skipped');
+    const excerpt = secureResult.errorExcerpt ?? '';
+    assert.ok(!excerpt.includes(secretValue), 'secret must not appear in errorExcerpt');
+    if (excerpt.length > 0) assert.ok(excerpt.includes('***'), 'redacted placeholder must appear');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

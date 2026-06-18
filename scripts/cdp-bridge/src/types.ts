@@ -278,6 +278,7 @@ export type ToolErrorCode =
   | 'ALREADY_LOCKED'
   | 'STRICT_RUN_FAILED'
   | 'PARAMS_UNSUPPORTED'
+  | 'MISSING_PARAMS'
   | 'SETUP_ERROR'
   | 'NO_E2E_TESTS'
   | 'E2E_RUN_ACTIVE'

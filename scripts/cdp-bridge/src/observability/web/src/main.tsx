@@ -70,6 +70,50 @@ function appOf(events: AgentEvent[]): string | undefined {
   return undefined;
 }
 
+interface ActionSummary {
+  id: string;
+  intent: string;
+  status: string;
+  params?: string[];
+  mutates?: boolean;
+  appId?: string;
+}
+
+interface ActionRunState {
+  running: boolean;
+  result?: { ok: boolean; output?: string; error?: string; missingParams?: string[] };
+}
+
+interface E2eProgress {
+  completed: number;
+  total: number;
+  lastTestId: string;
+}
+
+interface E2eFlowResult {
+  testId: string;
+  passed: boolean;
+  classification: string;
+}
+
+interface E2eRunResult {
+  ok?: boolean;
+  data?: {
+    runId?: string | null;
+    verdict?: string | null;
+    totals?: { total: number; passed: number; failed: number; skipped: number };
+    results?: E2eFlowResult[];
+    newlyFailing?: string[];
+  };
+}
+
+interface E2eRunIndexEntry {
+  runId: string;
+  finishedAt: string;
+  verdict: string;
+  totals: { total: number; passed: number; failed: number; skipped: number };
+}
+
 function App(): JSX.Element {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [conn, setConn] = useState<'connecting' | 'open' | 'error'>('connecting');
@@ -77,8 +121,84 @@ function App(): JSX.Element {
   const [tab, setTab] = useState<'route' | 'store' | 'tree'>('route');
   const [liveShotSeq, setLiveShotSeq] = useState<number | null>(null);
   const [liveRoute, setLiveRoute] = useState<string | null>(null);
+  const [view, setView] = useState<'live' | 'regression'>('live');
+  const [e2eProgress, setE2eProgress] = useState<E2eProgress | null>(null);
+  const [e2eRunning, setE2eRunning] = useState(false);
+  const [e2eResult, setE2eResult] = useState<E2eRunResult | null>(null);
+  const [e2eHistory, setE2eHistory] = useState<E2eRunIndexEntry[]>([]);
+  const [actions, setActions] = useState<ActionSummary[]>([]);
+  const [actionStates, setActionStates] = useState<Record<string, ActionRunState>>({});
   const maxSeqRef = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
+
+  const fetchE2eHistory = async (): Promise<void> => {
+    try {
+      const r = await fetch('/api/e2e/runs');
+      if (r.ok) setE2eHistory((await r.json()) as E2eRunIndexEntry[]);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const fetchActions = async (): Promise<void> => {
+    try {
+      const r = await fetch('/api/e2e/actions');
+      if (r.ok) setActions((await r.json()) as ActionSummary[]);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const runAction = async (actionId: string): Promise<void> => {
+    setActionStates((prev) => ({ ...prev, [actionId]: { running: true } }));
+    try {
+      const r = await fetch('/api/e2e/actions/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': (window as unknown as { __E2E_CSRF__?: string }).__E2E_CSRF__ ?? '',
+        },
+        body: JSON.stringify({ actionId }),
+      });
+      const result = (await r.json()) as ActionRunState['result'];
+      setActionStates((prev) => ({ ...prev, [actionId]: { running: false, result } }));
+    } catch {
+      setActionStates((prev) => ({
+        ...prev,
+        [actionId]: { running: false, result: { ok: false, error: 'network error' } },
+      }));
+    }
+  };
+
+  useEffect(() => {
+    if (view === 'regression') {
+      void fetchE2eHistory();
+      void fetchActions();
+    }
+  }, [view]);
+
+  const runE2eSuite = async (): Promise<void> => {
+    setE2eRunning(true);
+    setE2eProgress(null);
+    setE2eResult(null);
+    try {
+      const r = await fetch('/api/e2e/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': (window as unknown as { __E2E_CSRF__?: string }).__E2E_CSRF__ ?? '',
+        },
+        body: '{}',
+      });
+      const d = (await r.json()) as E2eRunResult;
+      setE2eResult(d);
+      await fetchE2eHistory();
+    } catch {
+      /* non-fatal */
+    } finally {
+      setE2eRunning(false);
+    }
+  };
 
   useEffect(() => {
     const merge = (incoming: AgentEvent[]): void => {
@@ -105,9 +225,6 @@ function App(): JSX.Element {
       }
       const type =
         parsed && typeof parsed === 'object' ? (parsed as { type?: string }).type : undefined;
-      // The server sends this right before it stops. Close the EventSource so
-      // the browser does NOT auto-reconnect (which would hammer the dead port,
-      // or silently reattach to a different session reusing the same port).
       if (type === 'shutdown') {
         es.close();
         setConn('error');
@@ -121,6 +238,20 @@ function App(): JSX.Element {
         if (typeof p.route === 'string') setLiveRoute(p.route);
         return;
       }
+      if (type === 'e2e-progress') {
+        const p = parsed as { completed?: number; total?: number; lastTestId?: string };
+        setE2eProgress({
+          completed: p.completed ?? 0,
+          total: p.total ?? 0,
+          lastTestId: p.lastTestId ?? '',
+        });
+        return;
+      }
+      if (type === 'e2e-done') {
+        setE2eProgress(null);
+        void fetchE2eHistory();
+        return;
+      }
       if (type === 'snapshot') {
         merge((parsed as { events?: AgentEvent[] }).events ?? []);
       } else {
@@ -130,14 +261,11 @@ function App(): JSX.Element {
     return () => es.close();
   }, []);
 
-  // Auto-scroll the timeline to the newest row.
   useEffect(() => {
     const el = timelineRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [events]);
 
-  // Lightweight virtualization: only the most recent RENDER_ROWS events hit the DOM;
-  // older rows are pruned from view (still held in state up to MAX_EVENTS).
   const visibleRows = useMemo(
     () => (events.length > RENDER_ROWS ? events.slice(events.length - RENDER_ROWS) : events),
     [events],
@@ -159,6 +287,9 @@ function App(): JSX.Element {
 
   const tabEv = tab === 'route' ? navEv : tab === 'store' ? storeEv : treeEv;
 
+  const verdict = e2eResult?.data?.verdict;
+  const newlyFailing = e2eResult?.data?.newlyFailing ?? [];
+
   return (
     <div className="app">
       <div className="statusbar">
@@ -167,84 +298,249 @@ function App(): JSX.Element {
         <span className="sep">events {events.length}</span>
         <span className="sep">route {liveRoute ?? route ?? '—'}</span>
         {app && <span className="sep">app {app}</span>}
+        <span className="view-toggle">
+          <button className={view === 'live' ? 'tab on' : 'tab'} onClick={() => setView('live')}>
+            Live
+          </button>
+          <button
+            className={view === 'regression' ? 'tab on' : 'tab'}
+            onClick={() => setView('regression')}
+          >
+            Regression
+          </button>
+        </span>
       </div>
-      <div className="panes">
-        <div className="pane left">
-          <div className="pane-head">Timeline</div>
-          <div className="timeline" ref={timelineRef}>
-            {visibleRows.map((e) => (
-              <div key={e.seq}>
-                <div
-                  className={`row ${selected === e.seq ? 'sel' : ''}`}
-                  onClick={() => setSelected(selected === e.seq ? null : e.seq)}
-                >
-                  <span className="fam" style={{ background: FAMILY_COLOR[e.family] }}>
-                    {e.family.slice(0, 4)}
-                  </span>
-                  <span className="tool">{e.tool}</span>
-                  <span className="summ">{e.summary}</span>
-                  {e.ghost && <span className="ghost">ghost</span>}
-                  <span className={`ok ${e.ok ? 'pass' : 'fail'}`}>{e.ok ? '✓' : '✗'}</span>
-                  {e.durationMs != null && <span className="dur">{e.durationMs}ms</span>}
-                </div>
-                {selected === e.seq && (
-                  <div className="detail">
-                    <div className="dlabel">args</div>
-                    <pre>{pretty(e.args)}</pre>
-                    {e.error && (
-                      <>
-                        <div className="dlabel">error</div>
-                        <pre className="err">{pretty(e.error)}</pre>
-                      </>
-                    )}
-                    {e.payload !== undefined && (
-                      <>
-                        <div className="dlabel">payload{e.truncated ? ' (truncated)' : ''}</div>
-                        <pre>{pretty(e.payload)}</pre>
-                      </>
-                    )}
+      {view === 'live' ? (
+        <div className="panes">
+          <div className="pane left">
+            <div className="pane-head">Timeline</div>
+            <div className="timeline" ref={timelineRef}>
+              {visibleRows.map((e) => (
+                <div key={e.seq}>
+                  <div
+                    className={`row ${selected === e.seq ? 'sel' : ''}`}
+                    onClick={() => setSelected(selected === e.seq ? null : e.seq)}
+                  >
+                    <span className="fam" style={{ background: FAMILY_COLOR[e.family] }}>
+                      {e.family.slice(0, 4)}
+                    </span>
+                    <span className="tool">{e.tool}</span>
+                    <span className="summ">{e.summary}</span>
+                    {e.ghost && <span className="ghost">ghost</span>}
+                    <span className={`ok ${e.ok ? 'pass' : 'fail'}`}>{e.ok ? '✓' : '✗'}</span>
+                    {e.durationMs != null && <span className="dur">{e.durationMs}ms</span>}
                   </div>
-                )}
-              </div>
-            ))}
-            {events.length === 0 && <div className="empty">waiting for events…</div>}
+                  {selected === e.seq && (
+                    <div className="detail">
+                      <div className="dlabel">args</div>
+                      <pre>{pretty(e.args)}</pre>
+                      {e.error && (
+                        <>
+                          <div className="dlabel">error</div>
+                          <pre className="err">{pretty(e.error)}</pre>
+                        </>
+                      )}
+                      {e.payload !== undefined && (
+                        <>
+                          <div className="dlabel">payload{e.truncated ? ' (truncated)' : ''}</div>
+                          <pre>{pretty(e.payload)}</pre>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {events.length === 0 && <div className="empty">waiting for events…</div>}
+            </div>
+          </div>
+          <div className="pane center">
+            <div className="pane-head">Device</div>
+            <div className="screen">
+              {liveShotSeq != null ? (
+                <img src={`/api/live-screenshot/${liveShotSeq}`} alt="live device screenshot" />
+              ) : shotEv ? (
+                <img src={`/api/screenshot/${shotEv.seq}`} alt={`screenshot seq ${shotEv.seq}`} />
+              ) : (
+                <div className="empty">no screenshot yet</div>
+              )}
+            </div>
+          </div>
+          <div className="pane right">
+            <div className="tabs">
+              {(['route', 'store', 'tree'] as const).map((t) => (
+                <button key={t} className={tab === t ? 'tab on' : 'tab'} onClick={() => setTab(t)}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="state">
+              {tab === 'route' && liveRoute && (
+                <div className="liveroute">live route: {liveRoute}</div>
+              )}
+              {tabEv ? (
+                <>
+                  {tabEv.truncated && <div className="trunc">payload truncated</div>}
+                  <pre>{pretty(tabEv.payload)}</pre>
+                </>
+              ) : tab === 'route' && liveRoute ? null : (
+                <div className="empty">no {tab} captured yet</div>
+              )}
+            </div>
           </div>
         </div>
-        <div className="pane center">
-          <div className="pane-head">Device</div>
-          <div className="screen">
-            {liveShotSeq != null ? (
-              <img src={`/api/live-screenshot/${liveShotSeq}`} alt="live device screenshot" />
-            ) : shotEv ? (
-              <img src={`/api/screenshot/${shotEv.seq}`} alt={`screenshot seq ${shotEv.seq}`} />
+      ) : (
+        <div className="reg-container">
+          <div className="actions-panel">
+            <div className="pane-head">Actions</div>
+            {actions.length === 0 ? (
+              <div className="empty">No actions found</div>
             ) : (
-              <div className="empty">no screenshot yet</div>
+              <table className="reg-table actions-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Intent</th>
+                    <th>Status</th>
+                    <th>Params</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {actions.map((a) => {
+                    const st = actionStates[a.id];
+                    return (
+                      <tr key={a.id}>
+                        <td className="reg-testid">{a.id}</td>
+                        <td className="actions-intent">{a.intent}</td>
+                        <td>
+                          <span className={`reg-badge actions-status-${a.status}`}>{a.status}</span>
+                          {a.mutates && (
+                            <span className="actions-mutates" title="mutates state">
+                              M
+                            </span>
+                          )}
+                        </td>
+                        <td className="actions-params">
+                          {a.params && a.params.length > 0
+                            ? a.params.map((p) => (
+                                <span key={p} className="actions-param-chip">
+                                  {p}
+                                </span>
+                              ))
+                            : null}
+                        </td>
+                        <td className="actions-run-cell">
+                          <button
+                            className="actions-run-btn"
+                            disabled={st?.running}
+                            onClick={() => void runAction(a.id)}
+                          >
+                            {st?.running ? '…' : 'Run'}
+                          </button>
+                          {st?.result && (
+                            <span
+                              className={st.result.ok ? 'actions-result-ok' : 'actions-result-fail'}
+                            >
+                              {st.result.ok
+                                ? '✓'
+                                : st.result.missingParams
+                                  ? `Missing params: ${st.result.missingParams.join(', ')}`
+                                  : (st.result.error ?? 'failed')}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
           </div>
-        </div>
-        <div className="pane right">
-          <div className="tabs">
-            {(['route', 'store', 'tree'] as const).map((t) => (
-              <button key={t} className={tab === t ? 'tab on' : 'tab'} onClick={() => setTab(t)}>
-                {t}
+          <div className="reg-panel">
+            <div className="reg-header">
+              <button
+                className="reg-run-btn"
+                disabled={e2eRunning}
+                onClick={() => void runE2eSuite()}
+              >
+                {e2eRunning ? 'Running…' : 'Run E2E Suite'}
               </button>
-            ))}
-          </div>
-          <div className="state">
-            {tab === 'route' && liveRoute && (
-              <div className="liveroute">live route: {liveRoute}</div>
+              {e2eProgress && (
+                <span className="reg-progress">
+                  test {e2eProgress.completed}/{e2eProgress.total} — {e2eProgress.lastTestId}
+                </span>
+              )}
+              {verdict && (
+                <span className={`reg-verdict ${verdict === 'green' ? 'pass' : 'fail'}`}>
+                  {verdict === 'green' ? 'PASS' : 'FAIL'}
+                </span>
+              )}
+            </div>
+            {e2eResult?.data?.results && e2eResult.data.results.length > 0 && (
+              <div className="reg-results">
+                <table className="reg-table">
+                  <thead>
+                    <tr>
+                      <th>Test ID</th>
+                      <th>Result</th>
+                      <th>Classification</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {e2eResult.data.results.map((r) => (
+                      <tr
+                        key={r.testId}
+                        className={newlyFailing.includes(r.testId) ? 'reg-newly-failing' : ''}
+                      >
+                        <td className="reg-testid">{r.testId}</td>
+                        <td className={r.passed ? 'reg-pass' : 'reg-fail'}>
+                          {r.passed ? 'pass' : 'fail'}
+                        </td>
+                        <td>
+                          <span className={`reg-badge reg-badge-${r.classification}`}>
+                            {r.classification}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-            {tabEv ? (
-              <>
-                {tabEv.truncated && <div className="trunc">payload truncated</div>}
-                <pre>{pretty(tabEv.payload)}</pre>
-              </>
-            ) : tab === 'route' && liveRoute ? null : (
-              <div className="empty">no {tab} captured yet</div>
+          </div>
+          <div className="reg-history">
+            <div className="pane-head">Run History</div>
+            {e2eHistory.length === 0 ? (
+              <div className="empty">no runs yet</div>
+            ) : (
+              <table className="reg-table">
+                <thead>
+                  <tr>
+                    <th>Run ID</th>
+                    <th>Finished</th>
+                    <th>Verdict</th>
+                    <th>Pass/Fail/Skip</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {e2eHistory.map((h) => (
+                    <tr key={h.runId}>
+                      <td className="reg-testid">{h.runId}</td>
+                      <td>{new Date(h.finishedAt).toLocaleTimeString()}</td>
+                      <td className={h.verdict === 'green' ? 'reg-pass' : 'reg-fail'}>
+                        {h.verdict === 'green' ? 'PASS' : 'FAIL'}
+                      </td>
+                      <td>
+                        {h.totals.passed}/{h.totals.failed}/{h.totals.skipped}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -267,6 +563,7 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .dot.open { background: #9ece6a; }
 .dot.connecting { background: #e0af68; }
 .dot.error { background: #f7768e; }
+.view-toggle { margin-left: auto; display: flex; gap: 4px; }
 .panes { display: flex; flex: 1; min-height: 0; }
 .pane { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid #2a2b3d; }
 .pane.left { flex: 0 0 38%; }
@@ -299,6 +596,47 @@ pre, .tool, .dur, .summ { font-family: ui-monospace, "SF Mono", Menlo, monospace
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
 .liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 6px; }
 .empty { color: #565f89; padding: 12px; }
+.reg-container { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 16px; gap: 16px; }
+.reg-panel { background: #16161e; border: 1px solid #2a2b3d; border-radius: 6px; padding: 14px; }
+.reg-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.reg-run-btn { background: #283457; color: #c0caf5; border: 1px solid #2a2b3d; border-radius: 4px; padding: 6px 16px; cursor: pointer; font: inherit; font-weight: 600; }
+.reg-run-btn:hover:not(:disabled) { background: #3b4261; }
+.reg-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.reg-progress { color: #e0af68; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.reg-verdict { font-weight: 700; border-radius: 4px; padding: 3px 10px; font-size: 13px; }
+.reg-verdict.pass { background: #1a2d1a; color: #9ece6a; border: 1px solid #9ece6a; }
+.reg-verdict.fail { background: #2d1a1a; color: #f7768e; border: 1px solid #f7768e; }
+.reg-results { overflow: auto; }
+.reg-history { background: #16161e; border: 1px solid #2a2b3d; border-radius: 6px; overflow: auto; }
+.reg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.reg-table th { padding: 6px 10px; text-align: left; background: #13141c; color: #787c99; font-weight: 600; border-bottom: 1px solid #2a2b3d; }
+.reg-table td { padding: 5px 10px; border-bottom: 1px solid #1f2335; }
+.reg-table tr:last-child td { border-bottom: none; }
+.reg-table tr:hover td { background: #1f2335; }
+.reg-testid { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #7dcfff; }
+.reg-pass { color: #9ece6a; font-weight: 600; }
+.reg-fail { color: #f7768e; font-weight: 600; }
+.reg-newly-failing td { background: #2d1a1a !important; }
+.reg-badge { border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.reg-badge-pass { background: #1a2d1a; color: #9ece6a; }
+.reg-badge-regression { background: #2d1a1a; color: #f7768e; }
+.reg-badge-infra { background: #2d2a1a; color: #e0af68; }
+.reg-badge-skipped { background: #1f2335; color: #787c99; }
+.actions-panel { background: #16161e; border: 1px solid #2a2b3d; border-radius: 6px; overflow: auto; }
+.actions-table { width: 100%; }
+.actions-intent { color: #a9b1d6; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actions-params { display: flex; gap: 4px; flex-wrap: wrap; }
+.actions-param-chip { background: #1f2335; color: #7aa2f7; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.actions-mutates { background: #2d2a1a; color: #e0af68; border-radius: 3px; padding: 1px 4px; font-size: 10px; font-weight: 700; margin-left: 4px; }
+.actions-status-active { background: #1a2d1a; color: #9ece6a; }
+.actions-status-experimental { background: #2d2a1a; color: #e0af68; }
+.actions-status-deprecated { background: #1f2335; color: #787c99; }
+.actions-run-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.actions-run-btn { background: #283457; color: #c0caf5; border: 1px solid #2a2b3d; border-radius: 4px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 11px; }
+.actions-run-btn:hover:not(:disabled) { background: #3b4261; }
+.actions-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.actions-result-ok { color: #9ece6a; font-size: 11px; font-weight: 600; }
+.actions-result-fail { color: #f7768e; font-size: 11px; }
 `;
 
 const style = document.createElement('style');

@@ -39,3 +39,5 @@ scripts/cdp-bridge/eval/
 
 # E2E regression run records (machine state); locked tests under .rn-agent/e2e/ stay tracked
 .rn-agent/state/e2e-runs/
+# E2E param values (may hold secrets) — local/personal, never committed
+.rn-agent/e2e.config.json

@@ -87,6 +87,16 @@ export class Recorder {
             }
         }
     }
+    push(ev) {
+        for (const fn of this.subs) {
+            try {
+                fn(ev);
+            }
+            catch {
+                /* per-subscriber swallow */
+            }
+        }
+    }
     clear() {
         this.buf.clear();
         // Notify live subscribers with a terminal sentinel BEFORE dropping them, so

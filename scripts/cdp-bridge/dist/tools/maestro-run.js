@@ -40,6 +40,17 @@ export async function runFlowParked(run, opts = {}) {
         stale();
     }
 }
+/**
+ * Splice `-e KEY=VALUE` param pairs in just before the flow file. Both runners
+ * treat args trailing the flow file as additional flow files (maestro-runner
+ * then `stat`s `-e`/`KEY=VALUE` as paths and aborts), so params MUST precede
+ * it. `buildArgs` always emits the flow file last.
+ */
+export function assembleMaestroArgs(baseArgs, paramArgs) {
+    if (paramArgs.length === 0)
+        return baseArgs;
+    return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
+}
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
  *  syntactically be confused with a flag (`--`, `-e`) or break the
  *  KEY=VALUE join (`=`, space, control chars). Strict; documented. */
@@ -157,7 +168,7 @@ export function createMaestroRunHandler() {
                 paramArgs.push('-e', `${key}=${value}`);
             }
         }
-        const finalArgs = [...baseArgs, ...paramArgs];
+        const finalArgs = assembleMaestroArgs(baseArgs, paramArgs);
         try {
             const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, 
             // 10MB buffer: a multi-step flow with screenshots + app console/network

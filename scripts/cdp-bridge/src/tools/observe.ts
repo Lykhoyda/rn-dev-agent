@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { ObservabilityServer } from '../observability/server.js';
+import type { E2eServerDeps } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
 
 export const observeSchema = {
@@ -24,12 +25,17 @@ export function parsePinnedPort(raw: string | undefined): number | undefined {
 }
 
 let server: ObservabilityServer | null = null;
+let e2eDeps: E2eServerDeps | undefined;
+
+export function setObserveE2eDeps(d: E2eServerDeps): void {
+  e2eDeps = d;
+}
 
 export async function observeHandler(args: ObserveArgs): Promise<ToolResult> {
   const action = args.action ?? 'status';
   try {
     if (action === 'start') {
-      if (!server) server = new ObservabilityServer(recorder);
+      if (!server) server = new ObservabilityServer(recorder, e2eDeps);
       const pinned = parsePinnedPort(process.env.RN_AGENT_OBSERVE_PORT);
       const { url, port } = await server.start(pinned);
       return okResult({ url, port, running: true, hint: `Open ${url} to watch the agent live.` });

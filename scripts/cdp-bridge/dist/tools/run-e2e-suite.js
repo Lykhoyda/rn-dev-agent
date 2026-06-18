@@ -1,5 +1,6 @@
 import { discoverLockedTests, loadLockedTest } from '../domain/e2e-test.js';
 import { classifyFlowResult, skippedResult, unloadableResult, computeVerdict, diffNewlyFailing, writeRunRecord, loadRunRecord, lastGreenRunId, } from '../domain/e2e-run.js';
+import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { createMaestroRunHandler } from './maestro-run.js';
@@ -68,6 +69,8 @@ export async function runE2eSuiteCore(args, deps = {}) {
             metroReloaded = false;
         }
     }
+    const loadCfg = deps.loadConfig ?? loadE2eConfig;
+    const config = loadCfg(projectRoot);
     const results = [];
     for (const id of ids) {
         const locked = load(projectRoot, id);
@@ -77,7 +80,27 @@ export async function runE2eSuiteCore(args, deps = {}) {
             continue;
         }
         if (locked.params?.length) {
-            results.push(skippedResult(id, locked.intent, 'needs params (unsupported in v1)'));
+            const resolved = resolveParams(config, id, locked.params);
+            if (!resolved.ok) {
+                results.push(skippedResult(id, locked.intent, 'missing param values: ' + resolved.missing.join(', ')));
+                deps.onProgress?.(results.length, ids.length, id);
+                continue;
+            }
+            const t0 = now().getTime();
+            const result = await maestroRun({
+                flowPath: locked.filePath,
+                platform: platform,
+                params: resolved.params,
+            });
+            const { passed, output } = readMaestro(result);
+            const safeOutput = redactSecrets(output, secretValuesFor(config, resolved.params));
+            results.push(classifyFlowResult({
+                testId: id,
+                intent: locked.intent,
+                passed,
+                durationMs: now().getTime() - t0,
+                output: safeOutput,
+            }));
             deps.onProgress?.(results.length, ids.length, id);
             continue;
         }
@@ -175,14 +198,18 @@ export function createRunE2eSuiteHandler(deps = {}) {
             return failResult(pre.detail, 'SETUP_ERROR');
         }
         updateRequest(projectRoot, runId, { status: 'running', updatedAt: now().toISOString() });
+        const externalOnProgress = deps.onProgress;
         try {
             const result = await runE2eSuiteCore(args, {
                 ...deps,
                 makeRunId: () => runId,
-                onProgress: (completed, total, lastTestId) => updateRequest(projectRoot, runId, {
-                    updatedAt: now().toISOString(),
-                    progress: { total, completed, lastTestId },
-                }),
+                onProgress: (completed, total, lastTestId) => {
+                    updateRequest(projectRoot, runId, {
+                        updatedAt: now().toISOString(),
+                        progress: { total, completed, lastTestId },
+                    });
+                    externalOnProgress?.(completed, total, lastTestId);
+                },
             });
             updateRequest(projectRoot, runId, { status: 'done', updatedAt: now().toISOString() });
             return result;

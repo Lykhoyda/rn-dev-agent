@@ -60,6 +60,17 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
   }
 }
 
+/**
+ * Splice `-e KEY=VALUE` param pairs in just before the flow file. Both runners
+ * treat args trailing the flow file as additional flow files (maestro-runner
+ * then `stat`s `-e`/`KEY=VALUE` as paths and aborts), so params MUST precede
+ * it. `buildArgs` always emits the flow file last.
+ */
+export function assembleMaestroArgs(baseArgs: string[], paramArgs: string[]): string[] {
+  if (paramArgs.length === 0) return baseArgs;
+  return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
+}
+
 interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
@@ -216,7 +227,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         paramArgs.push('-e', `${key}=${value}`);
       }
     }
-    const finalArgs = [...baseArgs, ...paramArgs];
+    const finalArgs = assembleMaestroArgs(baseArgs, paramArgs);
 
     try {
       const { stdout, stderr } = await runFlowParked(

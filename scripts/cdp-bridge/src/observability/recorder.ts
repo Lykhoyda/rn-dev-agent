@@ -93,6 +93,15 @@ export class Recorder {
       }
     }
   }
+  push(ev: { type: string; [k: string]: unknown }): void {
+    for (const fn of this.subs) {
+      try {
+        fn(ev as unknown as AgentEvent);
+      } catch {
+        /* per-subscriber swallow */
+      }
+    }
+  }
   clear(): void {
     this.buf.clear();
     // Notify live subscribers with a terminal sentinel BEFORE dropping them, so
