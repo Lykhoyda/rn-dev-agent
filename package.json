@@ -13,7 +13,9 @@
     "test": "cd scripts/cdp-bridge && npm test"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.27.10"
+    "@changesets/cli": "^2.27.10",
+    "oxfmt": "0.55.0",
+    "oxlint": "^1.70.0"
   },
   "overrides": {
     "ip-address": ">=10.1.1",
