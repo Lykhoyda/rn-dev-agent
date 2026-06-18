@@ -6,7 +6,11 @@ import { recorder } from '../../dist/observability/recorder.js';
 async function withServer(e2e, fn) {
   const s = new ObservabilityServer(recorder, e2e);
   const { url } = await s.start();
-  try { await fn(url); } finally { await s.stop(); }
+  try {
+    await fn(url);
+  } finally {
+    await s.stop();
+  }
 }
 
 const E2E = (over = {}) => ({
@@ -27,16 +31,32 @@ test('GET /api/e2e/runs returns the index json', async () => {
 
 test('POST /api/e2e/run without csrf is 403 and does NOT trigger', async () => {
   let triggered = false;
-  await withServer(E2E({ triggerRun: async () => { triggered = true; return {}; } }), async (url) => {
-    const r = await fetch(url + '/api/e2e/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    assert.equal(r.status, 403);
-    assert.equal(triggered, false);
-  });
+  await withServer(
+    E2E({
+      triggerRun: async () => {
+        triggered = true;
+        return {};
+      },
+    }),
+    async (url) => {
+      const r = await fetch(url + '/api/e2e/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(r.status, 403);
+      assert.equal(triggered, false);
+    },
+  );
 });
 
 test('POST /api/e2e/run with valid csrf triggers + returns result', async () => {
   await withServer(E2E(), async (url) => {
-    const r = await fetch(url + '/api/e2e/run', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' }, body: JSON.stringify({ pattern: 'smoke' }) });
+    const r = await fetch(url + '/api/e2e/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
+      body: JSON.stringify({ pattern: 'smoke' }),
+    });
     assert.equal(r.status, 200);
     assert.equal((await r.json()).data.verdict, 'green');
   });
@@ -66,7 +86,11 @@ test('GET /api/e2e/runs/:id returns 404 for missing run', async () => {
 
 test('no e2e deps → 501 on /api/e2e/run', async () => {
   await withServer(undefined, async (url) => {
-    const r = await fetch(url + '/api/e2e/run', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' }, body: '{}' });
+    const r = await fetch(url + '/api/e2e/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
+      body: '{}',
+    });
     assert.equal(r.status, 501);
   });
 });

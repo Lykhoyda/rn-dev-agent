@@ -15,12 +15,16 @@ export function parsePinnedPort(raw) {
     return Number.isInteger(n) && n > 0 && n <= 65535 ? n : undefined;
 }
 let server = null;
+let e2eDeps;
+export function setObserveE2eDeps(d) {
+    e2eDeps = d;
+}
 export async function observeHandler(args) {
     const action = args.action ?? 'status';
     try {
         if (action === 'start') {
             if (!server)
-                server = new ObservabilityServer(recorder);
+                server = new ObservabilityServer(recorder, e2eDeps);
             const pinned = parsePinnedPort(process.env.RN_AGENT_OBSERVE_PORT);
             const { url, port } = await server.start(pinned);
             return okResult({ url, port, running: true, hint: `Open ${url} to watch the agent live.` });

@@ -98,11 +98,26 @@ test('external onProgress is invoked when a test completes', async () => {
   try {
     const calls = [];
     const lockedFixture = (id) => ({
-      id, intent: `do ${id}`, flow: 'appId: com.x\n---\n- launchApp\n',
-      params: undefined, appId: 'com.x', filePath: `/x/${id}.yaml`,
-      status: 'locked', sourceActionId: id, lockedAt: '', lockedGitSha: null, sourceContentHash: '',
+      id,
+      intent: `do ${id}`,
+      flow: 'appId: com.x\n---\n- launchApp\n',
+      params: undefined,
+      appId: 'com.x',
+      filePath: `/x/${id}.yaml`,
+      status: 'locked',
+      sourceActionId: id,
+      lockedAt: '',
+      lockedGitSha: null,
+      sourceContentHash: '',
     });
-    const passEnv = () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow PASSED' } }) }] });
+    const passEnv = () => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, data: { passed: true, output: 'Flow PASSED' } }),
+        },
+      ],
+    });
     const deps = baseDeps({
       discover: () => ['smoke'],
       load: (_r, id) => lockedFixture(id),

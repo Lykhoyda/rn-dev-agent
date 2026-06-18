@@ -14,7 +14,9 @@ test('push broadcasts a custom event to all subscribers', () => {
 test('push swallows a throwing subscriber and still reaches others', () => {
   const r = new Recorder();
   const seen = [];
-  r.attach(() => { throw new Error('boom'); });
+  r.attach(() => {
+    throw new Error('boom');
+  });
   r.attach((e) => seen.push(e));
   r.push({ type: 'e2e-done', runId: 'x' });
   assert.equal(seen.length, 1);

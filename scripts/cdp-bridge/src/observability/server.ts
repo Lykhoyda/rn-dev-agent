@@ -179,7 +179,10 @@ export class ObservabilityServer {
       // dist/observability/web-dist/index.html (vite outDir).
       let html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
       if (this.e2e) {
-        html = html.replace('</head>', `<script>window.__E2E_CSRF__='${this.e2e.token}'</script></head>`);
+        html = html.replace(
+          '</head>',
+          `<script>window.__E2E_CSRF__='${this.e2e.token}'</script></head>`,
+        );
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
