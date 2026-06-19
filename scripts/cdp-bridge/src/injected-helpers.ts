@@ -1998,6 +1998,146 @@ export const INJECTED_HELPERS = `
     return 'none';
   }
 
+  // ── Task 4: accessible-name computation (port of RNTL accessibility.ts:152-318) ──
+  // Whitespace normalizer that preserves case (distinct from norm() at the
+  // interact() tier matcher which lowercases). Trim + collapse ws runs to one.
+  function __anNorm(s) {
+    return String(s).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
+  }
+
+  // getAriaLabelledByIds: aria-labelledby (string) -> [id]; accessibilityLabelledBy
+  // array -> as-is; accessibilityLabelledBy string -> [id]; else [].
+  function __ariaLabelledByIds(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    var ariaLabelledBy = props['aria-labelledby'];
+    if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+    var accLabelledBy = props.accessibilityLabelledBy;
+    if (Array.isArray(accLabelledBy)) return accLabelledBy;
+    if (typeof accLabelledBy === 'string') return [accLabelledBy];
+    return [];
+  }
+
+  // Find the first fiber in ANY root whose memoizedProps.nativeID === id.
+  function __findByNativeID(id) {
+    return forEachRootFiber(function(rootFiber) {
+      var stack = [rootFiber];
+      var guard = 0;
+      while (stack.length) {
+        if (++guard > 20000) return null;
+        var f = stack.pop();
+        if (!f) continue;
+        if (f.memoizedProps && f.memoizedProps.nativeID === id) return f;
+        if (f.sibling) stack.push(f.sibling);
+        if (f.child) stack.push(f.child);
+      }
+      return null;
+    });
+  }
+
+  // DEVIATION from RNTL draft (port of getTextContent, NOT computeAccessibleName):
+  // concatenate the referenced node's descendant host-text strings. A text node
+  // carries its raw string as memoizedProps (harness) or has tag 6 (live fiber).
+  // labelledBy refs resolve to THIS, never to __accessibleName — so a malformed
+  // labelledBy cycle (A->B->A) cannot drive infinite recursion. The visit cap is
+  // defense-in-depth against pathological / self-referential trees.
+  function __refTextContent(fiber) {
+    if (!fiber) return '';
+    var parts = [];
+    var visited = 0;
+    (function collect(node, depth) {
+      if (!node || depth > 40 || visited > 20000) return;
+      visited++;
+      if (typeof node.memoizedProps === 'string') {
+        if (node.memoizedProps) parts.push(node.memoizedProps);
+        return;
+      }
+      if (node.tag === 6 && typeof node.memoizedProps === 'string') {
+        if (node.memoizedProps) parts.push(node.memoizedProps);
+        return;
+      }
+      var child = node.child;
+      while (child) { collect(child, depth + 1); child = child.sibling; }
+    })(fiber, 0);
+    return __anNorm(parts.join(' '));
+  }
+
+  // computeAriaLabel: labelledBy refs (resolved to TEXT CONTENT — see
+  // __refTextContent) win; then explicit aria-label/accessibilityLabel; then
+  // host image alt. A ref resolving to empty text is filtered out of labelTexts
+  // (matches RNTL filtering undefined), so it falls through to the label branch.
+  function __ariaLabel(fiber) {
+    var ids = __ariaLabelledByIds(fiber);
+    if (ids.length > 0) {
+      var labelTexts = [];
+      for (var i = 0; i < ids.length; i++) {
+        var ref = __findByNativeID(ids[i]);
+        if (ref) {
+          var refText = __refTextContent(ref);
+          if (refText) labelTexts.push(refText);
+        }
+      }
+      if (labelTexts.length > 0) {
+        return __anNorm(labelTexts.join(' '));
+      }
+    }
+
+    var props = (fiber && fiber.memoizedProps) || {};
+    var explicit = props['aria-label'];
+    if (explicit === undefined || explicit === null) explicit = props.accessibilityLabel;
+    if (explicit) return explicit;
+
+    if (hostKind(fiber) === 'image' && props.alt) return props.alt;
+
+    return undefined;
+  }
+
+  // joinAccessibleNameParts: inline host-text neighbours join with '' else ' '.
+  function __joinNameParts(parts, inline) {
+    var out = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (i === 0) { out = parts[i].text; continue; }
+      var prev = parts[i - 1];
+      var sep = (inline && prev.isInlineText && parts[i].isInlineText) ? '' : ' ';
+      out = out + sep + parts[i].text;
+    }
+    return out;
+  }
+
+  // computeAccessibleName: aria-label first; then host textinput placeholder
+  // (root only); then recurse children, joining inline host-text with ''. The
+  // child-name recursion below (correct RNTL behavior) stays — only labelledBy
+  // ref resolution uses text content (see __ariaLabel / __refTextContent).
+  function __accessibleName(fiber, root) {
+    if (!fiber) return undefined;
+    var label = __ariaLabel(fiber);
+    if (label) return label;
+
+    var props = fiber.memoizedProps || {};
+    if (hostKind(fiber) === 'textinput' && props.placeholder && root !== false) {
+      return props.placeholder;
+    }
+
+    var parts = [];
+    var child = fiber.child;
+    while (child) {
+      // A text node's memoizedProps is the raw string (harness / live tag-6 fiber).
+      if (typeof child.memoizedProps === 'string') {
+        if (child.memoizedProps) {
+          parts.push({ text: child.memoizedProps, isInlineText: true });
+        }
+      } else {
+        var childLabel = __accessibleName(child, false);
+        if (childLabel) {
+          parts.push({ text: childLabel, isInlineText: hostKind(child) === 'text' });
+        }
+      }
+      child = child.sibling;
+    }
+
+    var joined = __joinNameParts(parts, hostKind(fiber) === 'text');
+    return joined ? joined : undefined;
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -2017,6 +2157,7 @@ export const INJECTED_HELPERS = `
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
+    __accessibleName: __accessibleName,
     __match: __match,
     __hostKind: hostKind,
     __role: __role,
