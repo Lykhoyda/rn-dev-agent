@@ -8,7 +8,7 @@
 // can fall back to JSON sidecars.
 
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ActionRuntimeState, RunRecord, RepairRecord } from './reusable-action.js';
 
@@ -75,6 +75,13 @@ export interface ActionDb {
    * Used by the Phase-2 repair-budget check.
    */
   recentRepairCount(actionId: string, sinceIso: string): number;
+  /**
+   * One-time import of legacy JSON sidecars from `<projectRoot>/.rn-agent/state/<id>.state.json`
+   * into the DB. Skips any `<id>` that already has an `actions_index` row (idempotent).
+   * Skips corrupt JSON and files with schemaVersion !== 1 (caught, never thrown).
+   * Returns the count of sidecars that were successfully imported on this call.
+   */
+  migrateSidecars(): { migrated: number };
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -353,6 +360,40 @@ export function openActionDb(
           )
           .get(actionId, sinceIso) as { cnt: number };
         return row.cnt;
+      },
+
+      migrateSidecars(): { migrated: number } {
+        const stateDir = join(projectRoot, '.rn-agent', 'state');
+        if (!existsSync(stateDir)) return { migrated: 0 };
+        let migrated = 0;
+        for (const f of readdirSync(stateDir)) {
+          if (!f.endsWith('.state.json')) continue;
+          const id = f.replace(/\.state\.json$/, '');
+          const exists = db.prepare('SELECT 1 FROM actions_index WHERE id = ?').get(id);
+          if (exists) continue;
+          try {
+            const parsed = JSON.parse(
+              readFileSync(join(stateDir, f), 'utf8'),
+            ) as ActionRuntimeState;
+            if (parsed?.schemaVersion !== 1) continue;
+            handle.upsertIndex(id, {
+              revision: parsed.revision,
+              statsJson: JSON.stringify(parsed.stats),
+              mtimeBaseline: parsed.lastSeenMtimeMs,
+              updatedAt: parsed.updatedAt,
+            });
+            for (const r of parsed.runHistory) {
+              handle.insertRunRecord(id, r);
+            }
+            for (const r of parsed.repairHistory) {
+              handle.insertRepairRecord(id, r);
+            }
+            migrated++;
+          } catch {
+            // skip corrupt sidecar — never throw
+          }
+        }
+        return { migrated };
       },
     };
 

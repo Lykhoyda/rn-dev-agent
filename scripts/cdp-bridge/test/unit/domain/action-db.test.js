@@ -1,8 +1,9 @@
 // Task 1: action-db — ESM loader + open + schema + PRAGMA + graceful degradation
 // Task 2: action-db — append-and-trim writes, upsertIndex (COALESCE), loadState, recentRepairCount
+// Task 3: action-db — migrateSidecars() one-time import of legacy JSON sidecars
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openActionDb, loadSqlite } from '../../../dist/domain/action-db.js';
@@ -420,6 +421,153 @@ test('loadState transport field: only set to cdp-js when column value is cdp-js'
   assert.ok(loaded);
   assert.equal(loaded.runHistory[0].transport, 'cdp-js', 'transport=cdp-js preserved');
   assert.equal(loaded.runHistory[1].transport, undefined, 'absent transport stays undefined');
+
+  handle.close();
+});
+
+// ─── Task 3: migrateSidecars ──────────────────────────────────────────────────
+
+test('migrateSidecars imports legacy .state.json files exactly once', () => {
+  if (!loadSqlite()) return;
+  const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t3a-'));
+  const stateDir = join(root, '.rn-agent', 'state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, 'login.state.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      revision: 2,
+      updatedAt: '2026-06-19T00:00:00Z',
+      lastSeenMtimeMs: 9,
+      runHistory: [
+        { timestamp: '2026-06-19T00:00:01Z', durationMs: 10, status: 'pass', trigger: 'agent' },
+      ],
+      repairHistory: [],
+      stats: { totalRuns: 1, successCount: 1, failureCount: 0, avgDurationMs: 10 },
+    }),
+  );
+
+  const handle = openActionDb(root);
+  assert.ok(handle, 'expected handle');
+
+  // First call: should migrate 1 sidecar
+  assert.equal(handle.migrateSidecars().migrated, 1, 'first call migrates 1 sidecar');
+
+  // Second call: idempotent — index row already exists
+  assert.equal(handle.migrateSidecars().migrated, 0, 'second call migrates 0 (idempotent)');
+
+  // loadState should return the imported run history and stats
+  const loaded = handle.loadState('login');
+  assert.ok(loaded, 'loadState must return non-null for migrated action');
+  assert.equal(loaded.runHistory.length, 1, 'runHistory must have 1 imported record');
+  assert.equal(loaded.runHistory[0].status, 'pass', 'run record status preserved');
+  assert.equal(loaded.runHistory[0].durationMs, 10, 'run record durationMs preserved');
+  assert.equal(loaded.stats.totalRuns, 1, 'stats.totalRuns preserved from sidecar');
+  assert.equal(loaded.revision, 2, 'revision preserved from sidecar');
+  assert.equal(loaded.lastSeenMtimeMs, 9, 'lastSeenMtimeMs preserved from sidecar');
+
+  handle.close();
+});
+
+test('migrateSidecars returns migrated=0 when state dir does not exist', () => {
+  if (!loadSqlite()) return;
+  const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t3b-'));
+  // Do NOT create .rn-agent/state/ — test that the function handles a missing dir gracefully
+  const handle = openActionDb(root);
+  assert.ok(handle);
+  assert.equal(handle.migrateSidecars().migrated, 0, 'no state dir → migrated=0');
+  handle.close();
+});
+
+test('migrateSidecars skips files with wrong schemaVersion or corrupt JSON', () => {
+  if (!loadSqlite()) return;
+  const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t3c-'));
+  const stateDir = join(root, '.rn-agent', 'state');
+  mkdirSync(stateDir, { recursive: true });
+
+  // Wrong schemaVersion (2) — should skip
+  writeFileSync(
+    join(stateDir, 'wrong-version.state.json'),
+    JSON.stringify({ schemaVersion: 2, revision: 1, runHistory: [], repairHistory: [], stats: {} }),
+  );
+
+  // Corrupt JSON — should skip (not throw)
+  writeFileSync(join(stateDir, 'corrupt.state.json'), '{invalid json{{');
+
+  // File without .state.json suffix — should be ignored
+  writeFileSync(join(stateDir, 'ignored.json'), JSON.stringify({ schemaVersion: 1 }));
+
+  const handle = openActionDb(root);
+  assert.ok(handle);
+  assert.equal(handle.migrateSidecars().migrated, 0, 'corrupt/wrong-version sidecars skipped');
+  assert.equal(handle.loadState('wrong-version'), null, 'wrong-version action not inserted');
+  assert.equal(handle.loadState('corrupt'), null, 'corrupt action not inserted');
+
+  handle.close();
+});
+
+test('migrateSidecars imports both runHistory and repairHistory records', () => {
+  if (!loadSqlite()) return;
+  const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t3d-'));
+  const stateDir = join(root, '.rn-agent', 'state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, 'checkout.state.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      revision: 5,
+      updatedAt: '2026-06-19T12:00:00Z',
+      lastSeenMtimeMs: 42,
+      runHistory: [
+        { timestamp: '2026-06-19T10:00:00Z', durationMs: 200, status: 'pass', trigger: 'agent' },
+        {
+          timestamp: '2026-06-19T11:00:00Z',
+          durationMs: 300,
+          status: 'fail',
+          trigger: 'ci',
+          failureCode: 'TIMEOUT',
+        },
+      ],
+      repairHistory: [
+        {
+          timestamp: '2026-06-19T10:30:00Z',
+          failureCode: 'SELECTOR_NOT_FOUND',
+          diff: { selector: { from: 'btn-old', to: 'btn-new', score: 0.9 } },
+          durationMs: 500,
+          agentReasoning: 'testID renamed',
+        },
+      ],
+      stats: { totalRuns: 2, successCount: 1, failureCount: 1, avgDurationMs: 250 },
+    }),
+  );
+
+  const handle = openActionDb(root);
+  assert.ok(handle);
+  assert.equal(handle.migrateSidecars().migrated, 1);
+
+  const loaded = handle.loadState('checkout');
+  assert.ok(loaded);
+  assert.equal(loaded.runHistory.length, 2, 'both run records imported');
+  assert.equal(loaded.runHistory[0].status, 'pass', 'first run record preserved');
+  assert.equal(loaded.runHistory[1].status, 'fail', 'second run record preserved');
+  assert.equal(loaded.runHistory[1].failureCode, 'TIMEOUT', 'failureCode preserved');
+  assert.equal(loaded.repairHistory.length, 1, 'repair record imported');
+  assert.equal(
+    loaded.repairHistory[0].failureCode,
+    'SELECTOR_NOT_FOUND',
+    'repair failureCode preserved',
+  );
+  assert.equal(
+    loaded.repairHistory[0].agentReasoning,
+    'testID renamed',
+    'agentReasoning preserved',
+  );
+  assert.deepEqual(
+    loaded.repairHistory[0].diff,
+    { selector: { from: 'btn-old', to: 'btn-new', score: 0.9 } },
+    'diff preserved',
+  );
+  assert.equal(loaded.stats.totalRuns, 2, 'stats preserved from sidecar');
 
   handle.close();
 });
