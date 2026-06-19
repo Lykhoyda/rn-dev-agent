@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 30;
+export const HELPERS_VERSION = 31;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -2113,7 +2113,7 @@ export const INJECTED_HELPERS = `
   }
 
   function __resolveLadderFiber(spec) {
-    var wantRole = typeof spec.role === 'string' ? spec.role : null;
+    var wantRole = typeof spec.role === 'string' ? normalizeRole(spec.role) : null;
     var wantName = typeof spec.name === 'string' ? spec.name : null;
     var wantText = typeof spec.text === 'string' ? spec.text : null;
     var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
@@ -2126,6 +2126,9 @@ export const INJECTED_HELPERS = `
         return !!tpi && (tpi.testID === spec.testID || tpi.nativeID === spec.testID);
       }
       if (wantRole !== null) {
+        // byRole requires an accessibility element — respect the explicit
+        // accessible={false} opt-out (RNTL isAccessibilityElement; Codex review).
+        if (fiber.memoizedProps && fiber.memoizedProps.accessible === false) return false;
         if (__role(fiber) !== wantRole) return false;
         if (wantName === null) return true;
         var an = __accessibleName(fiber);
@@ -2185,7 +2188,7 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({ found: false, error: 'Invalid spec JSON' });
     }
 
-    var wantRole = typeof spec.role === 'string' ? spec.role : null;
+    var wantRole = typeof spec.role === 'string' ? normalizeRole(spec.role) : null;
     var wantName = typeof spec.name === 'string' ? spec.name : null;
     var wantText = typeof spec.text === 'string' ? spec.text : null;
     var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
@@ -2220,6 +2223,9 @@ export const INJECTED_HELPERS = `
         return !!tpc && (tpc.testID === spec.testID || tpc.nativeID === spec.testID);
       }
       if (wantRole !== null) {
+        // byRole requires an accessibility element — respect the explicit
+        // accessible={false} opt-out (RNTL isAccessibilityElement; Codex review).
+        if (fiber.memoizedProps && fiber.memoizedProps.accessible === false) return false;
         if (__role(fiber) !== wantRole) return false;
         return nameMatches(fiber);
       }
