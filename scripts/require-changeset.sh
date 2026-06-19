@@ -53,7 +53,20 @@ fi
 # (the internal package) advances the bundled dist but leaves the manifest pinned,
 # so `/plugin update` never delivers the change to installs (#361/#363 delivery
 # gap). Require a `rn-dev-agent-plugin` entry so the manifest bumps and ships.
-plugin_changeset="$(grep -lE '"rn-dev-agent-plugin"' $changesets 2>/dev/null || true)"
+#
+# Parse ONLY the frontmatter package keys (the lines strictly between the first
+# and second `---`), not the whole file — otherwise a cdp-only changeset whose
+# release-note body merely mentions `"rn-dev-agent-plugin"` would falsely pass
+# (Codex PR #364 P1). Same frontmatter extraction as validate-changeset-names.sh.
+plugin_changeset=""
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  frontmatter="$(awk '$0 ~ /^---[[:space:]]*$/ { d++; next } d==1 { print }' "$file")"
+  if printf '%s\n' "$frontmatter" | grep -Eq '^[[:space:]]*"?rn-dev-agent-plugin"?[[:space:]]*:'; then
+    plugin_changeset="$file"
+    break
+  fi
+done < <(printf '%s\n' "$changesets")
 
 if [ -z "$plugin_changeset" ]; then
   echo "ERROR: this PR changes shippable source but no changeset bumps rn-dev-agent-plugin:" >&2

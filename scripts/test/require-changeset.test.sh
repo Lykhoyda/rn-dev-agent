@@ -58,6 +58,16 @@ CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
 check "src change with cdp+plugin changeset passes" 0 $?
 rm -f "$tmp/.changeset/wise-pandas.md"
 
+# 2d. cdp-only FRONTMATTER, but the BODY merely mentions rn-dev-agent-plugin -> MUST fail.
+# The guard must parse frontmatter package keys, not scan the whole file — else a
+# release note that name-drops the plugin would falsely satisfy the manifest-bump
+# requirement (Codex PR #364 P1).
+printf -- '---\n"rn-dev-agent-cdp": patch\n---\nNote: a future change should also add "rn-dev-agent-plugin": patch to ship it.\n' > "$tmp/.changeset/sly-foxes.md"
+CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "src change with cdp-only changeset mentioning plugin in BODY fails" 1 $?
+rm -f "$tmp/.changeset/sly-foxes.md"
+
 # 3. only non-shippable changes (tests / docs / CI) -> passes without a changeset
 CHANGED_FILES=$'scripts/cdp-bridge/test/unit/x.test.js\ndocs-site/foo.mdx\n.github/workflows/ci.yml' \
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
