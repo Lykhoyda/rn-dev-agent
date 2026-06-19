@@ -24,12 +24,12 @@ export interface CdpReplayDeps {
 }
 
 function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | null {
-  // find the node whose testID === id and return its props bag if exposed
+  // find the node whose testID === id or nativeID === id and return its props bag if exposed
   const stack: unknown[] = [treeJson];
   while (stack.length) {
     const n = stack.pop() as Record<string, unknown> | null;
     if (n && typeof n === 'object') {
-      if (n.testID === id) return (n.props as Record<string, unknown>) ?? n;
+      if (n.testID === id || n.nativeID === id) return (n.props as Record<string, unknown>) ?? n;
       const kids = n.children ?? n.interactive ?? n.nodes;
       if (Array.isArray(kids)) stack.push(...kids);
     }
