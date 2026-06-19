@@ -20,6 +20,7 @@ On iOS 26.x bridgeless, WebDriverAgent (the transport behind `maestro-runner`) r
 - `maestro_run` / `maestro_test_all` / the locked-e2e suite fallback (they take arbitrary YAML, not just action steps). Scope is actions.
 - Proactive blind-probe before maestro (reactive only — the ~40s doomed maestro attempt is accepted; a later probe can reclaim it without redesign).
 - Maestro step types **not used by any current action**: `scroll`, `scrollUntilVisible`, `swipe`, `assertNotVisible`, `extendedWaitUntil`, coordinate taps, `pressKey`, `copyTextFrom`, etc. Add per-step when an action needs it; until then they hit the `UNSUPPORTED_STEP` guard.
+- **Text-based selectors** (`tapOn: text: "…"`, bare-string `assertVisible: "…"`): the supported subset is **id-based only** (`tapOn:{id}` / `assertVisible:{id}`). Actions that use text selectors (e.g. `cycle-task-priority`'s `tapOn: text: "Tasks"`) correctly hit `UNSUPPORTED_STEP` rather than silently passing — a CDP/JS tap resolves by testID via the fiber tree, and text resolution is not in scope. Such actions remain WDA-only (run them on iOS 18). Adding text→fiber resolution is a future per-step extension.
 - Android (the empty-a11y-tree regression is iOS 26.x).
 
 ## Trigger (reactive)
@@ -28,14 +29,21 @@ On iOS 26.x bridgeless, WebDriverAgent (the transport behind `maestro-runner`) r
 runActionHandler (cdp_run_action)
  ├─ maestro attempt (today)
  ├─ pass → done                                    ← healthy-OS path UNCHANGED
- └─ fail with SELECTOR_NOT_FOUND:
-      ├─ isTransportBlindViaCdp(failedSelector)     ← failed testID present in CDP component tree?
+ └─ fail with SELECTOR_NOT_FOUND or UNKNOWN:
+      ├─ probe = SELECTOR_NOT_FOUND ? failedSelector : firstTestId(action steps)
+      ├─ isExactPresent(CDP tree, probe)            ← probe testID present in CDP component tree?
       │     no  → existing repair / drift / fail    ← UNCHANGED
       │     yes → replayActionViaCdp(steps, params) ← NEW
       └─ map replay result → verdict + RunRecord(transport:'cdp-js')
 ```
 
-Healthy OSes never reach the new branch (maestro passes). A genuinely-drifted selector is absent from the CDP tree too, so `isTransportBlindViaCdp` returns `false` and real drift still flows to the existing repair path — exact-presence is the discriminator (same principle as Phase 1, different oracle).
+**Two blind failure modes (amended 2026-06-19 after device verification).** On iOS 26.x bridgeless, WDA fails in *two* observable ways while the app itself renders fine:
+- **`SELECTOR_NOT_FOUND`** — WDA drove but reported the element invisible. Probe = the failed selector (`failure.selector`).
+- **`UNKNOWN`** — WDA dies at *launch*, before reaching any selector (observed live: maestro exits ~45s after "Building WDA…" with no selector in the output, so `parseMaestroFailure` returns `kind:'UNKNOWN'`). There is no failed selector to probe, so the probe is the action's **first top-level `tapOn`/`assertVisible` testID** (`firstTestId`). A top-level (unconditional) id is used deliberately — a conditional `runFlow` gate id is an unreliable "is the app rendering?" signal.
+
+The original spec gated only on `SELECTOR_NOT_FOUND`; device verification showed the real failure on the test sim was `UNKNOWN`, so the fallback never fired. Broadening to both modes — **guarded by the same exact-present oracle** — is what makes the fallback actually engage on 26.x.
+
+**The oracle is the safety, unchanged.** In both modes the fallback fires only when the probe testID is **verbatim-present** in the live CDP tree. If the app rendered the element we expect, the app is alive and the failure is transport-blindness, not a crash. Healthy OSes never reach the branch (maestro passes). A genuinely-drifted selector is absent from the CDP tree, so the probe returns `false` and real drift still flows to the existing repair path. A genuinely crashed/detached app has no testIDs present, so `UNKNOWN` correctly does NOT trigger replay. Exact-presence is the discriminator (same principle as Phase 1, different oracle).
 
 ## Architecture & components
 
