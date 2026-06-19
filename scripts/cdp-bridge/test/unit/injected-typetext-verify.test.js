@@ -15,8 +15,8 @@ function verifyNoHandlerSlice() {
   return s.slice(open, open + 400);
 }
 
-test('#321: HELPERS_VERSION bumped to 26 (getTree interactiveOnly salient digest)', () => {
-  assert.equal(HELPERS_VERSION, 26);
+test('#321: HELPERS_VERSION >= 26 baseline (value-agnostic; feature branches bump freely)', () => {
+  assert.ok(HELPERS_VERSION >= 26, 'HELPERS_VERSION must not regress below the #321 baseline (26)');
 });
 test('#191: verify mode reads opts.verify', () => {
   assert.match(typeTextSlice(), /opts\.verify/);
