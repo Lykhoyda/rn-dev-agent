@@ -81,6 +81,16 @@ function dbFor(projectRoot: string): ActionDb | null {
 const idOf = (yamlFilePath: string): string => basename(yamlFilePath).replace(/\.ya?ml$/i, '');
 
 /**
+ * Discriminated union for the action-store backend reported by `storeMode()`.
+ *
+ *   - `'sqlite'`                    — SQLite is available (handle open or not yet opened)
+ *   - `'legacy-files'`              — reserved for a future legacy-files-only mode
+ *   - `` `degraded:${string}` ``    — SQLite unavailable or failed to open; reason after the colon
+ *     (e.g. `'degraded:sqlite-unavailable'`, `'degraded:open-failed'`)
+ */
+export type ActionStoreMode = 'sqlite' | 'legacy-files' | `degraded:${string}`;
+
+/**
  * READ-ONLY 3-way backend detector. MUST NOT open or migrate the DB.
  *
  *   - sqlite ctor unavailable           → 'degraded:sqlite-unavailable'
@@ -88,7 +98,7 @@ const idOf = (yamlFilePath: string): string => basename(yamlFilePath).replace(/\
  *   - sqlite available (cached healthy
  *     handle OR not-yet-opened)          → 'sqlite'
  */
-export function storeMode(projectRoot: string): 'sqlite' | 'legacy-files' | string {
+export function storeMode(projectRoot: string): ActionStoreMode {
   if (!sqliteAvailable()) return 'degraded:sqlite-unavailable';
   if (dbCache.has(projectRoot) && dbCache.get(projectRoot) == null) {
     return 'degraded:open-failed';

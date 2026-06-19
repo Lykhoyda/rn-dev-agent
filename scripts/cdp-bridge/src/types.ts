@@ -179,6 +179,13 @@ export interface StatusResult {
     foreignRunner?: { detected: true };
   };
   /**
+   * Task 6: active action-store backend. One of `'sqlite'`, `'legacy-files'`,
+   * or a `degraded:<reason>` string (`'degraded:sqlite-unavailable'` /
+   * `'degraded:open-failed'`). Populated by `storeMode()` — read-only, never
+   * creates or migrates the DB.
+   */
+  actionStore?: string;
+  /**
    * M1b (Phase 100+): multiplexer proxy state. `active: true` means React Native
    * DevTools can coexist with the MCP by connecting to `port` on localhost.
    * `consumerCount` is the number of DevTools/other-debugger instances connected
