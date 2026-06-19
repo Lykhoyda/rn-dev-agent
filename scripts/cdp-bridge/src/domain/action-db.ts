@@ -10,6 +10,7 @@
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { ActionRuntimeState, RunRecord, RepairRecord } from './reusable-action.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -35,6 +36,45 @@ type DatabaseSyncCtor = new (path: string) => {
 export interface ActionDb {
   db: InstanceType<DatabaseSyncCtor>;
   close(): void;
+  /**
+   * INSERT one run record then trim to HISTORY_LIMITS.RUN_HISTORY_MAX (50).
+   * Executed in a single BEGIN IMMEDIATE transaction; rolls back on error.
+   */
+  insertRunRecord(actionId: string, record: RunRecord): void;
+  /**
+   * INSERT one repair record then trim to HISTORY_LIMITS.REPAIR_HISTORY_MAX (25).
+   * Executed in a single BEGIN IMMEDIATE transaction; rolls back on error.
+   */
+  insertRepairRecord(actionId: string, record: RepairRecord): void;
+  /**
+   * Upsert an actions_index row.  Uses COALESCE(excluded.col, actions_index.col)
+   * for every optional column so a stats-only call never nulls out app_id/path/etc.
+   */
+  upsertIndex(
+    actionId: string,
+    fields: {
+      appId?: string;
+      path?: string;
+      contentHash?: string;
+      status?: string;
+      revision?: number;
+      statsJson?: string;
+      mtimeBaseline?: number;
+      updatedAt?: string;
+    },
+  ): void;
+  /**
+   * Reconstruct an ActionRuntimeState from the DB.  Stats are read from the
+   * stored stats_json column — NOT recomputed from the (capped) row history,
+   * so totalRuns can legitimately exceed runHistory.length.
+   * Returns null when the actions_index row is absent.
+   */
+  loadState(actionId: string): ActionRuntimeState | null;
+  /**
+   * COUNT repair_records for actionId with ts >= sinceIso.
+   * Used by the Phase-2 repair-budget check.
+   */
+  recentRepairCount(actionId: string, sinceIso: string): number;
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -134,8 +174,196 @@ export function openActionDb(
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new Ctor(dbPath);
     db.exec(SCHEMA);
-    return { db, close: () => db.close() };
+
+    const handle: ActionDb = {
+      db,
+      close: () => db.close(),
+
+      insertRunRecord(actionId: string, record: RunRecord): void {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          db.prepare(
+            `INSERT INTO run_records
+               (action_id, ts, trigger, status, failure_code, failure_detail,
+                transport, auto_repair_json, duration_ms)
+             VALUES (?,?,?,?,?,?,?,?,?)`,
+          ).run(
+            actionId,
+            record.timestamp,
+            record.trigger,
+            record.status,
+            record.failureCode ?? null,
+            record.failureDetail ?? null,
+            record.transport ?? null,
+            record.autoRepair ? JSON.stringify(record.autoRepair) : null,
+            record.durationMs,
+          );
+          // Trim oldest rows beyond cap
+          db.prepare(
+            `DELETE FROM run_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM run_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${RUN_HISTORY_MAX}
+               )`,
+          ).run(actionId, actionId);
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+      },
+
+      insertRepairRecord(actionId: string, record: RepairRecord): void {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          db.prepare(
+            `INSERT INTO repair_records
+               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
+             VALUES (?,?,?,?,?,?)`,
+          ).run(
+            actionId,
+            record.timestamp,
+            record.failureCode,
+            JSON.stringify(record.diff ?? {}),
+            record.durationMs,
+            record.agentReasoning ?? null,
+          );
+          // Trim oldest rows beyond cap
+          db.prepare(
+            `DELETE FROM repair_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM repair_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${REPAIR_HISTORY_MAX}
+               )`,
+          ).run(actionId, actionId);
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+      },
+
+      upsertIndex(
+        actionId: string,
+        fields: {
+          appId?: string;
+          path?: string;
+          contentHash?: string;
+          status?: string;
+          revision?: number;
+          statsJson?: string;
+          mtimeBaseline?: number;
+          updatedAt?: string;
+        },
+      ): void {
+        db.prepare(
+          `INSERT INTO actions_index
+             (id, app_id, path, content_hash, status, revision,
+              created_at, updated_at, mtime_baseline, stats_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
+             path           = COALESCE(excluded.path,           actions_index.path),
+             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
+             status         = COALESCE(excluded.status,         actions_index.status),
+             revision       = COALESCE(excluded.revision,       actions_index.revision),
+             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
+             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
+             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`,
+        ).run(
+          actionId,
+          fields.appId ?? null,
+          fields.path ?? null,
+          fields.contentHash ?? null,
+          fields.status ?? null,
+          fields.revision ?? null,
+          fields.updatedAt ?? null,
+          fields.updatedAt ?? null,
+          fields.mtimeBaseline ?? null,
+          fields.statsJson ?? null,
+        );
+      },
+
+      loadState(actionId: string): ActionRuntimeState | null {
+        const idx = db.prepare('SELECT * FROM actions_index WHERE id = ?').get(actionId) as
+          | Record<string, unknown>
+          | undefined;
+        if (!idx) return null;
+
+        const runRows = db
+          .prepare('SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC')
+          .all(actionId) as Record<string, unknown>[];
+
+        const repairRows = db
+          .prepare('SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC')
+          .all(actionId) as Record<string, unknown>[];
+
+        const runHistory: RunRecord[] = runRows.map((r) => {
+          const rec: RunRecord = {
+            timestamp: String(r.ts),
+            durationMs: Number(r.duration_ms),
+            status: r.status as 'pass' | 'fail',
+            trigger: r.trigger as RunRecord['trigger'],
+          };
+          if (r.failure_code) rec.failureCode = r.failure_code as RunRecord['failureCode'];
+          if (r.failure_detail) rec.failureDetail = String(r.failure_detail);
+          if (r.transport === 'cdp-js') rec.transport = 'cdp-js';
+          if (r.auto_repair_json) rec.autoRepair = JSON.parse(String(r.auto_repair_json));
+          return rec;
+        });
+
+        const repairHistory: RepairRecord[] = repairRows.map((r) => {
+          const rec: RepairRecord = {
+            timestamp: String(r.ts),
+            failureCode: r.failure_code as RepairRecord['failureCode'],
+            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
+            durationMs: Number(r.duration_ms),
+          };
+          if (r.agent_reasoning) rec.agentReasoning = String(r.agent_reasoning);
+          return rec;
+        });
+
+        // Stats come from the stored stats_json — NOT recomputed from capped history.
+        const stats = idx.stats_json
+          ? (JSON.parse(String(idx.stats_json)) as ActionRuntimeState['stats'])
+          : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
+
+        return {
+          schemaVersion: 1,
+          revision: Number(idx.revision) || 1,
+          updatedAt: String(idx.updated_at ?? new Date(0).toISOString()),
+          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
+          runHistory,
+          repairHistory,
+          stats,
+        };
+      },
+
+      recentRepairCount(actionId: string, sinceIso: string): number {
+        const row = db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM repair_records
+           WHERE action_id = ? AND ts >= ?`,
+          )
+          .get(actionId, sinceIso) as { cnt: number };
+        return row.cnt;
+      },
+    };
+
+    return handle;
   } catch {
     return null;
   }
 }
+
+// ─── History cap constants (mirrors HISTORY_LIMITS from reusable-action.ts) ──
+// Inlined here to avoid a runtime import cycle; kept in sync via the type
+// import at the top which will error at compile time if the shapes diverge.
+const RUN_HISTORY_MAX = 50;
+const REPAIR_HISTORY_MAX = 25;
