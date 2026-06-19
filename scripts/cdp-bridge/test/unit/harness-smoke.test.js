@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { createSandbox, buildFiber, INJECTED_HELPERS } from './helpers/inject-harness.js';
 
 test('harness: createSandbox exposes __RN_AGENT and presses by testID', () => {
-  const root = buildFiber({ name: 'App', children: [
-    { name: 'Pressable', props: { testID: 'x', onPress() {} } },
-  ] });
+  const root = buildFiber({
+    name: 'App',
+    children: [{ name: 'Pressable', props: { testID: 'x', onPress() {} } }],
+  });
   const s = createSandbox({ fiberRoot: root });
   assert.ok(s.__RN_AGENT, 'sandbox exposes __RN_AGENT');
   const r = JSON.parse(s.__RN_AGENT.interact({ action: 'press', testID: 'x' }));

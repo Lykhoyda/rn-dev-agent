@@ -43,10 +43,7 @@ test('__role: plain View gives none', () => {
 // return "button" for a Pressable with an onPress handler and no role.
 // __role must NOT reuse it: it returns "none".
 test('__role: Pressable with onPress and NO role gives none (not button)', () => {
-  assert.equal(
-    role({ name: 'Pressable', props: { onPress: function () {} } }),
-    'none',
-  );
+  assert.equal(role({ name: 'Pressable', props: { onPress: function () {} } }), 'none');
 });
 
 // Source-drift guard: a refactor that drops __role fails CI.

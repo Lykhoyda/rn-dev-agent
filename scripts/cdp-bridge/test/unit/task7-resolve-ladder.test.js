@@ -21,7 +21,9 @@ test('resolveLadder: byRole button + name resolves a Pressable wrapping Text', (
     ],
   });
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Go to Dashboard' })));
+  const res = JSON.parse(
+    sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Go to Dashboard' })),
+  );
   assert.equal(res.found, true);
   assert.equal(res.bundle.role, 'button');
   assert.equal(res.bundle.accessibleName, 'Go to Dashboard');
@@ -37,7 +39,9 @@ test('resolveLadder: two Continue buttons → Ambiguous component match, count 2
   });
   const root = buildFiber({ name: 'App', children: [mk(), mk()] });
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Continue' })));
+  const res = JSON.parse(
+    sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Continue' })),
+  );
   assert.equal(res.found, false);
   assert.equal(res.error, 'Ambiguous component match');
   assert.equal(res.count, 2);
@@ -64,12 +68,16 @@ test('resolveLadder: aria-hidden match excluded → Component not found', () => 
     ],
   });
   const sb = createSandbox({ fiberRoot: root });
-  const hidden = JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Hidden Action' })));
+  const hidden = JSON.parse(
+    sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Hidden Action' })),
+  );
   assert.equal(hidden.found, false);
   assert.equal(hidden.error, 'Component not found');
 
   const shown = JSON.parse(
-    sb.__RN_AGENT.resolveLadder(JSON.stringify({ role: 'button', name: 'Hidden Action', includeHidden: true })),
+    sb.__RN_AGENT.resolveLadder(
+      JSON.stringify({ role: 'button', name: 'Hidden Action', includeHidden: true }),
+    ),
   );
   assert.equal(shown.found, true);
   assert.equal(shown.bundle.accessibleName, 'Hidden Action');
@@ -95,7 +103,9 @@ test('resolveLadder: byPlaceholder matches a host TextInput', () => {
     children: [{ hostType: 'TextInput', props: { placeholder: 'Email address' } }],
   });
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify({ placeholder: 'Email address' })));
+  const res = JSON.parse(
+    sb.__RN_AGENT.resolveLadder(JSON.stringify({ placeholder: 'Email address' })),
+  );
   assert.equal(res.found, true);
   assert.equal(res.bundle.placeholder, 'Email address');
 });
@@ -108,13 +118,20 @@ test('interact: role/name spec routes through resolveLadder and fires onPress', 
     children: [
       {
         name: 'Pressable',
-        props: { accessibilityRole: 'button', onPress: () => { pressed = true; } },
+        props: {
+          accessibilityRole: 'button',
+          onPress: () => {
+            pressed = true;
+          },
+        },
         children: [{ hostType: 'Text', children: [{ text: 'Go to Dashboard' }] }],
       },
     ],
   });
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', role: 'button', name: 'Go to Dashboard' }));
+  const res = JSON.parse(
+    sb.__RN_AGENT.interact({ action: 'press', role: 'button', name: 'Go to Dashboard' }),
+  );
   assert.equal(res.success, true);
   assert.equal(pressed, true);
 });
@@ -126,7 +143,11 @@ test('interact: byText spec presses the nearest onPress ancestor (walks .return)
     children: [
       {
         name: 'Pressable',
-        props: { onPress: () => { pressed = true; } },
+        props: {
+          onPress: () => {
+            pressed = true;
+          },
+        },
         children: [{ hostType: 'Text', children: [{ text: 'Tap me' }] }],
       },
     ],
@@ -145,7 +166,9 @@ test('interact: ambiguous ladder spec surfaces the resolveLadder error verbatim'
   });
   const root = buildFiber({ name: 'App', children: [mk(), mk()] });
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', role: 'button', name: 'Continue' }));
+  const res = JSON.parse(
+    sb.__RN_AGENT.interact({ action: 'press', role: 'button', name: 'Continue' }),
+  );
   assert.equal(res.error, 'Ambiguous component match');
   assert.equal(res.count, 2);
 });

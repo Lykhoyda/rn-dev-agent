@@ -9,9 +9,25 @@ export { INJECTED_HELPERS };
 // findAllRootFibers() discovers the fake tree.
 export function createSandbox(opts = {}) {
   const sandbox = {
-    Array, Object, JSON, Map, Set, WeakSet, WeakMap, Error, Date,
-    parseInt, parseFloat, String, Number, Boolean, RegExp, Symbol, Promise,
-    setTimeout, clearTimeout,
+    Array,
+    Object,
+    JSON,
+    Map,
+    Set,
+    WeakSet,
+    WeakMap,
+    Error,
+    Date,
+    parseInt,
+    parseFloat,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Symbol,
+    Promise,
+    setTimeout,
+    clearTimeout,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
@@ -34,8 +50,8 @@ export function createSandbox(opts = {}) {
 export function buildFiber(spec, parent = null) {
   const isText = typeof spec.text === 'string';
   const fiber = {
-    type: spec.name ? { displayName: spec.name } : (spec.hostType != null ? spec.hostType : null),
-    memoizedProps: isText ? spec.text : (spec.props || {}),
+    type: spec.name ? { displayName: spec.name } : spec.hostType != null ? spec.hostType : null,
+    memoizedProps: isText ? spec.text : spec.props || {},
     return: parent,
     child: null,
     sibling: null,
@@ -45,7 +61,8 @@ export function buildFiber(spec, parent = null) {
     let prev = null;
     for (const c of spec.children) {
       const child = buildFiber(c, fiber);
-      if (!fiber.child) fiber.child = child; else prev.sibling = child;
+      if (!fiber.child) fiber.child = child;
+      else prev.sibling = child;
       prev = child;
     }
   }

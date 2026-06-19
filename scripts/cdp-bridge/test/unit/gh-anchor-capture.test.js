@@ -17,9 +17,7 @@ function buildTaskRow() {
       {
         name: 'Pressable',
         props: { testID: 'task-row-3' },
-        children: [
-          { hostType: 'Text', children: [{ text: 'Buy milk' }] },
-        ],
+        children: [{ hostType: 'Text', children: [{ text: 'Buy milk' }] }],
       },
     ],
   });
@@ -51,9 +49,7 @@ test('__collectAnchors: nearest authored testID ancestor at index 0', () => {
 test('resolveLadder: bundle.anchors[0] is the authored-testID Pressable', () => {
   const root = buildTaskRow();
   const sb = createSandbox({ fiberRoot: root });
-  const res = JSON.parse(
-    sb.__RN_AGENT.resolveLadder(JSON.stringify({ text: 'Buy milk' }))
-  );
+  const res = JSON.parse(sb.__RN_AGENT.resolveLadder(JSON.stringify({ text: 'Buy milk' })));
   assert.equal(res.found, true);
   assert.ok(Array.isArray(res.bundle.anchors));
   assert.equal(res.bundle.anchors[0].testID, 'task-row-3');

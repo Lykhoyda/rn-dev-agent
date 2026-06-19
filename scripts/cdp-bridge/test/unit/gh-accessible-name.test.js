@@ -56,8 +56,16 @@ test('labelledBy array joins ref text content with single space', () => {
   const { sb, root } = mount({
     name: 'View',
     children: [
-      { name: 'View', props: { nativeID: 'a' }, children: [{ hostType: 'Text', children: [{ text: 'Hello' }] }] },
-      { name: 'View', props: { nativeID: 'b' }, children: [{ hostType: 'Text', children: [{ text: 'World' }] }] },
+      {
+        name: 'View',
+        props: { nativeID: 'a' },
+        children: [{ hostType: 'Text', children: [{ text: 'Hello' }] }],
+      },
+      {
+        name: 'View',
+        props: { nativeID: 'b' },
+        children: [{ hostType: 'Text', children: [{ text: 'World' }] }],
+      },
       { name: 'Pressable', props: { accessibilityLabelledBy: ['a', 'b'] } },
     ],
   });
@@ -70,7 +78,11 @@ test('aria-labelledby string form resolves to text content', () => {
   const { sb, root } = mount({
     name: 'View',
     children: [
-      { name: 'View', props: { nativeID: 'x' }, children: [{ hostType: 'Text', children: [{ text: 'Labelled' }] }] },
+      {
+        name: 'View',
+        props: { nativeID: 'x' },
+        children: [{ hostType: 'Text', children: [{ text: 'Labelled' }] }],
+      },
       { name: 'Pressable', props: { 'aria-labelledby': 'x' } },
     ],
   });
@@ -87,7 +99,10 @@ test('labelledBy resolving to empty text falls through to accessibilityLabel', (
     children: [
       // ref target exists but has no text content -> empty -> filtered out
       { name: 'View', props: { nativeID: 'empty' } },
-      { name: 'Pressable', props: { accessibilityLabelledBy: ['empty'], accessibilityLabel: 'Fallback' } },
+      {
+        name: 'Pressable',
+        props: { accessibilityLabelledBy: ['empty'], accessibilityLabel: 'Fallback' },
+      },
     ],
   });
   const target = find(root, (f) => f.memoizedProps && f.memoizedProps.accessibilityLabelledBy);

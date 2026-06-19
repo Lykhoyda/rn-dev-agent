@@ -30,11 +30,11 @@ test('task6: target beyond the node budget returns truncated:true and fires no p
   let pressed = false;
   // Budget for 1 root = min(40000, 8000*1) = 8000. 12000 fillers pushes the
   // target well past the cap.
-  const root = buildOversizedTree(12000, () => { pressed = true; });
+  const root = buildOversizedTree(12000, () => {
+    pressed = true;
+  });
   const sb = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(
-    sb.__RN_AGENT.interact({ action: 'press', testID: 'deep-target' }),
-  );
+  const result = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', testID: 'deep-target' }));
   assert.equal(result.truncated, true);
   assert.equal(result.error, 'Resolution truncated');
   assert.equal(typeof result.scanned, 'number');
@@ -46,9 +46,7 @@ test('task6: target beyond the node budget returns truncated:true and fires no p
 test('task6: truncation NEVER reports "Component not found" (fail-closed, not fail-missing)', () => {
   const root = buildOversizedTree(12000, () => {});
   const sb = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(
-    sb.__RN_AGENT.interact({ action: 'press', testID: 'deep-target' }),
-  );
+  const result = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', testID: 'deep-target' }));
   assert.notEqual(result.error, 'Component not found');
   assert.equal(result.truncated, true);
 });
@@ -63,7 +61,12 @@ test('task6: label-match truncation does NOT pick tier[0] from a partial scan', 
   }
   fillers.push({
     name: 'Pressable',
-    props: { accessibilityLabel: 'Continue', onPress: () => { pressed = true; } },
+    props: {
+      accessibilityLabel: 'Continue',
+      onPress: () => {
+        pressed = true;
+      },
+    },
   });
   const root = buildFiber({ name: 'App', children: fillers });
   const sb = createSandbox({ fiberRoot: root });
@@ -81,13 +84,19 @@ test('task6 regression: a small tree still resolves and presses normally', () =>
     name: 'App',
     children: [
       { name: 'Filler', props: { testID: 'a' } },
-      { name: 'Pressable', props: { testID: 'ok-btn', onPress: () => { pressed = true; } } },
+      {
+        name: 'Pressable',
+        props: {
+          testID: 'ok-btn',
+          onPress: () => {
+            pressed = true;
+          },
+        },
+      },
     ],
   });
   const sb = createSandbox({ fiberRoot: root });
-  const result = JSON.parse(
-    sb.__RN_AGENT.interact({ action: 'press', testID: 'ok-btn' }),
-  );
+  const result = JSON.parse(sb.__RN_AGENT.interact({ action: 'press', testID: 'ok-btn' }));
   assert.equal(result.success, true);
   assert.equal(result.truncated, undefined);
   assert.equal(pressed, true);

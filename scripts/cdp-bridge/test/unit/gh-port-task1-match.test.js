@@ -28,7 +28,10 @@ test('2: {value:"detail"} case-insensitively substring-matches "DeTaiLs"', () =>
 
 test('3: normalizer trims + collapses inner whitespace before compare', () => {
   const s = sb();
-  assert.equal(s.__RN_AGENT.__match('  Hello   World  ', { value: 'Hello World', exact: true }), true);
+  assert.equal(
+    s.__RN_AGENT.__match('  Hello   World  ', { value: 'Hello World', exact: true }),
+    true,
+  );
 });
 
 test('4: {regexSource:"^Save$"} matches "Save" not "Saved"', () => {
