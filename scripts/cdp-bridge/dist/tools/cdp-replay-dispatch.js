@@ -1,3 +1,5 @@
+import { parse as yamlParse } from 'yaml';
+import { normalizeSteps, replayFlow, } from '../domain/cdp-flow-replay.js';
 export function collectTestIds(node, acc = new Set()) {
     if (!node || typeof node !== 'object')
         return acc;
@@ -35,6 +37,11 @@ function isDisabled(props) {
         return false;
     const a11y = props.accessibilityState;
     return props.disabled === true || a11y?.disabled === true || props.pointerEvents === 'none';
+}
+export async function runCdpReplay(bodyYaml, params, deps) {
+    const parsed = yamlParse(bodyYaml);
+    const steps = normalizeSteps(parsed, params);
+    return replayFlow(steps, buildCdpDispatch(deps));
 }
 export function buildCdpDispatch(deps) {
     return {

@@ -35,6 +35,8 @@ import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
+import { isExactPresent, runCdpReplay, } from './cdp-replay-dispatch.js';
+import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -123,6 +125,7 @@ export function createRunActionHandler(deps = {}) {
     const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
     const repairAction = deps.repairAction ?? createRepairActionHandler();
     const getLiveRoute = deps.getLiveRoute ?? (async () => null);
+    const getReplayDeps = deps.replayDeps ?? (() => null);
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -230,6 +233,58 @@ export function createRunActionHandler(deps = {}) {
                         expectedRouteSequence: expectedSeq,
                         autoRepair,
                     });
+                }
+            }
+            // GH #317 Phase 2: CDP/JS transport-blind fallback.
+            // When Maestro/WDA reports SELECTOR_NOT_FOUND but the CDP tree
+            // confirms the testID IS present, the native WDA layer is blind to it.
+            // Replay via CDP/JS directly, skipping Maestro + repair entirely.
+            if (failure.kind === 'SELECTOR_NOT_FOUND') {
+                const replayDeps = getReplayDeps(args);
+                if (replayDeps) {
+                    const tree = await replayDeps.treeFor(failure.selector).catch(() => null);
+                    if (isExactPresent(tree, failure.selector)) {
+                        try {
+                            const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
+                            const status = replay.passed ? 'pass' : 'fail';
+                            const autoRepair = {
+                                attempted: false,
+                                outcome: 'skipped',
+                                phases: { firstAttemptMs },
+                            };
+                            await persistRun(args.actionId, projectRoot, {
+                                timestamp: new Date().toISOString(),
+                                durationMs: Date.now() - t0,
+                                status,
+                                failureCode: replay.passed ? undefined : 'UNKNOWN',
+                                failureDetail: replay.reason,
+                                trigger,
+                                autoRepair,
+                                transport: 'cdp-js',
+                            });
+                            if (replay.passed) {
+                                return okResult({
+                                    passed: true,
+                                    actionId: args.actionId,
+                                    transport: 'cdp-js',
+                                    autoRepair,
+                                    durationMs: Date.now() - t0,
+                                    flowFile: action.filePath,
+                                });
+                            }
+                            return failResult(`cdp_run_action: ${args.actionId} replayed via CDP/JS (WDA transport-blind) and failed at step ${replay.failedStepIndex}: ${replay.reason}`, 'TRANSPORT_BLIND', {
+                                actionId: args.actionId,
+                                transport: 'cdp-js',
+                                failedStepIndex: replay.failedStepIndex,
+                            });
+                        }
+                        catch (e) {
+                            if (e instanceof UnsupportedStepError) {
+                                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS — ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, 'UNSUPPORTED_STEP', { actionId: args.actionId, stepKey: e.stepKey });
+                            }
+                            throw e;
+                        }
+                    }
                 }
             }
             // Skip repair if disabled or if the failure isn't a repair shape.
