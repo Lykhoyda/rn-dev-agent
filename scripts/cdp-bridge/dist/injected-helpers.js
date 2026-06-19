@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 31;
+export const HELPERS_VERSION = 32;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -2112,6 +2112,19 @@ export const INJECTED_HELPERS = `
     return kept;
   }
 
+  // RNTL isAccessibilityElement: byRole only matches true accessibility
+  // elements. A plain View with a role prop but accessible undefined is NOT
+  // one — only Text/TextInput/Switch (and Image with alt) qualify by default;
+  // anything else must opt in with accessible={true}. (Codex review.)
+  function __isA11yElement(fiber) {
+    if (!fiber) return false;
+    var props = fiber.memoizedProps;
+    var hk = hostKind(fiber);
+    if (hk === 'image' && props && props.alt !== undefined) return true;
+    if (props && props.accessible !== undefined) return props.accessible === true;
+    return hk === 'text' || hk === 'textinput' || hk === 'switch';
+  }
+
   function __resolveLadderFiber(spec) {
     var wantRole = typeof spec.role === 'string' ? normalizeRole(spec.role) : null;
     var wantName = typeof spec.name === 'string' ? spec.name : null;
@@ -2126,9 +2139,10 @@ export const INJECTED_HELPERS = `
         return !!tpi && (tpi.testID === spec.testID || tpi.nativeID === spec.testID);
       }
       if (wantRole !== null) {
-        // byRole requires an accessibility element — respect the explicit
-        // accessible={false} opt-out (RNTL isAccessibilityElement; Codex review).
-        if (fiber.memoizedProps && fiber.memoizedProps.accessible === false) return false;
+        // byRole only matches true accessibility elements (RNTL
+        // isAccessibilityElement): excludes a plain View with a role prop but
+        // accessible undefined, and honors accessible={false}. (Codex review.)
+        if (!__isA11yElement(fiber)) return false;
         if (__role(fiber) !== wantRole) return false;
         if (wantName === null) return true;
         var an = __accessibleName(fiber);
@@ -2223,9 +2237,10 @@ export const INJECTED_HELPERS = `
         return !!tpc && (tpc.testID === spec.testID || tpc.nativeID === spec.testID);
       }
       if (wantRole !== null) {
-        // byRole requires an accessibility element — respect the explicit
-        // accessible={false} opt-out (RNTL isAccessibilityElement; Codex review).
-        if (fiber.memoizedProps && fiber.memoizedProps.accessible === false) return false;
+        // byRole only matches true accessibility elements (RNTL
+        // isAccessibilityElement): excludes a plain View with a role prop but
+        // accessible undefined, and honors accessible={false}. (Codex review.)
+        if (!__isA11yElement(fiber)) return false;
         if (__role(fiber) !== wantRole) return false;
         return nameMatches(fiber);
       }

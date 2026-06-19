@@ -18,7 +18,7 @@ test('distinct nested role matches stay Ambiguous (outer card button + inner but
     children: [
       {
         hostType: 'RCTView',
-        props: { accessibilityRole: 'button', accessibilityLabel: 'Settings' },
+        props: { accessibilityRole: 'button', accessibilityLabel: 'Settings', accessible: true },
       },
     ],
   };
@@ -28,7 +28,7 @@ test('distinct nested role matches stay Ambiguous (outer card button + inner but
     children: [
       {
         hostType: 'RCTView',
-        props: { accessibilityRole: 'button', accessibilityLabel: 'Settings' },
+        props: { accessibilityRole: 'button', accessibilityLabel: 'Settings', accessible: true },
         children: [inner],
       },
     ],

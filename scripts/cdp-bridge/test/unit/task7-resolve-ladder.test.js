@@ -15,7 +15,12 @@ test('resolveLadder: byRole button + name resolves a Pressable wrapping Text', (
     children: [
       {
         name: 'Pressable',
-        props: { accessibilityRole: 'button', testID: 'go-dash', onPress: () => {} },
+        props: {
+          accessibilityRole: 'button',
+          accessible: true,
+          testID: 'go-dash',
+          onPress: () => {},
+        },
         children: [{ hostType: 'Text', children: [{ text: 'Go to Dashboard' }] }],
       },
     ],
@@ -34,7 +39,7 @@ test('resolveLadder: byRole button + name resolves a Pressable wrapping Text', (
 test('resolveLadder: two Continue buttons → Ambiguous component match, count 2', () => {
   const mk = () => ({
     name: 'Pressable',
-    props: { accessibilityRole: 'button', onPress: () => {} },
+    props: { accessibilityRole: 'button', accessible: true, onPress: () => {} },
     children: [{ hostType: 'Text', children: [{ text: 'Continue' }] }],
   });
   const root = buildFiber({ name: 'App', children: [mk(), mk()] });
@@ -60,7 +65,7 @@ test('resolveLadder: aria-hidden match excluded → Component not found', () => 
         children: [
           {
             name: 'Pressable',
-            props: { accessibilityRole: 'button', onPress: () => {} },
+            props: { accessibilityRole: 'button', accessible: true, onPress: () => {} },
             children: [{ hostType: 'Text', children: [{ text: 'Hidden Action' }] }],
           },
         ],
@@ -120,6 +125,7 @@ test('interact: role/name spec routes through resolveLadder and fires onPress', 
         name: 'Pressable',
         props: {
           accessibilityRole: 'button',
+          accessible: true,
           onPress: () => {
             pressed = true;
           },
@@ -161,7 +167,7 @@ test('interact: byText spec presses the nearest onPress ancestor (walks .return)
 test('interact: ambiguous ladder spec surfaces the resolveLadder error verbatim', () => {
   const mk = () => ({
     name: 'Pressable',
-    props: { accessibilityRole: 'button', onPress: () => {} },
+    props: { accessibilityRole: 'button', accessible: true, onPress: () => {} },
     children: [{ hostType: 'Text', children: [{ text: 'Continue' }] }],
   });
   const root = buildFiber({ name: 'App', children: [mk(), mk()] });

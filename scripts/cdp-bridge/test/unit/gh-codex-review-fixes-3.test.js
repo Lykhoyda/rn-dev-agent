@@ -30,7 +30,12 @@ test('byRole excludes accessible={false} elements (respects the a11y opt-out)', 
       // the real target
       {
         name: 'Pressable',
-        props: { accessibilityRole: 'button', accessibilityLabel: 'Save', onPress() {} },
+        props: {
+          accessibilityRole: 'button',
+          accessibilityLabel: 'Save',
+          accessible: true,
+          onPress() {},
+        },
       },
     ],
   });
@@ -61,7 +66,10 @@ test('byRole normalizes the requested image role (image → img)', () => {
   const root = buildFiber({
     name: 'App',
     children: [
-      { name: 'Image', props: { accessibilityRole: 'image', accessibilityLabel: 'Logo' } },
+      {
+        name: 'Image',
+        props: { accessibilityRole: 'image', accessibilityLabel: 'Logo', accessible: true },
+      },
     ],
   });
   const sb = createSandbox({ fiberRoot: root });
@@ -71,6 +79,6 @@ test('byRole normalizes the requested image role (image → img)', () => {
 });
 
 test('source guards: accessible opt-out + normalized requested role present', () => {
-  assert.match(INJECTED_HELPERS, /accessible === false/);
+  assert.match(INJECTED_HELPERS, /function __isA11yElement\(/);
   assert.match(INJECTED_HELPERS, /normalizeRole\(spec\.role\)/);
 });
