@@ -13,7 +13,7 @@
 // lazily (and `migrateSidecars()` runs exactly once) on first WRITE use, so
 // `storeMode()` can report the backend WITHOUT creating/migrating the DB.
 
-import { basename } from 'node:path';
+import { basename, dirname, sep } from 'node:path';
 import { logger } from '../logger.js';
 import type { ActionRuntimeState, RunRecord, RepairRecord } from './reusable-action.js';
 import { openActionDb, loadSqlite, type ActionDb } from './action-db.js';
@@ -126,8 +126,50 @@ export function persist(args: {
   // 1. Authoritative — preserves the #101 pair-write guarantee. NOT swallowed.
   saveSidecar(yamlFilePath, state);
 
-  // 2. Best-effort DB mirror — NEVER throws.
+  // 2. Best-effort DB mirror — NEVER throws. The `path` defaults to the YAML
+  //    path so the index row points at the action file even when the caller
+  //    omits meta.path (matches the legacy persist() behaviour).
+  mirrorToDb({
+    yamlFilePath,
+    state,
+    newRunRecord,
+    newRepairRecord,
+    meta: { path: yamlFilePath, ...meta },
+    projectRoot,
+  });
+}
+
+/**
+ * Task 5 (A2/A3/A5): SIDECAR-LESS DB mirror. The DB is a best-effort mirror —
+ * this writes ONLY to the DB and NEVER throws. It deliberately does NOT call
+ * `saveSidecar`, so it is safe to call from authoritative write paths that
+ * already wrote the sidecar (e.g. `saveAction`'s #101 atomic pair-write).
+ * Calling `saveSidecar` there would double-write the sidecar and break the
+ * #101 atomicity guarantee.
+ *
+ * `projectRoot` is derived from `yamlFilePath` when not supplied: the
+ * `.rn-agent/actions/<id>.yaml` convention means the project root is the
+ * `.rn-agent` directory's parent. `persist()` passes the already-resolved
+ * `projectRoot` through directly.
+ *
+ * The index row is upserted (COALESCE semantics — omitted meta preserves
+ * priors); a supplied run/repair record is APPENDED (never re-syncs whole
+ * history — that would duplicate rows).
+ */
+export function mirrorToDb(opts: {
+  yamlFilePath: string;
+  state: ActionRuntimeState;
+  newRunRecord?: RunRecord;
+  newRepairRecord?: RepairRecord;
+  meta?: { appId?: string; path?: string; contentHash?: string; status?: string };
+  /** Optional pre-resolved root; derived from `yamlFilePath` when absent. */
+  projectRoot?: string;
+}): void {
+  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
   try {
+    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
+    if (!projectRoot) return;
+
     const handle = dbFor(projectRoot);
     if (!handle) return;
 
@@ -148,9 +190,28 @@ export function persist(args: {
   } catch (err) {
     logger.debug(
       TAG,
-      `DB mirror failed for ${idOf(yamlFilePath)} (sidecar write succeeded): ${String(err)}`,
+      `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`,
     );
   }
+}
+
+/**
+ * Derive the project root from a `.rn-agent/actions/<id>.yaml` path: walk up
+ * to the `.rn-agent` directory's parent. Returns null when the path doesn't
+ * sit under an `.rn-agent/actions/` segment (synthetic/inline-yaml paths), so
+ * the mirror is skipped rather than writing to a wrong root.
+ */
+function projectRootFromYaml(yamlFilePath: string): string | null {
+  const actionsDir = dirname(yamlFilePath); // .../.rn-agent/actions
+  const rnAgentDir = dirname(actionsDir); // .../.rn-agent
+  const root = dirname(rnAgentDir); // project root
+  if (basename(actionsDir) !== 'actions' || basename(rnAgentDir) !== '.rn-agent') {
+    return null;
+  }
+  // Guard against a degenerate path (e.g. `actions.yaml` at fs root) yielding
+  // an empty / separator-only root.
+  if (!root || root === sep) return null;
+  return root;
 }
 
 // ─── Lifecycle (A7) ───────────────────────────────────────────────────────────

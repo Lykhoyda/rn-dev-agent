@@ -32,6 +32,7 @@ import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
 import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { mirrorToDb } from '../domain/action-state-store.js';
 import {
   type RunRecord,
   type AutoRepairOutcome,
@@ -719,7 +720,25 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
       state: appendRunRecord(fresh.state, record),
     };
     const result = saveActionWithCAS(next);
-    if (result.ok) return;
+    if (result.ok) {
+      // Task 5 (A2/C): append the RunRecord ROW to the DB mirror. This runs
+      // ONLY on ok:true — never on the CAS-conflict path below, so the mirror
+      // can't append a row for a write that the authoritative layer refused.
+      // `saveAction` (inside saveActionWithCAS) already upserted the index row
+      // idempotently; the row append is the point here. Best-effort, never
+      // throws — `next.state` carries the just-appended run in its history.
+      mirrorToDb({
+        yamlFilePath: next.filePath,
+        state: next.state,
+        newRunRecord: record,
+        meta: {
+          appId: next.metadata.appId,
+          status: next.metadata.status,
+          path: next.filePath,
+        },
+      });
+      return;
+    }
     // CAS conflict — another writer raced us. Reload and retry.
     if (attempt === MAX_ATTEMPTS) {
       console.error(

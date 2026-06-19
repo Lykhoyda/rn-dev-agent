@@ -29,6 +29,7 @@
 //     mask underlying screen churn).
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
 import { createMaestroRunHandler } from './maestro-run.js';
@@ -556,8 +557,25 @@ async function persistRun(actionId, projectRoot, record) {
             state: appendRunRecord(fresh.state, record),
         };
         const result = saveActionWithCAS(next);
-        if (result.ok)
+        if (result.ok) {
+            // Task 5 (A2/C): append the RunRecord ROW to the DB mirror. This runs
+            // ONLY on ok:true — never on the CAS-conflict path below, so the mirror
+            // can't append a row for a write that the authoritative layer refused.
+            // `saveAction` (inside saveActionWithCAS) already upserted the index row
+            // idempotently; the row append is the point here. Best-effort, never
+            // throws — `next.state` carries the just-appended run in its history.
+            mirrorToDb({
+                yamlFilePath: next.filePath,
+                state: next.state,
+                newRunRecord: record,
+                meta: {
+                    appId: next.metadata.appId,
+                    status: next.metadata.status,
+                    path: next.filePath,
+                },
+            });
             return;
+        }
         // CAS conflict — another writer raced us. Reload and retry.
         if (attempt === MAX_ATTEMPTS) {
             console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
