@@ -66,7 +66,7 @@ export type ActionAuthor = 'auto' | 'human' | 'imported';
 /**
  * The M7 metadata header (D1203). Lives as `# key: value` comments above
  * the Maestro YAML body; the YAML executor ignores them but
- * learned-actions.mjs and the run-action pre-flight parse them.
+ * learned-actions.ts (dist/learned-actions.js) and the run-action pre-flight parse them.
  *
  * Required: id, intent, status. The rest are optional.
  */
@@ -478,7 +478,7 @@ export function shouldDemoteAfterRepair(metadata: M7Metadata): boolean {
  * found (the two required keys).
  *
  * Pure function — pass the file's text. Mirrors the parsing rules in
- * `scripts/learned-actions.mjs` parseFlowMeta() so they stay in sync.
+ * `scripts/cdp-bridge/src/learned-actions.ts` parseFlowMeta() so they stay in sync.
  */
 export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata | null {
   const lines = yamlText.split('\n');

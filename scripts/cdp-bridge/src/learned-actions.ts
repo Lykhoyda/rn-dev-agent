@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// learned-actions.mjs — Inventory of reusable actions for the rn-dev-agent plugin.
+// learned-actions.ts — Inventory of reusable actions for the rn-dev-agent plugin.
 //
 // Scans, in this order:
 //   A. Per-project auto-memory feedback files
@@ -29,8 +29,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+interface Flags {
+  json: boolean;
+  filter: string;
+  appId: string;
+  memoryCwd: string;
+  workspaceRoot: string;
+  section: string;
+  max: number;
+}
+
 const argv = process.argv.slice(2);
-const flags = {
+const flags: Flags = {
   json: false,
   filter: '',
   appId: '',
@@ -51,9 +61,9 @@ for (let i = 0; i < argv.length; i++) {
     const m = parseInt(argv[++i] || '50', 10);
     flags.max = Number.isNaN(m) ? 50 : m;
   } else if (a === '--help' || a === '-h') {
-    console.log(`Usage: learned-actions.mjs [--json] [--filter KW] [--appId ID]
-                                [--memory-cwd PATH] [--workspace-root PATH]
-                                [--section a|b|c|d|all] [--max N]`);
+    console.log(`Usage: learned-actions [--json] [--filter KW] [--appId ID]
+                               [--memory-cwd PATH] [--workspace-root PATH]
+                               [--section a|b|c|d|all] [--max N]`);
     process.exit(0);
   } else {
     process.stderr.write(`unknown flag: ${a}\n`);
@@ -61,13 +71,28 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
-const matchKw = (...fields) =>
+const matchKw = (...fields: Array<unknown>): boolean =>
   !flags.filter || fields.some((f) => (f || '').toString().toLowerCase().includes(flags.filter));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A. Feedback memories
 // ─────────────────────────────────────────────────────────────────────────────
-function scanMemories() {
+
+interface MemoryItem {
+  file: string;
+  path: string;
+  name: string;
+  description: string;
+  type: string;
+}
+
+interface MemoriesResult {
+  exists: boolean;
+  dir: string | undefined;
+  items: MemoryItem[];
+}
+
+function scanMemories(): MemoriesResult {
   // Claude Code encodes the project cwd by replacing every non-alphanumeric
   // character with `-` — that includes `/`, `_`, AND `.` (verified:
   // /Users/x/.claude-mem → -Users-x--claude-mem). The previous `[\/_]` regex
@@ -78,19 +103,22 @@ function scanMemories() {
   const memDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory');
   if (!fs.existsSync(memDir)) return { exists: false, dir: memDir, items: [] };
 
-  const items = [];
+  const items: MemoryItem[] = [];
   for (const f of fs.readdirSync(memDir)) {
     if (!f.startsWith('feedback_') || !f.endsWith('.md')) continue;
     const fp = path.join(memDir, f);
     const text = fs.readFileSync(fp, 'utf8');
     const fm = parseFrontmatter(text);
-    if (!matchKw(fm.name, fm.description, f)) continue;
+    if (!matchKw(fm['name'], fm['description'], f)) continue;
     items.push({
       file: f,
       path: fp,
-      name: fm.name || f.replace(/\.md$/, ''),
-      description: truncate(fm.description || firstParagraph(stripFrontmatter(text)), 160),
-      type: fm.type || 'feedback',
+      name: (fm['name'] as string) || f.replace(/\.md$/, ''),
+      description: truncate(
+        (fm['description'] as string) || firstParagraph(stripFrontmatter(text)),
+        160,
+      ),
+      type: (fm['type'] as string) || 'feedback',
     });
   }
   items.sort((a, b) => a.name.localeCompare(b.name));
@@ -100,9 +128,32 @@ function scanMemories() {
 // ─────────────────────────────────────────────────────────────────────────────
 // B. Maestro flows
 // ─────────────────────────────────────────────────────────────────────────────
-function scanFlows() {
+
+type ProducesMap = Record<string, boolean | number | string>;
+
+interface FlowItem {
+  flow: string;
+  path: string;
+  appId: string | null;
+  purpose: string;
+  id: string | null;
+  intent: string | null;
+  tags: string[] | null;
+  mutates: boolean | null;
+  status: string | null;
+  params: string[];
+  produces: ProducesMap | null;
+  replay: string;
+}
+
+interface FlowsResult {
+  items: FlowItem[];
+  roots: string[];
+}
+
+function scanFlows(): FlowsResult {
   const roots = collectFlowRoots(flags.workspaceRoot);
-  const items = [];
+  const items: FlowItem[] = [];
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
     for (const f of fs.readdirSync(root)) {
@@ -138,9 +189,9 @@ function scanFlows() {
   return { items: items.slice(0, flags.max), roots };
 }
 
-function collectFlowRoots(start) {
+function collectFlowRoots(start: string): string[] {
   // D1208: .rn-agent/actions/ is the single source of plugin-managed flows.
-  const candidates = new Set();
+  const candidates = new Set<string>();
   const own = path.join(start, '.rn-agent', 'actions');
   candidates.add(own);
   // Sibling test-app convention
@@ -157,7 +208,20 @@ function collectFlowRoots(start) {
   return Array.from(candidates);
 }
 
-function parseFlowMeta(text) {
+interface FlowMeta {
+  appId: string | null;
+  purpose: string;
+  id: string | null;
+  intent: string | null;
+  tags: string[] | null;
+  mutates: boolean | null;
+  status: string | null;
+  produces: ProducesMap | null;
+}
+
+type MetaKey = 'id' | 'intent' | 'tags' | 'mutates' | 'status' | 'produces';
+
+function parseFlowMeta(text: string): FlowMeta {
   // Maestro YAML has a top section before the `---` separator with appId etc.
   // Grab `appId:` and the first non-blank comment block as purpose.
   // Reusable Action Metadata (M7): also surface `# id|intent|tags|mutates|status: ...`
@@ -165,9 +229,16 @@ function parseFlowMeta(text) {
   // without parsing the full YAML body.
   const appIdMatch = text.match(/^appId:\s*([^\s#]+)/m);
   const lines = text.split('\n');
-  const purposeLines = [];
-  const meta = { id: null, intent: null, tags: null, mutates: null, status: null, produces: null };
-  const META_KEYS = new Set(['id', 'intent', 'tags', 'mutates', 'status', 'produces']);
+  const purposeLines: string[] = [];
+  const meta: Record<MetaKey, string[] | string | boolean | ProducesMap | null> = {
+    id: null,
+    intent: null,
+    tags: null,
+    mutates: null,
+    status: null,
+    produces: null,
+  };
+  const META_KEYS = new Set<string>(['id', 'intent', 'tags', 'mutates', 'status', 'produces']);
   let inComment = false;
   for (const line of lines) {
     if (line.startsWith('#')) {
@@ -176,7 +247,7 @@ function parseFlowMeta(text) {
       if (!stripped) continue;
       const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
       if (kv && META_KEYS.has(kv[1])) {
-        const key = kv[1];
+        const key = kv[1] as MetaKey;
         const raw = kv[2].trim();
         if (key === 'tags') {
           meta.tags = raw
@@ -202,16 +273,16 @@ function parseFlowMeta(text) {
   }
   const fallbackPurpose = purposeLines.length ? purposeLines.join(' ') : '(no description comment)';
   // Prefer explicit intent over the heuristic purpose extraction.
-  const purpose = meta.intent || fallbackPurpose;
+  const purpose = (meta.intent as string | null) || fallbackPurpose;
   return {
     appId: appIdMatch ? appIdMatch[1] : null,
     purpose,
-    id: meta.id,
-    intent: meta.intent,
-    tags: meta.tags,
-    mutates: meta.mutates,
-    status: meta.status,
-    produces: meta.produces,
+    id: meta.id as string | null,
+    intent: meta.intent as string | null,
+    tags: meta.tags as string[] | null,
+    mutates: meta.mutates as boolean | null,
+    status: meta.status as string | null,
+    produces: meta.produces as ProducesMap | null,
   };
 }
 
@@ -219,13 +290,13 @@ function parseFlowMeta(text) {
 // Values are typed as boolean (true/false), number, or string. Returns
 // null when empty or unparseable so callers can omit the field. Mirrors
 // parseProducesMap() in scripts/cdp-bridge/src/domain/reusable-action.ts.
-function parseProducesMap(raw) {
+function parseProducesMap(raw: string): ProducesMap | null {
   const inner = raw
     .trim()
     .replace(/^\{|\}$/g, '')
     .trim();
   if (!inner) return null;
-  const result = {};
+  const result: ProducesMap = {};
   for (const part of inner.split(',')) {
     const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
     if (!kv) continue;
@@ -245,10 +316,22 @@ function parseProducesMap(raw) {
 // ─────────────────────────────────────────────────────────────────────────────
 // C. UI skeletons
 // ─────────────────────────────────────────────────────────────────────────────
-function scanSkeletons() {
+
+interface SkeletonItem {
+  path: string;
+  appId: string | null;
+  screens: number;
+  testIds: number;
+}
+
+interface SkeletonsResult {
+  items: SkeletonItem[];
+}
+
+function scanSkeletons(): SkeletonsResult {
   // D1207 hard-cut: skeleton lives at .rn-agent/skeleton.yaml.
   // Old root-level .ui-skeleton.yaml is deprecated and no longer scanned.
-  const candidates = [
+  const candidates: string[] = [
     path.join(flags.workspaceRoot, '.rn-agent', 'skeleton.yaml'),
     path.join(flags.workspaceRoot, 'test-app', '.rn-agent', 'skeleton.yaml'),
   ];
@@ -259,8 +342,8 @@ function scanSkeletons() {
       candidates.push(path.join(parent, sib, 'test-app', '.rn-agent', 'skeleton.yaml'));
     }
   }
-  const items = [];
-  const seen = new Set();
+  const items: SkeletonItem[] = [];
+  const seen = new Set<string>();
   for (const fp of candidates) {
     if (!fs.existsSync(fp)) continue;
     const real = fs.realpathSync(fp);
@@ -286,21 +369,32 @@ function scanSkeletons() {
 // ─────────────────────────────────────────────────────────────────────────────
 // D. Plugin commands (only if scanning the plugin repo itself)
 // ─────────────────────────────────────────────────────────────────────────────
-function scanPluginCommands() {
+
+interface CommandItem {
+  command: string;
+  description: string;
+  path: string;
+}
+
+interface CommandsResult {
+  items: CommandItem[];
+}
+
+function scanPluginCommands(): CommandsResult {
   const dir = path.join(flags.workspaceRoot, 'commands');
   if (!fs.existsSync(dir)) return { items: [] };
-  const items = [];
+  const items: CommandItem[] = [];
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith('.md')) continue;
     const fp = path.join(dir, f);
     const text = fs.readFileSync(fp, 'utf8');
     const fm = parseFrontmatter(text);
-    if (!fm.command && !fm.description) continue;
-    const name = fm.command || f.replace(/\.md$/, '');
-    if (!matchKw(name, fm.description, f)) continue;
+    if (!fm['command'] && !fm['description']) continue;
+    const name = (fm['command'] as string) || f.replace(/\.md$/, '');
+    if (!matchKw(name, fm['description'], f)) continue;
     items.push({
       command: `/rn-dev-agent:${name}`,
-      description: truncate(fm.description || '(no description)', 160),
+      description: truncate((fm['description'] as string) || '(no description)', 160),
       path: fp,
     });
   }
@@ -311,10 +405,11 @@ function scanPluginCommands() {
 // ─────────────────────────────────────────────────────────────────────────────
 // helpers
 // ─────────────────────────────────────────────────────────────────────────────
-function parseFrontmatter(text) {
+
+function parseFrontmatter(text: string): Record<string, unknown> {
   const m = text.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!m) return {};
-  const out = {};
+  const out: Record<string, string> = {};
   for (const line of m[1].split('\n')) {
     const km = line.match(/^([a-zA-Z][\w-]*):\s*(.*)$/);
     if (km) {
@@ -327,19 +422,23 @@ function parseFrontmatter(text) {
   }
   return out;
 }
-function stripFrontmatter(text) {
+
+function stripFrontmatter(text: string): string {
   return text.replace(/^---\s*\n[\s\S]*?\n---\n?/, '');
 }
-function firstParagraph(text) {
+
+function firstParagraph(text: string): string {
   const trimmed = text.trim();
   const idx = trimmed.indexOf('\n\n');
   return (idx === -1 ? trimmed : trimmed.slice(0, idx)).replace(/\s+/g, ' ').trim();
 }
-function truncate(s, n) {
+
+function truncate(s: string | undefined | null, n: number): string {
   if (!s) return '';
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…';
 }
-function safeReaddir(p) {
+
+function safeReaddir(p: string): string[] {
   try {
     return fs.readdirSync(p);
   } catch {
@@ -350,8 +449,9 @@ function safeReaddir(p) {
 // ─────────────────────────────────────────────────────────────────────────────
 // run
 // ─────────────────────────────────────────────────────────────────────────────
-const want = (s) => flags.section === 'all' || flags.section === s;
-const memories = want('a') ? scanMemories() : { items: [], exists: false };
+
+const want = (s: string): boolean => flags.section === 'all' || flags.section === s;
+const memories = want('a') ? scanMemories() : { items: [], exists: false, dir: undefined };
 const flows = want('b') ? scanFlows() : { items: [], roots: [] };
 const skeletons = want('c') ? scanSkeletons() : { items: [] };
 const commands = want('d') ? scanPluginCommands() : { items: [] };
@@ -381,7 +481,7 @@ if (flags.json) {
   process.exit(total === 0 ? 3 : 0);
 }
 
-const parts = [];
+const parts: string[] = [];
 parts.push(`# Learned actions${flags.filter ? ` (filter: "${flags.filter}")` : ''}`);
 parts.push('');
 
@@ -465,14 +565,14 @@ process.exit(total === 0 ? 3 : 0);
 // regex metacharacters) is valid inside a GitHub-flavored Markdown table
 // cell. CodeQL js/incomplete-sanitization (alert #26) was raised on the
 // previous name `esc()` which read like a general-purpose escaper.
-function escapeMarkdownTableCell(s) {
+function escapeMarkdownTableCell(s: unknown): string {
   // Escape `\` FIRST so a pre-existing `\|` doesn't become `\\\|`.
   return (s || '').toString().replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
 // D1209 — render the parsed produces map as a compact table cell.
 // Empty / null returns '?'.
-function formatProducesCell(produces) {
+function formatProducesCell(produces: ProducesMap | null | undefined): string {
   if (!produces || typeof produces !== 'object') return '?';
   const keys = Object.keys(produces).sort();
   if (keys.length === 0) return '?';

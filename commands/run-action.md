@@ -1,6 +1,6 @@
 ---
 command: run-action
-description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via scripts/learned-actions.mjs (same inventory as /rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
+description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via scripts/cdp-bridge/dist/learned-actions.js (same inventory as /rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
 argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--no-auto-repair] [--dry-run]
 allowed-tools: Bash, Read, Glob, mcp__plugin_rn-dev-agent_cdp__cdp_run_action
 ---
@@ -50,7 +50,7 @@ Example calls:
    `.rn-agent/actions/` directly):
    ```bash
    ACTION_NAME="<first-arg>"
-   RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+   RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/learned-actions.js" \
      --json --section b \
      --workspace-root "$PWD" --memory-cwd "$PWD" \
      --filter "$ACTION_NAME")
@@ -218,5 +218,5 @@ reliably call other slash commands), but the contract is the same.
   — but most flows still cold-start.
 
 See `commands/list-learned-actions.md` for the discovery counterpart and
-`scripts/learned-actions.mjs` for the underlying script (single source of
+`scripts/cdp-bridge/src/learned-actions.ts` (compiled to `scripts/cdp-bridge/dist/learned-actions.js`) for the underlying script (single source of
 truth for both commands).

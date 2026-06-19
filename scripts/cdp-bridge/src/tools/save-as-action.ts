@@ -20,6 +20,7 @@ import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
 import { type ActionLifecycle, freshRuntimeState } from '../domain/reusable-action.js';
 import { actionPathFor } from '../domain/action-store.js';
+import { mirrorToDb } from '../domain/action-state-store.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { atomicWriter } from '../domain/atomic-writer.js';
 
@@ -155,7 +156,21 @@ export function createSaveAsActionHandler() {
     // positive "human edited" alarm.
     const sidecarPath = sidecarPathFor(filePath);
     const initialState = freshRuntimeState(() => new Date(), 0);
-    atomicWriter.pairWrite(filePath, yamlText, sidecarPath, initialState);
+    const writeResult = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, initialState);
+
+    // Task 5 (A2/C): seed the DB index row for the brand-new action, STRICTLY
+    // AFTER the authoritative #101 pair-write. Initial state has empty history
+    // so no run/repair row is appended — index/stats only. Best-effort, never
+    // throws. Mirror the POST-write mtime: pairWrite rewrote the sidecar with
+    // its finalMtimeMs, so seeding the DB from the pre-write baseline (0) would
+    // make a DB-backed load (Phase 2) treat the just-written YAML as externally
+    // edited. Mirrors the same correction saveAction applies.
+    mirrorToDb({
+      yamlFilePath: filePath,
+      state: { ...initialState, lastSeenMtimeMs: writeResult.finalMtimeMs },
+      meta: { appId: args.bundleId, status, path: filePath },
+      projectRoot,
+    });
 
     return okResult({
       // Phase 130 (post-review): use captured pre-existence, not the

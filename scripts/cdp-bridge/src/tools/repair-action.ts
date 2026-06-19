@@ -13,6 +13,7 @@ import { okResult, failResult, withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { loadAction, saveAction, actionWasEditedExternally } from '../domain/action-store.js';
+import { mirrorToDb } from '../domain/action-state-store.js';
 import {
   extractAllTestIDs,
   extractIdSelectors,
@@ -373,6 +374,22 @@ export function createRepairActionHandler() {
 
     const repaired = applyRepair(action, result, () => new Date(), args.agentReasoning);
     const { filePath, sidecarPath } = saveAction(repaired);
+    // Task 5 (A2/C): append the RepairRecord ROW to the DB mirror, STRICTLY
+    // AFTER the authoritative saveAction. applyRepair appended the record to
+    // repaired.state.repairHistory, so the just-added record is the last
+    // element. saveAction already upserted the index row idempotently; this
+    // appends the repair row. Best-effort, never throws.
+    const appendedRepair = repaired.state.repairHistory[repaired.state.repairHistory.length - 1];
+    mirrorToDb({
+      yamlFilePath: repaired.filePath,
+      state: repaired.state,
+      newRepairRecord: appendedRepair,
+      meta: {
+        appId: repaired.metadata.appId,
+        status: repaired.metadata.status,
+        path: repaired.filePath,
+      },
+    });
     return okResult({
       patched: true,
       actionId: args.actionId,

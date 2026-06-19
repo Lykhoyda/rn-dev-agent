@@ -16,6 +16,7 @@ import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
+import { storeMode } from '../domain/action-state-store.js';
 
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
@@ -163,6 +164,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
     autoConnect: client.autoConnectState,
     bridge: bridgeEnvState(process.env),
     deviceSession,
+    actionStore: storeMode(projectRoot ?? ''),
     proxy: {
       active: client.isProxyActive,
       port: client.proxyMultiplexer?.port ?? null,

@@ -23,6 +23,7 @@ import {
 } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
+import { mirrorToDb } from './action-state-store.js';
 
 /**
  * Resolve the canonical YAML path for an action id under a project root.
@@ -254,6 +255,19 @@ export function saveAction(action: ReusableAction): { filePath: string; sidecarP
   const stateToWrite = { ...action.state, lastSeenMtimeMs: result.finalMtimeMs };
   // Reflect in-memory so subsequent calls share the just-written mtime.
   action.state = stateToWrite;
+
+  // Task 5 (A2): best-effort DB mirror, STRICTLY AFTER the authoritative
+  // #101 pair-write. mirrorToDb is sidecar-less (it must NOT re-write the
+  // sidecar — that would break the atomic pair-write) and NEVER throws, so it
+  // can't convert a successful write into a failure. No record is appended
+  // here (the record-producing call sites do that); this refreshes the index
+  // row + stats only.
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: stateToWrite,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
+  });
+
   return { filePath: action.filePath, sidecarPath };
 }
 
@@ -294,6 +308,13 @@ export function acknowledgeExternalEdit(action: ReusableAction): ReusableAction 
   if (currentMtimeMs <= action.state.lastSeenMtimeMs) return action;
   const nextState = markSeen(action.state, currentMtimeMs);
   saveSidecar(action.filePath, nextState);
+  // Task 5 (A2): mirror the refreshed mtime baseline to the DB (best-effort,
+  // never throws). No record append — this is a baseline-only update.
+  mirrorToDb({
+    yamlFilePath: action.filePath,
+    state: nextState,
+    meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
+  });
   return { ...action, state: nextState };
 }
 
