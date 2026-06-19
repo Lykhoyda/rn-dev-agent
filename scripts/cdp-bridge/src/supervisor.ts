@@ -8,6 +8,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
+import { workerSpawnArgs } from './supervisor-args.js';
 
 // GH#264 Phase 5: the component that owns stdio with Claude Code must hold
 // ZERO network sockets — `lsof -ti tcp:8081 | xargs kill -9` (a documented
@@ -58,7 +59,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   }
 
   function spawnWorker(): void {
-    const child = spawn(process.execPath, [workerPath, '--no-lock'], {
+    const child = spawn(process.execPath, workerSpawnArgs(workerPath), {
       stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
