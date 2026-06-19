@@ -33,12 +33,30 @@ CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "src change without changeset fails" 1 $?
 
-# 2. shippable src changed, changeset present -> passes
+# 2. shippable src changed, but changeset bumps ONLY rn-dev-agent-cdp -> MUST fail.
+# rn-dev-agent-cdp is the internal package; it ships to users only via the plugin
+# manifest, which is bumped by a rn-dev-agent-plugin changeset. A cdp-only bump
+# leaves plugin.json/marketplace.json pinned, so the change never reaches installs
+# (the #361/#363 delivery-gap that this guard now closes).
 printf -- '---\n"rn-dev-agent-cdp": patch\n---\nfix\n' > "$tmp/.changeset/brave-lions.md"
 CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
-check "src change with changeset passes" 0 $?
+check "src change with cdp-only changeset fails (no plugin bump)" 1 $?
 rm -f "$tmp/.changeset/brave-lions.md"
+
+# 2b. shippable src changed, changeset bumps rn-dev-agent-plugin -> passes
+printf -- '---\n"rn-dev-agent-plugin": minor\n---\nship it\n' > "$tmp/.changeset/keen-otters.md"
+CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "src change with rn-dev-agent-plugin changeset passes" 0 $?
+rm -f "$tmp/.changeset/keen-otters.md"
+
+# 2c. shippable src changed, changeset bumps BOTH cdp + plugin (the ideal) -> passes
+printf -- '---\n"rn-dev-agent-cdp": patch\n"rn-dev-agent-plugin": patch\n---\nfix + ship\n' > "$tmp/.changeset/wise-pandas.md"
+CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "src change with cdp+plugin changeset passes" 0 $?
+rm -f "$tmp/.changeset/wise-pandas.md"
 
 # 3. only non-shippable changes (tests / docs / CI) -> passes without a changeset
 CHANGED_FILES=$'scripts/cdp-bridge/test/unit/x.test.js\ndocs-site/foo.mdx\n.github/workflows/ci.yml' \

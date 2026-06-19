@@ -47,6 +47,35 @@ MSG
   exit 1
 fi
 
-echo "require-changeset: shippable src changed AND a changeset is present — OK."
+# A changeset exists — but cdp-bridge ships to users ONLY via the plugin manifest
+# (plugin.json / marketplace.json), which is versioned by the synthetic
+# `rn-dev-agent-plugin` package. A changeset that bumps only `rn-dev-agent-cdp`
+# (the internal package) advances the bundled dist but leaves the manifest pinned,
+# so `/plugin update` never delivers the change to installs (#361/#363 delivery
+# gap). Require a `rn-dev-agent-plugin` entry so the manifest bumps and ships.
+plugin_changeset="$(grep -lE '"rn-dev-agent-plugin"' $changesets 2>/dev/null || true)"
+
+if [ -z "$plugin_changeset" ]; then
+  echo "ERROR: this PR changes shippable source but no changeset bumps rn-dev-agent-plugin:" >&2
+  printf '%s\n' "$src_changed" | sed 's/^/  /' >&2
+  cat >&2 <<'MSG'
+
+A `rn-dev-agent-cdp`-only changeset bumps the internal package but NOT the plugin
+manifest (plugin.json / marketplace.json) — so the change ships to main but never
+reaches marketplace installs via `/plugin update` (#361/#363 post-mortem: the
+cdp-bridge advanced through 0.48→0.49 while the plugin stayed pinned at 0.55.5).
+
+Fix: add a `rn-dev-agent-plugin` entry to a changeset (typically alongside the
+`rn-dev-agent-cdp` bump), e.g.:
+
+  ---
+  "rn-dev-agent-cdp": patch
+  "rn-dev-agent-plugin": patch
+  ---
+MSG
+  exit 1
+fi
+
+echo "require-changeset: shippable src changed AND a rn-dev-agent-plugin changeset is present — OK."
 printf '%s\n' "$changesets" | sed 's/^/  /'
 exit 0
