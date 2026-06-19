@@ -1,5 +1,7 @@
 import './env-setup.js';
 import { readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -35,6 +37,7 @@ import {
 import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
+import type { CdpReplayDeps } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -177,6 +180,56 @@ const setClient = (c: CDPClient): void => {
   client = c;
 };
 const createClient = (port: number): CDPClient => new CDPClient(port);
+
+const execFileP = promisify(execFile);
+
+// Parse an MCP envelope; throw when the handler reported failure.
+const mustOk = (res: { content: { text: string }[] }, what: string): void => {
+  const env = JSON.parse(res.content[0].text) as { ok?: boolean; error?: string };
+  if (env.ok === false) throw new Error(`${what} failed: ${env.error ?? 'ok:false'}`);
+};
+
+// GH #317 Phase 2: build real CDP/JS replay deps from existing handlers.
+// Returns null unless the active session is iOS with an appId (iOS-only fallback).
+const makeReplayDeps = (): CdpReplayDeps | null => {
+  const session = getActiveSession();
+  if (!session || session.platform !== 'ios' || !session.appId) return null;
+  const interact = createInteractHandler(getClient);
+  const tree = createComponentTreeHandler(getClient);
+  return {
+    pressByTestId: async (id: string) => {
+      mustOk(await interact({ action: 'press', testID: id, animated: false }), `press "${id}"`);
+    },
+    typeByTestId: async (id: string, text: string) => {
+      mustOk(
+        await interact({ action: 'typeText', testID: id, text, animated: false }),
+        `type "${id}"`,
+      );
+    },
+    treeFor: async (id: string) => {
+      const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text) as {
+        ok?: boolean;
+        data?: unknown;
+      };
+      return env.ok ? env.data : null;
+    },
+    launchApp: async (stopApp: boolean) => {
+      const udid = await resolveIosUdid(session.deviceId);
+      if (!udid) throw new Error('launchApp: could not resolve iOS udid');
+      if (stopApp) {
+        try {
+          await execFileP('xcrun', ['simctl', 'terminate', udid, session.appId!]);
+        } catch {
+          /* app not running — fine */
+        }
+      }
+      await execFileP('xcrun', ['simctl', 'launch', udid, session.appId!]);
+    },
+    settle: async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    },
+  };
+};
 
 const server = new McpServer({
   name: 'rn-dev-agent-cdp-bridge',
@@ -2153,7 +2206,10 @@ trackedTool(
   // actually active. Without this the handler defaulted getLiveRoute to a no-op
   // and the drift branch could never fire, silently routing screen-change
   // failures into fuzzy selector repair.
-  createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) }),
+  createRunActionHandler({
+    getLiveRoute: () => readLiveRoute(getClient()),
+    replayDeps: makeReplayDeps,
+  }),
 );
 
 trackedTool(
@@ -2238,7 +2294,10 @@ const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
   }
 };
 
-const runActionHandler = createRunActionHandler({ getLiveRoute: () => readLiveRoute(getClient()) });
+const runActionHandler = createRunActionHandler({
+  getLiveRoute: () => readLiveRoute(getClient()),
+  replayDeps: makeReplayDeps,
+});
 
 setObserveE2eDeps({
   token: e2eCsrfToken,
