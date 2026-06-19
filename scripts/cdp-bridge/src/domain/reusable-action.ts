@@ -46,6 +46,9 @@ export type ActionFailureCode =
   | 'MUTATE_PRECONDITION_FAILED'
   | 'ENV_UNREACHABLE'
   | 'TIMEOUT'
+  // GH #317 Phase 2: a CDP/JS transport-blind replay ran and the flow failed —
+  // distinct from a generic UNKNOWN error so run-history/MTTR can tell them apart.
+  | 'TRANSPORT_BLIND'
   | 'UNKNOWN';
 
 /**

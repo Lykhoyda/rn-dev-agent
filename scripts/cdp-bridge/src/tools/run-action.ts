@@ -380,7 +380,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status,
-                failureCode: replay.passed ? undefined : 'UNKNOWN',
+                failureCode: replay.passed ? undefined : 'TRANSPORT_BLIND',
                 failureDetail: replay.reason,
                 trigger,
                 autoRepair,

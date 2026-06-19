@@ -273,3 +273,58 @@ test('GH #317: Maestro PASS persists NO transport field and never consults repla
     'no transport field persisted on a Maestro pass (healthy-path byte-for-byte)',
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 5: a FAILED CDP/JS replay persists failureCode TRANSPORT_BLIND (not UNKNOWN)
+// so run-history/MTTR can distinguish a transport-blind flow failure from a
+// generic error.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('GH #317: failed CDP/JS replay → failResult TRANSPORT_BLIND + RunRecord.failureCode TRANSPORT_BLIND', async () => {
+  // launchApp → tapOn fab-create-task (present) → assertVisible ghost (absent → replay fails)
+  const yaml = [
+    'appId: com.test.app',
+    '---',
+    '# id: demo',
+    '# intent: failed-replay fixture',
+    '# status: experimental',
+    '',
+    '- launchApp:',
+    '    stopApp: false',
+    '- tapOn:',
+    '    id: "fab-create-task"',
+    '- assertVisible:',
+    '    id: "ghost-never-rendered"',
+    '',
+  ].join('\n');
+  project.seedAction('demo', yaml);
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+    replayDeps: () => ({
+      // probe (fab-create-task) present → fallback fires; ghost absent → assert fails
+      treeFor: async (id) =>
+        id === 'fab-create-task'
+          ? { tree: { testID: 'fab-create-task', children: [] }, totalNodes: 1 }
+          : { tree: null, totalNodes: 0 },
+      pressByTestId: async () => {},
+      typeByTestId: async () => {},
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, true, 'a failed replay must surface as an error');
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.code, 'TRANSPORT_BLIND', 'envelope code must be TRANSPORT_BLIND');
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory[0].status, 'fail');
+  assert.equal(sidecar.runHistory[0].transport, 'cdp-js');
+  assert.equal(
+    sidecar.runHistory[0].failureCode,
+    'TRANSPORT_BLIND',
+    'failed replay must record failureCode TRANSPORT_BLIND, not UNKNOWN',
+  );
+});
