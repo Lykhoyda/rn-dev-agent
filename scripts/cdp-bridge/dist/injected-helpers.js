@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 29;
+export const HELPERS_VERSION = 30;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -2067,22 +2067,47 @@ export const INJECTED_HELPERS = `
   // fail-close as Ambiguous on-device. Drop any match that is an ancestor (via
   // .return) of another match, keeping the deepest. Genuinely-distinct siblings
   // are NOT collapsed (they stay legitimately Ambiguous).
+  // Collapse only COMPOSITE+HOST duplicates of the SAME element — NOT arbitrary
+  // ancestor/descendant matches. A real RN element is a composite fiber
+  // (Text/TextInput/Pressable, object type) plus its host primitive
+  // (RCTText/RCTSinglelineTextInputView/RCTView, string type); both can satisfy
+  // the same selector. But two DISTINCT nested components (e.g. an outer card
+  // button and an inner button both named "Settings") must stay AMBIGUOUS, not
+  // silently collapse to the inner one (Codex review). Rule: for each HOST
+  // match B, drop its NEAREST matching ancestor iff that ancestor is a composite
+  // — i.e. B's own wrapper. A host-ancestor (distinct nested host) or a composite
+  // with no host match below it is preserved, so real nested matches stay
+  // ambiguous.
   function __deepestOnly(arr) {
     if (arr.length < 2) return arr;
+    function tid(f) { var p = f.memoizedProps; return (p && (p.testID || p.nativeID)) || null; }
     var inSet = new WeakSet();
     for (var i = 0; i < arr.length; i++) inSet.add(arr[i]);
-    var ancestor = new WeakSet();
+    var drop = new WeakSet();
     for (var j = 0; j < arr.length; j++) {
-      var p = arr[j].return;
+      var b = arr[j];
+      var bHost = typeof b.type === 'string';
+      var bTid = tid(b);
+      var p = b.return;
       var guard = 0;
       while (p && guard++ < 10000) {
-        if (inSet.has(p)) ancestor.add(p);
+        if (inSet.has(p)) {
+          // Nearest matching ancestor A of B. Drop A only when A and B are the
+          // SAME element: (1) A is B's composite wrapper (A composite, B host),
+          // or (2) A and B share the same testID/nativeID (one element whose id
+          // propagated across nested fibers, e.g. a tab button). A distinct
+          // nested match — a host ancestor, or a different id — is preserved so
+          // real nested matches stay Ambiguous (Codex review).
+          var aComposite = typeof p.type !== 'string';
+          if ((aComposite && bHost) || (bTid && tid(p) === bTid)) drop.add(p);
+          break;
+        }
         p = p.return;
       }
     }
     var kept = [];
     for (var k = 0; k < arr.length; k++) {
-      if (!ancestor.has(arr[k])) kept.push(arr[k]);
+      if (!drop.has(arr[k])) kept.push(arr[k]);
     }
     return kept;
   }
