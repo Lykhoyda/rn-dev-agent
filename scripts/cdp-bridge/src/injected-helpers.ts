@@ -2138,6 +2138,61 @@ export const INJECTED_HELPERS = `
     return joined ? joined : undefined;
   }
 
+  // ── Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
+  // isSubtreeInaccessible). No StyleSheet.flatten in-page → flatten manually.
+  // Walks fiber.return (live fibers) not instance.parent. opacity:0 is NOT
+  // hidden (RNTL accessibility.ts:73). Per-call cache WeakMap dropped (YAGNI).
+  function flattenStyle(style) {
+    var out = {};
+    if (style == null) return out;
+    if (Array.isArray(style)) {
+      for (var i = 0; i < style.length; i++) {
+        var part = flattenStyle(style[i]);
+        for (var k in part) if (part.hasOwnProperty(k)) out[k] = part[k];
+      }
+      return out;
+    }
+    if (typeof style === 'object') {
+      for (var key in style) if (style.hasOwnProperty(key)) out[key] = style[key];
+    }
+    return out;
+  }
+
+  // True if \`fiber\` itself is an inaccessible-subtree root.
+  function isSubtreeInaccessible(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    if (props['aria-hidden']) return true;
+    if (props.accessibilityElementsHidden) return true;
+    if (props.importantForAccessibility === 'no-hide-descendants') return true;
+
+    var flat = flattenStyle(props.style);
+    if (flat.display === 'none') return true;
+
+    // iOS: a host sibling marked aria-modal / accessibilityViewIsModal hides
+    // this subtree. Siblings = children of fiber.return other than fiber.
+    var parent = fiber && fiber.return;
+    if (parent && parent.child) {
+      for (var sib = parent.child; sib; sib = sib.sibling) {
+        if (sib === fiber) continue;
+        var sp = sib.memoizedProps;
+        if (sp && (sp['aria-modal'] || sp.accessibilityViewIsModal)) return true;
+      }
+    }
+    return false;
+  }
+
+  function __hidden(fiber) {
+    if (fiber == null) return true;
+    var current = fiber;
+    var guard = 0;
+    while (current && guard < 1000) {
+      if (isSubtreeInaccessible(current)) return true;
+      current = current.return;
+      guard++;
+    }
+    return false;
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -2157,6 +2212,7 @@ export const INJECTED_HELPERS = `
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
+    __hidden: __hidden,
     __accessibleName: __accessibleName,
     __match: __match,
     __hostKind: hostKind,
