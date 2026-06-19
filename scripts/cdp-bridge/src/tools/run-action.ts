@@ -49,7 +49,12 @@ import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
-import { isExactPresent, runCdpReplay, type CdpReplayDeps } from './cdp-replay-dispatch.js';
+import {
+  isExactPresent,
+  runCdpReplay,
+  firstReplayTestId,
+  type CdpReplayDeps,
+} from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 
 /**
@@ -347,15 +352,22 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         }
       }
 
-      // GH #317 Phase 2: CDP/JS transport-blind fallback.
-      // When Maestro/WDA reports SELECTOR_NOT_FOUND but the CDP tree
-      // confirms the testID IS present, the native WDA layer is blind to it.
-      // Replay via CDP/JS directly, skipping Maestro + repair entirely.
-      if (failure.kind === 'SELECTOR_NOT_FOUND') {
+      // GH #317 Phase 2: CDP/JS transport-blind fallback (broadened to UNKNOWN).
+      // On iOS 26.x bridgeless, WDA fails two ways while the app renders fine:
+      //   SELECTOR_NOT_FOUND — WDA drove but couldn't see the element (probe = failed selector)
+      //   UNKNOWN            — WDA died at launch before any selector (probe = first action testID)
+      // In both, if the probe testID is verbatim-present in the CDP tree the app IS
+      // rendering, so this is transport-blindness, not a crash — replay via CDP/JS.
+      if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
         const replayDeps = getReplayDeps(args);
-        if (replayDeps) {
-          const tree = await replayDeps.treeFor(failure.selector).catch(() => null);
-          if (isExactPresent(tree, failure.selector)) {
+        const probe = !replayDeps
+          ? null
+          : failure.kind === 'SELECTOR_NOT_FOUND'
+            ? failure.selector
+            : firstReplayTestId(action.body, args.params ?? {});
+        if (replayDeps && probe) {
+          const tree = await replayDeps.treeFor(probe).catch(() => null);
+          if (isExactPresent(tree, probe)) {
             try {
               const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
               const status = replay.passed ? 'pass' : 'fail';

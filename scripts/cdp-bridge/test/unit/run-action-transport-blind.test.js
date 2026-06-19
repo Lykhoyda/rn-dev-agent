@@ -21,21 +21,6 @@ afterEach(() => {
   project.cleanup();
 });
 
-test('RunRecord accepts optional transport and omits it by default', () => {
-  // a maestro record (no transport) and a cdp-js record both round-trip
-  const base = {
-    timestamp: '2026-06-19T00:00:00Z',
-    durationMs: 1,
-    status: 'pass',
-    trigger: 'human',
-    autoRepair: { attempted: false, outcome: 'skipped', phases: { firstAttemptMs: 1 } },
-  };
-  const maestro = { ...base };
-  const fallback = { ...base, transport: 'cdp-js' };
-  assert.equal('transport' in maestro, false);
-  assert.equal(fallback.transport, 'cdp-js');
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,6 +59,24 @@ const FAIL_SELECTOR_ENV = {
   },
 };
 
+// WDA dies at launch before any selector → parseMaestroFailure returns kind:UNKNOWN
+// (no "not found"/assertion pattern in the output). This is the real iOS 26.5
+// failure mode the broadened trigger (GH #317 device-verification) handles.
+const FAIL_UNKNOWN_ENV = {
+  ok: false,
+  data: {
+    passed: false,
+    output: '  maestro-runner 1.0.9\n  Building WDA...\n  (WDA failed to start; no steps executed)',
+    flowFile: 'x',
+    platform: 'ios',
+  },
+};
+
+const PASS_ENV = {
+  ok: true,
+  data: { passed: true, output: 'Flow PASSED', flowFile: 'x', platform: 'ios' },
+};
+
 function fakeMaestroRun(envelopes) {
   let i = 0;
   return async () => {
@@ -108,6 +111,7 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID present → CDP/JS fallback; p
 
   let maestroCallCount = 0;
   let replayDepsCallCount = 0;
+  const pressCalls = [];
 
   const handler = createRunActionHandler({
     maestroRun: async (...args) => {
@@ -123,7 +127,9 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID present → CDP/JS fallback; p
           if (id === 'fab-create-task') return { testID: 'fab-create-task', children: [] };
           return null;
         },
-        pressByTestId: async () => {},
+        pressByTestId: async (id) => {
+          pressCalls.push(id);
+        },
         typeByTestId: async () => {},
         launchApp: async () => {},
         settle: async () => {},
@@ -144,6 +150,11 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID present → CDP/JS fallback; p
     'maestro must NOT be retried — only one call (the failed first attempt)',
   );
   assert.equal(replayDepsCallCount, 1, 'replayDeps factory must be called once');
+  assert.deepEqual(
+    pressCalls,
+    ['fab-create-task'],
+    'replay must dispatch the tapOn step exactly once with the expected testID (not skip it)',
+  );
 
   // RunRecord must reflect the CDP/JS transport and pass status.
   const sidecar = project.readSidecar('demo');
@@ -194,5 +205,71 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID absent from tree → existing 
     cdpReplayInvoked,
     false,
     'CDP/JS replay must NOT execute when testID absent from tree',
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 3: UNKNOWN failure + first testID present → CDP/JS fallback (broadened trigger)
+// GH #317 device-verification finding: real iOS 26.5 maestro failure is UNKNOWN
+// (WDA dies at launch), not SELECTOR_NOT_FOUND.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('GH #317: UNKNOWN failure + first testID present → CDP/JS fallback fires; passed:true, transport:cdp-js', async () => {
+  project.seedAction('demo', replayFixtureYaml({ id: 'demo', selector: 'fab-create-task' }));
+
+  const pressCalls = [];
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_UNKNOWN_ENV]),
+    replayDeps: (_args) => ({
+      // probe is the action's FIRST testID (fab-create-task) — there is no
+      // failure.selector on an UNKNOWN failure.
+      treeFor: async (id) =>
+        id === 'fab-create-task' ? { testID: 'fab-create-task', children: [] } : null,
+      pressByTestId: async (id) => {
+        pressCalls.push(id);
+      },
+      typeByTestId: async () => {},
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined, `expected ok result, got: ${result.content[0].text}`);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.data.passed, true);
+  assert.equal(env.data.transport, 'cdp-js', 'UNKNOWN-triggered replay must mark transport cdp-js');
+  assert.deepEqual(pressCalls, ['fab-create-task'], 'replay must press the probed first testID');
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory[0].transport, 'cdp-js');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 4: a normal Maestro PASS persists NO transport field (byte-for-byte healthy path)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('GH #317: Maestro PASS persists NO transport field and never consults replayDeps', async () => {
+  project.seedAction('demo', replayFixtureYaml({ id: 'demo', selector: 'fab-create-task' }));
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([PASS_ENV]),
+    replayDeps: () => {
+      throw new Error('replayDeps must not be consulted on a Maestro pass');
+    },
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.data.passed, true);
+  assert.equal(env.data.transport, undefined, 'a Maestro pass must not set transport');
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory[0].status, 'pass');
+  assert.equal(
+    'transport' in sidecar.runHistory[0],
+    false,
+    'no transport field persisted on a Maestro pass (healthy-path byte-for-byte)',
   );
 });

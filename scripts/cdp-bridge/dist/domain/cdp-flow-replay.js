@@ -69,6 +69,13 @@ export function normalizeSteps(body, params) {
     }
     return out;
 }
+export function firstTestId(steps) {
+    for (const s of steps) {
+        if (s.t === 'tap' || s.t === 'assert')
+            return s.id;
+    }
+    return null;
+}
 export async function replayFlow(steps, dispatch) {
     const trace = [];
     let lastTapped = null;

@@ -4,7 +4,38 @@ import {
   normalizeSteps,
   UnsupportedStepError,
   replayFlow,
+  firstTestId,
 } from '../../dist/domain/cdp-flow-replay.js';
+
+test('firstTestId returns the first top-level tap/assert id, skipping launch/wait', () => {
+  const steps = [
+    { t: 'launch', stopApp: false },
+    { t: 'tap', id: 'tab-tasks' },
+    { t: 'assert', id: 'task-screen' },
+  ];
+  assert.equal(firstTestId(steps), 'tab-tasks');
+});
+
+test('firstTestId returns the first assert id when no tap precedes it', () => {
+  const steps = [
+    { t: 'launch', stopApp: false },
+    { t: 'wait' },
+    { t: 'assert', id: 'home-header' },
+  ];
+  assert.equal(firstTestId(steps), 'home-header');
+});
+
+test('firstTestId does NOT descend into conditional runFlow (returns null when ids are only nested)', () => {
+  const steps = [
+    { t: 'launch', stopApp: false },
+    { t: 'runFlow', whenVisible: 'onboarding', commands: [{ t: 'tap', id: 'onboarding-done' }] },
+  ];
+  assert.equal(firstTestId(steps), null);
+});
+
+test('firstTestId returns null for steps with no tap/assert', () => {
+  assert.equal(firstTestId([{ t: 'launch', stopApp: false }, { t: 'wait' }]), null);
+});
 
 test('normalizeSteps maps the supported subset with ${VAR} interpolation', () => {
   const body = [

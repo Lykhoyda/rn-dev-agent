@@ -1,6 +1,21 @@
 import { parse as yamlParse } from 'yaml';
-import { normalizeSteps, replayFlow, type ReplayResult } from '../domain/cdp-flow-replay.js';
+import {
+  normalizeSteps,
+  replayFlow,
+  firstTestId,
+  type ReplayResult,
+} from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
+
+export function firstReplayTestId(bodyYaml: string, params: Record<string, string>): string | null {
+  try {
+    const parsed = yamlParse(bodyYaml) as unknown[];
+    if (!Array.isArray(parsed)) return null;
+    return firstTestId(normalizeSteps(parsed, params));
+  } catch {
+    return null;
+  }
+}
 
 export function collectTestIds(node: unknown, acc: Set<string> = new Set()): Set<string> {
   if (!node || typeof node !== 'object') return acc;

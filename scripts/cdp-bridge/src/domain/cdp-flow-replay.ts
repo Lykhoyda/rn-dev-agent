@@ -93,6 +93,13 @@ export function normalizeSteps(body: unknown[], params: Record<string, string>):
   return out;
 }
 
+export function firstTestId(steps: ReplayStep[]): string | null {
+  for (const s of steps) {
+    if (s.t === 'tap' || s.t === 'assert') return s.id;
+  }
+  return null;
+}
+
 export async function replayFlow(
   steps: ReplayStep[],
   dispatch: ReplayDispatch,
