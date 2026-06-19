@@ -256,18 +256,26 @@ export function openActionDb(projectRoot, opts = {}) {
                         const parsed = JSON.parse(readFileSync(join(stateDir, f), 'utf8'));
                         if (parsed?.schemaVersion !== 1)
                             continue;
-                        handle.upsertIndex(id, {
-                            revision: parsed.revision,
-                            statsJson: JSON.stringify(parsed.stats),
-                            mtimeBaseline: parsed.lastSeenMtimeMs,
-                            updatedAt: parsed.updatedAt,
-                        });
+                        // Validate shape before importing: malformed arrays must not leave
+                        // a partial mirror (index row without history rows).
+                        if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
+                            continue;
+                        }
+                        // Insert history rows FIRST so that "index row exists" reliably
+                        // means "fully migrated". Any throw mid-import leaves no index row
+                        // and the next open retries cleanly.
                         for (const r of parsed.runHistory) {
                             handle.insertRunRecord(id, r);
                         }
                         for (const r of parsed.repairHistory) {
                             handle.insertRepairRecord(id, r);
                         }
+                        handle.upsertIndex(id, {
+                            revision: parsed.revision,
+                            statsJson: JSON.stringify(parsed.stats),
+                            mtimeBaseline: parsed.lastSeenMtimeMs,
+                            updatedAt: parsed.updatedAt,
+                        });
                         migrated++;
                     }
                     catch {
