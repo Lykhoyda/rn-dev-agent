@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 26;
+export const HELPERS_VERSION = 27;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1899,6 +1899,46 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ value: null, controlled: false });
   }
 
+  // Port of RNTL getDefaultNormalizer (matches.ts:37-47): trim + collapse
+  // whitespace runs to a single space. Does NOT lowercase — case-insensitivity
+  // for non-exact string matching lives in __match's compare (RNTL matches.ts:24),
+  // NOT here. Kept deliberately separate from norm() (line ~1114) which DOES
+  // lowercase for the legacy interact() label tiers.
+  function __matchNormalize(v) {
+    return String(v).replace(/^\\s+|\\s+$/g, '').replace(/\\s+/g, ' ');
+  }
+
+  // Port of RNTL matches() (matches.ts:9-30) collapsed to a single matcher
+  // object: {value,exact?} for strings, {regexSource,regexFlags?} for regexes.
+  // Returns false on non-string text or malformed matcher. Regex is compiled in
+  // try/catch, the global flag is stripped so lastIndex never carries across
+  // calls, and the candidate is length-capped to bound catastrophic backtracking.
+  var __MATCH_MAX_LEN = 10000;
+  function __match(text, matcher) {
+    if (typeof text !== 'string') return false;
+    if (!matcher || typeof matcher !== 'object') return false;
+    var normalizedText = __matchNormalize(text);
+    if (normalizedText.length > __MATCH_MAX_LEN) {
+      normalizedText = normalizedText.slice(0, __MATCH_MAX_LEN);
+    }
+    if (typeof matcher.regexSource === 'string') {
+      try {
+        var flags = (matcher.regexFlags || '').replace(/g/g, '');
+        var re = new RegExp(matcher.regexSource, flags);
+        re.lastIndex = 0;
+        return re.test(normalizedText);
+      } catch (_) {
+        return false;
+      }
+    }
+    if (typeof matcher.value !== 'string') return false;
+    var normalizedMatcher = __matchNormalize(matcher.value);
+    if (matcher.exact) {
+      return normalizedText === normalizedMatcher;
+    }
+    return normalizedText.toLowerCase().indexOf(normalizedMatcher.toLowerCase()) >= 0;
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -1918,6 +1958,7 @@ export const INJECTED_HELPERS = `
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
+    __match: __match,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
