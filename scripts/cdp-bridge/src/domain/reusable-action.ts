@@ -255,6 +255,9 @@ export interface RunRecord {
    * run-action orchestrator.
    */
   autoRepair?: AutoRepairOutcome;
+  /** GH #317 Phase 2: set to 'cdp-js' only when the run was replayed via the
+   *  CDP/JS fallback. Absent ⇒ maestro (healthy run-history JSON unchanged). */
+  transport?: 'cdp-js';
 }
 
 /** A single self-repair attempt (only emitted on successful repair). */
