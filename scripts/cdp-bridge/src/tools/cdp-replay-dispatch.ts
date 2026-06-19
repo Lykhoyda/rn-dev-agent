@@ -17,18 +17,35 @@ export function firstReplayTestId(bodyYaml: string, params: Record<string, strin
   }
 }
 
+// __RN_AGENT.getTree() wraps the node tree under a top-level `.tree` key —
+// `{ tree: <node> | { matches: [...] }, totalNodes, rootsSeeded }` — and the
+// interactive digest under `.interactive`. collectTestIds descends through all
+// of those container shapes so it works on the real handler payload, not only
+// on a bare node. (Boundary bug fix: treeFor used to hand the wrapper straight
+// to isExactPresent, which then saw zero testIDs and the fallback never fired.)
 export function collectTestIds(node: unknown, acc: Set<string> = new Set()): Set<string> {
   if (!node || typeof node !== 'object') return acc;
   const n = node as Record<string, unknown>;
   if (typeof n.testID === 'string') acc.add(n.testID);
   if (typeof n.nativeID === 'string') acc.add(n.nativeID);
-  const kids = n.children ?? n.interactive ?? n.nodes;
+  if (n.tree) collectTestIds(n.tree, acc);
+  const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
   if (Array.isArray(kids)) for (const c of kids) collectTestIds(c, acc);
   return acc;
 }
 
 export function isExactPresent(treeJson: unknown, selector: string): boolean {
   return collectTestIds(treeJson).has(selector);
+}
+
+// Unwrap getTree's `{ tree: <node>|{matches} }` envelope to the node(s) the
+// dispatch helpers walk. Returns the bare node for a single match, the
+// `{ matches: [...] }` wrapper for multiple, or the input unchanged when it is
+// already a node. Used at the treeFor boundary (index.ts).
+export function unwrapTree(data: unknown): unknown {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  return 'tree' in d ? d.tree : d;
 }
 
 export interface CdpReplayDeps {
@@ -47,7 +64,8 @@ function nodeProps(treeJson: unknown, id: string): Record<string, unknown> | nul
     const n = stack.pop() as Record<string, unknown> | null;
     if (n && typeof n === 'object') {
       if (n.testID === id || n.nativeID === id) return (n.props as Record<string, unknown>) ?? n;
-      const kids = n.children ?? n.interactive ?? n.nodes;
+      if (n.tree) stack.push(n.tree);
+      const kids = n.children ?? n.interactive ?? n.nodes ?? n.matches;
       if (Array.isArray(kids)) stack.push(...kids);
     }
   }

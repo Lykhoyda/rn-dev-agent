@@ -32,6 +32,7 @@ import { createExpectReduxHandler, createExpectRouteHandler, createExpectVisible
 import { createRepairActionHandler } from './tools/repair-action.js';
 import { createSaveAsActionHandler } from './tools/save-as-action.js';
 import { createRunActionHandler } from './tools/run-action.js';
+import { unwrapTree } from './tools/cdp-replay-dispatch.js';
 import { createDispatchHandler } from './tools/dispatch.js';
 import { createMmkvHandler } from './tools/mmkv.js';
 import { createDevSettingsHandler } from './tools/dev-settings.js';
@@ -159,7 +160,9 @@ const makeReplayDeps = () => {
         },
         treeFor: async (id) => {
             const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text);
-            return env.ok ? env.data : null;
+            // getTree wraps the node(s) under `.tree` — unwrap to the node/matches the
+            // oracle + dispatch walk, else isExactPresent sees zero testIDs.
+            return env.ok ? unwrapTree(env.data) : null;
         },
         launchApp: async (stopApp) => {
             const udid = await resolveIosUdid(session.deviceId);
