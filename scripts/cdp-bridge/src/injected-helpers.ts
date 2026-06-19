@@ -1139,6 +1139,43 @@ export const INJECTED_HELPERS = `
     var isLabelMatch = matchField === 'accessibilityLabel';
 
     if (!action) return JSON.stringify({ error: 'action is required' });
+
+    // Task 7 — ladder routing. When the caller passes a declarative selector
+    // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
+    // via resolveLadder then press the found fiber or its nearest onPress
+    // ancestor (walking .return). testID/accessibilityLabel keep the legacy
+    // path below unchanged (including Task 6's fail-closed truncation).
+    if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
+      var ladderResult = resolveLadder(JSON.stringify({
+        role: opts.role, name: opts.name, text: opts.text,
+        placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden
+      }));
+      var parsed = JSON.parse(ladderResult);
+      if (!parsed.found) return ladderResult;
+
+      var targetFiber = __resolveLadderFiber(opts);
+      if (!targetFiber) return JSON.stringify({ error: 'Component not found' });
+
+      var pressFiber = targetFiber;
+      while (pressFiber) {
+        var pf = pressFiber.memoizedProps;
+        if (pf && typeof pf.onPress === 'function') break;
+        pressFiber = pressFiber.return;
+      }
+      if (!pressFiber) {
+        return JSON.stringify({ error: 'Component has no onPress handler', bundle: parsed.bundle });
+      }
+      var pName = (pressFiber.type && (typeof pressFiber.type === 'string'
+        ? pressFiber.type
+        : (pressFiber.type.displayName || pressFiber.type.name))) || 'Unknown';
+      try {
+        pressFiber.memoizedProps.onPress({ nativeEvent: {} });
+        return JSON.stringify({ success: true, action: 'press', component: pName, bundle: parsed.bundle });
+      } catch (e) {
+        return JSON.stringify({ error: 'onPress threw', message: e && e.message, component: pName });
+      }
+    }
+
     if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
 
     var found = null;
@@ -1969,6 +2006,198 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ value: null, controlled: false });
   }
 
+  // Task 7 — fiber-returning twin of resolveLadder. resolveLadder serializes
+  // to JSON (no live fiber escapes); interact() needs the fiber itself to
+  // press, so it re-resolves here under the SAME predicates and returns the
+  // single match (or null when 0/>1 — interact() has already surfaced the
+  // JSON error before calling this). Uses the internal hostKind() (the
+  // public surface name is __hostKind, but inside the IIFE the function is
+  // hostKind — same as __role's own call site).
+  function __resolveLadderFiber(spec) {
+    var wantRole = typeof spec.role === 'string' ? spec.role : null;
+    var wantName = typeof spec.name === 'string' ? spec.name : null;
+    var wantText = typeof spec.text === 'string' ? spec.text : null;
+    var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
+    var includeHidden = spec.includeHidden === true;
+    var exact = spec.exact === true;
+
+    function isCand(fiber) {
+      if (wantRole !== null) {
+        if (__role(fiber) !== wantRole) return false;
+        if (wantName === null) return true;
+        var an = __accessibleName(fiber);
+        return an != null && __match(an, { value: wantName, exact: exact });
+      }
+      if (wantText !== null) {
+        if (hostKind(fiber) !== 'text') return false;
+        var tn = __accessibleName(fiber);
+        return tn != null && __match(tn, { value: wantText, exact: exact });
+      }
+      if (wantPlaceholder !== null) {
+        if (hostKind(fiber) !== 'textinput') return false;
+        var p = fiber.memoizedProps;
+        var ph = p && typeof p.placeholder === 'string' ? p.placeholder : null;
+        return ph !== null && __match(ph, { value: wantPlaceholder, exact: exact });
+      }
+      return false;
+    }
+
+    var out = [];
+    var n = 0;
+    forEachRootFiber(function (rootFiber) {
+      (function walk(node) {
+        var current = node;
+        while (current) {
+          n++;
+          if (n > 8000) return;
+          if (isCand(current) && (includeHidden || !__hidden(current))) out.push(current);
+          if (current.child) walk(current.child);
+          current = current.sibling;
+        }
+      })(rootFiber);
+      return null;
+    });
+    return out.length === 1 ? out[0] : null;
+  }
+
+  // Task 7 — declarative ladder resolver. Composes the pure helpers
+  // (__match/__role/__accessibleName/__hidden/hostKind) into byRole,
+  // byText and byPlaceholder predicates. COLLECT ALL matches across every
+  // renderer (no early return) so duplicate targets surface as Ambiguous
+  // rather than a silent pick — mirrors interact()'s label-tier ambiguous
+  // shape (:1259-1266). bundle.bounds is null in Phase 1 (no in-page
+  // measure primitive yet).
+  function resolveLadder(specJson) {
+    var spec;
+    try {
+      spec = typeof specJson === 'string' ? JSON.parse(specJson) : (specJson || {});
+    } catch (e) {
+      return JSON.stringify({ found: false, error: 'Invalid spec JSON' });
+    }
+
+    var wantRole = typeof spec.role === 'string' ? spec.role : null;
+    var wantName = typeof spec.name === 'string' ? spec.name : null;
+    var wantText = typeof spec.text === 'string' ? spec.text : null;
+    var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
+    var includeHidden = spec.includeHidden === true;
+    var exact = spec.exact === true;
+
+    function nameMatches(fiber) {
+      if (wantName === null) return true;
+      var an = __accessibleName(fiber);
+      if (an === undefined || an === null) return false;
+      return __match(an, { value: wantName, exact: exact });
+    }
+
+    // byText: a host Text node whose own text content __match-es. The text
+    // content is the inline-joined accessible name of the Text subtree.
+    function textContentMatches(fiber) {
+      var an = __accessibleName(fiber);
+      if (an === undefined || an === null) return false;
+      return __match(an, { value: wantText, exact: exact });
+    }
+
+    function placeholderOf(fiber) {
+      var p = fiber && fiber.memoizedProps;
+      return p && typeof p.placeholder === 'string' ? p.placeholder : null;
+    }
+
+    function isCandidate(fiber) {
+      if (wantRole !== null) {
+        if (__role(fiber) !== wantRole) return false;
+        return nameMatches(fiber);
+      }
+      if (wantText !== null) {
+        if (hostKind(fiber) !== 'text') return false;
+        return textContentMatches(fiber);
+      }
+      if (wantPlaceholder !== null) {
+        if (hostKind(fiber) !== 'textinput') return false;
+        var ph = placeholderOf(fiber);
+        return ph !== null && __match(ph, { value: wantPlaceholder, exact: exact });
+      }
+      return false;
+    }
+
+    var matched = [];
+    var visitCount = 0;
+
+    forEachRootFiber(function (rootFiber) {
+      (function walk(node) {
+        var current = node;
+        while (current) {
+          visitCount++;
+          if (visitCount > 8000) return;
+          if (isCandidate(current)) {
+            if (includeHidden || !__hidden(current)) matched.push(current);
+          }
+          if (current.child) walk(current.child);
+          current = current.sibling;
+        }
+      })(rootFiber);
+      return null; // collect-all — never short-circuit
+    });
+
+    function describe(fiber) {
+      var props = fiber.memoizedProps || {};
+      var dt = (fiber.type && (typeof fiber.type === 'string'
+        ? fiber.type
+        : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+      return {
+        component: dt,
+        testID: props.testID,
+        role: __role(fiber),
+        accessibleName: __accessibleName(fiber),
+      };
+    }
+
+    function hintFor() {
+      var bits = [];
+      if (wantRole !== null) bits.push('role="' + wantRole + '"');
+      if (wantName !== null) bits.push('name="' + wantName + '"');
+      if (wantText !== null) bits.push('text="' + wantText + '"');
+      if (wantPlaceholder !== null) bits.push('placeholder="' + wantPlaceholder + '"');
+      return bits.join(' ');
+    }
+
+    if (matched.length === 0) {
+      return JSON.stringify({
+        found: false,
+        error: 'Component not found',
+        hint: 'No accessible component matched ' + hintFor() +
+          (includeHidden ? '' : ' (hidden elements excluded — pass includeHidden:true to include them)') +
+          '. Use cdp_component_tree to verify it is mounted, or pass a testID.'
+      });
+    }
+
+    if (matched.length > 1) {
+      var descriptors = [];
+      for (var di = 0; di < matched.length && di < 10; di++) descriptors.push(describe(matched[di]));
+      return JSON.stringify({
+        found: false,
+        error: 'Ambiguous component match',
+        count: matched.length,
+        matches: descriptors,
+        hint: 'Add a testID'
+      });
+    }
+
+    var target = matched[0];
+    var tprops = target.memoizedProps || {};
+    var bundle = {
+      testID: tprops.testID,
+      text: hostKind(target) === 'text' ? __accessibleName(target) : undefined,
+      accessibleName: __accessibleName(target),
+      role: __role(target),
+      placeholder: placeholderOf(target) || undefined,
+      disabled: (tprops.disabled === true)
+        || (tprops['aria-disabled'] === true)
+        || !!(tprops.accessibilityState && tprops.accessibilityState.disabled),
+      bounds: null
+    };
+    return JSON.stringify({ found: true, bundle: bundle });
+  }
+
   // Port of RNTL getDefaultNormalizer (matches.ts:37-47): trim + collapse
   // whitespace runs to a single space. Does NOT lowercase — case-insensitivity
   // for non-exact string matching lives in __match's compare (RNTL matches.ts:24),
@@ -2241,6 +2470,7 @@ export const INJECTED_HELPERS = `
     getConsole: getConsole,
     clearConsole: clearConsole,
     interact: interact,
+    resolveLadder: resolveLadder,
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
