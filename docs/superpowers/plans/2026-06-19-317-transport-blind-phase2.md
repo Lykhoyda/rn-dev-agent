@@ -81,6 +81,14 @@ test('normalizeSteps throws UnsupportedStepError on an unknown step', () => {
     return true;
   });
 });
+
+test('normalizeSteps rejects malformed supported steps (never a silent "undefined" target)', () => {
+  assert.throws(() => normalizeSteps([{ tapOn: {} }], {}), UnsupportedStepError);            // missing id
+  assert.throws(() => normalizeSteps([{ tapOn: null }], {}), UnsupportedStepError);          // null value
+  assert.throws(() => normalizeSteps([{ inputText: { id: 'x' } }], {}), UnsupportedStepError); // not a string
+  assert.throws(() => normalizeSteps([{ tapOn: { id: 'a' }, extra: 1 }], {}), UnsupportedStepError); // >1 key
+  assert.throws(() => normalizeSteps([42], {}), UnsupportedStepError);                        // non-object
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -110,35 +118,53 @@ export class UnsupportedStepError extends Error {
 const interp = (s: string, p: Record<string, string>): string =>
   s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, k: string) => p[k] ?? `\${${k}}`);
 
+const asString = (x: unknown): string | null => (typeof x === 'string' ? x : null);
+const isObj = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
+
+// Validates each raw step before constructing a ReplayStep. Anything that is
+// not a non-null object with exactly one KNOWN key whose required fields are
+// present and correctly typed throws UnsupportedStepError — so a malformed
+// supported step can never coerce to a literal "undefined" target or crash.
 export function normalizeSteps(body: unknown[], params: Record<string, string>): ReplayStep[] {
   const out: ReplayStep[] = [];
   for (const raw of body) {
     if (raw === 'waitForAnimationToEnd') { out.push({ t: 'wait' }); continue; }
-    if (typeof raw === 'string') throw new UnsupportedStepError(raw);
-    const obj = raw as Record<string, unknown>;
-    const key = Object.keys(obj)[0];
-    const v = obj[key] as Record<string, unknown> | string | undefined;
+    if (!isObj(raw)) throw new UnsupportedStepError(typeof raw === 'string' ? raw : `non-object(${typeof raw})`);
+    const keys = Object.keys(raw);
+    if (keys.length !== 1) throw new UnsupportedStepError(keys.join('+') || 'empty');
+    const key = keys[0];
+    const v = raw[key];
     switch (key) {
       case 'launchApp':
-        out.push({ t: 'launch', stopApp: (v as { stopApp?: boolean })?.stopApp === true });
+        out.push({ t: 'launch', stopApp: isObj(v) && v.stopApp === true });
         break;
-      case 'tapOn':
-        out.push({ t: 'tap', id: interp(String((v as { id: string }).id), params) });
+      case 'tapOn': {
+        const id = isObj(v) ? asString(v.id) : null;
+        if (!id) throw new UnsupportedStepError('tapOn (missing string id)');
+        out.push({ t: 'tap', id: interp(id, params) });
         break;
-      case 'inputText':
-        out.push({ t: 'type', text: interp(String(v), params) });
+      }
+      case 'inputText': {
+        const text = asString(v);
+        if (text === null) throw new UnsupportedStepError('inputText (value not a string)');
+        out.push({ t: 'type', text: interp(text, params) });
         break;
-      case 'assertVisible':
-        out.push({ t: 'assert', id: interp(String((v as { id: string }).id), params) });
+      }
+      case 'assertVisible': {
+        const id = isObj(v) ? asString(v.id) : null;
+        if (!id) throw new UnsupportedStepError('assertVisible (missing string id)');
+        out.push({ t: 'assert', id: interp(id, params) });
         break;
+      }
       case 'waitForAnimationToEnd':
         out.push({ t: 'wait' });
         break;
       case 'runFlow': {
-        const rf = v as { when?: { visible?: { id?: string } }; commands?: unknown[] };
-        const id = rf.when?.visible?.id;
-        if (!id || !Array.isArray(rf.commands)) throw new UnsupportedStepError('runFlow');
-        out.push({ t: 'runFlow', whenVisible: interp(String(id), params), commands: normalizeSteps(rf.commands, params) });
+        const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
+        const commands = isObj(v) ? v.commands : undefined;
+        if (!when || !Array.isArray(commands)) throw new UnsupportedStepError('runFlow (need when.visible.id + commands[])');
+        out.push({ t: 'runFlow', whenVisible: interp(when, params), commands: normalizeSteps(commands, params) });
         break;
       }
       default:
@@ -578,21 +604,34 @@ git commit -m "feat(#317): wire CDP/JS replay fallback into cdp_run_action on tr
 
 - [ ] **Step 1: Implement `replayDeps`**
 
-In `index.ts`, build the real deps from existing handlers (call the underlying handler fns; parse their envelopes):
+In `index.ts`, build the real deps from existing handlers. Add at top: `import { execFile } from 'node:child_process'; import { promisify } from 'node:util';` (and reuse `resolveIosUdid`, already imported). Every interact call **parses the envelope and throws on `ok:false`** so a non-throwing handler failure can't yield a false pass:
 ```ts
+const execFileP = promisify(execFile);
+
+// Parse an MCP envelope; throw when the handler reported failure.
+const mustOk = (res: { content: { text: string }[] }, what: string): void => {
+  const env = JSON.parse(res.content[0].text) as { ok?: boolean; error?: string };
+  if (env.ok === false) throw new Error(`${what} failed: ${env.error ?? 'ok:false'}`);
+};
+
 const makeReplayDeps = () => {
   const session = getActiveSession();
-  if (!session || session.platform !== 'ios') return null; // iOS-only fallback
+  if (!session || session.platform !== 'ios' || !session.appId) return null; // iOS-only fallback
   const interact = createInteractHandler(getClient);
   const tree = createComponentTreeHandler(getClient);
   return {
-    pressByTestId: async (id) => { await interact({ action: 'press', testID: id }); },
-    typeByTestId: async (id, text) => { await interact({ action: 'typeText', testID: id, text }); },
-    treeFor: async (id) => {
-      const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text);
+    pressByTestId: async (id: string) => { mustOk(await interact({ action: 'press', testID: id }), `press "${id}"`); },
+    typeByTestId: async (id: string, text: string) => { mustOk(await interact({ action: 'typeText', testID: id, text }), `type "${id}"`); },
+    treeFor: async (id: string) => {
+      const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text) as { ok?: boolean; data?: unknown };
       return env.ok ? env.data : null;
     },
-    launchApp: async () => { /* simctl launch <udid> <appId> via existing helper */ },
+    launchApp: async (stopApp: boolean) => {
+      const udid = await resolveIosUdid(session.deviceId);
+      if (!udid) throw new Error('launchApp: could not resolve iOS udid');
+      if (stopApp) { try { await execFileP('xcrun', ['simctl', 'terminate', udid, session.appId!]); } catch { /* app not running — fine */ } }
+      await execFileP('xcrun', ['simctl', 'launch', udid, session.appId!]); // foregrounds (resumes JS for an already-running app)
+    },
     settle: async () => { await new Promise((r) => setTimeout(r, 400)); },
   };
 };
