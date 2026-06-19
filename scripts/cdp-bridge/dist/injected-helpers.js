@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 27;
+export const HELPERS_VERSION = 28;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -2051,6 +2051,33 @@ export const INJECTED_HELPERS = `
   // JSON error before calling this). Uses the internal hostKind() (the
   // public surface name is __hostKind, but inside the IIFE the function is
   // hostKind — same as __role's own call site).
+  // matchDeepestOnly (RNTL parity; found by live-device testing): a real RN
+  // element renders as a COMPOSITE fiber (Text/TextInput) AND its child HOST
+  // fiber (RCTText/RCTSinglelineTextInputView), both of which pass
+  // hostKind/byText/byPlaceholder — so every element would match twice and
+  // fail-close as Ambiguous on-device. Drop any match that is an ancestor (via
+  // .return) of another match, keeping the deepest. Genuinely-distinct siblings
+  // are NOT collapsed (they stay legitimately Ambiguous).
+  function __deepestOnly(arr) {
+    if (arr.length < 2) return arr;
+    var inSet = new WeakSet();
+    for (var i = 0; i < arr.length; i++) inSet.add(arr[i]);
+    var ancestor = new WeakSet();
+    for (var j = 0; j < arr.length; j++) {
+      var p = arr[j].return;
+      var guard = 0;
+      while (p && guard++ < 10000) {
+        if (inSet.has(p)) ancestor.add(p);
+        p = p.return;
+      }
+    }
+    var kept = [];
+    for (var k = 0; k < arr.length; k++) {
+      if (!ancestor.has(arr[k])) kept.push(arr[k]);
+    }
+    return kept;
+  }
+
   function __resolveLadderFiber(spec) {
     var wantRole = typeof spec.role === 'string' ? spec.role : null;
     var wantName = typeof spec.name === 'string' ? spec.name : null;
@@ -2095,7 +2122,8 @@ export const INJECTED_HELPERS = `
       })(rootFiber);
       return null;
     });
-    return out.length === 1 ? out[0] : null;
+    var dedupOut = __deepestOnly(out);
+    return dedupOut.length === 1 ? dedupOut[0] : null;
   }
 
   // Task 7 — declarative ladder resolver. Composes the pure helpers
@@ -2175,6 +2203,10 @@ export const INJECTED_HELPERS = `
       })(rootFiber);
       return null; // collect-all — never short-circuit
     });
+
+    // matchDeepestOnly: collapse composite+host fiber pairs (see __deepestOnly)
+    // so one on-device element is one match, not a false Ambiguous.
+    matched = __deepestOnly(matched);
 
     function describe(fiber) {
       var props = fiber.memoizedProps || {};
