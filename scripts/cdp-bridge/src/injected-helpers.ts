@@ -1977,6 +1977,27 @@ export const INJECTED_HELPERS = `
     return normalizedText.toLowerCase().indexOf(normalizedMatcher.toLowerCase()) >= 0;
   }
 
+  // ── Accessibility role (RNTL getRole + normalizeRole port) ──────────────
+  // Port of react-native-testing-library accessibility.ts:117-146. Order:
+  // explicit role prop → accessibilityRole (image→img) → host Text → none.
+  // Deliberately NOT the digest inferRole (defaults Pressable/Touchable to
+  // button); see gh-task3-role.test.js divergence guard.
+  function normalizeRole(role) {
+    if (role === 'image') return 'img';
+    return role;
+  }
+
+  function __role(fiber) {
+    if (!fiber) return 'none';
+    var props = fiber.memoizedProps;
+    var explicitRole = props && typeof props === 'object'
+      ? (props.role != null ? props.role : props.accessibilityRole)
+      : null;
+    if (explicitRole) return normalizeRole(String(explicitRole));
+    if (hostKind(fiber) === 'text') return 'text';
+    return 'none';
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -1998,6 +2019,7 @@ export const INJECTED_HELPERS = `
     __forEachRootFiber: forEachRootFiber,
     __match: __match,
     __hostKind: hostKind,
+    __role: __role,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
