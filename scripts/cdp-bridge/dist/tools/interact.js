@@ -1,8 +1,9 @@
 import { okResult, failResult, withConnection } from '../utils.js';
 export function createInteractHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
-        if (!args.testID && !args.accessibilityLabel) {
-            return failResult('Either testID or accessibilityLabel is required');
+        const hasLadderSelector = Boolean(args.role || args.text || args.placeholder);
+        if (!args.testID && !args.accessibilityLabel && !hasLadderSelector) {
+            return failResult('A selector is required: testID / accessibilityLabel, or a discovery-ladder selector (role / text / placeholder).');
         }
         if (args.action === 'typeText' && args.text === undefined) {
             return failResult('text parameter is required for typeText action');
@@ -35,6 +36,14 @@ export function createInteractHandler(getClient) {
             opts.shouldValidate = args.shouldValidate;
         if (args.shouldDirty !== undefined)
             opts.shouldDirty = args.shouldDirty;
+        if (args.role !== undefined)
+            opts.role = args.role;
+        if (args.placeholder !== undefined)
+            opts.placeholder = args.placeholder;
+        if (args.exact !== undefined)
+            opts.exact = args.exact;
+        if (args.includeHidden !== undefined)
+            opts.includeHidden = args.includeHidden;
         const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
         if (result.error) {
             return failResult(`Interact error: ${result.error}`);

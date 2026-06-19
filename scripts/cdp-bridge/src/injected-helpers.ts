@@ -1146,6 +1146,15 @@ export const INJECTED_HELPERS = `
     // ancestor (walking .return). testID/accessibilityLabel keep the legacy
     // path below unchanged (including Task 6's fail-closed truncation).
     if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
+      // Ladder selectors only support press in Phase 1 — fail closed for any
+      // other action instead of silently pressing (Codex review).
+      if (opts.action && opts.action !== 'press') {
+        return JSON.stringify({
+          error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
+          requestedAction: opts.action,
+          hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+        });
+      }
       var ladderResult = resolveLadder(JSON.stringify({
         role: opts.role, name: opts.name, text: opts.text,
         placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden
@@ -2096,8 +2105,8 @@ export const INJECTED_HELPERS = `
       }
       if (wantText !== null) {
         if (hostKind(fiber) !== 'text') return false;
-        var tn = __accessibleName(fiber);
-        return tn != null && __match(tn, { value: wantText, exact: exact });
+        var tn = __refTextContent(fiber);
+        return !!tn && __match(tn, { value: wantText, exact: exact });
       }
       if (wantPlaceholder !== null) {
         if (hostKind(fiber) !== 'textinput') return false;
@@ -2110,12 +2119,17 @@ export const INJECTED_HELPERS = `
 
     var out = [];
     var n = 0;
+    var lfTrunc = false;
+    var lfRoots = 0;
+    forEachRootFiber(function () { lfRoots++; return null; });
+    var lfBudget = Math.min(40000, 8000 * Math.max(1, lfRoots));
+    var lfStart = Date.now();
     forEachRootFiber(function (rootFiber) {
       (function walk(node) {
         var current = node;
         while (current) {
           n++;
-          if (n > 8000) return;
+          if (n > lfBudget || (Date.now() - lfStart) > 3000) { lfTrunc = true; return; }
           if (isCand(current) && (includeHidden || !__hidden(current))) out.push(current);
           if (current.child) walk(current.child);
           current = current.sibling;
@@ -2123,6 +2137,7 @@ export const INJECTED_HELPERS = `
       })(rootFiber);
       return null;
     });
+    if (lfTrunc) return null; // fail closed — never press a partial-walk pick
     var dedupOut = __deepestOnly(out);
     return dedupOut.length === 1 ? dedupOut[0] : null;
   }
@@ -2156,12 +2171,14 @@ export const INJECTED_HELPERS = `
       return __match(an, { value: wantName, exact: exact });
     }
 
-    // byText: a host Text node whose own text content __match-es. The text
-    // content is the inline-joined accessible name of the Text subtree.
+    // byText: a host Text node whose own visible TEXT CONTENT __match-es — NOT
+    // its accessible name (which gives accessibilityLabel/aria-label precedence
+    // over the rendered text; Codex review). Use __refTextContent (the
+    // getTextContent port); accessible names stay for byRole/name.
     function textContentMatches(fiber) {
-      var an = __accessibleName(fiber);
-      if (an === undefined || an === null) return false;
-      return __match(an, { value: wantText, exact: exact });
+      var tc = __refTextContent(fiber);
+      if (!tc) return false;
+      return __match(tc, { value: wantText, exact: exact });
     }
 
     function placeholderOf(fiber) {
@@ -2188,13 +2205,25 @@ export const INJECTED_HELPERS = `
 
     var matched = [];
     var visitCount = 0;
+    var ladderTrunc = false;
+    // Budget scales with renderer count + a wall-clock guard (mirrors the legacy
+    // findFiber path). On trip we FAIL CLOSED instead of evaluating a partial
+    // match set (Codex review: a duplicate past the cap could otherwise leave
+    // matched.length===1 and silently press the wrong element).
+    var ladderRoots = 0;
+    forEachRootFiber(function () { ladderRoots++; return null; });
+    var ladderBudget = Math.min(40000, 8000 * Math.max(1, ladderRoots));
+    var ladderStart = Date.now();
 
     forEachRootFiber(function (rootFiber) {
       (function walk(node) {
         var current = node;
         while (current) {
           visitCount++;
-          if (visitCount > 8000) return;
+          if (visitCount > ladderBudget || (Date.now() - ladderStart) > 3000) {
+            ladderTrunc = true;
+            return;
+          }
           if (isCandidate(current)) {
             if (includeHidden || !__hidden(current)) matched.push(current);
           }
@@ -2204,6 +2233,16 @@ export const INJECTED_HELPERS = `
       })(rootFiber);
       return null; // collect-all — never short-circuit
     });
+
+    if (ladderTrunc) {
+      return JSON.stringify({
+        found: false,
+        error: 'Resolution truncated',
+        truncated: true,
+        scanned: visitCount,
+        hint: 'Too many fibers scanned before a unique match — scope with a more specific selector or a container, or add a testID.'
+      });
+    }
 
     // matchDeepestOnly: collapse composite+host fiber pairs (see __deepestOnly)
     // so one on-device element is one match, not a false Ambiguous.
@@ -2257,7 +2296,7 @@ export const INJECTED_HELPERS = `
     var tprops = target.memoizedProps || {};
     var bundle = {
       testID: tprops.testID,
-      text: hostKind(target) === 'text' ? __accessibleName(target) : undefined,
+      text: hostKind(target) === 'text' ? __refTextContent(target) : undefined,
       accessibleName: __accessibleName(target),
       role: __role(target),
       placeholder: placeholderOf(target) || undefined,

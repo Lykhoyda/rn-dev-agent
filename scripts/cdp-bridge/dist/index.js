@@ -666,14 +666,33 @@ trackedTool('cdp_interact', 'Interact with React components by testID (preferred
         .string()
         .optional()
         .describe('accessibilityLabel prop (used if testID not provided). Tiered match: exact → normalized (trim+lowercase) → substring. Returns Ambiguous error if >1 component matches.'),
-    text: z.string().optional().describe('Required for typeText: the text to enter'),
+    text: z
+        .string()
+        .optional()
+        .describe('For typeText: the text to enter. For the discovery ladder (no testID/accessibilityLabel, action:"press"): byText — match a host Text by its visible text content.'),
+    role: z
+        .string()
+        .optional()
+        .describe('Discovery ladder (press-only): match by accessibility role (e.g. button, tab, link). Combine with `name` for the accessible name. Needs an explicit accessibilityRole — Pressables without one resolve as role "none".'),
+    placeholder: z
+        .string()
+        .optional()
+        .describe('Discovery ladder (press-only): match a TextInput by its placeholder text.'),
+    exact: z
+        .boolean()
+        .optional()
+        .describe('Discovery ladder: require an exact (full-string) match for text/name/placeholder instead of case-insensitive substring.'),
+    includeHidden: z
+        .boolean()
+        .optional()
+        .describe('Discovery ladder: include accessibility-hidden elements (excluded by default).'),
     scrollX: z.number().optional().describe('For scroll: horizontal offset in pixels (default 0)'),
     scrollY: z.number().optional().describe('For scroll: vertical offset in pixels (default 300)'),
     animated: z.boolean().default(true).describe('For scroll: whether to animate'),
     name: z
         .string()
         .optional()
-        .describe('Required for setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">).'),
+        .describe('For setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">). For the discovery ladder with `role`: the accessible name to match (e.g. role:"button" + name:"Save").'),
     value: z
         .union([z.string(), z.number(), z.boolean()])
         .optional()
