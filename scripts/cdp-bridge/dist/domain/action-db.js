@@ -106,6 +106,15 @@ export function openActionDb(projectRoot, opts = {}) {
             insertRunRecord(actionId, record) {
                 db.exec('BEGIN IMMEDIATE');
                 try {
+                    // Idempotent guard: a just-migrated sidecar already holds this record,
+                    // so skip the append when a row for (action_id, ts) is already present.
+                    const dup = db
+                        .prepare('SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1')
+                        .get(actionId, record.timestamp);
+                    if (dup) {
+                        db.exec('COMMIT');
+                        return;
+                    }
                     db.prepare(`INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
                 transport, auto_repair_json, duration_ms)
@@ -129,6 +138,15 @@ export function openActionDb(projectRoot, opts = {}) {
             insertRepairRecord(actionId, record) {
                 db.exec('BEGIN IMMEDIATE');
                 try {
+                    // Idempotent guard (see insertRunRecord): skip when a row for
+                    // (action_id, ts) already exists — the migration-boundary overlap.
+                    const dup = db
+                        .prepare('SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1')
+                        .get(actionId, record.timestamp);
+                    if (dup) {
+                        db.exec('COMMIT');
+                        return;
+                    }
                     db.prepare(`INSERT INTO repair_records
                (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
              VALUES (?,?,?,?,?,?)`).run(actionId, record.timestamp, record.failureCode, JSON.stringify(record.diff ?? {}), record.durationMs, record.agentReasoning ?? null);

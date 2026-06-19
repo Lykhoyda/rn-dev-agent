@@ -132,8 +132,12 @@ export function persist(args) {
  * `projectRoot` through directly.
  *
  * The index row is upserted (COALESCE semantics — omitted meta preserves
- * priors); a supplied run/repair record is APPENDED (never re-syncs whole
- * history — that would duplicate rows).
+ * priors); a supplied run/repair record is APPENDED idempotently. The append
+ * is a no-op when a row for `(action_id, ts)` already exists — this absorbs the
+ * migration-boundary overlap: `dbFor()` lazily runs `migrateSidecars()` on the
+ * first open, importing the authoritative sidecar history (which, in the
+ * saveSidecar-first ordering, already contains the record this mirror is about
+ * to append), so a naive append would double-count the newest record.
  */
 export function mirrorToDb(opts) {
     const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;

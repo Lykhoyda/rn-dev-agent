@@ -389,6 +389,44 @@ test('recentRepairCount returns count within window and 0 outside', () => {
   handle.close();
 });
 
+// T2: a failing RunRecord with BOTH failureCode AND failureDetail round-trips.
+test('loadState round-trips a fail RunRecord with failureCode + failureDetail', () => {
+  if (!loadSqlite()) return;
+  const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t2i-'));
+  const handle = openActionDb(root);
+  assert.ok(handle);
+
+  handle.upsertIndex('fail-detail', {
+    status: 'active',
+    revision: 1,
+    statsJson: '{}',
+    mtimeBaseline: 0,
+  });
+
+  handle.insertRunRecord('fail-detail', {
+    timestamp: '2026-06-19T00:03:00Z',
+    durationMs: 900,
+    status: 'fail',
+    trigger: 'agent',
+    failureCode: 'SELECTOR_NOT_FOUND',
+    failureDetail: 'tapOn id "sign-in" not found on the live snapshot',
+  });
+
+  const loaded = handle.loadState('fail-detail');
+  assert.ok(loaded);
+  assert.equal(loaded.runHistory.length, 1);
+  const rec = loaded.runHistory[0];
+  assert.equal(rec.status, 'fail');
+  assert.equal(rec.failureCode, 'SELECTOR_NOT_FOUND', 'failureCode must round-trip');
+  assert.equal(
+    rec.failureDetail,
+    'tapOn id "sign-in" not found on the live snapshot',
+    'failureDetail must round-trip',
+  );
+
+  handle.close();
+});
+
 test('loadState transport field: only set to cdp-js when column value is cdp-js', () => {
   if (!loadSqlite()) return;
   const root = mkdtempSync(join(tmpdir(), 'rn-actiondb-t2h-'));

@@ -185,6 +185,181 @@ test('a forced mirror failure does not break the authoritative sidecar write or 
   closeActionStoresForTest();
 });
 
+// ─── I1: migration-boundary double-count — append is idempotent on (id, ts) ──
+// Repro of the exact dual-write ordering bug: saveSidecar runs FIRST so the
+// sidecar already contains run1+run2 before mirrorToDb runs. The first
+// mirror call opens the DB, which lazily migrates the sidecar (importing
+// run1+run2), THEN appends run2 again. The idempotent (action_id, ts) guard
+// must make that append a no-op so the DB faithfully holds 2 rows, not 3.
+function seedSidecar(root, id, sidecar) {
+  const stateDir = join(root, '.rn-agent', 'state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, `${id}.state.json`), JSON.stringify(sidecar));
+}
+
+test('I1: migrated sidecar + record-bearing mirror does NOT double-count the newest run/repair', () => {
+  closeActionStoresForTest();
+  if (!loadSqlite()) return;
+  const { root, yaml, id } = freshProject('migrate-dedupe');
+  __setSqliteCtorForTest(loadSqlite());
+
+  const run1 = {
+    timestamp: '2026-06-19T00:01:00Z',
+    durationMs: 100,
+    status: 'pass',
+    trigger: 'agent',
+  };
+  const run2 = {
+    timestamp: '2026-06-19T00:02:00Z',
+    durationMs: 200,
+    status: 'pass',
+    trigger: 'agent',
+  };
+  const repair1 = {
+    timestamp: '2026-06-19T00:01:30Z',
+    failureCode: 'SELECTOR_NOT_FOUND',
+    diff: { selector: { from: 'a', to: 'b', score: 0.9 } },
+    durationMs: 50,
+  };
+  const repair2 = {
+    timestamp: '2026-06-19T00:02:30Z',
+    failureCode: 'SELECTOR_NOT_FOUND',
+    diff: { selector: { from: 'c', to: 'd', score: 0.8 } },
+    durationMs: 60,
+  };
+
+  // The authoritative sidecar already holds BOTH run records and BOTH repair
+  // records (saveSidecar-first ordering) before the mirror runs.
+  seedSidecar(root, id, {
+    schemaVersion: 1,
+    revision: 2,
+    updatedAt: '2026-06-19T00:02:00Z',
+    lastSeenMtimeMs: 1,
+    runHistory: [run1, run2],
+    repairHistory: [repair1, repair2],
+    stats: { totalRuns: 2, successCount: 2, failureCount: 0, avgDurationMs: 150 },
+  });
+
+  // First record-bearing mirror: dbFor() lazily migrates run1+run2 / repair1+repair2,
+  // then this call appends run2 + repair2 again — the idempotent guard must drop them.
+  mirrorToDb({
+    yamlFilePath: yaml,
+    state: {
+      schemaVersion: 1,
+      revision: 2,
+      updatedAt: '2026-06-19T00:02:00Z',
+      lastSeenMtimeMs: 1,
+      runHistory: [run1, run2],
+      repairHistory: [repair1, repair2],
+      stats: { totalRuns: 2, successCount: 2, failureCount: 0, avgDurationMs: 150 },
+    },
+    newRunRecord: run2,
+    newRepairRecord: repair2,
+    meta: { appId: 'com.x', status: 'active' },
+  });
+
+  let probe = openActionDb(root);
+  let runRows = probe.db
+    .prepare('SELECT ts FROM run_records WHERE action_id = ? ORDER BY id ASC')
+    .all(id);
+  let repairRows = probe.db
+    .prepare('SELECT ts FROM repair_records WHERE action_id = ? ORDER BY id ASC')
+    .all(id);
+  probe.close();
+
+  assert.equal(runRows.length, 2, 'run_records must equal the authoritative count (2), NOT 3');
+  assert.deepEqual(
+    runRows.map((r) => r.ts),
+    [run1.timestamp, run2.timestamp],
+    'no duplicate run ts at the migration boundary',
+  );
+  assert.equal(
+    repairRows.length,
+    2,
+    'repair_records must equal the authoritative count (2), NOT 3',
+  );
+  assert.deepEqual(
+    repairRows.map((r) => r.ts),
+    [repair1.timestamp, repair2.timestamp],
+    'no duplicate repair ts at the migration boundary',
+  );
+
+  // A SECOND distinct persist (a genuinely new run3) appends normally → 3 rows, each once.
+  const run3 = {
+    timestamp: '2026-06-19T00:03:00Z',
+    durationMs: 300,
+    status: 'pass',
+    trigger: 'agent',
+  };
+  mirrorToDb({
+    yamlFilePath: yaml,
+    state: {
+      schemaVersion: 1,
+      revision: 3,
+      updatedAt: '2026-06-19T00:03:00Z',
+      lastSeenMtimeMs: 1,
+      runHistory: [run1, run2, run3],
+      repairHistory: [repair1, repair2],
+      stats: { totalRuns: 3, successCount: 3, failureCount: 0, avgDurationMs: 200 },
+    },
+    newRunRecord: run3,
+    meta: { appId: 'com.x', status: 'active' },
+  });
+
+  probe = openActionDb(root);
+  runRows = probe.db
+    .prepare('SELECT ts FROM run_records WHERE action_id = ? ORDER BY id ASC')
+    .all(id);
+  probe.close();
+  assert.equal(runRows.length, 3, 'a distinct new run appends (3 rows)');
+  assert.deepEqual(
+    runRows.map((r) => r.ts),
+    [run1.timestamp, run2.timestamp, run3.timestamp],
+    'each run ts present exactly once after the distinct append',
+  );
+
+  closeActionStoresForTest();
+});
+
+// ─── I1 control: a FRESH action (no legacy sidecar) appends normally ─────────
+test('I1 control: fresh action with no legacy sidecar appends each run/repair once', () => {
+  closeActionStoresForTest();
+  if (!loadSqlite()) return;
+  const { root, yaml, id } = freshProject('fresh-append');
+  __setSqliteCtorForTest(loadSqlite());
+  // No seedSidecar — there is nothing for migrateSidecars to import.
+
+  const s0 = freshRuntimeState(() => new Date(), 0);
+  const runA = makeRunRecord({ timestamp: '2026-06-19T01:00:00Z', durationMs: 11 });
+  const runB = makeRunRecord({ timestamp: '2026-06-19T01:01:00Z', durationMs: 22 });
+
+  mirrorToDb({
+    yamlFilePath: yaml,
+    state: { ...s0, revision: 1, runHistory: [runA] },
+    newRunRecord: runA,
+    meta: { appId: 'com.x', status: 'active' },
+  });
+  mirrorToDb({
+    yamlFilePath: yaml,
+    state: { ...s0, revision: 2, runHistory: [runA, runB] },
+    newRunRecord: runB,
+    meta: { appId: 'com.x', status: 'active' },
+  });
+
+  const probe = openActionDb(root);
+  const runRows = probe.db
+    .prepare('SELECT ts FROM run_records WHERE action_id = ? ORDER BY id ASC')
+    .all(id);
+  probe.close();
+  assert.deepEqual(
+    runRows.map((r) => r.ts),
+    [runA.timestamp, runB.timestamp],
+    'fresh action: each distinct run appended exactly once',
+  );
+
+  closeActionStoresForTest();
+});
+
 // ─── #117 CAS conflict is preserved: the mirror never masks a conflict ───────
 test('#117: a CAS conflict is still returned (mirror does not convert it to a success)', () => {
   closeActionStoresForTest();

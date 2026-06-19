@@ -39,11 +39,20 @@ export interface ActionDb {
   /**
    * INSERT one run record then trim to HISTORY_LIMITS.RUN_HISTORY_MAX (50).
    * Executed in a single BEGIN IMMEDIATE transaction; rolls back on error.
+   *
+   * IDEMPOTENT: skips the insert when a row already exists for `(actionId, ts)`
+   * — this is the mirror's only guard against the migration-boundary
+   * double-count (a just-migrated sidecar already holds the record the mirror
+   * is about to append). Timestamps are ISO-ms; a same-ms collision between
+   * two genuinely distinct run events is implausible and acceptable for a mirror.
    */
   insertRunRecord(actionId: string, record: RunRecord): void;
   /**
    * INSERT one repair record then trim to HISTORY_LIMITS.REPAIR_HISTORY_MAX (25).
    * Executed in a single BEGIN IMMEDIATE transaction; rolls back on error.
+   *
+   * IDEMPOTENT: skips the insert when a row already exists for `(actionId, ts)`
+   * (same migration-boundary guard as `insertRunRecord`).
    */
   insertRepairRecord(actionId: string, record: RepairRecord): void;
   /**
@@ -189,6 +198,15 @@ export function openActionDb(
       insertRunRecord(actionId: string, record: RunRecord): void {
         db.exec('BEGIN IMMEDIATE');
         try {
+          // Idempotent guard: a just-migrated sidecar already holds this record,
+          // so skip the append when a row for (action_id, ts) is already present.
+          const dup = db
+            .prepare('SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1')
+            .get(actionId, record.timestamp);
+          if (dup) {
+            db.exec('COMMIT');
+            return;
+          }
           db.prepare(
             `INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
@@ -226,6 +244,15 @@ export function openActionDb(
       insertRepairRecord(actionId: string, record: RepairRecord): void {
         db.exec('BEGIN IMMEDIATE');
         try {
+          // Idempotent guard (see insertRunRecord): skip when a row for
+          // (action_id, ts) already exists — the migration-boundary overlap.
+          const dup = db
+            .prepare('SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1')
+            .get(actionId, record.timestamp);
+          if (dup) {
+            db.exec('COMMIT');
+            return;
+          }
           db.prepare(
             `INSERT INTO repair_records
                (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
