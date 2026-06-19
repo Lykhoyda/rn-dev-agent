@@ -245,6 +245,8 @@ export type ToolErrorCode =
   | 'RUNNER_LEAK'
   // GH #317: rn-fast-runner sees the selector but Maestro/WDA reported it not visible (empty a11y tree).
   | 'TRANSPORT_BLIND'
+  // GH #317 Phase 2
+  | 'UNSUPPORTED_STEP'
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
