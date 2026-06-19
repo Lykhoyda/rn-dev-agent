@@ -58,7 +58,18 @@ never silently empty) and to gain a **structured store with queryable history**.
   (delete `.db`, reconcile).
 - A new `domain/action-db.ts` wraps `node:sqlite` behind a narrow interface and **feature-detects** at
   open. If `node:sqlite` is unavailable, it returns a fallback that keeps reading/writing the legacy
-  sidecars so **actions never break**.
+  sidecars so **actions never break**. (The wrapper loads `node:sqlite` via
+  `createRequire(import.meta.url)` — the bridge builds to **ESM** (`"type":"module"`), so a bare
+  `require` is undefined and a static `import 'node:sqlite'` throws un-catchably without the flag.)
+
+- **Phase 1 is purely additive (post-review amendment).** The multi-LLM plan review (2026-06-19) showed
+  that retiring sidecar writes before `reconcile()` exists would make deleting the gitignored DB — the
+  documented recovery — *silently lose history*, and that the real load/save chokepoint is
+  `domain/action-store.ts`, not the tool files. So in **Phase 1 the JSON sidecars remain the
+  authoritative read/write path** and the DB is written as a **mirror** (dual-write) and exposed
+  **read-only** for the structured index + history + `cdp_status`. **Phase 2** flips authority to the DB,
+  adds `reconcile()`, and retires sidecar writes. This keeps Phase 1 net-safe (no split-brain, no loss,
+  #101 pair-write preserved) while still delivering a populated, queryable structured store.
 
 ```
 SOURCE OF TRUTH:  .rn-agent/actions/*.yaml   (git-tracked)
@@ -87,11 +98,21 @@ Existing domain modules already provide clean seams:
   (see §12).
 - **`cdp_status`** — new field `actionStore: 'sqlite' | 'legacy-files' | 'degraded'` so the active mode
   is visible before any action call.
-- **Supervisor** (`dist/supervisor.js`) — spawns the worker with `--experimental-sqlite` in the worker
-  `execArgv` (it controls that spawn), so `node:sqlite` is enabled on Node 22.5+ without relying on the
-  user's launch flags.
+- **Supervisor** (`dist/supervisor.js`) — spawns the worker with `--experimental-sqlite` via a
+  version-gated `sqliteFlagForNode()` (§8) in the worker spawn args (it controls that spawn), so
+  `node:sqlite` is enabled where it needs the flag without relying on the user's launch flags. The
+  `workerSpawnArgs()` builder lives in a side-effect-free module so it is unit-testable without
+  importing the supervisor's top-level (which spawns a worker / takes the lock).
 
 ## 6. Data model
+
+> **Post-review amendment.** Stats are stored **explicitly** (a `stats_json` column or discrete
+> columns) — they must NOT be recomputed from `run_records`, because `appendRunRecord` tracks a
+> *cumulative* `totalRuns` while `runHistory` is capped at `HISTORY_LIMITS.RUN_HISTORY_MAX` (50);
+> recomputing would collapse `totalRuns` to ≤ 50. `run_records.failure_detail` is preserved (the plan
+> draft dropped it). `id`/`ts` types are reconciled below (autoincrement INTEGER PK, ISO-string `ts`).
+> A state-only save must **not** null `app_id`/`path`/`content_hash`/`status` — use `COALESCE`/partial
+> upsert so a save without `meta` preserves prior metadata.
 
 ```sql
 actions_index(
@@ -101,17 +122,20 @@ actions_index(
   content_hash  TEXT,               -- hash of YAML body (drift / reconcile key)
   status        TEXT,               -- experimental | active
   revision      INTEGER,
+  stats_json    TEXT,               -- ActionStats (cumulative; NOT recomputed from capped history)
   created_at    INTEGER,
   updated_at    INTEGER,
   mtime_baseline INTEGER            -- the #101 human-edit baseline
 );
 run_records(
-  id            TEXT PRIMARY KEY,
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
   action_id     TEXT REFERENCES actions_index(id),
-  ts            INTEGER,
-  trigger       TEXT,               -- agent | ci
-  verdict       TEXT,               -- passed | failed | empty | ...
-  transport     TEXT,               -- maestro | cdp-js
+  ts            TEXT,               -- ISO-8601 (matches RunRecord.timestamp)
+  trigger       TEXT,               -- agent | ci | human
+  status        TEXT,               -- pass | fail (matches RunRecord.status)
+  failure_code  TEXT,
+  failure_detail TEXT,              -- preserved (was dropped in the plan draft)
+  transport     TEXT,               -- cdp-js | NULL (maestro)
   auto_repair_json TEXT,            -- embedded auto-repair telemetry
   duration_ms   INTEGER
 );
@@ -144,13 +168,21 @@ instead of scanning a sidecar.
 ## 8. Migration + graceful degradation
 
 - **Migration:** first DB open imports existing per-action JSON sidecars (RunRecords / RepairRecords /
-  status / revision / mtime_baseline) into the tables. Legacy sidecars are kept read-only as a safety
-  net for one release, then removable.
-- **Graceful degradation:** if `node:sqlite` cannot load (Node < 22.5, flag unavailable, or load error),
-  `action-db.ts` returns a fallback that operates from YAML + legacy sidecars and **never throws**;
-  `cdp_status.actionStore` reports `degraded` (or `legacy-files`). Actions keep working without the DB.
-- **engines:** bump `scripts/cdp-bridge/package.json` to `node >=22.5.0`; document the experimental-API
-  risk and the degraded path in CLAUDE.md / docs.
+  status / revision / mtime_baseline) into the tables. In Phase 1, sidecars stay authoritative and are
+  mirrored to the DB on every save; Phase 2 makes the DB authoritative and retires sidecar writes.
+- **Graceful degradation:** if `node:sqlite` cannot load (Node < 22.5, flag unavailable on
+  22.5–23.5, or load error), `action-db.ts` returns a fallback that operates from the legacy sidecars
+  and **never throws**. `cdp_status.actionStore` reports a **three-way** state via a *read-only*
+  detector (must not open/migrate the DB as a side effect): `sqlite` | `legacy-files` |
+  `degraded:<reason>` (`sqlite-unavailable` vs `open-failed`).
+- **engines (post-review amendment): keep `node >=22.5` floor? No — keep `>=22`.** Raising the floor
+  to `>=22.5` would strand Node 22.0–22.4 users *before* they reach the degraded path, defeating the
+  point of graceful degradation. The floor stays **`>=22`**; degraded mode is the contract on older
+  patch lines. The worker gets `--experimental-sqlite` only on the versions that need it via a
+  version-gated `sqliteFlagForNode()` (flag on 22.5–23.5; no-op on Node ≥ 23.6 where it is on by
+  default; omitted on < 22.5 where the module is absent and we degrade). The `RN_BRIDGE_SUPERVISOR=0`
+  in-process path (launched without the flag) must degrade cleanly — verified by test. Bump
+  `@types/node` to `^22.5`/`^24` (currently `^20`, predating the `node:sqlite` type declarations).
 
 ## 9. Testing (TDD)
 
@@ -167,41 +199,44 @@ All **source** is TypeScript (see §12). Test files follow the established `node
 
 ## 10. Decomposition / phasing
 
-- **Phase 1 PR** — DB layer (`action-db.ts`) + sidecar→DB migration + `node:sqlite` feature-detect /
-  degraded mode + `cdp_status.actionStore` + redirect `appendRunRecord` / repair-budget reads to the DB.
-  Delivers the **structured store + history** goal.
-- **Phase 2 PR** (stacked) — `reconcile()` loud diagnostics + the #348/#357 resolution guard. Delivers
-  the **never lost / never unfound** goal and **subsumes #357**.
+- **Phase 1 PR (additive — net-safe)** — DB layer (`action-db.ts`, ESM `createRequire` loader,
+  append+trim writes in `BEGIN IMMEDIATE` with `PRAGMA busy_timeout` + WAL, explicit stats) + one-time
+  sidecar→DB migration + version-gated `node:sqlite` feature-detect / degraded mode + read-only
+  `cdp_status.actionStore` (3-way). **`domain/action-store.ts` is made store-aware** (the real
+  `loadAction`/`saveAction`/`saveActionWithCAS`/`acknowledgeExternalEdit` chokepoint — NOT just the
+  three tool files), and in this phase it **dual-writes**: sidecars stay authoritative, the DB is a
+  mirror + read surface. Delivers the **structured store + history** goal without regressing the loss
+  surface. Engines floor stays `>=22`.
+- **Phase 2 PR** (stacked) — flip authority to the DB, add `reconcile()` loud diagnostics + DB-CAS
+  concurrency semantics, retire sidecar writes, and add the #348/#357 resolution guard. Delivers the
+  **never lost / never unfound** goal and **subsumes #357**.
 - **#356** (keyboard occlusion) — separate, smaller spec; resume after this is settled.
 
 ## 11. Open risks
 
 - `node:sqlite` is experimental; API churn across Node minors is possible. Mitigated by the narrow
   `action-db.ts` wrapper (one place to adapt) and the degraded fallback.
-- Raising the engines floor to `>=22.5` may strand users on 22.0–22.4 LTS patch lines; they land in
-  `degraded` mode (no DB, YAML still works) rather than breaking — acceptable.
-- Transactional consistency between the YAML write and the DB upsert must preserve the #101 guarantee
-  (no half-written action). The wrapper performs the YAML write first (durable artifact), then the DB
-  upsert; a failed upsert leaves a valid YAML that `reconcile()` re-ingests on next open.
+- Engines floor stays `>=22`; 22.0–22.4 (and any environment where `node:sqlite` won't load) land in
+  `degraded` mode (no DB, sidecars still work) rather than breaking.
+- Transactional consistency: in Phase 1 the sidecar pair-write (#101) is unchanged and authoritative;
+  the DB mirror is written after it. A failed DB mirror leaves the authoritative sidecar intact (logged,
+  never thrown); the one-time migration / Phase 2 `reconcile()` re-ingests on next open. Phase 2's flip
+  to DB-authoritative is where the YAML-then-DB ordering + `reconcile()` re-ingest becomes load-bearing.
 
 ## 12. Language conventions
 
 - **All source is TypeScript.** New modules (`domain/action-db.ts`, the inventory/index read path) are
   `.ts` under `scripts/cdp-bridge/src/`, consistent with the rest of the bridge. No new `.js` / `.mjs`
   source is introduced. Use explicit type imports (`import type { ... }`).
-- **`scripts/learned-actions.mjs` → TypeScript.** This standalone module (invoked directly by node from
-  `/list-learned-actions`, `/run-action`, and the agents' Step-0 scans) is migrated off `.mjs`. It is
-  *not* part of the compiled `dist/` bundle today, so the migration must pick a run mechanism:
-  - **Recommended:** run the `.ts` directly via Node type-stripping (`--experimental-strip-types`,
-    Node 22.6+). The engines floor is already rising to `>=22.5` for `node:sqlite`; bumping the
-    *invocation* requirement to 22.6 for this script (or stripping-by-default on 23.6+) is a small,
-    consistent step. The slash-command/agent invocations are updated to pass the flag (or rely on
-    default stripping) when launching the script.
-  - **Alternative:** compile the module into `dist/` as part of the existing build and invoke the
-    built output from the commands/agents. Avoids the runtime flag but adds a second consumer of the
-    build and an indirection from `scripts/` → `dist/`.
-  - The chosen mechanism is settled in the implementation plan; either way the public behavior
-    (the inventory it returns) is unchanged and must keep working in `degraded` mode.
+- **`scripts/learned-actions.mjs` → TypeScript (post-review amendment: compile-to-`dist`).** This
+  standalone module is invoked directly by node from `/list-learned-actions`, `/run-action`, and the
+  agents' Step-0 scans. The plan-review rejected runtime type-stripping: `--experimental-strip-types`
+  needs Node **22.6** (the engines floor is staying `>=22`), and type-stripping does **not** rewrite
+  `./x.js` → `.ts` import specifiers, so a standalone `.ts` that imports sibling source would fail to
+  resolve. **Decision:** author the module as `.ts` under `scripts/cdp-bridge/src/` and **compile it
+  into `dist/`** as part of the existing build; the slash-command/agent invocations call the built
+  `dist/` JS. No runtime flag, no engines bump for this script. Public behavior (the inventory it
+  returns) is unchanged. A behavioral-parity test guards the port.
 - **Tests** stay `.js` under `test/unit/**/*.test.js` (the `node:test` convention the #340 CI globs
   execute) — this is the one intentional exception to "source is TypeScript", since they are the test
   harness, not shipped source.

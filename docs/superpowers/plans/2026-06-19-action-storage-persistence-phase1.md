@@ -10,14 +10,62 @@
 
 ## Global Constraints
 
-- Node engines floor: **`>=22.5.0`** (was `>=22`).
-- Worker process must run with **`--experimental-sqlite`** (supervisor passes it; on Node ≥ 23.6 it is a no-op default-on).
-- **Zero new npm dependencies** — `node:sqlite` is built-in. No native addons.
+- Node engines floor: **stays `>=22`** (amended — see Amendments A4). Degraded mode is the contract on Node < 22.5.
+- Build is **ESM** (`package.json` `"type":"module"`, tsconfig `Node16`). Load `node:sqlite` via `createRequire(import.meta.url)`, never a bare `require` or a static `import` (Amendments A1).
+- Worker gets **`--experimental-sqlite` only on Node 22.5–23.5** via a version-gated helper; on ≥ 23.6 it's default-on; on < 22.5 the module is absent → degrade (Amendments A4).
+- **Zero new npm dependencies** — `node:sqlite` is built-in. No native addons. Bump `@types/node` `^20` → `^22.5`/`^24` (Amendments A1).
 - **All source is TypeScript**; explicit type imports (`import type { ... }`); no unnecessary comments.
-- Test files stay **`.js`** under `test/unit/**/*.test.js` (the `node:test` convention CI runs as of #340).
-- The DB is **derived and rebuildable** from YAML + sidecars; never the source of truth.
+- Test files stay **`.js`** under `test/unit/**/*.test.js`, written with **ESM `import`** (not `require` — the package is ESM) (Amendments A7).
+- The DB is **derived and rebuildable**; never the source of truth. **Phase 1 dual-writes** (sidecars authoritative, DB mirror) — see Amendments A2/A3.
 - A failure to open/use the DB must **never throw** to a tool caller — degrade to legacy files.
 - Add a **changeset** (`rn-dev-agent-cdp`, minor) — this changes shippable `scripts/cdp-bridge/src/`.
+
+> ## ⚠️ Amendments applied from the multi-LLM plan review (2026-06-19) — READ FIRST
+>
+> The Claude Opus + Codex plan review returned a **no-ship-as-is** verdict. The tasks below are
+> retained for structure, but the following amendments **override** them where they conflict. Execute
+> the amended behavior.
+>
+> - **A1 (P0 — Task 1): ESM loader + types.** The build is ESM, so `require('node:sqlite')` is
+>   `undefined` and the feature would ship **silently dead**. Use
+>   `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);` at
+>   module top, keep the `try/catch`. Do **not** use a static `import 'node:sqlite'` (un-catchable
+>   throw without the flag). Bump `@types/node` to `^22.5`/`^24` (currently `^20`, no sqlite types).
+>   Add a CI assertion that `loadSqlite()` is **non-null on Node 24** so a regression fails loudly
+>   instead of silently skipping (the `if (!loadSqlite()) return` guards must not hide it everywhere).
+> - **A2 (P0 — overrides Tasks 4+5): the seam is `domain/action-store.ts`, not the tool files.**
+>   `loadAction` (`action-store.ts:158`) reads the sidecar; `saveAction`/`saveActionWithCAS`/
+>   `acknowledgeExternalEdit` write it. Wiring only the three tool files leaves **reads on stale
+>   sidecars while writes go to the DB** (split-brain → broken repair guards/promotion/#117 CAS). Make
+>   `action-store.ts` itself store-aware and route its load/save through the facade. Port the existing
+>   #101/#117 tests to confirm no regression.
+> - **A3 (P0 — overrides Task 4 `saveState`): Phase 1 dual-writes; sidecars stay authoritative.**
+>   Retiring sidecar writes before Phase 2's `reconcile()` exists would make deleting the gitignored DB
+>   (the documented recovery) **silently lose history**. In Phase 1: keep the #101 sidecar pair-write
+>   as authoritative, then **mirror** to the DB (best-effort, logged-not-thrown on failure). The DB is
+>   read-only-surfaced for `cdp_status` + structured history. Phase 2 flips authority.
+> - **A4 (P1 — overrides Task 7): keep `engines >=22`; version-gate the flag.** Raising to `>=22.5`
+>   strands 22.0–22.4 *before* they degrade. Keep `>=22`. Add
+>   `sqliteFlagForNode(version=process.versions.node): string[]` returning `['--experimental-sqlite']`
+>   only for 22.5 ≤ v < 23.6, else `[]`. Verify the `RN_BRIDGE_SUPERVISOR=0` in-process path (no flag)
+>   degrades without throwing.
+> - **A5 (P1 — overrides Task 2 `saveState`/schema): append-and-trim, not delete-all; explicit stats.**
+>   Use `insertRunRecord`/`insertRepairRecord` that INSERT one row + trim to `HISTORY_LIMITS` inside
+>   `BEGIN IMMEDIATE`; set `PRAGMA busy_timeout=5000` and `PRAGMA journal_mode=WAL` at open. Store
+>   `ActionStats` **explicitly** (`stats_json` column) — do NOT recompute from `run_records` (capped
+>   history would collapse cumulative `totalRuns` to ≤ 50). Preserve `failure_detail`. On a state-only
+>   save with no `meta`, **COALESCE** so `app_id`/`path`/`content_hash`/`status` are not nulled.
+> - **A6 (P1 — overrides Task 8): compile learned-actions to `dist/`, not strip-types.**
+>   `--experimental-strip-types` needs 22.6 (floor stays 22) and won't resolve `./x.js`→`.ts`. Author
+>   `scripts/cdp-bridge/src/learned-actions.ts`, compile into `dist/` via the existing build, and point
+>   the slash-command/agent invocations at the built JS. Guard with a behavioral-parity test.
+> - **A7 (P2): read-only status + 3-way; ESM tests; dbCache lifecycle; drop redundant gitignore.**
+>   `storeMode()` must **not** open/migrate the DB (read-only detector) and returns
+>   `sqlite | legacy-files | degraded:<sqlite-unavailable|open-failed>`. Write all new tests with ESM
+>   `import`; put `workerSpawnArgs` in a **side-effect-free** module (importing `dist/supervisor.js`
+>   spawns a worker). Add `resetActionStore(projectRoot)`/`closeActionStoresForTest()` and reopen on
+>   DB-file identity change. **Drop Task 7's `state/*.db*` gitignore lines** — `templates/rn-agent/.gitignore`
+>   already ignores `state/` (verified).
 
 ---
 
