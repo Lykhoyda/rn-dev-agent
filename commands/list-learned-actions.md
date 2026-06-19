@@ -1,6 +1,6 @@
 ---
 command: list-learned-actions
-description: List persisted "learned actions" — feedback memories, Maestro flows, UI skeletons, and plugin commands that should be consulted before composing new device_* primitives. Wraps scripts/learned-actions.mjs for programmatic discovery.
+description: List persisted "learned actions" — feedback memories, Maestro flows, UI skeletons, and plugin commands that should be consulted before composing new device_* primitives. Wraps scripts/cdp-bridge/dist/learned-actions.js for programmatic discovery.
 argument-hint: [filter-keyword]
 allowed-tools: Bash, Read, Glob
 ---
@@ -16,7 +16,7 @@ should look at BEFORE re-deriving anything from scratch:
 2. **Executable artifacts**: `.rn-agent/actions/*.yaml`, `.rn-agent/skeleton.yaml`
 
 This command surfaces both lists in one place — and the underlying
-`scripts/learned-actions.mjs` is the **same script** invoked programmatically
+`scripts/cdp-bridge/src/learned-actions.ts` (compiled to `scripts/cdp-bridge/dist/learned-actions.js`) is the **same script** invoked programmatically
 by `/rn-dev-agent:test-feature` Step 0 and by the `rn-tester` / `rn-debugger`
 agents' artifact-scan steps. Keeping the discovery logic in one script means
 every consumer sees the same inventory.
@@ -24,7 +24,7 @@ every consumer sees the same inventory.
 ## Run
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/learned-actions.js" \
   --workspace-root "$PWD" \
   --memory-cwd "$PWD" \
   ${ARGUMENTS:+--filter "$ARGUMENTS"}
@@ -46,7 +46,7 @@ decision-making. **Always use `--json` from a programmatic caller** — the
 human table format is not a stable contract.
 
 ```bash
-RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/learned-actions.js" \
   --json --section b --filter "task creation" --workspace-root "$PWD" --memory-cwd "$PWD")
 echo "$RESULT" | jq '.sections.flows.items[0].path'
 ```

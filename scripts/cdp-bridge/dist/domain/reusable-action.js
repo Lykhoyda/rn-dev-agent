@@ -135,7 +135,7 @@ export function shouldDemoteAfterRepair(metadata) {
  * found (the two required keys).
  *
  * Pure function — pass the file's text. Mirrors the parsing rules in
- * `scripts/learned-actions.mjs` parseFlowMeta() so they stay in sync.
+ * `scripts/cdp-bridge/src/learned-actions.ts` parseFlowMeta() so they stay in sync.
  */
 export function parseM7Header(yamlText, fallbackId) {
     const lines = yamlText.split('\n');

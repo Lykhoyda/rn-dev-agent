@@ -71,7 +71,7 @@ Maestro replay. Codified in
 `feedback_execute_artifacts_before_manual.md`.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/learned-actions.js" \
   --json --section b --filter "<feature-keyword>" \
   --workspace-root "$PWD" --memory-cwd "$PWD" \
   > /tmp/learned-actions.json

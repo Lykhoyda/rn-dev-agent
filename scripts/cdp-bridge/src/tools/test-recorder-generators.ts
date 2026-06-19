@@ -29,7 +29,7 @@ export interface GenerateOpts {
   // already on <X>. When unset, flows assume the app's default landing route.
   startRoute?: string | null;
   // Reusable Action Metadata (M7 / Phase 116). Emitted as `# key: value`
-  // comments so Maestro ignores them but `learned-actions.mjs` can parse them
+  // comments so Maestro ignores them but `learned-actions.ts` (dist/learned-actions.js) can parse them
   // for the artifact-first inventory.
   id?: string;
   intent?: string;

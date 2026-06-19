@@ -23,7 +23,7 @@ An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<i
 Before authoring anything, check what already exists:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/learned-actions.mjs" --json --section b \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/cdp-bridge/dist/learned-actions.js" --json --section b \
   --workspace-root "$PWD" --memory-cwd "$PWD" --filter <keyword>
 ```
 
@@ -148,7 +148,7 @@ After any later auto-repair or manual selector edit, **update the embedded diagr
 | Sidecar (auto-created) | `<project>/.rn-agent/state/<id>.state.json` |
 | id regex | `^[a-z0-9][a-z0-9-]*$` |
 | param key regex | `[A-Z_][A-Z0-9_]*` |
-| Inventory / dedup | `scripts/learned-actions.mjs` or `/rn-dev-agent:list-learned-actions` |
+| Inventory / dedup | `scripts/cdp-bridge/src/learned-actions.ts` (built → `dist/learned-actions.js`) or `/rn-dev-agent:list-learned-actions` |
 | Replay | `cdp_run_action` / `/rn-dev-agent:run-action <id> -e KEY=VAL` |
 | Lifecycle | `experimental` → (clean replay) → `active`; repair demotes back to `experimental`; `deprecated` = never replay |
 | Repair budget | 3 auto-repairs per rolling 24h per action |

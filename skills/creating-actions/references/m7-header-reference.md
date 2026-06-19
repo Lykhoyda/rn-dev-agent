@@ -1,6 +1,6 @@
 # M7 Metadata Header — Field Reference
 
-The M7 header lives as `# key: value` comment lines above the Maestro YAML body. Maestro ignores comments; `scripts/learned-actions.mjs` (inventory), `cdp_run_action` (replay pre-flight), and `cdp_repair_action` (self-repair) parse them. Single source of truth for the schema: `scripts/cdp-bridge/src/domain/reusable-action.ts` (`M7Metadata`, `parseM7Header`, `serializeM7Header`).
+The M7 header lives as `# key: value` comment lines above the Maestro YAML body. Maestro ignores comments; `scripts/cdp-bridge/src/learned-actions.ts` (compiled to `dist/learned-actions.js`, inventory CLI), `cdp_run_action` (replay pre-flight), and `cdp_repair_action` (self-repair) parse them. Single source of truth for the schema: `scripts/cdp-bridge/src/domain/reusable-action.ts` (`M7Metadata`, `parseM7Header`, `serializeM7Header`).
 
 ## Parser behavior (what the header may and may not contain)
 
