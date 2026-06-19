@@ -38,11 +38,11 @@ jobs:
         working-directory: scripts/cdp-bridge
 
       - name: Unit tests
-        run: node --test 'test/unit/*.test.js'
+        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js'
         working-directory: scripts/cdp-bridge
 
       - name: Integration tests
-        run: node --test 'test/integration/*.test.js'
+        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js'
         working-directory: scripts/cdp-bridge
 
       # Runs at repo root (no working-directory) — guards the changeset CI gate.
