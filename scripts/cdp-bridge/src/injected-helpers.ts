@@ -1143,6 +1143,16 @@ export const INJECTED_HELPERS = `
 
     var found = null;
     var findCount = 0;
+    // Fail-closed truncation budget. Mirrors the salient-digest budget
+    // (Math.min(cap, perRoot * roots)) and its wall-clock guard
+    // (Date.now() - start < 3000). rootsSeeded is counted as roots are fed
+    // into findFiber via forEachRootFiber below. On trip we set findTruncated
+    // and unwind WITHOUT recording any match, so interact() returns a
+    // structured "Resolution truncated" error and NEVER presses a partial pick.
+    var findTruncated = false;
+    var findStart = Date.now();
+    var rootsSeeded = 0;
+    var findBudget = 8000; // recomputed once rootsSeeded is known
 
     // B5/D684: testID stays strict + early-return (fast happy path).
     // accessibilityLabel uses tiered matching: exact === → normalized
@@ -1160,8 +1170,12 @@ export const INJECTED_HELPERS = `
     function findFiber(fiber) {
       var current = fiber;
       while (current) {
+        if (findTruncated) return;
         findCount++;
-        if (findCount > 8000) return;
+        if (findCount > findBudget || (Date.now() - findStart) > 3000) {
+          findTruncated = true;
+          return;
+        }
         var props = current.memoizedProps;
         if (props) {
           if (!isLabelMatch) {
@@ -1195,11 +1209,29 @@ export const INJECTED_HELPERS = `
     // found. Previously only the first renderer's roots were searched.
     // For label matching, walk ALL renderers (no short-circuit) so duplicate
     // labels split across renderers (LogBox vs Fabric) are detected.
+    // First pass purely to size the budget by how many roots we'll seed,
+    // so a multi-renderer tree (LogBox + Fabric + Reanimated) gets proportional
+    // headroom — same shape as the digest's Math.min(cap, perRoot * roots).
+    forEachRootFiber(function() { rootsSeeded++; return null; });
+    findBudget = Math.min(40000, 8000 * Math.max(1, rootsSeeded));
     forEachRootFiber(function(rootFiber) {
+      if (findTruncated) return found;
       if (!isLabelMatch && found) return found;
       findFiber(rootFiber);
       return isLabelMatch ? null : found;
     });
+
+    // Fail-closed: a tripped budget means the scan is INCOMPLETE. Never fall
+    // through to the tier[0] pick, the "Component not found" branch, or onPress
+    // — any of those would act on a partial view of the tree.
+    if (findTruncated) {
+      return JSON.stringify({
+        error: 'Resolution truncated',
+        truncated: true,
+        scanned: findCount,
+        hint: 'increase budget or scope with a container/anchor'
+      });
+    }
 
     if (isLabelMatch) {
       var tier = exactMatches.length > 0
