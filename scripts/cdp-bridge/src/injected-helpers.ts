@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 28;
+export const HELPERS_VERSION = 29;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -543,7 +543,7 @@ export const INJECTED_HELPERS = `
   // for plain Views, user components, text nodes (tag 6) and null types.
   var HOST_KIND_NAMES = {
     text: ['Text', 'RCTText'],
-    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView'],
+    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'],
     image: ['Image', 'RCTImageView', 'RCTImage'],
     switch: ['Switch', 'RCTSwitch'],
     scrollview: ['ScrollView', 'RCTScrollView'],
@@ -2097,6 +2097,10 @@ export const INJECTED_HELPERS = `
     var exact = spec.exact === true;
 
     function isCand(fiber) {
+      if (typeof spec.testID === 'string') {
+        var tpi = fiber.memoizedProps;
+        return !!tpi && (tpi.testID === spec.testID || tpi.nativeID === spec.testID);
+      }
       if (wantRole !== null) {
         if (__role(fiber) !== wantRole) return false;
         if (wantName === null) return true;
@@ -2187,6 +2191,10 @@ export const INJECTED_HELPERS = `
     }
 
     function isCandidate(fiber) {
+      if (typeof spec.testID === 'string') {
+        var tpc = fiber.memoizedProps;
+        return !!tpc && (tpc.testID === spec.testID || tpc.nativeID === spec.testID);
+      }
       if (wantRole !== null) {
         if (__role(fiber) !== wantRole) return false;
         return nameMatches(fiber);
