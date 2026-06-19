@@ -2006,6 +2006,45 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ value: null, controlled: false });
   }
 
+  // Task 8 — bounded fiber.return ancestor walk producing the bundle's
+  // anchor trail. Mirrors the setFieldValue ancestor walk (cap + .return
+  // chain) at the ANCESTOR_DEPTH_CAP loop, but records nearest-first
+  // {testID, text, relation, depth, provenance} for any ancestor that
+  // carries a testID/nativeID OR an explicit accessibility label. Provenance
+  // is "authored-testID" when the ancestor has testID/nativeID, else "text"
+  // (from __ariaLabel — aria-label / accessibilityLabel / labelledBy only,
+  // NOT recursive child text, so bare host Text nodes are skipped). Bare
+  // wrapper Views with no anchor signal are skipped automatically.
+  function __collectAnchors(fiber) {
+    var ANCHOR_DEPTH_CAP = 8;
+    var anchors = [];
+    if (!fiber) return anchors;
+    var ancestor = fiber.return;
+    var depth = 1;
+    while (ancestor && depth <= ANCHOR_DEPTH_CAP) {
+      var aProps = ancestor.memoizedProps;
+      var testID = aProps && typeof aProps === 'object'
+        ? (aProps.testID || aProps.nativeID)
+        : undefined;
+      var name;
+      try { name = __ariaLabel(ancestor); } catch (_) { name = undefined; }
+      if (testID || (name && name.length > 0)) {
+        var entry = { relation: 'childOf', depth: depth };
+        if (testID) {
+          entry.testID = String(testID);
+          entry.provenance = 'authored-testID';
+        } else {
+          entry.text = String(name);
+          entry.provenance = 'text';
+        }
+        anchors.push(entry);
+      }
+      ancestor = ancestor.return;
+      depth++;
+    }
+    return anchors;
+  }
+
   // Task 7 — fiber-returning twin of resolveLadder. resolveLadder serializes
   // to JSON (no live fiber escapes); interact() needs the fiber itself to
   // press, so it re-resolves here under the SAME predicates and returns the
@@ -2193,7 +2232,8 @@ export const INJECTED_HELPERS = `
       disabled: (tprops.disabled === true)
         || (tprops['aria-disabled'] === true)
         || !!(tprops.accessibilityState && tprops.accessibilityState.disabled),
-      bounds: null
+      bounds: null,
+      anchors: __collectAnchors(target)
     };
     return JSON.stringify({ found: true, bundle: bundle });
   }
@@ -2471,6 +2511,7 @@ export const INJECTED_HELPERS = `
     clearConsole: clearConsole,
     interact: interact,
     resolveLadder: resolveLadder,
+    __collectAnchors: __collectAnchors,
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
