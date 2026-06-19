@@ -25,11 +25,30 @@ test('interact: success press by testID', async () => {
   assert.equal(data.action_executed, 'press');
 });
 
-test('interact: fails when neither testID nor accessibilityLabel provided', async () => {
+test('interact: fails when no selector (testID/accessibilityLabel/role/text/placeholder) provided', async () => {
   const client = createMockClient();
   const handler = createInteractHandler(() => client);
   const error = expectFail(await handler({ action: 'press', animated: false }));
-  assert.match(error, /testID or accessibilityLabel/);
+  assert.match(error, /A selector is required/);
+});
+
+test('interact: accepts a discovery-ladder selector (role/name) and forwards it', async () => {
+  let sentExpr = '';
+  const client = createMockClient({
+    evaluate: async (expr) => {
+      sentExpr = expr;
+      return {
+        value: JSON.stringify({ success: true, action: 'press', bundle: { testID: 'go' } }),
+      };
+    },
+  });
+  const handler = createInteractHandler(() => client);
+  const data = expectOk(
+    await handler({ action: 'press', role: 'button', name: 'Go', animated: false }),
+  );
+  assert.equal(data.success, true);
+  assert.match(sentExpr, /"role":"button"/);
+  assert.match(sentExpr, /"name":"Go"/);
 });
 
 test('interact: fails when typeText action missing text param', async () => {

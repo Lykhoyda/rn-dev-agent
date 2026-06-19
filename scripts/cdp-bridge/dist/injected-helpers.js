@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 26;
+export const HELPERS_VERSION = 32;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -529,6 +529,44 @@ export const INJECTED_HELPERS = `
       return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
     }
     return output;
+  }
+
+  // Task 2 — live-fiber host-kind classifier. Ports RNTL host-component-names.ts
+  // (isHostText/isHostTextInput/isHostImage/isHostSwitch/isHostScrollView/
+  // isHostModal). RNTL keys off a STRING instance.type; live fibers carry the
+  // host name as a raw string fiber.type OR as fiber.type.displayName/name for
+  // native views, so we resolve a string name from both shapes via getName.
+  // Name lists are widened to the native view names (RCTSinglelineTextInputView,
+  // RCTImageView, RCTModalHostView, ...) per FIXED INTERFACES because the live
+  // tree exposes the platform view name, not the JS component name. Returns null
+  // for plain Views, user components, text nodes (tag 6) and null types.
+  var HOST_KIND_NAMES = {
+    text: ['Text', 'RCTText'],
+    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'],
+    image: ['Image', 'RCTImageView', 'RCTImage'],
+    switch: ['Switch', 'RCTSwitch'],
+    scrollview: ['ScrollView', 'RCTScrollView'],
+    modal: ['Modal', 'RCTModalHostView']
+  };
+  var HOST_KIND_LOOKUP = (function() {
+    var map = {};
+    var kinds = Object.keys(HOST_KIND_NAMES);
+    for (var ki = 0; ki < kinds.length; ki++) {
+      var names = HOST_KIND_NAMES[kinds[ki]];
+      for (var ni = 0; ni < names.length; ni++) map[names[ni]] = kinds[ki];
+    }
+    return map;
+  })();
+
+  function hostKind(fiber) {
+    if (!fiber || !fiber.type) return null;
+    if (fiber.tag === 6) return null;
+    var name = typeof fiber.type === 'string'
+      ? fiber.type
+      : (fiber.type.displayName || fiber.type.name || null);
+    if (!name) return null;
+    var kind = HOST_KIND_LOOKUP[name];
+    return kind || null;
   }
 
   // Navigation State
@@ -1100,10 +1138,66 @@ export const INJECTED_HELPERS = `
     var isLabelMatch = matchField === 'accessibilityLabel';
 
     if (!action) return JSON.stringify({ error: 'action is required' });
+
+    // Task 7 — ladder routing. When the caller passes a declarative selector
+    // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
+    // via resolveLadder then press the found fiber or its nearest onPress
+    // ancestor (walking .return). testID/accessibilityLabel keep the legacy
+    // path below unchanged (including Task 6's fail-closed truncation).
+    if (!selector && (opts.role || opts.name || opts.text || opts.placeholder)) {
+      // Ladder selectors only support press in Phase 1 — fail closed for any
+      // other action instead of silently pressing (Codex review).
+      if (opts.action && opts.action !== 'press') {
+        return JSON.stringify({
+          error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
+          requestedAction: opts.action,
+          hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+        });
+      }
+      var ladderResult = resolveLadder(JSON.stringify({
+        role: opts.role, name: opts.name, text: opts.text,
+        placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden
+      }));
+      var parsed = JSON.parse(ladderResult);
+      if (!parsed.found) return ladderResult;
+
+      var targetFiber = __resolveLadderFiber(opts);
+      if (!targetFiber) return JSON.stringify({ error: 'Component not found' });
+
+      var pressFiber = targetFiber;
+      while (pressFiber) {
+        var pf = pressFiber.memoizedProps;
+        if (pf && typeof pf.onPress === 'function') break;
+        pressFiber = pressFiber.return;
+      }
+      if (!pressFiber) {
+        return JSON.stringify({ error: 'Component has no onPress handler', bundle: parsed.bundle });
+      }
+      var pName = (pressFiber.type && (typeof pressFiber.type === 'string'
+        ? pressFiber.type
+        : (pressFiber.type.displayName || pressFiber.type.name))) || 'Unknown';
+      try {
+        pressFiber.memoizedProps.onPress({ nativeEvent: {} });
+        return JSON.stringify({ success: true, action: 'press', component: pName, bundle: parsed.bundle });
+      } catch (e) {
+        return JSON.stringify({ error: 'onPress threw', message: e && e.message, component: pName });
+      }
+    }
+
     if (!selector) return JSON.stringify({ error: 'testID or accessibilityLabel is required' });
 
     var found = null;
     var findCount = 0;
+    // Fail-closed truncation budget. Mirrors the salient-digest budget
+    // (Math.min(cap, perRoot * roots)) and its wall-clock guard
+    // (Date.now() - start < 3000). rootsSeeded is counted as roots are fed
+    // into findFiber via forEachRootFiber below. On trip we set findTruncated
+    // and unwind WITHOUT recording any match, so interact() returns a
+    // structured "Resolution truncated" error and NEVER presses a partial pick.
+    var findTruncated = false;
+    var findStart = Date.now();
+    var rootsSeeded = 0;
+    var findBudget = 8000; // recomputed once rootsSeeded is known
 
     // B5/D684: testID stays strict + early-return (fast happy path).
     // accessibilityLabel uses tiered matching: exact === → normalized
@@ -1121,8 +1215,12 @@ export const INJECTED_HELPERS = `
     function findFiber(fiber) {
       var current = fiber;
       while (current) {
+        if (findTruncated) return;
         findCount++;
-        if (findCount > 8000) return;
+        if (findCount > findBudget || (Date.now() - findStart) > 3000) {
+          findTruncated = true;
+          return;
+        }
         var props = current.memoizedProps;
         if (props) {
           if (!isLabelMatch) {
@@ -1156,11 +1254,29 @@ export const INJECTED_HELPERS = `
     // found. Previously only the first renderer's roots were searched.
     // For label matching, walk ALL renderers (no short-circuit) so duplicate
     // labels split across renderers (LogBox vs Fabric) are detected.
+    // First pass purely to size the budget by how many roots we'll seed,
+    // so a multi-renderer tree (LogBox + Fabric + Reanimated) gets proportional
+    // headroom — same shape as the digest's Math.min(cap, perRoot * roots).
+    forEachRootFiber(function() { rootsSeeded++; return null; });
+    findBudget = Math.min(40000, 8000 * Math.max(1, rootsSeeded));
     forEachRootFiber(function(rootFiber) {
+      if (findTruncated) return found;
       if (!isLabelMatch && found) return found;
       findFiber(rootFiber);
       return isLabelMatch ? null : found;
     });
+
+    // Fail-closed: a tripped budget means the scan is INCOMPLETE. Never fall
+    // through to the tier[0] pick, the "Component not found" branch, or onPress
+    // — any of those would act on a partial view of the tree.
+    if (findTruncated) {
+      return JSON.stringify({
+        error: 'Resolution truncated',
+        truncated: true,
+        scanned: findCount,
+        hint: 'increase budget or scope with a container/anchor'
+      });
+    }
 
     if (isLabelMatch) {
       var tier = exactMatches.length > 0
@@ -1898,6 +2014,610 @@ export const INJECTED_HELPERS = `
     return JSON.stringify({ value: null, controlled: false });
   }
 
+  // Task 8 — bounded fiber.return ancestor walk producing the bundle's
+  // anchor trail. Mirrors the setFieldValue ancestor walk (cap + .return
+  // chain) at the ANCESTOR_DEPTH_CAP loop, but records nearest-first
+  // {testID, text, relation, depth, provenance} for any ancestor that
+  // carries a testID/nativeID OR an explicit accessibility label. Provenance
+  // is "authored-testID" when the ancestor has testID/nativeID, else "text"
+  // (from __ariaLabel — aria-label / accessibilityLabel / labelledBy only,
+  // NOT recursive child text, so bare host Text nodes are skipped). Bare
+  // wrapper Views with no anchor signal are skipped automatically.
+  function __collectAnchors(fiber) {
+    var ANCHOR_DEPTH_CAP = 8;
+    var anchors = [];
+    if (!fiber) return anchors;
+    var ancestor = fiber.return;
+    var depth = 1;
+    while (ancestor && depth <= ANCHOR_DEPTH_CAP) {
+      var aProps = ancestor.memoizedProps;
+      var testID = aProps && typeof aProps === 'object'
+        ? (aProps.testID || aProps.nativeID)
+        : undefined;
+      var name;
+      try { name = __ariaLabel(ancestor); } catch (_) { name = undefined; }
+      if (testID || (name && name.length > 0)) {
+        var entry = { relation: 'childOf', depth: depth };
+        if (testID) {
+          entry.testID = String(testID);
+          entry.provenance = 'authored-testID';
+        } else {
+          entry.text = String(name);
+          entry.provenance = 'text';
+        }
+        anchors.push(entry);
+      }
+      ancestor = ancestor.return;
+      depth++;
+    }
+    return anchors;
+  }
+
+  // Task 7 — fiber-returning twin of resolveLadder. resolveLadder serializes
+  // to JSON (no live fiber escapes); interact() needs the fiber itself to
+  // press, so it re-resolves here under the SAME predicates and returns the
+  // single match (or null when 0/>1 — interact() has already surfaced the
+  // JSON error before calling this). Uses the internal hostKind() (the
+  // public surface name is __hostKind, but inside the IIFE the function is
+  // hostKind — same as __role's own call site).
+  // matchDeepestOnly (RNTL parity; found by live-device testing): a real RN
+  // element renders as a COMPOSITE fiber (Text/TextInput) AND its child HOST
+  // fiber (RCTText/RCTSinglelineTextInputView), both of which pass
+  // hostKind/byText/byPlaceholder — so every element would match twice and
+  // fail-close as Ambiguous on-device. Drop any match that is an ancestor (via
+  // .return) of another match, keeping the deepest. Genuinely-distinct siblings
+  // are NOT collapsed (they stay legitimately Ambiguous).
+  // Collapse only COMPOSITE+HOST duplicates of the SAME element — NOT arbitrary
+  // ancestor/descendant matches. A real RN element is a composite fiber
+  // (Text/TextInput/Pressable, object type) plus its host primitive
+  // (RCTText/RCTSinglelineTextInputView/RCTView, string type); both can satisfy
+  // the same selector. But two DISTINCT nested components (e.g. an outer card
+  // button and an inner button both named "Settings") must stay AMBIGUOUS, not
+  // silently collapse to the inner one (Codex review). Rule: for each HOST
+  // match B, drop its NEAREST matching ancestor iff that ancestor is a composite
+  // — i.e. B's own wrapper. A host-ancestor (distinct nested host) or a composite
+  // with no host match below it is preserved, so real nested matches stay
+  // ambiguous.
+  function __deepestOnly(arr) {
+    if (arr.length < 2) return arr;
+    function tid(f) { var p = f.memoizedProps; return (p && (p.testID || p.nativeID)) || null; }
+    var inSet = new WeakSet();
+    for (var i = 0; i < arr.length; i++) inSet.add(arr[i]);
+    var drop = new WeakSet();
+    for (var j = 0; j < arr.length; j++) {
+      var b = arr[j];
+      var bHost = typeof b.type === 'string';
+      var bTid = tid(b);
+      var p = b.return;
+      var guard = 0;
+      while (p && guard++ < 10000) {
+        if (inSet.has(p)) {
+          // Nearest matching ancestor A of B. Drop A only when A and B are the
+          // SAME element: (1) A is B's composite wrapper (A composite, B host),
+          // or (2) A and B share the same testID/nativeID (one element whose id
+          // propagated across nested fibers, e.g. a tab button). A distinct
+          // nested match — a host ancestor, or a different id — is preserved so
+          // real nested matches stay Ambiguous (Codex review).
+          var aComposite = typeof p.type !== 'string';
+          if ((aComposite && bHost) || (bTid && tid(p) === bTid)) drop.add(p);
+          break;
+        }
+        p = p.return;
+      }
+    }
+    var kept = [];
+    for (var k = 0; k < arr.length; k++) {
+      if (!drop.has(arr[k])) kept.push(arr[k]);
+    }
+    return kept;
+  }
+
+  // RNTL isAccessibilityElement: byRole only matches true accessibility
+  // elements. A plain View with a role prop but accessible undefined is NOT
+  // one — only Text/TextInput/Switch (and Image with alt) qualify by default;
+  // anything else must opt in with accessible={true}. (Codex review.)
+  function __isA11yElement(fiber) {
+    if (!fiber) return false;
+    var props = fiber.memoizedProps;
+    var hk = hostKind(fiber);
+    if (hk === 'image' && props && props.alt !== undefined) return true;
+    if (props && props.accessible !== undefined) return props.accessible === true;
+    return hk === 'text' || hk === 'textinput' || hk === 'switch';
+  }
+
+  function __resolveLadderFiber(spec) {
+    var wantRole = typeof spec.role === 'string' ? normalizeRole(spec.role) : null;
+    var wantName = typeof spec.name === 'string' ? spec.name : null;
+    var wantText = typeof spec.text === 'string' ? spec.text : null;
+    var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
+    var includeHidden = spec.includeHidden === true;
+    var exact = spec.exact === true;
+
+    function isCand(fiber) {
+      if (typeof spec.testID === 'string') {
+        var tpi = fiber.memoizedProps;
+        return !!tpi && (tpi.testID === spec.testID || tpi.nativeID === spec.testID);
+      }
+      if (wantRole !== null) {
+        // byRole only matches true accessibility elements (RNTL
+        // isAccessibilityElement): excludes a plain View with a role prop but
+        // accessible undefined, and honors accessible={false}. (Codex review.)
+        if (!__isA11yElement(fiber)) return false;
+        if (__role(fiber) !== wantRole) return false;
+        if (wantName === null) return true;
+        var an = __accessibleName(fiber);
+        return an != null && __match(an, { value: wantName, exact: exact });
+      }
+      if (wantText !== null) {
+        if (hostKind(fiber) !== 'text') return false;
+        var tn = __refTextContent(fiber);
+        return !!tn && __match(tn, { value: wantText, exact: exact });
+      }
+      if (wantPlaceholder !== null) {
+        if (hostKind(fiber) !== 'textinput') return false;
+        var p = fiber.memoizedProps;
+        var ph = p && typeof p.placeholder === 'string' ? p.placeholder : null;
+        return ph !== null && __match(ph, { value: wantPlaceholder, exact: exact });
+      }
+      return false;
+    }
+
+    var out = [];
+    var n = 0;
+    var lfTrunc = false;
+    var lfRoots = 0;
+    forEachRootFiber(function () { lfRoots++; return null; });
+    var lfBudget = Math.min(40000, 8000 * Math.max(1, lfRoots));
+    var lfStart = Date.now();
+    forEachRootFiber(function (rootFiber) {
+      (function walk(node) {
+        var current = node;
+        while (current) {
+          n++;
+          if (n > lfBudget || (Date.now() - lfStart) > 3000) { lfTrunc = true; return; }
+          if (isCand(current) && (includeHidden || !__hidden(current))) out.push(current);
+          if (current.child) walk(current.child);
+          current = current.sibling;
+        }
+      })(rootFiber);
+      return null;
+    });
+    if (lfTrunc) return null; // fail closed — never press a partial-walk pick
+    var dedupOut = __deepestOnly(out);
+    return dedupOut.length === 1 ? dedupOut[0] : null;
+  }
+
+  // Task 7 — declarative ladder resolver. Composes the pure helpers
+  // (__match/__role/__accessibleName/__hidden/hostKind) into byRole,
+  // byText and byPlaceholder predicates. COLLECT ALL matches across every
+  // renderer (no early return) so duplicate targets surface as Ambiguous
+  // rather than a silent pick — mirrors interact()'s label-tier ambiguous
+  // shape (:1259-1266). bundle.bounds is null in Phase 1 (no in-page
+  // measure primitive yet).
+  function resolveLadder(specJson) {
+    var spec;
+    try {
+      spec = typeof specJson === 'string' ? JSON.parse(specJson) : (specJson || {});
+    } catch (e) {
+      return JSON.stringify({ found: false, error: 'Invalid spec JSON' });
+    }
+
+    var wantRole = typeof spec.role === 'string' ? normalizeRole(spec.role) : null;
+    var wantName = typeof spec.name === 'string' ? spec.name : null;
+    var wantText = typeof spec.text === 'string' ? spec.text : null;
+    var wantPlaceholder = typeof spec.placeholder === 'string' ? spec.placeholder : null;
+    var includeHidden = spec.includeHidden === true;
+    var exact = spec.exact === true;
+
+    function nameMatches(fiber) {
+      if (wantName === null) return true;
+      var an = __accessibleName(fiber);
+      if (an === undefined || an === null) return false;
+      return __match(an, { value: wantName, exact: exact });
+    }
+
+    // byText: a host Text node whose own visible TEXT CONTENT __match-es — NOT
+    // its accessible name (which gives accessibilityLabel/aria-label precedence
+    // over the rendered text; Codex review). Use __refTextContent (the
+    // getTextContent port); accessible names stay for byRole/name.
+    function textContentMatches(fiber) {
+      var tc = __refTextContent(fiber);
+      if (!tc) return false;
+      return __match(tc, { value: wantText, exact: exact });
+    }
+
+    function placeholderOf(fiber) {
+      var p = fiber && fiber.memoizedProps;
+      return p && typeof p.placeholder === 'string' ? p.placeholder : null;
+    }
+
+    function isCandidate(fiber) {
+      if (typeof spec.testID === 'string') {
+        var tpc = fiber.memoizedProps;
+        return !!tpc && (tpc.testID === spec.testID || tpc.nativeID === spec.testID);
+      }
+      if (wantRole !== null) {
+        // byRole only matches true accessibility elements (RNTL
+        // isAccessibilityElement): excludes a plain View with a role prop but
+        // accessible undefined, and honors accessible={false}. (Codex review.)
+        if (!__isA11yElement(fiber)) return false;
+        if (__role(fiber) !== wantRole) return false;
+        return nameMatches(fiber);
+      }
+      if (wantText !== null) {
+        if (hostKind(fiber) !== 'text') return false;
+        return textContentMatches(fiber);
+      }
+      if (wantPlaceholder !== null) {
+        if (hostKind(fiber) !== 'textinput') return false;
+        var ph = placeholderOf(fiber);
+        return ph !== null && __match(ph, { value: wantPlaceholder, exact: exact });
+      }
+      return false;
+    }
+
+    var matched = [];
+    var visitCount = 0;
+    var ladderTrunc = false;
+    // Budget scales with renderer count + a wall-clock guard (mirrors the legacy
+    // findFiber path). On trip we FAIL CLOSED instead of evaluating a partial
+    // match set (Codex review: a duplicate past the cap could otherwise leave
+    // matched.length===1 and silently press the wrong element).
+    var ladderRoots = 0;
+    forEachRootFiber(function () { ladderRoots++; return null; });
+    var ladderBudget = Math.min(40000, 8000 * Math.max(1, ladderRoots));
+    var ladderStart = Date.now();
+
+    forEachRootFiber(function (rootFiber) {
+      (function walk(node) {
+        var current = node;
+        while (current) {
+          visitCount++;
+          if (visitCount > ladderBudget || (Date.now() - ladderStart) > 3000) {
+            ladderTrunc = true;
+            return;
+          }
+          if (isCandidate(current)) {
+            if (includeHidden || !__hidden(current)) matched.push(current);
+          }
+          if (current.child) walk(current.child);
+          current = current.sibling;
+        }
+      })(rootFiber);
+      return null; // collect-all — never short-circuit
+    });
+
+    if (ladderTrunc) {
+      return JSON.stringify({
+        found: false,
+        error: 'Resolution truncated',
+        truncated: true,
+        scanned: visitCount,
+        hint: 'Too many fibers scanned before a unique match — scope with a more specific selector or a container, or add a testID.'
+      });
+    }
+
+    // matchDeepestOnly: collapse composite+host fiber pairs (see __deepestOnly)
+    // so one on-device element is one match, not a false Ambiguous.
+    matched = __deepestOnly(matched);
+
+    function describe(fiber) {
+      var props = fiber.memoizedProps || {};
+      var dt = (fiber.type && (typeof fiber.type === 'string'
+        ? fiber.type
+        : (fiber.type.displayName || fiber.type.name))) || 'Unknown';
+      return {
+        component: dt,
+        testID: props.testID,
+        role: __role(fiber),
+        accessibleName: __accessibleName(fiber),
+      };
+    }
+
+    function hintFor() {
+      var bits = [];
+      if (wantRole !== null) bits.push('role="' + wantRole + '"');
+      if (wantName !== null) bits.push('name="' + wantName + '"');
+      if (wantText !== null) bits.push('text="' + wantText + '"');
+      if (wantPlaceholder !== null) bits.push('placeholder="' + wantPlaceholder + '"');
+      return bits.join(' ');
+    }
+
+    if (matched.length === 0) {
+      return JSON.stringify({
+        found: false,
+        error: 'Component not found',
+        hint: 'No accessible component matched ' + hintFor() +
+          (includeHidden ? '' : ' (hidden elements excluded — pass includeHidden:true to include them)') +
+          '. Use cdp_component_tree to verify it is mounted, or pass a testID.'
+      });
+    }
+
+    if (matched.length > 1) {
+      var descriptors = [];
+      for (var di = 0; di < matched.length && di < 10; di++) descriptors.push(describe(matched[di]));
+      return JSON.stringify({
+        found: false,
+        error: 'Ambiguous component match',
+        count: matched.length,
+        matches: descriptors,
+        hint: 'Add a testID'
+      });
+    }
+
+    var target = matched[0];
+    var tprops = target.memoizedProps || {};
+    var bundle = {
+      testID: tprops.testID,
+      text: hostKind(target) === 'text' ? __refTextContent(target) : undefined,
+      accessibleName: __accessibleName(target),
+      role: __role(target),
+      placeholder: placeholderOf(target) || undefined,
+      disabled: (tprops.disabled === true)
+        || (tprops['aria-disabled'] === true)
+        || !!(tprops.accessibilityState && tprops.accessibilityState.disabled),
+      bounds: null,
+      anchors: __collectAnchors(target)
+    };
+    return JSON.stringify({ found: true, bundle: bundle });
+  }
+
+  // Port of RNTL getDefaultNormalizer (matches.ts:37-47): trim + collapse
+  // whitespace runs to a single space. Does NOT lowercase — case-insensitivity
+  // for non-exact string matching lives in __match's compare (RNTL matches.ts:24),
+  // NOT here. Kept deliberately separate from norm() (line ~1114) which DOES
+  // lowercase for the legacy interact() label tiers.
+  function __matchNormalize(v) {
+    return String(v).replace(/^\\s+|\\s+$/g, '').replace(/\\s+/g, ' ');
+  }
+
+  // Port of RNTL matches() (matches.ts:9-30) collapsed to a single matcher
+  // object: {value,exact?} for strings, {regexSource,regexFlags?} for regexes.
+  // Returns false on non-string text or malformed matcher. Regex is compiled in
+  // try/catch, the global flag is stripped so lastIndex never carries across
+  // calls, and the candidate is length-capped to bound catastrophic backtracking.
+  var __MATCH_MAX_LEN = 10000;
+  function __match(text, matcher) {
+    if (typeof text !== 'string') return false;
+    if (!matcher || typeof matcher !== 'object') return false;
+    var normalizedText = __matchNormalize(text);
+    if (normalizedText.length > __MATCH_MAX_LEN) {
+      normalizedText = normalizedText.slice(0, __MATCH_MAX_LEN);
+    }
+    if (typeof matcher.regexSource === 'string') {
+      try {
+        var flags = (matcher.regexFlags || '').replace(/g/g, '');
+        var re = new RegExp(matcher.regexSource, flags);
+        re.lastIndex = 0;
+        return re.test(normalizedText);
+      } catch (_) {
+        return false;
+      }
+    }
+    if (typeof matcher.value !== 'string') return false;
+    var normalizedMatcher = __matchNormalize(matcher.value);
+    if (matcher.exact) {
+      return normalizedText === normalizedMatcher;
+    }
+    return normalizedText.toLowerCase().indexOf(normalizedMatcher.toLowerCase()) >= 0;
+  }
+
+  // ── Accessibility role (RNTL getRole + normalizeRole port) ──────────────
+  // Port of react-native-testing-library accessibility.ts:117-146. Order:
+  // explicit role prop → accessibilityRole (image→img) → host Text → none.
+  // Deliberately NOT the digest inferRole (defaults Pressable/Touchable to
+  // button); see gh-task3-role.test.js divergence guard.
+  function normalizeRole(role) {
+    if (role === 'image') return 'img';
+    return role;
+  }
+
+  function __role(fiber) {
+    if (!fiber) return 'none';
+    var props = fiber.memoizedProps;
+    var explicitRole = props && typeof props === 'object'
+      ? (props.role != null ? props.role : props.accessibilityRole)
+      : null;
+    if (explicitRole) return normalizeRole(String(explicitRole));
+    if (hostKind(fiber) === 'text') return 'text';
+    return 'none';
+  }
+
+  // ── Task 4: accessible-name computation (port of RNTL accessibility.ts:152-318) ──
+  // Whitespace normalizer that preserves case (distinct from norm() at the
+  // interact() tier matcher which lowercases). Trim + collapse ws runs to one.
+  function __anNorm(s) {
+    return String(s).replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
+  }
+
+  // getAriaLabelledByIds: aria-labelledby (string) -> [id]; accessibilityLabelledBy
+  // array -> as-is; accessibilityLabelledBy string -> [id]; else [].
+  function __ariaLabelledByIds(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    var ariaLabelledBy = props['aria-labelledby'];
+    if (typeof ariaLabelledBy === 'string') return [ariaLabelledBy];
+    var accLabelledBy = props.accessibilityLabelledBy;
+    if (Array.isArray(accLabelledBy)) return accLabelledBy;
+    if (typeof accLabelledBy === 'string') return [accLabelledBy];
+    return [];
+  }
+
+  // Find the first fiber in ANY root whose memoizedProps.nativeID === id.
+  function __findByNativeID(id) {
+    return forEachRootFiber(function(rootFiber) {
+      var stack = [rootFiber];
+      var guard = 0;
+      while (stack.length) {
+        if (++guard > 20000) return null;
+        var f = stack.pop();
+        if (!f) continue;
+        if (f.memoizedProps && f.memoizedProps.nativeID === id) return f;
+        if (f.sibling) stack.push(f.sibling);
+        if (f.child) stack.push(f.child);
+      }
+      return null;
+    });
+  }
+
+  // DEVIATION from RNTL draft (port of getTextContent, NOT computeAccessibleName):
+  // concatenate the referenced node's descendant host-text strings. A text node
+  // carries its raw string as memoizedProps (harness) or has tag 6 (live fiber).
+  // labelledBy refs resolve to THIS, never to __accessibleName — so a malformed
+  // labelledBy cycle (A->B->A) cannot drive infinite recursion. The visit cap is
+  // defense-in-depth against pathological / self-referential trees.
+  function __refTextContent(fiber) {
+    if (!fiber) return '';
+    var parts = [];
+    var visited = 0;
+    (function collect(node, depth) {
+      if (!node || depth > 40 || visited > 20000) return;
+      visited++;
+      if (typeof node.memoizedProps === 'string') {
+        if (node.memoizedProps) parts.push(node.memoizedProps);
+        return;
+      }
+      if (node.tag === 6 && typeof node.memoizedProps === 'string') {
+        if (node.memoizedProps) parts.push(node.memoizedProps);
+        return;
+      }
+      var child = node.child;
+      while (child) { collect(child, depth + 1); child = child.sibling; }
+    })(fiber, 0);
+    return __anNorm(parts.join(' '));
+  }
+
+  // computeAriaLabel: labelledBy refs (resolved to TEXT CONTENT — see
+  // __refTextContent) win; then explicit aria-label/accessibilityLabel; then
+  // host image alt. A ref resolving to empty text is filtered out of labelTexts
+  // (matches RNTL filtering undefined), so it falls through to the label branch.
+  function __ariaLabel(fiber) {
+    var ids = __ariaLabelledByIds(fiber);
+    if (ids.length > 0) {
+      var labelTexts = [];
+      for (var i = 0; i < ids.length; i++) {
+        var ref = __findByNativeID(ids[i]);
+        if (ref) {
+          var refText = __refTextContent(ref);
+          if (refText) labelTexts.push(refText);
+        }
+      }
+      if (labelTexts.length > 0) {
+        return __anNorm(labelTexts.join(' '));
+      }
+    }
+
+    var props = (fiber && fiber.memoizedProps) || {};
+    var explicit = props['aria-label'];
+    if (explicit === undefined || explicit === null) explicit = props.accessibilityLabel;
+    if (explicit) return explicit;
+
+    if (hostKind(fiber) === 'image' && props.alt) return props.alt;
+
+    return undefined;
+  }
+
+  // joinAccessibleNameParts: inline host-text neighbours join with '' else ' '.
+  function __joinNameParts(parts, inline) {
+    var out = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (i === 0) { out = parts[i].text; continue; }
+      var prev = parts[i - 1];
+      var sep = (inline && prev.isInlineText && parts[i].isInlineText) ? '' : ' ';
+      out = out + sep + parts[i].text;
+    }
+    return out;
+  }
+
+  // computeAccessibleName: aria-label first; then host textinput placeholder
+  // (root only); then recurse children, joining inline host-text with ''. The
+  // child-name recursion below (correct RNTL behavior) stays — only labelledBy
+  // ref resolution uses text content (see __ariaLabel / __refTextContent).
+  function __accessibleName(fiber, root) {
+    if (!fiber) return undefined;
+    var label = __ariaLabel(fiber);
+    if (label) return label;
+
+    var props = fiber.memoizedProps || {};
+    if (hostKind(fiber) === 'textinput' && props.placeholder && root !== false) {
+      return props.placeholder;
+    }
+
+    var parts = [];
+    var child = fiber.child;
+    while (child) {
+      // A text node's memoizedProps is the raw string (harness / live tag-6 fiber).
+      if (typeof child.memoizedProps === 'string') {
+        if (child.memoizedProps) {
+          parts.push({ text: child.memoizedProps, isInlineText: true });
+        }
+      } else {
+        var childLabel = __accessibleName(child, false);
+        if (childLabel) {
+          parts.push({ text: childLabel, isInlineText: hostKind(child) === 'text' });
+        }
+      }
+      child = child.sibling;
+    }
+
+    var joined = __joinNameParts(parts, hostKind(fiber) === 'text');
+    return joined ? joined : undefined;
+  }
+
+  // ── Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
+  // isSubtreeInaccessible). No StyleSheet.flatten in-page → flatten manually.
+  // Walks fiber.return (live fibers) not instance.parent. opacity:0 is NOT
+  // hidden (RNTL accessibility.ts:73). Per-call cache WeakMap dropped (YAGNI).
+  function flattenStyle(style) {
+    var out = {};
+    if (style == null) return out;
+    if (Array.isArray(style)) {
+      for (var i = 0; i < style.length; i++) {
+        var part = flattenStyle(style[i]);
+        for (var k in part) if (part.hasOwnProperty(k)) out[k] = part[k];
+      }
+      return out;
+    }
+    if (typeof style === 'object') {
+      for (var key in style) if (style.hasOwnProperty(key)) out[key] = style[key];
+    }
+    return out;
+  }
+
+  // True if \`fiber\` itself is an inaccessible-subtree root.
+  function isSubtreeInaccessible(fiber) {
+    var props = (fiber && fiber.memoizedProps) || {};
+    if (props['aria-hidden']) return true;
+    if (props.accessibilityElementsHidden) return true;
+    if (props.importantForAccessibility === 'no-hide-descendants') return true;
+
+    var flat = flattenStyle(props.style);
+    if (flat.display === 'none') return true;
+
+    // iOS: a host sibling marked aria-modal / accessibilityViewIsModal hides
+    // this subtree. Siblings = children of fiber.return other than fiber.
+    var parent = fiber && fiber.return;
+    if (parent && parent.child) {
+      for (var sib = parent.child; sib; sib = sib.sibling) {
+        if (sib === fiber) continue;
+        var sp = sib.memoizedProps;
+        if (sp && (sp['aria-modal'] || sp.accessibilityViewIsModal)) return true;
+      }
+    }
+    return false;
+  }
+
+  function __hidden(fiber) {
+    if (fiber == null) return true;
+    var current = fiber;
+    var guard = 0;
+    while (current && guard < 1000) {
+      if (isSubtreeInaccessible(current)) return true;
+      current = current.return;
+      guard++;
+    }
+    return false;
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
@@ -1914,9 +2634,16 @@ export const INJECTED_HELPERS = `
     getConsole: getConsole,
     clearConsole: clearConsole,
     interact: interact,
+    resolveLadder: resolveLadder,
+    __collectAnchors: __collectAnchors,
     __extractFiberFromInstance: extractFiberFromInstance,
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
+    __hidden: __hidden,
+    __accessibleName: __accessibleName,
+    __match: __match,
+    __hostKind: hostKind,
+    __role: __role,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
