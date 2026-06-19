@@ -1,0 +1,71 @@
+export class UnsupportedStepError extends Error {
+    stepKey;
+    constructor(stepKey) {
+        super(`cdp-flow-replay: unsupported Maestro step "${stepKey}" (no CDP/JS mapping)`);
+        this.stepKey = stepKey;
+        this.name = 'UnsupportedStepError';
+    }
+}
+const interp = (s, p) => s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_m, k) => p[k] ?? `\${${k}}`);
+const asString = (x) => (typeof x === 'string' ? x : null);
+const isObj = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
+export function normalizeSteps(body, params) {
+    const out = [];
+    for (const raw of body) {
+        if (raw === 'waitForAnimationToEnd') {
+            out.push({ t: 'wait' });
+            continue;
+        }
+        if (!isObj(raw))
+            throw new UnsupportedStepError(typeof raw === 'string' ? raw : `non-object(${typeof raw})`);
+        const keys = Object.keys(raw);
+        if (keys.length !== 1)
+            throw new UnsupportedStepError(keys.join('+') || 'empty');
+        const key = keys[0];
+        const v = raw[key];
+        switch (key) {
+            case 'launchApp':
+                out.push({ t: 'launch', stopApp: isObj(v) && v.stopApp === true });
+                break;
+            case 'tapOn': {
+                const id = isObj(v) ? asString(v.id) : null;
+                if (!id)
+                    throw new UnsupportedStepError('tapOn (missing string id)');
+                out.push({ t: 'tap', id: interp(id, params) });
+                break;
+            }
+            case 'inputText': {
+                const text = asString(v);
+                if (text === null)
+                    throw new UnsupportedStepError('inputText (value not a string)');
+                out.push({ t: 'type', text: interp(text, params) });
+                break;
+            }
+            case 'assertVisible': {
+                const id = isObj(v) ? asString(v.id) : null;
+                if (!id)
+                    throw new UnsupportedStepError('assertVisible (missing string id)');
+                out.push({ t: 'assert', id: interp(id, params) });
+                break;
+            }
+            case 'waitForAnimationToEnd':
+                out.push({ t: 'wait' });
+                break;
+            case 'runFlow': {
+                const when = isObj(v) && isObj(v.when) && isObj(v.when.visible) ? asString(v.when.visible.id) : null;
+                const commands = isObj(v) ? v.commands : undefined;
+                if (!when || !Array.isArray(commands))
+                    throw new UnsupportedStepError('runFlow (need when.visible.id + commands[])');
+                out.push({
+                    t: 'runFlow',
+                    whenVisible: interp(when, params),
+                    commands: normalizeSteps(commands, params),
+                });
+                break;
+            }
+            default:
+                throw new UnsupportedStepError(key);
+        }
+    }
+    return out;
+}
