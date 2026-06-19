@@ -532,6 +532,44 @@ export const INJECTED_HELPERS = `
     return output;
   }
 
+  // Task 2 — live-fiber host-kind classifier. Ports RNTL host-component-names.ts
+  // (isHostText/isHostTextInput/isHostImage/isHostSwitch/isHostScrollView/
+  // isHostModal). RNTL keys off a STRING instance.type; live fibers carry the
+  // host name as a raw string fiber.type OR as fiber.type.displayName/name for
+  // native views, so we resolve a string name from both shapes via getName.
+  // Name lists are widened to the native view names (RCTSinglelineTextInputView,
+  // RCTImageView, RCTModalHostView, ...) per FIXED INTERFACES because the live
+  // tree exposes the platform view name, not the JS component name. Returns null
+  // for plain Views, user components, text nodes (tag 6) and null types.
+  var HOST_KIND_NAMES = {
+    text: ['Text', 'RCTText'],
+    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView'],
+    image: ['Image', 'RCTImageView', 'RCTImage'],
+    switch: ['Switch', 'RCTSwitch'],
+    scrollview: ['ScrollView', 'RCTScrollView'],
+    modal: ['Modal', 'RCTModalHostView']
+  };
+  var HOST_KIND_LOOKUP = (function() {
+    var map = {};
+    var kinds = Object.keys(HOST_KIND_NAMES);
+    for (var ki = 0; ki < kinds.length; ki++) {
+      var names = HOST_KIND_NAMES[kinds[ki]];
+      for (var ni = 0; ni < names.length; ni++) map[names[ni]] = kinds[ki];
+    }
+    return map;
+  })();
+
+  function hostKind(fiber) {
+    if (!fiber || !fiber.type) return null;
+    if (fiber.tag === 6) return null;
+    var name = typeof fiber.type === 'string'
+      ? fiber.type
+      : (fiber.type.displayName || fiber.type.name || null);
+    if (!name) return null;
+    var kind = HOST_KIND_LOOKUP[name];
+    return kind || null;
+  }
+
   // Navigation State
   function getNavState() {
     try {
@@ -1959,6 +1997,7 @@ export const INJECTED_HELPERS = `
     __findAllRootFibers: findAllRootFibers,
     __forEachRootFiber: forEachRootFiber,
     __match: __match,
+    __hostKind: hostKind,
     isReady: function() {
       // B145: ready when ANY renderer has at least one root fiber. The
       // single-renderer short-circuit from findActiveRenderer would return
