@@ -68,6 +68,14 @@ CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
 check "src change with cdp-only changeset mentioning plugin in BODY fails" 1 $?
 rm -f "$tmp/.changeset/sly-foxes.md"
 
+# 2e. shippable src changed, plugin key uses valid YAML SINGLE quotes -> passes
+# (Codex PR #364 P2: must accept 'rn-dev-agent-plugin' as well as "rn-dev-agent-plugin").
+printf -- "---\n'rn-dev-agent-plugin': patch\n---\nship\n" > "$tmp/.changeset/glad-bats.md"
+CHANGED_FILES=$'scripts/cdp-bridge/src/domain/maestro-validator.ts' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "src change with single-quoted plugin changeset passes" 0 $?
+rm -f "$tmp/.changeset/glad-bats.md"
+
 # 3. only non-shippable changes (tests / docs / CI) -> passes without a changeset
 CHANGED_FILES=$'scripts/cdp-bridge/test/unit/x.test.js\ndocs-site/foo.mdx\n.github/workflows/ci.yml' \
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1

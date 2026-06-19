@@ -62,7 +62,7 @@ plugin_changeset=""
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   frontmatter="$(awk '$0 ~ /^---[[:space:]]*$/ { d++; next } d==1 { print }' "$file")"
-  if printf '%s\n' "$frontmatter" | grep -Eq '^[[:space:]]*"?rn-dev-agent-plugin"?[[:space:]]*:'; then
+  if printf '%s\n' "$frontmatter" | grep -Eq "^[[:space:]]*[\"']?rn-dev-agent-plugin[\"']?[[:space:]]*:"; then
     plugin_changeset="$file"
     break
   fi
