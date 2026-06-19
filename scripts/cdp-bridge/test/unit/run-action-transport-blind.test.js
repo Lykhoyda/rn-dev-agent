@@ -9,7 +9,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
+import { createTmpProject } from '../helpers/tmp-project.js';
 
 let project;
 
@@ -138,7 +138,11 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID present → CDP/JS fallback; p
   assert.equal(env.ok, true);
   assert.equal(env.data.passed, true);
   assert.equal(env.data.transport, 'cdp-js', 'transport must be cdp-js for CDP/JS replay path');
-  assert.equal(maestroCallCount, 1, 'maestro must NOT be retried — only one call (the failed first attempt)');
+  assert.equal(
+    maestroCallCount,
+    1,
+    'maestro must NOT be retried — only one call (the failed first attempt)',
+  );
   assert.equal(replayDepsCallCount, 1, 'replayDeps factory must be called once');
 
   // RunRecord must reflect the CDP/JS transport and pass status.
@@ -166,7 +170,7 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID absent from tree → existing 
     },
     replayDeps: (_args) => ({
       treeFor: async () => ({ testID: 'some-other-element', children: [] }),
-      pressByTestId: async (id) => {
+      pressByTestId: async (_id) => {
         cdpReplayInvoked = true;
       },
       typeByTestId: async () => {},
@@ -180,7 +184,15 @@ test('GH #317 Task 5: SELECTOR_NOT_FOUND + testID absent from tree → existing 
   // Should fall through to the existing repair path (which returns NO_MATCH fail).
   assert.equal(result.isError, true, 'expected failure since repair returned NO_MATCH');
   const env = JSON.parse(result.content[0].text);
-  assert.equal(env.meta.autoRepair.refusedReason, 'NO_MATCH', 'should hit repair path, not CDP replay');
+  assert.equal(
+    env.meta.autoRepair.refusedReason,
+    'NO_MATCH',
+    'should hit repair path, not CDP replay',
+  );
   assert.equal(repairCalled, true, 'repair handler MUST be called when testID is absent');
-  assert.equal(cdpReplayInvoked, false, 'CDP/JS replay must NOT execute when testID absent from tree');
+  assert.equal(
+    cdpReplayInvoked,
+    false,
+    'CDP/JS replay must NOT execute when testID absent from tree',
+  );
 });

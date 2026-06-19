@@ -1,9 +1,5 @@
 import { parse as yamlParse } from 'yaml';
-import {
-  normalizeSteps,
-  replayFlow,
-  type ReplayResult,
-} from '../domain/cdp-flow-replay.js';
+import { normalizeSteps, replayFlow, type ReplayResult } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
 
 export function collectTestIds(node: unknown, acc: Set<string> = new Set()): Set<string> {

@@ -1,5 +1,5 @@
 import { parse as yamlParse } from 'yaml';
-import { normalizeSteps, replayFlow, } from '../domain/cdp-flow-replay.js';
+import { normalizeSteps, replayFlow } from '../domain/cdp-flow-replay.js';
 export function collectTestIds(node, acc = new Set()) {
     if (!node || typeof node !== 'object')
         return acc;
