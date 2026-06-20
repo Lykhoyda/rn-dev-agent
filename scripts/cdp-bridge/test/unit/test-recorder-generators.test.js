@@ -226,3 +226,49 @@ test('#356 Maestro: single hideKeyboard for type then two taps', () => {
   assert.equal(count, 1, 'flag cleared after first guarded tap');
   assert.ok(out.indexOf('- hideKeyboard') < out.indexOf('id: next'));
 });
+
+test('#356 Maestro: navigate resets keyboard state (no injection after nav)', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'navigate', from: 'A', to: 'B', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  assert.ok(!out.includes('- hideKeyboard'), 'navigation dismisses the keyboard');
+});
+
+test('#356 Maestro: consecutive types inject once before the final tap', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'first', value: 'x', t: 1 },
+    { type: 'type', testID: 'second', value: 'y', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const count = (out.match(/- hideKeyboard/g) || []).length;
+  assert.equal(count, 1, 'one injection for the trailing button tap');
+  const secondTap = out.indexOf('id: second');
+  assert.ok(
+    !out.slice(0, secondTap).includes('- hideKeyboard'),
+    'the focusing tap of the second type is not guarded',
+  );
+  assert.ok(out.indexOf('- hideKeyboard') < out.indexOf('id: submit'));
+});
+
+test('#356 Maestro: submit (Enter) does not reset keyboard state', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'submit', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const hk = out.indexOf('- hideKeyboard');
+  assert.ok(hk > -1, 'still guarded after submit');
+  assert.ok(hk < out.indexOf('id: submit'));
+});
+
+test('#356 Maestro: long_press following type is guarded', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'long_press', testID: 'avatar', t: 2 },
+  ]);
+  const hk = out.indexOf('- hideKeyboard');
+  assert.ok(hk > -1, 'long_press is guarded too');
+  assert.ok(hk < out.indexOf('- longPressOn:'));
+});
