@@ -191,3 +191,38 @@ test('M7 Maestro: empty tags array is treated as omitted', () => {
   const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], { tags: [] });
   assert.doesNotMatch(out, /# tags:/);
 });
+
+test('#356 Maestro: hideKeyboard injected before a tap that follows type', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'tap', testID: 'submit', t: 2 },
+  ]);
+  assert.match(out, /# rn-dev-agent: keyboard-occlusion guard \(#356\)/);
+  const hk = out.indexOf('- hideKeyboard');
+  const input = out.indexOf('- inputText:');
+  const submitTap = out.indexOf('id: submit');
+  assert.ok(hk > -1, 'hideKeyboard should be injected');
+  assert.ok(hk > input, 'hideKeyboard comes after the inputText');
+  assert.ok(hk < submitTap, 'hideKeyboard comes before the submit tap');
+  const emailTap = out.indexOf('id: email');
+  assert.ok(
+    !out.slice(0, emailTap).includes('- hideKeyboard'),
+    'the focusing tap of the type step is NOT guarded',
+  );
+});
+
+test('#356 Maestro: no hideKeyboard when a tap is not preceded by type', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'submit', t: 1 }]);
+  assert.ok(!out.includes('- hideKeyboard'), 'no keyboard, no injection');
+});
+
+test('#356 Maestro: single hideKeyboard for type then two taps', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'tap', testID: 'next', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const count = (out.match(/- hideKeyboard/g) || []).length;
+  assert.equal(count, 1, 'flag cleared after first guarded tap');
+  assert.ok(out.indexOf('- hideKeyboard') < out.indexOf('id: next'));
+});

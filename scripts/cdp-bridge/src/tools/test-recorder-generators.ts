@@ -184,13 +184,23 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   // tap; skip them here to avoid double-emission.
   const consumedNavIndices = new Set<number>();
 
+  // #356: track whether the soft keyboard is likely up so we can dismiss it
+  // before a button tap (a bottom-pinned tap otherwise lands on the keyboard).
+  let keyboardLikelyUp = false;
+
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     switch (ev.type) {
       case 'tap': {
         const sel = maestroSelector(ev);
-        if (sel) lines.push(`- tapOn:\n    ${sel}`);
-        else lines.push('# tap: missing testID/label');
+        if (sel) {
+          if (keyboardLikelyUp) {
+            lines.push('# rn-dev-agent: keyboard-occlusion guard (#356)');
+            lines.push('- hideKeyboard');
+            keyboardLikelyUp = false;
+          }
+          lines.push(`- tapOn:\n    ${sel}`);
+        } else lines.push('# tap: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
           lines.push(
@@ -222,6 +232,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         if (sel) {
           lines.push(`- tapOn:\n    ${sel}`);
           lines.push(`- inputText: ${JSON.stringify(ev.value)}`);
+          keyboardLikelyUp = true;
         } else {
           lines.push(`# type: missing testID/label, value=${JSON.stringify(ev.value)}`);
         }
