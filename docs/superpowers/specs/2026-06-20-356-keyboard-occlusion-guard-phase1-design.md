@@ -143,6 +143,23 @@ Confirm it was flaky before and replays reliably after, on **iOS and Android**.
   for existing on-disk action YAMLs (rewrites committed files → opt-in).
 - Detox parity; `swipe` / `fill` occlusion handling.
 
+## Post-verification addition — Android replay-runner routing (B223)
+
+On-device verification found that the plugin's default L3 replay engine,
+maestro-runner v1.0.9 (DeviceLab.dev), **silently no-ops `hideKeyboard` on
+Android** (reports pass in ~5ms; `dumpsys input_method` shows `mInputShown=true`
+after), while official Maestro v2.3.0 dismisses it. So the generation-time
+injection alone, replayed via the default runner, did not actually fix Android.
+
+Added in this phase: `chooseMaestroDispatch` (`maestro-dispatch.ts`) gains a
+`flowHasHideKeyboard` input; on **Android** it prefers the official Maestro CLI
+when a flow contains `hideKeyboard` (verified to dismiss the keyboard on-device),
+and falls through to maestro-runner with a `degradedReason` warning when the CLI
+is absent. `maestro_run` detects `hideKeyboard` in the parsed commands
+(`flowContainsHideKeyboard`) and passes the flag. iOS is unaffected
+(maestro-runner honors `hideKeyboard` there). The maestro-runner no-op itself is
+filed as **B223** for an upstream/runtime follow-up.
+
 ## Success criteria
 
 - Newly generated/saved Maestro action flows emit `- hideKeyboard` before any

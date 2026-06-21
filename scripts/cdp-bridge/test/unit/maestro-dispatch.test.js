@@ -184,7 +184,10 @@ test('#356/B223: android + hideKeyboard + NO maestro CLI → maestro-runner with
     maestroRunnerPath: () => '/runner',
   });
   assert.equal('runner' in d ? d.runner : null, 'maestro-runner');
-  assert.match('degradedReason' in d ? (d.degradedReason ?? '') : '', /will NOT be dismissed|brew install maestro/);
+  assert.match(
+    'degradedReason' in d ? (d.degradedReason ?? '') : '',
+    /will NOT be dismissed|brew install maestro/,
+  );
 });
 
 test('#356/B223: android WITHOUT hideKeyboard → maestro-runner unchanged (no degradedReason)', () => {
@@ -212,7 +215,10 @@ test('#356/B223: ios + hideKeyboard → maestro-runner (iOS honors hideKeyboard;
 });
 
 test('#356/B223: flowContainsHideKeyboard detects a bare hideKeyboard command', () => {
-  assert.equal(flowContainsHideKeyboard(['launchApp', 'hideKeyboard', { tapOn: { id: 'x' } }]), true);
+  assert.equal(
+    flowContainsHideKeyboard(['launchApp', 'hideKeyboard', { tapOn: { id: 'x' } }]),
+    true,
+  );
   assert.equal(flowContainsHideKeyboard([{ hideKeyboard: true }]), true);
   assert.equal(flowContainsHideKeyboard(['launchApp', { tapOn: { id: 'x' } }]), false);
   assert.equal(flowContainsHideKeyboard([]), false);
