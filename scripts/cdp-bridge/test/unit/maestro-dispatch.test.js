@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   chooseMaestroDispatch,
   _resetMaestroDispatchCache,
+  flowContainsHideKeyboard,
 } from '../../dist/tools/maestro-dispatch.js';
 
 test.beforeEach(() => _resetMaestroDispatchCache());
@@ -155,6 +156,66 @@ test('B59: Tier 1 wins when viable — does NOT use Maestro CLI just because bot
     maestroRunnerPath: () => '/runner',
   });
   assert.equal('runner' in d ? d.runner : null, 'maestro-runner', 'fast path must be preferred');
+});
+
+// ── #356 / B223: Android hideKeyboard routing ────────────────────────
+// maestro-runner v1.0.9 silently no-ops `hideKeyboard` on Android, defeating
+// the keyboard-occlusion guard. An Android flow that uses hideKeyboard must
+// prefer the official Maestro CLI (which honors it).
+
+test('#356/B223: android + hideKeyboard + maestro CLI present → official Maestro (not maestro-runner)', () => {
+  const d = chooseMaestroDispatch({
+    platform: 'android',
+    flowHasHideKeyboard: true,
+    whichAdb: () => '/adb',
+    whichMaestro: () => '/opt/homebrew/bin/maestro',
+    maestroRunnerPath: () => '/runner',
+  });
+  assert.equal('runner' in d ? d.runner : null, 'maestro');
+  assert.match('fallbackReason' in d ? (d.fallbackReason ?? '') : '', /hideKeyboard|B223/);
+});
+
+test('#356/B223: android + hideKeyboard + NO maestro CLI → maestro-runner with degradedReason warning', () => {
+  const d = chooseMaestroDispatch({
+    platform: 'android',
+    flowHasHideKeyboard: true,
+    whichAdb: () => '/adb',
+    whichMaestro: () => null,
+    maestroRunnerPath: () => '/runner',
+  });
+  assert.equal('runner' in d ? d.runner : null, 'maestro-runner');
+  assert.match('degradedReason' in d ? (d.degradedReason ?? '') : '', /will NOT be dismissed|brew install maestro/);
+});
+
+test('#356/B223: android WITHOUT hideKeyboard → maestro-runner unchanged (no degradedReason)', () => {
+  const d = chooseMaestroDispatch({
+    platform: 'android',
+    flowHasHideKeyboard: false,
+    whichAdb: () => '/adb',
+    whichMaestro: () => '/maestro',
+    maestroRunnerPath: () => '/runner',
+  });
+  assert.equal('runner' in d ? d.runner : null, 'maestro-runner');
+  assert.equal('degradedReason' in d && d.degradedReason !== undefined, false);
+});
+
+test('#356/B223: ios + hideKeyboard → maestro-runner (iOS honors hideKeyboard; routing is android-only)', () => {
+  const d = chooseMaestroDispatch({
+    platform: 'ios',
+    flowHasHideKeyboard: true,
+    whichAdb: () => '/adb',
+    whichMaestro: () => '/maestro',
+    maestroRunnerPath: () => '/runner',
+  });
+  assert.equal('runner' in d ? d.runner : null, 'maestro-runner');
+  assert.equal('degradedReason' in d && d.degradedReason !== undefined, false);
+});
+
+test('#356/B223: flowContainsHideKeyboard detects a bare hideKeyboard command', () => {
+  assert.equal(flowContainsHideKeyboard(['launchApp', 'hideKeyboard', { tapOn: { id: 'x' } }]), true);
+  assert.equal(flowContainsHideKeyboard([{ hideKeyboard: true }]), true);
+  assert.equal(flowContainsHideKeyboard(['launchApp', { tapOn: { id: 'x' } }]), false);
+  assert.equal(flowContainsHideKeyboard([]), false);
 });
 
 // ── Cache reset hook ─────────────────────────────────────────────────
