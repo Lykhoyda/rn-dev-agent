@@ -191,3 +191,84 @@ test('M7 Maestro: empty tags array is treated as omitted', () => {
   const out = generateMaestro([{ type: 'tap', testID: 'x', t: 1 }], { tags: [] });
   assert.doesNotMatch(out, /# tags:/);
 });
+
+test('#356 Maestro: hideKeyboard injected before a tap that follows type', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'tap', testID: 'submit', t: 2 },
+  ]);
+  assert.match(out, /# rn-dev-agent: keyboard-occlusion guard \(#356\)/);
+  const hk = out.indexOf('- hideKeyboard');
+  const input = out.indexOf('- inputText:');
+  const submitTap = out.indexOf('id: submit');
+  assert.ok(hk > -1, 'hideKeyboard should be injected');
+  assert.ok(hk > input, 'hideKeyboard comes after the inputText');
+  assert.ok(hk < submitTap, 'hideKeyboard comes before the submit tap');
+  const emailTap = out.indexOf('id: email');
+  assert.ok(
+    !out.slice(0, emailTap).includes('- hideKeyboard'),
+    'the focusing tap of the type step is NOT guarded',
+  );
+});
+
+test('#356 Maestro: no hideKeyboard when a tap is not preceded by type', () => {
+  const out = generateMaestro([{ type: 'tap', testID: 'submit', t: 1 }]);
+  assert.ok(!out.includes('- hideKeyboard'), 'no keyboard, no injection');
+});
+
+test('#356 Maestro: single hideKeyboard for type then two taps', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'tap', testID: 'next', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const count = (out.match(/- hideKeyboard/g) || []).length;
+  assert.equal(count, 1, 'flag cleared after first guarded tap');
+  assert.ok(out.indexOf('- hideKeyboard') < out.indexOf('id: next'));
+});
+
+test('#356 Maestro: navigate resets keyboard state (no injection after nav)', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'navigate', from: 'A', to: 'B', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  assert.ok(!out.includes('- hideKeyboard'), 'navigation dismisses the keyboard');
+});
+
+test('#356 Maestro: consecutive types inject once before the final tap', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'first', value: 'x', t: 1 },
+    { type: 'type', testID: 'second', value: 'y', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const count = (out.match(/- hideKeyboard/g) || []).length;
+  assert.equal(count, 1, 'one injection for the trailing button tap');
+  const secondTap = out.indexOf('id: second');
+  assert.ok(
+    !out.slice(0, secondTap).includes('- hideKeyboard'),
+    'the focusing tap of the second type is not guarded',
+  );
+  assert.ok(out.indexOf('- hideKeyboard') < out.indexOf('id: submit'));
+});
+
+test('#356 Maestro: submit (Enter) does not reset keyboard state', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'submit', t: 2 },
+    { type: 'tap', testID: 'submit', t: 3 },
+  ]);
+  const hk = out.indexOf('- hideKeyboard');
+  assert.ok(hk > -1, 'still guarded after submit');
+  assert.ok(hk < out.indexOf('id: submit'));
+});
+
+test('#356 Maestro: long_press following type is guarded', () => {
+  const out = generateMaestro([
+    { type: 'type', testID: 'email', value: 'a@b.c', t: 1 },
+    { type: 'long_press', testID: 'avatar', t: 2 },
+  ]);
+  const hk = out.indexOf('- hideKeyboard');
+  assert.ok(hk > -1, 'long_press is guarded too');
+  assert.ok(hk < out.indexOf('- longPressOn:'));
+});

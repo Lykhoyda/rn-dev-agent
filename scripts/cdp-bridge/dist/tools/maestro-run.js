@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
-import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
@@ -89,12 +89,9 @@ export function createMaestroRunHandler() {
         if (!platform) {
             return failResult('Cannot determine platform. Pass platform or open a device session first.');
         }
-        // B59: tiered dispatch — maestro-runner when viable, Maestro CLI fallback
-        // when iOS-only and adb is missing, fail-fast with install hints when neither.
-        const dispatch = chooseMaestroDispatch({ platform });
-        if ('error' in dispatch) {
-            return failResult(dispatch.error);
-        }
+        // GH #356/B223: the dispatch tier depends on whether the validated flow
+        // uses hideKeyboard on Android, so the runner is chosen AFTER parsing below.
+        let flowHasHideKeyboard = false;
         // Phase 134.1 (deepsec CRITICAL #4): both inlineYaml and flowPath
         // are caller-controlled. Parse, validate against the command allowlist
         // (rejecting runScript and other host-executing directives by default),
@@ -132,6 +129,7 @@ export function createMaestroRunHandler() {
                 ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
                 : {};
             const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+            flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
             const rawAppId = resolveAppId(args.appId, platform);
             headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
             if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
@@ -150,6 +148,13 @@ export function createMaestroRunHandler() {
                 return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
             }
             throw err;
+        }
+        // B59 + GH #356/B223: tiered dispatch — maestro-runner when viable, Maestro
+        // CLI fallback when iOS-only and adb is missing, and (B223) the Maestro CLI
+        // for Android flows that use hideKeyboard (maestro-runner no-ops it there).
+        const dispatch = chooseMaestroDispatch({ platform, flowHasHideKeyboard });
+        if ('error' in dispatch) {
+            return failResult(dispatch.error);
         }
         const timeout = args.timeoutMs ?? 120_000;
         // GH #116: build the final argv. Start with the dispatch tier's
@@ -196,19 +201,23 @@ export function createMaestroRunHandler() {
                 timedOut: false,
                 outputTruncated: false,
                 ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
+                ...(dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {}),
             };
+            // GH #356/B223: a degradedReason (Android hideKeyboard with no Maestro CLI)
+            // is a caveat surfaced the same way as a fallbackReason.
+            const caveat = dispatch.fallbackReason ?? dispatch.degradedReason;
             if (passed) {
                 // B59 (Gemini review, conf 82): on success-with-fallback, only emit
                 // a loud warning the FIRST time per process so a 100-flow loop
                 // doesn't generate 100 identical warnings. Subsequent successes
-                // carry the reason silently in meta.fallbackReason.
-                if (dispatch.fallbackReason && shouldWarnFallback(dispatch.fallbackReason)) {
-                    return warnResult(meta, dispatch.fallbackReason);
+                // carry the reason silently in meta.
+                if (caveat && shouldWarnFallback(caveat)) {
+                    return warnResult(meta, caveat);
                 }
                 return okResult(meta);
             }
-            const baseWarnMsg = dispatch.fallbackReason
-                ? `${dispatch.fallbackReason}; flow completed with warnings or failures`
+            const baseWarnMsg = caveat
+                ? `${caveat}; flow completed with warnings or failures`
                 : 'Flow completed with warnings or failures';
             // GH #263: classify on the FULL output (not the sliced meta.output).
             const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);

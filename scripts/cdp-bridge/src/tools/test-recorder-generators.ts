@@ -184,13 +184,21 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
   // tap; skip them here to avoid double-emission.
   const consumedNavIndices = new Set<number>();
 
+  let keyboardLikelyUp = false;
+
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     switch (ev.type) {
       case 'tap': {
         const sel = maestroSelector(ev);
-        if (sel) lines.push(`- tapOn:\n    ${sel}`);
-        else lines.push('# tap: missing testID/label');
+        if (sel) {
+          if (keyboardLikelyUp) {
+            lines.push('# rn-dev-agent: keyboard-occlusion guard (#356)');
+            lines.push('- hideKeyboard');
+            keyboardLikelyUp = false;
+          }
+          lines.push(`- tapOn:\n    ${sel}`);
+        } else lines.push('# tap: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
           lines.push(
@@ -204,8 +212,14 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
       }
       case 'long_press': {
         const sel = maestroSelector(ev);
-        if (sel) lines.push(`- longPressOn:\n    ${sel}`);
-        else lines.push('# long_press: missing testID/label');
+        if (sel) {
+          if (keyboardLikelyUp) {
+            lines.push('# rn-dev-agent: keyboard-occlusion guard (#356)');
+            lines.push('- hideKeyboard');
+            keyboardLikelyUp = false;
+          }
+          lines.push(`- longPressOn:\n    ${sel}`);
+        } else lines.push('# long_press: missing testID/label');
         const hit = lookaheadNavigate(events, i);
         if (hit) {
           lines.push(
@@ -222,6 +236,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         if (sel) {
           lines.push(`- tapOn:\n    ${sel}`);
           lines.push(`- inputText: ${JSON.stringify(ev.value)}`);
+          keyboardLikelyUp = true;
         } else {
           lines.push(`# type: missing testID/label, value=${JSON.stringify(ev.value)}`);
         }
@@ -249,6 +264,7 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
         break;
       }
       case 'navigate': {
+        keyboardLikelyUp = false;
         if (consumedNavIndices.has(i)) break;
         const next = nextSelector(events, i, maestroSelector);
         lines.push(`# navigated: ${stripNewlines(ev.from ?? '?')} -> ${stripNewlines(ev.to)}`);

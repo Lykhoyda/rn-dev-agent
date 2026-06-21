@@ -33,14 +33,30 @@ export interface MaestroDispatch {
    */
   buildArgs(platform: 'ios' | 'android', flowFile: string, appFile?: string): string[];
   /**
-   * Present when the fallback runner was chosen — surfaces in caller's
-   * warnResult so users see why the slower path was used.
+   * Present when a non-default runner was deliberately chosen — the B59 CLI
+   * fallback (iOS-only, no adb) OR the B223 CLI preference (Android flow uses
+   * hideKeyboard, which maestro-runner no-ops). Surfaces in the caller's
+   * warnResult so users see why the chosen path differs from the default.
    */
   fallbackReason?: string;
+  /**
+   * GH #356 / B223: set when an Android flow needs `hideKeyboard` but the
+   * official Maestro CLI is unavailable, so we fell back to maestro-runner —
+   * which silently no-ops `hideKeyboard` on Android. Surfaces a warning so the
+   * user knows the keyboard will not actually be dismissed.
+   */
+  degradedReason?: string;
 }
 
 export interface MaestroDispatchInputs {
   platform: 'ios' | 'android';
+  /**
+   * GH #356 / B223: the flow contains a `hideKeyboard` step. maestro-runner
+   * v1.0.9 silently no-ops `hideKeyboard` on Android (reports pass in ~5ms,
+   * keyboard stays up). When set on Android, prefer the official Maestro CLI,
+   * which honors `hideKeyboard`. No effect on iOS (maestro-runner honors it).
+   */
+  flowHasHideKeyboard?: boolean;
   /** Override for tests. Defaults to `which adb` via spawnSync. */
   whichAdb?: () => string | null;
   /** Override for tests. Defaults to `which maestro` via spawnSync. */
@@ -107,12 +123,50 @@ export interface MaestroDispatchError {
   hint: string;
 }
 
+/**
+ * GH #356 / B223: detect whether a parsed Maestro flow contains a
+ * `hideKeyboard` step. Maestro represents it as the bare string command
+ * `'hideKeyboard'`; we also accept the object form `{ hideKeyboard: ... }`
+ * defensively. Used to route Android hideKeyboard flows to the official
+ * Maestro CLI (maestro-runner no-ops hideKeyboard on Android).
+ */
+export function flowContainsHideKeyboard(commands: readonly unknown[]): boolean {
+  return commands.some(
+    (c) =>
+      c === 'hideKeyboard' ||
+      (typeof c === 'object' && c !== null && 'hideKeyboard' in (c as Record<string, unknown>)),
+  );
+}
+
 export function chooseMaestroDispatch(
   inputs: MaestroDispatchInputs,
 ): MaestroDispatch | MaestroDispatchError {
   const whichAdb = inputs.whichAdb ?? defaultWhichAdb;
   const whichMaestro = inputs.whichMaestro ?? defaultWhichMaestro;
   const runnerPath = (inputs.maestroRunnerPath ?? defaultMaestroRunnerPath)();
+
+  // GH #356 / B223: maestro-runner v1.0.9 silently no-ops `hideKeyboard` on
+  // Android (reports pass in ~5ms, `mInputShown` stays true), which defeats the
+  // keyboard-occlusion guard's whole purpose. When an Android flow contains a
+  // hideKeyboard step, prefer the official Maestro CLI — verified to honor it on
+  // Android (`mInputShown=false` after). iOS maestro-runner honors hideKeyboard,
+  // so this only applies to Android.
+  const needsOfficialForKeyboard =
+    inputs.platform === 'android' && inputs.flowHasHideKeyboard === true;
+  if (needsOfficialForKeyboard) {
+    const maestroPath = whichMaestro();
+    if (maestroPath) {
+      return {
+        runner: 'maestro',
+        binPath: maestroPath,
+        buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
+        fallbackReason:
+          'Android flow uses hideKeyboard; maestro-runner v1.0.9 no-ops it on Android (B223) — using the Maestro CLI so the keyboard is actually dismissed',
+      };
+    }
+    // CLI unavailable: fall through to maestro-runner (Tier 1) but mark the
+    // result degraded so the caller warns the keyboard will not be dismissed.
+  }
 
   // Tier 1: maestro-runner. Viable when (a) the binary is installed and
   // (b) we're on android OR adb is reachable (so the upstream bug doesn't bite).
@@ -126,6 +180,12 @@ export function chooseMaestroDispatch(
         appFile
           ? ['--app-file', appFile, '--platform', platform, 'test', flowFile]
           : ['--platform', platform, 'test', flowFile],
+      ...(needsOfficialForKeyboard
+        ? {
+            degradedReason:
+              'Android flow uses hideKeyboard but the Maestro CLI is not installed; maestro-runner v1.0.9 no-ops hideKeyboard on Android (B223), so the keyboard will NOT be dismissed. Install the Maestro CLI (`brew install maestro`) for the keyboard-occlusion fix to work on Android.',
+          }
+        : {}),
     };
   }
 

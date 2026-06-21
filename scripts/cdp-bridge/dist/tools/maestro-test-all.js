@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js';
+import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
@@ -65,6 +65,9 @@ export function createMaestroTestAllHandler() {
         const results = [];
         let passed = 0;
         let failed = 0;
+        // GH #356/B223: surfaced once if any Android flow needed hideKeyboard but
+        // the Maestro CLI was unavailable, so it ran on maestro-runner (no-op).
+        let keyboardCaveat = null;
         for (const flow of flows) {
             const name = flow.replace(flowDir + '/', '');
             const start = Date.now();
@@ -77,9 +80,11 @@ export function createMaestroTestAllHandler() {
             // any inert metadata or duplicated headers can't sneak through.
             let safeFlowFile;
             let appFile;
+            let flowHasHideKeyboard = false;
             try {
                 const yamlText = readFileSync(flow, 'utf-8');
                 const parsed = parseAndValidateFlow(yamlText);
+                flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
                 const canonical = buildMaestroFlow(parsed.appId !== undefined ? { appId: parsed.appId } : {}, parsed.commands);
                 safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
                 writeFileSync(safeFlowFile, canonical, 'utf-8');
@@ -115,8 +120,20 @@ export function createMaestroTestAllHandler() {
                     break;
                 continue;
             }
+            // GH #356/B223: Android flows that use hideKeyboard must run via the
+            // official Maestro CLI (maestro-runner no-ops hideKeyboard on Android).
+            // Re-route per flow; fall back to the base dispatch if re-selection errors.
+            let flowDispatch = dispatch;
+            if (platform === 'android' && flowHasHideKeyboard) {
+                const rerouted = chooseMaestroDispatch({ platform, flowHasHideKeyboard: true });
+                if (!('error' in rerouted)) {
+                    flowDispatch = rerouted;
+                    if (rerouted.degradedReason)
+                        keyboardCaveat ??= rerouted.degradedReason;
+                }
+            }
             try {
-                const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, dispatch.buildArgs(platform, safeFlowFile, appFile), {
+                const { stdout, stderr } = await runFlowParked(() => execFile(flowDispatch.binPath, flowDispatch.buildArgs(platform, safeFlowFile, appFile), {
                     timeout,
                     encoding: 'utf8',
                     maxBuffer: 10 * 1024 * 1024,
@@ -153,6 +170,9 @@ export function createMaestroTestAllHandler() {
                     break;
             }
         }
+        // GH #356/B223: surface the base dispatch's fallback reason, or (if any
+        // Android hideKeyboard flow had to degrade to maestro-runner) the keyboard caveat.
+        const batchCaveat = dispatch.fallbackReason ?? keyboardCaveat;
         const summary = {
             total: flows.length,
             executed: results.length,
@@ -161,18 +181,18 @@ export function createMaestroTestAllHandler() {
             platform,
             flowDir,
             runner: dispatch.runner,
-            ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
+            ...(batchCaveat ? { fallbackReason: batchCaveat } : {}),
             results,
         };
         if (failed > 0) {
             const baseMsg = `${failed} of ${results.length} flows failed`;
-            return warnResult(summary, dispatch.fallbackReason ? `${dispatch.fallbackReason}; ${baseMsg}` : baseMsg);
+            return warnResult(summary, batchCaveat ? `${batchCaveat}; ${baseMsg}` : baseMsg);
         }
         // B59 (Gemini review, conf 82): suppress repeated success-with-fallback
         // warnings within the same process — first call surfaces, subsequent
         // calls keep the reason in meta only.
-        if (dispatch.fallbackReason && shouldWarnFallback(dispatch.fallbackReason)) {
-            return warnResult(summary, dispatch.fallbackReason);
+        if (batchCaveat && shouldWarnFallback(batchCaveat)) {
+            return warnResult(summary, batchCaveat);
         }
         return okResult(summary);
     };
