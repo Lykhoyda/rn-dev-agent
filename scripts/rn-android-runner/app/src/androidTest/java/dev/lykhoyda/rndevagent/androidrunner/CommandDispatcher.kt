@@ -4,11 +4,13 @@
  */
 package dev.lykhoyda.rndevagent.androidrunner
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Base64
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
@@ -32,6 +34,15 @@ class SnapshotParseException(message: String) : IllegalStateException(message)
 
 class CommandDispatcher(private val instrumentation: Instrumentation) {
     private val device: UiDevice = UiDevice.getInstance(instrumentation)
+
+    init {
+        val ua = instrumentation.uiAutomation
+        val info = ua.serviceInfo
+        if (info != null) {
+            info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            ua.serviceInfo = info
+        }
+    }
 
     fun dispatch(cmd: JSONObject): JSONObject {
         val command = cmd.getString("command")
@@ -124,7 +135,28 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
     private fun tap(cmd: JSONObject): JSONObject {
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
-        return JSONObject().put("x", x).put("y", y).put("tapped", device.click(x, y))
+        val kb = applyKeyboardGuard(cmd, x, y)
+        return JSONObject().put("x", x).put("y", y).put("tapped", device.click(x, y)).put("keyboardGuard", kb)
+    }
+
+    private fun imeBoundsInScreen(): Rect? {
+        val ime = instrumentation.uiAutomation.windows
+            .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD } ?: return null
+        val r = Rect()
+        ime.getBoundsInScreen(r)
+        return if (r.isEmpty) null else r
+    }
+
+    private fun applyKeyboardGuard(cmd: JSONObject, x: Int, y: Int): String {
+        if (!cmd.optBoolean("guardKeyboard", true)) return "off"
+        val b = imeBoundsInScreen() ?: return "no_keyboard"
+        return if (KeyboardGuard.shouldDismiss(b.left, b.top, b.right, b.bottom, x, y, 150)) {
+            device.pressBack()
+            device.waitForIdle()
+            "dismissed"
+        } else {
+            "not_occluded"
+        }
     }
 
     private fun type(cmd: JSONObject): JSONObject {
@@ -157,8 +189,9 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
         val durationMs = cmd.optInt("durationMs", 600)
+        val kb = applyKeyboardGuard(cmd, x, y)
         val ok = device.swipe(x, y, x, y, durationToSteps(durationMs))
-        return JSONObject().put("x", x).put("y", y).put("durationMs", durationMs).put("pressed", ok)
+        return JSONObject().put("x", x).put("y", y).put("durationMs", durationMs).put("pressed", ok).put("keyboardGuard", kb)
     }
 
     private fun pinch(cmd: JSONObject): JSONObject {
