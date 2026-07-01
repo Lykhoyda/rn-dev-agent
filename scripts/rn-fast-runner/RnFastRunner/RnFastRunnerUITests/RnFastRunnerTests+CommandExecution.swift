@@ -205,6 +205,13 @@ extension RnFastRunnerTests {
       }
       if let x = command.x, let y = command.y {
         let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+        let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+        if keyboardGuardStatus == "dismiss_failed" {
+          return Response(
+            ok: false,
+            error: ErrorPayload(message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+          )
+        }
         var outcome = RunnerInteractionOutcome.performed
         let timing = measureGesture {
           withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
@@ -223,7 +230,8 @@ extension RnFastRunnerTests {
             x: touchFrame.x,
             y: touchFrame.y,
             referenceWidth: touchFrame.referenceWidth,
-            referenceHeight: touchFrame.referenceHeight
+            referenceHeight: touchFrame.referenceHeight,
+            keyboardGuard: keyboardGuardStatus
           )
         )
       }
@@ -326,6 +334,13 @@ extension RnFastRunnerTests {
       }
       let duration = (command.durationMs ?? 800) / 1000.0
       let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+      let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+      if keyboardGuardStatus == "dismiss_failed" {
+        return Response(
+          ok: false,
+          error: ErrorPayload(message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+        )
+      }
       var outcome = RunnerInteractionOutcome.performed
       let timing = measureGesture {
         withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
@@ -344,7 +359,8 @@ extension RnFastRunnerTests {
           x: touchFrame.x,
           y: touchFrame.y,
           referenceWidth: touchFrame.referenceWidth,
-          referenceHeight: touchFrame.referenceHeight
+          referenceHeight: touchFrame.referenceHeight,
+          keyboardGuard: keyboardGuardStatus
         )
       )
     case .drag:

@@ -7,6 +7,7 @@ import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
+import { withKeyboardGuard } from './keyboard-guard.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -712,7 +713,9 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.depth !== undefined) body.depth = args.depth;
   if (args.scope !== undefined) body.scope = args.scope;
 
-  const resp = await postCommand(body);
+  const resp = await postCommand(
+    withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+  );
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;

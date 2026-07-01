@@ -72,3 +72,24 @@ Decision table for build workflows:
 | adb shows "unauthorized" | Revoke USB debugging, reconnect, tap Allow |
 | Screenshot hangs | Wait for home screen, verify boot completed |
 | uiautomator dump fails | Wake screen with keyevent WAKEUP |
+
+### Keyboard-occlusion guard
+
+`device_press` and `device_longpress` guard against tapping through a software keyboard by default. Before the tap lands, the runner checks whether a visible keyboard's frame contains the tap point (a sanity-checked rect — min height 120pt iOS / 150px Android, so a predictive-text accessory bar doesn't count) and dismisses it first if so.
+
+| `meta.keyboardGuard` | Meaning |
+|---|---|
+| `off` | Guard disabled (`RN_KEYBOARD_GUARD=0`) |
+| `no_keyboard` | No keyboard was visible |
+| `not_occluded` | Keyboard visible but the tap point was clear of it |
+| `dismissed` | Keyboard was occluding the tap point and was dismissed first |
+
+Platform behavior differs because the safe dismissal mechanism differs:
+- **Android** — `pressBack` + a bounded wait for the UI to settle (~3.6s measured). Only fires when a real input-method window with sane bounds contains the tap point, so it never triggers an unrelated back-navigation.
+- **iOS** — verify-or-refuse. The runner only ever taps a genuine dismiss control ("Hide keyboard" / "Dismiss keyboard" / "Done") and re-verifies the keyboard is gone. On the standard iPhone QWERTY keyboard, which has no such control, the tap is **refused** with a `KEYBOARD_OCCLUDED` error (`keyboardGuard=dismiss_failed`) instead of swiping the keyboard closed — a swipe-based dismiss triggers QuickPath slide-typing and corrupts whatever the keyboard was over.
+
+If you hit `KEYBOARD_OCCLUDED` on iOS: dismiss the keyboard yourself first (`device_fill`/`cdp_interact` type through the JS path and don't require the keyboard to be down, or tap a non-input area of the screen) and then retry the tap.
+
+Opt out entirely with `RN_KEYBOARD_GUARD=0` (or `false`) if the guard gets in the way of a flow you control precisely.
+
+Only `device_press`/`device_longpress`-style taps are guarded — `tapSeries`, text-based taps, swipes/scrolls/drags, and `doubleTap` are unaffected.

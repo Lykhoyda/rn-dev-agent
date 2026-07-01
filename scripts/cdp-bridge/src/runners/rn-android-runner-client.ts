@@ -11,6 +11,7 @@ import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
+import { withKeyboardGuard } from './keyboard-guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -592,7 +593,9 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   let resp: RunnerResponse;
   try {
     await startAndroidRunner(args.deviceId, args.bundleId);
-    resp = await postCommand(body);
+    resp = await postCommand(
+      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+    );
   } catch (err) {
     const m = errMessage(err);
     // GH#243: a connection failure (runner just restarted after a flow, or can't bind

@@ -9,6 +9,7 @@ import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
+import { withKeyboardGuard } from './keyboard-guard.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
@@ -468,7 +469,7 @@ export async function runAndroid(args) {
     let resp;
     try {
         await startAndroidRunner(args.deviceId, args.bundleId);
-        resp = await postCommand(body);
+        resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
     }
     catch (err) {
         const m = errMessage(err);

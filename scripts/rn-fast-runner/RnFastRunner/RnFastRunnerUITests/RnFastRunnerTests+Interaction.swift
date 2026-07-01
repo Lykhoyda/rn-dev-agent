@@ -354,6 +354,30 @@ extension RnFastRunnerTests {
 #endif
   }
 
+  func keyboardFrameIfVisible(app: XCUIApplication) -> CGRect? {
+    let keyboard = app.keyboards.firstMatch
+    guard keyboard.exists else { return nil }
+    let frame = keyboard.frame
+    return frame.isEmpty ? nil : frame
+  }
+
+  func applyKeyboardGuard(app: XCUIApplication, tapX: Double, tapY: Double, enabled: Bool) -> String {
+#if os(tvOS)
+    return "off"
+#else
+    guard enabled else { return "off" }
+    guard let frame = keyboardFrameIfVisible(app: app) else { return "no_keyboard" }
+    guard KeyboardGuard.shouldDismiss(keyboardFrame: frame, tapPoint: CGPoint(x: tapX, y: tapY), minHeight: 120) else {
+      return "not_occluded"
+    }
+    if tapKeyboardDismissControl(app: app) {
+      sleepFor(0.2)
+      if !isKeyboardVisible(app: app) { return "dismissed" }
+    }
+    return "dismiss_failed"
+#endif
+  }
+
   private func tapKeyboardDismissControl(app: XCUIApplication) -> Bool {
 #if os(tvOS)
     return false
