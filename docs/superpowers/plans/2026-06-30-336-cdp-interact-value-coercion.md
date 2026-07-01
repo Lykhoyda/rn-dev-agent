@@ -270,12 +270,13 @@ In `scripts/cdp-bridge/src/injected-helpers.ts`, replace the `press` block (1329
         } else {
           props.onPress({ nativeEvent: {} });
         }
-        return JSON.stringify({
-          success: true, action: 'press', component: typeName, testID: selector,
-          ...(opts.value !== undefined ? { value: opts.value } : {})
-        });
+        var pressResult = { success: true, action: 'press', component: typeName, testID: selector };
+        if (opts.value !== undefined) pressResult.value = opts.value;
+        return JSON.stringify(pressResult);
       }
 ```
+
+> **Amendment (multi-LLM plan review, Codex + Gemini):** the injected-helpers runtime string is deliberately ES5-only (no object-spread/arrow outside string literals) so it stays safe on older Hermes. The `press` return is therefore built imperatively (`var pressResult = {…}; if (opts.value !== undefined) pressResult.value = opts.value;`) instead of with object-spread. Result shape is identical, so the Task 2 tests are unchanged.
 
 - [ ] **Step 4: Update the schema descriptions in `index.ts`**
 

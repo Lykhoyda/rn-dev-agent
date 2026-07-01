@@ -38,8 +38,9 @@ workarounds.
 
 ## Approach
 
-Both fixes live in the **injected helpers** (deterministic, unit-testable via
-`test/unit/helpers/inject-harness.js`). `interact.ts` already forwards `value` for
+Both fixes live in the **injected helpers** (deterministic, unit-testable via the
+`runInteract` VM-sandbox harness copied from `test/unit/gh-126-set-field-value.test.js`).
+`interact.ts` already forwards `value` for
 every action, so there is **no TS handler logic change**. `index.ts` gets schema
 *description* updates only (the union stays `string|number|boolean`). Bump
 `HELPERS_VERSION` 32 → 33 so on-device helpers re-inject on next use.
@@ -117,7 +118,7 @@ if (action === 'press') {
 
 ## Testing
 
-**Unit (primary, via `inject-harness.js`):**
+**Unit (primary, via the `runInteract` VM harness copied from gh-126):**
 - Bug #2: string-field (`getValues` → `''`) + number → `setValue` receives
   `"15112345678"` (string) and `coercedToString:true`; numeric field
   (`getValues` → `undefined`/`{}`) + `42` → unchanged number (re-assert gh-126);
