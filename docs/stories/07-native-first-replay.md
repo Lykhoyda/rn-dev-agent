@@ -1,7 +1,18 @@
 # Story 07 — Native-first action replay: own runners as the primary transport, Maestro YAML as interchange
 
-**Status:** Proposed (2026-07-02)
+**Status:** POSTPONED (2026-07-02, maintainer call — D1290). Near-term replay direction is [Story 13 — seamless maestro-runner (Go) integration](13-maestro-runner-seamless-integration.md); this story is the documented escalation path if that integration hits a wall (e.g. WDA-blindness spreads beyond iOS 26 bridgeless, or upstream stalls).
 **Epic:** [Maestro adoption](README.md)
+
+## Effort assessment (recorded 2026-07-02, basis for the postponement call)
+
+"Alternative to maestro-runner" is two things: a **device driver layer** and a **flow-execution brain**. The driver layer — the genuinely hard, years-of-fixes part — already exists in-tree (rn-fast-runner, rn-android-runner) and works where WDA is blind. What this story builds is only the brain:
+
+- Core interpreter + `NativeDispatch` over existing handlers: **~1–2 weeks** (pure TS, unit-testable).
+- With prerequisites (Story 04 settle engine, Story 05 re-resolution): **~3–4 weeks** to native-first-on-iOS-26.
+- Parity confidence to flip the default everywhere: **plus several weeks of dogfood telemetry** — WDA's implicit-wait tuning has years of edge cases baked in, and that long tail (transitions, modals, toasts mid-flow) only surfaces in use.
+- From-scratch equivalent *without* the in-tree runners would be a multi-month project; the drivers are the moat and they're done.
+
+Scope-saver if/when resumed: this executor replays flows the agent recorded against the user's own RN app (self-placed testIDs, CDP side-channel) — a far easier correctness target than Maestro's any-app-cold generality; `UNSUPPORTED_STEP` refusals stay the fence.
 **Impact:** Fully resolves the iOS 26.x bridgeless transport-blindness (#317) instead of falling back around it; removes WDA/maestro-runner from the replay critical path; unlocks hybrid (UI + state) assertions — the flagship differentiator
 **Effort:** L
 **Depends on:** Story 04 (settle), Story 05 (self-healing resolution); Story 10 improves `inputText` under it
