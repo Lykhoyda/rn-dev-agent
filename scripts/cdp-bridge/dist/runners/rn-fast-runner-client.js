@@ -4,6 +4,7 @@ import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
+import { withKeyboardGuard } from './keyboard-guard.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -508,7 +509,7 @@ export async function runIOS(args) {
         body.depth = args.depth;
     if (args.scope !== undefined)
         body.scope = args.scope;
-    const resp = await postCommand(body);
+    const resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
