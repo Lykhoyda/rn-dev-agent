@@ -56,7 +56,7 @@ struct Command: Codable {
   let scope: String?
   let raw: Bool?
   let fullscreen: Bool?
-  let guardKeyboard: Bool? = nil
+  var guardKeyboard: Bool? = nil
 }
 
 struct Response: Codable {

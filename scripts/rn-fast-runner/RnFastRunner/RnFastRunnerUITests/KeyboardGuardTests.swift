@@ -20,4 +20,9 @@ final class KeyboardGuardTests: XCTestCase {
     let floating = CGRect(x: 40, y: 500, width: 300, height: 300)
     XCTAssertFalse(KeyboardGuard.shouldDismiss(keyboardFrame: floating, tapPoint: CGPoint(x: 10, y: 600), minHeight: 120))
   }
+  func testCommandDecodesGuardKeyboardFalse() throws {
+    let json = #"{"command":"tap","x":1,"y":2,"guardKeyboard":false}"#.data(using: .utf8)!
+    let cmd = try JSONDecoder().decode(Command.self, from: json)
+    XCTAssertEqual(cmd.guardKeyboard, false)
+  }
 }
