@@ -56,6 +56,7 @@ struct Command: Codable {
   let scope: String?
   let raw: Bool?
   let fullscreen: Bool?
+  let guardKeyboard: Bool? = nil
 }
 
 struct Response: Codable {
@@ -90,6 +91,7 @@ struct DataPayload: Codable {
   let wasVisible: Bool?
   let dismissed: Bool?
   let orientation: String?
+  let keyboardGuard: String?
 
   init(
     message: String? = nil,
@@ -110,7 +112,8 @@ struct DataPayload: Codable {
     visible: Bool? = nil,
     wasVisible: Bool? = nil,
     dismissed: Bool? = nil,
-    orientation: String? = nil
+    orientation: String? = nil,
+    keyboardGuard: String? = nil
   ) {
     self.message = message
     self.text = text
@@ -131,6 +134,7 @@ struct DataPayload: Codable {
     self.wasVisible = wasVisible
     self.dismissed = dismissed
     self.orientation = orientation
+    self.keyboardGuard = keyboardGuard
   }
 }
 

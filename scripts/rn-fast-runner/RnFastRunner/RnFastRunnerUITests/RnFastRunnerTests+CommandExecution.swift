@@ -205,6 +205,7 @@ extension RnFastRunnerTests {
       }
       if let x = command.x, let y = command.y {
         let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+        let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
         var outcome = RunnerInteractionOutcome.performed
         let timing = measureGesture {
           withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
@@ -223,7 +224,8 @@ extension RnFastRunnerTests {
             x: touchFrame.x,
             y: touchFrame.y,
             referenceWidth: touchFrame.referenceWidth,
-            referenceHeight: touchFrame.referenceHeight
+            referenceHeight: touchFrame.referenceHeight,
+            keyboardGuard: keyboardGuardStatus
           )
         )
       }
@@ -326,6 +328,7 @@ extension RnFastRunnerTests {
       }
       let duration = (command.durationMs ?? 800) / 1000.0
       let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+      let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
       var outcome = RunnerInteractionOutcome.performed
       let timing = measureGesture {
         withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
@@ -344,7 +347,8 @@ extension RnFastRunnerTests {
           x: touchFrame.x,
           y: touchFrame.y,
           referenceWidth: touchFrame.referenceWidth,
-          referenceHeight: touchFrame.referenceHeight
+          referenceHeight: touchFrame.referenceHeight,
+          keyboardGuard: keyboardGuardStatus
         )
       )
     case .drag:
