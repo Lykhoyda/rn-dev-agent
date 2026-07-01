@@ -984,7 +984,7 @@ trackedTool(
       .union([z.string(), z.number(), z.boolean()])
       .optional()
       .describe(
-        'Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field is string-typed). For press: when provided, onPress receives this value instead of a synthetic event — use for radio/chip-style value-bearing controls.',
+        'Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string — give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event — use for radio/chip-style value-bearing controls.',
       ),
     shouldValidate: z
       .boolean()
