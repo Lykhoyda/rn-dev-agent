@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
+import { surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
@@ -175,7 +176,7 @@ function runnerLeakFailResult(query, recoveryReason) {
 export async function pressCandidate(candidate, action) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
     if (action === 'click') {
-        return runNative(['press', ref]);
+        return surfaceKeyboardGuard(await runNative(['press', ref]));
     }
     return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -336,7 +337,7 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = await runNative(cliArgs);
+        const result = surfaceKeyboardGuard(await runNative(cliArgs));
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }
@@ -344,19 +345,19 @@ export function createDevicePressHandler() {
     });
 }
 export function createDeviceLongPressHandler() {
-    return withSession((args) => {
+    return withSession(async (args) => {
         if (args.ref) {
             const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
             const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
-            return runNative(cliArgs);
+            return surfaceKeyboardGuard(await runNative(cliArgs));
         }
         if (args.x != null && args.y != null) {
             const cliArgs = ['longpress', String(args.x), String(args.y)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
-            return runNative(cliArgs);
+            return surfaceKeyboardGuard(await runNative(cliArgs));
         }
-        return Promise.resolve(failResult('Provide either ref or x+y coordinates'));
+        return failResult('Provide either ref or x+y coordinates');
     });
 }
 // Splits a chunk into segments where no segment, after space→%s encoding,
