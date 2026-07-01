@@ -177,14 +177,14 @@ cmd_stop() {
         adb_args+=(-s "$(cat "$serialf")")
       fi
       # Ensure remote screenrecord is stopped (local SIGINT may not propagate)
-      adb "${adb_args[@]}" shell pkill -2 screenrecord 2>/dev/null || true
+      adb "${adb_args[@]+"${adb_args[@]}"}" shell pkill -2 screenrecord 2>/dev/null || true
       local device_pathf="${PID_PREFIX}-${platform}.device-path"
       if [[ -f "$device_pathf" ]]; then
         local device_path
         device_path="$(cat "$device_pathf")"
         sleep 2
-        adb "${adb_args[@]}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
-        adb "${adb_args[@]}" shell rm -f "$device_path" 2>/dev/null || true
+        adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+        adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
         rm -f "$device_pathf"
       fi
       rm -f "$serialf"
