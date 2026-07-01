@@ -8,8 +8,24 @@ import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 
 function runInteract(buildFiber, interactOpts) {
   const sandbox = {
-    Array, Object, JSON, Map, WeakSet, Set, Error, Date, RegExp, Symbol,
-    parseInt, parseFloat, String, Number, Boolean, Promise, setTimeout, clearTimeout,
+    Array,
+    Object,
+    JSON,
+    Map,
+    WeakSet,
+    Set,
+    Error,
+    Date,
+    RegExp,
+    Symbol,
+    parseInt,
+    parseFloat,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    setTimeout,
+    clearTimeout,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
@@ -36,9 +52,18 @@ function buildFormTree(formReturn) {
     const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
     const provider = {
       type: { displayName: 'FormProvider' },
-      memoizedProps: { value: formReturn }, child: null, sibling: null, return: null,
+      memoizedProps: { value: formReturn },
+      child: null,
+      sibling: null,
+      return: null,
     };
-    const anchor = { type: {}, memoizedProps: { testID: 'f' }, child: null, sibling: null, return: null };
+    const anchor = {
+      type: {},
+      memoizedProps: { testID: 'f' },
+      child: null,
+      sibling: null,
+      return: null,
+    };
     linkFiber(root, provider);
     linkFiber(provider, anchor);
     return root;
@@ -50,7 +75,9 @@ function recordingForm(getValuesImpl) {
   return {
     calls,
     form: {
-      setValue(n, v) { calls.push({ v, type: typeof v }); },
+      setValue(n, v) {
+        calls.push({ v, type: typeof v });
+      },
       getValues: getValuesImpl,
       control: {},
     },
@@ -59,27 +86,49 @@ function recordingForm(getValuesImpl) {
 
 test('#336 setFieldValue: number into a string-typed field coerces to string', () => {
   const { calls, form } = recordingForm((name) => (name === 'phone' ? '' : undefined));
-  const res = runInteract(buildFormTree(form), { action: 'setFieldValue', testID: 'f', name: 'phone', value: 15112345678 });
+  const res = runInteract(buildFormTree(form), {
+    action: 'setFieldValue',
+    testID: 'f',
+    name: 'phone',
+    value: 15112345678,
+  });
   assert.deepEqual(calls, [{ v: '15112345678', type: 'string' }]);
   assert.equal(res.coercedToString, true);
 });
 
 test('#336 setFieldValue: number into a non-string field stays a number (gh-126 preserved)', () => {
   const { calls, form } = recordingForm(() => undefined);
-  const res = runInteract(buildFormTree(form), { action: 'setFieldValue', testID: 'f', name: 'age', value: 42 });
+  const res = runInteract(buildFormTree(form), {
+    action: 'setFieldValue',
+    testID: 'f',
+    name: 'age',
+    value: 42,
+  });
   assert.deepEqual(calls, [{ v: 42, type: 'number' }]);
   assert.ok(!res.coercedToString);
 });
 
 test('#336 setFieldValue: getValues throwing does not coerce (number passes through)', () => {
-  const { calls, form } = recordingForm(() => { throw new Error('not ready'); });
-  runInteract(buildFormTree(form), { action: 'setFieldValue', testID: 'f', name: 'phone', value: 15112345678 });
+  const { calls, form } = recordingForm(() => {
+    throw new Error('not ready');
+  });
+  runInteract(buildFormTree(form), {
+    action: 'setFieldValue',
+    testID: 'f',
+    name: 'phone',
+    value: 15112345678,
+  });
   assert.deepEqual(calls, [{ v: 15112345678, type: 'number' }]);
 });
 
 test('#336 setFieldValue: a string value into a string field is unchanged', () => {
   const { calls, form } = recordingForm(() => '');
-  runInteract(buildFormTree(form), { action: 'setFieldValue', testID: 'f', name: 'phone', value: 'abc' });
+  runInteract(buildFormTree(form), {
+    action: 'setFieldValue',
+    testID: 'f',
+    name: 'phone',
+    value: 'abc',
+  });
   assert.deepEqual(calls, [{ v: 'abc', type: 'string' }]);
 });
 
@@ -90,8 +139,17 @@ function buildPressTree(testID, withOnPress) {
   const build = function () {
     const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
     const props = { testID: testID };
-    if (withOnPress) props.onPress = (arg) => { calls.push(arg); };
-    const control = { type: { displayName: 'RadioOption' }, memoizedProps: props, child: null, sibling: null, return: null };
+    if (withOnPress)
+      props.onPress = (arg) => {
+        calls.push(arg);
+      };
+    const control = {
+      type: { displayName: 'RadioOption' },
+      memoizedProps: props,
+      child: null,
+      sibling: null,
+      return: null,
+    };
     linkFiber(root, control);
     return root;
   };
