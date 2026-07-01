@@ -152,7 +152,7 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val b = imeBoundsInScreen() ?: return "no_keyboard"
         return if (KeyboardGuard.shouldDismiss(b.left, b.top, b.right, b.bottom, x, y, 150)) {
             device.pressBack()
-            device.waitForIdle()
+            device.waitForIdle(1500)
             "dismissed"
         } else {
             "not_occluded"
