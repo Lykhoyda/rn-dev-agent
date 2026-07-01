@@ -82,3 +82,42 @@ test('#336 setFieldValue: a string value into a string field is unchanged', () =
   runInteract(buildFormTree(form), { action: 'setFieldValue', testID: 'f', name: 'phone', value: 'abc' });
   assert.deepEqual(calls, [{ v: 'abc', type: 'string' }]);
 });
+
+// Press tree: root → control(testID, onPress?) — onPress records its arg into
+// an outer-context array (same cross-VM capture gh-126 uses for setValue).
+function buildPressTree(testID, withOnPress) {
+  const calls = [];
+  const build = function () {
+    const root = { type: {}, memoizedProps: {}, child: null, sibling: null, return: null };
+    const props = { testID: testID };
+    if (withOnPress) props.onPress = (arg) => { calls.push(arg); };
+    const control = { type: { displayName: 'RadioOption' }, memoizedProps: props, child: null, sibling: null, return: null };
+    linkFiber(root, control);
+    return root;
+  };
+  return { build, calls };
+}
+
+test('#336 press: with value, onPress receives the value (not an event object)', () => {
+  const { build, calls } = buildPressTree('opt-male', true);
+  const res = runInteract(build, { action: 'press', testID: 'opt-male', value: 'male' });
+  assert.deepEqual(calls, ['male']);
+  assert.equal(res.success, true);
+  assert.equal(res.value, 'male');
+});
+
+test('#336 press: without value, onPress receives a synthetic event (unchanged)', () => {
+  const { build, calls } = buildPressTree('btn', true);
+  const res = runInteract(build, { action: 'press', testID: 'btn' });
+  assert.equal(calls.length, 1);
+  assert.equal(typeof calls[0], 'object');
+  assert.ok(calls[0] && 'nativeEvent' in calls[0]);
+  assert.equal(res.success, true);
+  assert.equal('value' in res, false);
+});
+
+test('#336 press: no onPress handler still returns the existing error', () => {
+  const { build } = buildPressTree('btn', false);
+  const res = runInteract(build, { action: 'press', testID: 'btn', value: 'x' });
+  assert.ok(res.error && /onPress/i.test(res.error));
+});

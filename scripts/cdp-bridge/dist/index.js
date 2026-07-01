@@ -657,7 +657,7 @@ trackedTool('cdp_dev_settings', 'Control React Native dev settings programmatica
 trackedTool('cdp_interact', 'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet.', {
     action: z
         .enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue'])
-        .describe('press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).'),
+        .describe('press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).'),
     testID: z
         .string()
         .optional()
@@ -696,7 +696,7 @@ trackedTool('cdp_interact', 'Interact with React components by testID (preferred
     value: z
         .union([z.string(), z.number(), z.boolean()])
         .optional()
-        .describe('Required for setFieldValue: the value to set. Passed verbatim to setValue; no coercion.'),
+        .describe('Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field is string-typed). For press: when provided, onPress receives this value instead of a synthetic event — use for radio/chip-style value-bearing controls.'),
     shouldValidate: z
         .boolean()
         .optional()

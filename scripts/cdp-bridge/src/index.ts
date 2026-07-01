@@ -931,7 +931,7 @@ trackedTool(
     action: z
       .enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue'])
       .describe(
-        'press: calls onPress. longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).',
+        'press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty}).',
       ),
     testID: z
       .string()
@@ -984,7 +984,7 @@ trackedTool(
       .union([z.string(), z.number(), z.boolean()])
       .optional()
       .describe(
-        'Required for setFieldValue: the value to set. Passed verbatim to setValue; no coercion.',
+        'Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field is string-typed). For press: when provided, onPress receives this value instead of a synthetic event — use for radio/chip-style value-bearing controls.',
       ),
     shouldValidate: z
       .boolean()

@@ -1329,8 +1329,14 @@ export const INJECTED_HELPERS = `
         if (typeof props.onPress !== 'function') {
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
-        props.onPress({ nativeEvent: {} });
-        return JSON.stringify({ success: true, action: 'press', component: typeName, testID: selector });
+        if (opts.value !== undefined) {
+          props.onPress(opts.value);
+        } else {
+          props.onPress({ nativeEvent: {} });
+        }
+        var pressResult = { success: true, action: 'press', component: typeName, testID: selector };
+        if (opts.value !== undefined) pressResult.value = opts.value;
+        return JSON.stringify(pressResult);
       }
 
       if (action === 'typeText') {
