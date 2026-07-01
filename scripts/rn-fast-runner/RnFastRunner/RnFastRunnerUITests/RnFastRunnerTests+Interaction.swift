@@ -370,8 +370,11 @@ extension RnFastRunnerTests {
     guard KeyboardGuard.shouldDismiss(keyboardFrame: frame, tapPoint: CGPoint(x: tapX, y: tapY), minHeight: 120) else {
       return "not_occluded"
     }
-    _ = dismissKeyboard(app: app)
-    return "dismissed"
+    if tapKeyboardDismissControl(app: app) {
+      sleepFor(0.2)
+      if !isKeyboardVisible(app: app) { return "dismissed" }
+    }
+    return "dismiss_failed"
 #endif
   }
 
