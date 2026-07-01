@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 32;
+export const HELPERS_VERSION = 33;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -1329,8 +1329,14 @@ export const INJECTED_HELPERS = `
         if (typeof props.onPress !== 'function') {
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
         }
-        props.onPress({ nativeEvent: {} });
-        return JSON.stringify({ success: true, action: 'press', component: typeName, testID: selector });
+        if (opts.value !== undefined) {
+          props.onPress(opts.value);
+        } else {
+          props.onPress({ nativeEvent: {} });
+        }
+        var pressResult = { success: true, action: 'press', component: typeName, testID: selector };
+        if (opts.value !== undefined) pressResult.value = opts.value;
+        return JSON.stringify(pressResult);
       }
 
       if (action === 'typeText') {
@@ -1572,6 +1578,15 @@ export const INJECTED_HELPERS = `
             hint: 'No React Hook Form FormProvider ancestor with setValue+getValues+control was reachable within ' + ANCESTOR_DEPTH_CAP + ' levels. Either the form is not wrapped in <FormProvider {...methods}>, or the testID anchor sits outside the form subtree. If you only need to fire onChangeText/onChange, use action="typeText" instead.'
           });
         }
+        var coercedToString = false;
+        if (typeof fieldValue === 'number') {
+          var currentValue;
+          try { currentValue = formReturn.getValues(fieldName); } catch (e2) { currentValue = undefined; }
+          if (typeof currentValue === 'string') {
+            fieldValue = String(fieldValue);
+            coercedToString = true;
+          }
+        }
         try {
           formReturn.setValue(fieldName, fieldValue, { shouldValidate: shouldValidate, shouldDirty: shouldDirty });
         } catch (e) {
@@ -1588,6 +1603,7 @@ export const INJECTED_HELPERS = `
           testID: selector,
           name: fieldName,
           value: fieldValue,
+          coercedToString: coercedToString,
           shouldValidate: shouldValidate,
           shouldDirty: shouldDirty,
           ancestorVisits: ancestorVisits
