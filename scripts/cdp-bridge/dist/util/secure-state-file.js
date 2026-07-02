@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync, } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 // GH #383: one hardened implementation for every bridge state file (session

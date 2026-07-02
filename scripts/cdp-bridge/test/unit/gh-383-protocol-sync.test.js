@@ -23,11 +23,31 @@ test('gh-383: RUNNER_PROTOCOL_VERSION agrees across TS, Swift, and Kotlin', () =
     /export const RUNNER_PROTOCOL_VERSION = (\d+);/,
   );
   const swift = extract(
-    join(BRIDGE_ROOT, '..', 'rn-fast-runner', 'RnFastRunner', 'RnFastRunnerUITests', 'RunnerProtocol.swift'),
+    join(
+      BRIDGE_ROOT,
+      '..',
+      'rn-fast-runner',
+      'RnFastRunner',
+      'RnFastRunnerUITests',
+      'RunnerProtocol.swift',
+    ),
     /static let version = (\d+)/,
   );
   const kotlin = extract(
-    join(BRIDGE_ROOT, '..', 'rn-android-runner', 'app', 'src', 'main', 'java', 'dev', 'lykhoyda', 'rndevagent', 'androidrunner', 'RunnerProtocol.kt'),
+    join(
+      BRIDGE_ROOT,
+      '..',
+      'rn-android-runner',
+      'app',
+      'src',
+      'main',
+      'java',
+      'dev',
+      'lykhoyda',
+      'rndevagent',
+      'androidrunner',
+      'RunnerProtocol.kt',
+    ),
     /const val VERSION = (\d+)/,
   );
   assert.equal(swift, ts, 'Swift RunnerProtocol.version must match protocol.ts');

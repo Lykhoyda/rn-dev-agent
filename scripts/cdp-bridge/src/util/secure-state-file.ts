@@ -1,11 +1,4 @@
-import {
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  mkdirSync,
-  renameSync,
-  lstatSync,
-} from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 

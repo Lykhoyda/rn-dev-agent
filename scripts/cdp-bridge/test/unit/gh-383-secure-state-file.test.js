@@ -3,7 +3,7 @@
 // atomic 0600 writes, best-effort deletes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, statSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
