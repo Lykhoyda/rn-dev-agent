@@ -144,6 +144,53 @@ test('Phase128: findRefByTestID returns null when tree node lacks ref', () => {
   assert.equal(findRefByTestID(treeEnv, 'orphan'), null);
 });
 
+// GH #396: the in-tree runners (rn-fast-runner / rn-android-runner) emit
+// envelope nodes with @-prefixed refs (mapRunnerNodesToFlat → ref: '@e68'),
+// unlike the deleted agent-device daemon whose refs were bare. findRefByTestID
+// must return the canonical BARE id regardless of envelope shape: callers
+// compose the press target as `@${ref}`, and a passed-through prefix produced
+// '@@e68' → ref-map miss → misleading STALE_REF ("UI re-rendered") failure.
+
+const RUNNER_SHAPE_OK = JSON.stringify({
+  ok: true,
+  data: {
+    nodes: [
+      { ref: '@e1', identifier: undefined, type: 'Application' },
+      { ref: '@e68', identifier: 'wizard-title-input', type: 'TextField' },
+      { ref: '@e151', identifier: 'fab-create-task', type: 'Button' },
+    ],
+  },
+});
+
+test('GH396: findRefByTestID returns bare id for @-prefixed runner flat nodes', () => {
+  assert.equal(findRefByTestID(RUNNER_SHAPE_OK, 'wizard-title-input'), 'e68');
+  assert.equal(findRefByTestID(RUNNER_SHAPE_OK, 'fab-create-task'), 'e151');
+});
+
+test('GH396: findRefByTestID returns bare id for @-prefixed tree shape', () => {
+  const treeEnv = JSON.stringify({
+    ok: true,
+    data: {
+      tree: {
+        ref: '@e1',
+        identifier: 'app',
+        children: [{ ref: '@e4', identifier: 'fab-create-task' }],
+      },
+    },
+  });
+  assert.equal(findRefByTestID(treeEnv, 'fab-create-task'), 'e4');
+  assert.equal(findRefByTestID(treeEnv, 'app'), 'e1');
+});
+
+test('GH396: composed press target has exactly one @ for both envelope ref styles', () => {
+  // The device_batch testID branches compose `@${ref}` — this invariant is
+  // what actually broke on device (#396: '@@e68').
+  for (const envelope of [RUNNER_SHAPE_OK, SAMPLE_OK]) {
+    const ref = findRefByTestID(envelope, 'fab-create-task');
+    assert.match(`@${ref}`, /^@[^@]/);
+  }
+});
+
 // Phase 128 (post-review #5/#6): snapshotEnvelopeFailed flags infrastructure
 // failure so callers can route to SNAPSHOT_FAILED vs TESTID_NOT_FOUND.
 

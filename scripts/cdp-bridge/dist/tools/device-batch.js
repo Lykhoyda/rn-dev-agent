@@ -71,6 +71,11 @@ export function salientizeSnapshotData(data) {
  *     up the ref-map, so subsequent iOS testID lookups hit the tree shape
  *     and used to silently fail.
  *
+ * GH #396: always returns the BARE ref id (no `@` prefix). The in-tree
+ * runners emit envelope refs as `@e68` while the legacy daemon emitted `e68`;
+ * callers compose the press target as `@${ref}`, so a passed-through prefix
+ * produced `@@e68` → ref-map miss → misleading STALE_REF failure.
+ *
  * Exported for unit tests; pure once a snapshot envelope is provided.
  */
 export function findRefByTestID(snapshotEnvelope, testID) {
@@ -82,17 +87,21 @@ export function findRefByTestID(snapshotEnvelope, testID) {
         const nodes = env.data?.nodes;
         if (Array.isArray(nodes)) {
             const hit = nodes.find((n) => n.identifier === testID);
-            return hit?.ref ?? null;
+            return hit?.ref ? bareRef(hit.ref) : null;
         }
         // Fast-runner shape — nested tree.
         if (env.data?.tree) {
-            return findRefInTree(env.data.tree, testID);
+            const hit = findRefInTree(env.data.tree, testID);
+            return hit ? bareRef(hit) : null;
         }
         return null;
     }
     catch {
         return null;
     }
+}
+function bareRef(ref) {
+    return ref.startsWith('@') ? ref.slice(1) : ref;
 }
 function findRefInTree(node, testID) {
     if (node.identifier === testID && typeof node.ref === 'string')
