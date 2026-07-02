@@ -2486,13 +2486,16 @@ async function main() {
     }
   }
 
-  await autostartObserve({
+  // Autostart is fire-and-forget: nothing downstream depends on its result,
+  // and even a throwing logger in its catch must not reject main() after MCP
+  // is already connected.
+  void autostartObserve({
     findRoot: findProjectRoot,
     resolveEnabled: resolveObserveAutostart,
     start: startObserveServer,
     warn: (m) => logger.warn('OBSERVE', m),
     info: (m) => logger.info('OBSERVE', m),
-  });
+  }).catch(() => {});
 }
 
 main().catch((err) => {
