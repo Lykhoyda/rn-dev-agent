@@ -23,6 +23,7 @@ export interface DeviceSessionHealth {
     pluginVersion?: string;
     compatible: boolean;
   };
+  runnerCapabilities?: string[];
 }
 
 export interface DeviceSessionHealthDeps {
@@ -64,6 +65,12 @@ export async function getDeviceSessionHealth(
           ...(plugin !== null ? { pluginVersion: plugin } : {}),
           compatible: detail.liveness === 'alive',
         };
+        // GH #384: omit empty lists — every pre-#384 runner reports
+        // capabilities: [] from /health, so surfacing [] would add noise to
+        // every cdp_status call. Absence = "runner alive, no capabilities active".
+        if (detail.capabilities !== undefined && detail.capabilities.length > 0) {
+          health.runnerCapabilities = detail.capabilities;
+        }
       }
     } catch {
       health.rnFastRunner = 'dead';

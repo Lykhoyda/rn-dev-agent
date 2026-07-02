@@ -422,6 +422,7 @@ async function defaultHttpProbe(port, timeoutMs) {
         let bodyOk;
         let protocolVersion;
         let runnerVersion;
+        let capabilities;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
@@ -429,6 +430,9 @@ async function defaultHttpProbe(port, timeoutMs) {
                 protocolVersion = body.protocolVersion;
             if (typeof body.runnerVersion === 'string')
                 runnerVersion = body.runnerVersion;
+            if (Array.isArray(body.capabilities)) {
+                capabilities = body.capabilities.filter((c) => typeof c === 'string');
+            }
         }
         catch {
             bodyOk = false;
@@ -439,6 +443,7 @@ async function defaultHttpProbe(port, timeoutMs) {
             bodyOk,
             ...(protocolVersion !== undefined ? { protocolVersion } : {}),
             ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+            ...(capabilities !== undefined ? { capabilities } : {}),
         };
     }
     finally {
@@ -495,6 +500,7 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
             liveness: 'alive',
             ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
             ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
         };
     }
     catch {

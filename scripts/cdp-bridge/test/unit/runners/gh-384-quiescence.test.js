@@ -13,7 +13,9 @@ import {
   _setFetchForTest,
   _resetQuiescenceAnnouncementForTest,
   runIOS,
+  probeFastRunnerLivenessDetailed,
 } from '../../../dist/runners/rn-fast-runner-client.js';
+import { getDeviceSessionHealth } from '../../../dist/tools/device-session-health.js';
 
 const READY = 'RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22088\n';
 
@@ -139,4 +141,66 @@ test('runIOS announces nothing when the runner reported no marker (old binary)',
   assert.equal(first.meta?.quiescenceBypass, undefined);
 
   _setRunnerStateForTest(null);
+});
+
+test('liveness detail carries capabilities from /health', async () => {
+  const detail = await probeFastRunnerLivenessDetailed({
+    getState: () => ({ pid: 1, port: 1, deviceId: 'D', bundleId: 'B' }),
+    processAlive: () => true,
+    httpProbe: async () => ({
+      ok: true,
+      status: 200,
+      bodyOk: true,
+      protocolVersion: 1,
+      capabilities: ['QUIESCENCE_BYPASS'],
+    }),
+    pluginVersion: null,
+  });
+  assert.equal(detail.liveness, 'alive');
+  assert.deepEqual(detail.capabilities, ['QUIESCENCE_BYPASS']);
+});
+
+test('deviceSession health surfaces runnerCapabilities', async () => {
+  const health = await getDeviceSessionHealth({
+    getActiveSession: () => ({
+      platform: 'ios',
+      appId: 'com.example.app',
+      deviceId: 'UDID-TEST',
+    }),
+    adopt: () => {},
+    probeLiveness: async () => ({
+      liveness: 'alive',
+      runnerProtocolVersion: 1,
+      capabilities: ['QUIESCENCE_BYPASS'],
+    }),
+  });
+  assert.deepEqual(health.runnerCapabilities, ['QUIESCENCE_BYPASS']);
+});
+
+test('deviceSession health omits runnerCapabilities when probe has none', async () => {
+  const health = await getDeviceSessionHealth({
+    getActiveSession: () => ({
+      platform: 'ios',
+      appId: 'com.example.app',
+      deviceId: 'UDID-TEST',
+    }),
+    adopt: () => {},
+    probeLiveness: async () => ({ liveness: 'alive', runnerProtocolVersion: 1 }),
+  });
+  assert.equal(health.runnerCapabilities, undefined);
+});
+
+test('deviceSession health omits runnerCapabilities when the list is empty', async () => {
+  // Every pre-#384 runner (and a disabled/unavailable one) reports [] from
+  // /health — an empty list must not add noise to cdp_status.
+  const health = await getDeviceSessionHealth({
+    getActiveSession: () => ({
+      platform: 'ios',
+      appId: 'com.example.app',
+      deviceId: 'UDID-TEST',
+    }),
+    adopt: () => {},
+    probeLiveness: async () => ({ liveness: 'alive', runnerProtocolVersion: 1, capabilities: [] }),
+  });
+  assert.equal(health.runnerCapabilities, undefined);
 });

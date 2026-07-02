@@ -534,6 +534,7 @@ export interface HttpProbeResult {
   bodyOk?: boolean;
   protocolVersion?: number;
   runnerVersion?: string;
+  capabilities?: string[];
 }
 
 export interface LivenessProbeDeps {
@@ -583,15 +584,20 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     let bodyOk: boolean | undefined;
     let protocolVersion: number | undefined;
     let runnerVersion: string | undefined;
+    let capabilities: string[] | undefined;
     try {
       const body = (await res.json()) as {
         ok?: boolean;
         protocolVersion?: number;
         runnerVersion?: string;
+        capabilities?: unknown;
       };
       bodyOk = body.ok === true;
       if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
       if (typeof body.runnerVersion === 'string') runnerVersion = body.runnerVersion;
+      if (Array.isArray(body.capabilities)) {
+        capabilities = body.capabilities.filter((c): c is string => typeof c === 'string');
+      }
     } catch {
       bodyOk = false;
     }
@@ -601,6 +607,7 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       bodyOk,
       ...(protocolVersion !== undefined ? { protocolVersion } : {}),
       ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+      ...(capabilities !== undefined ? { capabilities } : {}),
     };
   } finally {
     clearTimeout(timer);
@@ -627,6 +634,7 @@ export interface FastRunnerLivenessDetail {
   staleReason?: FastRunnerStaleReason;
   runnerProtocolVersion?: number;
   runnerVersion?: string;
+  capabilities?: string[];
 }
 
 export async function probeFastRunnerLivenessDetailed(
@@ -673,6 +681,7 @@ export async function probeFastRunnerLivenessDetailed(
       liveness: 'alive',
       ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
       ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+      ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
     };
   } catch {
     return { liveness: 'stale', staleReason: 'health' };
