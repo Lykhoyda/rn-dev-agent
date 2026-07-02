@@ -48,3 +48,18 @@ test('startObserveServer is idempotent and returns the same port', async () => {
   assert.equal(a.port, b.port);
   await observeHandler({ action: 'stop' });
 });
+
+test('stop closes the listening port while the process stays alive', async () => {
+  const start = parse(await observeHandler({ action: 'start' }));
+  assert.equal(start.data.running, true);
+  const url = start.data.url;
+  // Listening while running: any HTTP status proves the socket is open
+  // (200 = SPA served, 503 = SPA bundle not built in this checkout).
+  const before = await fetch(`${url}/`, { signal: AbortSignal.timeout(2000) });
+  assert.ok([200, 503].includes(before.status), `unexpected status ${before.status}`);
+  const stop = parse(await observeHandler({ action: 'stop' }));
+  assert.equal(stop.data.running, false);
+  // After a tool-level stop — with this process still alive — the port must
+  // refuse connections (fetch rejects with ECONNREFUSED under the hood).
+  await assert.rejects(fetch(`${url}/`, { signal: AbortSignal.timeout(2000) }));
+});
