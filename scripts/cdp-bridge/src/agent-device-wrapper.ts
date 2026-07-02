@@ -1,6 +1,5 @@
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
 import type { SessionState } from './types.js';
@@ -22,6 +21,11 @@ import {
   MAX_REF_MAP_AGE_MS,
 } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
+import {
+  getStateDir,
+  readJsonStateFile,
+  writeJsonStateFileAtomic,
+} from './util/secure-state-file.js';
 
 /**
  * CDP-015: derive a per-user, per-project session file path. The previous
@@ -37,16 +41,6 @@ import { resolveBundleId } from './project-config.js';
  * `<projectHash>` is sha256(cwd).slice(0, 12) so two checkouts of the same
  * repo at different paths get different session files.
  */
-function getStateDir(): string {
-  if (process.env.XDG_STATE_HOME) {
-    return join(process.env.XDG_STATE_HOME, 'rn-dev-agent');
-  }
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'rn-dev-agent');
-  }
-  return join(homedir(), '.rn-dev-agent');
-}
-
 function getSessionFilePath(): string {
   const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
   return join(getStateDir(), `session-${projectId}.json`);
@@ -57,32 +51,16 @@ const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 
 let activeSession: SessionState | null = null;
 
-// CDP-015: load session, refusing to follow symlinks (defends against the
-// classic /tmp/<predictable-name> -> arbitrary-write attack). On failure
-// silently start fresh — the next setActiveSession() call writes the
-// canonical per-project location.
-function readSessionSafely(path: string): SessionState | null {
-  try {
-    const stat = lstatSync(path);
-    if (stat.isSymbolicLink()) return null; // refuse to follow
-    const raw = readFileSync(path, 'utf8');
-    return JSON.parse(raw) as SessionState;
-  } catch {
-    return null;
-  }
-}
-
-activeSession = readSessionSafely(SESSION_FILE);
+activeSession = readJsonStateFile<SessionState>(SESSION_FILE);
 if (!activeSession) {
   // Migrate from the legacy /tmp location if present — one-time best-effort
   // so existing users don't lose their open session on upgrade. We only
   // migrate when the new location has nothing — never overwrite.
-  const legacy = readSessionSafely(LEGACY_SESSION_FILE);
+  const legacy = readJsonStateFile<SessionState>(LEGACY_SESSION_FILE);
   if (legacy) {
     activeSession = legacy;
     try {
-      mkdirSync(dirname(SESSION_FILE), { recursive: true });
-      writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
+      writeJsonStateFileAtomic(SESSION_FILE, legacy);
     } catch {
       /* migration is best-effort */
     }
@@ -98,10 +76,7 @@ export function setActiveSession(info: SessionState): void {
   // CDP-015: atomic write via tmp + rename, restrictive perms (0600 — only
   // the user can read).
   try {
-    mkdirSync(dirname(SESSION_FILE), { recursive: true });
-    const tmpPath = `${SESSION_FILE}.tmp.${process.pid}`;
-    writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
-    renameSync(tmpPath, SESSION_FILE);
+    writeJsonStateFileAtomic(SESSION_FILE, info);
   } catch {
     /* ignore — in-memory session is still valid */
   }
