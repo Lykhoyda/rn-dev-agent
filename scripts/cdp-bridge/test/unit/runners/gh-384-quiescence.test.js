@@ -27,14 +27,16 @@ test('parser captures QUIESCENCE_BYPASS_ACTIVE marker before READY', () => {
 });
 
 test('parser captures DISABLED and UNAVAILABLE markers', () => {
-  assert.deepEqual(
-    parseReadySignal(`RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED\n${READY}`),
-    { ready: true, port: 22088, quiescence: 'disabled' },
-  );
-  assert.deepEqual(
-    parseReadySignal(`RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE\n${READY}`),
-    { ready: true, port: 22088, quiescence: 'unavailable' },
-  );
+  assert.deepEqual(parseReadySignal(`RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED\n${READY}`), {
+    ready: true,
+    port: 22088,
+    quiescence: 'disabled',
+  });
+  assert.deepEqual(parseReadySignal(`RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE\n${READY}`), {
+    ready: true,
+    port: 22088,
+    quiescence: 'unavailable',
+  });
 });
 
 test('parser omits quiescence when no marker seen (old runner binary)', () => {
@@ -60,9 +62,7 @@ test('failure markers still win over quiescence markers', () => {
 });
 
 test('parser tolerates the =classic variant suffix on the ACTIVE marker', () => {
-  const result = parseReadySignal(
-    `RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE=classic\n${READY}`,
-  );
+  const result = parseReadySignal(`RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE=classic\n${READY}`);
   assert.deepEqual(result, { ready: true, port: 22088, quiescence: 'active' });
 });
 
