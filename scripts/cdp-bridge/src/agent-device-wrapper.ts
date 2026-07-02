@@ -821,7 +821,7 @@ export async function runNative(
     // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
     // fallback (like iOS simctl) — don't gate it on the runner.
     if (cliArgs[0] !== 'screenshot') {
-      const { resolveAndroidSerial, startAndroidRunner } =
+      const { resolveAndroidSerial, startAndroidRunner, consumePendingAndroidUpgradeNote } =
         await import('./runners/rn-android-runner-client.js');
       const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
       if (!serial) {
@@ -833,6 +833,9 @@ export async function runNative(
       try {
         await startAndroidRunner(serial, appId);
       } catch (err) {
+        // GH #383: discard any note the failed start left pending — a stale
+        // note must never attach to a LATER unrelated result.
+        consumePendingAndroidUpgradeNote();
         const msg = err instanceof Error ? err.message : String(err);
         // GH #383: a protocol mismatch surviving the reap+reinstall is a distinct,
         // actionable failure — surface it rather than the generic runner-down.

@@ -7,6 +7,7 @@ import {
   getActiveSession,
   ensureFastRunner,
   ensureRunnerForCommand,
+  attachMetaNote,
   cacheSnapshot,
   getAdbSerial,
 } from '../agent-device-wrapper.js';
@@ -15,6 +16,7 @@ import {
   stopAndroidRunner,
   resolveAndroidSerial,
   startAndroidRunner,
+  consumePendingAndroidUpgradeNote,
 } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
@@ -252,17 +254,22 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       }
 
       // Ensure runner + launch. Any failure releases the lock before returning.
+      // GH #383: the transparent-upgrade note must surface on EVERY entry path,
+      // not just runNative — capture it here and attach to the open result.
+      let upgradeNote: string | undefined;
       try {
         if (lockPlatform === 'ios') {
           // ensureRunnerForCommand re-probes liveness and returns a clean
           // {ok:false,message} when the XCUITest rig can't come up (ensureFastRunner
           // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
           // here instead of falsely reporting success against an un-prebuilt rig.
+          // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
           const ready = await ensureRunnerForCommand(deviceId, appId);
           if (!ready.ok) {
             releaseDeviceLockForSession();
-            return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+            return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
           }
+          upgradeNote = ready.note;
           // A bare simctl launch foregrounds a running PID without relaunch —
           // safe whether or not attachOnly; ignore errors (app may be frontmost).
           await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
@@ -273,6 +280,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           });
         } else {
           await startAndroidRunner(deviceId, appId);
+          upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
             await execFile(
               'adb',
@@ -293,11 +301,14 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         }
       } catch (err) {
         releaseDeviceLockForSession();
+        const msg = err instanceof Error ? err.message : String(err);
+        // GH #383: a protocol mismatch that survived the reap+reinstall is a
+        // distinct, actionable failure — surface it, not the generic runner-down.
+        if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+          return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+        }
         const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
-        return failResult(
-          `Failed to start device runner: ${err instanceof Error ? err.message : String(err)}`,
-          code,
-        );
+        return failResult(`Failed to start device runner: ${msg}`, code);
       }
 
       // Set session LAST — only after lock + runner + launch all succeeded.
@@ -404,6 +415,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
       }
 
       const data = { ok: true, sessionName, platform, deviceId, appId };
+      let result: ToolResult;
       if (autoDetected || foreign) {
         const warning = [
           autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
@@ -413,9 +425,11 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           .join('; ');
         const meta: Record<string, unknown> = { ...(foreign ? foreign.meta : {}) };
         if (foreignDetectMs !== undefined) meta.timings_ms = { foreignDetect: foreignDetectMs };
-        return warnResult(data, warning, meta);
+        result = warnResult(data, warning, meta);
+      } else {
+        result = okResult(data);
       }
-      return okResult(data);
+      return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
     }
 
     if (action === 'close') {
