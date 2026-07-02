@@ -2,6 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { observeHandler, parsePinnedPort } from '../../dist/tools/observe.js';
 
+// Pin a unique port for this file so the suite never seizes the real default
+// observe port (7333) and parallel test files can't collide.
+process.env.RN_AGENT_OBSERVE_PORT = '51734';
+
 test('parsePinnedPort accepts a valid port and rejects junk / NaN / out-of-range', () => {
   assert.equal(parsePinnedPort('51234'), 51234);
   assert.equal(parsePinnedPort(undefined), undefined);
