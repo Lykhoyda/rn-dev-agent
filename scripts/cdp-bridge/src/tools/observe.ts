@@ -5,6 +5,7 @@ import { ObservabilityServer } from '../observability/server.js';
 import type { E2eServerDeps } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
 import { resolveObservePort } from '../project-config.js';
+import { writeObserveState, removeObserveState } from '../observability/observe-state.js';
 
 // Back-compat alias: parsePinnedPort predates the shared resolver (spec
 // 2026-07-02); the validation now lives in project-config.parsePort.
@@ -39,12 +40,15 @@ export function setObserveE2eDeps(d: E2eServerDeps): void {
 export async function startObserveServer(): Promise<{ url: string; port: number }> {
   if (!server) server = new ObservabilityServer(recorder, e2eDeps);
   const { port } = resolveObservePort();
-  return server.start(port);
+  const res = await server.start(port);
+  writeObserveState(res.url, res.port);
+  return res;
 }
 
 async function stopObserveServer(): Promise<void> {
   await server?.stop();
   server = null;
+  removeObserveState();
 }
 
 export async function observeHandler(args: ObserveArgs): Promise<ToolResult> {
