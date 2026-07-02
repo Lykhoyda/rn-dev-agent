@@ -186,9 +186,12 @@ const IN_TREE_SNAPSHOT_OK_EMPTY = {
 // findRefByTestID — must extract ref by identifier from all producer shapes
 // ─────────────────────────────────────────────────────────────────────────────
 
+// GH #396: findRefByTestID returns the BARE ref id regardless of producer
+// prefix style — in-tree runners emit '@e7' but callers compose `@${ref}`,
+// so passing the prefix through produced '@@e7' → STALE_REF on device.
 const SUCCESS_ENVELOPES_WITH_TARGET = [
-  { name: 'in-tree iOS (flat nodes)', env: IN_TREE_IOS_SNAPSHOT_OK, expectedRef: '@e7' },
-  { name: 'in-tree Android (flat nodes)', env: IN_TREE_ANDROID_SNAPSHOT_OK, expectedRef: '@e12' },
+  { name: 'in-tree iOS (flat nodes)', env: IN_TREE_IOS_SNAPSHOT_OK, expectedRef: 'e7' },
+  { name: 'in-tree Android (flat nodes)', env: IN_TREE_ANDROID_SNAPSHOT_OK, expectedRef: 'e12' },
   { name: 'legacy daemon (flat nodes)', env: LEGACY_DAEMON_SNAPSHOT_OK, expectedRef: 'el-0' },
   { name: 'legacy CLI (flat nodes)', env: LEGACY_CLI_SNAPSHOT_OK, expectedRef: 'el-0' },
   {
