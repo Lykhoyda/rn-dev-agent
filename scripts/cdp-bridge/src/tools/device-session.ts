@@ -455,7 +455,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // session open), and fast-runner serves the (ref-less) snapshot.
           closeSession: async () => {
             clearActiveSession(); // also clears refMap via its side-effect
-            stopFastRunner();
+            stopFastRunner(session?.deviceId);
             await stopAndroidRunner();
             return okResult({ closed: true });
           },
@@ -534,7 +534,7 @@ export function runnerLeakFailureHint(
  */
 async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<ToolResult> {
   try {
-    stopFastRunner();
+    stopFastRunner(deviceId);
   } catch {
     /* best-effort — may already be dead */
   }
