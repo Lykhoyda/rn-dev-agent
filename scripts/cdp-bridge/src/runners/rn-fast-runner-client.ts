@@ -299,6 +299,7 @@ export async function startFastRunner(
       env: {
         ...process.env,
         RN_FAST_RUNNER_PORT: String(desired),
+        ...(getPluginVersion() !== null ? { RN_PLUGIN_VERSION: getPluginVersion()! } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -165,6 +165,9 @@ export function buildAdbForwardRemoveArgs(deviceId, hostPort) {
 export function buildInstrumentPortArgs(devicePort) {
     return ['-e', 'RN_ANDROID_RUNNER_PORT', String(devicePort)];
 }
+export function buildInstrumentVersionArgs(pluginVersion) {
+    return pluginVersion ? ['-e', 'RN_PLUGIN_VERSION', pluginVersion] : [];
+}
 export function buildAdbInstallArgs(deviceId, apkPath) {
     return [...adbSerialArgs(deviceId), 'install', '-r', apkPath];
 }
@@ -343,6 +346,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             '-w',
             '-r',
             ...buildInstrumentPortArgs(devicePort),
+            ...buildInstrumentVersionArgs(getPluginVersion()),
             '-e',
             'class',
             MAIN_LOOP_CLASS,

@@ -236,6 +236,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
             env: {
                 ...process.env,
                 RN_FAST_RUNNER_PORT: String(desired),
+                ...(getPluginVersion() !== null ? { RN_PLUGIN_VERSION: getPluginVersion() } : {}),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });

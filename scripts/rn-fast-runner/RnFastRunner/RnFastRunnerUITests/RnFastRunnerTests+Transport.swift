@@ -31,7 +31,15 @@ extension RnFastRunnerTests {
       // requires one) would loop forever and the liveness probe would always
       // time out to "stale". Answer it directly with 200 {ok:true}.
       if self.isHealthRequest(combined) {
-        let response = self.jsonResponse(status: 200, response: Response(ok: true))
+        let response = self.jsonResponse(
+          status: 200,
+          response: Response(
+            ok: true,
+            protocolVersion: RunnerProtocol.version,
+            runnerVersion: RunnerEnv.pluginVersion(),
+            capabilities: []
+          )
+        )
         self.sendResponse(response, over: connection)
         return
       }

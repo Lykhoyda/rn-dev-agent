@@ -16,6 +16,17 @@ enum RunnerEnv {
     return 0
   }
 
+  static func pluginVersion() -> String? {
+    if let env = ProcessInfo.processInfo.environment["RN_PLUGIN_VERSION"], !env.isEmpty {
+      return env
+    }
+    for arg in CommandLine.arguments where arg.hasPrefix("RN_PLUGIN_VERSION=") {
+      let value = String(arg.dropFirst("RN_PLUGIN_VERSION=".count))
+      if !value.isEmpty { return value }
+    }
+    return nil
+  }
+
   static func isTruthy(_ name: String) -> Bool {
     guard let raw = ProcessInfo.processInfo.environment[name] else {
       return false
