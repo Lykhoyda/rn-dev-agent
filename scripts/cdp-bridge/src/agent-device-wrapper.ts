@@ -7,11 +7,17 @@ import { failResult } from './utils.js';
 import {
   startFastRunner,
   probeFastRunnerLiveness,
+  probeFastRunnerLivenessDetailed,
+  adoptPersistedFastRunnerState,
   reapStaleFastRunner,
   hasBuiltTestProduct,
   derivedDataPathForRunner,
 } from './runners/rn-fast-runner-client.js';
-import type { FastRunnerLiveness } from './runners/rn-fast-runner-client.js';
+import type {
+  FastRunnerLiveness,
+  FastRunnerLivenessDetail,
+} from './runners/rn-fast-runner-client.js';
+import type { ToolErrorCode } from './types.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import {
   refCenter,
@@ -579,31 +585,64 @@ export function decideRunnerSpawn(input: {
 }
 
 export interface EnsureRunnerDeps {
-  probe?: () => Promise<FastRunnerLiveness>;
+  probe?: () => Promise<FastRunnerLivenessDetail>;
   ensure?: (deviceId: string, bundleId: string) => Promise<void>;
   prebuilt?: () => boolean;
+  adopt?: (deviceId: string | undefined) => void;
 }
+
+export type EnsureRunnerResult =
+  | { ok: true; note?: string }
+  | { ok: false; message: string; code?: ToolErrorCode };
+
+const PROTOCOL_STALE_REASONS = new Set([
+  'legacy',
+  'protocol-older',
+  'protocol-newer',
+  'version-skew',
+]);
 
 // #210: orchestrate probe → gate → spawn → RE-VERIFY → structured result. ensureFastRunner
 // swallows start errors, so the re-probe is what turns a failed spawn into a clean message
 // rather than the unstructured postCommand throw downstream (A6, multi-review).
+// GH #383: the probe now returns detailed liveness — a protocol/version-stale
+// runner is reaped-and-reinstalled transparently (ok + note); a mismatch that
+// survives the reinstall surfaces RUNNER_PROTOCOL_MISMATCH (stale prebuilt).
 export async function ensureRunnerForCommand(
   deviceId: string | null,
   bundleId: string,
   deps: EnsureRunnerDeps = {},
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  const probe = deps.probe ?? probeFastRunnerLiveness;
+): Promise<EnsureRunnerResult> {
+  const probe = deps.probe ?? probeFastRunnerLivenessDetailed;
   const ensure = deps.ensure ?? ensureFastRunner;
   const prebuilt = deps.prebuilt ?? (() => hasBuiltTestProduct(derivedDataPathForRunner()));
+  const adopt = deps.adopt ?? adoptPersistedFastRunnerState;
 
-  const liveness = await probe();
-  const decision = decideRunnerSpawn({ liveness, prebuilt: prebuilt(), deviceId });
+  adopt(deviceId ?? undefined);
+  const first = await probe();
+  const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
   if (decision.action === 'proceed') return { ok: true };
   if (decision.action === 'error') return { ok: false, message: decision.message };
 
   await ensure(decision.deviceId, bundleId);
   const after = await probe();
-  if (after === 'alive') return { ok: true };
+  if (after.liveness === 'alive') {
+    if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
+      return { ok: true, note: 'runner upgraded (protocol/version mismatch)' };
+    }
+    return { ok: true };
+  }
+  if (after.staleReason && PROTOCOL_STALE_REASONS.has(after.staleReason)) {
+    return {
+      ok: false,
+      code: 'RUNNER_PROTOCOL_MISMATCH',
+      message:
+        `rn-fast-runner still speaks an incompatible wire protocol after reinstall ` +
+        `(runner protocol ${after.runnerProtocolVersion ?? 'none'}, runnerVersion ${after.runnerVersion ?? 'unknown'}). ` +
+        `The prebuilt XCUITest artifact is stale — rebuild it: delete scripts/rn-fast-runner/build/DerivedData ` +
+        `and re-open the device session (cold build), or run xcodebuild build-for-testing (see plugin Prerequisites).`,
+    };
+  }
   return {
     ok: false,
     message:
@@ -669,6 +708,26 @@ export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
   _runAgentDeviceOverrideForTest = fn;
 }
 
+// GH #383: tool results are MCP envelopes (JSON text in content[0]) — attach
+// a meta.note by re-encoding, defensively.
+export function attachMetaNote(result: ToolResult, note: string): ToolResult {
+  try {
+    const first = result.content?.[0];
+    if (!first || first.type !== 'text') return result;
+    const envelope = JSON.parse(first.text) as { meta?: Record<string, unknown> };
+    envelope.meta = { ...envelope.meta, note };
+    return {
+      ...result,
+      content: [
+        { type: 'text' as const, text: JSON.stringify(envelope) },
+        ...result.content.slice(1),
+      ],
+    };
+  } catch {
+    return result;
+  }
+}
+
 export async function runNative(
   cliArgs: string[],
   opts: { skipSession?: boolean; platform?: 'ios' | 'android' | null } = {},
@@ -702,14 +761,17 @@ export async function runNative(
     const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
     // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
     // it here; the gate is only for verbs that genuinely require the XCUITest runner.
+    let upgradeNote: string | undefined;
     if (cliArgs[0] !== 'screenshot') {
       const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
       const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
-      if (!ready.ok) return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+      if (!ready.ok) return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+      upgradeNote = ready.note;
     }
     const { runIOS } = await import('./runners/rn-fast-runner-client.js');
     const ios = buildRunIOSArgs(cliArgs, appId);
-    return runIOS(ios);
+    const result = await runIOS(ios);
+    return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
   }
 
   // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`

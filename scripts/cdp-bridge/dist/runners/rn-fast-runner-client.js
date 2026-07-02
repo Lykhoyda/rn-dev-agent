@@ -6,7 +6,7 @@ import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -364,14 +364,26 @@ async function defaultHttpProbe(port, timeoutMs) {
         if (!res.ok)
             return { ok: false, status: res.status };
         let bodyOk;
+        let protocolVersion;
+        let runnerVersion;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
+            if (typeof body.protocolVersion === 'number')
+                protocolVersion = body.protocolVersion;
+            if (typeof body.runnerVersion === 'string')
+                runnerVersion = body.runnerVersion;
         }
         catch {
             bodyOk = false;
         }
-        return { ok: true, status: res.status, bodyOk };
+        return {
+            ok: true,
+            status: res.status,
+            bodyOk,
+            ...(protocolVersion !== undefined ? { protocolVersion } : {}),
+            ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+        };
     }
     finally {
         clearTimeout(timer);
@@ -390,7 +402,7 @@ function clearStateFile() {
     if (path)
         deleteStateFile(path);
 }
-export async function probeFastRunnerLiveness(deps = {}) {
+export async function probeFastRunnerLivenessDetailed(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
     const processAlive = deps.processAlive ?? defaultProcessAlive;
     const httpProbe = deps.httpProbe ?? defaultHttpProbe;
@@ -398,20 +410,43 @@ export async function probeFastRunnerLiveness(deps = {}) {
     const timeoutMs = deps.timeoutMs ?? 2000;
     const state = getState();
     if (!state)
-        return 'dead';
+        return { liveness: 'dead' };
     if (!processAlive(state.pid)) {
         clearState();
-        return 'dead';
+        return { liveness: 'dead' };
     }
     try {
         const res = await httpProbe(state.port, timeoutMs);
-        if (res.ok && res.status === 200 && res.bodyOk === true)
-            return 'alive';
-        return 'stale';
+        if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+            return { liveness: 'stale', staleReason: 'health' };
+        }
+        const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
+        const compat = classifyRunnerCompatibility({
+            ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        }, plugin);
+        if (!compat.compatible) {
+            return {
+                liveness: 'stale',
+                staleReason: compat.reason,
+                ...(res.protocolVersion !== undefined
+                    ? { runnerProtocolVersion: res.protocolVersion }
+                    : {}),
+                ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            };
+        }
+        return {
+            liveness: 'alive',
+            ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        };
     }
     catch {
-        return 'stale';
+        return { liveness: 'stale', staleReason: 'health' };
     }
+}
+export async function probeFastRunnerLiveness(deps = {}) {
+    return (await probeFastRunnerLivenessDetailed(deps)).liveness;
 }
 export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
@@ -476,7 +511,14 @@ async function postCommand(body) {
             body: JSON.stringify(body),
             signal: controller.signal,
         });
-        return resp.json();
+        const parsed = (await resp.json());
+        // GH #383: defense-in-depth — the liveness gate already reaps a
+        // protocol-mismatched runner, but a runner that flipped protocol mid-session
+        // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
+        if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+            throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+        }
+        return parsed;
     }
     catch (err) {
         if (err?.name === 'AbortError') {
@@ -558,7 +600,17 @@ export async function runIOS(args) {
         body.depth = args.depth;
     if (args.scope !== undefined)
         body.scope = args.scope;
-    const resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
+    let resp;
+    try {
+        resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
+    }
+    catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        throw err;
+    }
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
