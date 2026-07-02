@@ -34,7 +34,7 @@ export interface RecoverWedgeDeps {
   getSession?: () => { deviceId?: string; appId?: string; platform?: string } | null;
   isFlowActive?: () => boolean;
   launchApp?: (udid: string, appId: string) => Promise<void>;
-  stopFastRunner?: () => void;
+  stopFastRunner?: (deviceId?: string) => void;
   reconnect?: () => Promise<void>;
   probeAlive?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
@@ -93,7 +93,7 @@ export async function recoverWedge(
   const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client)).fresh);
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  stopFastRunner();
+  stopFastRunner(udid);
   try {
     await launchApp(udid, appId);
   } catch {

@@ -158,7 +158,7 @@ async function recoverDetachedInner(client, deps = {}) {
     const reconnect = deps.reconnect ?? (() => client.softReconnect());
     const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client)).fresh);
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    stopFastRunner();
+    stopFastRunner(udid);
     let relaunchError;
     try {
         await relaunchApp(udid, appId);

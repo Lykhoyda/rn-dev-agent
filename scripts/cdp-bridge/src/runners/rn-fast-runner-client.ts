@@ -1,13 +1,22 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
+import {
+  runnerStatePath,
+  readJsonStateFile,
+  writeJsonStateFileAtomic,
+  deleteStateFile,
+  readLegacyTmpState,
+  cleanupLegacyTmpState,
+} from '../util/secure-state-file.js';
+import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from './protocol.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -16,7 +25,6 @@ const READY_TIMEOUT_MS = 30_000;
 // ready-signal timeout is widened for the build path.
 const BUILD_READY_TIMEOUT_MS = 360_000;
 const HTTP_TIMEOUT_MS = 10_000;
-const STATE_FILE = '/tmp/rn-fast-runner-state.json';
 const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast-runner');
 
 // --- READY-signal parser (pure, testable without xcodebuild) ---
@@ -97,18 +105,76 @@ export function createReadySignalParser(): ReadySignalParser {
 let runnerProcess: ChildProcess | null = null;
 let runnerState: FastRunnerState | null = null;
 
-try {
-  if (existsSync(STATE_FILE)) {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as FastRunnerState;
-    try {
-      process.kill(raw.pid, 0);
-      runnerState = raw;
-    } catch {
-      unlinkSync(STATE_FILE);
+export function iosStatePath(deviceId: string): string {
+  return runnerStatePath(`ios-${deviceId}`);
+}
+
+export function parsePersistedRunnerState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): FastRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Partial<FastRunnerState>;
+  if (s.schemaVersion !== 1) return null;
+  if (typeof s.pid !== 'number' || typeof s.port !== 'number') return null;
+  if (typeof s.deviceId !== 'string' || typeof s.bundleId !== 'string') return null;
+  if (!pidAlive(s.pid)) return null;
+  return s as FastRunnerState;
+}
+
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state. protocolVersion is synthesized to 0 ("pre-protocol") — the
+// health gate then classifies the live runner 'legacy' → reap → relaunch,
+// which is exactly the transparent-upgrade path. Never trusted beyond
+// pid/port/deviceId.
+export function parseLegacyRunnerState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): FastRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as { pid?: unknown; port?: unknown; deviceId?: unknown; bundleId?: unknown };
+  if (typeof s.pid !== 'number' || typeof s.port !== 'number') return null;
+  if (typeof s.deviceId !== 'string') return null;
+  if (!pidAlive(s.pid)) return null;
+  return {
+    schemaVersion: 1,
+    pid: s.pid,
+    port: s.port,
+    deviceId: s.deviceId,
+    bundleId: typeof s.bundleId === 'string' ? s.bundleId : '',
+    startedAt: '',
+    protocolVersion: 0,
+  };
+}
+
+// GH #383: lazy per-device adoption replaces the import-time /tmp load. A
+// respawned bridge worker rediscovers a live runner the first time it knows
+// which device it is talking to (ensureRunnerForCommand / session health /
+// startFastRunner / stopFastRunner). Invalid or dead persisted state is
+// deleted on sight. Falls back to the legacy /tmp file ONCE so a live
+// pre-upgrade runner is discovered rather than orphaned (review amendment);
+// a dead legacy file is garbage and is removed immediately.
+export function adoptPersistedFastRunnerState(deviceId: string | undefined): void {
+  if (runnerState || !deviceId) return;
+  const path = iosStatePath(deviceId);
+  const raw = readJsonStateFile(path);
+  if (raw !== null) {
+    const parsed = parsePersistedRunnerState(raw);
+    if (!parsed) {
+      deleteStateFile(path);
+      return;
     }
+    runnerState = parsed;
+    return;
   }
-} catch {
-  /* start fresh */
+  const legacy = readLegacyTmpState('ios');
+  if (legacy === null) return;
+  const parsedLegacy = parseLegacyRunnerState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (parsedLegacy.deviceId === deviceId) runnerState = parsedLegacy;
 }
 
 export function getFastRunnerState(): FastRunnerState | null {
@@ -132,12 +198,7 @@ export function isFastRunnerAvailable(): boolean {
   } catch {
     /* process dead */
   }
-  runnerState = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* ignore */
-  }
+  clearStateFile();
   return false;
 }
 
@@ -210,6 +271,7 @@ export async function startFastRunner(
   bundleId: string,
   port?: number,
 ): Promise<FastRunnerState> {
+  adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
 
   const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
@@ -264,18 +326,22 @@ export async function startFastRunner(
         return;
       }
       const state: FastRunnerState = {
+        schemaVersion: 1,
         port: result.port,
         pid: child.pid!,
         deviceId,
         bundleId,
         startedAt: new Date().toISOString(),
+        protocolVersion: RUNNER_PROTOCOL_VERSION,
+        ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
       };
       runnerState = state;
       try {
-        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+        writeJsonStateFileAtomic(iosStatePath(deviceId), state);
       } catch {
         /* ignore */
       }
+      cleanupLegacyTmpState();
       resolve(state);
     };
 
@@ -290,21 +356,14 @@ export async function startFastRunner(
     child.on('error', (err) => {
       clearTimeout(timer);
       if (runnerProcess === child) {
-        runnerProcess = null;
-        runnerState = null;
+        clearStateFile();
       }
       reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
     child.on('exit', (code) => {
       if (runnerProcess === child) {
-        runnerProcess = null;
-        runnerState = null;
-        try {
-          unlinkSync(STATE_FILE);
-        } catch {
-          /* ignore */
-        }
+        clearStateFile();
       }
       clearTimeout(timer);
       reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
@@ -312,7 +371,11 @@ export async function startFastRunner(
   });
 }
 
-export function stopFastRunner(): void {
+// GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
+// (session close, restart, maestro park) would otherwise no-op against empty
+// in-memory state and leak the persisted runner — so adopt first, then reap.
+export function stopFastRunner(deviceId?: string): void {
+  adoptPersistedFastRunnerState(deviceId);
   if (runnerProcess) {
     runnerProcess.kill('SIGTERM');
     runnerProcess = null;
@@ -323,12 +386,7 @@ export function stopFastRunner(): void {
       /* already dead */
     }
   }
-  runnerState = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* ignore */
-  }
+  clearStateFile();
 }
 
 // --- Legacy helper kept for device-interact.ts swipe path ---
@@ -466,17 +524,16 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
 }
 
 function clearStateFile(): void {
+  // GH #383: capture the per-device path before nulling so the right hardened
+  // state file is removed (the /tmp singleton is gone).
+  const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
   runnerState = null;
   // M7 review (Gemini): null the child-process handle too. Previously a reap
   // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
   // eventually self-heal, but during the window a concurrent stopFastRunner
   // could signal an already-dead process. Clearing here is defensive.
   runnerProcess = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* already gone */
-  }
+  if (path) deleteStateFile(path);
 }
 
 export async function probeFastRunnerLiveness(

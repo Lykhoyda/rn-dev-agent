@@ -32,17 +32,20 @@ export async function closeDeviceSession(deps) {
     if (!deps.hasActiveSession()) {
         return okResult({ closed: true, message: 'No active session to close' });
     }
+    // GH #383: read the closing session's deviceId before clearActiveSession()
+    // wipes it, so the adoption-aware stopFastRunner reaps the right per-device runner.
+    const deviceId = deps.getDeviceId?.();
     const result = await deps.closeUnderlyingSession();
     if (!result.isError) {
         deps.clearActiveSession();
-        deps.stopFastRunner();
+        deps.stopFastRunner(deviceId);
         await deps.stopAndroidRunner();
         deps.releaseDeviceLock();
         return result;
     }
     if (isBenignSessionGoneError(result)) {
         deps.clearActiveSession();
-        deps.stopFastRunner();
+        deps.stopFastRunner(deviceId);
         await deps.stopAndroidRunner();
         deps.releaseDeviceLock();
         return okResult({

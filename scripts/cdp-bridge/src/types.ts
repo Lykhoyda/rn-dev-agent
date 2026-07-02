@@ -316,9 +316,12 @@ export interface SessionState {
 }
 
 export interface FastRunnerState {
+  schemaVersion: 1;
   port: number;
   pid: number;
   deviceId: string;
   bundleId: string;
   startedAt: string;
+  protocolVersion: number;
+  runnerVersion?: string;
 }

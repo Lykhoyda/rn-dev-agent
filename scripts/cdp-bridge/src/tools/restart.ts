@@ -27,7 +27,7 @@ export interface RestartHandlerDeps {
     args: string[],
     opts?: { timeout?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
-  stopFastRunner?: () => void;
+  stopFastRunner?: (deviceId?: string) => void;
   sleep?: (ms: number) => Promise<void>;
   /** GH #262 (#194 BUG 2 residual): strict per-platform app.json fallback. */
   resolveBundleIdStrict?: (platform: string) => string | null;
@@ -221,7 +221,7 @@ export function createRestartHandler(
         // agent-device XCTest test rig — if it's foreground, iOS treats
         // the test-app as backgrounded and pauses its JS thread.
         try {
-          stopFastRunner();
+          stopFastRunner(sessionMatches ? session?.deviceId : undefined);
           hardResetSteps.push('stopFastRunner:ok');
         } catch (err) {
           hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);

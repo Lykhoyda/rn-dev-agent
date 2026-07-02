@@ -89,7 +89,7 @@ export interface RecoverDetachedDeps {
   isFlowActive?: () => boolean;
   isOptedOut?: () => boolean;
   relaunchApp?: (udid: string, appId: string) => Promise<void>;
-  stopFastRunner?: () => void;
+  stopFastRunner?: (deviceId?: string) => void;
   reconnect?: () => Promise<void>;
   probeAlive?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
@@ -231,7 +231,7 @@ async function recoverDetachedInner(
   const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client)).fresh);
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  stopFastRunner();
+  stopFastRunner(udid);
   let relaunchError: string | undefined;
   try {
     await relaunchApp(udid, appId);

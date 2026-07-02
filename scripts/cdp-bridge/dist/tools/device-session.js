@@ -319,6 +319,7 @@ export function createDeviceSnapshotHandler() {
                 stopFastRunner,
                 stopAndroidRunner,
                 releaseDeviceLock: releaseDeviceLockForSession,
+                getDeviceId: () => getActiveSession()?.deviceId,
             });
         }
         // action === 'snapshot'

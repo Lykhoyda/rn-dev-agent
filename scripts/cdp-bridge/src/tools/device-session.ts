@@ -426,6 +426,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         stopFastRunner,
         stopAndroidRunner,
         releaseDeviceLock: releaseDeviceLockForSession,
+        getDeviceId: () => getActiveSession()?.deviceId,
       });
     }
 
