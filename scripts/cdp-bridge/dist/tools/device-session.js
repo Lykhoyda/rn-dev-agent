@@ -208,6 +208,11 @@ export function createDeviceSnapshotHandler() {
             }
             catch (err) {
                 releaseDeviceLockForSession();
+                // GH #383: startAndroidRunner may have set a pending upgrade note (reap
+                // on protocol mismatch) before throwing for an unrelated reason (adb
+                // forward race, exit-before-ready, spawn error). Discard it here so it
+                // doesn't leak onto the next successful Android result.
+                consumePendingAndroidUpgradeNote();
                 const msg = err instanceof Error ? err.message : String(err);
                 // GH #383: a protocol mismatch that survived the reap+reinstall is a
                 // distinct, actionable failure — surface it, not the generic runner-down.

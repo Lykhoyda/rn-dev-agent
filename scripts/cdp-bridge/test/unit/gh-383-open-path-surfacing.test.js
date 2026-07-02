@@ -47,6 +47,19 @@ test('gh-383: open catch surfaces RUNNER_PROTOCOL_MISMATCH before the generic ru
   assert.ok(mismatch < generic, 'mismatch check must run BEFORE the generic mapping');
 });
 
+test('gh-383: open catch discards a pending Android upgrade note before the mismatch check (non-mismatch failures must not leak a stale note)', () => {
+  const catchBlock = sessionSrc.slice(
+    sessionSrc.indexOf('// Ensure runner + launch.'),
+    sessionSrc.indexOf('// Set session LAST'),
+  );
+  assert.ok(catchBlock.length > 0, 'open try/catch block must be locatable');
+  const discard = catchBlock.indexOf('consumePendingAndroidUpgradeNote();');
+  const mismatch = catchBlock.indexOf("msg.startsWith('RUNNER_PROTOCOL_MISMATCH')");
+  assert.ok(discard !== -1, 'catch must discard the pending upgrade note');
+  assert.ok(mismatch !== -1, 'catch must check for RUNNER_PROTOCOL_MISMATCH');
+  assert.ok(discard < mismatch, 'the discard call must run BEFORE the mismatch check');
+});
+
 test('gh-383: runNative Android pre-flight failure consumes (discards) the pending upgrade note', () => {
   const preflight = wrapperSrc.slice(
     wrapperSrc.indexOf('await startAndroidRunner(serial, appId);'),

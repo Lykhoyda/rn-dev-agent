@@ -177,6 +177,13 @@ export interface StatusResult {
     appId?: string;
     deviceId?: string;
     foreignRunner?: { detected: true };
+    runnerProtocol?: {
+      expected: number;
+      runner?: number;
+      runnerVersion?: string;
+      pluginVersion?: string;
+      compatible: boolean;
+    };
   };
   /**
    * Task 6: active action-store backend. One of `'sqlite'`, `'legacy-files'`,
