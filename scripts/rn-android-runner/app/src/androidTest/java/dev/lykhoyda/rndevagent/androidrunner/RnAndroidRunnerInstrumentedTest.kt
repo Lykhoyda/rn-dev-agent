@@ -25,6 +25,7 @@ class RnAndroidRunnerInstrumentedTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val args = InstrumentationRegistry.getArguments()
         val port = args.getString("RN_ANDROID_RUNNER_PORT")?.toIntOrNull() ?: 22089
+        val pluginVersion = args.getString("RN_PLUGIN_VERSION")
 
         // Mirrors the iOS `withTemporaryScrollIdleTimeoutIfSupported` shim.
         // RN's main thread never reports quiescence when Reanimated/RAF worklets
@@ -40,7 +41,7 @@ class RnAndroidRunnerInstrumentedTest {
         Configurator.getInstance().setScrollAcknowledgmentTimeout(500)
 
         RunnerRuntime.dispatcher = CommandDispatcher(instrumentation)
-        server = CommandServer(port)
+        server = CommandServer(port, pluginVersion)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
 
         Log.i("RnAndroidRunner", "RN_ANDROID_RUNNER_LISTENER_READY")

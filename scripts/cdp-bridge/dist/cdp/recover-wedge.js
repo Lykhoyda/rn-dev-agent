@@ -56,7 +56,7 @@ export async function recoverWedge(client, deps = {}) {
     const reconnect = deps.reconnect ?? (() => client.softReconnect());
     const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client)).fresh);
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    stopFastRunner();
+    stopFastRunner(udid);
     try {
         await launchApp(udid, appId);
     }

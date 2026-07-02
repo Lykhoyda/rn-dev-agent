@@ -1,13 +1,27 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
+import {
+  runnerStatePath,
+  readJsonStateFile,
+  writeJsonStateFileAtomic,
+  deleteStateFile,
+  readLegacyTmpState,
+  cleanupLegacyTmpState,
+} from '../util/secure-state-file.js';
+import {
+  RUNNER_PROTOCOL_VERSION,
+  getPluginVersion,
+  classifyRunnerCompatibility,
+} from './protocol.js';
+import type { RunnerIncompatibilityReason } from './protocol.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -16,7 +30,6 @@ const READY_TIMEOUT_MS = 30_000;
 // ready-signal timeout is widened for the build path.
 const BUILD_READY_TIMEOUT_MS = 360_000;
 const HTTP_TIMEOUT_MS = 10_000;
-const STATE_FILE = '/tmp/rn-fast-runner-state.json';
 const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast-runner');
 
 // --- READY-signal parser (pure, testable without xcodebuild) ---
@@ -97,18 +110,76 @@ export function createReadySignalParser(): ReadySignalParser {
 let runnerProcess: ChildProcess | null = null;
 let runnerState: FastRunnerState | null = null;
 
-try {
-  if (existsSync(STATE_FILE)) {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as FastRunnerState;
-    try {
-      process.kill(raw.pid, 0);
-      runnerState = raw;
-    } catch {
-      unlinkSync(STATE_FILE);
+export function iosStatePath(deviceId: string): string {
+  return runnerStatePath(`ios-${deviceId}`);
+}
+
+export function parsePersistedRunnerState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): FastRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Partial<FastRunnerState>;
+  if (s.schemaVersion !== 1) return null;
+  if (typeof s.pid !== 'number' || typeof s.port !== 'number') return null;
+  if (typeof s.deviceId !== 'string' || typeof s.bundleId !== 'string') return null;
+  if (!pidAlive(s.pid)) return null;
+  return s as FastRunnerState;
+}
+
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state. protocolVersion is synthesized to 0 ("pre-protocol") — the
+// health gate then classifies the live runner 'legacy' → reap → relaunch,
+// which is exactly the transparent-upgrade path. Never trusted beyond
+// pid/port/deviceId.
+export function parseLegacyRunnerState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): FastRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as { pid?: unknown; port?: unknown; deviceId?: unknown; bundleId?: unknown };
+  if (typeof s.pid !== 'number' || typeof s.port !== 'number') return null;
+  if (typeof s.deviceId !== 'string') return null;
+  if (!pidAlive(s.pid)) return null;
+  return {
+    schemaVersion: 1,
+    pid: s.pid,
+    port: s.port,
+    deviceId: s.deviceId,
+    bundleId: typeof s.bundleId === 'string' ? s.bundleId : '',
+    startedAt: '',
+    protocolVersion: 0,
+  };
+}
+
+// GH #383: lazy per-device adoption replaces the import-time /tmp load. A
+// respawned bridge worker rediscovers a live runner the first time it knows
+// which device it is talking to (ensureRunnerForCommand / session health /
+// startFastRunner / stopFastRunner). Invalid or dead persisted state is
+// deleted on sight. Falls back to the legacy /tmp file ONCE so a live
+// pre-upgrade runner is discovered rather than orphaned (review amendment);
+// a dead legacy file is garbage and is removed immediately.
+export function adoptPersistedFastRunnerState(deviceId: string | undefined): void {
+  if (runnerState || !deviceId) return;
+  const path = iosStatePath(deviceId);
+  const raw = readJsonStateFile(path);
+  if (raw !== null) {
+    const parsed = parsePersistedRunnerState(raw);
+    if (!parsed) {
+      deleteStateFile(path);
+      return;
     }
+    runnerState = parsed;
+    return;
   }
-} catch {
-  /* start fresh */
+  const legacy = readLegacyTmpState('ios');
+  if (legacy === null) return;
+  const parsedLegacy = parseLegacyRunnerState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (parsedLegacy.deviceId === deviceId) runnerState = parsedLegacy;
 }
 
 export function getFastRunnerState(): FastRunnerState | null {
@@ -132,12 +203,7 @@ export function isFastRunnerAvailable(): boolean {
   } catch {
     /* process dead */
   }
-  runnerState = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* ignore */
-  }
+  clearStateFile();
   return false;
 }
 
@@ -205,11 +271,24 @@ export function shouldReuseRunner(state: FastRunnerState | null, deviceId: strin
   return state !== null && state.deviceId === deviceId;
 }
 
+// GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
+// vars to the XCUITest process (prefix stripped), so the plain var alone never
+// reaches RunnerEnv.pluginVersion(). Keep both forms — plain for any direct
+// launch path, TEST_RUNNER_ for xcodebuild test.
+export function buildRunnerVersionEnv(pluginVersion: string | null): Record<string, string> {
+  if (pluginVersion === null) return {};
+  return {
+    RN_PLUGIN_VERSION: pluginVersion,
+    TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion,
+  };
+}
+
 export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
 ): Promise<FastRunnerState> {
+  adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
 
   const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
@@ -237,6 +316,7 @@ export async function startFastRunner(
       env: {
         ...process.env,
         RN_FAST_RUNNER_PORT: String(desired),
+        ...buildRunnerVersionEnv(getPluginVersion()),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -264,18 +344,22 @@ export async function startFastRunner(
         return;
       }
       const state: FastRunnerState = {
+        schemaVersion: 1,
         port: result.port,
         pid: child.pid!,
         deviceId,
         bundleId,
         startedAt: new Date().toISOString(),
+        protocolVersion: RUNNER_PROTOCOL_VERSION,
+        ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
       };
       runnerState = state;
       try {
-        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+        writeJsonStateFileAtomic(iosStatePath(deviceId), state);
       } catch {
         /* ignore */
       }
+      cleanupLegacyTmpState();
       resolve(state);
     };
 
@@ -290,21 +374,14 @@ export async function startFastRunner(
     child.on('error', (err) => {
       clearTimeout(timer);
       if (runnerProcess === child) {
-        runnerProcess = null;
-        runnerState = null;
+        clearStateFile();
       }
       reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
     child.on('exit', (code) => {
       if (runnerProcess === child) {
-        runnerProcess = null;
-        runnerState = null;
-        try {
-          unlinkSync(STATE_FILE);
-        } catch {
-          /* ignore */
-        }
+        clearStateFile();
       }
       clearTimeout(timer);
       reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
@@ -312,7 +389,11 @@ export async function startFastRunner(
   });
 }
 
-export function stopFastRunner(): void {
+// GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
+// (session close, restart, maestro park) would otherwise no-op against empty
+// in-memory state and leak the persisted runner — so adopt first, then reap.
+export function stopFastRunner(deviceId?: string): void {
+  adoptPersistedFastRunnerState(deviceId);
   if (runnerProcess) {
     runnerProcess.kill('SIGTERM');
     runnerProcess = null;
@@ -323,12 +404,7 @@ export function stopFastRunner(): void {
       /* already dead */
     }
   }
-  runnerState = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* ignore */
-  }
+  clearStateFile();
 }
 
 // --- Legacy helper kept for device-interact.ts swipe path ---
@@ -408,6 +484,8 @@ export interface HttpProbeResult {
   ok: boolean;
   status: number;
   bodyOk?: boolean;
+  protocolVersion?: number;
+  runnerVersion?: string;
 }
 
 export interface LivenessProbeDeps {
@@ -421,6 +499,8 @@ export interface LivenessProbeDeps {
   clearState?: () => void;
   /** HTTP probe timeout in ms. Default 2000 (matches existing fastHealthCheck). */
   timeoutMs?: number;
+  /** GH #383: injected plugin version for hermetic tests; undefined → getPluginVersion(). */
+  pluginVersion?: string | null;
 }
 
 export interface ReapDeps {
@@ -453,35 +533,57 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) return { ok: false, status: res.status };
     let bodyOk: boolean | undefined;
+    let protocolVersion: number | undefined;
+    let runnerVersion: string | undefined;
     try {
-      const body = (await res.json()) as { ok?: boolean };
+      const body = (await res.json()) as {
+        ok?: boolean;
+        protocolVersion?: number;
+        runnerVersion?: string;
+      };
       bodyOk = body.ok === true;
+      if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
+      if (typeof body.runnerVersion === 'string') runnerVersion = body.runnerVersion;
     } catch {
       bodyOk = false;
     }
-    return { ok: true, status: res.status, bodyOk };
+    return {
+      ok: true,
+      status: res.status,
+      bodyOk,
+      ...(protocolVersion !== undefined ? { protocolVersion } : {}),
+      ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+    };
   } finally {
     clearTimeout(timer);
   }
 }
 
 function clearStateFile(): void {
+  // GH #383: capture the per-device path before nulling so the right hardened
+  // state file is removed (the /tmp singleton is gone).
+  const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
   runnerState = null;
   // M7 review (Gemini): null the child-process handle too. Previously a reap
   // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
   // eventually self-heal, but during the window a concurrent stopFastRunner
   // could signal an already-dead process. Clearing here is defensive.
   runnerProcess = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* already gone */
-  }
+  if (path) deleteStateFile(path);
 }
 
-export async function probeFastRunnerLiveness(
+export type FastRunnerStaleReason = 'health' | RunnerIncompatibilityReason;
+
+export interface FastRunnerLivenessDetail {
+  liveness: FastRunnerLiveness;
+  staleReason?: FastRunnerStaleReason;
+  runnerProtocolVersion?: number;
+  runnerVersion?: string;
+}
+
+export async function probeFastRunnerLivenessDetailed(
   deps: LivenessProbeDeps = {},
-): Promise<FastRunnerLiveness> {
+): Promise<FastRunnerLivenessDetail> {
   const getState = deps.getState ?? (() => runnerState);
   const processAlive = deps.processAlive ?? defaultProcessAlive;
   const httpProbe = deps.httpProbe ?? defaultHttpProbe;
@@ -489,20 +591,50 @@ export async function probeFastRunnerLiveness(
   const timeoutMs = deps.timeoutMs ?? 2000;
 
   const state = getState();
-  if (!state) return 'dead';
+  if (!state) return { liveness: 'dead' };
 
   if (!processAlive(state.pid)) {
     clearState();
-    return 'dead';
+    return { liveness: 'dead' };
   }
 
   try {
     const res = await httpProbe(state.port, timeoutMs);
-    if (res.ok && res.status === 200 && res.bodyOk === true) return 'alive';
-    return 'stale';
+    if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+      return { liveness: 'stale', staleReason: 'health' };
+    }
+    const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
+    const compat = classifyRunnerCompatibility(
+      {
+        ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
+        ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+      },
+      plugin,
+    );
+    if (!compat.compatible) {
+      return {
+        liveness: 'stale',
+        staleReason: compat.reason,
+        ...(res.protocolVersion !== undefined
+          ? { runnerProtocolVersion: res.protocolVersion }
+          : {}),
+        ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+      };
+    }
+    return {
+      liveness: 'alive',
+      ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
+      ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+    };
   } catch {
-    return 'stale';
+    return { liveness: 'stale', staleReason: 'health' };
   }
+}
+
+export async function probeFastRunnerLiveness(
+  deps: LivenessProbeDeps = {},
+): Promise<FastRunnerLiveness> {
+  return (await probeFastRunnerLivenessDetailed(deps)).liveness;
 }
 
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
@@ -590,6 +722,7 @@ interface RunnerResponse {
   ok: boolean;
   data?: unknown;
   error?: { message: string; code?: string };
+  v?: number;
 }
 
 interface RunnerSnapshotNode {
@@ -643,7 +776,16 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    return resp.json() as Promise<RunnerResponse>;
+    const parsed = (await resp.json()) as RunnerResponse;
+    // GH #383: defense-in-depth — the liveness gate already reaps a
+    // protocol-mismatched runner, but a runner that flipped protocol mid-session
+    // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
+    if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+      throw new Error(
+        `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`,
+      );
+    }
+    return parsed;
   } catch (err) {
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
@@ -713,9 +855,18 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.depth !== undefined) body.depth = args.depth;
   if (args.scope !== undefined) body.scope = args.scope;
 
-  const resp = await postCommand(
-    withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-  );
+  let resp: RunnerResponse;
+  try {
+    resp = await postCommand(
+      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+    );
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err);
+    if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+      return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+    }
+    throw err;
+  }
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;

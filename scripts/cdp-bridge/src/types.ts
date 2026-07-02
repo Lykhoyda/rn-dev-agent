@@ -177,6 +177,13 @@ export interface StatusResult {
     appId?: string;
     deviceId?: string;
     foreignRunner?: { detected: true };
+    runnerProtocol?: {
+      expected: number;
+      runner?: number;
+      runnerVersion?: string;
+      pluginVersion?: string;
+      compatible: boolean;
+    };
   };
   /**
    * Task 6: active action-store backend. One of `'sqlite'`, `'legacy-files'`,
@@ -282,6 +289,9 @@ export type ToolErrorCode =
   | 'NO_NATIVE_ROUTE'
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
   | 'RUNNER_DISABLED'
+  // GH #383: runner speaks an incompatible wire protocol even after the
+  // reap-and-reinstall path ran — stale prebuilt artifacts need a rebuild.
+  | 'RUNNER_PROTOCOL_MISMATCH'
   // E2E regression runner (2026-06-18)
   | 'NOT_FOUND'
   | 'ALREADY_LOCKED'
@@ -316,9 +326,12 @@ export interface SessionState {
 }
 
 export interface FastRunnerState {
+  schemaVersion: 1;
   port: number;
   pid: number;
   deviceId: string;
   bundleId: string;
   startedAt: string;
+  protocolVersion: number;
+  runnerVersion?: string;
 }

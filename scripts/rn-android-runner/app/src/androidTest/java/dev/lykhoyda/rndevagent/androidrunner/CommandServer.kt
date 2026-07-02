@@ -5,16 +5,22 @@
 package dev.lykhoyda.rndevagent.androidrunner
 
 import fi.iki.elonen.NanoHTTPD
+import org.json.JSONArray
 import org.json.JSONObject
 
 object RunnerRuntime {
     lateinit var dispatcher: CommandDispatcher
 }
 
-class CommandServer(port: Int) : NanoHTTPD(port) {
+class CommandServer(port: Int, private val pluginVersion: String? = null) : NanoHTTPD(port) {
     override fun serve(session: IHTTPSession): Response {
         if (session.method == Method.GET && session.uri == "/health") {
-            return json(Response.Status.OK, JSONObject().put("ok", true))
+            val body = JSONObject()
+                .put("ok", true)
+                .put("protocolVersion", RunnerProtocol.VERSION)
+                .put("capabilities", JSONArray())
+            if (pluginVersion != null) body.put("runnerVersion", pluginVersion)
+            return json(Response.Status.OK, body)
         }
 
         if (session.method != Method.POST || session.uri != "/command") {
@@ -57,6 +63,7 @@ class CommandServer(port: Int) : NanoHTTPD(port) {
     }
 
     private fun json(status: Response.Status, body: JSONObject): Response {
+        if (!body.has("v")) body.put("v", RunnerProtocol.VERSION)
         return newFixedLengthResponse(status, "application/json", body.toString())
     }
 }

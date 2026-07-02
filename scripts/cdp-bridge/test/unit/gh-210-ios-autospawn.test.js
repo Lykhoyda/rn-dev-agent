@@ -46,11 +46,12 @@ test('#210 spawn-decision: down + prebuilt + NO deviceId → actionable error', 
 test('#210 ensureRunnerForCommand: alive → ok (no spawn)', async () => {
   let spawned = 0;
   const r = await ensureRunnerForCommand('U', 'com.x', {
-    probe: async () => 'alive',
+    probe: async () => ({ liveness: 'alive' }),
     ensure: async () => {
       spawned++;
     },
     prebuilt: () => true,
+    adopt: () => {},
   });
   assert.deepEqual(r, { ok: true });
   assert.equal(spawned, 0);
@@ -59,9 +60,10 @@ test('#210 ensureRunnerForCommand: alive → ok (no spawn)', async () => {
 test('#210 ensureRunnerForCommand: dead+prebuilt → spawns, re-verifies alive → ok', async () => {
   let n = 0;
   const r = await ensureRunnerForCommand('U', 'com.x', {
-    probe: async () => (n++ === 0 ? 'dead' : 'alive'),
+    probe: async () => (n++ === 0 ? { liveness: 'dead' } : { liveness: 'alive' }),
     ensure: async () => {},
     prebuilt: () => true,
+    adopt: () => {},
   });
   assert.deepEqual(r, { ok: true });
 });
@@ -69,11 +71,12 @@ test('#210 ensureRunnerForCommand: dead+prebuilt → spawns, re-verifies alive �
 test('#210 ensureRunnerForCommand: dead+NOT prebuilt → actionable error (no spawn)', async () => {
   let spawned = 0;
   const r = await ensureRunnerForCommand('U', 'com.x', {
-    probe: async () => 'dead',
+    probe: async () => ({ liveness: 'dead' }),
     ensure: async () => {
       spawned++;
     },
     prebuilt: () => false,
+    adopt: () => {},
   });
   assert.equal(r.ok, false);
   assert.match(r.message, /device_snapshot action=open/);
@@ -82,9 +85,10 @@ test('#210 ensureRunnerForCommand: dead+NOT prebuilt → actionable error (no sp
 
 test('#210 ensureRunnerForCommand: spawn does not bring it up (swallowed error) → structured fail, NOT a throw', async () => {
   const r = await ensureRunnerForCommand('U', 'com.x', {
-    probe: async () => 'dead',
+    probe: async () => ({ liveness: 'dead' }),
     ensure: async () => {},
     prebuilt: () => true,
+    adopt: () => {},
   });
   assert.equal(r.ok, false);
   assert.match(r.message, /did not become ready/i);
@@ -92,9 +96,10 @@ test('#210 ensureRunnerForCommand: spawn does not bring it up (swallowed error) 
 
 test('#210 ensureRunnerForCommand: no deviceId → actionable error', async () => {
   const r = await ensureRunnerForCommand(null, 'com.x', {
-    probe: async () => 'dead',
+    probe: async () => ({ liveness: 'dead' }),
     ensure: async () => {},
     prebuilt: () => true,
+    adopt: () => {},
   });
   assert.equal(r.ok, false);
   assert.match(r.message, /no booted iOS simulator|device_snapshot action=open/i);

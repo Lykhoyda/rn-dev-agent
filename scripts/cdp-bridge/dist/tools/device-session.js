@@ -1,8 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
+import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, } from '../runners/rn-android-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
@@ -163,17 +163,22 @@ export function createDeviceSnapshotHandler() {
                 }
             }
             // Ensure runner + launch. Any failure releases the lock before returning.
+            // GH #383: the transparent-upgrade note must surface on EVERY entry path,
+            // not just runNative — capture it here and attach to the open result.
+            let upgradeNote;
             try {
                 if (lockPlatform === 'ios') {
                     // ensureRunnerForCommand re-probes liveness and returns a clean
                     // {ok:false,message} when the XCUITest rig can't come up (ensureFastRunner
                     // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
                     // here instead of falsely reporting success against an un-prebuilt rig.
+                    // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
                     const ready = await ensureRunnerForCommand(deviceId, appId);
                     if (!ready.ok) {
                         releaseDeviceLockForSession();
-                        return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+                        return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
                     }
+                    upgradeNote = ready.note;
                     // A bare simctl launch foregrounds a running PID without relaunch —
                     // safe whether or not attachOnly; ignore errors (app may be frontmost).
                     await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
@@ -185,6 +190,7 @@ export function createDeviceSnapshotHandler() {
                 }
                 else {
                     await startAndroidRunner(deviceId, appId);
+                    upgradeNote = consumePendingAndroidUpgradeNote();
                     if (!args.attachOnly) {
                         await execFile('adb', [
                             '-s',
@@ -202,8 +208,19 @@ export function createDeviceSnapshotHandler() {
             }
             catch (err) {
                 releaseDeviceLockForSession();
+                // GH #383: startAndroidRunner may have set a pending upgrade note (reap
+                // on protocol mismatch) before throwing for an unrelated reason (adb
+                // forward race, exit-before-ready, spawn error). Discard it here so it
+                // doesn't leak onto the next successful Android result.
+                consumePendingAndroidUpgradeNote();
+                const msg = err instanceof Error ? err.message : String(err);
+                // GH #383: a protocol mismatch that survived the reap+reinstall is a
+                // distinct, actionable failure — surface it, not the generic runner-down.
+                if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+                    return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+                }
                 const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
-                return failResult(`Failed to start device runner: ${err instanceof Error ? err.message : String(err)}`, code);
+                return failResult(`Failed to start device runner: ${msg}`, code);
             }
             // Set session LAST — only after lock + runner + launch all succeeded.
             setActiveSession({
@@ -297,6 +314,7 @@ export function createDeviceSnapshotHandler() {
                 }
             }
             const data = { ok: true, sessionName, platform, deviceId, appId };
+            let result;
             if (autoDetected || foreign) {
                 const warning = [
                     autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
@@ -307,9 +325,12 @@ export function createDeviceSnapshotHandler() {
                 const meta = { ...(foreign ? foreign.meta : {}) };
                 if (foreignDetectMs !== undefined)
                     meta.timings_ms = { foreignDetect: foreignDetectMs };
-                return warnResult(data, warning, meta);
+                result = warnResult(data, warning, meta);
             }
-            return okResult(data);
+            else {
+                result = okResult(data);
+            }
+            return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
             return closeDeviceSession({
@@ -319,6 +340,7 @@ export function createDeviceSnapshotHandler() {
                 stopFastRunner,
                 stopAndroidRunner,
                 releaseDeviceLock: releaseDeviceLockForSession,
+                getDeviceId: () => getActiveSession()?.deviceId,
             });
         }
         // action === 'snapshot'
@@ -342,8 +364,8 @@ export function createDeviceSnapshotHandler() {
                 // session open), and fast-runner serves the (ref-less) snapshot.
                 closeSession: async () => {
                     clearActiveSession(); // also clears refMap via its side-effect
-                    stopFastRunner();
-                    await stopAndroidRunner();
+                    stopFastRunner(session?.deviceId);
+                    await stopAndroidRunner(session?.deviceId);
                     return okResult({ closed: true });
                 },
                 openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
@@ -406,7 +428,7 @@ export function runnerLeakFailureHint(reason, session) {
  */
 async function reacquireIosTargetApp(appId, deviceId) {
     try {
-        stopFastRunner();
+        stopFastRunner(deviceId);
     }
     catch {
         /* best-effort — may already be dead */

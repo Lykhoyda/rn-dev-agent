@@ -61,13 +61,28 @@ struct Command: Codable {
 
 struct Response: Codable {
   let ok: Bool
+  let v: Int
+  let protocolVersion: Int?
+  let runnerVersion: String?
+  let capabilities: [String]?
   let data: DataPayload?
   let error: ErrorPayload?
 
-  init(ok: Bool, data: DataPayload? = nil, error: ErrorPayload? = nil) {
+  init(
+    ok: Bool,
+    data: DataPayload? = nil,
+    error: ErrorPayload? = nil,
+    protocolVersion: Int? = nil,
+    runnerVersion: String? = nil,
+    capabilities: [String]? = nil
+  ) {
     self.ok = ok
+    self.v = RunnerProtocol.version
     self.data = data
     self.error = error
+    self.protocolVersion = protocolVersion
+    self.runnerVersion = runnerVersion
+    self.capabilities = capabilities
   }
 }
 

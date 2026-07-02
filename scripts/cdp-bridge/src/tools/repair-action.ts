@@ -89,7 +89,7 @@ async function bringTargetAppToForeground(platform: string, bundleId: string): P
   // repair path so users don't have to call cdp_restart manually after
   // a SELECTOR_NOT_FOUND.
   try {
-    stopFastRunner();
+    stopFastRunner(getActiveSession()?.deviceId);
   } catch {
     /* best-effort — fast-runner may already be dead */
   }

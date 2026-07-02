@@ -68,9 +68,12 @@ test('Android short-circuit exempts screenshot from runner ensure (adb fallback 
 
 test('Android short-circuit still imports and calls runAndroid after ensure', () => {
   // runAndroid must still be called (the ensure is additive, not a replacement)
+  // GH #383: the destructure now also pulls consumePendingAndroidUpgradeNote (to
+  // attach the transparent-upgrade meta.note), so the assertion tolerates extra
+  // named imports + the multiline import() while still requiring runAndroid.
   assert.match(
     source,
-    /const \{ runAndroid \} = await import\(['"]\.\/runners\/rn-android-runner-client\.js['"]\)/,
+    /const \{ runAndroid[\s\S]{0,80}\}\s*=\s*await import\(\s*['"]\.\/runners\/rn-android-runner-client\.js['"]/,
     'runAndroid import must remain inside the Android short-circuit',
   );
 });
