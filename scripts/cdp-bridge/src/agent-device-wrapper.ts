@@ -833,15 +833,21 @@ export async function runNative(
       try {
         await startAndroidRunner(serial, appId);
       } catch (err) {
-        return failResult(
-          `rn-android-runner did not start: ${err instanceof Error ? err.message : String(err)}`,
-          'RN_ANDROID_RUNNER_DOWN',
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        // GH #383: a protocol mismatch surviving the reap+reinstall is a distinct,
+        // actionable failure — surface it rather than the generic runner-down.
+        if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+          return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        return failResult(`rn-android-runner did not start: ${msg}`, 'RN_ANDROID_RUNNER_DOWN');
       }
     }
-    const { runAndroid } = await import('./runners/rn-android-runner-client.js');
+    const { runAndroid, consumePendingAndroidUpgradeNote } =
+      await import('./runners/rn-android-runner-client.js');
     const android = buildRunAndroidArgs(cliArgs, appId);
-    return runAndroid({ ...android, deviceId: activeSession?.deviceId });
+    const result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+    const note = consumePendingAndroidUpgradeNote();
+    return note ? attachMetaNote(result, note) : result;
   }
 
   // No native route for this verb (open/close/devices/find are handled by their

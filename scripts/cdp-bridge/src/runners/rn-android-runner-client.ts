@@ -21,7 +21,11 @@ import {
   readLegacyTmpState,
   cleanupLegacyTmpState,
 } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from './protocol.js';
+import {
+  RUNNER_PROTOCOL_VERSION,
+  getPluginVersion,
+  classifyRunnerCompatibility,
+} from './protocol.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -109,6 +113,7 @@ interface RunnerResponse {
   ok: boolean;
   data?: unknown;
   error?: { message: string; code?: string };
+  v?: number;
 }
 
 interface RunnerSnapshotNode {
@@ -317,7 +322,10 @@ export function resolveAndroidInstallAction(opts: {
  * if those don't exist yet, cold-build them via Gradle first. Throws an actionable error
  * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
  */
-async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
+async function ensureAndroidRunnerInstalled(
+  deviceId?: string,
+  opts: { forceReinstall?: boolean } = {},
+): Promise<void> {
   // Fail fast if the target isn't online — never start a multi-minute cold build (or an
   // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
   try {
@@ -347,7 +355,8 @@ async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
   const action = resolveAndroidInstallAction({
-    instrumentationRegistered: isInstrumentationRegistered(pmOut, INSTRUMENTATION),
+    instrumentationRegistered:
+      !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
     apksExist: existsSync(APK_APP) && existsSync(APK_TEST),
   });
   if (action === 'reuse') return;
@@ -446,6 +455,74 @@ export async function waitForAndroidRunnerHealth(
   return false;
 }
 
+export interface AndroidHealthInfo {
+  reachable: boolean;
+  ok?: boolean;
+  protocolVersion?: number;
+  runnerVersion?: string;
+}
+
+export async function probeAndroidRunnerHealthInfo(port: number): Promise<AndroidHealthInfo> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+      signal: controller.signal,
+    });
+    if (!resp.ok) return { reachable: false };
+    const body = (await resp.json()) as {
+      ok?: boolean;
+      protocolVersion?: number;
+      runnerVersion?: string;
+    };
+    return {
+      reachable: true,
+      ok: body.ok === true,
+      ...(typeof body.protocolVersion === 'number'
+        ? { protocolVersion: body.protocolVersion }
+        : {}),
+      ...(typeof body.runnerVersion === 'string' ? { runnerVersion: body.runnerVersion } : {}),
+    };
+  } catch {
+    return { reachable: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// GH #383: set when a mismatched runner was transparently reaped; consumed by
+// runNative so the triggering tool result carries meta.note. MUST be cleared
+// on the mismatch-reject path too (review amendment) or a later successful
+// call would attach a stale "runner upgraded" note.
+let pendingUpgradeNote: string | undefined;
+
+export function consumePendingAndroidUpgradeNote(): string | undefined {
+  const note = pendingUpgradeNote;
+  pendingUpgradeNote = undefined;
+  return note;
+}
+
+// Review amendment (BLOCKER): a single `am force-stop` of the app package does
+// NOT reliably free the device-side UiAutomation slot (#237 — system_server
+// keeps it; see release-android-slot.ts:115-128). Reuse the battle-tested
+// helper, which stops our runner then force-stops BOTH owned packages.
+// Dynamic import because release-android-slot.ts statically imports this
+// module — a static back-import would be a cycle.
+async function reapMismatchedAndroidRunner(deviceId?: string): Promise<void> {
+  const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
+  await releaseAndroidInteractionSlot(deviceId ? { deviceId } : {});
+}
+
+function classifyAndroidHealth(info: AndroidHealthInfo) {
+  return classifyRunnerCompatibility(
+    {
+      ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
+      ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
+    },
+    getPluginVersion(),
+  );
+}
+
 export async function startAndroidRunner(
   deviceId?: string,
   bundleId?: string,
@@ -453,12 +530,24 @@ export async function startAndroidRunner(
 ): Promise<AndroidRunnerState> {
   const serial = deviceId ?? (await resolveAndroidSerial());
   adoptPersistedAndroidState(serial);
-  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
-    return runnerState!;
+  let forceReinstall = false;
+  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) {
+    const info = await probeAndroidRunnerHealthInfo(runnerState!.hostPort);
+    if (info.reachable && info.ok) {
+      const compat = classifyAndroidHealth(info);
+      if (compat.compatible) return runnerState!;
+      // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+      // state clear) and force-reinstalled so the fresh APK supersedes it.
+      pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+      forceReinstall = true;
+      await reapMismatchedAndroidRunner(deviceId);
+    }
+    // unreachable/unhealthy: fall through — the fresh start below supersedes it.
+  }
 
   // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
   // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
-  await ensureAndroidRunnerInstalled(deviceId);
+  await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
 
   let hostPort = await findFreePort(devicePort);
   try {
@@ -562,9 +651,25 @@ export async function startAndroidRunner(
 
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
-    void waitForAndroidRunnerHealth(hostPort).then((healthy) => {
+    void waitForAndroidRunnerHealth(hostPort).then(async (healthy) => {
       if (resolved) return;
       if (healthy) {
+        const info = await probeAndroidRunnerHealthInfo(hostPort);
+        const compat = classifyAndroidHealth(info);
+        if (!compat.compatible) {
+          resolved = true;
+          pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
+          child.kill('SIGTERM');
+          reject(
+            new Error(
+              `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
+                `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
+                `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
+                `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
+            ),
+          );
+          return;
+        }
         finishReady();
         return;
       }
@@ -627,11 +732,21 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   } finally {
     clearTimeout(timer);
   }
+  let parsed: RunnerResponse;
   try {
-    return (await resp.json()) as RunnerResponse;
+    parsed = (await resp.json()) as RunnerResponse;
   } catch {
     throw new Error('rn-android-runner returned a non-JSON response body');
   }
+  // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
+  // incompatible wire protocol mid-session is caught here (the reuse gate only
+  // runs at start). runAndroid's catch maps this BEFORE isAndroidConnectionFailure.
+  if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+    throw new Error(
+      `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`,
+    );
+  }
+  return parsed;
 }
 
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
@@ -684,6 +799,14 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     );
   } catch (err) {
     const m = errMessage(err);
+    // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
+    // /command v-stamp) is a distinct, actionable failure — surface it before the
+    // generic connection-failure mapping so it is never mislabeled RN_ANDROID_RUNNER_DOWN.
+    if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+      return failResult(m, 'RUNNER_PROTOCOL_MISMATCH', {
+        hint: 'The installed runner APK predates this plugin version. Rebuild + reinstall (command in the error), then retry.',
+      });
+    }
     // GH#243: a connection failure (runner just restarted after a flow, or can't bind
     // its port) must surface as a structured, retryable error — never a bare
     // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
