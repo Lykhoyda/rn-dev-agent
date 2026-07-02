@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 type Family = 'interaction' | 'introspection' | 'navigation' | 'lifecycle' | 'testing' | 'other';
@@ -114,7 +114,7 @@ interface E2eRunIndexEntry {
   totals: { total: number; passed: number; failed: number; skipped: number };
 }
 
-function App(): JSX.Element {
+function App(): React.JSX.Element {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [conn, setConn] = useState<'connecting' | 'open' | 'error'>('connecting');
   const [selected, setSelected] = useState<number | null>(null);
