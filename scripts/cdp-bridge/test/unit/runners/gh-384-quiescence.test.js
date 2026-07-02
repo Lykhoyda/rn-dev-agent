@@ -4,6 +4,10 @@ import {
   createReadySignalParser,
   parseReadySignal,
 } from '../../../dist/runners/rn-fast-runner-client.js';
+import {
+  resolveQuiescenceBypass,
+  buildRunnerQuiescenceEnv,
+} from '../../../dist/runners/quiescence.js';
 
 const READY = 'RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22088\n';
 
@@ -45,4 +49,31 @@ test('failure markers still win over quiescence markers', () => {
     'RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE\nRN_FAST_RUNNER_LISTENER_FAILED\n',
   );
   assert.deepEqual(result, { error: 'RN_FAST_RUNNER_LISTENER_FAILED' });
+});
+
+test('parser tolerates the =classic variant suffix on the ACTIVE marker', () => {
+  const result = parseReadySignal(
+    `RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE=classic\n${READY}`,
+  );
+  assert.deepEqual(result, { ready: true, port: 22088, quiescence: 'active' });
+});
+
+test('resolveQuiescenceBypass defaults ON and honors 0/false opt-out', () => {
+  assert.equal(resolveQuiescenceBypass({}), true);
+  assert.equal(resolveQuiescenceBypass({ RN_QUIESCENCE_BYPASS: '1' }), true);
+  assert.equal(resolveQuiescenceBypass({ RN_QUIESCENCE_BYPASS: 'weird' }), true);
+  assert.equal(resolveQuiescenceBypass({ RN_QUIESCENCE_BYPASS: '0' }), false);
+  assert.equal(resolveQuiescenceBypass({ RN_QUIESCENCE_BYPASS: 'false' }), false);
+  assert.equal(resolveQuiescenceBypass({ RN_QUIESCENCE_BYPASS: ' FALSE ' }), false);
+});
+
+test('buildRunnerQuiescenceEnv emits both plain and TEST_RUNNER_ forms', () => {
+  assert.deepEqual(buildRunnerQuiescenceEnv({}), {
+    RN_QUIESCENCE_BYPASS: '1',
+    TEST_RUNNER_RN_QUIESCENCE_BYPASS: '1',
+  });
+  assert.deepEqual(buildRunnerQuiescenceEnv({ RN_QUIESCENCE_BYPASS: '0' }), {
+    RN_QUIESCENCE_BYPASS: '0',
+    TEST_RUNNER_RN_QUIESCENCE_BYPASS: '0',
+  });
 });

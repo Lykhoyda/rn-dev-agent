@@ -23,6 +23,7 @@ import {
 } from './protocol.js';
 import type { RunnerIncompatibilityReason } from './protocol.js';
 import type { QuiescenceStatus } from './quiescence.js';
+import { buildRunnerQuiescenceEnv } from './quiescence.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -333,6 +334,7 @@ export async function startFastRunner(
         ...process.env,
         RN_FAST_RUNNER_PORT: String(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
+        ...buildRunnerQuiescenceEnv(process.env),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -368,6 +370,7 @@ export async function startFastRunner(
         startedAt: new Date().toISOString(),
         protocolVersion: RUNNER_PROTOCOL_VERSION,
         ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
+        ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
       };
       runnerState = state;
       try {

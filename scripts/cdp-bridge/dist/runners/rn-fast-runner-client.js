@@ -7,6 +7,7 @@ import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
 import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { buildRunnerQuiescenceEnv } from './quiescence.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -264,6 +265,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 ...process.env,
                 RN_FAST_RUNNER_PORT: String(desired),
                 ...buildRunnerVersionEnv(getPluginVersion()),
+                ...buildRunnerQuiescenceEnv(process.env),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -297,6 +299,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 startedAt: new Date().toISOString(),
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
+                ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
             };
             runnerState = state;
             try {
