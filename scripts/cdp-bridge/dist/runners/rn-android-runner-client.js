@@ -4,16 +4,18 @@
  */
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
+import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
+import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from './protocol.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
-const STATE_FILE = '/tmp/rn-android-runner-state.json';
 const INSTRUMENTATION = 'dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner';
 const MAIN_LOOP_CLASS = 'dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop';
 const HEALTH_POLL_INTERVAL_MS = 150;
@@ -30,31 +32,99 @@ const ADB_INSTALL_TIMEOUT_MS = 120_000;
 let runnerProcess = null;
 let runnerState = null;
 let fetchImpl = globalThis.fetch;
-try {
-    if (existsSync(STATE_FILE)) {
-        const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
-        if (typeof raw.hostPort !== 'number' || typeof raw.devicePort !== 'number') {
-            unlinkSync(STATE_FILE); // pre-split state shape → ignore + clear
-        }
-        else {
-            try {
-                process.kill(raw.pid, 0);
-                runnerState = raw;
-            }
-            catch {
-                unlinkSync(STATE_FILE);
-            }
-        }
-    }
-}
-catch {
-    runnerState = null;
-}
 export function _setFetchForTest(fn) {
     fetchImpl = fn;
 }
 export function _setAndroidRunnerStateForTest(state) {
     runnerState = state;
+}
+export function androidStatePath(serial) {
+    return runnerStatePath(`android-${serial}`);
+}
+function defaultProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+export function parsePersistedAndroidState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (s.schemaVersion !== 1)
+        return null;
+    if (typeof s.hostPort !== 'number' || typeof s.devicePort !== 'number')
+        return null;
+    if (typeof s.pid !== 'number')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return s;
+}
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state — mirrors parseLegacyRunnerState on iOS. protocolVersion 0 makes
+// the reuse-time health gate classify the live runner 'legacy' → reap.
+export function parseLegacyAndroidState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (typeof s.hostPort !== 'number' || typeof s.devicePort !== 'number')
+        return null;
+    if (typeof s.pid !== 'number')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return {
+        schemaVersion: 1,
+        hostPort: s.hostPort,
+        devicePort: s.devicePort,
+        pid: s.pid,
+        ...(typeof s.deviceId === 'string' ? { deviceId: s.deviceId } : {}),
+        ...(typeof s.bundleId === 'string' ? { bundleId: s.bundleId } : {}),
+        startedAt: '',
+        protocolVersion: 0,
+    };
+}
+// Serial-scoped adoption (review amendment: NO 'default' key — an unknown
+// serial means no persistence, so two projects driving two different
+// unspecified devices can never share a state file).
+export function adoptPersistedAndroidState(serial) {
+    if (runnerState)
+        return;
+    if (serial) {
+        const path = androidStatePath(serial);
+        const raw = readJsonStateFile(path);
+        if (raw !== null) {
+            const parsed = parsePersistedAndroidState(raw);
+            if (!parsed) {
+                deleteStateFile(path);
+                return;
+            }
+            runnerState = parsed;
+            return;
+        }
+    }
+    const legacy = readLegacyTmpState('android');
+    if (legacy === null)
+        return;
+    const parsedLegacy = parseLegacyAndroidState(legacy);
+    if (!parsedLegacy) {
+        cleanupLegacyTmpState();
+        return;
+    }
+    if (!serial || !parsedLegacy.deviceId || parsedLegacy.deviceId === serial) {
+        runnerState = parsedLegacy;
+    }
+}
+function clearAndroidStateFile() {
+    const path = runnerState?.deviceId ? androidStatePath(runnerState.deviceId) : null;
+    runnerState = null;
+    runnerProcess = null;
+    if (path)
+        deleteStateFile(path);
 }
 export function parseAdbDevicesSerials(stdout) {
     return stdout
@@ -192,13 +262,7 @@ export function isAndroidRunnerAvailable() {
         return true;
     }
     catch {
-        runnerState = null;
-        try {
-            unlinkSync(STATE_FILE);
-        }
-        catch {
-            /* already removed */
-        }
+        clearAndroidStateFile();
         return false;
     }
 }
@@ -253,6 +317,8 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
     return false;
 }
 export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT) {
+    const serial = deviceId ?? (await resolveAndroidSerial());
+    adoptPersistedAndroidState(serial);
     if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
         return runnerState;
     // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
@@ -299,20 +365,26 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                 return;
             resolved = true;
             const state = {
+                schemaVersion: 1,
                 hostPort,
                 devicePort,
                 pid: child.pid,
-                ...(deviceId ? { deviceId } : {}),
+                ...(serial ? { deviceId: serial } : {}),
                 ...(bundleId ? { bundleId } : {}),
                 startedAt: new Date().toISOString(),
+                protocolVersion: RUNNER_PROTOCOL_VERSION,
+                ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
             };
             runnerState = state;
-            try {
-                writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+            if (serial) {
+                try {
+                    writeJsonStateFileAtomic(androidStatePath(serial), state);
+                }
+                catch {
+                    /* non-fatal */
+                }
             }
-            catch {
-                /* non-fatal */
-            }
+            cleanupLegacyTmpState();
             resolve(state);
         };
         child.on('error', (err) => {
@@ -324,14 +396,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
         child.on('exit', (code) => {
             if (runnerProcess === child) {
                 const exitState = runnerState;
-                runnerProcess = null;
-                runnerState = null;
-                try {
-                    unlinkSync(STATE_FILE);
-                }
-                catch {
-                    /* already removed */
-                }
+                clearAndroidStateFile();
                 if (typeof exitState?.hostPort === 'number') {
                     execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort)).catch(() => {
                         /* best-effort: must never throw from exit handler */
@@ -359,16 +424,12 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     });
 }
 export async function stopAndroidRunner(deviceId) {
+    // GH #383 (review amendment): adopt first so a post-respawn stop finds the
+    // persisted runner (empty in-memory state would otherwise leak the forward).
+    adoptPersistedAndroidState(deviceId ?? undefined);
     const stoppedState = runnerState;
     runnerProcess?.kill('SIGTERM');
-    runnerProcess = null;
-    runnerState = null;
-    try {
-        unlinkSync(STATE_FILE);
-    }
-    catch {
-        /* already removed */
-    }
+    clearAndroidStateFile();
     if (typeof stoppedState?.hostPort === 'number') {
         const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
         try {
@@ -518,7 +579,7 @@ export async function runAndroid(args) {
         const data = resp.data;
         if (!data?.pngBase64)
             return failResult('Android runner screenshot response did not include pngBase64', 'SCREENSHOT_FAILED');
-        const outPath = args.outPath ?? `/tmp/rn-android-screenshot-${Date.now()}.png`;
+        const outPath = args.outPath ?? join(tmpdir(), `rn-android-screenshot-${Date.now()}.png`);
         writeFileSync(outPath, Buffer.from(data.pngBase64, 'base64'));
         return okResult({ path: outPath });
     }
