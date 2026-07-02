@@ -689,7 +689,7 @@ export async function runIOS(args) {
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {
-            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...(announce ?? {}) } });
+            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...announce } });
         }
         if (code) {
             return failResult(message, code);

@@ -944,7 +944,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     ) {
       return okResult(
         { typed: true, text: args.text },
-        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...(announce ?? {}) } },
+        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...announce } },
       );
     }
     if (code) {
