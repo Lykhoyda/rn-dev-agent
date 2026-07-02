@@ -1,6 +1,6 @@
 # Story 07 — Native-first action replay: own runners as the primary transport, Maestro YAML as interchange
 
-**Status:** POSTPONED (2026-07-02, maintainer call — D1290). Near-term replay direction is [Story 13 — seamless maestro-runner (Go) integration](13-maestro-runner-seamless-integration.md); this story is the documented escalation path if that integration hits a wall (e.g. WDA-blindness spreads beyond iOS 26 bridgeless, or upstream stalls).
+**Status:** POSTPONED (2026-07-02, maintainer call — D1291). Near-term replay direction is [Story 13 — seamless maestro-runner (Go) integration](13-maestro-runner-seamless-integration.md); this story is the documented escalation path if that integration hits a wall (e.g. WDA-blindness spreads beyond iOS 26 bridgeless, or upstream stalls).
 **Epic:** [Maestro adoption](README.md)
 
 ## Effort assessment (recorded 2026-07-02, basis for the postponement call)

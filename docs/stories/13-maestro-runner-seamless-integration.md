@@ -1,6 +1,6 @@
 # Story 13 — Seamless integration with the existing maestro-runner (Go)
 
-**Status:** Proposed (2026-07-02) — replaces Story 07 as the near-term replay direction (D1290; Story 07 postponed, kept as the documented escalation path)
+**Status:** Proposed (2026-07-02) — replaces Story 07 as the near-term replay direction (D1291; Story 07 postponed, kept as the documented escalation path)
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Replay stays on the proven Go maestro-runner engine, but the seams — version drift, WDA-blind 40 s doomed attempts, Android hideKeyboard no-op, narrow fallback grammar, no fast iteration mode — get closed so the integration feels first-party
 **Effort:** M (phased; each phase lands independently)
