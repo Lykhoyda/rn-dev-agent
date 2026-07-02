@@ -74,7 +74,10 @@ import { instrumentTool, setToolObserver } from './observability/instrumentation
 import { recorder } from './observability/recorder.js';
 import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, buildLiveDeps, } from './observability/live-device.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
-import { observeHandler, observeSchema, setObserveE2eDeps } from './tools/observe.js';
+import { observeHandler, observeSchema, setObserveE2eDeps, startObserveServer, } from './tools/observe.js';
+import { autostartObserve } from './observability/autostart.js';
+import { removeObserveState } from './observability/observe-state.js';
+import { resolveObserveAutostart } from './project-config.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
@@ -1711,6 +1714,7 @@ const stopParentWatch = startParentDeathWatch({
     },
 });
 process.on('exit', () => stopParentWatch());
+process.on('exit', () => removeObserveState());
 async function main() {
     logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
     if (logger.logFilePath) {
@@ -1738,6 +1742,13 @@ async function main() {
                 console.error(`[e2e] marked interrupted runs: ${recovered.join(', ')}`);
         }
     }
+    await autostartObserve({
+        findRoot: findProjectRoot,
+        resolveEnabled: resolveObserveAutostart,
+        start: startObserveServer,
+        warn: (m) => logger.warn('OBSERVE', m),
+        info: (m) => logger.info('OBSERVE', m),
+    });
 }
 main().catch((err) => {
     logger.error('MCP', `Fatal error: ${err instanceof Error ? err.message : err}`);

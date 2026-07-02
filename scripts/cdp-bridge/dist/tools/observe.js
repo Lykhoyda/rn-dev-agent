@@ -2,36 +2,52 @@ import { z } from 'zod';
 import { okResult, failResult } from '../utils.js';
 import { ObservabilityServer } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
+import { resolveObservePort } from '../project-config.js';
+import { writeObserveState, removeObserveState } from '../observability/observe-state.js';
+// Back-compat alias: parsePinnedPort predates the shared resolver (spec
+// 2026-07-02); the validation now lives in project-config.parsePort.
+export { parsePort as parsePinnedPort } from '../project-config.js';
 export const observeSchema = {
     action: z
-        .enum(['start', 'stop', 'status'])
+        .enum(['start', 'stop', 'restart', 'status'])
         .default('status')
-        .describe('start = launch the web UI and return its URL; stop = tear it down; status = report whether it is running'),
+        .describe('start = launch the web UI and return its URL; stop = tear it down for the rest of the session; restart = stop then start fresh (keeps the event timeline); status = report whether it is running'),
 };
-export function parsePinnedPort(raw) {
-    if (!raw)
-        return undefined;
-    const n = Number.parseInt(raw, 10);
-    return Number.isInteger(n) && n > 0 && n <= 65535 ? n : undefined;
-}
 let server = null;
 let e2eDeps;
 export function setObserveE2eDeps(d) {
     e2eDeps = d;
 }
+/**
+ * Start (or return) the module-global observability server on the resolved
+ * port (env RN_AGENT_OBSERVE_PORT > .rn-agent/config.json observe.port > 7333).
+ * Exported as the autostart entry point so `observe status/stop` sees the
+ * autostarted instance.
+ */
+export async function startObserveServer() {
+    if (!server)
+        server = new ObservabilityServer(recorder, e2eDeps);
+    const { port } = resolveObservePort();
+    const res = await server.start(port);
+    writeObserveState(res.url, res.port);
+    return res;
+}
+async function stopObserveServer() {
+    await server?.stop();
+    server = null;
+    removeObserveState();
+}
 export async function observeHandler(args) {
     const action = args.action ?? 'status';
     try {
-        if (action === 'start') {
-            if (!server)
-                server = new ObservabilityServer(recorder, e2eDeps);
-            const pinned = parsePinnedPort(process.env.RN_AGENT_OBSERVE_PORT);
-            const { url, port } = await server.start(pinned);
+        if (action === 'start' || action === 'restart') {
+            if (action === 'restart')
+                await stopObserveServer();
+            const { url, port } = await startObserveServer();
             return okResult({ url, port, running: true, hint: `Open ${url} to watch the agent live.` });
         }
         if (action === 'stop') {
-            await server?.stop();
-            server = null;
+            await stopObserveServer();
             return okResult({ running: false });
         }
         if (server) {
