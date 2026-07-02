@@ -109,6 +109,23 @@ test('resolveParams: partial coverage → lists all missing', () => {
   }
 });
 
+test('resolveParams: caller-provided params win over config and fill gaps', () => {
+  const config = { defaults: { params: { user: 'from-config', pass: 'cfg-pw' } } };
+  const r = resolveParams(config, 'login', ['user', 'pass'], { user: 'from-ui' });
+  assert.deepEqual(r, { ok: true, params: { user: 'from-ui', pass: 'cfg-pw' } });
+});
+
+test('resolveParams: empty-string provided values do not mask config values', () => {
+  const config = { defaults: { params: { user: 'from-config' } } };
+  const r = resolveParams(config, 'login', ['user'], { user: '' });
+  assert.deepEqual(r, { ok: true, params: { user: 'from-config' } });
+});
+
+test('resolveParams: provided params satisfy otherwise-missing requirements', () => {
+  const r = resolveParams({}, 'login', ['user'], { user: 'typed' });
+  assert.deepEqual(r, { ok: true, params: { user: 'typed' } });
+});
+
 // ── secretValuesFor ────────────────────────────────────────────────────────
 
 test('secretValuesFor: no secretParams → empty list', () => {

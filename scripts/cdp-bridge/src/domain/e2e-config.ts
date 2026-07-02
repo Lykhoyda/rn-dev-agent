@@ -21,10 +21,18 @@ export function resolveParams(
   config: E2eConfig,
   testId: string,
   required: string[],
+  provided?: Record<string, string>,
 ): { ok: true; params: Record<string, string> } | { ok: false; missing: string[] } {
+  // Caller-provided values (e.g. typed into the observe UI) take precedence
+  // over config; empty strings are treated as "not provided" so a blank input
+  // never masks a configured value.
+  const overrides = Object.fromEntries(
+    Object.entries(provided ?? {}).filter(([, v]) => typeof v === 'string' && v !== ''),
+  );
   const merged: Record<string, string> = {
     ...config.defaults?.params,
     ...config.tests?.[testId]?.params,
+    ...overrides,
   };
   const missing = required.filter((k) => !merged[k]);
   if (missing.length > 0) return { ok: false, missing };
