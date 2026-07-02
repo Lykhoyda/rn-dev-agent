@@ -148,7 +148,7 @@ EOF
   # default on, port 7333). Best-effort: any failure prints nothing.
   OBSERVE_LINE=$(node -e '
     let cfg = {};
-    try { cfg = JSON.parse(require("fs").readFileSync(".rn-agent/config.json", "utf8")); } catch {}
+    try { cfg = JSON.parse(require("fs").readFileSync(".rn-agent/config.json", "utf8")) || {}; } catch {}
     const o = cfg.observe || {};
     const autoEnv = process.env.RN_AGENT_OBSERVE_AUTOSTART;
     const auto = autoEnv === "0" || autoEnv === "false" ? false
