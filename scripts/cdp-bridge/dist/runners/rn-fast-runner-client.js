@@ -211,6 +211,18 @@ export function derivedDataPathForRunner() {
 export function shouldReuseRunner(state, deviceId) {
     return state !== null && state.deviceId === deviceId;
 }
+// GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
+// vars to the XCUITest process (prefix stripped), so the plain var alone never
+// reaches RunnerEnv.pluginVersion(). Keep both forms — plain for any direct
+// launch path, TEST_RUNNER_ for xcodebuild test.
+export function buildRunnerVersionEnv(pluginVersion) {
+    if (pluginVersion === null)
+        return {};
+    return {
+        RN_PLUGIN_VERSION: pluginVersion,
+        TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion,
+    };
+}
 export async function startFastRunner(deviceId, bundleId, port) {
     adoptPersistedFastRunnerState(deviceId);
     if (shouldReuseRunner(runnerState, deviceId))
@@ -236,7 +248,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
             env: {
                 ...process.env,
                 RN_FAST_RUNNER_PORT: String(desired),
-                ...(getPluginVersion() !== null ? { RN_PLUGIN_VERSION: getPluginVersion() } : {}),
+                ...buildRunnerVersionEnv(getPluginVersion()),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
