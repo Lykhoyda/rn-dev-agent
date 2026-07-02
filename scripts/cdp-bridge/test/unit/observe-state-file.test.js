@@ -10,14 +10,18 @@ import { tmpdir } from 'node:os';
 const stateHome = mkdtempSync(join(tmpdir(), 'rn-observe-state-'));
 process.env.XDG_STATE_HOME = stateHome;
 
-const { observeStatePath, writeObserveState, removeObserveState } = await import(
-  '../../dist/observability/observe-state.js'
-);
+const { observeStatePath, writeObserveState, removeObserveState } =
+  await import('../../dist/observability/observe-state.js');
 
 const fakeRoot = '/Users/someone/projects/my app';
 
 test('writeObserveState writes an atomic per-project state file', () => {
-  writeObserveState('http://127.0.0.1:7333', 7333, fakeRoot, () => new Date('2026-07-02T10:00:00Z'));
+  writeObserveState(
+    'http://127.0.0.1:7333',
+    7333,
+    fakeRoot,
+    () => new Date('2026-07-02T10:00:00Z'),
+  );
   const p = observeStatePath(fakeRoot);
   assert.ok(p.startsWith(join(stateHome, 'rn-dev-agent', 'observe')), p);
   assert.ok(existsSync(p));
@@ -47,7 +51,13 @@ test('removeObserveState deletes only a file owned by this pid', () => {
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(
     p,
-    JSON.stringify({ url: 'x', port: 1, pid: process.pid + 1, projectRoot: fakeRoot, startedAt: 'x' }),
+    JSON.stringify({
+      url: 'x',
+      port: 1,
+      pid: process.pid + 1,
+      projectRoot: fakeRoot,
+      startedAt: 'x',
+    }),
   );
   removeObserveState(fakeRoot);
   assert.ok(existsSync(p), 'foreign-pid state file must not be deleted');
