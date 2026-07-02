@@ -5,19 +5,32 @@
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
+import {
+  runnerStatePath,
+  readJsonStateFile,
+  writeJsonStateFileAtomic,
+  deleteStateFile,
+  readLegacyTmpState,
+  cleanupLegacyTmpState,
+} from '../util/secure-state-file.js';
+import {
+  RUNNER_PROTOCOL_VERSION,
+  getPluginVersion,
+  classifyRunnerCompatibility,
+} from './protocol.js';
 
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
-const STATE_FILE = '/tmp/rn-android-runner-state.json';
 const INSTRUMENTATION =
   'dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner';
 const MAIN_LOOP_CLASS =
@@ -53,12 +66,15 @@ const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes 
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 
 interface AndroidRunnerState {
+  schemaVersion: 1;
   hostPort: number; // 127.0.0.1 port the TS client connects to (probed; globally contended)
   devicePort: number; // NanoHTTPD listener inside the emulator (fixed; emulator-namespaced)
   pid: number;
   deviceId?: string;
   bundleId?: string;
   startedAt: string;
+  protocolVersion: number;
+  runnerVersion?: string;
 }
 
 export interface RunAndroidArgs {
@@ -97,6 +113,7 @@ interface RunnerResponse {
   ok: boolean;
   data?: unknown;
   error?: { message: string; code?: string };
+  v?: number;
 }
 
 interface RunnerSnapshotNode {
@@ -113,30 +130,105 @@ let runnerProcess: ChildProcess | null = null;
 let runnerState: AndroidRunnerState | null = null;
 let fetchImpl: typeof fetch = globalThis.fetch;
 
-try {
-  if (existsSync(STATE_FILE)) {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as Partial<AndroidRunnerState>;
-    if (typeof raw.hostPort !== 'number' || typeof raw.devicePort !== 'number') {
-      unlinkSync(STATE_FILE); // pre-split state shape → ignore + clear
-    } else {
-      try {
-        process.kill(raw.pid!, 0);
-        runnerState = raw as AndroidRunnerState;
-      } catch {
-        unlinkSync(STATE_FILE);
-      }
-    }
-  }
-} catch {
-  runnerState = null;
-}
-
 export function _setFetchForTest(fn: typeof fetch): void {
   fetchImpl = fn;
 }
 
 export function _setAndroidRunnerStateForTest(state: AndroidRunnerState | null): void {
   runnerState = state;
+}
+
+export function androidStatePath(serial: string): string {
+  return runnerStatePath(`android-${serial}`);
+}
+
+function defaultProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parsePersistedAndroidState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): AndroidRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Partial<AndroidRunnerState>;
+  if (s.schemaVersion !== 1) return null;
+  if (typeof s.hostPort !== 'number' || typeof s.devicePort !== 'number') return null;
+  if (typeof s.pid !== 'number') return null;
+  if (!pidAlive(s.pid)) return null;
+  return s as AndroidRunnerState;
+}
+
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state — mirrors parseLegacyRunnerState on iOS. protocolVersion 0 makes
+// the reuse-time health gate classify the live runner 'legacy' → reap.
+export function parseLegacyAndroidState(
+  raw: unknown,
+  pidAlive: (pid: number) => boolean = defaultProcessAlive,
+): AndroidRunnerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as {
+    hostPort?: unknown;
+    devicePort?: unknown;
+    pid?: unknown;
+    deviceId?: unknown;
+    bundleId?: unknown;
+  };
+  if (typeof s.hostPort !== 'number' || typeof s.devicePort !== 'number') return null;
+  if (typeof s.pid !== 'number') return null;
+  if (!pidAlive(s.pid)) return null;
+  return {
+    schemaVersion: 1,
+    hostPort: s.hostPort,
+    devicePort: s.devicePort,
+    pid: s.pid,
+    ...(typeof s.deviceId === 'string' ? { deviceId: s.deviceId } : {}),
+    ...(typeof s.bundleId === 'string' ? { bundleId: s.bundleId } : {}),
+    startedAt: '',
+    protocolVersion: 0,
+  };
+}
+
+// Serial-scoped adoption (review amendment: NO 'default' key — an unknown
+// serial means no persistence, so two projects driving two different
+// unspecified devices can never share a state file).
+export function adoptPersistedAndroidState(serial?: string): void {
+  if (runnerState) return;
+  if (serial) {
+    const path = androidStatePath(serial);
+    const raw = readJsonStateFile(path);
+    if (raw !== null) {
+      const parsed = parsePersistedAndroidState(raw);
+      if (!parsed) {
+        deleteStateFile(path);
+        return;
+      }
+      runnerState = parsed;
+      return;
+    }
+  }
+  const legacy = readLegacyTmpState('android');
+  if (legacy === null) return;
+  const parsedLegacy = parseLegacyAndroidState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (!serial || !parsedLegacy.deviceId || parsedLegacy.deviceId === serial) {
+    runnerState = parsedLegacy;
+  }
+}
+
+function clearAndroidStateFile(): void {
+  const path = runnerState?.deviceId ? androidStatePath(runnerState.deviceId) : null;
+  runnerState = null;
+  runnerProcess = null;
+  if (path) deleteStateFile(path);
 }
 
 export function parseAdbDevicesSerials(stdout: string): string[] {
@@ -186,6 +278,10 @@ export function buildInstrumentPortArgs(devicePort: number): string[] {
   return ['-e', 'RN_ANDROID_RUNNER_PORT', String(devicePort)];
 }
 
+export function buildInstrumentVersionArgs(pluginVersion: string | null): string[] {
+  return pluginVersion ? ['-e', 'RN_PLUGIN_VERSION', pluginVersion] : [];
+}
+
 export function buildAdbInstallArgs(deviceId: string | undefined, apkPath: string): string[] {
   return [...adbSerialArgs(deviceId), 'install', '-r', apkPath];
 }
@@ -226,7 +322,10 @@ export function resolveAndroidInstallAction(opts: {
  * if those don't exist yet, cold-build them via Gradle first. Throws an actionable error
  * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
  */
-async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
+async function ensureAndroidRunnerInstalled(
+  deviceId?: string,
+  opts: { forceReinstall?: boolean } = {},
+): Promise<void> {
   // Fail fast if the target isn't online — never start a multi-minute cold build (or an
   // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
   try {
@@ -256,7 +355,8 @@ async function ensureAndroidRunnerInstalled(deviceId?: string): Promise<void> {
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
   const action = resolveAndroidInstallAction({
-    instrumentationRegistered: isInstrumentationRegistered(pmOut, INSTRUMENTATION),
+    instrumentationRegistered:
+      !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
     apksExist: existsSync(APK_APP) && existsSync(APK_TEST),
   });
   if (action === 'reuse') return;
@@ -297,12 +397,7 @@ export function isAndroidRunnerAvailable(): boolean {
     process.kill(runnerState.pid, 0);
     return true;
   } catch {
-    runnerState = null;
-    try {
-      unlinkSync(STATE_FILE);
-    } catch {
-      /* already removed */
-    }
+    clearAndroidStateFile();
     return false;
   }
 }
@@ -360,17 +455,99 @@ export async function waitForAndroidRunnerHealth(
   return false;
 }
 
+export interface AndroidHealthInfo {
+  reachable: boolean;
+  ok?: boolean;
+  protocolVersion?: number;
+  runnerVersion?: string;
+}
+
+export async function probeAndroidRunnerHealthInfo(port: number): Promise<AndroidHealthInfo> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+      signal: controller.signal,
+    });
+    if (!resp.ok) return { reachable: false };
+    const body = (await resp.json()) as {
+      ok?: boolean;
+      protocolVersion?: number;
+      runnerVersion?: string;
+    };
+    return {
+      reachable: true,
+      ok: body.ok === true,
+      ...(typeof body.protocolVersion === 'number'
+        ? { protocolVersion: body.protocolVersion }
+        : {}),
+      ...(typeof body.runnerVersion === 'string' ? { runnerVersion: body.runnerVersion } : {}),
+    };
+  } catch {
+    return { reachable: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// GH #383: set when a mismatched runner was transparently reaped; consumed by
+// runNative so the triggering tool result carries meta.note. MUST be cleared
+// on the mismatch-reject path too (review amendment) or a later successful
+// call would attach a stale "runner upgraded" note.
+let pendingUpgradeNote: string | undefined;
+
+export function consumePendingAndroidUpgradeNote(): string | undefined {
+  const note = pendingUpgradeNote;
+  pendingUpgradeNote = undefined;
+  return note;
+}
+
+// Review amendment (BLOCKER): a single `am force-stop` of the app package does
+// NOT reliably free the device-side UiAutomation slot (#237 — system_server
+// keeps it; see release-android-slot.ts:115-128). Reuse the battle-tested
+// helper, which stops our runner then force-stops BOTH owned packages.
+// Dynamic import because release-android-slot.ts statically imports this
+// module — a static back-import would be a cycle.
+async function reapMismatchedAndroidRunner(deviceId?: string): Promise<void> {
+  const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
+  await releaseAndroidInteractionSlot(deviceId ? { deviceId } : {});
+}
+
+function classifyAndroidHealth(info: AndroidHealthInfo) {
+  return classifyRunnerCompatibility(
+    {
+      ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
+      ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
+    },
+    getPluginVersion(),
+  );
+}
+
 export async function startAndroidRunner(
   deviceId?: string,
   bundleId?: string,
   devicePort = DEFAULT_PORT,
 ): Promise<AndroidRunnerState> {
-  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId))
-    return runnerState!;
+  const serial = deviceId ?? (await resolveAndroidSerial());
+  adoptPersistedAndroidState(serial);
+  let forceReinstall = false;
+  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) {
+    const info = await probeAndroidRunnerHealthInfo(runnerState!.hostPort);
+    if (info.reachable && info.ok) {
+      const compat = classifyAndroidHealth(info);
+      if (compat.compatible) return runnerState!;
+      // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+      // state clear) and force-reinstalled so the fresh APK supersedes it.
+      pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+      forceReinstall = true;
+      await reapMismatchedAndroidRunner(deviceId);
+    }
+    // unreachable/unhealthy: fall through — the fresh start below supersedes it.
+  }
 
   // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
   // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
-  await ensureAndroidRunnerInstalled(deviceId);
+  await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
 
   let hostPort = await findFreePort(devicePort);
   try {
@@ -394,6 +571,7 @@ export async function startAndroidRunner(
         '-w',
         '-r',
         ...buildInstrumentPortArgs(devicePort),
+        ...buildInstrumentVersionArgs(getPluginVersion()),
         '-e',
         'class',
         MAIN_LOOP_CLASS,
@@ -420,19 +598,25 @@ export async function startAndroidRunner(
       if (resolved) return;
       resolved = true;
       const state: AndroidRunnerState = {
+        schemaVersion: 1,
         hostPort,
         devicePort,
         pid: child.pid!,
-        ...(deviceId ? { deviceId } : {}),
+        ...(serial ? { deviceId: serial } : {}),
         ...(bundleId ? { bundleId } : {}),
         startedAt: new Date().toISOString(),
+        protocolVersion: RUNNER_PROTOCOL_VERSION,
+        ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
       };
       runnerState = state;
-      try {
-        writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
-      } catch {
-        /* non-fatal */
+      if (serial) {
+        try {
+          writeJsonStateFileAtomic(androidStatePath(serial), state);
+        } catch {
+          /* non-fatal */
+        }
       }
+      cleanupLegacyTmpState();
       resolve(state);
     };
 
@@ -445,13 +629,7 @@ export async function startAndroidRunner(
     child.on('exit', (code) => {
       if (runnerProcess === child) {
         const exitState = runnerState;
-        runnerProcess = null;
-        runnerState = null;
-        try {
-          unlinkSync(STATE_FILE);
-        } catch {
-          /* already removed */
-        }
+        clearAndroidStateFile();
         if (typeof exitState?.hostPort === 'number') {
           execFileAsync(
             'adb',
@@ -473,9 +651,25 @@ export async function startAndroidRunner(
 
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
-    void waitForAndroidRunnerHealth(hostPort).then((healthy) => {
+    void waitForAndroidRunnerHealth(hostPort).then(async (healthy) => {
       if (resolved) return;
       if (healthy) {
+        const info = await probeAndroidRunnerHealthInfo(hostPort);
+        const compat = classifyAndroidHealth(info);
+        if (!compat.compatible) {
+          resolved = true;
+          pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
+          child.kill('SIGTERM');
+          reject(
+            new Error(
+              `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
+                `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
+                `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
+                `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
+            ),
+          );
+          return;
+        }
         finishReady();
         return;
       }
@@ -491,15 +685,12 @@ export async function startAndroidRunner(
 }
 
 export async function stopAndroidRunner(deviceId?: string): Promise<void> {
+  // GH #383 (review amendment): adopt first so a post-respawn stop finds the
+  // persisted runner (empty in-memory state would otherwise leak the forward).
+  adoptPersistedAndroidState(deviceId ?? undefined);
   const stoppedState = runnerState;
   runnerProcess?.kill('SIGTERM');
-  runnerProcess = null;
-  runnerState = null;
-  try {
-    unlinkSync(STATE_FILE);
-  } catch {
-    /* already removed */
-  }
+  clearAndroidStateFile();
   if (typeof stoppedState?.hostPort === 'number') {
     const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
     try {
@@ -541,11 +732,21 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   } finally {
     clearTimeout(timer);
   }
+  let parsed: RunnerResponse;
   try {
-    return (await resp.json()) as RunnerResponse;
+    parsed = (await resp.json()) as RunnerResponse;
   } catch {
     throw new Error('rn-android-runner returned a non-JSON response body');
   }
+  // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
+  // incompatible wire protocol mid-session is caught here (the reuse gate only
+  // runs at start). runAndroid's catch maps this BEFORE isAndroidConnectionFailure.
+  if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+    throw new Error(
+      `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`,
+    );
+  }
+  return parsed;
 }
 
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
@@ -598,6 +799,14 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     );
   } catch (err) {
     const m = errMessage(err);
+    // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
+    // /command v-stamp) is a distinct, actionable failure — surface it before the
+    // generic connection-failure mapping so it is never mislabeled RN_ANDROID_RUNNER_DOWN.
+    if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+      return failResult(m, 'RUNNER_PROTOCOL_MISMATCH', {
+        hint: 'The installed runner APK predates this plugin version. Rebuild + reinstall (command in the error), then retry.',
+      });
+    }
     // GH#243: a connection failure (runner just restarted after a flow, or can't bind
     // its port) must surface as a structured, retryable error — never a bare
     // "fetch failed". RUNNER_TIMEOUT (a wedged-but-bound instrument) is NOT a connection
@@ -653,7 +862,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
         'Android runner screenshot response did not include pngBase64',
         'SCREENSHOT_FAILED',
       );
-    const outPath = args.outPath ?? `/tmp/rn-android-screenshot-${Date.now()}.png`;
+    const outPath = args.outPath ?? join(tmpdir(), `rn-android-screenshot-${Date.now()}.png`);
     writeFileSync(outPath, Buffer.from(data.pngBase64, 'base64'));
     return okResult({ path: outPath });
   }

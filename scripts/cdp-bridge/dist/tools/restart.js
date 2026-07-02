@@ -141,7 +141,7 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 // agent-device XCTest test rig — if it's foreground, iOS treats
                 // the test-app as backgrounded and pauses its JS thread.
                 try {
-                    stopFastRunner();
+                    stopFastRunner(sessionMatches ? session?.deviceId : undefined);
                     hardResetSteps.push('stopFastRunner:ok');
                 }
                 catch (err) {

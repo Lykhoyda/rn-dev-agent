@@ -44,10 +44,14 @@ test('M7 probe: returns dead and clears state when PID has exited', async () => 
 // ── probe: alive path ────────────────────────────────────────────────
 
 test('M7 probe: returns alive when PID lives and /health returns {ok:true}', async () => {
+  // GH #383: alive now also requires a compatible protocol; `1` matches
+  // RUNNER_PROTOCOL_VERSION (tri-file sync test guards drift). pluginVersion:null
+  // keeps this hermetic — no version-skew intent here.
   const liveness = await probeFastRunnerLiveness({
     getState: () => STATE,
     processAlive: () => true,
-    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true }),
+    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true, protocolVersion: 1 }),
+    pluginVersion: null,
   });
   assert.equal(liveness, 'alive');
 });
@@ -105,8 +109,9 @@ test('M7 probe: timeoutMs override forwards to httpProbe', async () => {
     processAlive: () => true,
     httpProbe: async (_port, timeoutMs) => {
       observedTimeout = timeoutMs;
-      return { ok: true, status: 200, bodyOk: true };
+      return { ok: true, status: 200, bodyOk: true, protocolVersion: 1 };
     },
+    pluginVersion: null,
     timeoutMs: 750,
   });
   assert.equal(observedTimeout, 750);
@@ -119,8 +124,9 @@ test('M7 probe: default timeout is 2000ms (matches existing fastHealthCheck)', a
     processAlive: () => true,
     httpProbe: async (_port, timeoutMs) => {
       observedTimeout = timeoutMs;
-      return { ok: true, status: 200, bodyOk: true };
+      return { ok: true, status: 200, bodyOk: true, protocolVersion: 1 };
     },
+    pluginVersion: null,
   });
   assert.equal(observedTimeout, 2000);
 });
@@ -145,7 +151,8 @@ test('M7 probe: alive path does NOT clear state', async () => {
   await probeFastRunnerLiveness({
     getState: () => STATE,
     processAlive: () => true,
-    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true }),
+    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true, protocolVersion: 1 }),
+    pluginVersion: null,
     clearState: () => {
       clearCalls++;
     },

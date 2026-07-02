@@ -1744,6 +1744,6 @@ main().catch((err) => {
     if (logger.logFilePath) {
         console.error(`CDP bridge log: ${logger.logFilePath}`);
     }
-    stopFastRunner();
+    stopFastRunner(getActiveSession()?.deviceId);
     process.exit(1);
 });

@@ -1,12 +1,12 @@
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync, lstatSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
+import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
  * CDP-015: derive a per-user, per-project session file path. The previous
  * fixed `/tmp/rn-dev-agent-session.json` location bled state across repos,
@@ -21,15 +21,6 @@ import { resolveBundleId } from './project-config.js';
  * `<projectHash>` is sha256(cwd).slice(0, 12) so two checkouts of the same
  * repo at different paths get different session files.
  */
-function getStateDir() {
-    if (process.env.XDG_STATE_HOME) {
-        return join(process.env.XDG_STATE_HOME, 'rn-dev-agent');
-    }
-    if (process.platform === 'darwin') {
-        return join(homedir(), 'Library', 'Application Support', 'rn-dev-agent');
-    }
-    return join(homedir(), '.rn-dev-agent');
-}
 function getSessionFilePath() {
     const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
     return join(getStateDir(), `session-${projectId}.json`);
@@ -37,33 +28,16 @@ function getSessionFilePath() {
 const SESSION_FILE = getSessionFilePath();
 const LEGACY_SESSION_FILE = '/tmp/rn-dev-agent-session.json';
 let activeSession = null;
-// CDP-015: load session, refusing to follow symlinks (defends against the
-// classic /tmp/<predictable-name> -> arbitrary-write attack). On failure
-// silently start fresh — the next setActiveSession() call writes the
-// canonical per-project location.
-function readSessionSafely(path) {
-    try {
-        const stat = lstatSync(path);
-        if (stat.isSymbolicLink())
-            return null; // refuse to follow
-        const raw = readFileSync(path, 'utf8');
-        return JSON.parse(raw);
-    }
-    catch {
-        return null;
-    }
-}
-activeSession = readSessionSafely(SESSION_FILE);
+activeSession = readJsonStateFile(SESSION_FILE);
 if (!activeSession) {
     // Migrate from the legacy /tmp location if present — one-time best-effort
     // so existing users don't lose their open session on upgrade. We only
     // migrate when the new location has nothing — never overwrite.
-    const legacy = readSessionSafely(LEGACY_SESSION_FILE);
+    const legacy = readJsonStateFile(LEGACY_SESSION_FILE);
     if (legacy) {
         activeSession = legacy;
         try {
-            mkdirSync(dirname(SESSION_FILE), { recursive: true });
-            writeFileSync(SESSION_FILE, JSON.stringify(legacy), { encoding: 'utf8', mode: 0o600 });
+            writeJsonStateFileAtomic(SESSION_FILE, legacy);
         }
         catch {
             /* migration is best-effort */
@@ -78,10 +52,7 @@ export function setActiveSession(info) {
     // CDP-015: atomic write via tmp + rename, restrictive perms (0600 — only
     // the user can read).
     try {
-        mkdirSync(dirname(SESSION_FILE), { recursive: true });
-        const tmpPath = `${SESSION_FILE}.tmp.${process.pid}`;
-        writeFileSync(tmpPath, JSON.stringify(info), { encoding: 'utf8', mode: 0o600 });
-        renameSync(tmpPath, SESSION_FILE);
+        writeJsonStateFileAtomic(SESSION_FILE, info);
     }
     catch {
         /* ignore — in-memory session is still valid */
@@ -518,23 +489,48 @@ export function decideRunnerSpawn(input) {
     }
     return { action: 'spawn', deviceId: input.deviceId };
 }
+const PROTOCOL_STALE_REASONS = new Set([
+    'legacy',
+    'protocol-older',
+    'protocol-newer',
+    'version-skew',
+]);
 // #210: orchestrate probe → gate → spawn → RE-VERIFY → structured result. ensureFastRunner
 // swallows start errors, so the re-probe is what turns a failed spawn into a clean message
 // rather than the unstructured postCommand throw downstream (A6, multi-review).
+// GH #383: the probe now returns detailed liveness — a protocol/version-stale
+// runner is reaped-and-reinstalled transparently (ok + note); a mismatch that
+// survives the reinstall surfaces RUNNER_PROTOCOL_MISMATCH (stale prebuilt).
 export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
-    const probe = deps.probe ?? probeFastRunnerLiveness;
+    const probe = deps.probe ?? probeFastRunnerLivenessDetailed;
     const ensure = deps.ensure ?? ensureFastRunner;
     const prebuilt = deps.prebuilt ?? (() => hasBuiltTestProduct(derivedDataPathForRunner()));
-    const liveness = await probe();
-    const decision = decideRunnerSpawn({ liveness, prebuilt: prebuilt(), deviceId });
+    const adopt = deps.adopt ?? adoptPersistedFastRunnerState;
+    adopt(deviceId ?? undefined);
+    const first = await probe();
+    const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
     if (decision.action === 'proceed')
         return { ok: true };
     if (decision.action === 'error')
         return { ok: false, message: decision.message };
     await ensure(decision.deviceId, bundleId);
     const after = await probe();
-    if (after === 'alive')
+    if (after.liveness === 'alive') {
+        if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
+            return { ok: true, note: 'runner upgraded (protocol/version mismatch)' };
+        }
         return { ok: true };
+    }
+    if (after.staleReason && PROTOCOL_STALE_REASONS.has(after.staleReason)) {
+        return {
+            ok: false,
+            code: 'RUNNER_PROTOCOL_MISMATCH',
+            message: `rn-fast-runner still speaks an incompatible wire protocol after reinstall ` +
+                `(runner protocol ${after.runnerProtocolVersion ?? 'none'}, runnerVersion ${after.runnerVersion ?? 'unknown'}). ` +
+                `The prebuilt XCUITest artifact is stale — rebuild it: delete scripts/rn-fast-runner/build/DerivedData ` +
+                `and re-open the device session (cold build), or run xcodebuild build-for-testing (see plugin Prerequisites).`,
+        };
+    }
     return {
         ok: false,
         message: 'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
@@ -584,6 +580,27 @@ export function _setRunAgentDeviceForTest(fn) {
     }
     _runAgentDeviceOverrideForTest = fn;
 }
+// GH #383: tool results are MCP envelopes (JSON text in content[0]) — attach
+// a meta.note by re-encoding, defensively.
+export function attachMetaNote(result, note) {
+    try {
+        const first = result.content?.[0];
+        if (!first || first.type !== 'text')
+            return result;
+        const envelope = JSON.parse(first.text);
+        envelope.meta = { ...envelope.meta, note };
+        return {
+            ...result,
+            content: [
+                { type: 'text', text: JSON.stringify(envelope) },
+                ...result.content.slice(1),
+            ],
+        };
+    }
+    catch {
+        return result;
+    }
+}
 export async function runNative(cliArgs, opts = {}) {
     if (_runAgentDeviceOverrideForTest) {
         return _runAgentDeviceOverrideForTest(cliArgs, opts);
@@ -612,15 +629,18 @@ export async function runNative(cliArgs, opts = {}) {
         const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
         // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
         // it here; the gate is only for verbs that genuinely require the XCUITest runner.
+        let upgradeNote;
         if (cliArgs[0] !== 'screenshot') {
             const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
             const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
             if (!ready.ok)
-                return failResult(ready.message, 'RN_FAST_RUNNER_DOWN');
+                return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+            upgradeNote = ready.note;
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
-        return runIOS(ios);
+        const result = await runIOS(ios);
+        return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
     }
     // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
     // as a pure-TS orchestrator (snapshot → match → tap) for cross-platform symmetry.
@@ -660,7 +680,7 @@ export async function runNative(cliArgs, opts = {}) {
         // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
         // fallback (like iOS simctl) — don't gate it on the runner.
         if (cliArgs[0] !== 'screenshot') {
-            const { resolveAndroidSerial, startAndroidRunner } = await import('./runners/rn-android-runner-client.js');
+            const { resolveAndroidSerial, startAndroidRunner, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
             const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
             if (!serial) {
                 return failResult('No Android device resolved (none booted, or multiple — pass deviceId / set ANDROID_SERIAL).', 'RN_ANDROID_RUNNER_DOWN');
@@ -669,12 +689,23 @@ export async function runNative(cliArgs, opts = {}) {
                 await startAndroidRunner(serial, appId);
             }
             catch (err) {
-                return failResult(`rn-android-runner did not start: ${err instanceof Error ? err.message : String(err)}`, 'RN_ANDROID_RUNNER_DOWN');
+                // GH #383: discard any note the failed start left pending — a stale
+                // note must never attach to a LATER unrelated result.
+                consumePendingAndroidUpgradeNote();
+                const msg = err instanceof Error ? err.message : String(err);
+                // GH #383: a protocol mismatch surviving the reap+reinstall is a distinct,
+                // actionable failure — surface it rather than the generic runner-down.
+                if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+                    return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+                }
+                return failResult(`rn-android-runner did not start: ${msg}`, 'RN_ANDROID_RUNNER_DOWN');
             }
         }
-        const { runAndroid } = await import('./runners/rn-android-runner-client.js');
+        const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
-        return runAndroid({ ...android, deviceId: activeSession?.deviceId });
+        const result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+        const note = consumePendingAndroidUpgradeNote();
+        return note ? attachMetaNote(result, note) : result;
     }
     // No native route for this verb (open/close/devices/find are handled by their
     // own native tools; interaction verbs route via the iOS/Android short-circuits

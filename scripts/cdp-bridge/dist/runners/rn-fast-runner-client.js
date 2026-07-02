@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
+import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
+import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -12,7 +14,6 @@ const READY_TIMEOUT_MS = 30_000;
 // ready-signal timeout is widened for the build path.
 const BUILD_READY_TIMEOUT_MS = 360_000;
 const HTTP_TIMEOUT_MS = 10_000;
-const STATE_FILE = '/tmp/rn-fast-runner-state.json';
 const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast-runner');
 /**
  * Pure function variant: parse an entire stdout buffer in one shot.
@@ -62,20 +63,79 @@ export function createReadySignalParser() {
 // --- Singleton state ---
 let runnerProcess = null;
 let runnerState = null;
-try {
-    if (existsSync(STATE_FILE)) {
-        const raw = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
-        try {
-            process.kill(raw.pid, 0);
-            runnerState = raw;
-        }
-        catch {
-            unlinkSync(STATE_FILE);
-        }
-    }
+export function iosStatePath(deviceId) {
+    return runnerStatePath(`ios-${deviceId}`);
 }
-catch {
-    /* start fresh */
+export function parsePersistedRunnerState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (s.schemaVersion !== 1)
+        return null;
+    if (typeof s.pid !== 'number' || typeof s.port !== 'number')
+        return null;
+    if (typeof s.deviceId !== 'string' || typeof s.bundleId !== 'string')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return s;
+}
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state. protocolVersion is synthesized to 0 ("pre-protocol") — the
+// health gate then classifies the live runner 'legacy' → reap → relaunch,
+// which is exactly the transparent-upgrade path. Never trusted beyond
+// pid/port/deviceId.
+export function parseLegacyRunnerState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (typeof s.pid !== 'number' || typeof s.port !== 'number')
+        return null;
+    if (typeof s.deviceId !== 'string')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return {
+        schemaVersion: 1,
+        pid: s.pid,
+        port: s.port,
+        deviceId: s.deviceId,
+        bundleId: typeof s.bundleId === 'string' ? s.bundleId : '',
+        startedAt: '',
+        protocolVersion: 0,
+    };
+}
+// GH #383: lazy per-device adoption replaces the import-time /tmp load. A
+// respawned bridge worker rediscovers a live runner the first time it knows
+// which device it is talking to (ensureRunnerForCommand / session health /
+// startFastRunner / stopFastRunner). Invalid or dead persisted state is
+// deleted on sight. Falls back to the legacy /tmp file ONCE so a live
+// pre-upgrade runner is discovered rather than orphaned (review amendment);
+// a dead legacy file is garbage and is removed immediately.
+export function adoptPersistedFastRunnerState(deviceId) {
+    if (runnerState || !deviceId)
+        return;
+    const path = iosStatePath(deviceId);
+    const raw = readJsonStateFile(path);
+    if (raw !== null) {
+        const parsed = parsePersistedRunnerState(raw);
+        if (!parsed) {
+            deleteStateFile(path);
+            return;
+        }
+        runnerState = parsed;
+        return;
+    }
+    const legacy = readLegacyTmpState('ios');
+    if (legacy === null)
+        return;
+    const parsedLegacy = parseLegacyRunnerState(legacy);
+    if (!parsedLegacy) {
+        cleanupLegacyTmpState();
+        return;
+    }
+    if (parsedLegacy.deviceId === deviceId)
+        runnerState = parsedLegacy;
 }
 export function getFastRunnerState() {
     return runnerState;
@@ -98,13 +158,7 @@ export function isFastRunnerAvailable() {
     catch {
         /* process dead */
     }
-    runnerState = null;
-    try {
-        unlinkSync(STATE_FILE);
-    }
-    catch {
-        /* ignore */
-    }
+    clearStateFile();
     return false;
 }
 /**
@@ -157,7 +211,20 @@ export function derivedDataPathForRunner() {
 export function shouldReuseRunner(state, deviceId) {
     return state !== null && state.deviceId === deviceId;
 }
+// GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
+// vars to the XCUITest process (prefix stripped), so the plain var alone never
+// reaches RunnerEnv.pluginVersion(). Keep both forms — plain for any direct
+// launch path, TEST_RUNNER_ for xcodebuild test.
+export function buildRunnerVersionEnv(pluginVersion) {
+    if (pluginVersion === null)
+        return {};
+    return {
+        RN_PLUGIN_VERSION: pluginVersion,
+        TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion,
+    };
+}
 export async function startFastRunner(deviceId, bundleId, port) {
+    adoptPersistedFastRunnerState(deviceId);
     if (shouldReuseRunner(runnerState, deviceId))
         return runnerState;
     const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
@@ -181,6 +248,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
             env: {
                 ...process.env,
                 RN_FAST_RUNNER_PORT: String(desired),
+                ...buildRunnerVersionEnv(getPluginVersion()),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -206,19 +274,23 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 return;
             }
             const state = {
+                schemaVersion: 1,
                 port: result.port,
                 pid: child.pid,
                 deviceId,
                 bundleId,
                 startedAt: new Date().toISOString(),
+                protocolVersion: RUNNER_PROTOCOL_VERSION,
+                ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
             };
             runnerState = state;
             try {
-                writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+                writeJsonStateFileAtomic(iosStatePath(deviceId), state);
             }
             catch {
                 /* ignore */
             }
+            cleanupLegacyTmpState();
             resolve(state);
         };
         child.stdout.setEncoding('utf-8');
@@ -230,28 +302,24 @@ export async function startFastRunner(deviceId, bundleId, port) {
         child.on('error', (err) => {
             clearTimeout(timer);
             if (runnerProcess === child) {
-                runnerProcess = null;
-                runnerState = null;
+                clearStateFile();
             }
             reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
         });
         child.on('exit', (code) => {
             if (runnerProcess === child) {
-                runnerProcess = null;
-                runnerState = null;
-                try {
-                    unlinkSync(STATE_FILE);
-                }
-                catch {
-                    /* ignore */
-                }
+                clearStateFile();
             }
             clearTimeout(timer);
             reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
         });
     });
 }
-export function stopFastRunner() {
+// GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
+// (session close, restart, maestro park) would otherwise no-op against empty
+// in-memory state and leak the persisted runner — so adopt first, then reap.
+export function stopFastRunner(deviceId) {
+    adoptPersistedFastRunnerState(deviceId);
     if (runnerProcess) {
         runnerProcess.kill('SIGTERM');
         runnerProcess = null;
@@ -264,13 +332,7 @@ export function stopFastRunner() {
             /* already dead */
         }
     }
-    runnerState = null;
-    try {
-        unlinkSync(STATE_FILE);
-    }
-    catch {
-        /* ignore */
-    }
+    clearStateFile();
 }
 export async function fastSwipe(x1, y1, x2, y2, durationMs) {
     const body = { command: 'drag', x: x1, y: y1, x2, y2 };
@@ -314,34 +376,45 @@ async function defaultHttpProbe(port, timeoutMs) {
         if (!res.ok)
             return { ok: false, status: res.status };
         let bodyOk;
+        let protocolVersion;
+        let runnerVersion;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
+            if (typeof body.protocolVersion === 'number')
+                protocolVersion = body.protocolVersion;
+            if (typeof body.runnerVersion === 'string')
+                runnerVersion = body.runnerVersion;
         }
         catch {
             bodyOk = false;
         }
-        return { ok: true, status: res.status, bodyOk };
+        return {
+            ok: true,
+            status: res.status,
+            bodyOk,
+            ...(protocolVersion !== undefined ? { protocolVersion } : {}),
+            ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+        };
     }
     finally {
         clearTimeout(timer);
     }
 }
 function clearStateFile() {
+    // GH #383: capture the per-device path before nulling so the right hardened
+    // state file is removed (the /tmp singleton is gone).
+    const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
     runnerState = null;
     // M7 review (Gemini): null the child-process handle too. Previously a reap
     // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
     // eventually self-heal, but during the window a concurrent stopFastRunner
     // could signal an already-dead process. Clearing here is defensive.
     runnerProcess = null;
-    try {
-        unlinkSync(STATE_FILE);
-    }
-    catch {
-        /* already gone */
-    }
+    if (path)
+        deleteStateFile(path);
 }
-export async function probeFastRunnerLiveness(deps = {}) {
+export async function probeFastRunnerLivenessDetailed(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
     const processAlive = deps.processAlive ?? defaultProcessAlive;
     const httpProbe = deps.httpProbe ?? defaultHttpProbe;
@@ -349,20 +422,43 @@ export async function probeFastRunnerLiveness(deps = {}) {
     const timeoutMs = deps.timeoutMs ?? 2000;
     const state = getState();
     if (!state)
-        return 'dead';
+        return { liveness: 'dead' };
     if (!processAlive(state.pid)) {
         clearState();
-        return 'dead';
+        return { liveness: 'dead' };
     }
     try {
         const res = await httpProbe(state.port, timeoutMs);
-        if (res.ok && res.status === 200 && res.bodyOk === true)
-            return 'alive';
-        return 'stale';
+        if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+            return { liveness: 'stale', staleReason: 'health' };
+        }
+        const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
+        const compat = classifyRunnerCompatibility({
+            ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        }, plugin);
+        if (!compat.compatible) {
+            return {
+                liveness: 'stale',
+                staleReason: compat.reason,
+                ...(res.protocolVersion !== undefined
+                    ? { runnerProtocolVersion: res.protocolVersion }
+                    : {}),
+                ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            };
+        }
+        return {
+            liveness: 'alive',
+            ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        };
     }
     catch {
-        return 'stale';
+        return { liveness: 'stale', staleReason: 'health' };
     }
+}
+export async function probeFastRunnerLiveness(deps = {}) {
+    return (await probeFastRunnerLivenessDetailed(deps)).liveness;
 }
 export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
@@ -427,7 +523,14 @@ async function postCommand(body) {
             body: JSON.stringify(body),
             signal: controller.signal,
         });
-        return resp.json();
+        const parsed = (await resp.json());
+        // GH #383: defense-in-depth — the liveness gate already reaps a
+        // protocol-mismatched runner, but a runner that flipped protocol mid-session
+        // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
+        if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+            throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+        }
+        return parsed;
     }
     catch (err) {
         if (err?.name === 'AbortError') {
@@ -509,7 +612,17 @@ export async function runIOS(args) {
         body.depth = args.depth;
     if (args.scope !== undefined)
         body.scope = args.scope;
-    const resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
+    let resp;
+    try {
+        resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
+    }
+    catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        throw err;
+    }
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;

@@ -14,6 +14,7 @@ import {
   isFastRunnerAvailable,
   fastSwipe,
   stopFastRunner,
+  adoptPersistedFastRunnerState,
 } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
@@ -182,8 +183,8 @@ async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResu
     {
       closeSession: async () => {
         clearActiveSession();
-        stopFastRunner();
-        await stopAndroidRunner();
+        stopFastRunner(session?.deviceId);
+        await stopAndroidRunner(session?.deviceId);
         return okResult({ closed: true });
       },
       openSession: ({ appId, platform, attachOnly }) =>
@@ -1027,6 +1028,10 @@ export function exactModeRejectionMessage(
 
 export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
+    // GH #383: a respawned worker starts with empty in-memory runner state, so
+    // adopt the persisted per-device file before the isFastRunnerAvailable()
+    // gates below (else they false-report "unavailable" after a respawn).
+    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     // B106 fix: use fast-runner's HID-level synthesis to bypass XCTest
     // `waitForIdle` hangs on Reanimated-driven screens. Only applies when
     // fast-runner is available (iOS) and count/pattern are not used (those
@@ -1153,6 +1158,9 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
     const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
+    // GH #383: adopt persisted per-device state so a respawned worker sees a
+    // live runner before this fast-path gate.
+    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     if (isFastRunnerAvailable()) {
       try {
         const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);

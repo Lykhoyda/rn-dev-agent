@@ -20,6 +20,13 @@ let calls = [];
 let response = { ok: true, data: {} };
 
 _setFetchForTest(async (url, init) => {
+  // GH #383: the reuse-time protocol gate probes GET /health on every
+  // startAndroidRunner (runAndroid calls it per dispatch). Answer /health with a
+  // compatible body so the live injected state is reused (not reaped); only
+  // /command POSTs are recorded for the command-dispatch assertions.
+  if (String(url).endsWith('/health')) {
+    return { ok: true, status: 200, json: async () => ({ ok: true, protocolVersion: 1 }) };
+  }
   calls.push({ url, body: JSON.parse(init.body) });
   return { ok: true, status: 200, json: async () => response };
 });

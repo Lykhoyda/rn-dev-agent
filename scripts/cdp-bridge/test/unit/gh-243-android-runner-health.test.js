@@ -91,7 +91,13 @@ test('#243 runAndroid returns RN_ANDROID_RUNNER_DOWN (not bare "fetch failed") o
     bundleId: 'com.example',
     startedAt: '2026-06-09T00:00:00.000Z',
   });
-  _setFetchForTest(async () => {
+  // GH #383: the reuse gate probes GET /health first — answer it healthy +
+  // compatible so the live injected runner is reused (no reap/real adb), then
+  // fail the /command POST to exercise the connection-failure → RN_ANDROID_RUNNER_DOWN map.
+  _setFetchForTest(async (url) => {
+    if (String(url).endsWith('/health')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, protocolVersion: 1 }) };
+    }
     throw new Error('fetch failed');
   });
 

@@ -1,5 +1,23 @@
 # rn-dev-agent-plugin
 
+## 0.58.0
+
+### Minor Changes
+
+- 694a57d: feat(protocol): version the native runner /command wire protocol + move runner state out of /tmp (#383). Both runners' `GET /health` now reports `{protocolVersion, runnerVersion, capabilities}` and every response carries a `"v"` stamp; the bridge classifies a reachable runner with a missing/older/newer protocol or a skewed `runnerVersion` as stale and transparently reaps + reinstalls it (the first device tool call after upgrading from a pre-protocol plugin pays one runner restart — `meta.note: "runner upgraded (protocol/version mismatch)"`). Only a mismatch that survives reinstall surfaces the new typed error `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Runner state files move from fixed shared `/tmp` paths to per-device hardened files (0600, symlink-refusing, atomic) under the app-support state dir (`runner-state/ios-<udid>.json`, `android-<serial>.json`; Android persists only under a resolved serial) via a shared `util/secure-state-file.ts` also adopted by the session file; a live pre-upgrade runner pointed at by the legacy `/tmp` state is adopted once, reaped, and relaunched before the `/tmp` files are deleted, and a grep-enforced test keeps `/tmp` out of the runner clients. `cdp_status` → `deviceSession.runnerProtocol` surfaces the handshake.
+
+## 0.57.4
+
+### Patch Changes
+
+- b1e0ad6: feat(keyboard-guard): in-runner keyboard-occlusion guard for live `device_press`/`device_longpress` taps on iOS + Android (#370). Before a guarded tap, the runner probes for a visible software keyboard whose frame contains the tap point (containment on a sane rect — non-empty, min height 120pt iOS / 150px Android, so accessory bars don't false-trigger) and auto-dismisses first when occluded. Android dismissal is `pressBack` + a bounded `waitForIdle(1500)` (≈3.6s measured incl. bounded idle), gated on a TYPE_INPUT_METHOD window with sane bounds so it never navigates back otherwise — requires `FLAG_RETRIEVE_INTERACTIVE_WINDOWS`, now enabled at dispatcher init. iOS is verify-or-refuse: only the safe dismiss-control tap ("Hide keyboard"/"Dismiss keyboard"/"Done") is used, then re-verified; on iPhone standard QWERTY, which has no such control, the runner REFUSES the tap with `KEYBOARD_OCCLUDED … keyboardGuard=dismiss_failed` instead of tapping the keyboard, because XCTest's `swipeDown` on the keyboard triggers QuickPath slide-typing and corrupts the focused field (device-proven). Every guarded gesture returns `meta.keyboardGuard`: `"off" | "no_keyboard" | "not_occluded" | "dismissed"` (plus `dismiss_failed` inside the iOS refusal error). Opt out with `RN_KEYBOARD_GUARD=0`/`false`, resolved TS-side per command (`guardKeyboard` on the wire; absent → guard stays ON, so older clients keep guarding). Scope is command-handler tap/longPress only — `tapSeries`, by-text taps, element-center taps, the focus-tap inside type/fill, swipes/scrolls/drags, and `doubleTap` are explicitly unguarded. Follow-up #379 tracks a JS-first (`Keyboard.dismiss()`) auto-heal for the iOS refusal case; #378 tracks a pre-existing Android `foreground()` pre-flight stall surfaced (not fixed) during verification.
+
+## 0.57.3
+
+### Patch Changes
+
+- a6112e6: fix(record): `device_record stop` no longer crashes on macOS with `adb_args[@]: unbound variable` (#374). In `record_proof.sh` the Android stop branch expanded an empty `adb_args` array unguarded (`"${adb_args[@]}"`); under `set -euo pipefail` on bash 3.2 (the macOS default `/bin/bash`) that is an unbound-variable error, aborting the stop before the pull/convert — so recording finalize (and, via a leftover Android `.pid`, even iOS stops) failed. All three expansions now use the `+`-default guard already present elsewhere in the file. Regression-guarded by a static invariant test (effective on bash 5.x CI) plus a behavioral reproduction gated to bash < 4.4.
+
 ## 0.57.2
 
 ### Patch Changes
