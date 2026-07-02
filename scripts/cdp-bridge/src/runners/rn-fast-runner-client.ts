@@ -22,6 +22,7 @@ import {
   classifyRunnerCompatibility,
 } from './protocol.js';
 import type { RunnerIncompatibilityReason } from './protocol.js';
+import type { QuiescenceStatus } from './quiescence.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -47,7 +48,9 @@ const FAST_RUNNER_PROJECT = join(import.meta.dirname, '..', '..', '..', 'rn-fast
 // xcodebuild streams stdout in arbitrary-sized chunks, so the parser
 // holds a small buffer + a `seenReady` flag and walks complete lines.
 
-export type ReadySignalResult = { ready: true; port: number } | { error: string };
+export type ReadySignalResult =
+  | { ready: true; port: number; quiescence?: QuiescenceStatus }
+  | { error: string };
 
 export interface ReadySignalParser {
   /**
@@ -72,6 +75,7 @@ export function parseReadySignal(buf: string): ReadySignalResult | null {
 export function createReadySignalParser(): ReadySignalParser {
   let pending = '';
   let seenReady = false;
+  let quiescence: QuiescenceStatus | undefined;
   return {
     feed(chunk: string): ReadySignalResult | null {
       pending += chunk;
@@ -87,6 +91,14 @@ export function createReadySignalParser(): ReadySignalParser {
         if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
           return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
         }
+        // GH #384: quiescence startup marker precedes LISTENER_READY.
+        if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE')) {
+          quiescence = 'active';
+        } else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED')) {
+          quiescence = 'disabled';
+        } else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE')) {
+          quiescence = 'unavailable';
+        }
         if (!seenReady) {
           if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
             seenReady = true;
@@ -97,7 +109,11 @@ export function createReadySignalParser(): ReadySignalParser {
         // timestamp + process prefix, so match anywhere in the line.
         const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
         if (portMatch) {
-          return { ready: true, port: Number(portMatch[1]) };
+          return {
+            ready: true,
+            port: Number(portMatch[1]),
+            ...(quiescence !== undefined ? { quiescence } : {}),
+          };
         }
       }
       return null;

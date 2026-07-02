@@ -28,6 +28,7 @@ export function parseReadySignal(buf) {
 export function createReadySignalParser() {
     let pending = '';
     let seenReady = false;
+    let quiescence;
     return {
         feed(chunk) {
             pending += chunk;
@@ -43,6 +44,16 @@ export function createReadySignalParser() {
                 if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
                     return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
                 }
+                // GH #384: quiescence startup marker precedes LISTENER_READY.
+                if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE')) {
+                    quiescence = 'active';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED')) {
+                    quiescence = 'disabled';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE')) {
+                    quiescence = 'unavailable';
+                }
                 if (!seenReady) {
                     if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
                         seenReady = true;
@@ -53,7 +64,11 @@ export function createReadySignalParser() {
                 // timestamp + process prefix, so match anywhere in the line.
                 const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
                 if (portMatch) {
-                    return { ready: true, port: Number(portMatch[1]) };
+                    return {
+                        ready: true,
+                        port: Number(portMatch[1]),
+                        ...(quiescence !== undefined ? { quiescence } : {}),
+                    };
                 }
             }
             return null;
