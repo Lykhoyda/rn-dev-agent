@@ -41,4 +41,32 @@ final class QuiescenceBypassTests: XCTestCase {
     // renamed the API and the bypass silently degraded (spec: degrade loudly).
     XCTAssertNotEqual(RNQuiescenceGetProbeResult(), .unavailable)
   }
+
+  // MARK: - Status resolution (Task 2)
+
+  func testResolveStatusActive() {
+    XCTAssertEqual(QuiescenceStatus.resolve(probe: .classic, bypassEnabled: true), .active)
+    XCTAssertEqual(QuiescenceStatus.resolve(probe: .preEvent, bypassEnabled: true), .active)
+  }
+
+  func testResolveStatusDisabledWhenOptedOut() {
+    XCTAssertEqual(QuiescenceStatus.resolve(probe: .classic, bypassEnabled: false), .disabled)
+  }
+
+  func testResolveStatusUnavailableTrumpsBypass() {
+    XCTAssertEqual(QuiescenceStatus.resolve(probe: .unavailable, bypassEnabled: true), .unavailable)
+    XCTAssertEqual(QuiescenceStatus.resolve(probe: .unavailable, bypassEnabled: false), .unavailable)
+  }
+
+  func testStartupMarkers() {
+    XCTAssertEqual(QuiescenceStatus.active.startupMarker, "RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE")
+    XCTAssertEqual(QuiescenceStatus.disabled.startupMarker, "RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED")
+    XCTAssertEqual(QuiescenceStatus.unavailable.startupMarker, "RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE")
+  }
+
+  func testCapabilitiesOnlyWhenActive() {
+    XCTAssertEqual(QuiescenceStatus.active.capabilities, ["QUIESCENCE_BYPASS"])
+    XCTAssertEqual(QuiescenceStatus.disabled.capabilities, [])
+    XCTAssertEqual(QuiescenceStatus.unavailable.capabilities, [])
+  }
 }

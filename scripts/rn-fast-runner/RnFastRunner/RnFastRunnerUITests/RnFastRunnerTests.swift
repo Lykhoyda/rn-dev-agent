@@ -88,6 +88,13 @@ class RnFastRunnerTests: XCTestCase {
     let queue = DispatchQueue(label: "rn-fast-runner.runner")
     let desiredPort = RunnerEnv.resolvePort()
     NSLog("RN_FAST_RUNNER_DESIRED_PORT=%d", desiredPort)
+    let quiescence = QuiescenceStatus.current()
+    if quiescence == .active {
+      let variant = RNQuiescenceGetProbeResult() == .preEvent ? "preEvent" : "classic"
+      NSLog("%@=%@", quiescence.startupMarker, variant)
+    } else {
+      NSLog("%@", quiescence.startupMarker)
+    }
     listener = try makeRunnerListener(desiredPort: desiredPort)
     listener?.stateUpdateHandler = { [weak self] state in
       switch state {
