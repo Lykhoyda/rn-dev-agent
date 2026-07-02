@@ -36,7 +36,7 @@ const execFile = promisify(execFileCb);
 export interface FlowParkOpts {
   platform?: 'ios' | 'android';
   deviceId?: string;
-  stopFastRunner?: () => void;
+  stopFastRunner?: (deviceId?: string) => void;
   markCdpStale?: () => void;
   releaseAndroidSlot?: (opts: { deviceId?: string }) => Promise<void>;
 }
@@ -56,7 +56,7 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
       await release({ deviceId: opts.deviceId });
     } else {
-      (opts.stopFastRunner ?? defaultStopFastRunner)();
+      (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
     }
     return await run();
   } finally {

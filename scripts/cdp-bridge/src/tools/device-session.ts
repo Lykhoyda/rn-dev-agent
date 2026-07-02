@@ -475,7 +475,7 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           closeSession: async () => {
             clearActiveSession(); // also clears refMap via its side-effect
             stopFastRunner(session?.deviceId);
-            await stopAndroidRunner();
+            await stopAndroidRunner(session?.deviceId);
             return okResult({ closed: true });
           },
           openSession: ({ appId, platform, attachOnly }) =>
