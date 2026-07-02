@@ -8,6 +8,12 @@ import {
   resolveQuiescenceBypass,
   buildRunnerQuiescenceEnv,
 } from '../../../dist/runners/quiescence.js';
+import {
+  _setRunnerStateForTest,
+  _setFetchForTest,
+  _resetQuiescenceAnnouncementForTest,
+  runIOS,
+} from '../../../dist/runners/rn-fast-runner-client.js';
 
 const READY = 'RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22088\n';
 
@@ -76,4 +82,61 @@ test('buildRunnerQuiescenceEnv emits both plain and TEST_RUNNER_ forms', () => {
     RN_QUIESCENCE_BYPASS: '0',
     TEST_RUNNER_RN_QUIESCENCE_BYPASS: '0',
   });
+});
+
+function fakeState(quiescence) {
+  return {
+    schemaVersion: 1,
+    port: 12345,
+    pid: process.pid,
+    deviceId: 'UDID-TEST',
+    bundleId: 'com.example.app',
+    startedAt: '2026-07-02T00:00:00.000Z',
+    protocolVersion: 1,
+    ...(quiescence !== undefined ? { quiescence } : {}),
+  };
+}
+
+function okFetch() {
+  return async () =>
+    new Response(JSON.stringify({ ok: true, v: 1, data: { message: 'done' } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+}
+
+test('runIOS announces meta.quiescenceBypass exactly once after boot', async () => {
+  _setRunnerStateForTest(fakeState('active'));
+  _setFetchForTest(okFetch());
+  _resetQuiescenceAnnouncementForTest(true);
+
+  const first = JSON.parse((await runIOS({ command: 'tap', x: 1, y: 1 })).content[0].text);
+  assert.equal(first.meta?.quiescenceBypass, 'active');
+
+  const second = JSON.parse((await runIOS({ command: 'tap', x: 1, y: 1 })).content[0].text);
+  assert.equal(second.meta?.quiescenceBypass, undefined);
+
+  _setRunnerStateForTest(null);
+});
+
+test('runIOS announces disabled status too', async () => {
+  _setRunnerStateForTest(fakeState('disabled'));
+  _setFetchForTest(okFetch());
+  _resetQuiescenceAnnouncementForTest(true);
+
+  const first = JSON.parse((await runIOS({ command: 'tap', x: 1, y: 1 })).content[0].text);
+  assert.equal(first.meta?.quiescenceBypass, 'disabled');
+
+  _setRunnerStateForTest(null);
+});
+
+test('runIOS announces nothing when the runner reported no marker (old binary)', async () => {
+  _setRunnerStateForTest(fakeState(undefined));
+  _setFetchForTest(okFetch());
+  _resetQuiescenceAnnouncementForTest(true);
+
+  const first = JSON.parse((await runIOS({ command: 'tap', x: 1, y: 1 })).content[0].text);
+  assert.equal(first.meta?.quiescenceBypass, undefined);
+
+  _setRunnerStateForTest(null);
 });

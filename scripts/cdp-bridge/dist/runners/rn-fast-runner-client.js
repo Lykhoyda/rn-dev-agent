@@ -79,6 +79,28 @@ export function createReadySignalParser() {
 // --- Singleton state ---
 let runnerProcess = null;
 let runnerState = null;
+// GH #384: announce the runner's quiescence-bypass status on the FIRST
+// successful /command after a state acquisition (fresh spawn or adoption),
+// so sessions are auditable without polling /health. Consumed by every
+// success return in runIOS — currently the type-shim return, the snapshot
+// return + its defensive fallback, and the final default return; a new
+// success return site must also attach it. A shimmed `type` (resp.ok=false
+// at the wire level) defers the announcement to the next command by design.
+let quiescenceAnnouncementPending = false;
+const QUIESCENCE_STATUSES = new Set(['active', 'disabled', 'unavailable']);
+export function _resetQuiescenceAnnouncementForTest(pending) {
+    quiescenceAnnouncementPending = pending;
+}
+function takeQuiescenceAnnouncement() {
+    if (!quiescenceAnnouncementPending)
+        return null;
+    quiescenceAnnouncementPending = false;
+    // Persisted state is cast, not validated field-by-field — guard against a
+    // tampered/corrupt local state file surfacing an arbitrary string.
+    if (!runnerState?.quiescence || !QUIESCENCE_STATUSES.has(runnerState.quiescence))
+        return null;
+    return { quiescenceBypass: runnerState.quiescence };
+}
 export function iosStatePath(deviceId) {
     return runnerStatePath(`ios-${deviceId}`);
 }
@@ -140,6 +162,7 @@ export function adoptPersistedFastRunnerState(deviceId) {
             return;
         }
         runnerState = parsed;
+        quiescenceAnnouncementPending = true;
         return;
     }
     const legacy = readLegacyTmpState('ios');
@@ -150,8 +173,10 @@ export function adoptPersistedFastRunnerState(deviceId) {
         cleanupLegacyTmpState();
         return;
     }
-    if (parsedLegacy.deviceId === deviceId)
+    if (parsedLegacy.deviceId === deviceId) {
         runnerState = parsedLegacy;
+        quiescenceAnnouncementPending = true;
+    }
 }
 export function getFastRunnerState() {
     return runnerState;
@@ -302,6 +327,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
             };
             runnerState = state;
+            quiescenceAnnouncementPending = true;
             try {
                 writeJsonStateFileAtomic(iosStatePath(deviceId), state);
             }
@@ -641,6 +667,7 @@ export async function runIOS(args) {
         }
         throw err;
     }
+    const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
@@ -656,7 +683,7 @@ export async function runIOS(args) {
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {
-            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } });
+            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...(announce ?? {}) } });
         }
         if (code) {
             return failResult(message, code);
@@ -670,10 +697,10 @@ export async function runIOS(args) {
         if (Array.isArray(data.nodes)) {
             const flat = mapRunnerNodesToFlat(data.nodes);
             updateRefMapFromFlat(flat);
-            return okResult({ nodes: flat });
+            return okResult({ nodes: flat }, announce ? { meta: announce } : undefined);
         }
         // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
-        return okResult(resp.data);
+        return okResult(resp.data, announce ? { meta: announce } : undefined);
     }
-    return okResult(resp.data ?? {});
+    return okResult(resp.data ?? {}, announce ? { meta: announce } : undefined);
 }
