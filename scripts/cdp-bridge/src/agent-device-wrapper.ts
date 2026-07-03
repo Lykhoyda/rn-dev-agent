@@ -641,8 +641,9 @@ async function rebuildStaleRunnerArtifact(
       code: 'RUNNER_COMMANDS_STALE',
       message:
         `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
-        `required commands (missing: ${missing}) — the checkout may be broken; update or ` +
-        `reinstall the plugin, then re-open the device session.`,
+        `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
+        `not booted, xcodebuild flake), delete scripts/rn-fast-runner/build/commands-rebuild.json ` +
+        `and re-open to retry; otherwise update or reinstall the plugin.`,
     };
   }
   const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
@@ -714,6 +715,20 @@ export async function ensureRunnerForCommand(
   // through to ensure(), which cold-builds. Without this, any runner death
   // after a cold `xcodebuild test` (which leaves no .xctestrun) bricks opens.
   if (decision.action === 'error' && !(deps.allowArtifactRebuild && deviceId)) {
+    // GH #418 (multi-review): a stale runner missing commands surfaces the
+    // typed refusal even when nothing is prebuilt — not the generic
+    // not-prebuilt message, whose code would be RN_FAST_RUNNER_DOWN.
+    if (first.staleReason === 'missing-commands') {
+      const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
+      return {
+        ok: false,
+        code: 'RUNNER_COMMANDS_STALE',
+        message:
+          `rn-fast-runner artifact lacks required commands (missing: ${missing}). ` +
+          `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) ` +
+          `to rebuild it (cold build, several minutes).`,
+      };
+    }
     return { ok: false, message: decision.message };
   }
 

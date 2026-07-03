@@ -177,6 +177,20 @@ test('gh-418: at open, dead runner + NOT prebuilt → cold-build via ensure, not
   assert.deepEqual(res, { ok: true });
 });
 
+test('gh-418: mid-flow, STALE missing-commands runner + NOT prebuilt → typed RUNNER_COMMANDS_STALE', async () => {
+  // Multi-review finding: without this, the not-prebuilt decision shadowed the
+  // typed refusal and callers surfaced RN_FAST_RUNNER_DOWN instead.
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    prebuilt: () => false,
+    probe: async () => MISSING,
+    ensure: async () => {},
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'RUNNER_COMMANDS_STALE');
+  assert.match(res.message, /keyboardDismiss/);
+});
+
 test('gh-418: mid-flow, dead runner + NOT prebuilt keeps the #210 refusal', async () => {
   let ensured = 0;
   const res = await ensureRunnerForCommand('U1', 'com.example', {
