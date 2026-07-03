@@ -28,9 +28,7 @@ export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps)
         ) : (
           <div className="empty empty-guide">
             <div className="empty-title">No screenshot yet</div>
-            <div>
-              The screen appears here automatically after the agent interacts with the app.
-            </div>
+            <div>The screen appears here automatically after the agent interacts with the app.</div>
             <div>Nothing showing? Check the connection with cdp_status.</div>
           </div>
         )}

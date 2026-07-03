@@ -62,7 +62,10 @@ export function Header({ conn, app, route, events, view, onViewChange }: HeaderP
           <span className="k">errors</span>
         </span>
         <span className="view-toggle">
-          <button className={view === 'live' ? 'tab on' : 'tab'} onClick={() => onViewChange('live')}>
+          <button
+            className={view === 'live' ? 'tab on' : 'tab'}
+            onClick={() => onViewChange('live')}
+          >
             Live
           </button>
           <button

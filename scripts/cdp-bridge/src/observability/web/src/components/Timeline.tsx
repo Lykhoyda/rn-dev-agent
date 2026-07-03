@@ -56,7 +56,9 @@ export function Timeline({ events, totalCount, selected, onSelect }: TimelinePro
               {e.ghost && <span className="ghost">ghost</span>}
               <span className={`ok ${e.ok ? 'pass' : 'fail'}`}>{e.ok ? '✓' : '✗'}</span>
               {e.durationMs != null && (
-                <span className={e.durationMs > SLOW_MS ? 'dur slow' : 'dur'}>{e.durationMs}ms</span>
+                <span className={e.durationMs > SLOW_MS ? 'dur slow' : 'dur'}>
+                  {e.durationMs}ms
+                </span>
               )}
             </div>
             {selected === e.seq && (

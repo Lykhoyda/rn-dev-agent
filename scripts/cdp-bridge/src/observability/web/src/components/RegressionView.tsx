@@ -107,7 +107,9 @@ export function RegressionView({ e2eProgress, e2eDoneCount }: RegressionViewProp
             </span>
           )}
           {verdict === 'empty' && (
-            <span className="reg-empty-hint">No locked tests — lock one with cdp_lock_e2e_test</span>
+            <span className="reg-empty-hint">
+              No locked tests — lock one with cdp_lock_e2e_test
+            </span>
           )}
         </div>
         {result?.data?.results && result.data.results.length > 0 && (
