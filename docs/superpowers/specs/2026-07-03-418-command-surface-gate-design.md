@@ -163,6 +163,29 @@ this branch only catches mid-session hot-swaps.
   already dispatch as `/command` verbs.
 - No change to `capabilities` semantics.
 
+## Addendum (planning discovery, 2026-07-03): B235's true root cause
+
+Plan-time code archaeology (`git log -S`) showed the Swift `CommandType` enum
+**never** had a `dismissKeyboard` case — it has been `keyboardDismiss` since
+the original import — while the TS bridge posts `dismissKeyboard`
+(`buildRunIOSArgs` `case 'keyboard'`). The B235 incident was therefore not a
+stale artifact at all: the explicit iOS keyboard-dismiss wire verb has NEVER
+decoded on any artifact. (The #356/#370 keyboard-guard dismissal is
+Swift-internal via the `guardKeyboard` flag on taps, which is why
+device-verified keyboard work still passed.)
+
+Consequences:
+- The plan adds **Task 1: fix the wire verb TS-side** (`dismissKeyboard` →
+  `keyboardDismiss` in `buildRunIOSArgs` + the `RunIOSArgs` union) so old AND
+  new artifacts accept it. Android keeps `dismissKeyboard` (its Kotlin
+  when-label) — the platforms legitimately differ, which is itself an argument
+  for per-platform REQUIRED lists.
+- The gate blind spot this spec addresses remains real and worth fixing —
+  nothing fingerprints the artifact's command surface — but the device
+  verification uses the genuine pre-#418 artifact (absent `commands` field)
+  as the migration test instead of the fake-verb protocol from the Testing
+  section, which is now optional.
+
 ## Risks / mitigations
 
 - **Upgrade friction**: every existing DerivedData prebuild is classified
