@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { probeFastRunnerLivenessDetailed } from '../../dist/runners/rn-fast-runner-client.js';
 import { ensureRunnerForCommand } from '../../dist/agent-device-wrapper.js';
+import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 
 const STATE = { pid: 1, port: 22088, deviceId: 'U1', bundleId: 'com.example' };
 const deps = (probeBody, plugin = '0.58.0') => ({
@@ -16,8 +17,16 @@ const deps = (probeBody, plugin = '0.58.0') => ({
 });
 
 test('gh-383 gate: healthy + matching protocol + version → alive', async () => {
+  // GH #418: alive now also requires the full advertised command surface.
   const d = await probeFastRunnerLivenessDetailed(
-    deps({ ok: true, status: 200, bodyOk: true, protocolVersion: 1, runnerVersion: '0.58.0' }),
+    deps({
+      ok: true,
+      status: 200,
+      bodyOk: true,
+      protocolVersion: 1,
+      runnerVersion: '0.58.0',
+      commands: [...REQUIRED_IOS_COMMANDS],
+    }),
   );
   assert.deepEqual(d, {
     liveness: 'alive',
@@ -45,7 +54,17 @@ test('gh-383 gate: newer protocol → stale/protocol-newer; version skew → sta
 
 test('gh-383 gate: version check is fail-open when plugin version unknown', async () => {
   const d = await probeFastRunnerLivenessDetailed(
-    deps({ ok: true, status: 200, bodyOk: true, protocolVersion: 1, runnerVersion: '0.0.1' }, null),
+    deps(
+      {
+        ok: true,
+        status: 200,
+        bodyOk: true,
+        protocolVersion: 1,
+        runnerVersion: '0.0.1',
+        commands: [...REQUIRED_IOS_COMMANDS],
+      },
+      null,
+    ),
   );
   assert.equal(d.liveness, 'alive');
 });

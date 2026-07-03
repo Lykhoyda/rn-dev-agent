@@ -16,6 +16,7 @@ import {
   probeFastRunnerLivenessDetailed,
 } from '../../../dist/runners/rn-fast-runner-client.js';
 import { getDeviceSessionHealth } from '../../../dist/tools/device-session-health.js';
+import { REQUIRED_IOS_COMMANDS } from '../../../dist/runners/protocol.js';
 
 const READY = 'RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22088\n';
 
@@ -153,6 +154,7 @@ test('liveness detail carries capabilities from /health', async () => {
       bodyOk: true,
       protocolVersion: 1,
       capabilities: ['QUIESCENCE_BYPASS'],
+      commands: [...REQUIRED_IOS_COMMANDS],
     }),
     pluginVersion: null,
   });

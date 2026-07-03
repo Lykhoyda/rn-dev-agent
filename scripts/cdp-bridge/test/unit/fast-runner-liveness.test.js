@@ -4,6 +4,7 @@ import {
   probeFastRunnerLiveness,
   reapStaleFastRunner,
 } from '../../dist/runners/rn-fast-runner-client.js';
+import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 
 // M7 / D666 — hermetic tests for the tri-state fast-runner liveness probe.
 // Mirrors the injectable-deps pattern from test/unit/lockfile.test.js so we
@@ -46,11 +47,18 @@ test('M7 probe: returns dead and clears state when PID has exited', async () => 
 test('M7 probe: returns alive when PID lives and /health returns {ok:true}', async () => {
   // GH #383: alive now also requires a compatible protocol; `1` matches
   // RUNNER_PROTOCOL_VERSION (tri-file sync test guards drift). pluginVersion:null
-  // keeps this hermetic — no version-skew intent here.
+  // keeps this hermetic — no version-skew intent here. GH #418: alive also
+  // requires the full advertised command surface.
   const liveness = await probeFastRunnerLiveness({
     getState: () => STATE,
     processAlive: () => true,
-    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true, protocolVersion: 1 }),
+    httpProbe: async () => ({
+      ok: true,
+      status: 200,
+      bodyOk: true,
+      protocolVersion: 1,
+      commands: [...REQUIRED_IOS_COMMANDS],
+    }),
     pluginVersion: null,
   });
   assert.equal(liveness, 'alive');

@@ -18,6 +18,7 @@ import {
 } from '../util/secure-state-file.js';
 import {
   RUNNER_PROTOCOL_VERSION,
+  REQUIRED_IOS_COMMANDS,
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
@@ -535,6 +536,7 @@ export interface HttpProbeResult {
   protocolVersion?: number;
   runnerVersion?: string;
   capabilities?: string[];
+  commands?: string[];
 }
 
 export interface LivenessProbeDeps {
@@ -585,18 +587,23 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     let protocolVersion: number | undefined;
     let runnerVersion: string | undefined;
     let capabilities: string[] | undefined;
+    let commands: string[] | undefined;
     try {
       const body = (await res.json()) as {
         ok?: boolean;
         protocolVersion?: number;
         runnerVersion?: string;
         capabilities?: unknown;
+        commands?: unknown;
       };
       bodyOk = body.ok === true;
       if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
       if (typeof body.runnerVersion === 'string') runnerVersion = body.runnerVersion;
       if (Array.isArray(body.capabilities)) {
         capabilities = body.capabilities.filter((c): c is string => typeof c === 'string');
+      }
+      if (Array.isArray(body.commands)) {
+        commands = body.commands.filter((c): c is string => typeof c === 'string');
       }
     } catch {
       bodyOk = false;
@@ -608,6 +615,7 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       ...(protocolVersion !== undefined ? { protocolVersion } : {}),
       ...(runnerVersion !== undefined ? { runnerVersion } : {}),
       ...(capabilities !== undefined ? { capabilities } : {}),
+      ...(commands !== undefined ? { commands } : {}),
     };
   } finally {
     clearTimeout(timer);
@@ -635,6 +643,8 @@ export interface FastRunnerLivenessDetail {
   runnerProtocolVersion?: number;
   runnerVersion?: string;
   capabilities?: string[];
+  /** GH #418: set only when staleReason === 'missing-commands'. */
+  missingCommands?: string[];
 }
 
 export async function probeFastRunnerLivenessDetailed(
@@ -664,13 +674,16 @@ export async function probeFastRunnerLivenessDetailed(
       {
         ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
         ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        ...(res.commands !== undefined ? { commands: res.commands } : {}),
       },
       plugin,
+      REQUIRED_IOS_COMMANDS,
     );
     if (!compat.compatible) {
       return {
         liveness: 'stale',
         staleReason: compat.reason,
+        ...(compat.missing !== undefined ? { missingCommands: compat.missing } : {}),
         ...(res.protocolVersion !== undefined
           ? { runnerProtocolVersion: res.protocolVersion }
           : {}),
