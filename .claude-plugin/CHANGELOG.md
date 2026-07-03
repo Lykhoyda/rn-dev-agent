@@ -1,5 +1,19 @@
 # rn-dev-agent-plugin
 
+## 0.60.0
+
+### Minor Changes
+
+- d5acd6b: Observe web UI overhaul: session header (connection, app, route, duration, call/error stats),
+  filterable + searchable timeline with follow/pause autoscroll, device-screenshot hero pane with
+  route chip, guided empty states, inline param inputs for learned actions (server now honors
+  UI-provided params), expandable action output, and E2E run-history drill-down with per-flow
+  error excerpts. The SPA is split from one 670-line file into focused modules.
+
+### Patch Changes
+
+- d5acd6b: SessionStart hook links `.rn-agent` from the main checkout when running in a git worktree, so learned actions, e2e config, and troubleshooting notes stay available (previously they silently disappeared in worktrees).
+
 ## 0.59.0
 
 ### Minor Changes
