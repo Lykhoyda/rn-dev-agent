@@ -1617,7 +1617,7 @@ setObserveE2eDeps({
         const required = action.metadata.params ?? [];
         if (required.length > 0) {
             const config = loadE2eConfig(root);
-            const resolved = resolveParams(config, actionId, required);
+            const resolved = resolveParams(config, actionId, required, params);
             if (!resolved.ok)
                 return { ok: false, missingParams: resolved.missing };
             params = resolved.params;

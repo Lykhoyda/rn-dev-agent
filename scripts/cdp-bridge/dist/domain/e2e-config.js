@@ -10,10 +10,15 @@ export function loadE2eConfig(projectRoot) {
         return {};
     }
 }
-export function resolveParams(config, testId, required) {
+export function resolveParams(config, testId, required, provided) {
+    // Caller-provided values (e.g. typed into the observe UI) take precedence
+    // over config; empty strings are treated as "not provided" so a blank input
+    // never masks a configured value.
+    const overrides = Object.fromEntries(Object.entries(provided ?? {}).filter(([, v]) => typeof v === 'string' && v !== ''));
     const merged = {
         ...config.defaults?.params,
         ...config.tests?.[testId]?.params,
+        ...overrides,
     };
     const missing = required.filter((k) => !merged[k]);
     if (missing.length > 0)
