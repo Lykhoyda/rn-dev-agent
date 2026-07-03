@@ -942,6 +942,11 @@ export async function runNative(
         // note must never attach to a LATER unrelated result.
         consumePendingAndroidUpgradeNote();
         const msg = err instanceof Error ? err.message : String(err);
+        // GH #418: a stale command surface mid-flow is a fast refusal — the
+        // open path (device_snapshot action=open) is the rebuild entry.
+        if (msg.startsWith('RUNNER_COMMANDS_STALE')) {
+          return failResult(msg, 'RUNNER_COMMANDS_STALE');
+        }
         // GH #383: a protocol mismatch surviving the reap+reinstall is a distinct,
         // actionable failure — surface it rather than the generic runner-down.
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {

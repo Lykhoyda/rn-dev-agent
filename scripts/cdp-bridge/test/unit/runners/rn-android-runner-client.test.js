@@ -6,6 +6,7 @@ import {
   _setAndroidRunnerStateForTest,
 } from '../../../dist/runners/rn-android-runner-client.js';
 import { refCenter, clearRefMap } from '../../../dist/fast-runner-ref-map.js';
+import { REQUIRED_ANDROID_COMMANDS } from '../../../dist/runners/protocol.js';
 
 _setAndroidRunnerStateForTest({
   hostPort: 22089,
@@ -24,8 +25,17 @@ _setFetchForTest(async (url, init) => {
   // startAndroidRunner (runAndroid calls it per dispatch). Answer /health with a
   // compatible body so the live injected state is reused (not reaped); only
   // /command POSTs are recorded for the command-dispatch assertions.
+  // GH #418: compatible now also requires the full advertised command surface.
   if (String(url).endsWith('/health')) {
-    return { ok: true, status: 200, json: async () => ({ ok: true, protocolVersion: 1 }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        protocolVersion: 1,
+        commands: [...REQUIRED_ANDROID_COMMANDS],
+      }),
+    };
   }
   calls.push({ url, body: JSON.parse(init.body) });
   return { ok: true, status: 200, json: async () => response };
