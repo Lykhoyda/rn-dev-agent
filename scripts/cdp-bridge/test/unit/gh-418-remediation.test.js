@@ -157,6 +157,41 @@ test('gh-418: at open, DEAD runner spawned from a stale prebuilt → rebuild tie
   });
 });
 
+test('gh-418: at open, dead runner + NOT prebuilt → cold-build via ensure, not a refusal', async () => {
+  // Open is the sanctioned cold-build entry (its own not-prebuilt error text
+  // directs users here). After #418's invalidation deletes DerivedData — and
+  // because a cold `xcodebuild test` leaves no .xctestrun — a later runner
+  // death must not brick opens (device-verify finding).
+  const probes = [{ liveness: 'dead' }, { liveness: 'alive' }];
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    prebuilt: () => false,
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift(),
+    ensure: async () => {
+      ensured++;
+    },
+  });
+  assert.equal(ensured, 1);
+  assert.deepEqual(res, { ok: true });
+});
+
+test('gh-418: mid-flow, dead runner + NOT prebuilt keeps the #210 refusal', async () => {
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    prebuilt: () => false,
+    probe: async () => ({ liveness: 'dead' }),
+    ensure: async () => {
+      ensured++;
+    },
+  });
+  assert.equal(ensured, 0);
+  assert.equal(res.ok, false);
+  assert.match(res.message, /not prebuilt/);
+});
+
 test('gh-418: protocol reasons keep the existing note and error path', async () => {
   const probes = [{ liveness: 'stale', staleReason: 'legacy' }, { liveness: 'alive' }];
   const res = await ensureRunnerForCommand('U1', 'com.example', {

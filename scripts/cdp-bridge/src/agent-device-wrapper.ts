@@ -708,9 +708,16 @@ export async function ensureRunnerForCommand(
   }
   const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
   if (decision.action === 'proceed') return { ok: true };
-  if (decision.action === 'error') return { ok: false, message: decision.message };
+  // GH #418 (device-verify finding): open IS the sanctioned cold-build entry —
+  // the not-prebuilt refusal exists for mid-flow auto-spawn (#210), and its
+  // message directs users to open. With a device present, open must fall
+  // through to ensure(), which cold-builds. Without this, any runner death
+  // after a cold `xcodebuild test` (which leaves no .xctestrun) bricks opens.
+  if (decision.action === 'error' && !(deps.allowArtifactRebuild && deviceId)) {
+    return { ok: false, message: decision.message };
+  }
 
-  await ensure(decision.deviceId, bundleId);
+  await ensure(decision.action === 'spawn' ? decision.deviceId : deviceId!, bundleId);
   const after = await probe();
   if (after.liveness === 'alive') {
     if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
