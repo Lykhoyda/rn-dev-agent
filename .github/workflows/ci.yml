@@ -61,6 +61,12 @@ jobs:
       - name: Feedback telemetry staleness guard
         run: bash scripts/test/telemetry-staleness.test.sh
 
+      # GH#419: upgrade notice must recommend /mcp reconnect before restart; the
+      # SessionStart banner must not assert a static tool count; the lockfile
+      # probe must flag a live bridge from a previous plugin install.
+      - name: MCP upgrade-notice + bridge-probe guard
+        run: bash scripts/test/mcp-upgrade-notice.test.sh
+
   lint-format:
     name: Lint & format
     runs-on: ubuntu-latest
