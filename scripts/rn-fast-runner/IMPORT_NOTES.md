@@ -50,3 +50,22 @@ logic.
 ## License
 
 See `LICENSE` for the MIT attribution required for the imported code.
+
+## Third-party: ThirdParty/FBQuiescence (added 2026-07-02, GH #384)
+
+`RnFastRunnerUITests/ThirdParty/FBQuiescence/` vendors an adapted quiescence
+bypass:
+
+- `RNQuiescence.{h,m}` — adapted from mobile-dev-inc/maestro (Apache-2.0),
+  `maestro-ios-xctest-runner/maestro-driver-iosUITests/Categories/XCUIApplicationProcess+FBQuiescence.m`,
+  which itself derives from facebookarchive/WebDriverAgent (BSD-3-Clause,
+  Copyright (c) 2015-present, Facebook, Inc.).
+- `XCUIApplicationProcess.h` — trimmed from the class-dump private header
+  vendored by the same projects.
+
+Adaptation differences: process-wide `RN_QUIESCENCE_BYPASS` env toggle
+(default ON) replaces `FBConfiguration.waitForIdleTimeout` + the per-app
+`fb_shouldWaitForQuiescence` associated object; the non-bypass path calls the
+original implementation unmodified (no `_XCTSetApplicationStateTimeout`
+bounding); `FBLogger` dropped in favor of Swift-side startup markers.
+No upstream-sync relationship is maintained.

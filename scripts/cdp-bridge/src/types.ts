@@ -334,4 +334,5 @@ export interface FastRunnerState {
   startedAt: string;
   protocolVersion: number;
   runnerVersion?: string;
+  quiescence?: 'active' | 'disabled' | 'unavailable';
 }

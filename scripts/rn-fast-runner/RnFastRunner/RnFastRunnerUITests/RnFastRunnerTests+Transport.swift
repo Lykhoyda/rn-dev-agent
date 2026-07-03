@@ -37,7 +37,7 @@ extension RnFastRunnerTests {
             ok: true,
             protocolVersion: RunnerProtocol.version,
             runnerVersion: RunnerEnv.pluginVersion(),
-            capabilities: []
+            capabilities: QuiescenceStatus.current().capabilities
           )
         )
         self.sendResponse(response, over: connection)

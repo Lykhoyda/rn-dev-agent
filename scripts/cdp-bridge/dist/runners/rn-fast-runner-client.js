@@ -7,6 +7,7 @@ import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
 import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { buildRunnerQuiescenceEnv } from './quiescence.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -28,6 +29,7 @@ export function parseReadySignal(buf) {
 export function createReadySignalParser() {
     let pending = '';
     let seenReady = false;
+    let quiescence;
     return {
         feed(chunk) {
             pending += chunk;
@@ -43,6 +45,16 @@ export function createReadySignalParser() {
                 if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
                     return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
                 }
+                // GH #384: quiescence startup marker precedes LISTENER_READY.
+                if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE')) {
+                    quiescence = 'active';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED')) {
+                    quiescence = 'disabled';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE')) {
+                    quiescence = 'unavailable';
+                }
                 if (!seenReady) {
                     if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
                         seenReady = true;
@@ -53,7 +65,11 @@ export function createReadySignalParser() {
                 // timestamp + process prefix, so match anywhere in the line.
                 const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
                 if (portMatch) {
-                    return { ready: true, port: Number(portMatch[1]) };
+                    return {
+                        ready: true,
+                        port: Number(portMatch[1]),
+                        ...(quiescence !== undefined ? { quiescence } : {}),
+                    };
                 }
             }
             return null;
@@ -63,6 +79,28 @@ export function createReadySignalParser() {
 // --- Singleton state ---
 let runnerProcess = null;
 let runnerState = null;
+// GH #384: announce the runner's quiescence-bypass status on the FIRST
+// successful /command after a state acquisition (fresh spawn or adoption),
+// so sessions are auditable without polling /health. Consumed by every
+// success return in runIOS — currently the type-shim return, the snapshot
+// return + its defensive fallback, and the final default return; a new
+// success return site must also attach it. A shimmed `type` (resp.ok=false
+// at the wire level) defers the announcement to the next command by design.
+let quiescenceAnnouncementPending = false;
+const QUIESCENCE_STATUSES = new Set(['active', 'disabled', 'unavailable']);
+export function _resetQuiescenceAnnouncementForTest(pending) {
+    quiescenceAnnouncementPending = pending;
+}
+function takeQuiescenceAnnouncement() {
+    if (!quiescenceAnnouncementPending)
+        return null;
+    quiescenceAnnouncementPending = false;
+    // Persisted state is cast, not validated field-by-field — guard against a
+    // tampered/corrupt local state file surfacing an arbitrary string.
+    if (!runnerState?.quiescence || !QUIESCENCE_STATUSES.has(runnerState.quiescence))
+        return null;
+    return { quiescenceBypass: runnerState.quiescence };
+}
 export function iosStatePath(deviceId) {
     return runnerStatePath(`ios-${deviceId}`);
 }
@@ -124,6 +162,7 @@ export function adoptPersistedFastRunnerState(deviceId) {
             return;
         }
         runnerState = parsed;
+        quiescenceAnnouncementPending = true;
         return;
     }
     const legacy = readLegacyTmpState('ios');
@@ -134,8 +173,10 @@ export function adoptPersistedFastRunnerState(deviceId) {
         cleanupLegacyTmpState();
         return;
     }
-    if (parsedLegacy.deviceId === deviceId)
+    if (parsedLegacy.deviceId === deviceId) {
         runnerState = parsedLegacy;
+        quiescenceAnnouncementPending = true;
+    }
 }
 export function getFastRunnerState() {
     return runnerState;
@@ -249,6 +290,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 ...process.env,
                 RN_FAST_RUNNER_PORT: String(desired),
                 ...buildRunnerVersionEnv(getPluginVersion()),
+                ...buildRunnerQuiescenceEnv(process.env),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -282,8 +324,10 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 startedAt: new Date().toISOString(),
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
+                ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
             };
             runnerState = state;
+            quiescenceAnnouncementPending = true;
             try {
                 writeJsonStateFileAtomic(iosStatePath(deviceId), state);
             }
@@ -378,6 +422,7 @@ async function defaultHttpProbe(port, timeoutMs) {
         let bodyOk;
         let protocolVersion;
         let runnerVersion;
+        let capabilities;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
@@ -385,6 +430,9 @@ async function defaultHttpProbe(port, timeoutMs) {
                 protocolVersion = body.protocolVersion;
             if (typeof body.runnerVersion === 'string')
                 runnerVersion = body.runnerVersion;
+            if (Array.isArray(body.capabilities)) {
+                capabilities = body.capabilities.filter((c) => typeof c === 'string');
+            }
         }
         catch {
             bodyOk = false;
@@ -395,6 +443,7 @@ async function defaultHttpProbe(port, timeoutMs) {
             bodyOk,
             ...(protocolVersion !== undefined ? { protocolVersion } : {}),
             ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+            ...(capabilities !== undefined ? { capabilities } : {}),
         };
     }
     finally {
@@ -451,6 +500,7 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
             liveness: 'alive',
             ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
             ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
         };
     }
     catch {
@@ -623,6 +673,7 @@ export async function runIOS(args) {
         }
         throw err;
     }
+    const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
@@ -638,7 +689,7 @@ export async function runIOS(args) {
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {
-            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } });
+            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...announce } });
         }
         if (code) {
             return failResult(message, code);
@@ -652,10 +703,10 @@ export async function runIOS(args) {
         if (Array.isArray(data.nodes)) {
             const flat = mapRunnerNodesToFlat(data.nodes);
             updateRefMapFromFlat(flat);
-            return okResult({ nodes: flat });
+            return okResult({ nodes: flat }, announce ? { meta: announce } : undefined);
         }
         // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
-        return okResult(resp.data);
+        return okResult(resp.data, announce ? { meta: announce } : undefined);
     }
-    return okResult(resp.data ?? {});
+    return okResult(resp.data ?? {}, announce ? { meta: announce } : undefined);
 }
