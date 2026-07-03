@@ -203,7 +203,12 @@ const liveDeps = buildLiveDeps({
     isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
     getActiveSession,
     getClient: () => getClient(),
-    captureScreenshot: (platform, path) => tryRawScreenshot(platform, path),
+    captureScreenshot: (platform, path) => {
+        // GH #422: bind the live panel to the session device too — raw resolution
+        // refuses on multi-sim ambiguity instead of first-pick now.
+        const session = getActiveSession();
+        return tryRawScreenshot(platform, path, session && session.platform === platform ? session.deviceId : undefined);
+    },
     readRoute: (c) => readLiveRoute(c),
     readShotFile: (path) => {
         try {

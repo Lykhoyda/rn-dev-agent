@@ -8,9 +8,11 @@
  * `--platform` routing issue when both an iOS sim and an Android emu are
  * booted simultaneously (the field-reported bug from issue #136 #1).
  *
- * On any failure (resolution fails, command errors), the caller falls through
- * to the existing `runAgentDevice` path — no behavior change for users who
- * don't pass `platform` or who run a single device.
+ * Failure behavior (updated by GH #136 PR-B): callers on the explicit-platform
+ * or raw-only routes HARD-FAIL with an actionable SCREENSHOT_FAILED — falling
+ * through to another backend was the wrong-platform regression vector. Only
+ * the Android runner-error path still falls back here (see device-list.ts).
+ * Since GH #422 this raw path is also the primary iOS pixel backend.
  *
  * Test seams (`_setForTest`, `_resetForTest`) follow the GH #136 picker
  * precedent — allow unit tests to inject resolver/capturer fakes without
@@ -33,31 +35,9 @@ interface SimctlListPayload {
   devices?: Record<string, SimctlDevice[]>;
 }
 
-export function parseSimctlBootedUDID(jsonText: string): string | null {
-  let data: SimctlListPayload;
-  try {
-    data = JSON.parse(jsonText) as SimctlListPayload;
-  } catch {
-    return null;
-  }
-  const runtimes = data?.devices;
-  if (!runtimes || typeof runtimes !== 'object') return null;
-  for (const list of Object.values(runtimes)) {
-    if (!Array.isArray(list)) continue;
-    for (const device of list) {
-      if (
-        device &&
-        device.state === 'Booted' &&
-        typeof device.udid === 'string' &&
-        device.udid.length > 0
-      ) {
-        return device.udid;
-      }
-    }
-  }
-  return null;
-}
-
+// GH #422: the single-pick parseSimctlBootedUDID was removed — first-booted
+// selection was a silent wrong-device capture once raw became the primary iOS
+// path. All resolution goes through parseSimctlBootedAll + exactly-one.
 export function parseSimctlBootedAll(jsonText: string): string[] {
   let data: SimctlListPayload;
   try {
@@ -68,7 +48,11 @@ export function parseSimctlBootedAll(jsonText: string): string[] {
   const runtimes = data?.devices;
   if (!runtimes || typeof runtimes !== 'object') return [];
   const udids: string[] = [];
-  for (const list of Object.values(runtimes)) {
+  for (const [runtime, list] of Object.entries(runtimes)) {
+    // GH #422 hardening: a booted paired watchOS/tvOS sim must not make the
+    // single iOS sim look ambiguous to resolveIosUdid, nor be counted as an
+    // iOS device.
+    if (!runtime.includes('SimRuntime.iOS')) continue;
     if (!Array.isArray(list)) continue;
     for (const device of list) {
       if (
@@ -125,7 +109,11 @@ const defaultIosResolver: RawResolver = async () => {
       timeout: 5000,
       maxBuffer: 1024 * 1024,
     });
-    return parseSimctlBootedUDID(stdout);
+    // GH #422: raw is the primary iOS pixel path now, so a no-session resolve
+    // must be unambiguous — with several booted iOS sims, first-pick was a
+    // silent wrong-device capture. Callers with a session pass its UDID.
+    const all = parseSimctlBootedAll(stdout);
+    return all.length === 1 ? all[0] : null;
   } catch {
     return null;
   }
@@ -294,11 +282,21 @@ export type RawScreenshotResult =
 export async function tryRawScreenshot(
   platform: 'ios' | 'android',
   path: string,
+  preferredDeviceId?: string,
 ): Promise<RawScreenshotResult> {
   const resolver = platform === 'ios' ? iosResolver : androidResolver;
   const capturer = platform === 'ios' ? iosCapturer : androidCapturer;
-  const id = await resolver();
+  // GH #422: raw is now the PRIMARY iOS pixel path, so it must inherit the
+  // session's device binding — with two booted sims, "first booted" could
+  // capture the wrong one. No session → single-booted resolution as before.
+  const id = preferredDeviceId ?? (await resolver());
   if (!id) return { ok: false, reason: 'no-device' };
-  const ok = await capturer(id, path);
-  return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+  try {
+    const ok = await capturer(id, path);
+    return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+  } catch {
+    // Raw is the primary iOS path since GH #422 — a thrown capturer error
+    // (fs validation, spawn failure) must honor the result contract.
+    return { ok: false, reason: 'capture-failed' };
+  }
 }

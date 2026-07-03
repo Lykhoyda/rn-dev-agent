@@ -219,6 +219,40 @@ export interface RunActionDeps {
    * Production wiring lives in index.ts.
    */
   replayDeps?: (args: RunActionArgs) => CdpReplayDeps | null;
+  /**
+   * GH #423: retry budget for the fallback's tree probe. The failed flow has
+   * usually just relaunched the app, so CDP is mid-reconnect exactly when the
+   * probe runs — a single attempt silently disabled the fallback in the field.
+   */
+  probeRetry?: { attempts: number; delayMs: number };
+}
+
+/** GH #423: why the CDP/JS fallback did not replay — surfaced in failure meta. */
+interface CdpJsFallbackSkip {
+  attempted: false;
+  reason: 'no-replay-deps' | 'no-probe-testid' | 'cdp-unreachable' | 'testid-not-in-tree';
+}
+
+async function probeTreeWithRetry(
+  replay: CdpReplayDeps,
+  probe: string,
+  retry: { attempts: number; delayMs: number },
+): Promise<{ found: boolean; sawTree: boolean }> {
+  // Retry until the probe testID is PRESENT, not merely until a tree is
+  // readable — after a WDA-death relaunch the app may serve an early/loading
+  // tree while the target element hasn't mounted yet (per-edit review).
+  let sawTree = false;
+  for (let attempt = 0; attempt < retry.attempts; attempt++) {
+    const tree = await replay.treeFor(probe).catch(() => null);
+    if (tree !== null) {
+      sawTree = true;
+      if (isExactPresent(tree, probe)) return { found: true, sawTree: true };
+    }
+    if (attempt < retry.attempts - 1) {
+      await new Promise((r) => setTimeout(r, retry.delayMs));
+    }
+  }
+  return { found: false, sawTree };
 }
 
 export function createRunActionHandler(deps: RunActionDeps = {}) {
@@ -226,6 +260,13 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const repairAction = deps.repairAction ?? createRepairActionHandler();
   const getLiveRoute = deps.getLiveRoute ?? (async () => null);
   const getReplayDeps = deps.replayDeps ?? (() => null);
+  const probeRetryRaw = deps.probeRetry ?? { attempts: 3, delayMs: 1500 };
+  // Clamp so an injected budget can't stall cdp_run_action beyond a few extra
+  // seconds (each attempt also carries the tree handler's own CDP timeout).
+  const probeRetry = {
+    attempts: Math.min(Math.max(1, probeRetryRaw.attempts), 5),
+    delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5000),
+  };
   return async (args: RunActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -359,6 +400,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       //   UNKNOWN            — WDA died at launch before any selector (probe = first action testID)
       // In both, if the probe testID is verbatim-present in the CDP tree the app IS
       // rendering, so this is transport-blindness, not a crash — replay via CDP/JS.
+      // GH #423: the probe retries through a reconnecting CDP (the failed flow
+      // usually just relaunched the app), and every skip records its reason —
+      // a silent skip surfaced in the field as an unexplained UNKNOWN.
+      let cdpJsFallback: CdpJsFallbackSkip | undefined;
       if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
         const replayDeps = getReplayDeps(args);
         const probe = !replayDeps
@@ -366,9 +411,18 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           : failure.kind === 'SELECTOR_NOT_FOUND'
             ? failure.selector
             : firstReplayTestId(action.body, args.params ?? {});
-        if (replayDeps && probe) {
-          const tree = await replayDeps.treeFor(probe).catch(() => null);
-          if (isExactPresent(tree, probe)) {
+        if (!replayDeps) {
+          cdpJsFallback = { attempted: false, reason: 'no-replay-deps' };
+        } else if (!probe) {
+          cdpJsFallback = { attempted: false, reason: 'no-probe-testid' };
+        } else {
+          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          if (!probeOutcome.found) {
+            cdpJsFallback = {
+              attempted: false,
+              reason: probeOutcome.sawTree ? 'testid-not-in-tree' : 'cdp-unreachable',
+            };
+          } else {
             try {
               const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
               const status = replay.passed ? 'pass' : 'fail';
@@ -453,8 +507,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           failureKind: failure.kind,
           autoRepair,
           firstAttemptOutput: firstOutput.slice(0, 500),
+          ...(cdpJsFallback ? { cdpJsFallback } : {}),
         };
-        const message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}`;
+        let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}`;
+        // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
+        // opaque dead end in the field — say why and what to do next.
+        if (cdpJsFallback?.reason === 'cdp-unreachable') {
+          message +=
+            '. Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.';
+        }
         return toolCode ? failResult(message, toolCode, meta) : failResult(message, meta);
       }
 
