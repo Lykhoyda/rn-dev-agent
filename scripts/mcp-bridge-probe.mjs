@@ -85,13 +85,29 @@ try {
     process.exit(0);
   }
 
+  const currentDistRaw = join(resolve(pluginRoot), 'scripts', 'cdp-bridge', 'dist');
+  const currentDist = realpathOr(currentDistRaw);
+
+  // Current-install check FIRST via exact containment — \S-based parsing
+  // cannot span spaces (e.g. an install under "Application Support"), and a
+  // parse-truncated path must never make us call the user's own live bridge
+  // stale. Both raw and realpath'd forms are tried (symlinked spawns).
+  if (psArgs.includes(currentDistRaw) || psArgs.includes(currentDist)) {
+    if (upgraded) {
+      console.log(`MCP bridge check: a bridge from the current install is running (PID ${pid}).`);
+    }
+    process.exit(0);
+  }
+
   // Identify the running bridge's install dir from its argv. No match → not
   // provably a bridge (PID reuse, redacted ps) → stay silent (fail open).
+  // A space-containing FOREIGN path parses truncated here — the stale verdict
+  // still holds (the current-install case already returned above); only the
+  // displayed path is shortened.
   const m = psArgs.match(/\/\S*\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js/);
   if (!m) process.exit(0);
 
   const runningDist = realpathOr(dirname(m[0]));
-  const currentDist = realpathOr(join(resolve(pluginRoot), 'scripts', 'cdp-bridge', 'dist'));
 
   if (runningDist === currentDist) {
     if (upgraded) {

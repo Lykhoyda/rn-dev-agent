@@ -116,6 +116,13 @@ echo "$out" | grep -A2 "ToolSearch finds no cdp_" | grep -q "reconnect the" \
   && ok "banner tells the agent the /mcp reconnect recovery path" \
   || bad "banner missing the missing-tools self-check advice"
 
+# Live-holder cases identify the bridge via `ps -o args=`; skip them where ps
+# is unavailable/redacted (restricted sandboxes) rather than fail spuriously.
+if ! ps -p $$ -o args= >/dev/null 2>&1; then
+  echo "skip: ps unusable in this environment — live-holder probe cases not run"
+  exit $fail
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Probe: live bridge from a PREVIOUS install → explicit stale warning.
 # ---------------------------------------------------------------------------
@@ -157,6 +164,21 @@ pout="$(run_probe "$SANDBOX" 0)"
 [ -z "$pout" ] \
   && ok "healthy bridge with no upgrade → probe stays silent" \
   || bad "probe is noisy on a healthy no-upgrade session: $pout"
+
+# Space-containing install path must NOT be reported stale (\S-regex can't
+# span spaces; the exact-containment current-install check must catch it).
+SPACE_ROOT="$tmp/plug in root"
+mkdir -p "$SPACE_ROOT/scripts/cdp-bridge/dist"
+spawn_decoy "$SPACE_ROOT/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID"
+pout="$(run_probe "$SPACE_ROOT" 1)"
+echo "$pout" | grep -q "different plugin install" \
+  && bad "current-install bridge under a space-containing path reported stale" \
+  || ok "no stale false positive for a space-containing install path"
+echo "$pout" | grep -q "current install" \
+  && ok "space-containing current install still confirmed after upgrade" \
+  || bad "space-containing current install not recognized"
+write_lock "$current_pid"
 
 # Hook-level: an upgrade run must pass --upgraded=1 through to the probe,
 # surfacing the current-install confirmation in the hook output.
