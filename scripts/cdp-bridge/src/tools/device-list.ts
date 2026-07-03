@@ -384,7 +384,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
     const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
     const hint =
       reason === 'no-device'
-        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
+        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target; if your emulator is 'offline'/'unauthorized', restart it.`
         : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
     return failResult(
       `device_screenshot platform=${platform} failed: ${hint}`,
@@ -414,11 +414,17 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
 
   // simctl path: a flow owns the device (raw-ONLY — never fall through to the runner, A3),
   // OR the existing GH#136 explicit-platform disambiguation (no flow). Both hard-fail on error.
+  // GH #422: bind raw captures to the open session's device when platforms
+  // match — raw is now the primary iOS path and must not pick "first booted"
+  // over the session device on multi-sim setups.
+  const session = getActiveSession();
+  const sessionDeviceId =
+    session && session.platform === args.platform ? session.deviceId : undefined;
   if (
     (route === 'simctl' || args.platformExplicit) &&
     (args.platform === 'ios' || args.platform === 'android')
   ) {
-    const raw = await tryRawScreenshot(args.platform, requestedPath);
+    const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
     if (raw.ok) result = rawResultOk(raw.path, args.platform);
     else return rawResultFail(args.platform, raw.reason);
   }
@@ -436,7 +442,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
       result = failResult(err instanceof Error ? err.message : String(err), 'SCREENSHOT_FAILED');
     }
     if (result.isError && (args.platform === 'ios' || args.platform === 'android')) {
-      const raw = await tryRawScreenshot(args.platform, requestedPath);
+      const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
       if (raw.ok) result = rawResultOk(raw.path, args.platform);
     }
   }

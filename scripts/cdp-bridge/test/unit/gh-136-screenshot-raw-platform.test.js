@@ -53,8 +53,8 @@ test('resolveCaptureOutcome: stream finished + non-zero exit → failure (the de
 
 // ── Pure parsers ────────────────────────────────────────────────────
 
-test('parseSimctlBootedUDID: returns first Booted device UDID, skips Shutdown', async () => {
-  const { parseSimctlBootedUDID } = await import(RAW_MOD);
+test('parseSimctlBootedAll: returns Booted device UDIDs, skips Shutdown', async () => {
+  const { parseSimctlBootedAll } = await import(RAW_MOD);
   // `xcrun simctl list -j devices booted` actually only returns booted devices,
   // but the parser should still tolerate mixed state in case the caller passes
   // unfiltered output.
@@ -66,11 +66,46 @@ test('parseSimctlBootedUDID: returns first Booted device UDID, skips Shutdown', 
       ],
     },
   });
-  assert.equal(parseSimctlBootedUDID(json), 'DEF-BOOTED-IOS');
+  assert.deepEqual(parseSimctlBootedAll(json), ['DEF-BOOTED-IOS']);
 });
 
-test('parseSimctlBootedUDID: returns null on no Booted device or malformed JSON', async () => {
-  const { parseSimctlBootedUDID } = await import(RAW_MOD);
+test('parseSimctlBootedAll: ignores booted non-iOS runtimes (GH #422 hardening)', async () => {
+  const { parseSimctlBootedAll } = await import(RAW_MOD);
+  // A booted paired Apple Watch precedes the iPhone in the runtime map; the
+  // iOS resolvers must never count it.
+  const json = JSON.stringify({
+    devices: {
+      'com.apple.CoreSimulator.SimRuntime.watchOS-11-0': [
+        { udid: 'WATCH-BOOTED', state: 'Booted', name: 'Apple Watch Series 10' },
+      ],
+      'com.apple.CoreSimulator.SimRuntime.tvOS-18-0': [
+        { udid: 'TV-BOOTED', state: 'Booted', name: 'Apple TV 4K' },
+      ],
+      'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [
+        { udid: 'PHONE-BOOTED', state: 'Booted', name: 'iPhone 17 Pro' },
+      ],
+    },
+  });
+  assert.deepEqual(parseSimctlBootedAll(json), ['PHONE-BOOTED']);
+});
+
+test('resolveIosUdid: booted watchOS sim must not make the single iOS sim ambiguous (GH #422 hardening)', async () => {
+  const { resolveIosUdid } = await import(RAW_MOD);
+  const json = JSON.stringify({
+    devices: {
+      'com.apple.CoreSimulator.SimRuntime.watchOS-11-0': [
+        { udid: 'WATCH-BOOTED', state: 'Booted', name: 'Apple Watch Series 10' },
+      ],
+      'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [
+        { udid: 'PHONE-BOOTED', state: 'Booted', name: 'iPhone 17 Pro' },
+      ],
+    },
+  });
+  assert.equal(await resolveIosUdid(undefined, async () => json), 'PHONE-BOOTED');
+});
+
+test('parseSimctlBootedAll: returns [] on no Booted device or malformed JSON', async () => {
+  const { parseSimctlBootedAll } = await import(RAW_MOD);
   // No booted device
   const noBootedJson = JSON.stringify({
     devices: {
@@ -79,13 +114,13 @@ test('parseSimctlBootedUDID: returns null on no Booted device or malformed JSON'
       ],
     },
   });
-  assert.equal(parseSimctlBootedUDID(noBootedJson), null);
+  assert.deepEqual(parseSimctlBootedAll(noBootedJson), []);
   // Empty devices object
-  assert.equal(parseSimctlBootedUDID(JSON.stringify({ devices: {} })), null);
+  assert.deepEqual(parseSimctlBootedAll(JSON.stringify({ devices: {} })), []);
   // Malformed JSON
-  assert.equal(parseSimctlBootedUDID('not-json'), null);
+  assert.deepEqual(parseSimctlBootedAll('not-json'), []);
   // Missing devices key
-  assert.equal(parseSimctlBootedUDID('{}'), null);
+  assert.deepEqual(parseSimctlBootedAll('{}'), []);
 });
 
 test('parseAdbDevicesEmu: returns first emulator-N device, skips offline/unauthorized', async () => {

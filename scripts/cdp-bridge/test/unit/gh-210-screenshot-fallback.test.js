@@ -119,7 +119,9 @@ test('#210 screenshot-int: flow active + raw fails → SCREENSHOT_FAILED, runner
 });
 
 test('#210 screenshot-int: android raw fallback reports via:adb (accurate backend name)', async () => {
+  let runnerCalls = 0;
   _setRunAgentDeviceForTest(async () => {
+    runnerCalls++;
     throw new Error('runner down');
   });
   setRawForTest({
@@ -134,6 +136,7 @@ test('#210 screenshot-int: android raw fallback reports via:adb (accurate backen
     });
     assert.ok(!res.isError);
     assert.equal(parse(res).data.via, 'adb');
+    assert.equal(runnerCalls, 1, 'the A2 throw path must actually exercise the runner first');
   } finally {
     _resetRunAgentDeviceForTest();
     resetRawForTest();
