@@ -237,11 +237,17 @@ export function wrapResultWithAdvisories(result, advisories) {
  * - flow active + platform known → 'simctl' (OS-level, flow-safe).
  * - flow active + platform unknown → 'fail' (NEVER the runner — would hit XCUITest
  *   unleased and crash the flow, A3).
- * - no flow → 'runner' (rn-fast-runner primary; its own simctl fallback fires on error).
+ * - no flow, iOS → 'simctl' (GH #422: the rn-fast-runner screenshot verb writes
+ *   inside its own sandbox and returns a relative tmp/ path — the caller's `path`
+ *   cannot reach it over the wire, so simctl is the only iOS backend that can
+ *   honor it; "pixels → simctl" per D1249).
+ * - no flow, otherwise → 'runner' (Android's runner honors outPath host-side).
  */
 export function chooseScreenshotPath(input) {
     if (input.flowActive)
         return input.platform ? 'simctl' : 'fail';
+    if (input.platform === 'ios')
+        return 'simctl';
     return 'runner';
 }
 /**
@@ -316,8 +322,9 @@ export async function captureAndResizeScreenshot(args) {
     }
     if (!result) {
         // route === 'runner' (NO flow — runAgentDevice can never run while a flow is active here).
-        // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
-        // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
+        // Since GH #422 a known-iOS platform never reaches this branch (routed to simctl above);
+        // it serves Android and the platform-unresolved case. A2: the runner client THROWS when
+        // down, so catch it, then fall back to raw capture when the platform is known.
         try {
             result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), {
                 platform: args.platform ?? null,

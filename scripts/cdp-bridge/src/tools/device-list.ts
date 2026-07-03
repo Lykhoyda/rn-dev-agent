@@ -306,9 +306,10 @@ export interface ScreenshotArgs {
   platform?: 'ios' | 'android' | null;
   /**
    * GH #136 PR-A internal signal: did the caller pass `platform` explicitly,
-   * or was it inferred from the connected CDP target? Only explicit calls
-   * take the raw `xcrun simctl` / `adb` path; inferred ones use the existing
-   * `runAgentDevice` flow so behavior is unchanged for single-device users.
+   * or was it inferred from the connected CDP target? Explicit calls always
+   * take the raw `xcrun simctl` / `adb` path. Since GH #422 iOS takes the raw
+   * path even when inferred (the runner verb cannot honor the caller's path);
+   * inferred Android still uses the `runAgentDevice` flow.
    */
   platformExplicit?: boolean;
   maxWidth?: number;
@@ -320,13 +321,18 @@ export interface ScreenshotArgs {
  * - flow active + platform known → 'simctl' (OS-level, flow-safe).
  * - flow active + platform unknown → 'fail' (NEVER the runner — would hit XCUITest
  *   unleased and crash the flow, A3).
- * - no flow → 'runner' (rn-fast-runner primary; its own simctl fallback fires on error).
+ * - no flow, iOS → 'simctl' (GH #422: the rn-fast-runner screenshot verb writes
+ *   inside its own sandbox and returns a relative tmp/ path — the caller's `path`
+ *   cannot reach it over the wire, so simctl is the only iOS backend that can
+ *   honor it; "pixels → simctl" per D1249).
+ * - no flow, otherwise → 'runner' (Android's runner honors outPath host-side).
  */
 export function chooseScreenshotPath(input: {
   flowActive: boolean;
   platform: 'ios' | 'android' | null;
 }): 'simctl' | 'runner' | 'fail' {
   if (input.flowActive) return input.platform ? 'simctl' : 'fail';
+  if (input.platform === 'ios') return 'simctl';
   return 'runner';
 }
 
@@ -419,8 +425,9 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
 
   if (!result) {
     // route === 'runner' (NO flow — runAgentDevice can never run while a flow is active here).
-    // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
-    // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
+    // Since GH #422 a known-iOS platform never reaches this branch (routed to simctl above);
+    // it serves Android and the platform-unresolved case. A2: the runner client THROWS when
+    // down, so catch it, then fall back to raw capture when the platform is known.
     try {
       result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), {
         platform: args.platform ?? null,

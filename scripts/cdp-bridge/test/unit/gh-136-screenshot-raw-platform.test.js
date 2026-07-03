@@ -7,11 +7,12 @@
 // and `adb devices` stdout, (2) the `tryRawScreenshot` orchestrator branches
 // (now returning a discriminated union `{ok:true,path}` | `{ok:false,reason}`),
 // and (3) the device-list `captureAndResizeScreenshot` plumbing — that the
-// raw path is taken iff `platformExplicit` is true, and **hard-fails with an
+// raw path is taken when `platformExplicit` is true, and **hard-fails with an
 // actionable SCREENSHOT_FAILED envelope** when raw fails (per PR-B; the
 // original PR-A graceful-fallback was the regression vector for #136).
-// Implicit-platform calls (platformExplicit=false) still route through
-// runAgentDevice — backward parity preserved.
+// Implicit-platform Android calls (platformExplicit=false) still route through
+// runAgentDevice — backward parity preserved. Implicit iOS moved to the raw
+// path in GH #422 (the runner's screenshot verb can't honor the caller path).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -361,7 +362,7 @@ test('captureAndResizeScreenshot: platformExplicit + capture fails → hard-fail
   }
 });
 
-test('captureAndResizeScreenshot: platformExplicit=false → uses runAgentDevice (backward parity)', async () => {
+test('captureAndResizeScreenshot: Android platformExplicit=false → uses runAgentDevice (backward parity; iOS inferred moved to raw in GH #422)', async () => {
   const raw = await import(RAW_MOD);
   const dl = await import(DEVICE_LIST_MOD);
   const { captureAndResizeScreenshot, _setRunAgentDeviceForTest, _resetRunAgentDeviceForTest } = dl;
@@ -374,16 +375,16 @@ test('captureAndResizeScreenshot: platformExplicit=false → uses runAgentDevice
     };
   });
   raw._setForTest({
-    iosResolver: async () => {
+    androidResolver: async () => {
       resolverCalled = true;
       return 'X';
     },
   });
   try {
-    // No platformExplicit field (or false) — even with platform set,
-    // we must NOT attempt raw path (only client-inferred platforms here).
+    // No platformExplicit field (or false) — with an inferred Android platform,
+    // we must NOT attempt raw path (the Android runner honors outPath host-side).
     await captureAndResizeScreenshot({
-      platform: 'ios',
+      platform: 'android',
       // platformExplicit deliberately omitted
       path: '/tmp/x.jpg',
       maxWidth: 0,
@@ -392,7 +393,7 @@ test('captureAndResizeScreenshot: platformExplicit=false → uses runAgentDevice
     assert.equal(
       resolverCalled,
       false,
-      'resolver MUST NOT be called when platformExplicit is falsy',
+      'resolver MUST NOT be called when platformExplicit is falsy on Android',
     );
   } finally {
     _resetRunAgentDeviceForTest();
