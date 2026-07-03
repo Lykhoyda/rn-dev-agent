@@ -63,3 +63,16 @@ test('stop closes the listening port while the process stays alive', async () =>
   // refuse connections (fetch rejects with ECONNREFUSED under the hood).
   await assert.rejects(fetch(`${url}/`, { signal: AbortSignal.timeout(2000) }));
 });
+
+test('stop racing a pending start closes the server instead of orphaning it', async () => {
+  // Deliberately NOT awaited: stop is issued while start's listen() is pending.
+  const startP = startObserveServer();
+  const stopP = observeHandler({ action: 'stop' });
+  const [startRes] = await Promise.all([startP, stopP]);
+  // After both settle nothing may be listening on the port start resolved to.
+  await assert.rejects(
+    fetch(`http://127.0.0.1:${startRes.port}/`, { signal: AbortSignal.timeout(2000) }),
+  );
+  const status = parse(await observeHandler({ action: 'status' }));
+  assert.equal(status.data.running, false);
+});

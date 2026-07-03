@@ -31,21 +31,42 @@ export function setObserveE2eDeps(d: E2eServerDeps): void {
   e2eDeps = d;
 }
 
+let starting: Promise<{ url: string; port: number }> | null = null;
+
 /**
  * Start (or return) the module-global observability server on the resolved
  * port (env RN_AGENT_OBSERVE_PORT > .rn-agent/config.json observe.port > 7333).
  * Exported as the autostart entry point so `observe status/stop` sees the
- * autostarted instance.
+ * autostarted instance. Concurrent callers share one in-flight start, and
+ * stopObserveServer awaits it, so a stop racing a pending start can never
+ * orphan a listening server (PR #403 review).
  */
 export async function startObserveServer(): Promise<{ url: string; port: number }> {
-  if (!server) server = new ObservabilityServer(recorder, e2eDeps);
-  const { port } = resolveObservePort();
-  const res = await server.start(port);
-  writeObserveState(res.url, res.port);
-  return res;
+  if (starting) return starting;
+  starting = (async () => {
+    if (!server) server = new ObservabilityServer(recorder, e2eDeps);
+    const { port } = resolveObservePort();
+    const res = await server.start(port);
+    writeObserveState(res.url, res.port);
+    return res;
+  })();
+  try {
+    return await starting;
+  } catch (e) {
+    starting = null;
+    throw e;
+  }
 }
 
 async function stopObserveServer(): Promise<void> {
+  if (starting) {
+    try {
+      await starting;
+    } catch {
+      /* start failed — nothing bound */
+    }
+  }
+  starting = null;
   await server?.stop();
   server = null;
   removeObserveState();
