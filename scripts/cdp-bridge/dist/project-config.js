@@ -119,3 +119,40 @@ export function resolveAutoConnect(deps = {}) {
     }
     return { enabled: true, source: 'default' };
 }
+/**
+ * Spec 2026-07-02 (observe autostart): shared port validation. Also re-exported
+ * from tools/observe.ts as `parsePinnedPort` for backward compatibility.
+ */
+export function parsePort(raw) {
+    if (!raw)
+        return undefined;
+    const n = Number.parseInt(raw, 10);
+    return Number.isInteger(n) && n > 0 && n <= 65535 ? n : undefined;
+}
+export const DEFAULT_OBSERVE_PORT = 7333;
+export function resolveObserveAutostart(deps = {}) {
+    // Present-but-undefined `env` means "treat as unset, do NOT fall back to
+    // process.env" (test seam) — same contract as resolveAutoConnect.
+    const envRaw = 'env' in deps ? deps.env : process.env.RN_AGENT_OBSERVE_AUTOSTART;
+    if (envRaw === '0' || envRaw === 'false')
+        return { enabled: false, source: 'env' };
+    if (envRaw === '1' || envRaw === 'true')
+        return { enabled: true, source: 'env' };
+    const cfg = (deps.readConfig ?? readRnAgentConfig)();
+    if (typeof cfg?.observe?.autoStart === 'boolean') {
+        return { enabled: cfg.observe.autoStart, source: 'config' };
+    }
+    return { enabled: true, source: 'default' };
+}
+export function resolveObservePort(deps = {}) {
+    const envRaw = 'env' in deps ? deps.env : process.env.RN_AGENT_OBSERVE_PORT;
+    const envPort = parsePort(envRaw);
+    if (envPort !== undefined)
+        return { port: envPort, source: 'env' };
+    const cfg = (deps.readConfig ?? readRnAgentConfig)();
+    const cfgPort = cfg?.observe?.port;
+    if (typeof cfgPort === 'number' && Number.isInteger(cfgPort) && cfgPort > 0 && cfgPort <= 65535) {
+        return { port: cfgPort, source: 'config' };
+    }
+    return { port: DEFAULT_OBSERVE_PORT, source: 'default' };
+}

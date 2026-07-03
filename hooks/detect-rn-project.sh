@@ -140,4 +140,28 @@ Always run `cdp_status` first. If it fails to connect, run `/rn-dev-agent:check-
 to diagnose missing dependencies (Metro, simulator, agent-device, etc.).
 Do NOT proceed to Phase 5.5 verification without a successful `cdp_status`.
 EOF
+
+  # Observe UI autostart notice (spec 2026-07-02). The MCP worker autostarts
+  # the observability web UI unless disabled via env/config; print the expected
+  # URL so the user can open it without running /observe. Mirrors the
+  # resolveObserveAutostart/resolveObservePort precedence (env > config >
+  # default on, port 7333). Best-effort: any failure prints nothing.
+  OBSERVE_LINE=$(node -e '
+    let cfg = {};
+    try { cfg = JSON.parse(require("fs").readFileSync(".rn-agent/config.json", "utf8")) || {}; } catch {}
+    const o = cfg.observe || {};
+    const autoEnv = process.env.RN_AGENT_OBSERVE_AUTOSTART;
+    const auto = autoEnv === "0" || autoEnv === "false" ? false
+      : autoEnv === "1" || autoEnv === "true" ? true
+      : typeof o.autoStart === "boolean" ? o.autoStart : true;
+    if (!auto) process.exit(0);
+    const pe = Number.parseInt(process.env.RN_AGENT_OBSERVE_PORT ?? "", 10);
+    const port = Number.isInteger(pe) && pe > 0 && pe <= 65535 ? pe
+      : Number.isInteger(o.port) && o.port > 0 && o.port <= 65535 ? o.port : 7333;
+    console.log("Observe UI: http://127.0.0.1:" + port + " — /rn-dev-agent:observe to stop/restart (disable autostart via .rn-agent/config.json observe.autoStart=false)");
+  ' 2>/dev/null || true)
+  if [ -n "$OBSERVE_LINE" ]; then
+    echo ""
+    echo "$OBSERVE_LINE"
+  fi
 fi
