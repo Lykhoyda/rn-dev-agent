@@ -71,9 +71,9 @@ LOCK_PATH="$(TMPDIR="$FAKE_TMP" node -e '
   console.log(path.join(os.tmpdir(), `rn-dev-agent-cdp-${os.userInfo().uid}-${hash}.lock`));
 ' "$PROJ")"
 
-write_lock() { # $1=pid
-  printf '{"pid":%s,"projectRoot":"%s","startedAt":%s,"version":"0.53.0"}\n' \
-    "$1" "$PROJ" "$(date +%s)000" > "$LOCK_PATH"
+write_lock() { # $1=pid [$2=extra JSON fields, e.g. ',"ppid":1']
+  printf '{"pid":%s,"projectRoot":"%s","startedAt":%s,"version":"0.53.0"%s}\n' \
+    "$1" "$PROJ" "$(date +%s)000" "${2:-}" > "$LOCK_PATH"
 }
 
 # Runs in the parent shell (no command substitution) so DECOY_PIDS survives
@@ -224,5 +224,49 @@ echo "$pout" | grep -q "reconnect" \
 echo "$pout" | grep -q "different plugin install" \
   && bad "dead holder wrongly reported as live stale bridge" \
   || ok "dead holder not reported as a live stale bridge"
+
+# ---------------------------------------------------------------------------
+# 6. Fail-open branches: holders lockfile.ts would reclaim must never warn.
+# ---------------------------------------------------------------------------
+# (a) Live PID whose argv is NOT a bridge (PID reuse) → treated as no blocker.
+node -e 'setInterval(() => {}, 1000)' >/dev/null 2>&1 &
+DECOY_PID=$!
+DECOY_PIDS+=("$DECOY_PID")
+write_lock "$DECOY_PID"
+pout="$(run_probe "$SANDBOX" 0)"
+[ -z "$pout" ] \
+  && ok "live non-bridge holder (PID reuse) → silent without upgrade" \
+  || bad "live non-bridge holder produced output: $pout"
+pout="$(run_probe "$SANDBOX" 1)"
+echo "$pout" | grep -q "different plugin install" \
+  && bad "live non-bridge holder wrongly reported stale" \
+  || ok "live non-bridge holder not reported stale"
+echo "$pout" | grep -q "reconnect" \
+  && ok "live non-bridge holder + upgrade → conditional /mcp advice" \
+  || bad "live non-bridge holder + upgrade printed no advice"
+
+# (b) Heartbeat-stale bridge holder (wedged — lockfile.ts would reclaim).
+spawn_decoy "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID" ",\"lastHeartbeat\":$(( ($(date +%s) - 300) * 1000 ))"
+pout="$(run_probe "$SANDBOX" 0)"
+echo "$pout" | grep -q "different plugin install" \
+  && bad "heartbeat-stale (reclaimable) holder wrongly reported stale" \
+  || ok "heartbeat-stale holder treated as reclaimable, no warning"
+
+# (c) Orphaned bridge holder (recorded ppid != live ppid — reclaimable).
+spawn_decoy "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID" ",\"lastHeartbeat\":$(date +%s)000,\"ppid\":1"
+pout="$(run_probe "$SANDBOX" 0)"
+echo "$pout" | grep -q "different plugin install" \
+  && bad "orphaned (ppid-changed) holder wrongly reported stale" \
+  || ok "orphaned holder treated as reclaimable, no warning"
+
+# (d) Fresh-heartbeat, same-ppid holder still warns (true positive intact).
+spawn_decoy "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID" ",\"lastHeartbeat\":$(date +%s)000,\"ppid\":$$"
+pout="$(run_probe "$SANDBOX" 0)"
+echo "$pout" | grep -q "different plugin install" \
+  && ok "healthy surviving old-install holder still warns (true positive)" \
+  || bad "true-positive stale warning lost after reclaimability checks: $pout"
 
 exit $fail

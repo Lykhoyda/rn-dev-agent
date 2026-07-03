@@ -62,26 +62,61 @@ try {
     }
   }
 
-  if (!alive) {
-    // Absent/dead lock is inconclusive at SessionStart: the hook may simply
-    // have run before Claude Code spawned the MCP server. Only worth a
-    // conditional note in the risky window right after an upgrade.
+  let psArgs = '';
+  if (alive) {
+    try {
+      psArgs = execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      }).trim();
+    } catch {
+      // Holder identity unknowable (ps unavailable/redacted) — claim nothing.
+      process.exit(0);
+    }
+  }
+
+  // A live holder only BLOCKS the new supervisor if lockfile.ts's isLockLive
+  // would refuse to reclaim it. Mirror its cheap checks: argv must prove a
+  // bridge (else it's PID reuse — suffix containment, since argv separators
+  // and in-path spaces are indistinguishable in ps output); a heartbeat >90s
+  // stale is a wedged owner → reclaimed; a live PPID differing from the
+  // recorded one is an orphan → reclaimed. Absent fields skip their check
+  // (pre-0.39 locks), and an unreadable live PPID never downgrades a holder —
+  // both matching lockfile.ts.
+  let liveBlocker =
+    alive && /\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js(?:\s|$)/.test(psArgs);
+  if (
+    liveBlocker &&
+    typeof lock.lastHeartbeat === 'number' &&
+    Date.now() - lock.lastHeartbeat > 90_000
+  ) {
+    liveBlocker = false;
+  }
+  if (liveBlocker && typeof lock.ppid === 'number') {
+    try {
+      const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      }).trim();
+      const livePpid = parseInt(out, 10);
+      if (Number.isFinite(livePpid) && livePpid !== lock.ppid) liveBlocker = false;
+    } catch {
+      /* fail safe: unknown PPID keeps the holder a blocker */
+    }
+  }
+
+  if (!liveBlocker) {
+    // No blocking holder (lock absent, dead, or one the supervisor would
+    // reclaim) is inconclusive at SessionStart: the hook may simply have run
+    // before Claude Code spawned the MCP server. Only worth a conditional
+    // note in the risky window right after an upgrade.
     if (upgraded) {
       console.log(
         `MCP bridge check: no bridge is running for this project yet. If cdp_*/device_* tools are missing once the session is up, ${RECONNECT_ADVICE}.`,
       );
     }
-    process.exit(0);
-  }
-
-  let psArgs = '';
-  try {
-    psArgs = execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 1000,
-    }).trim();
-  } catch {
     process.exit(0);
   }
 
@@ -96,14 +131,6 @@ try {
     if (upgraded) {
       console.log(`MCP bridge check: a bridge from the current install is running (PID ${pid}).`);
     }
-    process.exit(0);
-  }
-
-  // Verdict must not depend on parsing an absolute path out of ps args —
-  // argv separators and in-path spaces are indistinguishable there. Holder is
-  // provably a bridge if the fixed dist suffix appears at a token end; not
-  // provably a bridge (PID reuse, redacted ps) → stay silent (fail open).
-  if (!/\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js(?:\s|$)/.test(psArgs)) {
     process.exit(0);
   }
 
