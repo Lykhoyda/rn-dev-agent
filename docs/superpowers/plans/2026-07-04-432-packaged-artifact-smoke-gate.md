@@ -14,7 +14,8 @@
 
 - Repo root: all paths below are relative to the repo root (the `rn-dev-agent` checkout).
 - ESM everywhere; JS test files use `node:test`; no new dependencies may be added.
-- The user install command is **byte-for-byte** `npm install --production --ignore-scripts` (from `scripts/ensure-cdp-deps.sh:27`) plus `--no-audit --no-fund`; do NOT "modernize" `--production` to `--omit=dev` — fidelity to the shipped hook wins.
+- The user install is **byte-for-byte** what `scripts/ensure-cdp-deps.sh:24-27` does: copy `package.json` AND (when present) the committed `scripts/cdp-bridge/package-lock.json`, then `npm install --production --ignore-scripts` (plus `--no-audit --no-fund` for output hygiene). Do NOT "modernize" `--production` to `--omit=dev`, and do NOT omit the lockfile — users get a lockfile-pinned prod tree (Codex plan review 2026-07-04).
+- The committed `scripts/cdp-bridge/package-lock.json` is stale (its `version` field says 0.38.23 vs package.json 0.53.0). Do NOT refresh it in this PR — that changes what users install and is out of scope; it is a filed follow-up.
 - The golden has **78** tool names (verified live 2026-07-04: `tools/list` on the packaged server returns 78; the 79th `trackedTool(` grep hit in `src/index.ts` is the function definition).
 - NO changeset: nothing under `scripts/cdp-bridge/src/` changes (require-changeset WATCHED set untouched).
 - Lint/format must pass at repo root: `npm run lint` (oxlint) and `npm run format:check` (oxfmt).
@@ -30,7 +31,7 @@
 - Modify: `scripts/cdp-bridge/test/integration/gh-264-supervisor-respawn.test.js` (delete inline `startSupervisor`, lines ~12–53; import the helper instead)
 
 **Interfaces:**
-- Produces: `startSupervisor({ supervisorPath?, workerPath?, env?, cwd? }) → { child, nextLine(): Promise<string>, send(method, params?): number, notify(method): void }` — consumed by Tasks 3 and 4. `supervisorPath` defaults to the repo's `dist/supervisor.js`; `workerPath`, when given, is exported as `RN_BRIDGE_WORKER_PATH` (how gh-264 injects fake workers); `env` merges over `process.env`; `send` returns the JSON-RPC id it used.
+- Produces: `startSupervisor({ supervisorPath?, workerPath?, env?, cwd?, lineTimeoutMs? }) → { child, nextLine(): Promise<string>, send(method, params?): number, notify(method): void, stderrText(): string }` — consumed by Tasks 3 and 4. `supervisorPath` defaults to the repo's `dist/supervisor.js`; `workerPath`, when given, is exported as `RN_BRIDGE_WORKER_PATH` (how gh-264 injects fake workers); `env` merges over `process.env`; `send` returns the JSON-RPC id it used; `lineTimeoutMs` defaults to 15_000 (gh-264's original budget). `nextLine()` rejects early — with the captured stderr tail — if the supervisor process exits before producing a line, so a boot crash (the exact class this gate hunts) reports the real diagnostic instead of a generic timeout.
 
 - [ ] **Step 1: Create the helper**
 
@@ -38,8 +39,12 @@
 
 ```js
 // Line-delimited JSON-RPC harness around a spawned dist/supervisor.js.
-// Extracted verbatim from gh-264-supervisor-respawn.test.js (GH #432) so the
+// Extracted from gh-264-supervisor-respawn.test.js (GH #432) so the
 // packaged-artifact smoke test and scripts/update-tool-registry.mjs share it.
+// Hardened over the original (Codex plan review): stderr is captured, and
+// nextLine() rejects early with the stderr tail when the supervisor dies
+// before answering — a packaged boot crash must surface its diagnostic, not
+// a generic timeout.
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -52,6 +57,7 @@ export function startSupervisor({
   workerPath,
   env = {},
   cwd,
+  lineTimeoutMs = 15_000,
 } = {}) {
   const child = spawn(process.execPath, [supervisorPath, '--no-lock'], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -62,9 +68,17 @@ export function startSupervisor({
       ...env,
     },
   });
+  const stderrChunks = [];
+  child.stderr.on('data', (c) => stderrChunks.push(c.toString('utf8')));
+  const stderrText = () => stderrChunks.join('');
   let buf = '';
+  let exited = null;
   const pendingLines = [];
-  const waiters = [];
+  const waiters = []; // { resolve, reject, timer }
+  const deathError = () =>
+    new Error(
+      `supervisor exited (code=${exited.code} signal=${exited.signal}) before answering; stderr tail:\n${stderrText().slice(-2000)}`,
+    );
   child.stdout.on('data', (c) => {
     buf += c.toString('utf8');
     const parts = buf.split('\n');
@@ -72,22 +86,36 @@ export function startSupervisor({
     for (const p of parts) {
       if (!p.length) continue;
       const w = waiters.shift();
-      if (w) w(p);
-      else pendingLines.push(p);
+      if (w) {
+        clearTimeout(w.timer);
+        w.resolve(p);
+      } else pendingLines.push(p);
+    }
+  });
+  child.on('exit', (code, signal) => {
+    exited = { code, signal };
+    while (waiters.length) {
+      const w = waiters.shift();
+      clearTimeout(w.timer);
+      w.reject(deathError());
     }
   });
   const nextLine = () =>
     new Promise((resolveLine, reject) => {
       const queued = pendingLines.shift();
       if (queued !== undefined) return resolveLine(queued);
-      const t = setTimeout(
-        () => reject(new Error('timeout waiting for supervisor stdout line')),
-        15_000,
-      );
-      waiters.push((line) => {
-        clearTimeout(t);
-        resolveLine(line);
-      });
+      if (exited) return reject(deathError());
+      const entry = { resolve: resolveLine, reject, timer: null };
+      entry.timer = setTimeout(() => {
+        const i = waiters.indexOf(entry);
+        if (i !== -1) waiters.splice(i, 1);
+        reject(
+          new Error(
+            `timeout (${lineTimeoutMs}ms) waiting for supervisor stdout line; stderr tail:\n${stderrText().slice(-2000)}`,
+          ),
+        );
+      }, lineTimeoutMs);
+      waiters.push(entry);
     });
   let id = 0;
   const send = (method, params = {}) => {
@@ -96,20 +124,21 @@ export function startSupervisor({
     return id;
   };
   const notify = (method) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
-  return { child, nextLine, send, notify };
+  return { child, nextLine, send, notify, stderrText };
 }
 ```
 
 - [ ] **Step 2: Refactor gh-264 to consume it**
 
 In `scripts/cdp-bridge/test/integration/gh-264-supervisor-respawn.test.js`:
-1. Delete the inline `startSupervisor` function (the block starting `function startSupervisor(workerPath, extraEnv = {}) {` through its closing `}` — roughly lines 12–53) and the now-unused `spawn` import.
-2. Add `import { startSupervisor } from '../helpers/supervisor-harness.js';`
-3. Rewrite every call site mechanically — the file's test bodies must not otherwise change:
+1. Delete ONLY the inline `startSupervisor` function (the block starting `function startSupervisor(workerPath, extraEnv = {}) {` through its closing `}` — roughly lines 12–53) and the now-unused `SUPERVISOR` const (line 8; the helper resolves the same `../../dist/supervisor.js` as its default).
+2. **Keep the `spawn` import** — it is still used at ~line 213 by the `GH#264 worker SIGUSR2 exits 1` test, which spawns `dist/index.js` directly (Codex plan review BLOCKER: deleting it makes the whole file throw `ReferenceError` at load).
+3. Add `import { startSupervisor } from '../helpers/supervisor-harness.js';`
+4. Rewrite every call site mechanically — the file's test bodies must not otherwise change:
    - `startSupervisor(FAKE)` → `startSupervisor({ workerPath: FAKE })`
    - `startSupervisor(CRASHER)` → `startSupervisor({ workerPath: CRASHER })`
    - `startSupervisor(X, { SOME_ENV: '1' })` → `startSupervisor({ workerPath: X, env: { SOME_ENV: '1' } })`
-   Keep `SUPERVISOR`/`FAKE`/`CRASHER` path constants only if still referenced (delete `SUPERVISOR` if the helper's default now covers it — the helper resolves the same `../../dist/supervisor.js`).
+   Keep `FAKE`/`CRASHER`/`REAL_WORKER` path constants — all still referenced.
 
 - [ ] **Step 3: Run the refactored test — must stay green (refactor-only)**
 
@@ -136,7 +165,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Create: `scripts/test/check-dist-fresh.test.sh`
 
 **Interfaces:**
-- Produces: `bash scripts/check-dist-fresh.sh` — exit 0 + `dist fresh` when committed `scripts/cdp-bridge/dist/` equals a clean rebuild; exit 1 with porcelain output otherwise. Env overrides for the guard test: `REPO_ROOT` (repo to operate on), `DIST_BUILD_CMD` (build command run inside `$REPO_ROOT/scripts/cdp-bridge`, default `npx tsc`). Consumed by Task 5 (CI step).
+- Produces: `bash scripts/check-dist-fresh.sh` — exit 0 + `dist fresh` when committed `scripts/cdp-bridge/dist/` equals a clean rebuild; exit 1 with porcelain output otherwise. Env overrides for the guard test: `REPO_ROOT` (repo to operate on), `DIST_BUILD_CMD` (build command run inside `$REPO_ROOT/scripts/cdp-bridge`, default `npm run build` — NOT `npx tsc`, which in non-interactive CI would auto-install `typescript@latest` if resolution ever failed, producing nondeterministic output; `npm run build` fails closed). Consumed by Task 5 (CI step).
 
 - [ ] **Step 1: Write the failing guard test**
 
@@ -247,7 +276,9 @@ set -euo pipefail
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BRIDGE="$ROOT/scripts/cdp-bridge"
 DIST_REL="scripts/cdp-bridge/dist"
-BUILD_CMD="${DIST_BUILD_CMD:-npx tsc}"
+# npm run build (= tsc) fails closed; bare `npx tsc` would auto-install
+# typescript@latest in non-interactive CI if resolution ever broke.
+BUILD_CMD="${DIST_BUILD_CMD:-npm run build}"
 
 find "$BRIDGE/dist" -mindepth 1 -maxdepth 1 ! -name observability -exec rm -rf {} +
 if [ -d "$BRIDGE/dist/observability" ]; then
@@ -385,12 +416,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ```js
 // GH #432: validate the artifact users actually run. Copies the COMMITTED
-// dist/ + package.json to a temp dir, installs deps exactly as
-// ensure-cdp-deps.sh does on user machines (production-only, --ignore-scripts,
-// NO lockfile — users float in-range), then drives dist/supervisor.js over
-// stdio: MCP handshake, tools/list vs the committed golden, observe start +
-// SPA fetch, clean SIGTERM. CI runs the dist-freshness gate first, so the
-// "fresh" dist this exercises is provably identical to the committed one.
+// dist/ + package.json + package-lock.json to a temp dir — exactly the files
+// ensure-cdp-deps.sh:24-25 copies — installs production-only with
+// --ignore-scripts (lockfile-pinned, matching user machines), then drives
+// dist/supervisor.js over stdio: MCP handshake, tools/list vs the committed
+// golden, observe start + SPA fetch, clean SIGTERM. CI runs the
+// dist-freshness gate first, so the "fresh" dist this exercises is provably
+// identical to the committed one.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -420,6 +452,11 @@ test(
     try {
       await cp(resolve(BRIDGE, 'dist'), join(tmp, 'dist'), { recursive: true });
       await cp(resolve(BRIDGE, 'package.json'), join(tmp, 'package.json'));
+      // Conditional, mirroring ensure-cdp-deps.sh:25 — the lock ships today,
+      // but the smoke must not hard-fail if it is ever removed.
+      await cp(resolve(BRIDGE, 'package-lock.json'), join(tmp, 'package-lock.json')).catch(
+        () => {},
+      );
 
       try {
         await pexecFile('npm', INSTALL_ARGS, { cwd: tmp, timeout: 180_000 });
@@ -437,6 +474,9 @@ test(
         supervisorPath: join(tmp, 'dist/supervisor.js'),
         cwd: tmp,
         env: { RN_AGENT_OBSERVE_PORT: String(port) },
+        // Cold worker boot right after a cold install on a loaded 2-core CI
+        // runner — double gh-264's 15s interactive budget.
+        lineTimeoutMs: 30_000,
       });
 
       const initId = s.send('initialize', {
@@ -595,16 +635,17 @@ Closes #432. P0-A of the 2026-07-03 test-confidence audit.
 
 ## What
 - **`scripts/check-dist-fresh.sh`** — CI now fails when the committed `scripts/cdp-bridge/dist/` is not a clean rebuild of `src/` (stale ` M`, uncommitted `??`, orphaned ` D`). Replaces the unconditional build step that silently repaired staleness in CI only. Guard-tested (`scripts/test/check-dist-fresh.test.sh`, 6 cases incl. web-dist preservation).
-- **`test/integration/packaged-artifact-smoke.test.js`** — replicates the exact user runtime: committed `dist/` + `npm install --production --ignore-scripts` (no lockfile, per `ensure-cdp-deps.sh`) in a temp dir → `dist/supervisor.js` stdio spawn → real MCP handshake → `tools/list` vs committed golden (exact set, 78 names) → `observe start` → SPA fetch (CSRF marker) → clean SIGTERM. Phase-prefixed failures: `SMOKE_INSTALL/HANDSHAKE/REGISTRY/OBSERVE/SHUTDOWN`.
+- **`test/integration/packaged-artifact-smoke.test.js`** — replicates the exact user runtime: committed `dist/` + `package.json` + `package-lock.json` (the files `ensure-cdp-deps.sh` copies) + `npm install --production --ignore-scripts` in a temp dir → `dist/supervisor.js` stdio spawn → real MCP handshake → `tools/list` vs committed golden (exact set, 78 names) → `observe start` → SPA fetch (CSRF marker) → clean SIGTERM. Phase-prefixed failures: `SMOKE_INSTALL/HANDSHAKE/REGISTRY/OBSERVE/SHUTDOWN`.
 - **`test/fixtures/tool-registry.json`** + `scripts/update-tool-registry.mjs` — deliberate-update golden of the MCP tool surface (require-changeset philosophy).
 - Supervisor JSON-RPC harness extracted from gh-264 into `test/helpers/supervisor-harness.js` (refactor-only, shared by smoke + updater).
 
 ## Why
-Escaped-bug classes this closes at CI time: #419 (zero tools registered — static banner lied), #424-adjacent packaging drift, #361/#363 delivery gap, devDependency leaks (CI installs devDeps; users don't), "src change inert in installs" (pre-#356). Spec: `docs/superpowers/specs/2026-07-03-packaged-artifact-smoke-gate-design.md`.
+Escaped-bug classes this closes at CI time: the cold-registration invariant behind #419's symptom (a packaged server that registers fewer tools than claimed now goes red — #419's mid-session-upgrade trigger itself stays open), #424-adjacent packaging drift, #361/#363 delivery gap, devDependency leaks (CI installs devDeps; users don't), "src change inert in installs" (pre-#356). Spec: `docs/superpowers/specs/2026-07-03-packaged-artifact-smoke-gate-design.md`.
 
 ## Notes
 - No changeset: no `scripts/cdp-bridge/src/` changes (test/CI surface only).
-- The smoke's install is intentionally unpinned — identical resolution to user machines; `SMOKE_INSTALL` prefix + one retry keep registry flake distinguishable from product regressions.
+- The smoke's install is lockfile-pinned exactly like user machines (`ensure-cdp-deps.sh` copies the committed lock); `SMOKE_INSTALL` prefix + one retry keep registry flake distinguishable from product regressions.
+- Found during review, deliberately NOT fixed here: the committed `scripts/cdp-bridge/package-lock.json` is stale (`version` 0.38.23 vs 0.53.0) — refreshing it changes what users install and gets its own follow-up issue.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

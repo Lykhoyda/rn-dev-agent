@@ -18,14 +18,19 @@ gated today:
    observability SPA bundle has a freshness gate (`check-web-bundle.sh`);
    the ~200 compiled JS files have none.
 2. **Production install vs dev install.** On user machines the SessionStart
-   hook chain (`detect-rn-project.sh` → `ensure-cdp-deps.sh`) installs deps
-   with `npm install --production --ignore-scripts` into
-   `$CLAUDE_PLUGIN_DATA/cdp-node_modules`, **without a lockfile**
-   (`scripts/cdp-bridge/` is a workspace member; it has no own
-   `package-lock.json`, and the copy in `ensure-cdp-deps.sh` is conditional).
-   CI installs the root-locked tree **including devDependencies**. A runtime
-   import of a devDependency, or an in-range dep release that breaks the
-   server, passes every current gate and breaks every user install.
+   hook chain (`detect-rn-project.sh` → `ensure-cdp-deps.sh`) copies
+   `package.json` **and the committed `scripts/cdp-bridge/package-lock.json`**
+   (`ensure-cdp-deps.sh:25`) and installs with
+   `npm install --production --ignore-scripts` into
+   `$CLAUDE_PLUGIN_DATA/cdp-node_modules` — a **production-only,
+   lockfile-pinned** tree. CI installs the root-workspace-locked tree
+   **including devDependencies**. A runtime import of a devDependency passes
+   every current gate and breaks every user install. (Corrected per Codex
+   plan review 2026-07-04: an earlier revision of this spec claimed the
+   install was unpinned. Separate pre-existing hygiene finding: the committed
+   lock is stale — its `version` field says 0.38.23 vs package.json 0.53.0 —
+   so the pin users receive is an old resolution; follow-up, not this gate's
+   scope.)
 3. **Registration vs static claims.** Nothing asserts what the spawned server
    actually registers. #419's symptom — the MCP worker comes up with **zero
    tools** while the SessionStart banner claims a hardcoded count — is
@@ -86,11 +91,13 @@ One test file, phases asserted in order with **typed failure prefixes**
 `SMOKE_OBSERVE`, `SMOKE_SHUTDOWN`) so a red run names the broken layer.
 
 **Setup (once per file):**
-- `mkdtemp` → copy `dist/` and `package.json` (mirroring what a marketplace
-  checkout ships; no `src/`, no root workspace).
+- `mkdtemp` → copy `dist/`, `package.json`, and (when present)
+  `package-lock.json` — exactly the files `ensure-cdp-deps.sh:24-25` copies;
+  no `src/`, no root workspace.
 - `npm install --production --ignore-scripts --no-audit --no-fund` in the
-  temp dir — byte-for-byte the `ensure-cdp-deps.sh` install. One retry on
-  failure (registry flake mitigation); ~15–30 s in CI with the npm cache.
+  temp dir — byte-for-byte the `ensure-cdp-deps.sh` install (lockfile-pinned
+  prod deps, matching user machines). One retry on failure (registry flake
+  mitigation); ~15–30 s in CI with the npm cache.
 
 **Phases:**
 1. **Spawn:** `node <tmp>/dist/supervisor.js --no-lock`, `cwd` = temp dir
@@ -118,8 +125,9 @@ committed dist — the committed artifact is transitively validated.
 
 ### 3. `test/fixtures/tool-registry.json` + `scripts/update-tool-registry.mjs`
 
-- Golden: sorted JSON array of all registered MCP tool names (79 at time of
-  writing).
+- Golden: sorted JSON array of all registered MCP tool names (78 at time of
+  writing — a `trackedTool(` grep says 79, but one hit is the function
+  definition itself; live `tools/list` returns 78).
 - Updater: spawns the packaged server the same way the smoke does (helper
   shared), writes the sorted `tools/list` result back to the fixture.
   Regeneration is deliberate: run the script, review the diff, commit.
@@ -131,8 +139,8 @@ committed dist — the committed artifact is transitively validated.
   (require-changeset). Src-parity passes silently when a tool vanishes from
   both sides.
 - **Full user-path replication** over in-repo spawn: the production-only,
-  lockfile-less install is the only way to catch devDependency leaks and
-  unpinned-dep breakage — the classes CI is structurally blind to.
+  lockfile-pinned install is the only way to catch devDependency leaks —
+  the class CI's root-workspace dev install is structurally blind to.
 - **Existing `test` job** over a new workflow job: typed phase prefixes give
   failure attribution without more workflow surface.
 
@@ -141,10 +149,10 @@ committed dist — the committed artifact is transitively validated.
 - **Network flake** (production install hits the registry): single retry;
   failure message distinguishes `SMOKE_INSTALL` so a registry outage isn't
   misread as a product regression.
-- **Unpinned install can break on a bad in-range dep release**: that is the
-  point — users get the same resolution. The failure is real signal, just
-  not necessarily caused by the PR under test; the `SMOKE_INSTALL`/runtime
-  phase split plus `overrides` in `package.json` keep it diagnosable.
+- **Install resolution matches users, not the PR author's tree**: the copied
+  lockfile pins prod deps to what user machines resolve. Divergence from the
+  root-workspace CI install is intentional signal; the
+  `SMOKE_INSTALL`/runtime phase split keeps it diagnosable.
 - **tsc nondeterminism**: version pinned by the root lockfile (`npm ci`),
   same guarantee `check-web-bundle.sh` relies on.
 - **Supervisor lock contention in CI**: `--no-lock`, same as gh-264.
