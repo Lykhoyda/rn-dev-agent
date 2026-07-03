@@ -503,9 +503,7 @@ export async function startFastRunner(
     let resolved = false;
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      reject(
-        new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`),
-      );
+      reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
 
     const handleChunk = (chunk: string): void => {

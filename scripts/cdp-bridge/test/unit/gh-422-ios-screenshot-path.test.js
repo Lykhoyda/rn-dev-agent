@@ -47,7 +47,9 @@ test('recorder rejects relative screenshot paths even when a cwd file matches (G
       params: {},
       status: 'PASS',
       latencyMs: 1,
-      result: { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { message: relPath } }) }] },
+      result: {
+        content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { message: relPath } }) }],
+      },
     });
     assert.equal(r.getScreenshot(1), undefined);
   } finally {

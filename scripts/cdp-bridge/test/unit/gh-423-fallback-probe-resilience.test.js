@@ -51,7 +51,8 @@ const FAIL_UNKNOWN_ENV = {
   ok: false,
   data: {
     passed: false,
-    output: '  maestro-runner 1.1.16\n  Building WDA...\n  (WDA failed to start; no steps executed)',
+    output:
+      '  maestro-runner 1.1.16\n  Building WDA...\n  (WDA failed to start; no steps executed)',
     flowFile: 'x',
     platform: 'ios',
   },
@@ -100,11 +101,18 @@ test('GH #423: treeFor fails twice (CDP reconnecting) then succeeds → CDP/JS f
 
   const result = await handler({ actionId: 'demo', projectRoot: project.root });
   const env = JSON.parse(result.content[0].text);
-  assert.equal(env.ok, true, `expected replay to engage after probe retries, got: ${result.content[0].text}`);
+  assert.equal(
+    env.ok,
+    true,
+    `expected replay to engage after probe retries, got: ${result.content[0].text}`,
+  );
   assert.equal(env.data.transport, 'cdp-js');
   // 2 failed probe attempts + 1 successful probe; the replay engine then makes
   // its own tree reads on top — only the probe's retry behavior is under test.
-  assert.ok(treeCalls >= 3, `probe must retry through transient CDP failures (saw ${treeCalls} calls)`);
+  assert.ok(
+    treeCalls >= 3,
+    `probe must retry through transient CDP failures (saw ${treeCalls} calls)`,
+  );
   assert.deepEqual(pressCalls, ['fab-create-task']);
 });
 

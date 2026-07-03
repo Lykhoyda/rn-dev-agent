@@ -19,7 +19,9 @@ test('warm start plan is a single test-without-building launch', () => {
   assert.ok(plan[0].args.includes('/p/RnFastRunner.xcodeproj'));
   assert.ok(plan[0].args.includes('platform=iOS Simulator,id=UDID-123'));
   assert.ok(plan[0].args.includes('/p/build/DerivedData'));
-  assert.ok(plan[0].args.includes('-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand'));
+  assert.ok(
+    plan[0].args.includes('-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand'),
+  );
 });
 
 test('cold start plan builds the test product first, then launches warm (GH #424)', () => {
@@ -40,7 +42,9 @@ test('cold start plan builds the test product first, then launches warm (GH #424
 
   assert.equal(launch.action, 'test-without-building');
   assert.equal(launch.args[0], 'test-without-building');
-  assert.ok(launch.args.includes('-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand'));
+  assert.ok(
+    launch.args.includes('-only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand'),
+  );
 });
 
 test('no plan ever uses the bare `test` action — it never emits a .xctestrun (GH #424)', () => {
