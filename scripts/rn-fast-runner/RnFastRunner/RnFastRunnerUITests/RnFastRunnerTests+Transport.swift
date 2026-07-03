@@ -44,14 +44,21 @@ extension RnFastRunnerTests {
         self.sendResponse(response, over: connection)
         return
       }
-      if let body = self.parseRequest(data: combined) {
+      switch self.parseRequest(data: combined) {
+      case .body(let body):
         let result = self.handleRequestBody(body)
         self.sendResponse(result.data, over: connection) { [weak self] in
           if result.shouldFinish {
             self?.finish()
           }
         }
-      } else {
+      case .invalid:
+        let response = self.jsonResponse(
+          status: 400,
+          response: Response(ok: false, error: ErrorPayload(message: "invalid Content-Length"))
+        )
+        self.sendResponse(response, over: connection)
+      case .incomplete:
         self.receiveRequest(connection: connection, buffer: combined)
       }
     }
@@ -78,22 +85,32 @@ extension RnFastRunnerTests {
     return firstLine.hasPrefix("GET /health")
   }
 
-  private func parseRequest(data: Data) -> Data? {
+  enum ParseOutcome {
+    case incomplete
+    case invalid
+    case body(Data)
+  }
+
+  private func parseRequest(data: Data) -> ParseOutcome {
     guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else {
-      return nil
+      return .incomplete
     }
     let headerData = data.subdata(in: 0..<headerEnd.lowerBound)
     let bodyStart = headerEnd.upperBound
     let headers = String(decoding: headerData, as: UTF8.self)
-    let contentLength = extractContentLength(headers: headers)
-    guard let contentLength = contentLength else {
-      return nil
+    // The header section is complete here, so a missing/negative/oversized
+    // Content-Length can never become valid — answer 400 instead of buffering
+    // forever (and never do range arithmetic on an unchecked length: negative
+    // made an invalid subdata range, huge trapped on integer overflow).
+    guard let contentLength = extractContentLength(headers: headers),
+          contentLength >= 0, contentLength <= maxRequestBytes
+    else {
+      return .invalid
     }
     if data.count < bodyStart + contentLength {
-      return nil
+      return .incomplete
     }
-    let body = data.subdata(in: bodyStart..<(bodyStart + contentLength))
-    return body
+    return .body(data.subdata(in: bodyStart..<(bodyStart + contentLength)))
   }
 
   private func extractContentLength(headers: String) -> Int? {
