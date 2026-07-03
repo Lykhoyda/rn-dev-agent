@@ -264,7 +264,11 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
           // here instead of falsely reporting success against an un-prebuilt rig.
           // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
-          const ready = await ensureRunnerForCommand(deviceId, appId);
+          // GH #418: open is the only entry allowed to invalidate a stale
+          // runner artifact and pay the cold rebuild (mid-flow refuses fast).
+          const ready = await ensureRunnerForCommand(deviceId, appId, {
+            allowArtifactRebuild: true,
+          });
           if (!ready.ok) {
             releaseDeviceLockForSession();
             return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');

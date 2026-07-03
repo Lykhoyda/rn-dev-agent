@@ -117,7 +117,13 @@ test('M7 probe: timeoutMs override forwards to httpProbe', async () => {
     processAlive: () => true,
     httpProbe: async (_port, timeoutMs) => {
       observedTimeout = timeoutMs;
-      return { ok: true, status: 200, bodyOk: true, protocolVersion: 1 };
+      return {
+        ok: true,
+        status: 200,
+        bodyOk: true,
+        protocolVersion: 1,
+        commands: [...REQUIRED_IOS_COMMANDS],
+      };
     },
     pluginVersion: null,
     timeoutMs: 750,
@@ -132,7 +138,13 @@ test('M7 probe: default timeout is 2000ms (matches existing fastHealthCheck)', a
     processAlive: () => true,
     httpProbe: async (_port, timeoutMs) => {
       observedTimeout = timeoutMs;
-      return { ok: true, status: 200, bodyOk: true, protocolVersion: 1 };
+      return {
+        ok: true,
+        status: 200,
+        bodyOk: true,
+        protocolVersion: 1,
+        commands: [...REQUIRED_IOS_COMMANDS],
+      };
     },
     pluginVersion: null,
   });
@@ -159,7 +171,13 @@ test('M7 probe: alive path does NOT clear state', async () => {
   await probeFastRunnerLiveness({
     getState: () => STATE,
     processAlive: () => true,
-    httpProbe: async () => ({ ok: true, status: 200, bodyOk: true, protocolVersion: 1 }),
+    httpProbe: async () => ({
+      ok: true,
+      status: 200,
+      bodyOk: true,
+      protocolVersion: 1,
+      commands: [...REQUIRED_IOS_COMMANDS],
+    }),
     pluginVersion: null,
     clearState: () => {
       clearCalls++;
