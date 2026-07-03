@@ -104,6 +104,21 @@ test('resolveIosUdid: booted watchOS sim must not make the single iOS sim ambigu
   assert.equal(await resolveIosUdid(undefined, async () => json), 'PHONE-BOOTED');
 });
 
+test('resolveIosUdid: TWO booted iOS sims → undefined (ambiguity must refuse, never first-pick — GH #422)', async () => {
+  const { resolveIosUdid } = await import(RAW_MOD);
+  const json = JSON.stringify({
+    devices: {
+      'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [
+        { udid: 'PHONE-A', state: 'Booted', name: 'iPhone 16' },
+      ],
+      'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [
+        { udid: 'PHONE-B', state: 'Booted', name: 'iPhone 17 Pro' },
+      ],
+    },
+  });
+  assert.equal(await resolveIosUdid(undefined, async () => json), undefined);
+});
+
 test('parseSimctlBootedAll: returns [] on no Booted device or malformed JSON', async () => {
   const { parseSimctlBootedAll } = await import(RAW_MOD);
   // No booted device
