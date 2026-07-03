@@ -37,7 +37,8 @@ extension RnFastRunnerTests {
             ok: true,
             protocolVersion: RunnerProtocol.version,
             runnerVersion: RunnerEnv.pluginVersion(),
-            capabilities: QuiescenceStatus.current().capabilities
+            capabilities: QuiescenceStatus.current().capabilities,
+            commands: CommandType.allCases.map(\.rawValue)
           )
         )
         self.sendResponse(response, over: connection)
@@ -115,6 +116,23 @@ extension RnFastRunnerTests {
     guard let data = json.data(using: .utf8) else {
       return (
         jsonResponse(status: 400, response: Response(ok: false, error: ErrorPayload(message: "invalid json"))),
+        false
+      )
+    }
+
+    struct CommandTypeProbe: Decodable { let command: String }
+    if let probe = try? JSONDecoder().decode(CommandTypeProbe.self, from: data),
+       CommandType(rawValue: probe.command) == nil {
+      // GH #418: a verb this artifact doesn't know is a typed refusal, not a
+      // dataCorrupted decode error (B235). Mirrors the Android runner's shape.
+      return (
+        jsonResponse(status: 200, response: Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "UNSUPPORTED_COMMAND",
+            message: "Unsupported iOS runner command: \(probe.command) — the runner artifact predates it; re-open the device session (device_snapshot action=open) to rebuild."
+          )
+        )),
         false
       )
     }
