@@ -1,7 +1,15 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
@@ -18,6 +26,7 @@ import {
 } from '../util/secure-state-file.js';
 import {
   RUNNER_PROTOCOL_VERSION,
+  REQUIRED_IOS_COMMANDS,
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
@@ -304,6 +313,70 @@ export function derivedDataPathForRunner(): string {
   return join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
 }
 
+// GH #418 (review amendment): DerivedData is plugin-checkout-scoped while the
+// device lock is UDID-scoped, so two projects sharing this checkout could race
+// invalidate-vs-build. mkdir is atomic — it is the mutex. Fail-open on fs
+// errors (never block a legit session); stale takeover after 15 min.
+const REBUILD_LOCK_DIR = join(FAST_RUNNER_PROJECT, 'build', '.rebuild-lock');
+const REBUILD_LOCK_STALE_MS = 15 * 60_000;
+
+export function acquireRunnerRebuildLock(): boolean {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      mkdirSync(REBUILD_LOCK_DIR, { recursive: false });
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return true; // fail-open
+      try {
+        const age = Date.now() - statSync(REBUILD_LOCK_DIR).mtimeMs;
+        if (age < REBUILD_LOCK_STALE_MS) return false;
+        rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+      } catch {
+        return true; // fail-open
+      }
+    }
+  }
+  return false;
+}
+
+export function releaseRunnerRebuildLock(): void {
+  try {
+    rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+// GH #418 (review amendment): at most ONE commands-triggered cold rebuild per
+// plugin version — a genuinely-broken checkout must not loop multi-minute
+// builds on every open. Lives in build/ (sibling of DerivedData) so the
+// invalidation itself can't erase it.
+const REBUILD_BUDGET_FILE = join(FAST_RUNNER_PROJECT, 'build', 'commands-rebuild.json');
+
+export const runnerRebuildBudget = {
+  alreadyRebuiltFor(pluginVersion: string): boolean {
+    try {
+      const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8')) as {
+        pluginVersion?: string;
+      };
+      return parsed.pluginVersion === pluginVersion;
+    } catch {
+      return false;
+    }
+  },
+  recordRebuild(pluginVersion: string): void {
+    try {
+      mkdirSync(join(FAST_RUNNER_PROJECT, 'build'), { recursive: true });
+      writeFileSync(
+        REBUILD_BUDGET_FILE,
+        JSON.stringify({ pluginVersion, at: new Date().toISOString() }),
+      );
+    } catch {
+      /* fail-open */
+    }
+  },
+};
+
 // --- Lifecycle ---
 
 /**
@@ -458,7 +531,7 @@ export function stopFastRunner(deviceId?: string): void {
 // --- Legacy helper kept for device-interact.ts swipe path ---
 //
 // GH #105 iOS-MVP follow-up: the upstream agent-device runner exposed
-// per-verb HTTP endpoints (/tap, /swipe, /snapshot, /screenshot, /dismissKeyboard).
+// per-verb HTTP endpoints (/tap, /swipe, /snapshot, /screenshot, …).
 // Our in-tree RnFastRunner only exposes a single POST /command with
 // {command: '...', ...payload}. The unused fastTap/fastType/fastSnapshot/
 // fastScreenshot/fastDismissKeyboard helpers were dead code post-Task 8 —
@@ -535,6 +608,7 @@ export interface HttpProbeResult {
   protocolVersion?: number;
   runnerVersion?: string;
   capabilities?: string[];
+  commands?: string[];
 }
 
 export interface LivenessProbeDeps {
@@ -585,18 +659,23 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     let protocolVersion: number | undefined;
     let runnerVersion: string | undefined;
     let capabilities: string[] | undefined;
+    let commands: string[] | undefined;
     try {
       const body = (await res.json()) as {
         ok?: boolean;
         protocolVersion?: number;
         runnerVersion?: string;
         capabilities?: unknown;
+        commands?: unknown;
       };
       bodyOk = body.ok === true;
       if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
       if (typeof body.runnerVersion === 'string') runnerVersion = body.runnerVersion;
       if (Array.isArray(body.capabilities)) {
         capabilities = body.capabilities.filter((c): c is string => typeof c === 'string');
+      }
+      if (Array.isArray(body.commands)) {
+        commands = body.commands.filter((c): c is string => typeof c === 'string');
       }
     } catch {
       bodyOk = false;
@@ -608,6 +687,7 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       ...(protocolVersion !== undefined ? { protocolVersion } : {}),
       ...(runnerVersion !== undefined ? { runnerVersion } : {}),
       ...(capabilities !== undefined ? { capabilities } : {}),
+      ...(commands !== undefined ? { commands } : {}),
     };
   } finally {
     clearTimeout(timer);
@@ -635,6 +715,8 @@ export interface FastRunnerLivenessDetail {
   runnerProtocolVersion?: number;
   runnerVersion?: string;
   capabilities?: string[];
+  /** GH #418: set only when staleReason === 'missing-commands'. */
+  missingCommands?: string[];
 }
 
 export async function probeFastRunnerLivenessDetailed(
@@ -664,13 +746,16 @@ export async function probeFastRunnerLivenessDetailed(
       {
         ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
         ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+        ...(res.commands !== undefined ? { commands: res.commands } : {}),
       },
       plugin,
+      REQUIRED_IOS_COMMANDS,
     );
     if (!compat.compatible) {
       return {
         liveness: 'stale',
         staleReason: compat.reason,
+        ...(compat.missing !== undefined ? { missingCommands: compat.missing } : {}),
         ...(res.protocolVersion !== undefined
           ? { runnerProtocolVersion: res.protocolVersion }
           : {}),
@@ -740,7 +825,7 @@ export interface RunIOSArgs {
     | 'pinch'
     | 'findText'
     | 'type'
-    | 'dismissKeyboard'
+    | 'keyboardDismiss'
     | 'screenshot'
     | 'back'
     | 'scroll'

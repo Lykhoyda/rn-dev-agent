@@ -29,6 +29,9 @@ export async function getDeviceSessionHealth(deps = {}) {
                         : {}),
                     ...(detail.runnerVersion !== undefined ? { runnerVersion: detail.runnerVersion } : {}),
                     ...(plugin !== null ? { pluginVersion: plugin } : {}),
+                    ...(detail.missingCommands !== undefined
+                        ? { missingCommands: detail.missingCommands }
+                        : {}),
                     compatible: detail.liveness === 'alive',
                 };
                 // GH #384: omit empty lists — every pre-#384 runner reports

@@ -29,9 +29,11 @@ test('gh-383: open success carries the upgrade note (iOS ready.note, Android pen
 });
 
 test('gh-383: Android note is consumed immediately after startAndroidRunner succeeds (never left pending)', () => {
+  // GH #418: the open call gained { allowArtifactRebuild: true } — the
+  // invariant is unchanged: the note is consumed on the very next line.
   assert.match(
     sessionSrc,
-    /await startAndroidRunner\(deviceId, appId\);\s*\n\s*upgradeNote = consumePendingAndroidUpgradeNote\(\);/,
+    /await startAndroidRunner\(deviceId, appId, undefined, \{ allowArtifactRebuild: true \}\);\s*\n\s*upgradeNote = consumePendingAndroidUpgradeNote\(\);/,
   );
 });
 

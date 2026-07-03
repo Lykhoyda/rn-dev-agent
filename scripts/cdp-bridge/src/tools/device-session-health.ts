@@ -21,6 +21,8 @@ export interface DeviceSessionHealth {
     runner?: number;
     runnerVersion?: string;
     pluginVersion?: string;
+    /** GH #418: verbs the runner artifact lacks (staleReason 'missing-commands'). */
+    missingCommands?: string[];
     compatible: boolean;
   };
   runnerCapabilities?: string[];
@@ -63,6 +65,9 @@ export async function getDeviceSessionHealth(
             : {}),
           ...(detail.runnerVersion !== undefined ? { runnerVersion: detail.runnerVersion } : {}),
           ...(plugin !== null ? { pluginVersion: plugin } : {}),
+          ...(detail.missingCommands !== undefined
+            ? { missingCommands: detail.missingCommands }
+            : {}),
           compatible: detail.liveness === 'alive',
         };
         // GH #384: omit empty lists — every pre-#384 runner reports

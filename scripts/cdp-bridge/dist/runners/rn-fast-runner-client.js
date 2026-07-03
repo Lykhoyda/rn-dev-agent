@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { buildRunnerQuiescenceEnv } from './quiescence.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -242,6 +242,67 @@ export function hasBuiltTestProduct(derivedDataPath) {
 export function derivedDataPathForRunner() {
     return join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
 }
+// GH #418 (review amendment): DerivedData is plugin-checkout-scoped while the
+// device lock is UDID-scoped, so two projects sharing this checkout could race
+// invalidate-vs-build. mkdir is atomic — it is the mutex. Fail-open on fs
+// errors (never block a legit session); stale takeover after 15 min.
+const REBUILD_LOCK_DIR = join(FAST_RUNNER_PROJECT, 'build', '.rebuild-lock');
+const REBUILD_LOCK_STALE_MS = 15 * 60_000;
+export function acquireRunnerRebuildLock() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            mkdirSync(REBUILD_LOCK_DIR, { recursive: false });
+            return true;
+        }
+        catch (err) {
+            if (err.code !== 'EEXIST')
+                return true; // fail-open
+            try {
+                const age = Date.now() - statSync(REBUILD_LOCK_DIR).mtimeMs;
+                if (age < REBUILD_LOCK_STALE_MS)
+                    return false;
+                rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+            }
+            catch {
+                return true; // fail-open
+            }
+        }
+    }
+    return false;
+}
+export function releaseRunnerRebuildLock() {
+    try {
+        rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+    }
+    catch {
+        /* best-effort */
+    }
+}
+// GH #418 (review amendment): at most ONE commands-triggered cold rebuild per
+// plugin version — a genuinely-broken checkout must not loop multi-minute
+// builds on every open. Lives in build/ (sibling of DerivedData) so the
+// invalidation itself can't erase it.
+const REBUILD_BUDGET_FILE = join(FAST_RUNNER_PROJECT, 'build', 'commands-rebuild.json');
+export const runnerRebuildBudget = {
+    alreadyRebuiltFor(pluginVersion) {
+        try {
+            const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8'));
+            return parsed.pluginVersion === pluginVersion;
+        }
+        catch {
+            return false;
+        }
+    },
+    recordRebuild(pluginVersion) {
+        try {
+            mkdirSync(join(FAST_RUNNER_PROJECT, 'build'), { recursive: true });
+            writeFileSync(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: new Date().toISOString() }));
+        }
+        catch {
+            /* fail-open */
+        }
+    },
+};
 // --- Lifecycle ---
 /**
  * GH#202: only adopt an existing runner when it is bound to the SAME
@@ -423,6 +484,7 @@ async function defaultHttpProbe(port, timeoutMs) {
         let protocolVersion;
         let runnerVersion;
         let capabilities;
+        let commands;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
@@ -432,6 +494,9 @@ async function defaultHttpProbe(port, timeoutMs) {
                 runnerVersion = body.runnerVersion;
             if (Array.isArray(body.capabilities)) {
                 capabilities = body.capabilities.filter((c) => typeof c === 'string');
+            }
+            if (Array.isArray(body.commands)) {
+                commands = body.commands.filter((c) => typeof c === 'string');
             }
         }
         catch {
@@ -444,6 +509,7 @@ async function defaultHttpProbe(port, timeoutMs) {
             ...(protocolVersion !== undefined ? { protocolVersion } : {}),
             ...(runnerVersion !== undefined ? { runnerVersion } : {}),
             ...(capabilities !== undefined ? { capabilities } : {}),
+            ...(commands !== undefined ? { commands } : {}),
         };
     }
     finally {
@@ -485,11 +551,13 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
         const compat = classifyRunnerCompatibility({
             ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
             ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
-        }, plugin);
+            ...(res.commands !== undefined ? { commands: res.commands } : {}),
+        }, plugin, REQUIRED_IOS_COMMANDS);
         if (!compat.compatible) {
             return {
                 liveness: 'stale',
                 staleReason: compat.reason,
+                ...(compat.missing !== undefined ? { missingCommands: compat.missing } : {}),
                 ...(res.protocolVersion !== undefined
                     ? { runnerProtocolVersion: res.protocolVersion }
                     : {}),

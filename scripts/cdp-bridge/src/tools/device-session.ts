@@ -264,7 +264,11 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
           // swallows its own start error), so `open` surfaces RN_FAST_RUNNER_DOWN
           // here instead of falsely reporting success against an un-prebuilt rig.
           // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
-          const ready = await ensureRunnerForCommand(deviceId, appId);
+          // GH #418: open is the only entry allowed to invalidate a stale
+          // runner artifact and pay the cold rebuild (mid-flow refuses fast).
+          const ready = await ensureRunnerForCommand(deviceId, appId, {
+            allowArtifactRebuild: true,
+          });
           if (!ready.ok) {
             releaseDeviceLockForSession();
             return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
@@ -279,7 +283,8 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
             /* already frontmost is OK */
           });
         } else {
-          await startAndroidRunner(deviceId, appId);
+          // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.
+          await startAndroidRunner(deviceId, appId, undefined, { allowArtifactRebuild: true });
           upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
             await execFile(
@@ -307,6 +312,11 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         // doesn't leak onto the next successful Android result.
         consumePendingAndroidUpgradeNote();
         const msg = err instanceof Error ? err.message : String(err);
+        // GH #418: even the open-path rebuild couldn't produce a runner with
+        // the required commands — the checkout itself is suspect.
+        if (msg.startsWith('RUNNER_COMMANDS_STALE')) {
+          return failResult(msg, 'RUNNER_COMMANDS_STALE');
+        }
         // GH #383: a protocol mismatch that survived the reap+reinstall is a
         // distinct, actionable failure — surface it, not the generic runner-down.
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {

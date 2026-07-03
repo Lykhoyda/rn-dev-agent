@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { RunIOSArgs } from './rn-fast-runner-client.js';
+import type { RunAndroidArgs } from './rn-android-runner-client.js';
 
 // GH #383: the native runner /command wire protocol version. Mirrored by
 // RunnerProtocol.swift (iOS) and RunnerProtocol.kt (Android); the tri-file
@@ -13,15 +15,45 @@ export type RunnerIncompatibilityReason =
   | 'legacy'
   | 'protocol-older'
   | 'protocol-newer'
-  | 'version-skew';
+  | 'version-skew'
+  | 'missing-commands';
 
 export type RunnerCompatibility =
   | { compatible: true }
-  | { compatible: false; reason: RunnerIncompatibilityReason };
+  | { compatible: false; reason: RunnerIncompatibilityReason; missing?: string[] };
+
+// GH #418: every wire verb the bridge can POST to each runner's /command —
+// a curated subset of the client command unions (lifecycle/tvOS verbs are
+// deliberately not gated). The satisfies tie makes a typo'd verb a compile
+// error; gh-418-command-surface-sync.test.js enforces the native side.
+export const REQUIRED_IOS_COMMANDS = [
+  'tap',
+  'type',
+  'drag',
+  'longPress',
+  'pinch',
+  'snapshot',
+  'screenshot',
+  'back',
+  'keyboardDismiss',
+] as const satisfies readonly RunIOSArgs['command'][];
+
+export const REQUIRED_ANDROID_COMMANDS = [
+  'tap',
+  'type',
+  'drag',
+  'longPress',
+  'pinch',
+  'snapshot',
+  'screenshot',
+  'back',
+  'dismissKeyboard',
+] as const satisfies readonly RunAndroidArgs['command'][];
 
 export function classifyRunnerCompatibility(
-  health: { protocolVersion?: number; runnerVersion?: string },
+  health: { protocolVersion?: number; runnerVersion?: string; commands?: string[] },
   pluginVersion: string | null,
+  requiredCommands?: readonly string[],
 ): RunnerCompatibility {
   if (health.protocolVersion === undefined) return { compatible: false, reason: 'legacy' };
   if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
@@ -36,6 +68,15 @@ export function classifyRunnerCompatibility(
     health.runnerVersion !== pluginVersion
   ) {
     return { compatible: false, reason: 'version-skew' };
+  }
+  // GH #418: strict on absence — an artifact that doesn't enumerate commands
+  // predates enumeration and by definition predates any newer verb.
+  if (requiredCommands !== undefined) {
+    const advertised = new Set(health.commands ?? []);
+    const missing = requiredCommands.filter((c) => !advertised.has(c));
+    if (missing.length > 0) {
+      return { compatible: false, reason: 'missing-commands', missing };
+    }
   }
   return { compatible: true };
 }

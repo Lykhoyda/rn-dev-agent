@@ -1,6 +1,6 @@
 // MARK: - Wire Models
 
-enum CommandType: String, Codable {
+enum CommandType: String, Codable, CaseIterable {
   case tap
   case mouseClick
   case tapSeries
@@ -65,6 +65,7 @@ struct Response: Codable {
   let protocolVersion: Int?
   let runnerVersion: String?
   let capabilities: [String]?
+  let commands: [String]?
   let data: DataPayload?
   let error: ErrorPayload?
 
@@ -74,7 +75,8 @@ struct Response: Codable {
     error: ErrorPayload? = nil,
     protocolVersion: Int? = nil,
     runnerVersion: String? = nil,
-    capabilities: [String]? = nil
+    capabilities: [String]? = nil,
+    commands: [String]? = nil
   ) {
     self.ok = ok
     self.v = RunnerProtocol.version
@@ -83,6 +85,7 @@ struct Response: Codable {
     self.protocolVersion = protocolVersion
     self.runnerVersion = runnerVersion
     self.capabilities = capabilities
+    self.commands = commands
   }
 }
 
