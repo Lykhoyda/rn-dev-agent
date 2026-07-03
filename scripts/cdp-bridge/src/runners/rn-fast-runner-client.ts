@@ -272,19 +272,26 @@ interface RunnerXcodebuildArgsOptions {
   hasBuiltTestProduct: boolean;
 }
 
+export interface RunnerStartStep {
+  action: 'build-for-testing' | 'test-without-building';
+  args: string[];
+}
+
 /**
- * Decide which xcodebuild invocation launches the runner.
+ * Decide the ordered xcodebuild invocations that start the runner.
  *
- * `test-without-building` is the fast steady-state path, but it requires a prior
- * `build-for-testing` to have produced a .xctestrun. On a fresh machine that
- * artifact is absent (build/ is gitignored), so we fall back to a full `test`,
- * which compiles the project first and then runs it — making the runner
- * self-install on first use (D1219 follow-up).
+ * `test-without-building` is the fast steady-state launch, but it requires a
+ * prior `build-for-testing` to have produced a .xctestrun. On a fresh machine
+ * that artifact is absent (build/ is gitignored), so the cold path builds it
+ * first and then launches warm — making the runner self-install on first use
+ * (D1219 follow-up). GH #424: a bare `xcodebuild test` never writes a
+ * .xctestrun, so the previous single-invocation cold path left the runner
+ * permanently "not prebuilt" and every runner death cost another multi-minute
+ * cold build. The build step carries no -only-testing so it produces the same
+ * artifact as the documented manual prebuild.
  */
-export function resolveRunnerXcodebuildArgs(opts: RunnerXcodebuildArgsOptions): string[] {
-  const action = opts.hasBuiltTestProduct ? 'test-without-building' : 'test';
-  return [
-    action,
+export function resolveRunnerStartPlan(opts: RunnerXcodebuildArgsOptions): RunnerStartStep[] {
+  const common = [
     '-project',
     opts.projectPath,
     '-scheme',
@@ -293,8 +300,13 @@ export function resolveRunnerXcodebuildArgs(opts: RunnerXcodebuildArgsOptions): 
     `platform=iOS Simulator,id=${opts.deviceId}`,
     '-derivedDataPath',
     opts.derivedDataPath,
-    `-only-testing:${opts.onlyTesting}`,
   ];
+  const launch: RunnerStartStep = {
+    action: 'test-without-building',
+    args: ['test-without-building', ...common, `-only-testing:${opts.onlyTesting}`],
+  };
+  if (opts.hasBuiltTestProduct) return [launch];
+  return [{ action: 'build-for-testing', args: ['build-for-testing', ...common] }, launch];
 }
 
 /** True when a prior build-for-testing left a .xctestrun under DerivedData. */
@@ -401,6 +413,45 @@ export function buildRunnerVersionEnv(pluginVersion: string | null): Record<stri
   };
 }
 
+/**
+ * GH #424: run a build-phase xcodebuild (build-for-testing) to completion.
+ * Unlike the launch invocation it exits on its own and emits no READY marker,
+ * so success is exit code 0 — the .xctestrun it writes is what makes every
+ * later start warm.
+ */
+function runXcodebuildToExit(args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('xcodebuild', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderrTail = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(
+        new Error(
+          `xcodebuild ${args[0]} did not complete within ${timeoutMs / 1000}s (cold build — first run compiles the runner)`,
+        ),
+      );
+    }, timeoutMs);
+    child.stderr!.setEncoding('utf-8');
+    child.stderr!.on('data', (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-2000);
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ''}`,
+          ),
+        );
+    });
+  });
+}
+
 export async function startFastRunner(
   deviceId: string,
   bundleId: string,
@@ -411,26 +462,33 @@ export async function startFastRunner(
 
   const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
 
-  return new Promise((resolve, reject) => {
-    const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
+  const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
+  if (!existsSync(projectPath)) {
+    throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
+  }
 
-    if (!existsSync(projectPath)) {
-      reject(new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`));
-      return;
+  const derivedDataPath = derivedDataPathForRunner();
+  const plan = resolveRunnerStartPlan({
+    projectPath,
+    scheme: 'RnFastRunner',
+    deviceId,
+    derivedDataPath,
+    onlyTesting: 'RnFastRunnerUITests/RnFastRunnerTests/testCommand',
+    hasBuiltTestProduct: hasBuiltTestProduct(derivedDataPath),
+  });
+
+  for (const step of plan.slice(0, -1)) {
+    await runXcodebuildToExit(step.args, BUILD_READY_TIMEOUT_MS);
+    if (!hasBuiltTestProduct(derivedDataPath)) {
+      throw new Error(
+        `xcodebuild ${step.action} completed but left no .xctestrun under ${derivedDataPath}/Build/Products — unexpected DerivedData layout`,
+      );
     }
+  }
+  const launch = plan[plan.length - 1];
 
-    const derivedDataPath = derivedDataPathForRunner();
-    const built = hasBuiltTestProduct(derivedDataPath);
-    const args = resolveRunnerXcodebuildArgs({
-      projectPath,
-      scheme: 'RnFastRunner',
-      deviceId,
-      derivedDataPath,
-      onlyTesting: 'RnFastRunnerUITests/RnFastRunnerTests/testCommand',
-      hasBuiltTestProduct: built,
-    });
-
-    const child = spawn('xcodebuild', args, {
+  return new Promise((resolve, reject) => {
+    const child = spawn('xcodebuild', launch.args, {
       env: {
         ...process.env,
         RN_FAST_RUNNER_PORT: String(desired),
@@ -443,14 +501,12 @@ export async function startFastRunner(
     runnerProcess = child;
     const parser = createReadySignalParser();
     let resolved = false;
-    const readyTimeoutMs = built ? READY_TIMEOUT_MS : BUILD_READY_TIMEOUT_MS;
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      const phase = built ? '' : ' (cold build — first run compiles the runner)';
       reject(
-        new Error(`Fast runner did not become ready within ${readyTimeoutMs / 1000}s${phase}`),
+        new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`),
       );
-    }, readyTimeoutMs);
+    }, READY_TIMEOUT_MS);
 
     const handleChunk = (chunk: string): void => {
       if (resolved) return;
