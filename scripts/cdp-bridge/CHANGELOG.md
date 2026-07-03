@@ -1,5 +1,17 @@
 # rn-dev-agent-cdp
 
+## 0.52.0
+
+### Minor Changes
+
+- d12f18f: feat(rn-fast-runner): quiescence bypass — make XCTest's private quiescence wait a no-op inside the iOS runner (#384, Story 03). RN apps with Reanimated worklets/looping animations never report idle, so XCTest queries and snapshots stalled until per-symptom patches (runner-timeout shim, HID-synthesis scroll, 35s budgets) caught them; the bypass removes the idle-wait at the root — the same WebDriverAgent-lineage approach Maestro uses. Probes both private selector variants (`waitForQuiescenceIncludingAnimationsIdle:` and the Xcode-16 `:isPreEvent:` form), swizzles exactly one (classic preferred), and degrades loudly (`RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE`) when Apple drifts the API — the runner keeps working without the bypass. Default ON; opt out with `RN_QUIESCENCE_BYPASS=0` (resolved at runner spawn; threaded as `TEST_RUNNER_RN_QUIESCENCE_BYPASS` because xcodebuild only forwards `TEST_RUNNER_`-prefixed vars). Note: `XCUIElement.typeText` runs its own internal sync, so the type-timeout shim remains as a safety net. Auditable via `meta.quiescenceBypass` on the first command after boot, `QUIESCENCE_BYPASS` in `/health.capabilities`, and `cdp_status.deviceSession.runnerCapabilities`.
+- 0cfa78a: The observe web UI now autostarts when the MCP worker boots in an RN project, listening on a
+  stable default port (7333, `http://127.0.0.1:7333`) with an ephemeral fallback on collision.
+  New `.rn-agent/config.json` block `{ "observe": { "autoStart": boolean, "port": number } }`
+  plus `RN_AGENT_OBSERVE_AUTOSTART` env override (precedence env > config > default, matching
+  `cdp.autoConnect`). The `observe` tool gains a `restart` action; `stop` is session-scoped.
+  The live URL is recorded in a per-project state file and announced at SessionStart.
+
 ## 0.51.1
 
 ### Patch Changes
