@@ -10,7 +10,7 @@ going forward — no upstream-sync relationship is maintained.
 9 Swift source files providing:
 - HTTP `POST /command` dispatcher
 - Snapshot (XCUI accessibility tree → JSON)
-- Interaction (tap, swipe, type, dismissKeyboard, back, scroll)
+- Interaction (tap, swipe, type, keyboardDismiss — the iOS wire verb (#418), back, scroll)
 - Lifecycle (activate, terminate, state queries)
 - System modal handling (alerts/permission dialogs)
 - Transport (embedded FlyingFox HTTP server)

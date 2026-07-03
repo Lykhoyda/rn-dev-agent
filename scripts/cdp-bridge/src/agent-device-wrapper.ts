@@ -329,7 +329,9 @@ export function buildRunIOSArgs(
     case 'screenshot':
       return { command: 'screenshot', ...(bundleId ? { bundleId } : {}) };
     case 'keyboard':
-      return { command: 'dismissKeyboard', ...(bundleId ? { bundleId } : {}) };
+      // B235/#418: the Swift enum case is keyboardDismiss; 'dismissKeyboard'
+      // (the Android wire verb) never decoded on iOS.
+      return { command: 'keyboardDismiss', ...(bundleId ? { bundleId } : {}) };
     case 'swipe':
     case 'scroll': {
       // Coordinate-based gesture. The Swift `.swipe` is tvOS-only; iOS

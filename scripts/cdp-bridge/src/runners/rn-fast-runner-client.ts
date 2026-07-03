@@ -458,7 +458,7 @@ export function stopFastRunner(deviceId?: string): void {
 // --- Legacy helper kept for device-interact.ts swipe path ---
 //
 // GH #105 iOS-MVP follow-up: the upstream agent-device runner exposed
-// per-verb HTTP endpoints (/tap, /swipe, /snapshot, /screenshot, /dismissKeyboard).
+// per-verb HTTP endpoints (/tap, /swipe, /snapshot, /screenshot, …).
 // Our in-tree RnFastRunner only exposes a single POST /command with
 // {command: '...', ...payload}. The unused fastTap/fastType/fastSnapshot/
 // fastScreenshot/fastDismissKeyboard helpers were dead code post-Task 8 —
@@ -740,7 +740,7 @@ export interface RunIOSArgs {
     | 'pinch'
     | 'findText'
     | 'type'
-    | 'dismissKeyboard'
+    | 'keyboardDismiss'
     | 'screenshot'
     | 'back'
     | 'scroll'
