@@ -99,17 +99,21 @@ try {
     process.exit(0);
   }
 
-  // Identify the running bridge's install dir from its argv. No match → not
+  // Verdict must not depend on parsing an absolute path out of ps args —
+  // argv separators and in-path spaces are indistinguishable there. Holder is
+  // provably a bridge if the fixed dist suffix appears at a token end; not
   // provably a bridge (PID reuse, redacted ps) → stay silent (fail open).
-  // A space-containing FOREIGN path parses truncated here — the stale verdict
-  // still holds (the current-install case already returned above); only the
-  // displayed path is shortened.
+  if (!/\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js(?:\s|$)/.test(psArgs)) {
+    process.exit(0);
+  }
+
+  // Best-effort path extraction, for display and the symlinked-spawn case
+  // only. A space-containing path parses truncated or not at all — the stale
+  // verdict above is unaffected.
   const m = psArgs.match(/\/\S*\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js/);
-  if (!m) process.exit(0);
+  const holderDist = m ? dirname(m[0]) : null;
 
-  const runningDist = realpathOr(dirname(m[0]));
-
-  if (runningDist === currentDist) {
+  if (holderDist !== null && realpathOr(holderDist) === currentDist) {
     if (upgraded) {
       console.log(`MCP bridge check: a bridge from the current install is running (PID ${pid}).`);
     }
@@ -118,8 +122,9 @@ try {
 
   const bridgeVersion =
     lock && typeof lock.version === 'string' && lock.version ? ` bridge v${lock.version},` : '';
+  const holderDesc = holderDist ?? 'install path unparsable from ps args';
   console.log(
-    `WARNING: an MCP bridge from a different plugin install (usually a previous version) is still running (PID ${pid},${bridgeVersion} ${dirname(m[0])}) and holds this project's bridge lock. This session's MCP server may have failed to register (zero cdp_*/device_* tools). Run /mcp and reconnect the rn-dev-agent server; if reconnect still fails, close the other Claude Code window using this project or run \`kill ${pid}\`, then reconnect.`,
+    `WARNING: an MCP bridge from a different plugin install (usually a previous version) is still running (PID ${pid},${bridgeVersion} ${holderDesc}) and holds this project's bridge lock. This session's MCP server may have failed to register (zero cdp_*/device_* tools). Run /mcp and reconnect the rn-dev-agent server; if reconnect still fails, close the other Claude Code window using this project or run \`kill ${pid}\`, then reconnect.`,
   );
 } catch {
   // Never block or fail SessionStart.

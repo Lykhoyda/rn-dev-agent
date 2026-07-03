@@ -178,6 +178,15 @@ echo "$pout" | grep -q "different plugin install" \
 echo "$pout" | grep -q "current install" \
   && ok "space-containing current install still confirmed after upgrade" \
   || bad "space-containing current install not recognized"
+# Foreign holder with a space directly before /scripts (regex-unparsable path)
+# must still be flagged stale — the verdict uses suffix containment, not the
+# path parse.
+spawn_decoy "$tmp/old ver/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID"
+pout="$(run_probe "$SANDBOX" 0)"
+echo "$pout" | grep -q "different plugin install" \
+  && ok "space-containing FOREIGN install still flagged stale" \
+  || bad "space-containing foreign install evaded the stale warning"
 write_lock "$current_pid"
 
 # Hook-level: an upgrade run must pass --upgraded=1 through to the probe,
