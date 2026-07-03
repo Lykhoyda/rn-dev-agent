@@ -19,6 +19,7 @@ class CommandServer(port: Int, private val pluginVersion: String? = null) : Nano
                 .put("ok", true)
                 .put("protocolVersion", RunnerProtocol.VERSION)
                 .put("capabilities", JSONArray())
+                .put("commands", JSONArray(CommandDispatcher.SUPPORTED_COMMANDS))
             if (pluginVersion != null) body.put("runnerVersion", pluginVersion)
             return json(Response.Status.OK, body)
         }
