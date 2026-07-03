@@ -443,19 +443,16 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             if (compat.compatible)
                 return runnerState;
             if (compat.reason === 'missing-commands') {
-                // GH #418: reinstalling the SAME APK can't add commands — this is
-                // artifact staleness. Open invalidates + rebuilds; mid-flow refuses.
-                if (!opts.allowArtifactRebuild) {
-                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
-                }
-                invalidateAndroidRunnerApks();
-                pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${(compat.missing ?? []).join(', ') || 'unknown'})`;
+                // GH #418: reinstalling the SAME APK can't add commands — artifact
+                // staleness. Always throw the typed error: the retry-once wrapper is
+                // the SINGLE rebuild owner (one Gradle build even on a checkout whose
+                // fresh build still misses commands — multi-review advisory); mid-flow
+                // callers surface the typed refusal.
+                throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
             }
-            else {
-                // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
-                // state clear) and force-reinstalled so the fresh APK supersedes it.
-                pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
-            }
+            // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+            // state clear) and force-reinstalled so the fresh APK supersedes it.
+            pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
             forceReinstall = true;
             await reapMismatchedAndroidRunner(deviceId);
         }
