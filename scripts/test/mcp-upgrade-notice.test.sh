@@ -261,7 +261,31 @@ echo "$pout" | grep -q "different plugin install" \
   && bad "orphaned (ppid-changed) holder wrongly reported stale" \
   || ok "orphaned holder treated as reclaimable, no warning"
 
-# (d) Fresh-heartbeat, same-ppid holder still warns (true positive intact).
+# (d) Lock file older than 24h (abandoned) — lockfile.ts max-age reclaim.
+spawn_decoy "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js"
+write_lock "$DECOY_PID"
+touch -t 202001010000 "$LOCK_PATH"
+pout="$(run_probe "$SANDBOX" 0)"
+echo "$pout" | grep -q "different plugin install" \
+  && bad ">24h-old lock (reclaimable) wrongly reported stale" \
+  || ok ">24h-old lock treated as reclaimable, no warning"
+
+# (e) Legacy lock (no ppid) held by an init-orphaned process → reclaimable.
+# Only asserted when the orphan actually reparented to PID 1 (platform-dependent).
+orphan_pid=$( (node -e 'setInterval(() => {}, 1000)' "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js" >/dev/null 2>&1 & echo $!) )
+DECOY_PIDS+=("$orphan_pid")
+live_ppid="$(ps -p "$orphan_pid" -o ppid= 2>/dev/null | tr -d ' ')"
+if [ "$live_ppid" = "1" ]; then
+  write_lock "$orphan_pid"
+  pout="$(run_probe "$SANDBOX" 0)"
+  echo "$pout" | grep -q "different plugin install" \
+    && bad "init-orphaned legacy-lock holder wrongly reported stale" \
+    || ok "init-orphaned legacy-lock holder treated as reclaimable"
+else
+  echo "skip: orphan reparented to $live_ppid (not 1) — legacy-orphan case not asserted"
+fi
+
+# (f) Fresh-heartbeat, same-ppid holder still warns (true positive intact).
 spawn_decoy "/fake-old-root/scripts/cdp-bridge/dist/supervisor.js"
 write_lock "$DECOY_PID" ",\"lastHeartbeat\":$(date +%s)000,\"ppid\":$$"
 pout="$(run_probe "$SANDBOX" 0)"

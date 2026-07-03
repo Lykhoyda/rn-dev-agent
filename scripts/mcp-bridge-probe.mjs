@@ -14,7 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -77,15 +77,23 @@ try {
   }
 
   // A live holder only BLOCKS the new supervisor if lockfile.ts's isLockLive
-  // would refuse to reclaim it. Mirror its cheap checks: argv must prove a
-  // bridge (else it's PID reuse — suffix containment, since argv separators
-  // and in-path spaces are indistinguishable in ps output); a heartbeat >90s
-  // stale is a wedged owner → reclaimed; a live PPID differing from the
-  // recorded one is an orphan → reclaimed. Absent fields skip their check
-  // (pre-0.39 locks), and an unreadable live PPID never downgrades a holder —
-  // both matching lockfile.ts.
+  // would refuse to reclaim it. Mirror its checks: argv must prove a bridge
+  // (else it's PID reuse — suffix containment, since argv separators and
+  // in-path spaces are indistinguishable in ps output); lock mtime >24h is an
+  // abandoned lock → reclaimed; a heartbeat >90s stale is a wedged owner →
+  // reclaimed; a live PPID differing from the recorded one is an orphan →
+  // reclaimed (for pre-0.39 locks with no recorded PPID, reparented-to-init
+  // is the orphan signal). Unreadable mtime/PPID never downgrades a holder —
+  // matching lockfile.ts fail-safe semantics.
   let liveBlocker =
     alive && /\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js(?:\s|$)/.test(psArgs);
+  if (liveBlocker) {
+    try {
+      if (Date.now() - statSync(lockPath).mtimeMs > 24 * 60 * 60 * 1000) liveBlocker = false;
+    } catch {
+      /* fail safe: unreadable mtime keeps the holder a blocker */
+    }
+  }
   if (
     liveBlocker &&
     typeof lock.lastHeartbeat === 'number' &&
@@ -93,7 +101,7 @@ try {
   ) {
     liveBlocker = false;
   }
-  if (liveBlocker && typeof lock.ppid === 'number') {
+  if (liveBlocker) {
     try {
       const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
         encoding: 'utf8',
@@ -101,7 +109,14 @@ try {
         timeout: 1000,
       }).trim();
       const livePpid = parseInt(out, 10);
-      if (Number.isFinite(livePpid) && livePpid !== lock.ppid) liveBlocker = false;
+      if (Number.isFinite(livePpid)) {
+        if (typeof lock.ppid === 'number') {
+          if (livePpid !== lock.ppid) liveBlocker = false;
+        } else if (livePpid === 1) {
+          // Pre-0.39 lock with no recorded PPID: reparented to init = orphan.
+          liveBlocker = false;
+        }
+      }
     } catch {
       /* fail safe: unknown PPID keeps the holder a blocker */
     }
