@@ -13,7 +13,11 @@ const FULL = [...REQUIRED_IOS_COMMANDS];
 
 test('gh-418 classify: commands ⊇ required → compatible', () => {
   assert.deepEqual(
-    classifyRunnerCompatibility({ protocolVersion: 1, commands: FULL }, null, REQUIRED_IOS_COMMANDS),
+    classifyRunnerCompatibility(
+      { protocolVersion: 1, commands: FULL },
+      null,
+      REQUIRED_IOS_COMMANDS,
+    ),
     { compatible: true },
   );
 });
