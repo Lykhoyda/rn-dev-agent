@@ -727,6 +727,13 @@ export async function ensureRunnerForCommand(
   // GH #418: 'missing-commands' surviving a respawn means the ARTIFACT is
   // stale — mid-flow callers refuse fast (never a silent multi-minute build).
   if (after.staleReason === 'missing-commands') {
+    // Open path, dead-runner-spawned-from-stale-prebuilt case: the first
+    // probe said 'dead', so the up-front short-circuit couldn't fire — the
+    // rebuild tier must still run here or the first open after an upgrade
+    // errors and only the SECOND open heals (device-verify finding).
+    if (deps.allowArtifactRebuild && deviceId) {
+      return rebuildStaleRunnerArtifact(after, deviceId, bundleId, deps);
+    }
     const missing = (after.missingCommands ?? []).join(', ') || 'unknown';
     return {
       ok: false,

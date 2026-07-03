@@ -133,6 +133,30 @@ test('gh-418: at open, even a cold rebuild misses commands → RUNNER_COMMANDS_S
   assert.match(res.message, /update the plugin/i);
 });
 
+test('gh-418: at open, DEAD runner spawned from a stale prebuilt → rebuild tier still fires', async () => {
+  // First probe 'dead' (no runner yet — the common first-open-after-upgrade
+  // case), spawn launches the stale prebuilt, after-probe says
+  // missing-commands: the FIRST open must heal, not error until a second one.
+  const probes = [{ liveness: 'dead' }, MISSING, { liveness: 'alive' }];
+  let invalidated = 0;
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift(),
+    ensure: async () => {
+      ensured++;
+    },
+    invalidateArtifact: () => invalidated++,
+  });
+  assert.equal(invalidated, 1);
+  assert.equal(ensured, 2, 'initial spawn + post-invalidation cold rebuild');
+  assert.deepEqual(res, {
+    ok: true,
+    note: 'runner artifact rebuilt (missing commands: keyboardDismiss)',
+  });
+});
+
 test('gh-418: protocol reasons keep the existing note and error path', async () => {
   const probes = [{ liveness: 'stale', staleReason: 'legacy' }, { liveness: 'alive' }];
   const res = await ensureRunnerForCommand('U1', 'com.example', {
