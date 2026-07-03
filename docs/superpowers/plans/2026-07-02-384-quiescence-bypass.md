@@ -22,6 +22,8 @@
 7. Task 9's state-file lookup corrected to `~/Library/Application Support/rn-dev-agent/runner-state/ios-<UDID>.json` (verified against `util/secure-state-file.ts`).
 Plus: `runnerCapabilities` omitted when empty (no `[]` noise), persisted `quiescence` validated against the union before announcing, unused `bundleID` dropped from the vendored header.
 
+**Execution-time deviations (recorded post-implementation):** (a) CLAUDE.md is gitignored in this repo (local-only since #331), so Task 7's committable troubleshooting entry landed as a README.md `## Troubleshooting` table row instead; CLAUDE.md was still edited locally. (b) The final whole-branch review corrected the opt-out instruction in both docs: a live runner survives session reopen by design (#383 adoption), so flipping `RN_QUIESCENCE_BYPASS` requires killing the runner (`pkill -f RnFastRunnerUITests`) before reopening the session.
+
 ## Global Constraints
 
 - Node.js >= 22 LTS; cdp-bridge is TypeScript compiled by `tsc` (`npm run build` inside `scripts/cdp-bridge`).
