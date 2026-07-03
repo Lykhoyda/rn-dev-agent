@@ -1,8 +1,9 @@
-import { unlinkSync } from 'node:fs';
+import { unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
+import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
@@ -262,7 +263,9 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
         case 'screenshot':
             return { command: 'screenshot', ...(bundleId ? { bundleId } : {}) };
         case 'keyboard':
-            return { command: 'dismissKeyboard', ...(bundleId ? { bundleId } : {}) };
+            // B235/#418: the Swift enum case is keyboardDismiss; 'dismissKeyboard'
+            // (the Android wire verb) never decoded on iOS.
+            return { command: 'keyboardDismiss', ...(bundleId ? { bundleId } : {}) };
         case 'swipe':
         case 'scroll': {
             // Coordinate-based gesture. The Swift `.swipe` is tvOS-only; iOS
@@ -494,7 +497,65 @@ const PROTOCOL_STALE_REASONS = new Set([
     'protocol-older',
     'protocol-newer',
     'version-skew',
+    // GH #418: a respawn can fix a runner PROCESS older than the on-disk
+    // artifact; artifact staleness surviving the respawn is handled separately.
+    'missing-commands',
 ]);
+// GH #418: the open-path rebuild tier. A respawn reuses the same build
+// artifact, so 'missing-commands' can only be fixed by invalidating
+// DerivedData and paying the cold rebuild — allowed at device_snapshot
+// action=open only, reap-first, serialized behind the checkout-scoped build
+// lock, at most once per plugin version (a broken checkout must not loop
+// multi-minute builds).
+async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
+    const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
+    const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
+    const budget = deps.rebuildBudget ?? runnerRebuildBudget;
+    if (plugin !== null && budget.alreadyRebuiltFor(plugin)) {
+        return {
+            ok: false,
+            code: 'RUNNER_COMMANDS_STALE',
+            message: `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
+                `required commands (missing: ${missing}) — the checkout may be broken; update or ` +
+                `reinstall the plugin, then re-open the device session.`,
+        };
+    }
+    const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
+    if (!acquire()) {
+        return {
+            ok: false,
+            code: 'RUNNER_COMMANDS_STALE',
+            message: 'another session is rebuilding the shared runner artifact — retry this open in a few minutes.',
+        };
+    }
+    const release = deps.releaseBuildLock ?? releaseRunnerRebuildLock;
+    try {
+        const reap = deps.reap ?? reapStaleFastRunner;
+        await reap();
+        const invalidate = deps.invalidateArtifact ??
+            (() => rmSync(derivedDataPathForRunner(), { recursive: true, force: true }));
+        invalidate();
+        if (plugin !== null)
+            budget.recordRebuild(plugin);
+        const ensure = deps.ensure ?? ensureFastRunner;
+        await ensure(deviceId, bundleId);
+    }
+    finally {
+        release();
+    }
+    const probe = deps.probe ?? probeFastRunnerLivenessDetailed;
+    const rebuilt = await probe();
+    if (rebuilt.liveness === 'alive') {
+        return { ok: true, note: `runner artifact rebuilt (missing commands: ${missing})` };
+    }
+    return {
+        ok: false,
+        code: 'RUNNER_COMMANDS_STALE',
+        message: `rn-fast-runner still lacks required commands after a cold rebuild ` +
+            `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
+            `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
+    };
+}
 // #210: orchestrate probe → gate → spawn → RE-VERIFY → structured result. ensureFastRunner
 // swallows start errors, so the re-probe is what turns a failed spawn into a clean message
 // rather than the unstructured postCommand throw downstream (A6, multi-review).
@@ -508,6 +569,11 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     const adopt = deps.adopt ?? adoptPersistedFastRunnerState;
     adopt(deviceId ?? undefined);
     const first = await probe();
+    // GH #418: artifact staleness at open — a respawn launches the same stale
+    // .xctestrun, so skip it and invalidate up front (multi-LLM review amendment).
+    if (first.staleReason === 'missing-commands' && deps.allowArtifactRebuild && deviceId) {
+        return rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps);
+    }
     const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
     if (decision.action === 'proceed')
         return { ok: true };
@@ -517,9 +583,26 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     const after = await probe();
     if (after.liveness === 'alive') {
         if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
-            return { ok: true, note: 'runner upgraded (protocol/version mismatch)' };
+            return {
+                ok: true,
+                note: first.staleReason === 'missing-commands'
+                    ? 'runner upgraded (stale command surface)'
+                    : 'runner upgraded (protocol/version mismatch)',
+            };
         }
         return { ok: true };
+    }
+    // GH #418: 'missing-commands' surviving a respawn means the ARTIFACT is
+    // stale — mid-flow callers refuse fast (never a silent multi-minute build).
+    if (after.staleReason === 'missing-commands') {
+        const missing = (after.missingCommands ?? []).join(', ') || 'unknown';
+        return {
+            ok: false,
+            code: 'RUNNER_COMMANDS_STALE',
+            message: `rn-fast-runner artifact lacks required commands (missing: ${missing}). ` +
+                `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) ` +
+                `to rebuild it (cold build, several minutes).`,
+        };
     }
     if (after.staleReason && PROTOCOL_STALE_REASONS.has(after.staleReason)) {
         return {
@@ -693,6 +776,11 @@ export async function runNative(cliArgs, opts = {}) {
                 // note must never attach to a LATER unrelated result.
                 consumePendingAndroidUpgradeNote();
                 const msg = err instanceof Error ? err.message : String(err);
+                // GH #418: a stale command surface mid-flow is a fast refusal — the
+                // open path (device_snapshot action=open) is the rebuild entry.
+                if (msg.startsWith('RUNNER_COMMANDS_STALE')) {
+                    return failResult(msg, 'RUNNER_COMMANDS_STALE');
+                }
                 // GH #383: a protocol mismatch surviving the reap+reinstall is a distinct,
                 // actionable failure — surface it rather than the generic runner-down.
                 if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {

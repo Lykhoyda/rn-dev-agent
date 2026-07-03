@@ -7,7 +7,33 @@ import { join } from 'node:path';
 // no longer be driven.
 export const RUNNER_PROTOCOL_VERSION = 1;
 export const MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
-export function classifyRunnerCompatibility(health, pluginVersion) {
+// GH #418: every wire verb the bridge can POST to each runner's /command —
+// a curated subset of the client command unions (lifecycle/tvOS verbs are
+// deliberately not gated). The satisfies tie makes a typo'd verb a compile
+// error; gh-418-command-surface-sync.test.js enforces the native side.
+export const REQUIRED_IOS_COMMANDS = [
+    'tap',
+    'type',
+    'drag',
+    'longPress',
+    'pinch',
+    'snapshot',
+    'screenshot',
+    'back',
+    'keyboardDismiss',
+];
+export const REQUIRED_ANDROID_COMMANDS = [
+    'tap',
+    'type',
+    'drag',
+    'longPress',
+    'pinch',
+    'snapshot',
+    'screenshot',
+    'back',
+    'dismissKeyboard',
+];
+export function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
     if (health.protocolVersion === undefined)
         return { compatible: false, reason: 'legacy' };
     if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
@@ -20,6 +46,15 @@ export function classifyRunnerCompatibility(health, pluginVersion) {
         health.runnerVersion !== undefined &&
         health.runnerVersion !== pluginVersion) {
         return { compatible: false, reason: 'version-skew' };
+    }
+    // GH #418: strict on absence — an artifact that doesn't enumerate commands
+    // predates enumeration and by definition predates any newer verb.
+    if (requiredCommands !== undefined) {
+        const advertised = new Set(health.commands ?? []);
+        const missing = requiredCommands.filter((c) => !advertised.has(c));
+        if (missing.length > 0) {
+            return { compatible: false, reason: 'missing-commands', missing };
+        }
     }
     return { compatible: true };
 }

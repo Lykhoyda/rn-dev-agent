@@ -4,7 +4,7 @@
  */
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
@@ -12,7 +12,7 @@ import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
@@ -227,7 +227,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     }
     const action = resolveAndroidInstallAction({
         instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-        apksExist: existsSync(APK_APP) && existsSync(APK_TEST),
+        apksExist: androidRunnerApksExist(),
     });
     if (action === 'reuse')
         return;
@@ -336,6 +336,9 @@ export async function probeAndroidRunnerHealthInfo(port) {
                 ? { protocolVersion: body.protocolVersion }
                 : {}),
             ...(typeof body.runnerVersion === 'string' ? { runnerVersion: body.runnerVersion } : {}),
+            ...(Array.isArray(body.commands)
+                ? { commands: body.commands.filter((c) => typeof c === 'string') }
+                : {}),
         };
     }
     catch {
@@ -369,21 +372,90 @@ function classifyAndroidHealth(info) {
     return classifyRunnerCompatibility({
         ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
         ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
-    }, getPluginVersion());
+        ...(info.commands !== undefined ? { commands: info.commands } : {}),
+    }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
 }
-export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT) {
+// GH #418: mid-flow refusal + retry-once signal. The message prefix is the
+// wire contract — device-session.ts and agent-device-wrapper.ts map it to the
+// RUNNER_COMMANDS_STALE ToolErrorCode by startsWith, mirroring
+// RUNNER_PROTOCOL_MISMATCH.
+export class AndroidCommandsStaleError extends Error {
+    missing;
+    constructor(missing, bundleId) {
+        super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands ` +
+            `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
+            `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`);
+        this.missing = missing;
+    }
+}
+// GH #418: deleting the APKs is the artifact invalidation — apksExist flips
+// false, so resolveAndroidInstallAction returns 'build-then-install' (Gradle).
+// The invalidation and the install-action check share RUNNER_APK_PATHS so
+// they cannot drift apart.
+const RUNNER_APK_PATHS = [APK_APP, APK_TEST];
+export function androidRunnerApksExist() {
+    return RUNNER_APK_PATHS.every((p) => existsSync(p));
+}
+export function _androidRunnerApkPathsForTest() {
+    return RUNNER_APK_PATHS;
+}
+export function invalidateAndroidRunnerApks(rm = (p) => rmSync(p, { force: true })) {
+    for (const apk of RUNNER_APK_PATHS) {
+        try {
+            rm(apk);
+        }
+        catch {
+            /* best-effort; the install action check re-reads existsSync */
+        }
+    }
+}
+// GH #418: retry-once wrapper for the fresh-open case — the attempt spawns the
+// stale installed APK, the post-install verify throws the typed error, and (at
+// open only) we invalidate the APKs so the retry Gradle-rebuilds from source.
+export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
+    try {
+        return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
+    }
+    catch (err) {
+        if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
+            // Killing the local adb child does NOT free the device-side
+            // UiAutomation slot (#237) — reap through the slot-release path so the
+            // rebuilt instrumentation can bind.
+            await reapMismatchedAndroidRunner(deviceId);
+            invalidateAndroidRunnerApks();
+            const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+                _forceReinstall: true,
+            });
+            pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
+            return state;
+        }
+        throw err;
+    }
+}
+async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
     const serial = deviceId ?? (await resolveAndroidSerial());
     adoptPersistedAndroidState(serial);
-    let forceReinstall = false;
+    let forceReinstall = opts._forceReinstall === true;
     if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) {
         const info = await probeAndroidRunnerHealthInfo(runnerState.hostPort);
         if (info.reachable && info.ok) {
             const compat = classifyAndroidHealth(info);
             if (compat.compatible)
                 return runnerState;
-            // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
-            // state clear) and force-reinstalled so the fresh APK supersedes it.
-            pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+            if (compat.reason === 'missing-commands') {
+                // GH #418: reinstalling the SAME APK can't add commands — this is
+                // artifact staleness. Open invalidates + rebuilds; mid-flow refuses.
+                if (!opts.allowArtifactRebuild) {
+                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+                }
+                invalidateAndroidRunnerApks();
+                pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${(compat.missing ?? []).join(', ') || 'unknown'})`;
+            }
+            else {
+                // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+                // state clear) and force-reinstalled so the fresh APK supersedes it.
+                pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+            }
             forceReinstall = true;
             await reapMismatchedAndroidRunner(deviceId);
         }
@@ -489,6 +561,12 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                     resolved = true;
                     pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
                     child.kill('SIGTERM');
+                    if (compat.reason === 'missing-commands') {
+                        // GH #418: typed — the wrapper's retry-once invalidates the APKs
+                        // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
+                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId));
+                        return;
+                    }
                     reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
                         `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
                         `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
