@@ -31,6 +31,9 @@ export function startSupervisor({
   const stderrChunks = [];
   child.stderr.on('data', (c) => stderrChunks.push(c.toString('utf8')));
   const stderrText = () => stderrChunks.join('');
+  // A dead supervisor's stdin raises EPIPE on write; without a handler that
+  // crashes the test file instead of surfacing deathError via nextLine().
+  child.stdin.on('error', () => {});
   let buf = '';
   let exited = null;
   const pendingLines = [];
@@ -39,8 +42,12 @@ export function startSupervisor({
     new Error(
       `supervisor exited (code=${exited.code} signal=${exited.signal}) before answering; stderr tail:\n${stderrText().slice(-2000)}`,
     );
+  // setEncoding makes Node's StringDecoder hold partial UTF-8 sequences — a
+  // multi-byte codepoint split across 'data' chunks must not corrupt the JSON
+  // (same rationale as the supervisor's own stdin handling).
+  child.stdout.setEncoding('utf8');
   child.stdout.on('data', (c) => {
-    buf += c.toString('utf8');
+    buf += c;
     const parts = buf.split('\n');
     buf = parts.pop() ?? '';
     for (const p of parts) {

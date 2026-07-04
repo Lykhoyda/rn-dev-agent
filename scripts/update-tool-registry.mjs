@@ -29,7 +29,9 @@ try {
   const list = JSON.parse(await s.nextLine());
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
   if (names.length === 0)
-    throw new Error('tools/list returned zero tools — refusing to write an empty golden');
+    throw new Error(
+      `tools/list returned zero tools — refusing to write an empty golden: ${JSON.stringify(list)}`,
+    );
   writeFileSync(GOLDEN, JSON.stringify(names, null, 2) + '\n');
   console.log(`wrote ${names.length} tool names to ${GOLDEN}`);
 } finally {

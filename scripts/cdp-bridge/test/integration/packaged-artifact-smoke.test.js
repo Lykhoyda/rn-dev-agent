@@ -23,12 +23,15 @@ const GOLDEN = JSON.parse(
   await readFile(resolve(__dirname, '../fixtures/tool-registry.json'), 'utf8'),
 );
 
-// ensure-cdp-deps.sh:27 verbatim (+ --no-audit --no-fund: output hygiene only).
+// ensure-cdp-deps.sh:26 verbatim (+ --no-audit --no-fund: output hygiene only).
 const INSTALL_ARGS = ['install', '--production', '--ignore-scripts', '--no-audit', '--no-fund'];
 
 test(
   'GH#432 packaged-artifact smoke: the user install path serves the full tool surface',
-  { timeout: 300_000 },
+  // Budget: two 180s install attempts + boot/handshake must fit, or a
+  // hung-then-retried install is killed by the test timeout and masks the
+  // SMOKE_INSTALL diagnostic.
+  { timeout: 450_000 },
   async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'rn-agent-packaged-'));
     let s = null;
@@ -80,6 +83,11 @@ test(
       const actual = (list.result?.tools ?? []).map((t) => t.name).sort();
       const missing = GOLDEN.filter((n) => !actual.includes(n));
       const unexpected = actual.filter((n) => !GOLDEN.includes(n));
+      assert.equal(
+        actual.length,
+        GOLDEN.length,
+        `SMOKE_REGISTRY: served ${actual.length} tools vs ${GOLDEN.length} in the golden — a duplicated name passes the set checks below`,
+      );
       assert.deepEqual(
         { missing, unexpected },
         { missing: [], unexpected: [] },

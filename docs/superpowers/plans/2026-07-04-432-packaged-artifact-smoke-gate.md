@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** CI validates the artifact users actually run — committed `dist/`, production-only unpinned install, `supervisor.js` stdio spawn, MCP handshake, tool registry, observe SPA — so staleness/registration/packaging regressions go red before release.
+**Goal:** CI validates the artifact users actually run — committed `dist/`, production-only lockfile-pinned install, `supervisor.js` stdio spawn, MCP handshake, tool registry, observe SPA — so staleness/registration/packaging regressions go red before release.
 
 **Architecture:** Three independent pieces gated in the existing CI `test` job: (1) `scripts/check-dist-fresh.sh` clean-rebuilds `dist/` and requires an empty `git status --porcelain`; (2) `test/integration/packaged-artifact-smoke.test.js` replicates the exact user install in a temp dir and drives the real supervisor over line-delimited JSON-RPC; (3) a committed golden `test/fixtures/tool-registry.json` (78 names) with a deliberate regeneration script. The gh-264 supervisor harness is extracted to a shared helper.
 
