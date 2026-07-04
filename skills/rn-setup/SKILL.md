@@ -146,7 +146,7 @@ If missing: `brew install ffmpeg` (not critical — videos work without it, GIF 
 
 ### 10. idb (optional — fast screen mirroring)
 ```bash
-command -v idb && command -v idb_companion
+command -v idb && { command -v idb_companion || command -v idb-companion; }
 ```
 Both binaries present → the observe UI's live mirror uses `idb video-stream`
 (20–30fps). Missing → the mirror still works via a ~6fps `simctl screenshot`

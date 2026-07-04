@@ -57,6 +57,13 @@ OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "idb available"; then ok "present: reports available"; else bad "present: expected 'idb available', got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "present: no spawn" || bad "present: unexpected spawn"
 
+# 1b. Hyphenated companion name (older brew formula) also counts as present.
+STATE="$TMP/state1b"
+STUBS="$(mkstubs "idb idb-companion brew")"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "idb available"; then ok "hyphen: idb-companion accepted"; else bad "hyphen: expected available, got: $OUT"; fi
+[ ! -f "$STATE/spawn.log" ] && ok "hyphen: no spawn" || bad "hyphen: unexpected spawn"
+
 # 2. Non-macOS -> silent success, no spawn.
 STATE="$TMP/state2"
 STUBS="$(mkstubs "brew")"

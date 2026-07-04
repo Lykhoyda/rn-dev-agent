@@ -36,11 +36,18 @@ BACKOFF_SECS=86400
 OS="${RN_AGENT_IDB_UNAME:-$(uname -s)}"
 [ "$OS" = "Darwin" ] || exit 0
 
+# Homebrew has shipped the companion under both spellings across versions;
+# ensure-idb-companion.sh accepts both, so this script must too — otherwise
+# hyphen-name installs are reported missing and the worker respawns forever.
+has_companion() {
+  command -v idb_companion >/dev/null 2>&1 || command -v idb-companion >/dev/null 2>&1
+}
+
 # --install-worker: the detached background job (never reached at SessionStart).
 if [ "${1:-}" = "--install-worker" ]; then
   mkdir -p "$STATE_DIR"
   status=ok
-  if ! command -v idb_companion >/dev/null 2>&1; then
+  if ! has_companion; then
     brew install idb-companion || status=failed
   fi
   if ! command -v idb >/dev/null 2>&1; then
@@ -60,7 +67,7 @@ if [ "${1:-}" = "--install-worker" ]; then
 fi
 
 # Foreground path — bounded: checks + at most one detached spawn.
-if command -v idb >/dev/null 2>&1 && command -v idb_companion >/dev/null 2>&1; then
+if command -v idb >/dev/null 2>&1 && has_companion; then
   echo "idb available: screen mirroring uses the fast path (idb video-stream)"
   exit 0
 fi
