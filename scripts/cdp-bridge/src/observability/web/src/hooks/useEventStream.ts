@@ -3,6 +3,8 @@ import type { AgentEvent, Conn, E2eProgress, MirrorState } from '../types';
 
 const MAX_EVENTS = 500;
 
+const MIRROR_STATUSES = ['starting', 'streaming', 'error', 'idle'] as const;
+
 export interface EventStream {
   events: AgentEvent[];
   conn: Conn;
@@ -65,7 +67,7 @@ export function useEventStream(): EventStream {
       }
       if (type === 'mirror') {
         const p = parsed as { status?: MirrorState['status'] } & Partial<MirrorState>;
-        if (p.status) {
+        if (p.status && (MIRROR_STATUSES as readonly string[]).includes(p.status)) {
           setMirror({
             status: p.status,
             pipeline: p.pipeline,

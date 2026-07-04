@@ -42,6 +42,16 @@ export function DevicePane({
         : null;
 
   const onMirrorError = (): void => {
+    // mirror === null means no {type:'mirror'} SSE status has ever arrived —
+    // the endpoint is almost certainly disabled/absent (404) or the backend
+    // predates mirror support, and nothing will ever push a status to re-arm
+    // the retry budget. Retrying a permanent 404 only delays the fallback
+    // screenshot, so skip straight to the fallback instead of burning the
+    // retry timers.
+    if (mirror === null) {
+      setAttempts(MAX_MIRROR_RETRIES);
+      return;
+    }
     setAttempts((a) => a + 1);
     if (attempts + 1 < MAX_MIRROR_RETRIES) {
       setTimeout(() => setNonce((n) => n + 1), 2000);
