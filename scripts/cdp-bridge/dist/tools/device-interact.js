@@ -331,6 +331,13 @@ export function findInputForPressable(nodes, pressableRef) {
 function settleOpts(args) {
     return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
 }
+// Story 05 (#386): thread caller-supplied settle and retryIfNoChange into runNative opts.
+function interactOpts(args) {
+    return {
+        ...settleOpts(args),
+        ...(args.retryIfNoChange !== undefined ? { retryIfNoChange: args.retryIfNoChange } : {}),
+    };
+}
 export function createDevicePressHandler() {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
@@ -341,7 +348,7 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = surfaceKeyboardGuard(await runNative(cliArgs, settleOpts(args)));
+        const result = surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }
@@ -353,13 +360,13 @@ export function createDeviceLongPressHandler() {
         if (args.ref) {
             const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
             const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
-            return surfaceKeyboardGuard(await runNative(cliArgs));
+            return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
         }
         if (args.x != null && args.y != null) {
             const cliArgs = ['longpress', String(args.x), String(args.y)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
-            return surfaceKeyboardGuard(await runNative(cliArgs));
+            return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
         }
         return failResult('Provide either ref or x+y coordinates');
     });

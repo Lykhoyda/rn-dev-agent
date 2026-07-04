@@ -1154,7 +1154,7 @@ trackedTool(
 
 trackedTool(
   'device_press',
-  'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session.',
+  'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).',
   {
     ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
@@ -1189,6 +1189,12 @@ trackedTool(
       .optional()
       .describe(
         'Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.',
+      ),
+    retryIfNoChange: z
+      .boolean()
+      .optional()
+      .describe(
+        'Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
       ),
   },
   createDevicePressHandler(),
@@ -1296,6 +1302,12 @@ trackedTool(
       .max(10000)
       .optional()
       .describe('Hold duration in ms (default 1000)'),
+    retryIfNoChange: z
+      .boolean()
+      .optional()
+      .describe(
+        'Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
+      ),
   },
   createDeviceLongPressHandler(),
 );

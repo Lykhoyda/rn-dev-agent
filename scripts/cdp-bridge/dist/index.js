@@ -804,7 +804,7 @@ trackedTool('device_find', 'Find a UI element by visible text and optionally int
         .optional()
         .describe('Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.'),
 }, createDeviceFindHandler());
-trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session.', {
+trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).', {
     ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
     count: z
@@ -835,6 +835,10 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. 
         .max(30000)
         .optional()
         .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
+    retryIfNoChange: z
+        .boolean()
+        .optional()
+        .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDevicePressHandler());
 trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
@@ -905,6 +909,10 @@ trackedTool('device_longpress', 'Long press on an element or coordinates. Use fo
         .max(10000)
         .optional()
         .describe('Hold duration in ms (default 1000)'),
+    retryIfNoChange: z
+        .boolean()
+        .optional()
+        .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDeviceLongPressHandler());
 trackedTool('device_scroll', 'Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.', {
     direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
