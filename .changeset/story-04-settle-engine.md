@@ -1,4 +1,5 @@
 ---
+'rn-dev-agent-cdp': minor
 'rn-dev-agent-plugin': minor
 ---
 
