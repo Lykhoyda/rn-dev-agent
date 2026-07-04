@@ -92,7 +92,8 @@ export interface RunAndroidArgs {
     | 'fill'
     | 'dismissKeyboard'
     | 'screenshot'
-    | 'back';
+    | 'back'
+    | 'isWindowUpdating';
   bundleId?: string;
   deviceId?: string;
   x?: number;
@@ -104,6 +105,8 @@ export interface RunAndroidArgs {
   text?: string;
   exact?: boolean;
   durationMs?: number;
+  /** Story 04 (#385): window-gate probe timeout for isWindowUpdating (Kotlin clamps to 0..2000ms). */
+  timeoutMs?: number;
   scale?: number;
   interactiveOnly?: boolean;
   outPath?: string;
@@ -461,7 +464,21 @@ export interface AndroidHealthInfo {
   ok?: boolean;
   protocolVersion?: number;
   runnerVersion?: string;
+  capabilities?: string[];
   commands?: string[];
+}
+
+// Story 04 (#385): capabilities from the last successful /health probe. Warm
+// before any mutating verb — startAndroidRunner probes /health on the reuse
+// and readiness paths. Consumed by the settle engine.
+let lastKnownCapabilities: string[] = [];
+
+export function getAndroidRunnerCapabilities(): string[] {
+  return lastKnownCapabilities;
+}
+
+export function _resetCapabilitiesForTest(): void {
+  lastKnownCapabilities = [];
 }
 
 export async function probeAndroidRunnerHealthInfo(port: number): Promise<AndroidHealthInfo> {
@@ -476,8 +493,20 @@ export async function probeAndroidRunnerHealthInfo(port: number): Promise<Androi
       ok?: boolean;
       protocolVersion?: number;
       runnerVersion?: string;
+      capabilities?: unknown;
       commands?: unknown;
     };
+    const capabilities = Array.isArray(body.capabilities)
+      ? body.capabilities.filter((c): c is string => typeof c === 'string')
+      : undefined;
+    // Cache scope: a healthy reply refreshes; an unhealthy reply only clears
+    // when it came from the LIVE runner's port — probing a stale/foreign port
+    // must not erase capabilities learned from the live runner.
+    if (body.ok === true) {
+      lastKnownCapabilities = capabilities ?? [];
+    } else if (runnerState?.hostPort === port) {
+      lastKnownCapabilities = [];
+    }
     return {
       reachable: true,
       ok: body.ok === true,
@@ -485,11 +514,13 @@ export async function probeAndroidRunnerHealthInfo(port: number): Promise<Androi
         ? { protocolVersion: body.protocolVersion }
         : {}),
       ...(typeof body.runnerVersion === 'string' ? { runnerVersion: body.runnerVersion } : {}),
+      ...(capabilities !== undefined ? { capabilities } : {}),
       ...(Array.isArray(body.commands)
         ? { commands: body.commands.filter((c): c is string => typeof c === 'string') }
         : {}),
     };
   } catch {
+    if (runnerState?.hostPort === port) lastKnownCapabilities = [];
     return { reachable: false };
   } finally {
     clearTimeout(timer);
@@ -850,6 +881,53 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   return parsed;
 }
 
+export function getAndroidRunnerHostPort(): number | null {
+  return runnerState?.hostPort ?? null;
+}
+
+// Story 04 (#385): thin settle probes. They deliberately skip startAndroidRunner's
+// ensure path (runAndroid runs it on EVERY dispatch — a 10-poll snapshot-eq tier
+// must not pay 10 ensure round-trips) and pin the forwarded host port captured
+// right after the mutating dispatch. If the live runner state has since changed
+// (device switch, restart), the probe degrades to null instead of posting to the
+// wrong port — the endpoint assumption is CHECKED, not hidden.
+export async function androidIsWindowUpdatingProbe(
+  timeoutMs: number,
+  bundleId: string | undefined,
+  pinnedHostPort: number | undefined,
+): Promise<boolean | null> {
+  if (pinnedHostPort !== undefined && runnerState?.hostPort !== pinnedHostPort) return null;
+  try {
+    const body: Record<string, unknown> = { command: 'isWindowUpdating', timeoutMs };
+    if (bundleId) body.appBundleId = bundleId;
+    const resp = await postCommand(body);
+    const updating = (resp.data as { updating?: unknown } | undefined)?.updating;
+    return resp.ok && typeof updating === 'boolean' ? updating : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function androidSnapshotNodesViaProbe(
+  bundleId: string | undefined,
+  pinnedHostPort: number | undefined,
+): Promise<FlatNode[] | null> {
+  if (pinnedHostPort !== undefined && runnerState?.hostPort !== pinnedHostPort) return null;
+  try {
+    const body: Record<string, unknown> = { command: 'snapshot', interactiveOnly: true };
+    if (bundleId) body.appBundleId = bundleId;
+    const resp = await postCommand(body);
+    if (!resp.ok || !resp.data || typeof resp.data !== 'object') return null;
+    const data = resp.data as { nodes?: RunnerSnapshotNode[] };
+    if (!Array.isArray(data.nodes)) return null;
+    const flat = mapRunnerNodesToFlat(data.nodes);
+    updateRefMapFromFlat(flat);
+    return flat;
+  } catch {
+    return null;
+  }
+}
+
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   const out: FlatNode[] = [];
   let synthCounter = 0;
@@ -889,6 +967,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.text !== undefined) body.text = args.text;
   if (args.exact !== undefined) body.exact = args.exact;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
+  if (args.timeoutMs !== undefined) body.timeoutMs = args.timeoutMs;
   if (args.scale !== undefined) body.scale = args.scale;
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
 

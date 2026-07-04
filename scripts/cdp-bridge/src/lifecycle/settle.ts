@@ -1,3 +1,13 @@
+import type { ToolResult } from '../utils.js';
+import type { FlatNode } from '../fast-runner-ref-map.js';
+import { hashSnapshotNodes } from './settle-hash.js';
+import { runIOS } from '../runners/rn-fast-runner-client.js';
+import {
+  androidIsWindowUpdatingProbe,
+  androidSnapshotNodesViaProbe,
+  getAndroidRunnerHostPort,
+} from '../runners/rn-android-runner-client.js';
+
 export type SettleMethod = 'window-gate' | 'screen-static' | 'snapshot-eq' | 'timeout';
 
 export interface SettleOutcome {
@@ -65,7 +75,8 @@ export async function waitForSettle(opts: WaitForSettleOpts): Promise<SettleOutc
       const isStatic = await safeProbe(() => probes.isScreenStatic!());
       if (isStatic === true) return { settled: true, method: 'screen-static', ms: elapsed() };
       if (isStatic === null) break; // probe infra failed — don't burn the tier budget
-      await probes.sleep(SCREEN_STATIC_POLL_INTERVAL_MS);
+      const nap = Math.min(SCREEN_STATIC_POLL_INTERVAL_MS, tierDeadline - elapsed());
+      if (nap > 0) await probes.sleep(nap);
     }
   }
 
@@ -88,7 +99,8 @@ export async function waitForSettle(opts: WaitForSettleOpts): Promise<SettleOutc
       }
       prev = hash;
     }
-    await probes.sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    const nap = Math.min(SNAPSHOT_POLL_INTERVAL_MS, remaining());
+    if (nap > 0) await probes.sleep(nap);
   }
   return {
     settled: false,
@@ -104,4 +116,71 @@ async function safeProbe<T>(fn: () => Promise<T>): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+// --- Production probe builders ---
+//
+// Probes call runIOS / the Android thin probes directly, NEVER runNative — no
+// recursion into settle, no double snapshot-dirty marking. Because the snapshot
+// paths call updateRefMapFromFlat, every settle refreshes the ref-map for free
+// (the Story 05 hook). snapshotHash uses interactiveOnly:true — a deliberate,
+// documented deviation from Maestro's full-hierarchy compare (full-tree iOS
+// serialization costs ~1.5s/poll); revisit if live verification shows
+// false-settled transitions.
+
+function envelopeData(result: ToolResult): unknown {
+  try {
+    const parsed = JSON.parse(result.content[0].text) as { ok?: boolean; data?: unknown };
+    return parsed.ok === false ? null : parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export function buildIosProbes(bundleId?: string): SettleProbes {
+  return {
+    isScreenStatic: async () => {
+      try {
+        const data = envelopeData(
+          await runIOS({ command: 'isScreenStatic', ...(bundleId ? { bundleId } : {}) }),
+        );
+        const s = (data as { static?: unknown } | null)?.static;
+        return typeof s === 'boolean' ? s : null;
+      } catch {
+        return null;
+      }
+    },
+    snapshotHash: async () => {
+      try {
+        const data = envelopeData(
+          await runIOS({
+            command: 'snapshot',
+            interactiveOnly: true,
+            ...(bundleId ? { bundleId } : {}),
+          }),
+        );
+        const nodes = (data as { nodes?: FlatNode[] } | null)?.nodes;
+        return Array.isArray(nodes) ? hashSnapshotNodes(nodes) : null;
+      } catch {
+        return null;
+      }
+    },
+    sleep: realSleep,
+    now: () => Date.now(),
+  };
+}
+
+export function buildAndroidProbes(bundleId?: string): SettleProbes {
+  const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
+  return {
+    isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
+    snapshotHash: async () => {
+      const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
+      return nodes ? hashSnapshotNodes(nodes) : null;
+    },
+    sleep: realSleep,
+    now: () => Date.now(),
+  };
 }

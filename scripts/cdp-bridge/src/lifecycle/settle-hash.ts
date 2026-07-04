@@ -19,6 +19,8 @@ export function normalizeNodeForHash(node: FlatNode): string {
     q(node.rect.y),
     q(node.rect.width),
     q(node.rect.height),
+    node.enabled ?? null,
+    node.hittable ?? null,
   ]);
 }
 

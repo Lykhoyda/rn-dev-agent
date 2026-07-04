@@ -1,3 +1,6 @@
+import { hashSnapshotNodes } from './settle-hash.js';
+import { runIOS } from '../runners/rn-fast-runner-client.js';
+import { androidIsWindowUpdatingProbe, androidSnapshotNodesViaProbe, getAndroidRunnerHostPort, } from '../runners/rn-android-runner-client.js';
 export const SETTLE_DEFAULT_BUDGET_MS = 6000;
 // Maestro parity: SCREEN_SETTLE_TIMEOUT_MS=3000 (IOSDriver.kt:487-504); hierarchy
 // polling bounded 10×200ms (ScreenshotUtils.kt:38-74). Window-gate probe is 100ms
@@ -38,7 +41,9 @@ export async function waitForSettle(opts) {
                 return { settled: true, method: 'screen-static', ms: elapsed() };
             if (isStatic === null)
                 break; // probe infra failed — don't burn the tier budget
-            await probes.sleep(SCREEN_STATIC_POLL_INTERVAL_MS);
+            const nap = Math.min(SCREEN_STATIC_POLL_INTERVAL_MS, tierDeadline - elapsed());
+            if (nap > 0)
+                await probes.sleep(nap);
         }
     }
     let prev = null;
@@ -61,7 +66,9 @@ export async function waitForSettle(opts) {
             }
             prev = hash;
         }
-        await probes.sleep(SNAPSHOT_POLL_INTERVAL_MS);
+        const nap = Math.min(SNAPSHOT_POLL_INTERVAL_MS, remaining());
+        if (nap > 0)
+            await probes.sleep(nap);
     }
     return {
         settled: false,
@@ -77,4 +84,65 @@ async function safeProbe(fn) {
     catch {
         return null;
     }
+}
+// --- Production probe builders ---
+//
+// Probes call runIOS / the Android thin probes directly, NEVER runNative — no
+// recursion into settle, no double snapshot-dirty marking. Because the snapshot
+// paths call updateRefMapFromFlat, every settle refreshes the ref-map for free
+// (the Story 05 hook). snapshotHash uses interactiveOnly:true — a deliberate,
+// documented deviation from Maestro's full-hierarchy compare (full-tree iOS
+// serialization costs ~1.5s/poll); revisit if live verification shows
+// false-settled transitions.
+function envelopeData(result) {
+    try {
+        const parsed = JSON.parse(result.content[0].text);
+        return parsed.ok === false ? null : parsed.data;
+    }
+    catch {
+        return null;
+    }
+}
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export function buildIosProbes(bundleId) {
+    return {
+        isScreenStatic: async () => {
+            try {
+                const data = envelopeData(await runIOS({ command: 'isScreenStatic', ...(bundleId ? { bundleId } : {}) }));
+                const s = data?.static;
+                return typeof s === 'boolean' ? s : null;
+            }
+            catch {
+                return null;
+            }
+        },
+        snapshotHash: async () => {
+            try {
+                const data = envelopeData(await runIOS({
+                    command: 'snapshot',
+                    interactiveOnly: true,
+                    ...(bundleId ? { bundleId } : {}),
+                }));
+                const nodes = data?.nodes;
+                return Array.isArray(nodes) ? hashSnapshotNodes(nodes) : null;
+            }
+            catch {
+                return null;
+            }
+        },
+        sleep: realSleep,
+        now: () => Date.now(),
+    };
+}
+export function buildAndroidProbes(bundleId) {
+    const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
+    return {
+        isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
+        snapshotHash: async () => {
+            const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
+            return nodes ? hashSnapshotNodes(nodes) : null;
+        },
+        sleep: realSleep,
+        now: () => Date.now(),
+    };
 }
