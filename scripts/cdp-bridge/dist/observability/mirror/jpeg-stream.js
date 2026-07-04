@@ -15,8 +15,13 @@ export class JpegFrameExtractor {
         for (;;) {
             const soi = this.acc.indexOf(SOI);
             if (soi === -1) {
-                // No frame start in sight — nothing before SOI is ever useful.
-                this.acc = Buffer.alloc(0);
+                // No frame start in sight — nothing before SOI is useful EXCEPT a
+                // trailing 0xFF, which may be the first byte of an SOI split across
+                // chunk boundaries.
+                this.acc =
+                    this.acc.length > 0 && this.acc[this.acc.length - 1] === 0xff
+                        ? this.acc.subarray(this.acc.length - 1)
+                        : Buffer.alloc(0);
                 break;
             }
             if (soi > 0)

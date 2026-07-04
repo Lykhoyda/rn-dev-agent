@@ -37,6 +37,16 @@ test('reassembles a frame split across chunks, including EOI split at the bounda
   assert.deepEqual(frames[0], f);
 });
 
+test('reassembles a frame whose SOI is split across chunks', () => {
+  const x = new JpegFrameExtractor();
+  const f = jpeg(6, 32);
+  // Chunk 1 ends with the SOI's 0xFF; chunk 2 starts with its 0xD8.
+  assert.deepEqual(x.push(Buffer.concat([Buffer.from('noise'), f.subarray(0, 1)])), []);
+  const frames = x.push(f.subarray(1));
+  assert.equal(frames.length, 1);
+  assert.deepEqual(frames[0], f);
+});
+
 test('discards garbage before SOI (multipart headers, ffmpeg noise)', () => {
   const x = new JpegFrameExtractor();
   const f = jpeg(4);
