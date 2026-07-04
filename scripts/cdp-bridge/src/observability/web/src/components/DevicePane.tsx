@@ -23,15 +23,48 @@ export function DevicePane({
   const [attempts, setAttempts] = useState(0);
 
   // A fresh starting/streaming status is the server telling us the pipeline is
-  // (re)alive — re-arm the <img> retry budget.
+  // (re)alive — re-arm the <img> retry budget. A pushed 'error' status is
+  // authoritative even with zero client-side onError failures yet (e.g. the
+  // manager's resolveTarget failed on the very first attach) — route it
+  // through the same `attempts` budget so mirrorBroken has a single source of
+  // truth that the re-arm effects below can reset.
   useEffect(() => {
     if (mirror?.status === 'starting' || mirror?.status === 'streaming') {
       setAttempts(0);
       setNonce((n) => n + 1);
+    } else if (mirror?.status === 'error') {
+      setAttempts(MAX_MIRROR_RETRIES);
     }
   }, [mirror?.status]);
 
-  const mirrorBroken = mirror?.status === 'error' || attempts >= MAX_MIRROR_RETRIES;
+  const mirrorBroken = attempts >= MAX_MIRROR_RETRIES;
+
+  // A new live screenshot proves a device/CDP target now exists — if the tab
+  // opened before any session did, the first attach fails with no future
+  // status push to re-arm on (the manager only retries in response to a fresh
+  // attach), so a live frame arriving is the signal that retrying may now
+  // succeed.
+  useEffect(() => {
+    if (mirrorBroken && liveShotSeq != null) {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    }
+  }, [liveShotSeq]);
+
+  // Belt-and-suspenders: while broken, retry every 15s regardless of other
+  // signals. A failed attach is cheap (the manager's resolveTarget failure
+  // ends the request immediately — no process spawned), so slow polling costs
+  // nothing and guarantees recovery even if no live-screenshot event ever
+  // fires (e.g. the agent only takes fallback screenshots).
+  useEffect(() => {
+    if (!mirrorBroken) return;
+    const id = setInterval(() => {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    }, 15000);
+    return () => clearInterval(id);
+  }, [mirrorBroken]);
+
   const useMirror = !mirrorBroken;
 
   const fallbackSrc =
