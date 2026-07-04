@@ -11,6 +11,16 @@ function get(port, path) {
   });
 }
 
+function request(port, path, method) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method }, (res) =>
+      resolve({ res, req }),
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 test('GET /api/device/mirror attaches to the manager and streams headers', async () => {
   const attached = [];
   const fakeMirror = {
@@ -36,6 +46,30 @@ test('GET /api/device/mirror without a manager → 404', async () => {
   const { port } = await server.start(0);
   const { res, req } = await get(port, '/api/device/mirror');
   assert.equal(res.statusCode, 404);
+  req.destroy();
+  await server.stop();
+});
+
+test('POST /api/device/mirror → 405, manager never attached', async () => {
+  const attached = [];
+  const fakeMirror = { attach: (client) => attached.push(client), shutdown: () => {} };
+  const server = new ObservabilityServer(new Recorder(), undefined, fakeMirror);
+  const { port } = await server.start(0);
+  const { res, req } = await request(port, '/api/device/mirror', 'POST');
+  assert.equal(res.statusCode, 405);
+  assert.equal(attached.length, 0);
+  req.destroy();
+  await server.stop();
+});
+
+test('GET /api/device/mirrorXYZ → 404 (prefix match rejected)', async () => {
+  const attached = [];
+  const fakeMirror = { attach: (client) => attached.push(client), shutdown: () => {} };
+  const server = new ObservabilityServer(new Recorder(), undefined, fakeMirror);
+  const { port } = await server.start(0);
+  const { res, req } = await get(port, '/api/device/mirrorXYZ');
+  assert.equal(res.statusCode, 404);
+  assert.equal(attached.length, 0);
   req.destroy();
   await server.stop();
 });

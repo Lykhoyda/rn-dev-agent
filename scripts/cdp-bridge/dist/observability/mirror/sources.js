@@ -78,6 +78,9 @@ export class IosIdbSource {
             '0.7',
         ]);
         this.proc = proc;
+        // Undrained stderr can fill the 64KB pipe and block the child mid-write —
+        // resume() discards it.
+        proc.stderr?.resume();
         proc.stdout.on('data', (chunk) => {
             if (!this.active)
                 return;
@@ -130,7 +133,8 @@ export class IosSimctlLoopSource {
         this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
         this.idleDelayMs = opts.idleDelayMs ?? 25;
         this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
+        this.tmpPath =
+            opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
     }
     start(sink) {
         this.active = true;
@@ -246,6 +250,8 @@ export class AndroidScreenrecordSource {
         ]);
         this.adb = adb;
         this.ffmpeg = ffmpeg;
+        adb.stderr?.resume();
+        ffmpeg.stderr?.resume();
         if (ffmpeg.stdin) {
             // pipe() does not forward destination errors: if ffmpeg dies mid-write,
             // an unhandled EPIPE on its stdin would crash the bridge process. The

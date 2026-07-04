@@ -6,7 +6,7 @@ import { MirrorManager, MIRROR_BOUNDARY } from '../../dist/observability/mirror/
 const jpeg = (fill) =>
   Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(4, fill), Buffer.from([0xff, 0xd9])]);
 
-function fakeClient({ writeOk = true } = {}) {
+function fakeClient({ writeOk = true, closeOnEnd = false } = {}) {
   const em = new EventEmitter();
   const c = {
     chunks: [],
@@ -24,6 +24,9 @@ function fakeClient({ writeOk = true } = {}) {
     },
     end() {
       c.ended = true;
+      // Real sockets emit 'close' asynchronously after end() — opt in to
+      // reproduce that for teardown-race regression tests.
+      if (closeOnEnd) setImmediate(() => em.emit('close'));
     },
     on: (e, cb) => em.on(e, cb),
     emit: (e) => em.emit(e),
@@ -217,6 +220,49 @@ test('one client whose write throws does not break broadcast to others', async (
   assert.ok(Buffer.concat(good.chunks).includes(jpeg(1)), 'good client still served');
   src.frame(jpeg(2));
   assert.ok(Buffer.concat(good.chunks).includes(jpeg(2)));
+});
+
+test('socket close after error teardown does not flap the status back to idle', async () => {
+  // Regression: endAllClients() on error → real socket 'close' fires a tick
+  // later → close handler used to scheduleGrace() unconditionally → grace
+  // callback pushed 'idle' over the error, and the frontend re-attached in a
+  // perpetual retry loop.
+  const { mgr, statuses } = build({
+    resolution: { ok: false, reason: 'no booted simulator' },
+    graceMs: 20,
+  });
+  const c = fakeClient({ closeOnEnd: true });
+  mgr.attach(c);
+  await new Promise((r) => setTimeout(r, 60));
+  const errIdx = statuses.findIndex((s) => s.status === 'error');
+  assert.ok(errIdx >= 0, 'error status pushed');
+  assert.equal(
+    statuses.slice(errIdx + 1).find((s) => s.status === 'idle'),
+    undefined,
+    'no idle status after error',
+  );
+  assert.equal(mgr.isStreaming(), false);
+});
+
+test('grace timer pending when source errors → no idle status revives the error', async () => {
+  // Client leaves first (grace scheduled while streaming), then the source
+  // dies before the grace fires — the callback must not overwrite 'error'.
+  const { mgr, src, statuses } = build({ graceMs: 20 });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  src.frame(jpeg(1));
+  c.emit('close');
+  src.exit({ reason: 'capture died' });
+  await new Promise((r) => setTimeout(r, 60));
+  const errIdx = statuses.findIndex((s) => s.status === 'error');
+  assert.ok(errIdx >= 0, 'error status pushed');
+  assert.equal(
+    statuses.slice(errIdx + 1).find((s) => s.status === 'idle'),
+    undefined,
+    'grace callback must not push idle over an error state',
+  );
+  assert.equal(mgr.isStreaming(), false);
 });
 
 test('a client whose end() throws does not prevent ending the others', async () => {

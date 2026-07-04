@@ -15,6 +15,12 @@ export interface MirrorSource {
   readonly pipeline: 'idb' | 'simctl' | 'screenrecord';
   readonly nominalFps: number;
   start(sink: MirrorFrameSink): void;
+  /**
+   * Consumers must tolerate at most one trailing onFrame after stop() from
+   * IosSimctlLoopSource — a capture already in flight when stop() lands runs
+   * to completion and still delivers its frame. MirrorManager's cycle token
+   * filters that straggler out.
+   */
   stop(): void;
 }
 
@@ -126,6 +132,9 @@ export class IosIdbSource implements MirrorSource {
       '0.7',
     ]);
     this.proc = proc;
+    // Undrained stderr can fill the 64KB pipe and block the child mid-write —
+    // resume() discards it.
+    proc.stderr?.resume();
 
     proc.stdout.on('data', (chunk: Buffer) => {
       if (!this.active) return;
@@ -179,7 +188,8 @@ export class IosSimctlLoopSource implements MirrorSource {
     this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
     this.idleDelayMs = opts.idleDelayMs ?? 25;
     this.failurePauseMs = opts.failurePauseMs ?? 500;
-    this.tmpPath = opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
+    this.tmpPath =
+      opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
   }
 
   start(sink: MirrorFrameSink): void {
@@ -302,6 +312,8 @@ export class AndroidScreenrecordSource implements MirrorSource {
     ]);
     this.adb = adb;
     this.ffmpeg = ffmpeg;
+    adb.stderr?.resume();
+    ffmpeg.stderr?.resume();
 
     if (ffmpeg.stdin) {
       // pipe() does not forward destination errors: if ffmpeg dies mid-write,

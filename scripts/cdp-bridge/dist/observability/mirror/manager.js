@@ -38,7 +38,14 @@ export class MirrorManager {
         this.clients.add(entry);
         client.on('close', () => {
             this.clients.delete(entry);
-            if (this.clients.size === 0)
+            // A real socket's 'close' fires a tick after onSourceExit/resolution
+            // failure has already torn the pipeline down via endAllClients() and set
+            // state to 'error'. Scheduling a grace-stop from that straggler close
+            // would push a spurious 'idle' status later even though nothing is
+            // running — the frontend reads idle as "not broken", remounts <img>,
+            // re-attaches, fails again, and loops forever. Only grace-stop a
+            // pipeline that is actually still live (starting/streaming).
+            if (this.clients.size === 0 && this.state !== 'error')
                 this.scheduleGrace();
         });
         client.on('drain', () => {
@@ -83,6 +90,11 @@ export class MirrorManager {
             clearTimeout(this.graceTimer);
         this.graceTimer = setTimeout(() => {
             this.graceTimer = null;
+            // Error teardown (onSourceExit/resolution failure) may have landed
+            // between scheduling and firing — never overwrite 'error' with 'idle';
+            // the frontend treats idle as safe-to-reconnect and would retry forever.
+            if (this.state === 'error')
+                return;
             this.cycle += 1;
             this.source?.stop();
             this.source = null;
@@ -171,6 +183,7 @@ export class MirrorManager {
             if (myCycle !== this.cycle)
                 return;
             this.cycle += 1;
+            this.source?.stop();
             this.source = null;
             this.state = 'error';
             this.deps.pushStatus({

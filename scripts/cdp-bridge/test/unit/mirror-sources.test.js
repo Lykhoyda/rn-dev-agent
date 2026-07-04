@@ -262,6 +262,39 @@ test('AndroidScreenrecordSource: ffmpeg.stdin error (EPIPE) does not throw unhan
   assert.ok(true, 'no unhandled error thrown');
 });
 
+test('IosIdbSource: stderr is drained (flowing) so the child can never block on it', () => {
+  const spawned = [];
+  const src = new IosIdbSource('U', 20, {
+    spawnFn: (cmd, args) => {
+      const p = fakeProc();
+      spawned.push({ cmd, args, p });
+      return p;
+    },
+    restartDelayMs: 0,
+  });
+  const { sink } = sinkRecorder();
+  src.start(sink);
+  assert.equal(spawned[0].p.stderr.readableFlowing, true, 'idb stderr resumed');
+  src.stop();
+});
+
+test('AndroidScreenrecordSource: both adb and ffmpeg stderr are drained (flowing)', () => {
+  const spawned = [];
+  const src = new AndroidScreenrecordSource('emulator-5554', {
+    spawnFn: (cmd, args) => {
+      const p = fakeProc();
+      spawned.push({ cmd, args, p });
+      return p;
+    },
+    restartDelayMs: 0,
+  });
+  const { sink } = sinkRecorder();
+  src.start(sink);
+  assert.equal(spawned[0].p.stderr.readableFlowing, true, 'adb stderr resumed');
+  assert.equal(spawned[1].p.stderr.readableFlowing, true, 'ffmpeg stderr resumed');
+  src.stop();
+});
+
 test('SIMCTL_HINT names idb', () => {
   assert.match(SIMCTL_HINT, /idb/);
 });

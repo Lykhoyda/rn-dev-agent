@@ -78,8 +78,13 @@ export class ObservabilityServer {
             return this.screenshot(Number(shot[1]), res);
         if (/^\/api\/live-screenshot\/\d+$/.test(url))
             return this.liveScreenshot(res);
-        if (url.startsWith('/api/device/mirror'))
+        if (/^\/api\/device\/mirror(\?|$)/.test(url)) {
+            if (req.method?.toUpperCase() !== 'GET') {
+                this.json(res, 405, { error: 'method not allowed' });
+                return;
+            }
             return this.mirrorStream(res);
+        }
         if (url === '/api/e2e/run')
             return void this.e2eRun(req, res);
         if (url === '/api/e2e/runs')
