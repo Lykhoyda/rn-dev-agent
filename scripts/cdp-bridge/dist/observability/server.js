@@ -8,12 +8,14 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 export class ObservabilityServer {
     recorder;
     e2e;
+    mirror;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder, e2e) {
+    constructor(recorder, e2e, mirror) {
         this.recorder = recorder;
         this.e2e = e2e;
+        this.mirror = mirror;
     }
     async start(preferredPort) {
         if (this.server)
@@ -42,6 +44,7 @@ export class ObservabilityServer {
     async stop() {
         const s = this.server;
         this.server = null;
+        this.mirror?.shutdown();
         // Tell live SSE clients we're shutting down BEFORE yanking the sockets, so
         // the browser's EventSource closes instead of entering its auto-reconnect
         // loop (which would otherwise hammer the dead port, or silently reattach to
@@ -75,6 +78,8 @@ export class ObservabilityServer {
             return this.screenshot(Number(shot[1]), res);
         if (/^\/api\/live-screenshot\/\d+$/.test(url))
             return this.liveScreenshot(res);
+        if (url.startsWith('/api/device/mirror'))
+            return this.mirrorStream(res);
         if (url === '/api/e2e/run')
             return void this.e2eRun(req, res);
         if (url === '/api/e2e/runs')
@@ -172,6 +177,18 @@ export class ObservabilityServer {
         }
         res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
         res.end(shot.buf);
+    }
+    mirrorStream(res) {
+        if (!this.mirror) {
+            res.writeHead(404);
+            res.end();
+            return;
+        }
+        res.socket?.setTimeout(0);
+        res.on('error', () => {
+            /* client socket reset mid-stream — manager cleanup runs on 'close' */
+        });
+        this.mirror.attach(res);
     }
     index(res) {
         try {
