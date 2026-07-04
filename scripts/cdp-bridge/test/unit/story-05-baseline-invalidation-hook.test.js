@@ -22,11 +22,16 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
     'cdp_evaluate',
     'cdp_mmkv',
     'cdp_run_action',
+    // device_fill's JS-first path (attemptJsFill) returns before any runNative
+    // settle, so it never manages the baseline — the hook must invalidate after
+    // it. The native fill path already invalidates on its own, so this is a
+    // no-op there and correct on the JS path.
+    'device_fill',
   ]) {
     assert.equal(
       toolInvalidatesRetryBaseline(t),
       true,
-      `${t} mutates the screen outside runNative and must invalidate the retry baseline`,
+      `${t} mutates the screen outside a settle-managed runNative path and must invalidate the retry baseline`,
     );
   }
 });
@@ -35,7 +40,6 @@ test('toolInvalidatesRetryBaseline: FALSE for native device verbs that self-mana
   for (const t of [
     'device_press',
     'device_longpress',
-    'device_fill',
     'device_swipe',
     'device_scroll',
     'device_scrollintoview',

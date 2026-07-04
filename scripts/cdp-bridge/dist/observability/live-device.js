@@ -80,10 +80,16 @@ export function toolInvalidatesSnapshotCache(tool, args) {
 // re-snapshots) or invalidates it on a blind mutation. Invalidating it again
 // here AFTER those verbs return would erase a freshly-refreshed baseline and
 // defeat tap-sequence change detection — the story's whole point.
+//
+// device_fill is deliberately NOT here: its JS-first path (attemptJsFill)
+// returns before any runNative settle, so it never manages the baseline — the
+// hook must invalidate after it. The native fill path already invalidates the
+// baseline on its own (type is retry-ineligible → its settle exits
+// hierarchyChanged===undefined → invalidate), so the extra hook invalidation is
+// a no-op there. Excluding it would leave a stale baseline after a JS fill.
 export const BASELINE_SELF_MANAGED_TOOLS = new Set([
     'device_press',
     'device_longpress',
-    'device_fill',
     'device_swipe',
     'device_scroll',
     'device_scrollintoview',
