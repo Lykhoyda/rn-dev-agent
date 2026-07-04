@@ -124,13 +124,13 @@ export function DevicePane({
             <div>Nothing showing? Check the connection with cdp_status.</div>
           </div>
         )}
-        {(statusLine || mirror?.hint) && (
-          <div className="mirror-status">
-            {statusLine}
-            {mirror?.hint ? <span className="mirror-hint"> — {mirror.hint}</span> : null}
-          </div>
-        )}
       </div>
+      {(statusLine || mirror?.hint) && (
+        <div className="mirror-footer">
+          {statusLine}
+          {mirror?.hint ? <span className="mirror-hint"> — {mirror.hint}</span> : null}
+        </div>
+      )}
     </div>
   );
 }

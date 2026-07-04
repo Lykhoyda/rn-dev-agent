@@ -63,7 +63,6 @@ button { font: inherit; }
 .stat .v { font-weight: 700; font-size: 13px; }
 .stat .k { color: #565f89; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
 .stat .v.bad { color: #f7768e; }
-.view-toggle { display: flex; gap: 4px; }
 
 /* ── Panes ──────────────────────────────────────────────── */
 .panes { display: flex; flex: 1; min-height: 0; }
@@ -135,10 +134,14 @@ button { font: inherit; }
   background: #101018; border: 1px solid #2a2b3d; border-radius: 22px;
   padding: 10px; box-shadow: 0 8px 30px #00000066; max-width: 100%; max-height: 100%;
 }
-.device-frame img { display: block; max-width: 100%; max-height: calc(100vh - 180px); border-radius: 14px; }
+.device-frame img { display: block; max-width: 100%; max-height: calc(100vh - 160px); border-radius: 14px; }
 .route-chip {
   margin-left: auto; background: #1f2335; color: #9ece6a; border: 1px solid #2a2b3d;
   border-radius: 999px; padding: 1px 10px; font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0;
+}
+.mirror-footer {
+  flex: none; padding: 3px 12px; text-align: center; font-size: 11px; color: #565f89;
+  background: #1a1b26; border-top: 1px solid #2a2b3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ── Tabs / state pane ──────────────────────────────────── */
@@ -149,9 +152,9 @@ button { font: inherit; }
 }
 .tab.on { background: #283457; color: #c0caf5; border-color: #7aa2f7; }
 .state { flex: 1; overflow: auto; padding: 10px 12px; }
+.state-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
 .liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 8px; }
-.mirror-status { color: #565f89; font-size: 11px; margin-top: 6px; text-align: center; }
 .mirror-hint { color: #e0af68; }
 
 /* ── Empty states ───────────────────────────────────────── */
@@ -159,7 +162,7 @@ button { font: inherit; }
 .empty-guide { margin: auto; max-width: 320px; text-align: center; line-height: 1.6; }
 .empty-guide .empty-title { color: #a9b1d6; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
 
-/* ── Regression view ────────────────────────────────────── */
+/* ── E2E panel (run history + suite results) ───────────── */
 .reg-container { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 16px; gap: 16px; }
 .reg-panel, .actions-panel, .reg-history { background: #1a1b26; border: 1px solid #2a2b3d; border-radius: 8px; }
 .reg-panel { padding: 14px; }
