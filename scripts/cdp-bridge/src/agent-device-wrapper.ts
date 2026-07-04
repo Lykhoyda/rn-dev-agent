@@ -38,6 +38,7 @@ import {
   type FlatNode,
   type RefreshOutcome,
 } from './fast-runner-ref-map.js';
+import { recordUiChange } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import {
   getStateDir,
@@ -110,6 +111,7 @@ export function setActiveSession(info: SessionState): void {
 export function clearActiveSession(): void {
   activeSession = null;
   clearRefMap();
+  recordUiChange();
   try {
     unlinkSync(SESSION_FILE);
   } catch {

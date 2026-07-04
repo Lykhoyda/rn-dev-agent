@@ -6,6 +6,7 @@ import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetail
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { recordUiChange } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
@@ -68,6 +69,7 @@ export function setActiveSession(info) {
 export function clearActiveSession() {
     activeSession = null;
     clearRefMap();
+    recordUiChange();
     try {
         unlinkSync(SESSION_FILE);
     }
