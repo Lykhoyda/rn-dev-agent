@@ -108,7 +108,8 @@ test('IosSimctlLoopSource: sequential captures, one frame per capture, honors st
     execJpeg: async (cmd, args) => {
       calls++;
       assert.equal(cmd, 'xcrun');
-      assert.deepEqual(args, ['simctl', 'io', 'UDID-9', 'screenshot', '--type=jpeg', '-']);
+      assert.deepEqual(args.slice(0, 5), ['simctl', 'io', 'UDID-9', 'screenshot', '--type=jpeg']);
+      assert.match(args[5], /\.jpg$/);
       if (calls >= 3) src.stop();
       return jpeg(calls);
     },
@@ -118,6 +119,23 @@ test('IosSimctlLoopSource: sequential captures, one frame per capture, honors st
   src.start(sink);
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(frames.length, 3, 'no captures after stop()');
+});
+
+test('IosSimctlLoopSource: passes the injectable tmpPath as the capture target', async () => {
+  const seen = [];
+  const src = new IosSimctlLoopSource('U', {
+    tmpPath: () => '/tmp/fake-mirror.jpg',
+    execJpeg: async (_cmd, args) => {
+      seen.push(args[args.length - 1]);
+      src.stop();
+      return jpeg(1);
+    },
+    idleDelayMs: 0,
+  });
+  const { sink } = sinkRecorder();
+  src.start(sink);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(seen, ['/tmp/fake-mirror.jpg']);
 });
 
 test('IosSimctlLoopSource: 3 consecutive failures inside window → onExit', async () => {

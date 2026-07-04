@@ -1,5 +1,8 @@
 // scripts/cdp-bridge/src/observability/mirror/sources.ts
 import { spawn, execFile } from 'node:child_process';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { JpegFrameExtractor } from './jpeg-stream.js';
 export class RestartGate {
     limit;
@@ -120,12 +123,14 @@ export class IosSimctlLoopSource {
     gate;
     idleDelayMs;
     failurePauseMs;
+    tmpPath;
     constructor(udid, opts = {}) {
         this.udid = udid;
         this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
         this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
         this.idleDelayMs = opts.idleDelayMs ?? 25;
         this.failurePauseMs = opts.failurePauseMs ?? 500;
+        this.tmpPath = opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
     }
     start(sink) {
         this.active = true;
@@ -140,7 +145,7 @@ export class IosSimctlLoopSource {
                     this.udid,
                     'screenshot',
                     '--type=jpeg',
-                    '-',
+                    this.tmpPath(),
                 ]);
                 // A capture already in flight runs to completion and delivers its
                 // frame even if stop() lands mid-capture; only the *next* iteration
@@ -165,13 +170,30 @@ export class IosSimctlLoopSource {
         this.active = false;
     }
 }
+// simctl's `screenshot --type=jpeg -` is documented as writing to stdout when
+// the target is `-`, but on current Xcode/simctl builds this is broken: it
+// instead writes a literal file named `-` in the process cwd (and logs
+// "Wrote screenshot to: <cwd>/-" on stderr); passing `/dev/stdout` errors
+// outright. So the default capture path goes through a real tmp file — the
+// last element of `args` is, by construction, that output path — and reads
+// it back once simctl exits.
 function defaultExecJpeg(cmd, args) {
+    const outPath = args[args.length - 1];
     return new Promise((resolve, reject) => {
-        execFile(cmd, args, { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }, (err, stdout) => {
-            if (err)
+        execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }, (err) => {
+            if (err) {
                 reject(err);
-            else
-                resolve(stdout);
+                return;
+            }
+            readFile(outPath)
+                .then((buf) => {
+                void unlink(outPath).catch(() => { });
+                resolve(buf);
+            })
+                .catch((readErr) => {
+                void unlink(outPath).catch(() => { });
+                reject(readErr);
+            });
         });
     });
 }

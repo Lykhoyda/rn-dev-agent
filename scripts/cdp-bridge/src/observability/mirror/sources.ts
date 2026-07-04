@@ -1,5 +1,8 @@
 // scripts/cdp-bridge/src/observability/mirror/sources.ts
 import { spawn, execFile } from 'node:child_process';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { JpegFrameExtractor } from './jpeg-stream.js';
 
 export interface MirrorFrameSink {
@@ -41,6 +44,7 @@ export interface LoopOpts {
   now?: () => number;
   idleDelayMs?: number;
   failurePauseMs?: number;
+  tmpPath?: () => string;
 }
 
 export type SpawnFn = (cmd: string, args: string[]) => SpawnedLike;
@@ -165,6 +169,7 @@ export class IosSimctlLoopSource implements MirrorSource {
   private readonly gate: RestartGate;
   private readonly idleDelayMs: number;
   private readonly failurePauseMs: number;
+  private readonly tmpPath: () => string;
 
   constructor(
     private readonly udid: string,
@@ -174,6 +179,7 @@ export class IosSimctlLoopSource implements MirrorSource {
     this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
     this.idleDelayMs = opts.idleDelayMs ?? 25;
     this.failurePauseMs = opts.failurePauseMs ?? 500;
+    this.tmpPath = opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
   }
 
   start(sink: MirrorFrameSink): void {
@@ -190,7 +196,7 @@ export class IosSimctlLoopSource implements MirrorSource {
           this.udid,
           'screenshot',
           '--type=jpeg',
-          '-',
+          this.tmpPath(),
         ]);
         // A capture already in flight runs to completion and delivers its
         // frame even if stop() lands mid-capture; only the *next* iteration
@@ -214,17 +220,31 @@ export class IosSimctlLoopSource implements MirrorSource {
   }
 }
 
+// simctl's `screenshot --type=jpeg -` is documented as writing to stdout when
+// the target is `-`, but on current Xcode/simctl builds this is broken: it
+// instead writes a literal file named `-` in the process cwd (and logs
+// "Wrote screenshot to: <cwd>/-" on stderr); passing `/dev/stdout` errors
+// outright. So the default capture path goes through a real tmp file — the
+// last element of `args` is, by construction, that output path — and reads
+// it back once simctl exits.
 function defaultExecJpeg(cmd: string, args: string[]): Promise<Buffer> {
+  const outPath = args[args.length - 1];
   return new Promise((resolve, reject) => {
-    execFile(
-      cmd,
-      args,
-      { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024, timeout: 10_000 },
-      (err, stdout) => {
-        if (err) reject(err);
-        else resolve(stdout as unknown as Buffer);
-      },
-    );
+    execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      readFile(outPath)
+        .then((buf) => {
+          void unlink(outPath).catch(() => {});
+          resolve(buf);
+        })
+        .catch((readErr) => {
+          void unlink(outPath).catch(() => {});
+          reject(readErr);
+        });
+    });
   });
 }
 
