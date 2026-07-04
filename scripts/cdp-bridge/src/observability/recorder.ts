@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { RingBuffer } from '../ring-buffer.js';
 import { mapObservation, unwrapResult } from './events.js';
 import type { AgentEvent, ToolObservation } from './events.js';
@@ -10,12 +11,17 @@ export interface ScreenshotBytes {
   contentType: string;
 }
 
+// GH #422: absolute paths only — a runner-internal relative path (e.g. iOS
+// "tmp/…") would resolve against the bridge cwd, silently blanking the panel
+// or reading an unrelated file that shares the name.
 function screenshotPath(result: unknown): string | null {
   const data = (unwrapResult(result)?.data ?? (result as { data?: unknown })?.data) as
     | { message?: string; path?: string }
     | undefined;
   const p = data?.path ?? data?.message;
-  return typeof p === 'string' && (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png'))
+  return typeof p === 'string' &&
+    isAbsolute(p) &&
+    (p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png'))
     ? p
     : null;
 }

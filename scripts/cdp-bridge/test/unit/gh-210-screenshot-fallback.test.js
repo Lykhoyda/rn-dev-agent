@@ -26,8 +26,8 @@ test('#210 screenshot-route: flow active + platform → simctl (skip runner)', (
   assert.equal(chooseScreenshotPath({ flowActive: true, platform: 'ios' }), 'simctl');
 });
 
-test('#210 screenshot-route: no flow → runner first', () => {
-  assert.equal(chooseScreenshotPath({ flowActive: false, platform: 'ios' }), 'runner');
+test('#210 screenshot-route: no flow, Android → runner first (iOS moved to simctl in GH #422)', () => {
+  assert.equal(chooseScreenshotPath({ flowActive: false, platform: 'android' }), 'runner');
 });
 
 test('#210 screenshot-route: no flow + no platform → runner (agent-device resolves default)', () => {
@@ -39,8 +39,14 @@ test('#210 screenshot-route: flow active + NO platform → fail (must NOT touch 
 });
 
 // ── integration: the wiring the pure helpers can't catch (A7) ──
-test('#210 screenshot-int: runner THROWS (down) + raw succeeds → simctl fallback, no crash', async () => {
+// GH #422: iOS goes DIRECT to simctl (runner never consulted — its screenshot
+// verb can't honor the caller's path), so the iOS runner-throw variant of A2 is
+// intentionally unreachable now. The A2 catch+fallback logic itself stays
+// covered by the android runner-throw test below (same code path).
+test('#210 screenshot-int: iOS routes direct to simctl, runner never called (GH #422)', async () => {
+  let runnerCalls = 0;
   _setRunAgentDeviceForTest(async () => {
+    runnerCalls++;
     throw new Error('rn-fast-runner not started');
   });
   setRawForTest({ iosResolver: async () => 'UDID-TEST', iosCapturer: async () => true });
@@ -50,8 +56,9 @@ test('#210 screenshot-int: runner THROWS (down) + raw succeeds → simctl fallba
       platformExplicit: false,
       maxWidth: 0,
     });
-    assert.ok(!res.isError, 'a thrown runner error must be caught and routed to simctl');
+    assert.ok(!res.isError, 'iOS capture must succeed via simctl without touching the runner');
     assert.equal(parse(res).data.via, 'simctl');
+    assert.equal(runnerCalls, 0, 'iOS must not consult the runner for pixels (GH #422)');
   } finally {
     _resetRunAgentDeviceForTest();
     resetRawForTest();
@@ -66,6 +73,7 @@ test('#210 screenshot-int: flow active → runner fn is NEVER called (raw-only)'
   });
   setRawForTest({ iosResolver: async () => 'UDID-TEST', iosCapturer: async () => true });
   const lease = arbiter.tryAcquire('flow', 'maestro_run');
+  assert.equal(lease.ok, true, 'test setup: flow lease must be acquired');
   try {
     const res = await captureAndResizeScreenshot({
       platform: 'ios',
@@ -89,6 +97,7 @@ test('#210 screenshot-int: flow active + raw fails → SCREENSHOT_FAILED, runner
   });
   setRawForTest({ iosResolver: async () => 'UDID-TEST', iosCapturer: async () => false });
   const lease = arbiter.tryAcquire('flow', 'maestro_run');
+  assert.equal(lease.ok, true, 'test setup: flow lease must be acquired');
   try {
     const res = await captureAndResizeScreenshot({
       platform: 'ios',
@@ -110,7 +119,9 @@ test('#210 screenshot-int: flow active + raw fails → SCREENSHOT_FAILED, runner
 });
 
 test('#210 screenshot-int: android raw fallback reports via:adb (accurate backend name)', async () => {
+  let runnerCalls = 0;
   _setRunAgentDeviceForTest(async () => {
+    runnerCalls++;
     throw new Error('runner down');
   });
   setRawForTest({
@@ -125,6 +136,7 @@ test('#210 screenshot-int: android raw fallback reports via:adb (accurate backen
     });
     assert.ok(!res.isError);
     assert.equal(parse(res).data.via, 'adb');
+    assert.equal(runnerCalls, 1, 'the A2 throw path must actually exercise the runner first');
   } finally {
     _resetRunAgentDeviceForTest();
     resetRawForTest();

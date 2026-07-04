@@ -306,9 +306,10 @@ export interface ScreenshotArgs {
   platform?: 'ios' | 'android' | null;
   /**
    * GH #136 PR-A internal signal: did the caller pass `platform` explicitly,
-   * or was it inferred from the connected CDP target? Only explicit calls
-   * take the raw `xcrun simctl` / `adb` path; inferred ones use the existing
-   * `runAgentDevice` flow so behavior is unchanged for single-device users.
+   * or was it inferred from the connected CDP target? Explicit calls always
+   * take the raw `xcrun simctl` / `adb` path. Since GH #422 iOS takes the raw
+   * path even when inferred (the runner verb cannot honor the caller's path);
+   * inferred Android still uses the `runAgentDevice` flow.
    */
   platformExplicit?: boolean;
   maxWidth?: number;
@@ -320,13 +321,18 @@ export interface ScreenshotArgs {
  * - flow active + platform known → 'simctl' (OS-level, flow-safe).
  * - flow active + platform unknown → 'fail' (NEVER the runner — would hit XCUITest
  *   unleased and crash the flow, A3).
- * - no flow → 'runner' (rn-fast-runner primary; its own simctl fallback fires on error).
+ * - no flow, iOS → 'simctl' (GH #422: the rn-fast-runner screenshot verb writes
+ *   inside its own sandbox and returns a relative tmp/ path — the caller's `path`
+ *   cannot reach it over the wire, so simctl is the only iOS backend that can
+ *   honor it; "pixels → simctl" per D1249).
+ * - no flow, otherwise → 'runner' (Android's runner honors outPath host-side).
  */
 export function chooseScreenshotPath(input: {
   flowActive: boolean;
   platform: 'ios' | 'android' | null;
 }): 'simctl' | 'runner' | 'fail' {
   if (input.flowActive) return input.platform ? 'simctl' : 'fail';
+  if (input.platform === 'ios') return 'simctl';
   return 'runner';
 }
 
@@ -378,7 +384,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
     const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
     const hint =
       reason === 'no-device'
-        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} detected by ${cli}. Boot one and retry; if your emulator is in 'offline' or 'unauthorized' state, restart it.`
+        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target; if your emulator is 'offline'/'unauthorized', restart it.`
         : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
     return failResult(
       `device_screenshot platform=${platform} failed: ${hint}`,
@@ -408,19 +414,26 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
 
   // simctl path: a flow owns the device (raw-ONLY — never fall through to the runner, A3),
   // OR the existing GH#136 explicit-platform disambiguation (no flow). Both hard-fail on error.
+  // GH #422: bind raw captures to the open session's device when platforms
+  // match — raw is now the primary iOS path and must not pick "first booted"
+  // over the session device on multi-sim setups.
+  const session = getActiveSession();
+  const sessionDeviceId =
+    session && session.platform === args.platform ? session.deviceId : undefined;
   if (
     (route === 'simctl' || args.platformExplicit) &&
     (args.platform === 'ios' || args.platform === 'android')
   ) {
-    const raw = await tryRawScreenshot(args.platform, requestedPath);
+    const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
     if (raw.ok) result = rawResultOk(raw.path, args.platform);
     else return rawResultFail(args.platform, raw.reason);
   }
 
   if (!result) {
     // route === 'runner' (NO flow — runAgentDevice can never run while a flow is active here).
-    // A2: runIOS()/postCommand THROW when the runner is down, so the bare isError check is dead
-    // code for that path; catch it, then fall back to simctl so iOS never hard-fails.
+    // Since GH #422 a known-iOS platform never reaches this branch (routed to simctl above);
+    // it serves Android and the platform-unresolved case. A2: the runner client THROWS when
+    // down, so catch it, then fall back to raw capture when the platform is known.
     try {
       result = await runAgentDeviceFn(buildScreenshotArgs(argsWithPath), {
         platform: args.platform ?? null,
@@ -429,7 +442,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
       result = failResult(err instanceof Error ? err.message : String(err), 'SCREENSHOT_FAILED');
     }
     if (result.isError && (args.platform === 'ios' || args.platform === 'android')) {
-      const raw = await tryRawScreenshot(args.platform, requestedPath);
+      const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
       if (raw.ok) result = rawResultOk(raw.path, args.platform);
     }
   }

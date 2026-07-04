@@ -1,5 +1,65 @@
 # rn-dev-agent-cdp
 
+## 0.54.1
+
+### Patch Changes
+
+- c15bc52: iOS `device_screenshot` honors the caller's `path` (#422): iOS pixels now route
+  to `xcrun simctl io screenshot` even with an rn-fast-runner session open — the
+  runner's screenshot verb writes inside its own sandbox and returns a relative
+  `tmp/…` path the host can never serve, which blanked the observe UI panel and
+  broke `sips` resizing (`meta.resize.reason: no-dimensions`). simctl was already
+  the flow-active and runner-down backend; it is now the sole iOS pixel path
+  ("pixels → simctl", D1249). Android is unchanged (its runner honors `outPath`
+  host-side). Defense-in-depth: the observe recorder rejects relative screenshot
+  paths instead of resolving them against the bridge cwd.
+- c15bc52: `cdp_run_action` no longer dead-ends in an opaque UNKNOWN when WDA dies at
+  launch (#423). Root cause chain from the field failure: the #317 CDP/JS replay
+  fallback covers this exact case, but its single tree probe ran while CDP was
+  mid-reconnect (the failed flow had just relaunched the app), was silently
+  swallowed, and the fallback never engaged. The probe now retries (bounded,
+  default 3×1.5s) until the probe testID is actually present — tolerating both a
+  reconnecting CDP and a still-mounting app — and every skip is surfaced as
+  `meta.cdpJsFallback: { attempted: false, reason }`
+  (`no-replay-deps | no-probe-testid | cdp-unreachable | testid-not-in-tree`).
+  A `cdp-unreachable` skip appends actionable guidance (check `cdp_status`,
+  reconnect, stop foreign XCUITest automation) instead of a bare
+  "failure not auto-repairable". Also (#422 hardening): the simctl UDID parsers
+  now only consider iOS runtimes (a booted paired watchOS/tvOS simulator can
+  neither win the screenshot UDID pick nor make the single iPhone look ambiguous
+  to `resolveIosUdid`), and raw captures bind to the open device session's UDID
+  when platforms match instead of picking the first booted device.
+- c15bc52: iOS cold start persists a reusable `.xctestrun` (#424): `startFastRunner()` now
+  runs `xcodebuild build-for-testing` first when no test product exists and then
+  launches via the same `test-without-building` path as every warm start, instead
+  of a single bare `xcodebuild test` — which never writes a `.xctestrun`, so
+  self-built runners were permanently "not prebuilt" and every runner death cost
+  another multi-minute cold build. The build phase keeps the 360s cold timeout;
+  the launch phase uses the standard 30s ready window. The #418 stale-artifact
+  rebuild tier funnels through the same path, so it also leaves a reusable
+  artifact now.
+
+## 0.54.0
+
+### Minor Changes
+
+- 8a21532: Command-surface gate (#418, B235): both native runners enumerate their supported
+  commands in `/health.commands` (iOS derives it from `CommandType.allCases`, Android
+  from a sync-tested `SUPPORTED_COMMANDS` list) and the liveness gate classifies a
+  runner missing any bridge-required verb as stale (`missing-commands`). Remediation
+  is tiered: `device_snapshot action=open` auto-invalidates the stale artifact and
+  rebuilds — iOS deletes DerivedData and cold-builds (once per plugin version, behind a
+  checkout-scoped build lock), Android deletes the runner APKs so self-install
+  Gradle-rebuilds; mid-flow device tools refuse fast with `RUNNER_COMMANDS_STALE`
+  instead of silently building. An unknown verb reaching the iOS runner now returns a
+  typed `UNSUPPORTED_COMMAND` error instead of a raw Swift decode failure. Root cause
+  of B235 fixed: the explicit iOS keyboard-dismiss path posted `dismissKeyboard`,
+  which no Swift artifact ever accepted — the wire verb is now `keyboardDismiss`.
+  `cdp_status` surfaces `deviceSession.runnerProtocol.missingCommands`. Hardening
+  from per-edit review: the iOS runner validates client-supplied Content-Length
+  (400 on invalid instead of crash/hang) and Android foregrounds alias verbs
+  (press/fill/scroll) before dispatch.
+
 ## 0.53.0
 
 ### Minor Changes
