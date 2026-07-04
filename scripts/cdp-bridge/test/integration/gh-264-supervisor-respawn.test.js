@@ -66,7 +66,10 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
 });
 
 test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervisor (plan-review BLOCKER)', async () => {
-  const s = startSupervisor({ workerPath: '/nonexistent/worker.js', env: { RN_BRIDGE_MAX_RESPAWNS: '2' } });
+  const s = startSupervisor({
+    workerPath: '/nonexistent/worker.js',
+    env: { RN_BRIDGE_MAX_RESPAWNS: '2' },
+  });
   try {
     await new Promise((r) => setTimeout(r, 1500)); // spawn errors burn the budget
     assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');

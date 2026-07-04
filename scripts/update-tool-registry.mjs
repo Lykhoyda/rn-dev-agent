@@ -22,12 +22,14 @@ try {
     clientInfo: { name: 'update-tool-registry', version: '0.0.0' },
   });
   const init = JSON.parse(await s.nextLine());
-  if (init.id !== initId || !init.result) throw new Error(`initialize failed: ${JSON.stringify(init)}`);
+  if (init.id !== initId || !init.result)
+    throw new Error(`initialize failed: ${JSON.stringify(init)}`);
   s.notify('notifications/initialized');
   s.send('tools/list');
   const list = JSON.parse(await s.nextLine());
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  if (names.length === 0) throw new Error('tools/list returned zero tools — refusing to write an empty golden');
+  if (names.length === 0)
+    throw new Error('tools/list returned zero tools — refusing to write an empty golden');
   writeFileSync(GOLDEN, JSON.stringify(names, null, 2) + '\n');
   console.log(`wrote ${names.length} tool names to ${GOLDEN}`);
 } finally {
