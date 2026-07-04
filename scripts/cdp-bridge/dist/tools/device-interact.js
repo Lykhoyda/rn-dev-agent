@@ -711,7 +711,7 @@ export function createDeviceFillHandler(getClient) {
                         try {
                             const envelope = JSON.parse(resolved.content[0].text);
                             return okResult(envelope.data, {
-                                meta: { fallbackUsed: 'pressable-resolution', resolvedRef },
+                                meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
                             });
                         }
                         catch {

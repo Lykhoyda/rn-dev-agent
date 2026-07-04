@@ -932,9 +932,13 @@ export function createDeviceFillHandler(
           );
           if (!resolved.isError) {
             try {
-              const envelope = JSON.parse(resolved.content[0].text) as { ok: true; data: unknown };
+              const envelope = JSON.parse(resolved.content[0].text) as {
+                ok: true;
+                data: unknown;
+                meta?: Record<string, unknown>;
+              };
               return okResult(envelope.data, {
-                meta: { fallbackUsed: 'pressable-resolution', resolvedRef },
+                meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
               });
             } catch {
               return resolved;
