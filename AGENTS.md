@@ -73,3 +73,27 @@ S89 CDP presentation slides creation (rn-dev-agent pitch deck), plus ongoing: fi
 
 Access 2683k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
+## Engineering rules
+
+### TypeScript only (strict — applies to every new file)
+
+All new code in this repo MUST be TypeScript:
+
+- New source modules: `.ts` / `.tsx` — never `.js` / `.mjs` / `.cjs`.
+- New tests: `.ts`, run via `node --test` type stripping (Node >= 22.18 strips
+  types natively; no build step needed for tests).
+- New standalone scripts: `.ts` where runnable (Node scripts); shell scripts
+  (`.sh`) remain shell.
+
+Enforced by CI: `scripts/check-typescript-only.sh` fails the Lint & format job
+when a `.js`/`.mjs`/`.cjs` file exists outside `scripts/js-migration-baseline.txt`
+(the grandfathered pre-rule inventory — mostly node:test suites) and the
+generated/vendored exclusions (`scripts/cdp-bridge/dist/`, `**/web-dist/`,
+`third_party/`).
+
+Migrating a baseline file to TS: delete the `.js`, add the `.ts` — the check
+passes automatically (shrink is free). Growing the baseline requires editing
+it in the same PR with justification; treat that as an exception, not a path.
+
+The migration of the ~340 grandfathered files is tracked in a GitHub issue
+(search: "migrate JavaScript to TypeScript").
