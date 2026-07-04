@@ -1,6 +1,6 @@
 # Story 05 — Self-healing taps: inline re-resolution + retry-if-no-change
 
-**Status:** Proposed (2026-07-02)
+**Status:** Implemented (2026-07-04, #386)
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Converts most `STALE_REF` refusals (a full agent round-trip: error → re-snapshot → re-find → retry) into a transparent in-tool repair; adds change-detection so a swallowed tap retries itself once
 **Effort:** M
