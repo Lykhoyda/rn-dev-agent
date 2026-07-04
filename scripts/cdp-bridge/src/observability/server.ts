@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { Recorder } from './recorder.js';
+import type { MirrorManager } from './mirror/manager.js';
 import { isPostAllowed } from './e2e-csrf.js';
 
 const HOST = '127.0.0.1';
@@ -27,6 +28,7 @@ export class ObservabilityServer {
   constructor(
     private readonly recorder: Recorder,
     private readonly e2e?: E2eServerDeps,
+    private readonly mirror?: MirrorManager,
   ) {}
 
   async start(preferredPort?: number): Promise<{ url: string; port: number }> {
@@ -54,6 +56,7 @@ export class ObservabilityServer {
   async stop(): Promise<void> {
     const s = this.server;
     this.server = null;
+    this.mirror?.shutdown();
     // Tell live SSE clients we're shutting down BEFORE yanking the sockets, so
     // the browser's EventSource closes instead of entering its auto-reconnect
     // loop (which would otherwise hammer the dead port, or silently reattach to
@@ -84,6 +87,13 @@ export class ObservabilityServer {
     const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
     if (shot) return this.screenshot(Number(shot[1]), res);
     if (/^\/api\/live-screenshot\/\d+$/.test(url)) return this.liveScreenshot(res);
+    if (/^\/api\/device\/mirror(\?|$)/.test(url)) {
+      if (req.method?.toUpperCase() !== 'GET') {
+        this.json(res, 405, { error: 'method not allowed' });
+        return;
+      }
+      return this.mirrorStream(res);
+    }
     if (url === '/api/e2e/run') return void this.e2eRun(req, res);
     if (url === '/api/e2e/runs') return void this.e2eListRuns(res);
     const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
@@ -178,6 +188,19 @@ export class ObservabilityServer {
     }
     res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
     res.end(shot.buf);
+  }
+
+  private mirrorStream(res: ServerResponse): void {
+    if (!this.mirror) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.socket?.setTimeout(0);
+    res.on('error', () => {
+      /* client socket reset mid-stream — manager cleanup runs on 'close' */
+    });
+    this.mirror.attach(res);
   }
 
   private index(res: ServerResponse): void {

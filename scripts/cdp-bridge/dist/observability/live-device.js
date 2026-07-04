@@ -119,16 +119,18 @@ async function runCapture(deps) {
     if (!platform)
         return;
     const frame = {};
-    try {
-        const shot = await deps.captureScreenshot(platform, deps.tmpPath());
-        if (shot.ok) {
-            const bytes = deps.readShotFile(shot.path);
-            if (bytes)
-                frame.shot = bytes;
+    if (!deps.isMirrorActive?.()) {
+        try {
+            const shot = await deps.captureScreenshot(platform, deps.tmpPath());
+            if (shot.ok) {
+                const bytes = deps.readShotFile(shot.path);
+                if (bytes)
+                    frame.shot = bytes;
+            }
         }
-    }
-    catch {
-        /* screenshot best-effort */
+        catch {
+            /* screenshot best-effort */
+        }
     }
     try {
         const route = await deps.readRoute();
@@ -168,5 +170,6 @@ export function buildLiveDeps(input) {
         // this — the unit fakes used standalone arrows and missed it.
         pushLive: (frame) => input.recorder.pushLive(frame),
         tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
+        isMirrorActive: input.isMirrorActive,
     };
 }

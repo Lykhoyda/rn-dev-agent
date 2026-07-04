@@ -15,8 +15,12 @@ export const observeSchema = {
 };
 let server = null;
 let e2eDeps;
+let mirrorManager;
 export function setObserveE2eDeps(d) {
     e2eDeps = d;
+}
+export function setObserveMirror(m) {
+    mirrorManager = m;
 }
 let starting = null;
 /**
@@ -32,7 +36,7 @@ export async function startObserveServer() {
         return starting;
     starting = (async () => {
         if (!server)
-            server = new ObservabilityServer(recorder, e2eDeps);
+            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager);
         const { port } = resolveObservePort();
         const res = await server.start(port);
         writeObserveState(res.url, res.port);

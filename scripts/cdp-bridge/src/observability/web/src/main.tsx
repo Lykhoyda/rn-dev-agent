@@ -14,7 +14,8 @@ import { RegressionView } from './components/RegressionView';
 const RENDER_ROWS = 250;
 
 function App(): JSX.Element {
-  const { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount } = useEventStream();
+  const { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount, mirror } =
+    useEventStream();
   const [view, setView] = useState<View>('live');
   const [selected, setSelected] = useState<number | null>(null);
   const [activeFamilies, setActiveFamilies] = useState<ReadonlySet<Family>>(new Set(FAMILIES));
@@ -87,6 +88,7 @@ function App(): JSX.Element {
             />
           </div>
           <DevicePane
+            mirror={mirror}
             liveShotSeq={liveShotSeq}
             fallbackSeq={shotEv && shotEv.ok ? shotEv.seq : null}
             route={route}

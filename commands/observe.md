@@ -12,7 +12,7 @@ The user's argument: "$ARGUMENTS"
 
 - If the argument is empty: call the `observe` MCP tool with `action: "status"`. If running,
   print the returned `url` prominently and tell the user to open it in a browser to watch the
-  live tool-call timeline, device screenshot, and app state. If NOT running (autostart disabled
+  live tool-call timeline, live device mirror, and app state. If NOT running (autostart disabled
   or previously stopped), call `action: "start"` — an explicit /observe is an explicit request
   to see the UI — and print the URL.
 - If the argument is `stop`: call with `action: "stop"`. The UI stays down for the rest of the
