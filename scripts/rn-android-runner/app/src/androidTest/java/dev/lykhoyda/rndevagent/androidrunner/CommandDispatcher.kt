@@ -44,6 +44,12 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
             "screenshot", "back", "dismissKeyboard", "keyboard", "longPress",
             "pinch", "findText", "isWindowUpdating",
         )
+
+        // GH #378: cold-start-only relaunch wait. Reached solely on a confirmed
+        // cold state (no app window, hence no IME to stall By.pkg), so it is kept
+        // well under the TS client's 10s non-slow command budget — a hung launch
+        // now fails fast instead of masquerading as a RUNNER_TIMEOUT.
+        const val FOREGROUND_READY_TIMEOUT_MS = 5_000L
     }
 
     init {
@@ -101,14 +107,37 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
     }
 
     private fun foreground(appPackage: String) {
-        if (device.currentPackageName == appPackage) return
+        // GH #378: `currentPackageName` reports the IME/launcher package during
+        // keyboard transitions, so the old equality-only fast-path missed and fired
+        // a relaunch intent + a ~10s `By.pkg` wait that itself stalled behind the IME
+        // window — breaching the client's 10s HTTP budget with the work already done.
+        // An application window of the package existing is the robust "already
+        // foreground" signal (not fooled by an IME/system window on top); only a
+        // confirmed cold state warrants the relaunch.
+        if (isPackageForeground(appPackage) || device.currentPackageName == appPackage) return
         val context = instrumentation.targetContext
         val intent = context.packageManager.getLaunchIntentForPackage(appPackage)
             ?: throw IllegalStateException("No launch intent for package $appPackage")
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
-        val ready = device.wait(Until.hasObject(By.pkg(appPackage)), 10_000)
-        if (!ready) throw IllegalStateException("Package $appPackage did not foreground within 10s")
+        val ready = device.wait(Until.hasObject(By.pkg(appPackage)), FOREGROUND_READY_TIMEOUT_MS)
+        if (!ready) {
+            throw IllegalStateException("Package $appPackage did not foreground within ${FOREGROUND_READY_TIMEOUT_MS}ms")
+        }
+    }
+
+    // GH #378: windows-based foreground probe. FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+    // (set in init) makes the app's own application window visible in the list even
+    // while an IME window sits on top; the pure decision lives in ForegroundGate.
+    private fun isPackageForeground(appPackage: String): Boolean {
+        val windows = instrumentation.uiAutomation.windows.map {
+            ForegroundGate.WindowSignature(it.type, it.root?.packageName?.toString())
+        }
+        return ForegroundGate.hasForegroundWindow(
+            windows,
+            appPackage,
+            AccessibilityWindowInfo.TYPE_APPLICATION,
+        )
     }
 
     private fun snapshot(appPackage: String?): JSONObject {
