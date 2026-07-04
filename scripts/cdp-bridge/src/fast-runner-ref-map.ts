@@ -279,3 +279,30 @@ export function flattenAndroidAccessibilityTree(nodes: FlatNode[]): {
   }
   return { nodes, refMap: localRefMap };
 }
+
+export type RefreshOutcome =
+  | { kind: 'unique'; node: FlatNode }
+  | { kind: 'ambiguous'; candidates: FlatNode[] }
+  | { kind: 'absent' };
+
+function identityMatches(sig: RefSignature, node: FlatNode): boolean {
+  return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
+}
+
+// Story 05 (#386): re-bind a stale ref to the live tree by identity attrs
+// (type/label/identifier — bounds excluded; enabled/hittable are state, not
+// identity). Maestro's rule: tap only on a UNIQUE match. The flat index is a
+// tie-breaker only when the tree shape is unchanged — never a primary key.
+export function refreshRef(sig: RefSignature, nodes: FlatNode[]): RefreshOutcome {
+  const matches: { node: FlatNode; index: number }[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (identityMatches(sig, nodes[i])) matches.push({ node: nodes[i], index: i });
+  }
+  if (matches.length === 0) return { kind: 'absent' };
+  if (matches.length === 1) return { kind: 'unique', node: matches[0].node };
+  if (nodes.length === sig.nodeCount) {
+    const atSameIndex = matches.filter((m) => m.index === sig.flatIndex);
+    if (atSameIndex.length === 1) return { kind: 'unique', node: atSameIndex[0].node };
+  }
+  return { kind: 'ambiguous', candidates: matches.map((m) => m.node) };
+}
