@@ -36,6 +36,10 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
     'device_scrollintoview',
     'device_pinch',
     'device_back',
+    // PR #459 review (Codex P2): device_batch runs steps under a per-step
+    // Promise.race timeout whose native action can keep mutating the screen
+    // after the batch returns, so it can't guarantee a valid baseline.
+    'device_batch',
   ]) {
     assert.equal(
       toolInvalidatesRetryBaseline(t),
@@ -45,8 +49,8 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
   }
 });
 
-test('toolInvalidatesRetryBaseline: FALSE only for tools that leave a valid current-screen baseline for the next tap', () => {
-  for (const t of ['device_press', 'device_longpress', 'device_batch']) {
+test('toolInvalidatesRetryBaseline: FALSE only for single-action tools that leave a valid current-screen baseline for the next tap', () => {
+  for (const t of ['device_press', 'device_longpress']) {
     assert.equal(
       toolInvalidatesRetryBaseline(t),
       false,

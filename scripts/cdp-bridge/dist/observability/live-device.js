@@ -74,23 +74,25 @@ export function toolInvalidatesSnapshotCache(tool, args) {
         return args?.action === 'click';
     return !SNAPSHOT_CACHE_READS.has(tool);
 }
-// Story 05 (#386): the exclusion is ONLY for tools that leave a VALID
-// current-screen baseline (lastSnapshotHash) for the next tap — invalidating
-// after them would erase it and defeat tap-sequence change detection. Exactly
-// two kinds qualify: retry-eligible tap verbs (their settle refreshes the hash
-// to the post-tap screen and does NOT invalidate), and device_find (snapshot,
-// or click routed through a tap). Everything else must invalidate:
+// Story 05 (#386): the exclusion is ONLY for single-action tools that leave a
+// VALID current-screen baseline (lastSnapshotHash) for the next tap —
+// invalidating after them would erase it and defeat tap-sequence change
+// detection. Exactly two kinds qualify: retry-eligible tap verbs (their settle
+// refreshes the hash to the post-tap screen and does NOT invalidate), and
+// device_find (snapshot, or click routed through a tap). Everything else must
+// invalidate:
 //   - swipe/scroll take the iOS fastSwipe path that returns BEFORE any settle
 //     (baseline left stale) — the exact hazard this hook exists for;
 //   - pinch/back/fill/scrollintoview do settle, but as non-retry-eligible
 //     verbs their settle exits hierarchyChanged===undefined → already
-//     invalidates, so the hook's invalidation is a harmless no-op.
-// device_batch stays excluded because its last step may be a tap that
-// refreshed the baseline.
+//     invalidates, so the hook's invalidation is a harmless no-op;
+//   - device_batch runs steps under a per-step Promise.race timeout whose
+//     native action can keep mutating the screen AFTER the batch returns
+//     (device-batch.ts documents this), so it cannot guarantee a valid
+//     baseline — invalidate and let the next tap fail-open.
 export const BASELINE_SELF_MANAGED_TOOLS = new Set([
     'device_press',
     'device_longpress',
-    'device_batch',
     'device_find',
 ]);
 /**
