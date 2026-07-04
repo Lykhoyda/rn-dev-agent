@@ -1,4 +1,5 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
 let sessionReloadCount = 0;
 export function getSessionReloadCount() {
     return sessionReloadCount;
@@ -163,7 +164,9 @@ export function createReloadHandler(getClient, setClient, createClient) {
                 return warnResult({ reloaded: true, type: 'full', reconnected: true }, 'Reload succeeded but helper injection failed. App may still be loading — retry cdp_status.', forceMeta);
             }
         }
+        const devMenuMeta = await autoDismissDevMenuMeta(client);
+        const mergedMeta = { ...forceMeta, ...devMenuMeta };
         sessionReloadCount++;
-        return okResult({ reloaded: true, type: 'full', reconnected: true }, Object.keys(forceMeta).length > 0 ? { meta: forceMeta } : undefined);
+        return okResult({ reloaded: true, type: 'full', reconnected: true }, Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : undefined);
     });
 }

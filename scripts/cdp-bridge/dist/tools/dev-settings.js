@@ -1,4 +1,5 @@
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { hideExpoDevMenu } from './expo-dev-menu.js';
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
   if (typeof globalThis.nativeModuleProxy !== 'undefined') try { var ds2 = globalThis.nativeModuleProxy.DevSettings; if (ds2) return ds2; } catch(e) {}
@@ -31,6 +32,13 @@ const ACTION_EXPRESSIONS = {
 };
 export function createDevSettingsHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
+        if (args.action === 'hideDevMenu') {
+            const outcome = await hideExpoDevMenu(client);
+            if (outcome.dismissed) {
+                return okResult({ action: args.action, executed: true, method: outcome.method });
+            }
+            return warnResult({ action: args.action, executed: false }, outcome.reason);
+        }
         const expression = ACTION_EXPRESSIONS[args.action];
         try {
             const result = await client.evaluate(expression);
