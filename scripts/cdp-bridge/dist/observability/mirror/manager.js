@@ -33,6 +33,7 @@ export class MirrorManager {
     }
     attach(client) {
         client.writeHead(200, MULTIPART_HEADERS);
+        client.flushHeaders?.();
         const entry = { client, ready: true };
         this.clients.add(entry);
         client.on('close', () => {

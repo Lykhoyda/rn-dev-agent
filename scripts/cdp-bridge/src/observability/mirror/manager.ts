@@ -19,6 +19,8 @@ export interface MirrorClient {
   write(chunk: Buffer | string): boolean;
   end(): void;
   on(event: 'close' | 'drain', cb: () => void): void;
+  // ServerResponse buffers headers until first body write; flush so clients see the stream is live before the first frame.
+  flushHeaders?(): void;
 }
 
 export interface MirrorManagerDeps {
@@ -72,6 +74,7 @@ export class MirrorManager {
 
   attach(client: MirrorClient): void {
     client.writeHead(200, MULTIPART_HEADERS);
+    client.flushHeaders?.();
 
     const entry: ClientEntry = { client, ready: true };
     this.clients.add(entry);
