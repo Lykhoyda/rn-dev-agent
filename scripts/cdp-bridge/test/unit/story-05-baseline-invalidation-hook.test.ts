@@ -27,6 +27,15 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
     // it. The native fill path already invalidates on its own, so this is a
     // no-op there and correct on the JS path.
     'device_fill',
+    // PR #459 review (Codex P2): swipe/scroll take the iOS fastSwipe path that
+    // returns BEFORE any settle → stale baseline. pinch/back/scrollintoview do
+    // settle, but as non-retry-eligible verbs their settle already invalidates
+    // (hierarchyChanged===undefined), so invalidating here is a harmless no-op.
+    'device_swipe',
+    'device_scroll',
+    'device_scrollintoview',
+    'device_pinch',
+    'device_back',
   ]) {
     assert.equal(
       toolInvalidatesRetryBaseline(t),
@@ -36,21 +45,12 @@ test('toolInvalidatesRetryBaseline: TRUE for screen-mutating tools that bypass r
   }
 });
 
-test('toolInvalidatesRetryBaseline: FALSE for native device verbs that self-manage the baseline via settle', () => {
-  for (const t of [
-    'device_press',
-    'device_longpress',
-    'device_swipe',
-    'device_scroll',
-    'device_scrollintoview',
-    'device_pinch',
-    'device_back',
-    'device_batch',
-  ]) {
+test('toolInvalidatesRetryBaseline: FALSE only for tools that leave a valid current-screen baseline for the next tap', () => {
+  for (const t of ['device_press', 'device_longpress', 'device_batch']) {
     assert.equal(
       toolInvalidatesRetryBaseline(t),
       false,
-      `${t} manages its own baseline via settleAfterMutationWithOutcome — invalidating post-hoc would erase a refreshed baseline`,
+      `${t} refreshes the baseline to the current screen via settle — invalidating post-hoc would erase it`,
     );
   }
 });

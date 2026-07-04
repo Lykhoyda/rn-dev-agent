@@ -853,13 +853,19 @@ export function selfHealEnabled(env) {
 const RETRYABLE_TAP_COMMANDS = new Set(['tap', 'longPress']);
 // Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
 // gestures (--count/--double-tap) would change semantics on a re-tap; fills
-// have their own read-back verification and a retype would duplicate text.
+// have their own read-back verification and a retype would duplicate text;
+// hold gestures (--hold-ms, from device_press holdMs / device_longpress by ref,
+// routed as ['press', ref, '--hold-ms'] → command 'tap') are a deliberate timed
+// interaction, so re-dispatching would change the requested action. Genuine
+// coordinate long-presses carry duration positionally (command 'longPress', no
+// --hold-ms flag) and stay eligible.
 export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
     const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
         opts.retryIfNoChange !== false &&
         selfHealEnabled(process.env) &&
         !cliArgs.includes('--double-tap') &&
         !cliArgs.includes('--count') &&
+        !cliArgs.includes('--hold-ms') &&
         x !== undefined &&
         y !== undefined;
     return { eligible, targetKey: `${builtCommand}@${x},${y}` };

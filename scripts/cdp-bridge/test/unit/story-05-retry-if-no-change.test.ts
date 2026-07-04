@@ -216,6 +216,19 @@ test('tapRetryPolicy gates on command, flags, coords, env, and opt-out', () => {
   assert.equal(tapRetryPolicy(['fill', '@e0', 'hi'], 'type', 50, 20, {}).eligible, false);
   assert.equal(tapRetryPolicy(['press', '@e0', '--double-tap'], 'tap', 50, 20, {}).eligible, false);
   assert.equal(tapRetryPolicy(['press', '@e0', '--count', '3'], 'tap', 50, 20, {}).eligible, false);
+  // PR #459 review (Codex P2): hold gestures (device_press holdMs /
+  // device_longpress by ref → ['press', ref, '--hold-ms', N] → command 'tap')
+  // are excluded — re-dispatching a timed hold would change the interaction.
+  assert.equal(
+    tapRetryPolicy(['press', '@e0', '--hold-ms', '1000'], 'tap', 50, 20, {}).eligible,
+    false,
+  );
+  // A genuine coordinate long-press carries duration positionally (no --hold-ms
+  // flag) and stays eligible per the plan's RETRYABLE_TAP_COMMANDS.
+  assert.equal(
+    tapRetryPolicy(['longpress', '50', '20', '800'], 'longPress', 50, 20, {}).eligible,
+    true,
+  );
   assert.equal(tapRetryPolicy(['press', '@e0'], 'tap', undefined, undefined, {}).eligible, false);
   assert.equal(
     tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, { retryIfNoChange: false }).eligible,

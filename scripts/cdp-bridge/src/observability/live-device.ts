@@ -78,27 +78,22 @@ export function toolInvalidatesSnapshotCache(
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 
-// Story 05 (#386): native device verbs manage the tap-retry baseline hash
-// (fast-runner-ref-map's lastSnapshotHash) themselves via
-// settleAfterMutationWithOutcome, which either refreshes it (settle probe
-// re-snapshots) or invalidates it on a blind mutation. Invalidating it again
-// here AFTER those verbs return would erase a freshly-refreshed baseline and
-// defeat tap-sequence change detection — the story's whole point.
-//
-// device_fill is deliberately NOT here: its JS-first path (attemptJsFill)
-// returns before any runNative settle, so it never manages the baseline — the
-// hook must invalidate after it. The native fill path already invalidates the
-// baseline on its own (type is retry-ineligible → its settle exits
-// hierarchyChanged===undefined → invalidate), so the extra hook invalidation is
-// a no-op there. Excluding it would leave a stale baseline after a JS fill.
+// Story 05 (#386): the exclusion is ONLY for tools that leave a VALID
+// current-screen baseline (lastSnapshotHash) for the next tap — invalidating
+// after them would erase it and defeat tap-sequence change detection. Exactly
+// two kinds qualify: retry-eligible tap verbs (their settle refreshes the hash
+// to the post-tap screen and does NOT invalidate), and device_find (snapshot,
+// or click routed through a tap). Everything else must invalidate:
+//   - swipe/scroll take the iOS fastSwipe path that returns BEFORE any settle
+//     (baseline left stale) — the exact hazard this hook exists for;
+//   - pinch/back/fill/scrollintoview do settle, but as non-retry-eligible
+//     verbs their settle exits hierarchyChanged===undefined → already
+//     invalidates, so the hook's invalidation is a harmless no-op.
+// device_batch stays excluded because its last step may be a tap that
+// refreshed the baseline.
 export const BASELINE_SELF_MANAGED_TOOLS = new Set<string>([
   'device_press',
   'device_longpress',
-  'device_swipe',
-  'device_scroll',
-  'device_scrollintoview',
-  'device_pinch',
-  'device_back',
   'device_batch',
   'device_find',
 ]);
