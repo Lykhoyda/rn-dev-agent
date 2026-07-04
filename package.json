@@ -11,6 +11,7 @@
     "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
     "release-cdp-bridge": "cd scripts/cdp-bridge && npm publish",
     "test": "cd scripts/cdp-bridge && npm test",
+    "test:native:android": "cd scripts/rn-android-runner && ./gradlew testDebugUnitTest --no-daemon",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
