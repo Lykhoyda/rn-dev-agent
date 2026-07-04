@@ -122,6 +122,7 @@ export class IosSimctlLoopSource {
     pipeline = 'simctl';
     nominalFps = 6;
     active = false;
+    inFlight = null;
     execJpeg;
     gate;
     idleDelayMs;
@@ -142,24 +143,21 @@ export class IosSimctlLoopSource {
     }
     async loop(sink) {
         while (this.active) {
+            const controller = new AbortController();
+            this.inFlight = controller;
             try {
-                const buf = await this.execJpeg('xcrun', [
-                    'simctl',
-                    'io',
-                    this.udid,
-                    'screenshot',
-                    '--type=jpeg',
-                    this.tmpPath(),
-                ]);
-                // A capture already in flight runs to completion and delivers its
-                // frame even if stop() lands mid-capture; only the *next* iteration
-                // honors the stop.
+                const buf = await this.execJpeg('xcrun', ['simctl', 'io', this.udid, 'screenshot', '--type=jpeg', this.tmpPath()], controller.signal);
                 sink.onFrame(buf);
                 if (!this.active)
                     break;
                 await sleep(this.idleDelayMs);
             }
             catch {
+                // stop() aborted the in-flight capture — that's a deliberate
+                // teardown, not a capture failure, so it must not count toward
+                // RestartGate or trigger a failure pause.
+                if (!this.active)
+                    break;
                 if (!this.gate.record()) {
                     if (this.active)
                         sink.onExit({ reason: 'simctl screenshot failing', hint: SIMCTL_HINT });
@@ -168,10 +166,14 @@ export class IosSimctlLoopSource {
                 }
                 await sleep(this.failurePauseMs);
             }
+            finally {
+                this.inFlight = null;
+            }
         }
     }
     stop() {
         this.active = false;
+        this.inFlight?.abort();
     }
 }
 // simctl's `screenshot --type=jpeg -` is documented as writing to stdout when
@@ -181,10 +183,10 @@ export class IosSimctlLoopSource {
 // outright. So the default capture path goes through a real tmp file — the
 // last element of `args` is, by construction, that output path — and reads
 // it back once simctl exits.
-function defaultExecJpeg(cmd, args) {
+function defaultExecJpeg(cmd, args, signal) {
     const outPath = args[args.length - 1];
     return new Promise((resolve, reject) => {
-        execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }, (err) => {
+        execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000, signal }, (err) => {
             if (err) {
                 reject(err);
                 return;

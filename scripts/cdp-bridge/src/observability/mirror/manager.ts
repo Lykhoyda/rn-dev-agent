@@ -104,6 +104,11 @@ export class MirrorManager {
       } catch {
         // Destroyed socket — don't keep a dead client registered.
         this.clients.delete(entry);
+        // Dropping the last (possibly only) client here must still reap the
+        // pipeline — otherwise a broken reconnect leaves clients.size === 0
+        // with the pipeline running forever. Same guard as the 'close'
+        // handler: never grace-schedule over an 'error' teardown.
+        if (this.clients.size === 0 && this.state !== 'error') this.scheduleGrace();
         return;
       }
     }
@@ -168,6 +173,10 @@ export class MirrorManager {
       } catch {
         // Destroyed socket — drop this client and keep serving the rest.
         this.clients.delete(entry);
+        // If that was the last client, reap the pipeline the same way the
+        // 'close' handler does — otherwise state stays 'streaming' with
+        // zero clients and the capture runs forever.
+        if (this.clients.size === 0 && this.state !== 'error') this.scheduleGrace();
       }
     }
   }

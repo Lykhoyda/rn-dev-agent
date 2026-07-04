@@ -265,6 +265,36 @@ test('grace timer pending when source errors → no idle status revives the erro
   assert.equal(mgr.isStreaming(), false);
 });
 
+test('sole client dropped on attach-write throw → grace stop still fires', async () => {
+  const { mgr, src } = build({ graceMs: 20 });
+  const a = fakeClient();
+  mgr.attach(a);
+  await tick();
+  src.frame(jpeg(1)); // streaming, latest frame cached
+  a.emit('close'); // last client leaves → grace pending
+  const b = fakeClient();
+  b.write = () => {
+    throw new Error('destroyed');
+  }; // immediate-write throw on attach
+  mgr.attach(b); // cancels grace, then drops b on the throw
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(src.stopped, true, 'pipeline reaped despite dropped reconnect');
+});
+
+test('broadcast write-throw dropping the last client → grace stop still fires', async () => {
+  const { mgr, src } = build({ graceMs: 20 });
+  const a = fakeClient();
+  mgr.attach(a);
+  await tick();
+  src.frame(jpeg(1));
+  a.write = () => {
+    throw new Error('destroyed');
+  };
+  src.frame(jpeg(2)); // broadcast drops a → zero clients
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(src.stopped, true, 'pipeline reaped after broadcast drop');
+});
+
 test('a client whose end() throws does not prevent ending the others', async () => {
   const { mgr, statuses } = build({
     resolution: { ok: false, reason: 'nope' },

@@ -16,10 +16,10 @@ export interface MirrorSource {
   readonly nominalFps: number;
   start(sink: MirrorFrameSink): void;
   /**
-   * Consumers must tolerate at most one trailing onFrame after stop() from
-   * IosSimctlLoopSource — a capture already in flight when stop() lands runs
-   * to completion and still delivers its frame. MirrorManager's cycle token
-   * filters that straggler out.
+   * IosSimctlLoopSource aborts its in-flight capture on stop() via
+   * AbortSignal, so no trailing onFrame is expected from it. Other sources
+   * kill their child process synchronously; consumers should not rely on
+   * any further onFrame delivery after stop() returns.
    */
   stop(): void;
 }
@@ -46,7 +46,7 @@ export interface SourceOpts {
 }
 
 export interface LoopOpts {
-  execJpeg?: (cmd: string, args: string[]) => Promise<Buffer>;
+  execJpeg?: (cmd: string, args: string[], signal?: AbortSignal) => Promise<Buffer>;
   now?: () => number;
   idleDelayMs?: number;
   failurePauseMs?: number;
@@ -174,7 +174,8 @@ export class IosSimctlLoopSource implements MirrorSource {
   readonly pipeline = 'simctl' as const;
   readonly nominalFps = 6;
   private active = false;
-  private readonly execJpeg: (cmd: string, args: string[]) => Promise<Buffer>;
+  private inFlight: AbortController | null = null;
+  private readonly execJpeg: (cmd: string, args: string[], signal?: AbortSignal) => Promise<Buffer>;
   private readonly gate: RestartGate;
   private readonly idleDelayMs: number;
   private readonly failurePauseMs: number;
@@ -199,34 +200,37 @@ export class IosSimctlLoopSource implements MirrorSource {
 
   private async loop(sink: MirrorFrameSink): Promise<void> {
     while (this.active) {
+      const controller = new AbortController();
+      this.inFlight = controller;
       try {
-        const buf = await this.execJpeg('xcrun', [
-          'simctl',
-          'io',
-          this.udid,
-          'screenshot',
-          '--type=jpeg',
-          this.tmpPath(),
-        ]);
-        // A capture already in flight runs to completion and delivers its
-        // frame even if stop() lands mid-capture; only the *next* iteration
-        // honors the stop.
+        const buf = await this.execJpeg(
+          'xcrun',
+          ['simctl', 'io', this.udid, 'screenshot', '--type=jpeg', this.tmpPath()],
+          controller.signal,
+        );
         sink.onFrame(buf);
         if (!this.active) break;
         await sleep(this.idleDelayMs);
       } catch {
+        // stop() aborted the in-flight capture — that's a deliberate
+        // teardown, not a capture failure, so it must not count toward
+        // RestartGate or trigger a failure pause.
+        if (!this.active) break;
         if (!this.gate.record()) {
           if (this.active) sink.onExit({ reason: 'simctl screenshot failing', hint: SIMCTL_HINT });
           this.active = false;
           break;
         }
         await sleep(this.failurePauseMs);
+      } finally {
+        this.inFlight = null;
       }
     }
   }
 
   stop(): void {
     this.active = false;
+    this.inFlight?.abort();
   }
 }
 
@@ -237,10 +241,10 @@ export class IosSimctlLoopSource implements MirrorSource {
 // outright. So the default capture path goes through a real tmp file — the
 // last element of `args` is, by construction, that output path — and reads
 // it back once simctl exits.
-function defaultExecJpeg(cmd: string, args: string[]): Promise<Buffer> {
+function defaultExecJpeg(cmd: string, args: string[], signal?: AbortSignal): Promise<Buffer> {
   const outPath = args[args.length - 1];
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }, (err) => {
+    execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 10_000, signal }, (err) => {
       if (err) {
         reject(err);
         return;

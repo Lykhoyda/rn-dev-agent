@@ -295,6 +295,28 @@ test('AndroidScreenrecordSource: both adb and ffmpeg stderr are drained (flowing
   src.stop();
 });
 
+test('IosSimctlLoopSource: stop() aborts the in-flight capture', async () => {
+  let signal = null;
+  const src = new IosSimctlLoopSource('U', {
+    execJpeg: (_cmd, _args, sig) =>
+      new Promise((resolve, reject) => {
+        signal = sig;
+        sig.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }),
+    idleDelayMs: 0,
+    failurePauseMs: 0,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  await tick();
+  assert.ok(signal, 'capture received an AbortSignal');
+  src.stop();
+  await tick();
+  assert.equal(signal.aborted, true, 'in-flight child killed on stop');
+  assert.equal(rec.frames.length, 0);
+  assert.equal(rec.getExit(), null, 'abort is not reported as a failure');
+});
+
 test('SIMCTL_HINT names idb', () => {
   assert.match(SIMCTL_HINT, /idb/);
 });
