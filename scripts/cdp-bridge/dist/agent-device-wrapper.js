@@ -2,7 +2,7 @@ import { unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
@@ -573,7 +573,10 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
         if (plugin !== null)
             budget.recordRebuild(plugin);
         const ensure = deps.ensure ?? ensureFastRunner;
-        await ensure(deviceId, bundleId);
+        // GH #382 (Codex P1): force a source rebuild — a stale prebuilt artifact must
+        // not be re-selected here, or the cold rebuild that heals the command surface
+        // never runs.
+        await ensure(deviceId, bundleId, { forceLocalBuild: true });
     }
     finally {
         release();
@@ -680,7 +683,9 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
         message: 'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
     };
 }
-export async function ensureFastRunner(deviceId, bundleId) {
+export async function ensureFastRunner(deviceId, bundleId, 
+// GH #382 (Codex P1): recovery forces a source rebuild by bypassing prebuilt.
+opts = {}) {
     // M7/Phase-109: probe tri-state liveness instead of the PID-only
     // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server
     // has wedged ('stale') must be reaped before a fresh start — otherwise it is
@@ -694,7 +699,7 @@ export async function ensureFastRunner(deviceId, bundleId) {
         await reapStaleFastRunner();
     }
     try {
-        await startFastRunner(deviceId, bundleId);
+        await startFastRunner(deviceId, bundleId, undefined, opts);
     }
     catch (err) {
         console.error(`Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -832,9 +837,12 @@ export async function runNative(cliArgs, opts = {}) {
         if (cliArgs[0] !== 'screenshot') {
             const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
             const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
-            if (!ready.ok)
+            if (!ready.ok) {
+                // GH #382: discard any pending artifact note from a failed start.
+                consumePendingFastRunnerArtifactNote();
                 return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
-            upgradeNote = ready.note;
+            }
+            upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);

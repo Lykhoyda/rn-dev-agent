@@ -40,11 +40,11 @@ jobs:
         run: bash scripts/check-dist-fresh.sh
 
       - name: Unit tests
-        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js'
+        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'
         working-directory: scripts/cdp-bridge
 
       - name: Integration tests
-        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js'
+        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'
         working-directory: scripts/cdp-bridge
 
       # Runs at repo root (no working-directory) — guards the changeset CI gate.

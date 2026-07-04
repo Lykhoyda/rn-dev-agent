@@ -2,11 +2,12 @@ import type {
   FastRunnerLiveness,
   FastRunnerLivenessDetail,
 } from '../runners/rn-fast-runner-client.js';
-import type { SessionState } from '../types.js';
+import type { FastRunnerState, SessionState } from '../types.js';
 import { getActiveSession as defaultGetActiveSession } from '../agent-device-wrapper.js';
 import {
   probeFastRunnerLivenessDetailed,
   adoptPersistedFastRunnerState,
+  getFastRunnerState,
 } from '../runners/rn-fast-runner-client.js';
 import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from '../runners/protocol.js';
 
@@ -26,6 +27,9 @@ export interface DeviceSessionHealth {
     compatible: boolean;
   };
   runnerCapabilities?: string[];
+  // GH #382: how the live runner's artifact was obtained (prebuilt cache/download
+  // vs local xcodebuild). Present only for a reachable runner; /doctor renders it.
+  runnerProvenance?: 'prebuilt' | 'local';
 }
 
 export interface DeviceSessionHealthDeps {
@@ -33,6 +37,7 @@ export interface DeviceSessionHealthDeps {
   probeLiveness?: () => Promise<FastRunnerLivenessDetail>;
   detectForeign?: (udid?: string) => Promise<{ detected: true } | null>;
   adopt?: (deviceId: string | undefined) => void;
+  getRunnerState?: () => FastRunnerState | null;
 }
 
 export async function getDeviceSessionHealth(
@@ -76,6 +81,10 @@ export async function getDeviceSessionHealth(
         if (detail.capabilities !== undefined && detail.capabilities.length > 0) {
           health.runnerCapabilities = detail.capabilities;
         }
+        // GH #382: report the artifact provenance recorded at start (adopt() above
+        // loaded the per-device state a reachable runner would reuse).
+        const runnerState = (deps.getRunnerState ?? getFastRunnerState)();
+        if (runnerState?.provenance) health.runnerProvenance = runnerState.provenance;
       }
     } catch {
       health.rnFastRunner = 'dead';

@@ -184,6 +184,8 @@ export interface StatusResult {
       pluginVersion?: string;
       compatible: boolean;
     };
+    // GH #382: prebuilt (cache/download) vs local xcodebuild — /doctor renders it.
+    runnerProvenance?: 'prebuilt' | 'local';
   };
   /**
    * Task 6: active action-store backend. One of `'sqlite'`, `'legacy-files'`,
@@ -337,5 +339,8 @@ export interface FastRunnerState {
   startedAt: string;
   protocolVersion: number;
   runnerVersion?: string;
+  // GH #382: how this runner's artifact was obtained — prebuilt (cache/download)
+  // vs a local xcodebuild. Surfaced by doctor / cdp_status.
+  provenance?: 'prebuilt' | 'local';
   quiescence?: 'active' | 'disabled' | 'unavailable';
 }
