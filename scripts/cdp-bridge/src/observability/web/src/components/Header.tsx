@@ -2,18 +2,14 @@ import { useEffect, useState, type JSX } from 'react';
 import type { AgentEvent, Conn } from '../types';
 import { fmtElapsed } from '../derive';
 
-export type View = 'live' | 'regression';
-
 interface HeaderProps {
   conn: Conn;
   app?: string;
   route?: string;
   events: AgentEvent[];
-  view: View;
-  onViewChange: (v: View) => void;
 }
 
-export function Header({ conn, app, route, events, view, onViewChange }: HeaderProps): JSX.Element {
+export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
   const startTs = events.length > 0 ? events[0].ts : null;
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -60,20 +56,6 @@ export function Header({ conn, app, route, events, view, onViewChange }: HeaderP
         <span className="stat">
           <span className={errors > 0 ? 'v bad' : 'v'}>{errors}</span>
           <span className="k">errors</span>
-        </span>
-        <span className="view-toggle">
-          <button
-            className={view === 'live' ? 'tab on' : 'tab'}
-            onClick={() => onViewChange('live')}
-          >
-            Live
-          </button>
-          <button
-            className={view === 'regression' ? 'tab on' : 'tab'}
-            onClick={() => onViewChange('regression')}
-          >
-            Regression
-          </button>
         </span>
       </div>
     </div>

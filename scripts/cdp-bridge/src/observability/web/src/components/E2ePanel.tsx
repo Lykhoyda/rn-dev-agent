@@ -1,25 +1,17 @@
 import { useEffect, useState, type JSX } from 'react';
-import type {
-  ActionSummary,
-  E2eProgress,
-  E2eRunDetail,
-  E2eRunIndexEntry,
-  E2eRunResult,
-} from '../types';
+import type { E2eProgress, E2eRunDetail, E2eRunIndexEntry, E2eRunResult } from '../types';
 import { csrfToken } from '../derive';
-import { ActionsPanel } from './ActionsPanel';
 
-interface RegressionViewProps {
+interface E2ePanelProps {
   e2eProgress: E2eProgress | null;
   /** From useEventStream — bumps when a suite finishes anywhere (tool or UI). */
   e2eDoneCount: number;
 }
 
-export function RegressionView({ e2eProgress, e2eDoneCount }: RegressionViewProps): JSX.Element {
+export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Element {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<E2eRunResult | null>(null);
   const [history, setHistory] = useState<E2eRunIndexEntry[]>([]);
-  const [actions, setActions] = useState<ActionSummary[]>([]);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [runDetails, setRunDetails] = useState<Record<string, E2eRunDetail | 'loading' | 'error'>>(
     {},
@@ -34,18 +26,8 @@ export function RegressionView({ e2eProgress, e2eDoneCount }: RegressionViewProp
     }
   };
 
-  const fetchActions = async (): Promise<void> => {
-    try {
-      const r = await fetch('/api/e2e/actions');
-      if (r.ok) setActions((await r.json()) as ActionSummary[]);
-    } catch {
-      /* non-fatal */
-    }
-  };
-
   useEffect(() => {
     void fetchHistory();
-    void fetchActions();
   }, [e2eDoneCount]);
 
   const toggleRun = (runId: string): void => {
@@ -88,7 +70,6 @@ export function RegressionView({ e2eProgress, e2eDoneCount }: RegressionViewProp
 
   return (
     <div className="reg-container">
-      <ActionsPanel actions={actions} />
       <div className="reg-panel">
         <div className="reg-header">
           <button className="reg-run-btn" disabled={running} onClick={() => void runSuite()}>
