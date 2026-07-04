@@ -24,17 +24,32 @@ if [ "$has_rn_config" = true ]; then
   # Resolve plugin root (hooks/ is one level down from plugin root)
   PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-  # Detect plugin upgrade — warn user to restart Claude Code if MCP server keys may have changed (GH #30, D605)
+  # Detect plugin upgrade (GH #30, D605). Advice order per GH #419: a manual
+  # /mcp reconnect is field-proven to restore a dead MCP server without a full
+  # Claude Code restart — recommend the cheap step first.
   PLUGIN_VERSION=$(jq -r '.version // "unknown"' "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null || echo "unknown")
   LAST_VERSION_FILE="${TMPDIR:-/tmp}/rn-dev-agent-last-version"
+  UPGRADE_DETECTED=0
   if [ -f "$LAST_VERSION_FILE" ]; then
     LAST_VERSION=$(cat "$LAST_VERSION_FILE" 2>/dev/null || echo "")
     if [ -n "$LAST_VERSION" ] && [ "$LAST_VERSION" != "$PLUGIN_VERSION" ]; then
-      echo "NOTICE: rn-dev-agent upgraded from v${LAST_VERSION} to v${PLUGIN_VERSION}. If MCP tools fail, restart Claude Code to reinitialize MCP servers."
+      UPGRADE_DETECTED=1
+      echo "NOTICE: rn-dev-agent upgraded from v${LAST_VERSION} to v${PLUGIN_VERSION}. If MCP tools (cdp_*/device_*) are missing, run /mcp and reconnect the rn-dev-agent server — restart Claude Code only if reconnect doesn't fix it."
       echo ""
     fi
   fi
   echo "$PLUGIN_VERSION" > "$LAST_VERSION_FILE" 2>/dev/null || true
+
+  # GH #419: read-only probe of the supervisor lockfile. The plugin cache is
+  # versioned per install, so a bridge surviving an upgrade runs from the OLD
+  # version dir while holding this project's lock — the new session's MCP
+  # server then exits on the conflict and registers zero tools. Fail-silent,
+  # no polling (SessionStart stays bounded, GH #252).
+  PROBE_OUT=$(node "$PLUGIN_ROOT/scripts/mcp-bridge-probe.mjs" --plugin-root "$PLUGIN_ROOT" --upgraded "$UPGRADE_DETECTED" 2>/dev/null || true)
+  if [ -n "$PROBE_OUT" ]; then
+    echo "$PROBE_OUT"
+    echo ""
+  fi
 
   # Warn if Node.js is not an LTS version (even numbers: 22, 24, ...)
   NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null)
@@ -70,6 +85,12 @@ if [ "$has_rn_config" = true ]; then
 
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
+
+  # Ensure idb for the observe live mirror's 20-30fps fast path (optional —
+  # mirror falls back to a ~6fps simctl loop without it). Foreground path is
+  # bounded (GH#252): command checks only; the actual brew/pipx install runs
+  # as a detached background worker with pidfile + 24h-failure backoff.
+  bash "$PLUGIN_ROOT/scripts/ensure-idb.sh" 2>/dev/null || true
 
   # Worktree support: .rn-agent is largely untracked local state (learned
   # actions, e2e config, troubleshooting notes), so a linked git worktree
@@ -121,8 +142,11 @@ if [ "$has_rn_config" = true ]; then
     fi
   fi
 
+  # GH #419: no static tool count here — the hook cannot see Claude Code's
+  # actual MCP registration, and a hardcoded count misleads when the server
+  # registered zero tools (or when the shipped count drifts).
+  echo "React Native project detected. The rn-dev-agent plugin v${PLUGIN_VERSION} is active."
   cat <<'EOF'
-React Native project detected. The rn-dev-agent plugin is active with 76 MCP tools.
 
 ## How to interact with the running app
 
@@ -158,6 +182,10 @@ The CDP tools handle connection, reconnection, and error recovery automatically.
 Always run `cdp_status` first. If it fails to connect, run `/rn-dev-agent:check-env`
 to diagnose missing dependencies (Metro, simulator, agent-device, etc.).
 Do NOT proceed to Phase 5.5 verification without a successful `cdp_status`.
+
+If ToolSearch finds no cdp_* / device_* tools at all, the MCP server did not
+register with this session — ask the user to run /mcp and reconnect the
+rn-dev-agent server (a full Claude Code restart is rarely needed).
 EOF
 
   # Observe UI autostart notice (spec 2026-07-02). The MCP worker autostarts

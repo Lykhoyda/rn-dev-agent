@@ -24,6 +24,7 @@ enum CommandType: String, Codable, CaseIterable {
   case keyboardDismiss
   case alert
   case pinch
+  case isScreenStatic
   case uptime
   case shutdown
 }
@@ -110,6 +111,7 @@ struct DataPayload: Codable {
   let dismissed: Bool?
   let orientation: String?
   let keyboardGuard: String?
+  let `static`: Bool?
 
   init(
     message: String? = nil,
@@ -131,7 +133,8 @@ struct DataPayload: Codable {
     wasVisible: Bool? = nil,
     dismissed: Bool? = nil,
     orientation: String? = nil,
-    keyboardGuard: String? = nil
+    keyboardGuard: String? = nil,
+    `static`: Bool? = nil
   ) {
     self.message = message
     self.text = text
@@ -153,6 +156,7 @@ struct DataPayload: Codable {
     self.dismissed = dismissed
     self.orientation = orientation
     self.keyboardGuard = keyboardGuard
+    self.`static` = `static`
   }
 }
 

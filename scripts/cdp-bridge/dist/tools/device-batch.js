@@ -1,4 +1,5 @@
 import { runNative } from '../agent-device-wrapper.js';
+import { settleEnabled } from '../lifecycle/settle.js';
 import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate, } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -140,6 +141,25 @@ async function resolveTestIDViaSnapshot(testID) {
         return { ref: null, envelope, snapshotFailed: true };
     return { ref: findRefByTestID(envelope, testID), envelope, snapshotFailed: false };
 }
+// #385: batch steps get a LOWER settle budget than standalone verbs — a
+// 10-step walk on an animating screen at the 6000ms default would take up to
+// ~60s. 2500ms still covers window-gate / screen-static and ~2 snapshot
+// polls; settle:false skips entirely.
+const BATCH_STEP_SETTLE_BUDGET_MS = 2500;
+function stepSettleOpts(step) {
+    if (step.settle === false)
+        return { settle: { enabled: false } };
+    return { settle: { timeoutMs: BATCH_STEP_SETTLE_BUDGET_MS } };
+}
+// Settle governs inter-step stability when it is on, so the blanket 300ms
+// inter-step sleep drops to 0; an explicit caller delayMs is always honored.
+// Env-gating alone is safe: the snapshot-eq tier works on ALL runners —
+// capability flags only select the cheaper tiers.
+export function resolveBatchDelayMs(explicit, env) {
+    if (explicit !== undefined)
+        return explicit;
+    return settleEnabled(env) ? 0 : 300;
+}
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
@@ -165,7 +185,7 @@ async function executeStep(step) {
                     });
                 }
                 if (step.tap)
-                    return runNative(['press', `@${ref}`]);
+                    return runNative(['press', `@${ref}`], stepSettleOpts(step));
                 return okResult({
                     resolved: ref,
                     testID: step.testID,
@@ -206,12 +226,12 @@ async function executeStep(step) {
                         testID: step.testID,
                     });
                 }
-                return runNative(['press', `@${ref}`]);
+                return runNative(['press', `@${ref}`], stepSettleOpts(step));
             }
             if (!step.ref)
                 return failResult('press requires ref or testID');
             const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-            return runNative(['press', ref]);
+            return runNative(['press', ref], stepSettleOpts(step));
         }
         case 'fill': {
             if (!step.text)
@@ -226,30 +246,30 @@ async function executeStep(step) {
                         testID: step.testID,
                     });
                 }
-                return runNative(['fill', `@${ref}`, step.text]);
+                return runNative(['fill', `@${ref}`, step.text], stepSettleOpts(step));
             }
             if (!step.ref)
                 return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.');
             const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-            return runNative(['fill', ref, step.text]);
+            return runNative(['fill', ref, step.text], stepSettleOpts(step));
         }
         case 'swipe': {
             if (!step.direction)
                 return failResult('swipe requires direction');
-            return runNative(buildDirectionalSwipeCliArgs(step.direction, step.ms));
+            return runNative(buildDirectionalSwipeCliArgs(step.direction, step.ms), stepSettleOpts(step));
         }
         case 'scroll': {
             if (!step.direction)
                 return failResult('scroll requires direction');
             // Coordinate form — the raw ['scroll', direction] shape throws in the
             // iOS/Android arg builders and aborted the whole batch.
-            return runNative(buildDirectionalScrollCliArgs(step.direction));
+            return runNative(buildDirectionalScrollCliArgs(step.direction), stepSettleOpts(step));
         }
         case 'back': {
-            return runNative(['back']);
+            return runNative(['back'], stepSettleOpts(step));
         }
         case 'hideKeyboard': {
-            return runNative(['keyboard', 'dismiss']);
+            return runNative(['keyboard', 'dismiss'], stepSettleOpts(step));
         }
         case 'snapshot': {
             return runNative(['snapshot', '-i']);
@@ -287,7 +307,8 @@ function extractData(result) {
 }
 export function createDeviceBatchHandler() {
     return withSession(async (args) => {
-        const { steps, delayMs = 300, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient', } = args;
+        const { steps, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient', } = args;
+        const delayMs = resolveBatchDelayMs(args.delayMs, process.env);
         if (!steps || steps.length === 0) {
             return failResult('steps array is required and must not be empty');
         }

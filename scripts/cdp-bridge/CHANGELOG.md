@@ -1,5 +1,23 @@
 # rn-dev-agent-cdp
 
+## 0.55.1
+
+### Patch Changes
+
+- 396e862: rn-android-runner `findText` refuses missing/blank `text` with a typed
+  `INVALID_ARGUMENT` error (#444). Previously `optString("text")` silently
+  defaulted to `""`, falling through to `By.textContains("")` — which matches an
+  arbitrary node — so a malformed request reported `found: true` for whatever
+  element UIAutomator visited first instead of surfacing an argument error. The
+  guard runs in the dispatch when-branch before any selector is constructed;
+  a source-sync test (gh-418 style) enforces it in CI without an emulator.
+
+## 0.55.0
+
+### Minor Changes
+
+- 683a132: Story 04 (#385): shared two-tier settle engine. Every mutating device\_\* verb now waits for the UI to actually stabilize instead of relying on fixed sleeps: Android gates on a new `isWindowUpdating` runner probe (capability `WINDOW_UPDATE`) then falls back to snapshot-hash equality polling; iOS polls a new on-runner `isScreenStatic` SHA-256 screenshot compare (capability `SCREEN_STATIC`, Maestro's 3s screen-settle budget) with the same snapshot-hash fallback. Results surface `meta.settle: {method, settled}` + `meta.timings_ms.settle`. `device_fill` drops its fixed 150ms focus delay when settle ran and pins its target coordinates once up front (`--at-x/--at-y`) so the settle's ref-map refresh can never retarget the fill mid-call; its corrective retypes skip settle (their stability check is the CDP read-back). `device_batch` settles between steps by default at a batch-scoped 2500ms budget (per-step `settle: false` escape hatch) and its blanket 300ms inter-step delay defaults to 0 while settle is on. Legacy runner artifacts (no new capabilities) transparently degrade to snapshot polling — no rebuild required, the new verbs are deliberately NOT in the required-command gate. Opt out globally with `RN_SETTLE=0` or per batch step with `settle: false`; tune the per-call budget with `settleTimeoutMs` (a budget knob, not a disable switch). A perpetually-animating screen settles via hierarchy stability or returns `method: 'timeout'` at budget — bounded, never hanging.
+
 ## 0.54.1
 
 ### Patch Changes

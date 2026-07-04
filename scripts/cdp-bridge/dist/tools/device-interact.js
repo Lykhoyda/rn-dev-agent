@@ -9,7 +9,7 @@ import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
-import { getCachedMetadata, isRefMapFresh } from '../fast-runner-ref-map.js';
+import { getCachedMetadata, isRefMapFresh, refCenter } from '../fast-runner-ref-map.js';
 import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype, } from './fill-verify.js';
 const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
@@ -327,6 +327,10 @@ export function findInputForPressable(nodes, pressableRef) {
     const inputNode = nodes.find((n) => n.identifier === baseId && n.type !== undefined && TEXT_INPUT_TYPES.has(n.type));
     return inputNode ? `@${inputNode.ref}` : null;
 }
+// Story 04 (#385): thread a caller-supplied settle budget into runNative.
+function settleOpts(args) {
+    return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
+}
 export function createDevicePressHandler() {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
@@ -337,7 +341,7 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = surfaceKeyboardGuard(await runNative(cliArgs));
+        const result = surfaceKeyboardGuard(await runNative(cliArgs, settleOpts(args)));
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }
@@ -424,6 +428,24 @@ function isAndroidSession() {
     return !!process.env.ANDROID_SERIAL;
 }
 const FOCUS_DELAY_MS = 150;
+// #385: explicit waitForKeyboardMs always wins (B122 Pressable-wrapped
+// inputs); a pre-tap whose envelope carries meta.settle already waited for UI
+// stability, so the fixed 150ms is only the settle-less fallback.
+export function focusDelayAfterPreTap(preTapEnvelopeText, waitForKeyboardMs) {
+    if (waitForKeyboardMs !== undefined)
+        return waitForKeyboardMs;
+    if (preTapEnvelopeText) {
+        try {
+            const envelope = JSON.parse(preTapEnvelopeText);
+            if (envelope.meta?.settle !== undefined)
+                return 0;
+        }
+        catch {
+            /* fall through to legacy delay */
+        }
+    }
+    return FOCUS_DELAY_MS;
+}
 const NO_FOCUSED_INPUT_RE = /no focused text input|no focused element|element is not focused/i;
 function isNoFocusedInputError(result) {
     if (!result.isError)
@@ -433,6 +455,21 @@ function isNoFocusedInputError(result) {
 }
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+}
+function extractSettleMeta(result) {
+    try {
+        const envelope = JSON.parse(result.content[0].text);
+        const out = {};
+        if (envelope.meta?.settle !== undefined)
+            out.settle = envelope.meta.settle;
+        if (typeof envelope.meta?.timings_ms?.settle === 'number') {
+            out.settleMs = envelope.meta.timings_ms.settle;
+        }
+        return out;
+    }
+    catch {
+        return {};
+    }
 }
 function cdpClientOrNull(getClient) {
     try {
@@ -553,18 +590,26 @@ export function createDeviceFillHandler(getClient) {
                 }
             }
         }
-        const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
+        // #385: resolve the target's coords ONCE. The pre-tap's settle re-snapshots
+        // and rebuilds the @ref map (post-keyboard screen), so a later @ref
+        // re-resolution inside this call could target a different element.
+        const pinned = isRefMapFresh() ? refCenter(ref) : null;
+        const pinArgs = pinned ? ['--at-x', String(pinned.x), '--at-y', String(pinned.y)] : [];
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
         // press+fill+press+fill flows where the previous call left focus on a different field.
-        const preTap = await runNative(['press', ref]);
+        const preTap = pinned
+            ? await runNative(['press', String(pinned.x), String(pinned.y)], settleOpts(args))
+            : await runNative(['press', ref], settleOpts(args));
         if (preTap.isError) {
             // If we can't even tap the element, fall straight through to fill — it may still
             // work via the fast-runner coordinate path, and we want its error message, not ours.
         }
         else {
-            await sleep(focusWaitMs);
+            const delay = focusDelayAfterPreTap(preTap.content?.[0]?.text, args.waitForKeyboardMs);
+            if (delay > 0)
+                await sleep(delay);
         }
-        const primary = await runNative(['fill', ref, args.text]);
+        const primary = await runNative(['fill', ref, args.text, ...pinArgs], settleOpts(args));
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -572,6 +617,9 @@ export function createDeviceFillHandler(getClient) {
             // make corruption worse (multi-review H1). Android keeps the legacy result.
             if (client && jsTestId && !androidSession) {
                 const tNative = Date.now();
+                // #385: the verified-native path re-wraps the result — carry the
+                // primary fill's settle telemetry forward instead of dropping it.
+                const primarySettle = extractSettleMeta(primary);
                 let settleAnchor = await readValueBefore(client, jsTestId);
                 let stabilityPrior = null;
                 for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
@@ -583,7 +631,13 @@ export function createDeviceFillHandler(getClient) {
                                 textEntryPath: attempt === 0 ? 'native' : 'native-retype',
                                 verify: jsVerifyMeta(outcome),
                                 retypes: attempt,
-                                timings_ms: { nativeType: Date.now() - tNative },
+                                ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+                                timings_ms: {
+                                    nativeType: Date.now() - tNative,
+                                    ...(primarySettle.settleMs !== undefined
+                                        ? { settle: primarySettle.settleMs }
+                                        : {}),
+                                },
                             },
                         });
                     }
@@ -591,14 +645,17 @@ export function createDeviceFillHandler(getClient) {
                         break;
                     settleAnchor = value;
                     stabilityPrior = value;
+                    // #385: retypes skip settle — the nativeSettle CDP read-back that
+                    // follows is their stability check; a UI-settle here only adds latency.
                     await runNative([
                         'fill',
                         ref,
                         args.text,
+                        ...pinArgs,
                         '--clear-first',
                         '--delay-ms',
                         String(decision.delayMs),
-                    ]);
+                    ], { settle: { enabled: false } });
                 }
                 const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
                 if (!maestro.isError) {
@@ -634,15 +691,27 @@ export function createDeviceFillHandler(getClient) {
         if (snap.ok) {
             const resolvedRef = findInputForPressable(snap.nodes, ref);
             if (resolvedRef && resolvedRef !== ref) {
-                const innerTap = await runNative(['press', resolvedRef]);
+                // #385: same pin-once guard as the primary path — the inner tap's settle
+                // re-snapshots and renumbers the positional map, so the fill must not
+                // re-resolve resolvedRef afterwards (fetchSnapshotNodes above just
+                // refreshed the map, so the pin resolves against the current screen).
+                const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
+                const innerPinArgs = innerPin
+                    ? ['--at-x', String(innerPin.x), '--at-y', String(innerPin.y)]
+                    : [];
+                const innerTap = innerPin
+                    ? await runNative(['press', String(innerPin.x), String(innerPin.y)], settleOpts(args))
+                    : await runNative(['press', resolvedRef], settleOpts(args));
                 if (!innerTap.isError) {
-                    await sleep(focusWaitMs);
-                    const resolved = await runNative(['fill', resolvedRef, args.text]);
+                    const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
+                    if (delay > 0)
+                        await sleep(delay);
+                    const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
                     if (!resolved.isError) {
                         try {
                             const envelope = JSON.parse(resolved.content[0].text);
                             return okResult(envelope.data, {
-                                meta: { fallbackUsed: 'pressable-resolution', resolvedRef },
+                                meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
                             });
                         }
                         catch {

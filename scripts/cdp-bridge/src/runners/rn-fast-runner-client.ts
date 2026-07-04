@@ -136,6 +136,23 @@ export function createReadySignalParser(): ReadySignalParser {
 let runnerProcess: ChildProcess | null = null;
 let runnerState: FastRunnerState | null = null;
 
+// Story 04 (#385): capabilities from the last successful /health probe. Warm
+// before any mutating verb — ensureRunnerForCommand probes /health ahead of
+// every non-screenshot iOS command. Consumed by the settle engine.
+let lastKnownCapabilities: string[] = [];
+
+export function getFastRunnerCapabilities(): string[] {
+  return lastKnownCapabilities;
+}
+
+export function _resetCapabilitiesForTest(): void {
+  lastKnownCapabilities = [];
+}
+
+export function _setFastRunnerStateForTest(state: FastRunnerState | null): void {
+  runnerState = state;
+}
+
 // GH #384: announce the runner's quiescence-bypass status on the FIRST
 // successful /command after a state acquisition (fresh spawn or adoption),
 // so sessions are auditable without polling /health. Consumed by every
@@ -707,7 +724,9 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
+    // probe like every other client call — production default is globalThis.fetch.
+    const res = await fetchImpl(url, { signal: controller.signal });
     if (!res.ok) return { ok: false, status: res.status };
     let bodyOk: boolean | undefined;
     let protocolVersion: number | undefined;
@@ -753,6 +772,7 @@ function clearStateFile(): void {
   // state file is removed (the /tmp singleton is gone).
   const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
   runnerState = null;
+  lastKnownCapabilities = [];
   // M7 review (Gemini): null the child-process handle too. Previously a reap
   // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
   // eventually self-heal, but during the window a concurrent stopFastRunner
@@ -793,6 +813,7 @@ export async function probeFastRunnerLivenessDetailed(
   try {
     const res = await httpProbe(state.port, timeoutMs);
     if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+      lastKnownCapabilities = [];
       return { liveness: 'stale', staleReason: 'health' };
     }
     const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
@@ -806,6 +827,7 @@ export async function probeFastRunnerLivenessDetailed(
       REQUIRED_IOS_COMMANDS,
     );
     if (!compat.compatible) {
+      lastKnownCapabilities = [];
       return {
         liveness: 'stale',
         staleReason: compat.reason,
@@ -816,6 +838,7 @@ export async function probeFastRunnerLivenessDetailed(
         ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
       };
     }
+    lastKnownCapabilities = res.capabilities ?? [];
     return {
       liveness: 'alive',
       ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
@@ -823,6 +846,7 @@ export async function probeFastRunnerLivenessDetailed(
       ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
     };
   } catch {
+    lastKnownCapabilities = [];
     return { liveness: 'stale', staleReason: 'health' };
   }
 }
@@ -880,6 +904,7 @@ export interface RunIOSArgs {
     | 'findText'
     | 'type'
     | 'keyboardDismiss'
+    | 'isScreenStatic'
     | 'screenshot'
     | 'back'
     | 'scroll'
