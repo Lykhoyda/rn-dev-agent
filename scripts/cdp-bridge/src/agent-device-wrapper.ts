@@ -22,7 +22,7 @@ import type {
   FastRunnerLivenessDetail,
 } from './runners/rn-fast-runner-client.js';
 import type { ToolErrorCode } from './types.js';
-import type { SettleProbes, waitForSettle } from './lifecycle/settle.js';
+import type { SettleProbes, SettleOutcome, waitForSettle } from './lifecycle/settle.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import {
   refCenter,
@@ -34,6 +34,7 @@ import {
   getCachedMetadata,
   refreshRef,
   getLastSnapshotHash,
+  invalidateLastSnapshotHash,
   type FlatNode,
   type RefreshOutcome,
 } from './fast-runner-ref-map.js';
@@ -936,6 +937,7 @@ export interface SettleContext {
   verb: string;
   appId?: string;
   settle?: SettlePerCallOpts;
+  initialSnapshotHash?: string;
 }
 
 export interface SettleAfterMutationDeps {
@@ -950,18 +952,30 @@ export interface SettleAfterMutationDeps {
 // into an error; every path out of here returns the original result (with
 // meta.settle attached when the engine ran). Dynamic import keeps the
 // wrapper↔settle↔client module graph acyclic at load time.
-export async function settleAfterMutation(
+//
+// Story 05 (#386): also returns the raw SettleOutcome (null when settle never
+// ran) so callers can inspect hierarchyChanged. A mutating verb that exits
+// without a hash observation invalidates the ref-map's last snapshot hash —
+// the screen may have changed unobserved, and a later tap comparing against
+// the stale baseline would get a WRONG change verdict.
+export async function settleAfterMutationWithOutcome(
   result: ToolResult,
   ctx: SettleContext,
   deps: SettleAfterMutationDeps = {},
-): Promise<ToolResult> {
-  if (result.isError) return result;
-  if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb)) return result;
-  if (ctx.settle?.enabled === false) return result;
+): Promise<{ result: ToolResult; outcome: SettleOutcome | null }> {
+  if (result.isError) return { result, outcome: null }; // dispatch never landed — baseline keeps
+  if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb)) return { result, outcome: null };
+  if (ctx.settle?.enabled === false) {
+    invalidateLastSnapshotHash(); // mutated + settled blind
+    return { result, outcome: null };
+  }
   try {
     const settle = await import('./lifecycle/settle.js');
     const enabled = deps.enabled ?? settle.settleEnabled;
-    if (!enabled(process.env)) return result;
+    if (!enabled(process.env)) {
+      invalidateLastSnapshotHash();
+      return { result, outcome: null };
+    }
     const capabilities = deps.capabilities
       ? deps.capabilities(ctx.platform)
       : ctx.platform === 'ios'
@@ -978,14 +992,36 @@ export async function settleAfterMutation(
       capabilities,
       probes,
       ...(ctx.settle?.timeoutMs !== undefined ? { budgetMs: ctx.settle.timeoutMs } : {}),
+      ...(ctx.initialSnapshotHash !== undefined
+        ? { initialSnapshotHash: ctx.initialSnapshotHash }
+        : {}),
     });
-    return attachMeta(result, {
-      settle: { method: outcome.method, settled: outcome.settled },
-      timings_ms: { settle: outcome.ms },
-    });
+    if (outcome.hierarchyChanged === undefined) invalidateLastSnapshotHash();
+    return {
+      result: attachMeta(result, {
+        settle: {
+          method: outcome.method,
+          settled: outcome.settled,
+          ...(outcome.hierarchyChanged !== undefined
+            ? { hierarchyChanged: outcome.hierarchyChanged }
+            : {}),
+        },
+        timings_ms: { settle: outcome.ms },
+      }),
+      outcome,
+    };
   } catch {
-    return result;
+    invalidateLastSnapshotHash();
+    return { result, outcome: null };
   }
+}
+
+export async function settleAfterMutation(
+  result: ToolResult,
+  ctx: SettleContext,
+  deps: SettleAfterMutationDeps = {},
+): Promise<ToolResult> {
+  return (await settleAfterMutationWithOutcome(result, ctx, deps)).result;
 }
 
 export function selfHealEnabled(env: NodeJS.ProcessEnv): boolean {

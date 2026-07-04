@@ -5,7 +5,7 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
@@ -768,18 +768,28 @@ export function attachMetaNote(result, note) {
 // into an error; every path out of here returns the original result (with
 // meta.settle attached when the engine ran). Dynamic import keeps the
 // wrapper↔settle↔client module graph acyclic at load time.
-export async function settleAfterMutation(result, ctx, deps = {}) {
+//
+// Story 05 (#386): also returns the raw SettleOutcome (null when settle never
+// ran) so callers can inspect hierarchyChanged. A mutating verb that exits
+// without a hash observation invalidates the ref-map's last snapshot hash —
+// the screen may have changed unobserved, and a later tap comparing against
+// the stale baseline would get a WRONG change verdict.
+export async function settleAfterMutationWithOutcome(result, ctx, deps = {}) {
     if (result.isError)
-        return result;
+        return { result, outcome: null }; // dispatch never landed — baseline keeps
     if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
-        return result;
-    if (ctx.settle?.enabled === false)
-        return result;
+        return { result, outcome: null };
+    if (ctx.settle?.enabled === false) {
+        invalidateLastSnapshotHash(); // mutated + settled blind
+        return { result, outcome: null };
+    }
     try {
         const settle = await import('./lifecycle/settle.js');
         const enabled = deps.enabled ?? settle.settleEnabled;
-        if (!enabled(process.env))
-            return result;
+        if (!enabled(process.env)) {
+            invalidateLastSnapshotHash();
+            return { result, outcome: null };
+        }
         const capabilities = deps.capabilities
             ? deps.capabilities(ctx.platform)
             : ctx.platform === 'ios'
@@ -796,15 +806,33 @@ export async function settleAfterMutation(result, ctx, deps = {}) {
             capabilities,
             probes,
             ...(ctx.settle?.timeoutMs !== undefined ? { budgetMs: ctx.settle.timeoutMs } : {}),
+            ...(ctx.initialSnapshotHash !== undefined
+                ? { initialSnapshotHash: ctx.initialSnapshotHash }
+                : {}),
         });
-        return attachMeta(result, {
-            settle: { method: outcome.method, settled: outcome.settled },
-            timings_ms: { settle: outcome.ms },
-        });
+        if (outcome.hierarchyChanged === undefined)
+            invalidateLastSnapshotHash();
+        return {
+            result: attachMeta(result, {
+                settle: {
+                    method: outcome.method,
+                    settled: outcome.settled,
+                    ...(outcome.hierarchyChanged !== undefined
+                        ? { hierarchyChanged: outcome.hierarchyChanged }
+                        : {}),
+                },
+                timings_ms: { settle: outcome.ms },
+            }),
+            outcome,
+        };
     }
     catch {
-        return result;
+        invalidateLastSnapshotHash();
+        return { result, outcome: null };
     }
+}
+export async function settleAfterMutation(result, ctx, deps = {}) {
+    return (await settleAfterMutationWithOutcome(result, ctx, deps)).result;
 }
 export function selfHealEnabled(env) {
     const v = env.RN_SELF_HEAL?.trim().toLowerCase();
