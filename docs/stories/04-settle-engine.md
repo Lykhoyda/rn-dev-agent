@@ -1,6 +1,6 @@
 # Story 04 — Shared two-tier settle engine + capability flags
 
-**Status:** Proposed (2026-07-02)
+**Status:** Implemented (2026-07-04, #385)
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Replaces fixed sleeps (`FOCUS_DELAY_MS=150` etc.) with a principled "UI is stable" invariant applied after every mutating action, on both platforms, from one implementation
 **Effort:** M
