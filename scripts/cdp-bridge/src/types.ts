@@ -184,6 +184,8 @@ export interface StatusResult {
       pluginVersion?: string;
       compatible: boolean;
     };
+    // GH #382: prebuilt (cache/download) vs local xcodebuild — /doctor renders it.
+    runnerProvenance?: 'prebuilt' | 'local';
   };
   /**
    * Task 6: active action-store backend. One of `'sqlite'`, `'legacy-files'`,
