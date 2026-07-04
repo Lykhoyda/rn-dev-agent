@@ -42,7 +42,7 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val SUPPORTED_COMMANDS = listOf(
             "snapshot", "tap", "press", "type", "fill", "drag", "swipe", "scroll",
             "screenshot", "back", "dismissKeyboard", "keyboard", "longPress",
-            "pinch", "findText",
+            "pinch", "findText", "isWindowUpdating",
         )
     }
 
@@ -75,6 +75,13 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
             "screenshot" -> screenshot()
             "back" -> JSONObject().put("pressed", device.pressBack())
             "dismissKeyboard", "keyboard" -> JSONObject().put("dismissed", device.pressBack())
+            // Settle probe (#385): read-only window-gate, deliberately absent from
+            // the foregrounding whitelist above — it must never steal foreground,
+            // and it IS the settle primitive so it adds no sleep of its own.
+            "isWindowUpdating" -> {
+                val timeoutMs = cmd.optLong("timeoutMs", 500L).coerceIn(0L, 2_000L)
+                JSONObject().put("updating", device.waitForWindowUpdate(appPackage, timeoutMs))
+            }
             "longPress" -> longPress(cmd)
             "pinch" -> pinch(cmd)
             "findText" -> findText(cmd)

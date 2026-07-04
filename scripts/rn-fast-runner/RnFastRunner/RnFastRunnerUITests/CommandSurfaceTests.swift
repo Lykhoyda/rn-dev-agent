@@ -27,8 +27,9 @@ final class CommandSurfaceTests: XCTestCase {
   // the bridge gate, and gating on this verb would force cold rebuilds of
   // every pre-settle artifact instead of the designed snapshot-poll degrade.
   func testSettleProbeVerbIsLifecycle() {
-    let verb = CommandType(rawValue: "isScreenStatic")
-    XCTAssertNotNil(verb)
-    XCTAssertTrue(RnFastRunnerTests().isRunnerLifecycleCommand(verb!))
+    guard let verb = CommandType(rawValue: "isScreenStatic") else {
+      return XCTFail("CommandType missing isScreenStatic")
+    }
+    XCTAssertTrue(isRunnerLifecycleCommand(verb))
   }
 }

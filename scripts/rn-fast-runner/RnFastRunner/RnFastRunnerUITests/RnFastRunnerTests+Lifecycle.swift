@@ -197,22 +197,6 @@ extension RnFastRunnerTests {
     }
   }
 
-  func isRunnerLifecycleCommand(_ command: CommandType) -> Bool {
-    switch command {
-    // isScreenStatic skips activation like .screenshot: (1) it is a pure read of
-    // whatever is actually on screen — if a foreign overlay/dialog is animating,
-    // "not settled" is the RIGHT answer, and re-activating mid-probe would fight
-    // legitimate transitions; (2) it only ever runs immediately after a mutating
-    // command that DID run the activation preamble, so the target app is
-    // foregrounded by construction; (3) activate() inside a 200ms poll loop would
-    // dominate the probe cost and perturb the very animations being measured.
-    case .shutdown, .screenshot, .isScreenStatic:
-      return true
-    default:
-      return false
-    }
-  }
-
   // MARK: - Interaction Stabilization
 
   func applyInteractionStabilizationIfNeeded() {
@@ -229,5 +213,23 @@ extension RnFastRunnerTests {
   func sleepFor(_ delay: TimeInterval) {
     guard delay > 0 else { return }
     usleep(useconds_t(delay * 1_000_000))
+  }
+}
+
+// Free function (not a test-case method) so pure-logic tests can exercise the
+// classification without instantiating the XCUITest harness.
+func isRunnerLifecycleCommand(_ command: CommandType) -> Bool {
+  switch command {
+  // isScreenStatic skips activation like .screenshot: (1) it is a pure read of
+  // whatever is actually on screen — if a foreign overlay/dialog is animating,
+  // "not settled" is the RIGHT answer, and re-activating mid-probe would fight
+  // legitimate transitions; (2) it only ever runs immediately after a mutating
+  // command that DID run the activation preamble, so the target app is
+  // foregrounded by construction; (3) activate() inside a 200ms poll loop would
+  // dominate the probe cost and perturb the very animations being measured.
+  case .shutdown, .screenshot, .isScreenStatic:
+    return true
+  default:
+    return false
   }
 }
