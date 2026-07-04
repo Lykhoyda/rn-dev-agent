@@ -84,7 +84,14 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
             }
             "longPress" -> longPress(cmd)
             "pinch" -> pinch(cmd)
-            "findText" -> findText(cmd)
+            // GH #444: optString defaults missing text to "" and By.textContains("")
+            // matches an arbitrary node — refuse malformed requests instead.
+            "findText" -> {
+                if (cmd.optString("text").isBlank()) {
+                    return error("INVALID_ARGUMENT", "findText requires a non-blank 'text' argument")
+                }
+                findText(cmd)
+            }
             // Note: TS-side `device_find` is a snapshot-based orchestrator (mirrors iOS).
             // The runner exposes `findText` only as an opt-in fast-path for existence checks.
             else -> return error("UNSUPPORTED_COMMAND", "Unsupported Android runner command: $command")
