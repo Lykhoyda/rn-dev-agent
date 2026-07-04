@@ -532,7 +532,9 @@ async function defaultHttpProbe(port, timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const res = await fetch(url, { signal: controller.signal });
+        // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
+        // probe like every other client call — production default is globalThis.fetch.
+        const res = await fetchImpl(url, { signal: controller.signal });
         if (!res.ok)
             return { ok: false, status: res.status };
         let bodyOk;

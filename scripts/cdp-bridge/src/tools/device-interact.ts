@@ -453,6 +453,16 @@ interface PressArgs {
   count?: number;
   holdMs?: number;
   waitForFocusMs?: number;
+  settleTimeoutMs?: number;
+}
+
+// Story 04 (#385): thread a caller-supplied settle budget into runNative.
+function settleOpts(args: { settleTimeoutMs?: number }): {
+  settle?: { timeoutMs: number };
+} {
+  return args.settleTimeoutMs !== undefined
+    ? { settle: { timeoutMs: args.settleTimeoutMs } }
+    : {};
 }
 
 export function createDevicePressHandler(): (args: PressArgs) => Promise<ToolResult> {
@@ -462,7 +472,7 @@ export function createDevicePressHandler(): (args: PressArgs) => Promise<ToolRes
     if (args.doubleTap) cliArgs.push('--double-tap');
     if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
     if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
-    const result = surfaceKeyboardGuard(await runNative(cliArgs));
+    const result = surfaceKeyboardGuard(await runNative(cliArgs, settleOpts(args)));
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
       await new Promise((r) => setTimeout(r, args.waitForFocusMs));
     }
@@ -509,6 +519,8 @@ interface FillArgs {
   waitForKeyboardMs?: number;
   /** #191: explicit testID for the JS-first path; resolved from ref's cached identifier when omitted. */
   testID?: string;
+  /** Story 04 (#385): per-call settle budget override in ms. */
+  settleTimeoutMs?: number;
 }
 
 // Splits a chunk into segments where no segment, after space→%s encoding,

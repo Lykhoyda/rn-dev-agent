@@ -48,6 +48,12 @@ if (!activeSession) {
 export function getActiveSession() {
     return activeSession;
 }
+// Story 04 (#385): deterministic session seam for wiring tests — without it,
+// runNative falls back to resolveBootedIosUdid(), which shells `xcrun simctl`
+// (flaky on CI, machine-dependent locally).
+export function _setActiveSessionForTest(session) {
+    activeSession = session;
+}
 export function setActiveSession(info) {
     activeSession = info;
     // CDP-015: atomic write via tmp + rename, restrictive perms (0600 — only
@@ -691,14 +697,23 @@ export function _setRunAgentDeviceForTest(fn) {
     _runAgentDeviceOverrideForTest = fn;
 }
 // GH #383: tool results are MCP envelopes (JSON text in content[0]) — attach
-// a meta.note by re-encoding, defensively.
-export function attachMetaNote(result, note) {
+// meta by re-encoding, defensively. timings_ms is deep-merged so a settle
+// timing never clobbers a dispatcher timing (or vice versa).
+export function attachMeta(result, patch) {
     try {
         const first = result.content?.[0];
         if (!first || first.type !== 'text')
             return result;
         const envelope = JSON.parse(first.text);
-        envelope.meta = { ...envelope.meta, note };
+        const prevTimings = (envelope.meta?.timings_ms ?? {});
+        const patchTimings = (patch.timings_ms ?? {});
+        envelope.meta = {
+            ...envelope.meta,
+            ...patch,
+            ...(Object.keys(prevTimings).length + Object.keys(patchTimings).length > 0
+                ? { timings_ms: { ...prevTimings, ...patchTimings } }
+                : {}),
+        };
         return {
             ...result,
             content: [
@@ -706,6 +721,52 @@ export function attachMetaNote(result, note) {
                 ...result.content.slice(1),
             ],
         };
+    }
+    catch {
+        return result;
+    }
+}
+export function attachMetaNote(result, note) {
+    return attachMeta(result, { note });
+}
+// Story 04 (#385): post-mutation settle at the dispatch choke point. Advisory
+// by contract — a settle failure or timeout NEVER turns a succeeded action
+// into an error; every path out of here returns the original result (with
+// meta.settle attached when the engine ran). Dynamic import keeps the
+// wrapper↔settle↔client module graph acyclic at load time.
+export async function settleAfterMutation(result, ctx, deps = {}) {
+    if (result.isError)
+        return result;
+    if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
+        return result;
+    if (ctx.settle?.enabled === false)
+        return result;
+    try {
+        const settle = await import('./lifecycle/settle.js');
+        const enabled = deps.enabled ?? settle.settleEnabled;
+        if (!enabled(process.env))
+            return result;
+        const capabilities = deps.capabilities
+            ? deps.capabilities(ctx.platform)
+            : ctx.platform === 'ios'
+                ? (await import('./runners/rn-fast-runner-client.js')).getFastRunnerCapabilities()
+                : (await import('./runners/rn-android-runner-client.js')).getAndroidRunnerCapabilities();
+        const probes = deps.probes
+            ? deps.probes(ctx.platform, ctx.appId)
+            : ctx.platform === 'ios'
+                ? settle.buildIosProbes(ctx.appId)
+                : settle.buildAndroidProbes(ctx.appId);
+        const wait = deps.wait ?? settle.waitForSettle;
+        const outcome = await wait({
+            platform: ctx.platform,
+            capabilities,
+            probes,
+            ...(ctx.settle?.timeoutMs !== undefined ? { budgetMs: ctx.settle.timeoutMs } : {}),
+        });
+        return attachMeta(result, {
+            settle: { method: outcome.method, settled: outcome.settled },
+            timings_ms: { settle: outcome.ms },
+        });
     }
     catch {
         return result;
@@ -749,7 +810,13 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
-        const result = await runIOS(ios);
+        let result = await runIOS(ios);
+        result = await settleAfterMutation(result, {
+            platform: 'ios',
+            verb: cliArgs[0],
+            ...(appId ? { appId } : {}),
+            ...(opts.settle ? { settle: opts.settle } : {}),
+        });
         return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
     }
     // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
@@ -818,7 +885,13 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
-        const result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+        let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+        result = await settleAfterMutation(result, {
+            platform: 'android',
+            verb: cliArgs[0],
+            ...(appId ? { appId } : {}),
+            ...(opts.settle ? { settle: opts.settle } : {}),
+        });
         const note = consumePendingAndroidUpgradeNote();
         return note ? attachMetaNote(result, note) : result;
     }

@@ -327,6 +327,12 @@ export function findInputForPressable(nodes, pressableRef) {
     const inputNode = nodes.find((n) => n.identifier === baseId && n.type !== undefined && TEXT_INPUT_TYPES.has(n.type));
     return inputNode ? `@${inputNode.ref}` : null;
 }
+// Story 04 (#385): thread a caller-supplied settle budget into runNative.
+function settleOpts(args) {
+    return args.settleTimeoutMs !== undefined
+        ? { settle: { timeoutMs: args.settleTimeoutMs } }
+        : {};
+}
 export function createDevicePressHandler() {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
@@ -337,7 +343,7 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = surfaceKeyboardGuard(await runNative(cliArgs));
+        const result = surfaceKeyboardGuard(await runNative(cliArgs, settleOpts(args)));
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }

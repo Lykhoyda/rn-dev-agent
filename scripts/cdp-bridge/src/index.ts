@@ -1181,6 +1181,15 @@ trackedTool(
       .describe(
         'Sleep this many ms after tap to let keyboard focus settle — useful in sequential press+fill flows where focus would otherwise not propagate.',
       ),
+    settleTimeoutMs: z
+      .number()
+      .int()
+      .min(500)
+      .max(30000)
+      .optional()
+      .describe(
+        'Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.',
+      ),
   },
   createDevicePressHandler(),
 );
@@ -1205,6 +1214,15 @@ trackedTool(
       .optional()
       .describe(
         "Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token.",
+      ),
+    settleTimeoutMs: z
+      .number()
+      .int()
+      .min(500)
+      .max(30000)
+      .optional()
+      .describe(
+        'Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.',
       ),
   },
   createDeviceFillHandler(getClient),

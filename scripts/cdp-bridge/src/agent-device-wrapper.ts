@@ -22,6 +22,7 @@ import type {
   FastRunnerLivenessDetail,
 } from './runners/rn-fast-runner-client.js';
 import type { ToolErrorCode } from './types.js';
+import type { SettleProbes, waitForSettle } from './lifecycle/settle.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import {
   refCenter,
@@ -79,6 +80,13 @@ if (!activeSession) {
 
 export function getActiveSession(): SessionState | null {
   return activeSession;
+}
+
+// Story 04 (#385): deterministic session seam for wiring tests — without it,
+// runNative falls back to resolveBootedIosUdid(), which shells `xcrun simctl`
+// (flaky on CI, machine-dependent locally).
+export function _setActiveSessionForTest(session: SessionState | null): void {
+  activeSession = session;
 }
 
 export function setActiveSession(info: SessionState): void {
@@ -843,13 +851,22 @@ export function _setRunAgentDeviceForTest(fn: RunAgentDeviceFn | null): void {
 }
 
 // GH #383: tool results are MCP envelopes (JSON text in content[0]) — attach
-// a meta.note by re-encoding, defensively.
-export function attachMetaNote(result: ToolResult, note: string): ToolResult {
+// meta by re-encoding, defensively. timings_ms is deep-merged so a settle
+// timing never clobbers a dispatcher timing (or vice versa).
+export function attachMeta(result: ToolResult, patch: Record<string, unknown>): ToolResult {
   try {
     const first = result.content?.[0];
     if (!first || first.type !== 'text') return result;
     const envelope = JSON.parse(first.text) as { meta?: Record<string, unknown> };
-    envelope.meta = { ...envelope.meta, note };
+    const prevTimings = (envelope.meta?.timings_ms ?? {}) as Record<string, unknown>;
+    const patchTimings = (patch.timings_ms ?? {}) as Record<string, unknown>;
+    envelope.meta = {
+      ...envelope.meta,
+      ...patch,
+      ...(Object.keys(prevTimings).length + Object.keys(patchTimings).length > 0
+        ? { timings_ms: { ...prevTimings, ...patchTimings } }
+        : {}),
+    };
     return {
       ...result,
       content: [
@@ -862,9 +879,79 @@ export function attachMetaNote(result: ToolResult, note: string): ToolResult {
   }
 }
 
+export function attachMetaNote(result: ToolResult, note: string): ToolResult {
+  return attachMeta(result, { note });
+}
+
+export interface SettlePerCallOpts {
+  enabled?: boolean;
+  timeoutMs?: number;
+}
+
+export interface SettleContext {
+  platform: 'ios' | 'android';
+  verb: string;
+  appId?: string;
+  settle?: SettlePerCallOpts;
+}
+
+export interface SettleAfterMutationDeps {
+  enabled?: (env: NodeJS.ProcessEnv) => boolean;
+  capabilities?: (platform: 'ios' | 'android') => string[];
+  probes?: (platform: 'ios' | 'android', appId?: string) => SettleProbes;
+  wait?: typeof waitForSettle;
+}
+
+// Story 04 (#385): post-mutation settle at the dispatch choke point. Advisory
+// by contract — a settle failure or timeout NEVER turns a succeeded action
+// into an error; every path out of here returns the original result (with
+// meta.settle attached when the engine ran). Dynamic import keeps the
+// wrapper↔settle↔client module graph acyclic at load time.
+export async function settleAfterMutation(
+  result: ToolResult,
+  ctx: SettleContext,
+  deps: SettleAfterMutationDeps = {},
+): Promise<ToolResult> {
+  if (result.isError) return result;
+  if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb)) return result;
+  if (ctx.settle?.enabled === false) return result;
+  try {
+    const settle = await import('./lifecycle/settle.js');
+    const enabled = deps.enabled ?? settle.settleEnabled;
+    if (!enabled(process.env)) return result;
+    const capabilities = deps.capabilities
+      ? deps.capabilities(ctx.platform)
+      : ctx.platform === 'ios'
+        ? (await import('./runners/rn-fast-runner-client.js')).getFastRunnerCapabilities()
+        : (await import('./runners/rn-android-runner-client.js')).getAndroidRunnerCapabilities();
+    const probes = deps.probes
+      ? deps.probes(ctx.platform, ctx.appId)
+      : ctx.platform === 'ios'
+        ? settle.buildIosProbes(ctx.appId)
+        : settle.buildAndroidProbes(ctx.appId);
+    const wait = deps.wait ?? settle.waitForSettle;
+    const outcome = await wait({
+      platform: ctx.platform,
+      capabilities,
+      probes,
+      ...(ctx.settle?.timeoutMs !== undefined ? { budgetMs: ctx.settle.timeoutMs } : {}),
+    });
+    return attachMeta(result, {
+      settle: { method: outcome.method, settled: outcome.settled },
+      timings_ms: { settle: outcome.ms },
+    });
+  } catch {
+    return result;
+  }
+}
+
 export async function runNative(
   cliArgs: string[],
-  opts: { skipSession?: boolean; platform?: 'ios' | 'android' | null } = {},
+  opts: {
+    skipSession?: boolean;
+    platform?: 'ios' | 'android' | null;
+    settle?: SettlePerCallOpts;
+  } = {},
 ): Promise<ToolResult> {
   if (_runAgentDeviceOverrideForTest) {
     return _runAgentDeviceOverrideForTest(cliArgs, opts);
@@ -904,7 +991,13 @@ export async function runNative(
     }
     const { runIOS } = await import('./runners/rn-fast-runner-client.js');
     const ios = buildRunIOSArgs(cliArgs, appId);
-    const result = await runIOS(ios);
+    let result = await runIOS(ios);
+    result = await settleAfterMutation(result, {
+      platform: 'ios',
+      verb: cliArgs[0],
+      ...(appId ? { appId } : {}),
+      ...(opts.settle ? { settle: opts.settle } : {}),
+    });
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
   }
 
@@ -987,7 +1080,13 @@ export async function runNative(
     const { runAndroid, consumePendingAndroidUpgradeNote } =
       await import('./runners/rn-android-runner-client.js');
     const android = buildRunAndroidArgs(cliArgs, appId);
-    const result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+    let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
+    result = await settleAfterMutation(result, {
+      platform: 'android',
+      verb: cliArgs[0],
+      ...(appId ? { appId } : {}),
+      ...(opts.settle ? { settle: opts.settle } : {}),
+    });
     const note = consumePendingAndroidUpgradeNote();
     return note ? attachMetaNote(result, note) : result;
   }

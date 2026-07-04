@@ -2,6 +2,10 @@ import { hashSnapshotNodes } from './settle-hash.js';
 import { runIOS } from '../runners/rn-fast-runner-client.js';
 import { androidIsWindowUpdatingProbe, androidSnapshotNodesViaProbe, getAndroidRunnerHostPort, } from '../runners/rn-android-runner-client.js';
 export const SETTLE_DEFAULT_BUDGET_MS = 6000;
+// Hard ceiling for caller-supplied budgets (MCP args are untrusted): matches
+// the slow-command timeout class. Non-finite/negative input falls back to the
+// default rather than disabling or unbounding the wait.
+export const SETTLE_MAX_BUDGET_MS = 30_000;
 // Maestro parity: SCREEN_SETTLE_TIMEOUT_MS=3000 (IOSDriver.kt:487-504); hierarchy
 // polling bounded 10×200ms (ScreenshotUtils.kt:38-74). Window-gate probe is 100ms
 // (not Maestro's 500) so the static-screen path stays inside the spec's ≤150ms
@@ -18,7 +22,10 @@ export function settleEnabled(env) {
 }
 export async function waitForSettle(opts) {
     const { platform, capabilities, probes, initialSnapshotHash } = opts;
-    const budgetMs = opts.budgetMs ?? SETTLE_DEFAULT_BUDGET_MS;
+    const requested = opts.budgetMs;
+    const budgetMs = typeof requested === 'number' && Number.isFinite(requested) && requested >= 0
+        ? Math.min(requested, SETTLE_MAX_BUDGET_MS)
+        : SETTLE_DEFAULT_BUDGET_MS;
     const start = probes.now();
     const elapsed = () => probes.now() - start;
     const remaining = () => budgetMs - elapsed();
