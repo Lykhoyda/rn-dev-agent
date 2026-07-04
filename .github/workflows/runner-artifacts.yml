@@ -1,0 +1,179 @@
+name: Runner artifacts
+
+# GH #382 (Story 01): publish prebuilt runner artifacts so the first
+# device_snapshot action=open never pays the multi-minute cold build.
+#
+# SCAFFOLD — this workflow cannot be exercised outside a real release run (it
+# needs macOS + Android CI runners and a version bump). It is wired to fire once
+# per release: on push to main it detects a plugin.json version bump (i.e. the
+# changesets "Version Packages" PR just merged), builds both runners, attaches
+# the zips to a GitHub Release v<version>, and commits runner-manifest.json (the
+# client's offline SHA-256 trust root — see scripts/cdp-bridge/src/runners/
+# runner-artifacts.ts). Until this runs for a released version, clients resolve
+# to the local build (provenance 'local'); that is by design, not a failure.
+#
+# PREREQUISITES (repo settings, cannot be set from this file):
+#   - Settings > Actions > General > Workflow permissions: "Read and write"
+#     (needed to create the release and push the manifest commit).
+#   - If branch protection blocks the Actions bot from pushing to main, the
+#     manifest commit step must be routed through a PR instead (see comment).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: Build+publish artifacts for this exact version (skips bump detection)
+        required: false
+        default: ''
+
+concurrency: runner-artifacts-${{ github.ref }}
+
+# Minimal, explicit permissions (CodeQL actions/missing-workflow-permissions).
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    name: Detect version bump
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      changed: ${{ steps.v.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          fetch-depth: 2
+      - id: v
+        name: Compare plugin.json version to the previous commit
+        env:
+          FORCE_VERSION: ${{ github.event.inputs.force_version }}
+        run: |
+          CUR=$(jq -r '.version' .claude-plugin/plugin.json)
+          if [ -n "$FORCE_VERSION" ]; then
+            echo "version=$FORCE_VERSION" >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git show HEAD~1:.claude-plugin/plugin.json > /tmp/prev.json 2>/dev/null || echo '{}' > /tmp/prev.json
+          PREV=$(jq -r '.version // "none"' /tmp/prev.json)
+          echo "current=$CUR previous=$PREV"
+          echo "version=$CUR" >> "$GITHUB_OUTPUT"
+          if [ "$CUR" != "$PREV" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create the release for this version (idempotent)
+        if: steps.v.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" \
+              --title "v$VERSION" \
+              --notes "Prebuilt runner artifacts for v$VERSION (rn-fast-runner iOS, rn-android-runner)."
+          fi
+
+  build-ios:
+    name: Build rn-fast-runner (iOS)
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+      - name: build-for-testing (no code signing, both arches)
+        run: |
+          xcodebuild build-for-testing \
+            -project scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
+            -scheme RnFastRunner \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO
+      - name: Zip products + xctestrun (preserving Build/Products layout)
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          test -n "$(find build/dd/Build/Products -name '*.xctestrun' -print -quit)" \
+            || { echo "no .xctestrun produced — unexpected DerivedData layout"; exit 1; }
+          (cd build/dd && zip -r "$GITHUB_WORKSPACE/rn-fast-runner-$VERSION-sim.zip" Build/Products)
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: gh release upload "v$VERSION" "rn-fast-runner-$VERSION-sim.zip" --clobber
+
+  build-android:
+    name: Build rn-android-runner (Android)
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+      # Ubuntu runners ship a JDK (JAVA_HOME set) and the Android SDK
+      # ($ANDROID_HOME). If a future AGP needs a newer JDK, add actions/setup-java.
+      - name: assembleDebug + assembleDebugAndroidTest
+        working-directory: scripts/rn-android-runner
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Zip both APKs (flat)
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          APP=scripts/rn-android-runner/app/build/outputs/apk/debug/app-debug.apk
+          TEST=scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          test -f "$APP" && test -f "$TEST" || { echo "APK(s) missing after gradle build"; exit 1; }
+          zip -j "rn-android-runner-$VERSION.zip" "$APP" "$TEST"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: gh release upload "v$VERSION" "rn-android-runner-$VERSION.zip" --clobber
+
+  publish-manifest:
+    name: Generate + commit runner-manifest.json
+    needs: [detect, build-ios, build-android]
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — SHA pin
+        with:
+          node-version: 22
+      - name: Download both runner zips from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          gh release download "v$VERSION" \
+            --pattern "rn-fast-runner-$VERSION-sim.zip" \
+            --pattern "rn-android-runner-$VERSION.zip"
+      - name: Generate the manifest (sha256 + bytes)
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          node scripts/build-runner-manifest.mjs \
+            --version "$VERSION" \
+            --ios "rn-fast-runner-$VERSION-sim.zip" \
+            --android "rn-android-runner-$VERSION.zip" \
+            --out runner-manifest.json
+          cat runner-manifest.json
+      - name: Attach the manifest to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: gh release upload "v$VERSION" runner-manifest.json --clobber
+      - name: Commit the manifest to main (client's offline trust root)
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add runner-manifest.json
+          # [skip ci] keeps CI off a manifest-only commit; it changes no version,
+          # so this workflow does not re-trigger (detect -> changed=false).
+          git commit -m "chore(release): runner-manifest for v$VERSION [skip ci]" \
+            || { echo "manifest unchanged"; exit 0; }
+          # If branch protection rejects this push, route it through a PR instead.
+          git push origin HEAD:main
