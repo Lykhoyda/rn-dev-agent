@@ -151,6 +151,8 @@ button { font: inherit; }
 .state { flex: 1; overflow: auto; padding: 10px 12px; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
 .liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 8px; }
+.mirror-status { color: #565f89; font-size: 11px; margin-top: 6px; text-align: center; }
+.mirror-hint { color: #e0af68; }
 
 /* ── Empty states ───────────────────────────────────────── */
 .empty { color: #565f89; padding: 14px; }

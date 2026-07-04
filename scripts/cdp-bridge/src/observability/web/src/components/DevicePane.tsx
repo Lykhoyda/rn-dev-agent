@@ -1,19 +1,60 @@
-import type { JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
+import type { MirrorState } from '../types';
 
 interface DevicePaneProps {
+  mirror: MirrorState | null;
   liveShotSeq: number | null;
   /** seq of the latest device_screenshot event, used before any live frame exists. */
   fallbackSeq: number | null;
   route: string | null;
 }
 
-export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps): JSX.Element {
-  const src =
+const MAX_MIRROR_RETRIES = 3;
+
+export function DevicePane({
+  mirror,
+  liveShotSeq,
+  fallbackSeq,
+  route,
+}: DevicePaneProps): JSX.Element {
+  // Nonce busts the browser's connection cache on retry; attempts cap avoids
+  // hammering a dead endpoint (mirror disabled / persistent capture error).
+  const [nonce, setNonce] = useState(1);
+  const [attempts, setAttempts] = useState(0);
+
+  // A fresh starting/streaming status is the server telling us the pipeline is
+  // (re)alive — re-arm the <img> retry budget.
+  useEffect(() => {
+    if (mirror?.status === 'starting' || mirror?.status === 'streaming') {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    }
+  }, [mirror?.status]);
+
+  const mirrorBroken = mirror?.status === 'error' || attempts >= MAX_MIRROR_RETRIES;
+  const useMirror = !mirrorBroken;
+
+  const fallbackSrc =
     liveShotSeq != null
       ? `/api/live-screenshot/${liveShotSeq}`
       : fallbackSeq != null
         ? `/api/screenshot/${fallbackSeq}`
         : null;
+
+  const onMirrorError = (): void => {
+    setAttempts((a) => a + 1);
+    if (attempts + 1 < MAX_MIRROR_RETRIES) {
+      setTimeout(() => setNonce((n) => n + 1), 2000);
+    }
+  };
+
+  const statusLine =
+    mirror?.status === 'streaming'
+      ? `mirror: ${mirror.pipeline}${mirror.fps ? ` ~${mirror.fps}fps` : ''}`
+      : mirror?.status === 'error'
+        ? `mirror off: ${mirror.reason ?? 'error'}`
+        : null;
+
   return (
     <div className="pane center">
       <div className="pane-head">
@@ -21,15 +62,29 @@ export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps)
         {route && <span className="route-chip">{route}</span>}
       </div>
       <div className="screen">
-        {src ? (
+        {useMirror ? (
           <div className="device-frame">
-            <img src={src} alt="device screenshot" />
+            <img
+              src={`/api/device/mirror?t=${nonce}`}
+              alt="live device mirror"
+              onError={onMirrorError}
+            />
+          </div>
+        ) : fallbackSrc ? (
+          <div className="device-frame">
+            <img src={fallbackSrc} alt="device screenshot" />
           </div>
         ) : (
           <div className="empty empty-guide">
             <div className="empty-title">No screenshot yet</div>
             <div>The screen appears here automatically after the agent interacts with the app.</div>
             <div>Nothing showing? Check the connection with cdp_status.</div>
+          </div>
+        )}
+        {(statusLine || mirror?.hint) && (
+          <div className="mirror-status">
+            {statusLine}
+            {mirror?.hint ? <span className="mirror-hint"> — {mirror.hint}</span> : null}
           </div>
         )}
       </div>
