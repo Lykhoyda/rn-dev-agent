@@ -1,7 +1,10 @@
+import { hashSnapshotNodes } from './lifecycle/settle-hash.js';
 let refMap = new Map();
 let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
+let lastSnapshotNodeCount = 0;
+let lastSnapshotHash = null;
 export function updateRefMap(nodes) {
     refMap.clear();
     screenRect = null;
@@ -48,6 +51,8 @@ export function clearRefMap() {
     metadataMap.clear();
     screenRect = null;
     lastUpdated = 0;
+    lastSnapshotNodeCount = 0;
+    lastSnapshotHash = null;
 }
 export function hasRefMap() {
     return refMap.size > 0;
@@ -96,26 +101,74 @@ export function updateRefMapFromFlat(nodes) {
     refMap.clear();
     metadataMap.clear();
     screenRect = null;
-    for (const node of nodes) {
+    const hashed = [];
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
         if (!node.ref || !node.rect)
             continue;
         const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
-        const meta = { type: node.type };
+        const meta = { type: node.type, flatIndex: i };
         if (node.label !== undefined)
             meta.label = node.label;
         if (node.identifier !== undefined)
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
+        hashed.push(node);
         if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
             screenRect = node.rect;
         }
+    }
+    lastSnapshotNodeCount = nodes.length;
+    // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
+    // dereferences node.rect.* unconditionally, and a malformed entry must not
+    // throw mid-update. For real runner data the filtered subset equals the full
+    // array (both mappers pre-filter !rect), so comparability with the settle
+    // probes is preserved. Fail-open on hash error (matches settle.ts).
+    try {
+        lastSnapshotHash = hashSnapshotNodes(hashed);
+    }
+    catch {
+        lastSnapshotHash = null;
     }
     lastUpdated = Date.now();
 }
 export function getCachedMetadata(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;
-    return metadataMap.get(key) ?? null;
+    const rec = metadataMap.get(key);
+    if (!rec)
+        return null;
+    const meta = { type: rec.type };
+    if (rec.label !== undefined)
+        meta.label = rec.label;
+    if (rec.identifier !== undefined)
+        meta.identifier = rec.identifier;
+    return meta;
+}
+export function getCachedSignature(ref) {
+    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    const rec = metadataMap.get(key);
+    if (!rec)
+        return null;
+    const sig = {
+        type: rec.type,
+        flatIndex: rec.flatIndex,
+        nodeCount: lastSnapshotNodeCount,
+    };
+    if (rec.label !== undefined)
+        sig.label = rec.label;
+    if (rec.identifier !== undefined)
+        sig.identifier = rec.identifier;
+    return sig;
+}
+export function getLastSnapshotHash() {
+    return lastSnapshotHash;
+}
+// Story 05 (#386): called when a mutating verb settles without any hash
+// observation — the screen may have changed unobserved, so the baseline must
+// not be compared against. Fail-open beats fail-wrong.
+export function invalidateLastSnapshotHash() {
+    lastSnapshotHash = null;
 }
 function metadataMatches(a, b) {
     return a.type === b.type && a.label === b.label && a.identifier === b.identifier;
