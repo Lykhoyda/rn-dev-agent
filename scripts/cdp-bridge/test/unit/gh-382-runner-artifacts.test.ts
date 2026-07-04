@@ -341,3 +341,35 @@ test('Android: RN_RUNNER_BUILD=local -> build-local uses local apks', async () =
   assert.equal(r.testApk, LOCAL_APKS.testApk);
   assert.equal(calls.fetch.length, 0);
 });
+
+// --- forceLocalBuild: recovery must bypass prebuilt (Codex P1: stale-artifact heal) ---
+
+test('iOS: forceLocalBuild bypasses a valid cache -> build-local, no network', async () => {
+  const cacheDir = join('/cache', '0.62.3', 'ios');
+  const zip = join(cacheDir, 'rn-fast-runner-0.62.3-sim.zip');
+  const { deps, calls } = makeDeps({
+    manifest: IOS_MANIFEST,
+    files: [zip, join(cacheDir, 'products/Build/Products/RnFastRunner.xctestrun')],
+    shas: { [zip]: 'GOOD' },
+  });
+  const r = await resolveIosRunnerArtifacts('0.62.3', LOCAL_DD, deps, true);
+  assert.equal(r.provenance, 'build-local');
+  assert.equal(r.derivedDataPath, LOCAL_DD);
+  assert.equal(calls.fetch.length, 0);
+});
+
+test('Android: forceLocalBuild bypasses a valid cache -> build-local, uses local apks', async () => {
+  const cacheDir = join('/cache', '0.62.3', 'android');
+  const zip = join(cacheDir, 'rn-android-runner-0.62.3.zip');
+  const products = join(cacheDir, 'products');
+  const { deps, calls } = makeDeps({
+    manifest: IOS_MANIFEST,
+    files: [zip, join(products, ANDROID_APP_APK_NAME), join(products, ANDROID_TEST_APK_NAME)],
+    shas: { [zip]: 'GOOD' },
+  });
+  const r = await resolveAndroidRunnerArtifacts('0.62.3', LOCAL_APKS, deps, true);
+  assert.equal(r.provenance, 'build-local');
+  assert.equal(r.appApk, LOCAL_APKS.appApk);
+  assert.equal(r.testApk, LOCAL_APKS.testApk);
+  assert.equal(calls.fetch.length, 0);
+});

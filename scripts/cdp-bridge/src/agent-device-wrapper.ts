@@ -631,7 +631,11 @@ export function decideRunnerSpawn(input: {
 
 export interface EnsureRunnerDeps {
   probe?: () => Promise<FastRunnerLivenessDetail>;
-  ensure?: (deviceId: string, bundleId: string) => Promise<void>;
+  ensure?: (
+    deviceId: string,
+    bundleId: string,
+    opts?: { forceLocalBuild?: boolean },
+  ) => Promise<void>;
   prebuilt?: () => boolean;
   adopt?: (deviceId: string | undefined) => void;
   /** GH #418: open-path only — permits DerivedData invalidation + cold rebuild. */
@@ -704,7 +708,10 @@ async function rebuildStaleRunnerArtifact(
     invalidate();
     if (plugin !== null) budget.recordRebuild(plugin);
     const ensure = deps.ensure ?? ensureFastRunner;
-    await ensure(deviceId, bundleId);
+    // GH #382 (Codex P1): force a source rebuild — a stale prebuilt artifact must
+    // not be re-selected here, or the cold rebuild that heals the command surface
+    // never runs.
+    await ensure(deviceId, bundleId, { forceLocalBuild: true });
   } finally {
     release();
   }
@@ -823,7 +830,12 @@ export async function ensureRunnerForCommand(
   };
 }
 
-export async function ensureFastRunner(deviceId: string, bundleId: string): Promise<void> {
+export async function ensureFastRunner(
+  deviceId: string,
+  bundleId: string,
+  // GH #382 (Codex P1): recovery forces a source rebuild by bypassing prebuilt.
+  opts: { forceLocalBuild?: boolean } = {},
+): Promise<void> {
   // M7/Phase-109: probe tri-state liveness instead of the PID-only
   // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server
   // has wedged ('stale') must be reaped before a fresh start — otherwise it is
@@ -836,7 +848,7 @@ export async function ensureFastRunner(deviceId: string, bundleId: string): Prom
     await reapStaleFastRunner();
   }
   try {
-    await startFastRunner(deviceId, bundleId);
+    await startFastRunner(deviceId, bundleId, undefined, opts);
   } catch (err) {
     console.error(
       `Fast runner auto-start failed: ${err instanceof Error ? err.message : String(err)}`,

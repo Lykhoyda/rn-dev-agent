@@ -487,6 +487,9 @@ export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
+  // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
+  // by bypassing the prebuilt artifact tier.
+  opts: { forceLocalBuild?: boolean } = {},
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
@@ -503,7 +506,12 @@ export async function startFastRunner(
   // DerivedData layout so hasBuiltTestProduct is true and the plan skips
   // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
   // build-local returns the local DerivedData path (unchanged cold path).
-  const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner());
+  const artifacts = await resolveIosRunnerArtifacts(
+    getPluginVersion(),
+    derivedDataPathForRunner(),
+    undefined,
+    opts.forceLocalBuild,
+  );
   const derivedDataPath = artifacts.derivedDataPath;
   if (artifacts.note) pendingFastRunnerArtifactNote = artifacts.note;
   const plan = resolveRunnerStartPlan({

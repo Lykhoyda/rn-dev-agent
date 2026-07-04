@@ -331,7 +331,7 @@ export function resolveAndroidInstallAction(opts: {
  */
 async function ensureAndroidRunnerInstalled(
   deviceId?: string,
-  opts: { forceReinstall?: boolean } = {},
+  opts: { forceReinstall?: boolean; forceLocalBuild?: boolean } = {},
 ): Promise<'prebuilt' | 'local'> {
   // Fail fast if the target isn't online — never start a multi-minute cold build (or an
   // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
@@ -365,10 +365,12 @@ async function ensureAndroidRunnerInstalled(
   // local Gradle build. When prebuilt, the resolved paths point at the cache and
   // the build-then-install branch is skipped (no gradlew on the user's machine).
   // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
-  const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), {
-    appApk: APK_APP,
-    testApk: APK_TEST,
-  });
+  const artifacts = await resolveAndroidRunnerArtifacts(
+    getPluginVersion(),
+    { appApk: APK_APP, testApk: APK_TEST },
+    undefined,
+    opts.forceLocalBuild,
+  );
   const provenance = artifactProvenanceToState(artifacts.provenance);
   if (artifacts.note) pendingUpgradeNote = artifacts.note;
 
@@ -625,6 +627,12 @@ export interface StartAndroidRunnerOpts {
   allowArtifactRebuild?: boolean;
   /** Internal: set by the rebuild retry so the install action can't 'reuse'. */
   _forceReinstall?: boolean;
+  /**
+   * GH #382 (Codex P1): set by the rebuild retry so artifact resolution bypasses
+   * the prebuilt tier and Gradle-rebuilds from source — a stale prebuilt APK must
+   * not be re-selected when healing a missing-command surface.
+   */
+  _forceLocalBuild?: boolean;
 }
 
 // GH #418: retry-once wrapper for the fresh-open case — the attempt spawns the
@@ -647,6 +655,7 @@ export async function startAndroidRunner(
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
+        _forceLocalBuild: true,
       });
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
       return state;
@@ -688,7 +697,10 @@ async function startAndroidRunnerAttempt(
 
   // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
   // the in-tree runner APKs if the instrumentation isn't on the device yet.
-  const provenance = await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
+  const provenance = await ensureAndroidRunnerInstalled(deviceId, {
+    forceReinstall,
+    forceLocalBuild: opts._forceLocalBuild === true,
+  });
 
   let hostPort = await findFreePort(devicePort);
   try {

@@ -154,12 +154,25 @@ function androidExtractedOk(deps) {
     return (productsDir) => deps.existsSync(join(productsDir, ANDROID_APP_APK_NAME)) &&
         deps.existsSync(join(productsDir, ANDROID_TEST_APK_NAME));
 }
-export async function resolveIosRunnerArtifacts(version, localDerivedDataPath, deps = defaultArtifactDeps()) {
+export async function resolveIosRunnerArtifacts(version, localDerivedDataPath, deps = defaultArtifactDeps(), 
+// GH #382 (Codex P1): the #418 stale-command recovery deletes the local build
+// product to force a cold rebuild from source. It must bypass the prebuilt tier
+// — otherwise a version-matched-but-stale prebuilt is re-selected and the heal
+// (guaranteed only by a source rebuild) never happens.
+forceLocalBuild = false) {
+    if (forceLocalBuild) {
+        return { provenance: 'build-local', derivedDataPath: localDerivedDataPath };
+    }
     const r = await acquireArtifact('ios', version, deps, iosExtractedOk(deps));
     const derivedDataPath = r.provenance === 'build-local' ? localDerivedDataPath : r.productsDir;
     return { provenance: r.provenance, derivedDataPath, note: r.note };
 }
-export async function resolveAndroidRunnerArtifacts(version, local, deps = defaultArtifactDeps()) {
+export async function resolveAndroidRunnerArtifacts(version, local, deps = defaultArtifactDeps(), 
+// GH #382 (Codex P1): recovery path bypasses prebuilt — see resolveIosRunnerArtifacts.
+forceLocalBuild = false) {
+    if (forceLocalBuild) {
+        return { provenance: 'build-local', appApk: local.appApk, testApk: local.testApk };
+    }
     const r = await acquireArtifact('android', version, deps, androidExtractedOk(deps));
     if (r.provenance === 'build-local') {
         return { provenance: r.provenance, appApk: local.appApk, testApk: local.testApk, note: r.note };

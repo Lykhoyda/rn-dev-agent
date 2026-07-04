@@ -230,10 +230,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     // local Gradle build. When prebuilt, the resolved paths point at the cache and
     // the build-then-install branch is skipped (no gradlew on the user's machine).
     // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
-    const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), {
-        appApk: APK_APP,
-        testApk: APK_TEST,
-    });
+    const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), { appApk: APK_APP, testApk: APK_TEST }, undefined, opts.forceLocalBuild);
     const provenance = artifactProvenanceToState(artifacts.provenance);
     if (artifacts.note)
         pendingUpgradeNote = artifacts.note;
@@ -463,6 +460,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             invalidateAndroidRunnerApks();
             const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
                 _forceReinstall: true,
+                _forceLocalBuild: true,
             });
             pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
             return state;
@@ -498,7 +496,10 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     }
     // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
     // the in-tree runner APKs if the instrumentation isn't on the device yet.
-    const provenance = await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
+    const provenance = await ensureAndroidRunnerInstalled(deviceId, {
+        forceReinstall,
+        forceLocalBuild: opts._forceLocalBuild === true,
+    });
     let hostPort = await findFreePort(devicePort);
     try {
         await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
