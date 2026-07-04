@@ -119,11 +119,16 @@ import {
   observeHandler,
   observeSchema,
   setObserveE2eDeps,
+  setObserveMirror,
   startObserveServer,
 } from './tools/observe.js';
 import { autostartObserve } from './observability/autostart.js';
 import { removeObserveState } from './observability/observe-state.js';
-import { resolveObserveAutostart } from './project-config.js';
+import { resolveObserveAutostart, resolveMirrorConfig } from './project-config.js';
+import { MirrorManager } from './observability/mirror/manager.js';
+import { buildMirrorTargetResolver } from './observability/mirror/target.js';
+import { createMirrorSource } from './observability/mirror/sources.js';
+import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
@@ -256,6 +261,42 @@ setForeignGateUdidProvider(() => {
   return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
 });
 
+// Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
+// closes over `mirrorManager`, so this must exist first (TDZ safety) even
+// though the arrow body only runs later.
+const mirrorCfg = resolveMirrorConfig();
+const mirrorManager = mirrorCfg.enabled
+  ? new MirrorManager({
+      resolveTarget: buildMirrorTargetResolver({
+        getPlatform: () => {
+          const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
+          return p === 'ios' || p === 'android' ? p : null;
+        },
+        getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
+        resolveIosUdid: () => resolveIosUdid(),
+        listAndroidSerials: async () => {
+          try {
+            const { stdout } = await execFileP('adb', ['devices'], {
+              timeout: 5000,
+              maxBuffer: 1024 * 1024,
+            });
+            return parseAllAdbDevices(stdout)
+              .filter((d) => d.state === 'device')
+              .map((d) => d.serial);
+          } catch {
+            return [];
+          }
+        },
+      }),
+      createSource: (t) => createMirrorSource(t, mirrorCfg.fps),
+      // MirrorStatus is a closed interface (no index signature); recorder.push
+      // takes the open event shape every other recorder.push(...) call site
+      // uses. Spread into a fresh literal so structural assignability applies.
+      pushStatus: (s) => recorder.push({ ...s }),
+    })
+  : undefined;
+if (mirrorManager) setObserveMirror(mirrorManager);
+
 const liveEnabled = process.env.RN_OBSERVE_LIVE !== '0';
 const liveDeps = buildLiveDeps({
   recorder,
@@ -286,6 +327,7 @@ const liveDeps = buildLiveDeps({
       return null;
     }
   },
+  isMirrorActive: () => mirrorManager?.isStreaming() ?? false,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
