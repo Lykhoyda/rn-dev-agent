@@ -33,9 +33,11 @@ jobs:
       # root lockfile.
       - run: npm ci
 
-      - name: TypeScript build
-        run: npm run build
-        working-directory: scripts/cdp-bridge
+      # GH#432: build + freshness in one gate. Users run the COMMITTED dist;
+      # an unconditional rebuild here silently repairs a stale artifact in CI
+      # while shipping it broken to installs.
+      - name: TypeScript build + dist freshness gate
+        run: bash scripts/check-dist-fresh.sh
 
       - name: Unit tests
         run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js'
@@ -60,6 +62,10 @@ jobs:
       # GH#266: feedback collector must not present stale/orphaned telemetry as recent.
       - name: Feedback telemetry staleness guard
         run: bash scripts/test/telemetry-staleness.test.sh
+
+      # GH#432: the freshness gate is itself tested (house rule for CI guards).
+      - name: Dist-freshness guard unit test
+        run: bash scripts/test/check-dist-fresh.test.sh
 
   lint-format:
     name: Lint & format
