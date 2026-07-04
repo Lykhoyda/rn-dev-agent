@@ -8,6 +8,7 @@ import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
 import { RUNNER_PROTOCOL_VERSION, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { buildRunnerQuiescenceEnv } from './quiescence.js';
+import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
@@ -324,6 +325,17 @@ export const runnerRebuildBudget = {
         }
     },
 };
+// GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
+// runner unavailable ...; building locally") set while startFastRunner resolves
+// artifacts. Consumed by the open / mid-flow dispatch paths and attached as a
+// meta.note. Mirrors the Android pendingUpgradeNote discipline: the consumer must
+// discard it on a failed start so a stale note never leaks onto a later result.
+let pendingFastRunnerArtifactNote;
+export function consumePendingFastRunnerArtifactNote() {
+    const note = pendingFastRunnerArtifactNote;
+    pendingFastRunnerArtifactNote = undefined;
+    return note;
+}
 // --- Lifecycle ---
 /**
  * GH#202: only adopt an existing runner when it is bound to the SAME
@@ -386,7 +398,15 @@ export async function startFastRunner(deviceId, bundleId, port) {
     if (!existsSync(projectPath)) {
         throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
     }
-    const derivedDataPath = derivedDataPathForRunner();
+    // GH #382: resolve a prebuilt artifact (verified cache → release download)
+    // before the local build. When prebuilt, derivedDataPath points at the cached
+    // DerivedData layout so hasBuiltTestProduct is true and the plan skips
+    // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
+    // build-local returns the local DerivedData path (unchanged cold path).
+    const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner());
+    const derivedDataPath = artifacts.derivedDataPath;
+    if (artifacts.note)
+        pendingFastRunnerArtifactNote = artifacts.note;
     const plan = resolveRunnerStartPlan({
         projectPath,
         scheme: 'RnFastRunner',
@@ -440,6 +460,7 @@ export async function startFastRunner(deviceId, bundleId, port) {
                 startedAt: new Date().toISOString(),
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
+                provenance: artifactProvenanceToState(artifacts.provenance),
                 ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
             };
             runnerState = state;

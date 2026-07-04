@@ -337,5 +337,8 @@ export interface FastRunnerState {
   startedAt: string;
   protocolVersion: number;
   runnerVersion?: string;
+  // GH #382: how this runner's artifact was obtained — prebuilt (cache/download)
+  // vs a local xcodebuild. Surfaced by doctor / cdp_status.
+  provenance?: 'prebuilt' | 'local';
   quiescence?: 'active' | 'disabled' | 'unavailable';
 }

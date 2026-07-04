@@ -15,6 +15,7 @@ import {
   acquireRunnerRebuildLock,
   releaseRunnerRebuildLock,
   runnerRebuildBudget,
+  consumePendingFastRunnerArtifactNote,
 } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import type {
@@ -1016,8 +1017,12 @@ export async function runNative(
     if (cliArgs[0] !== 'screenshot') {
       const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
       const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
-      if (!ready.ok) return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
-      upgradeNote = ready.note;
+      if (!ready.ok) {
+        // GH #382: discard any pending artifact note from a failed start.
+        consumePendingFastRunnerArtifactNote();
+        return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+      }
+      upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
     const { runIOS } = await import('./runners/rn-fast-runner-client.js');
     const ios = buildRunIOSArgs(cliArgs, appId);

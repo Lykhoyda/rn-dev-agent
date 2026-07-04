@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
 import { RUNNER_PROTOCOL_VERSION, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
@@ -225,12 +226,23 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     catch {
         // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
     }
+    // GH #382: resolve prebuilt APKs (verified cache → release download) before the
+    // local Gradle build. When prebuilt, the resolved paths point at the cache and
+    // the build-then-install branch is skipped (no gradlew on the user's machine).
+    // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
+    const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), {
+        appApk: APK_APP,
+        testApk: APK_TEST,
+    });
+    const provenance = artifactProvenanceToState(artifacts.provenance);
+    if (artifacts.note)
+        pendingUpgradeNote = artifacts.note;
     const action = resolveAndroidInstallAction({
         instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-        apksExist: androidRunnerApksExist(),
+        apksExist: existsSync(artifacts.appApk) && existsSync(artifacts.testApk),
     });
     if (action === 'reuse')
-        return;
+        return provenance;
     if (action === 'build-then-install') {
         try {
             await execFileAsync(GRADLEW, buildGradleAssembleArgs(), {
@@ -245,10 +257,10 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
         }
     }
     try {
-        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), {
+        await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.appApk), {
             timeout: ADB_INSTALL_TIMEOUT_MS,
         });
-        await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), {
+        await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.testApk), {
             timeout: ADB_INSTALL_TIMEOUT_MS,
         });
     }
@@ -256,6 +268,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
         throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
             `${err instanceof Error ? err.message : String(err)}`);
     }
+    return provenance;
 }
 export function isAndroidRunnerAvailable() {
     if (!runnerState)
@@ -483,9 +496,9 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
         // unreachable/unhealthy: fall through — the fresh start below supersedes it.
     }
-    // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
-    // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
-    await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
+    // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
+    // the in-tree runner APKs if the instrumentation isn't on the device yet.
+    const provenance = await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
     let hostPort = await findFreePort(devicePort);
     try {
         await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
@@ -537,6 +550,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 startedAt: new Date().toISOString(),
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
+                provenance,
             };
             runnerState = state;
             if (serial) {

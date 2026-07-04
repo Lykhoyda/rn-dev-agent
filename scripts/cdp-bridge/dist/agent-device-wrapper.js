@@ -2,7 +2,7 @@ import { unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
@@ -832,9 +832,12 @@ export async function runNative(cliArgs, opts = {}) {
         if (cliArgs[0] !== 'screenshot') {
             const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
             const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
-            if (!ready.ok)
+            if (!ready.ok) {
+                // GH #382: discard any pending artifact note from a failed start.
+                consumePendingFastRunnerArtifactNote();
                 return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
-            upgradeNote = ready.note;
+            }
+            upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
