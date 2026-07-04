@@ -1,5 +1,5 @@
 import { getActiveSession as defaultGetActiveSession } from '../agent-device-wrapper.js';
-import { probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
+import { probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, getFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { RUNNER_PROTOCOL_VERSION, getPluginVersion } from '../runners/protocol.js';
 export async function getDeviceSessionHealth(deps = {}) {
     const getSession = deps.getActiveSession ?? defaultGetActiveSession;
@@ -40,6 +40,11 @@ export async function getDeviceSessionHealth(deps = {}) {
                 if (detail.capabilities !== undefined && detail.capabilities.length > 0) {
                     health.runnerCapabilities = detail.capabilities;
                 }
+                // GH #382: report the artifact provenance recorded at start (adopt() above
+                // loaded the per-device state a reachable runner would reuse).
+                const runnerState = (deps.getRunnerState ?? getFastRunnerState)();
+                if (runnerState?.provenance)
+                    health.runnerProvenance = runnerState.provenance;
             }
         }
         catch {

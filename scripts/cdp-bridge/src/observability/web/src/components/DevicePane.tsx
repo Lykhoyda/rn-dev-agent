@@ -1,19 +1,103 @@
-import type { JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
+import type { MirrorState } from '../types';
 
 interface DevicePaneProps {
+  mirror: MirrorState | null;
   liveShotSeq: number | null;
   /** seq of the latest device_screenshot event, used before any live frame exists. */
   fallbackSeq: number | null;
   route: string | null;
 }
 
-export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps): JSX.Element {
-  const src =
+const MAX_MIRROR_RETRIES = 3;
+
+export function DevicePane({
+  mirror,
+  liveShotSeq,
+  fallbackSeq,
+  route,
+}: DevicePaneProps): JSX.Element {
+  // Nonce busts the browser's connection cache on retry; attempts cap avoids
+  // hammering a dead endpoint (mirror disabled / persistent capture error).
+  const [nonce, setNonce] = useState(1);
+  const [attempts, setAttempts] = useState(0);
+
+  // A fresh starting/streaming status is the server telling us the pipeline is
+  // (re)alive — re-arm the <img> retry budget. A pushed 'error' status is
+  // authoritative even with zero client-side onError failures yet (e.g. the
+  // manager's resolveTarget failed on the very first attach) — route it
+  // through the same `attempts` budget so mirrorBroken has a single source of
+  // truth that the re-arm effects below can reset.
+  useEffect(() => {
+    if (mirror?.status === 'starting' || mirror?.status === 'streaming') {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    } else if (mirror?.status === 'error') {
+      setAttempts(MAX_MIRROR_RETRIES);
+    }
+  }, [mirror?.status]);
+
+  const mirrorBroken = attempts >= MAX_MIRROR_RETRIES;
+
+  // A new live screenshot proves a device/CDP target now exists — if the tab
+  // opened before any session did, the first attach fails with no future
+  // status push to re-arm on (the manager only retries in response to a fresh
+  // attach), so a live frame arriving is the signal that retrying may now
+  // succeed.
+  useEffect(() => {
+    if (mirrorBroken && liveShotSeq != null) {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    }
+  }, [liveShotSeq]);
+
+  // Belt-and-suspenders: while broken, retry every 15s regardless of other
+  // signals. A failed attach is cheap (the manager's resolveTarget failure
+  // ends the request immediately — no process spawned), so slow polling costs
+  // nothing and guarantees recovery even if no live-screenshot event ever
+  // fires (e.g. the agent only takes fallback screenshots).
+  useEffect(() => {
+    if (!mirrorBroken) return;
+    const id = setInterval(() => {
+      setAttempts(0);
+      setNonce((n) => n + 1);
+    }, 15000);
+    return () => clearInterval(id);
+  }, [mirrorBroken]);
+
+  const useMirror = !mirrorBroken;
+
+  const fallbackSrc =
     liveShotSeq != null
       ? `/api/live-screenshot/${liveShotSeq}`
       : fallbackSeq != null
         ? `/api/screenshot/${fallbackSeq}`
         : null;
+
+  const onMirrorError = (): void => {
+    // mirror === null means no {type:'mirror'} SSE status has ever arrived —
+    // the endpoint is almost certainly disabled/absent (404) or the backend
+    // predates mirror support, and nothing will ever push a status to re-arm
+    // the retry budget. Retrying a permanent 404 only delays the fallback
+    // screenshot, so skip straight to the fallback instead of burning the
+    // retry timers.
+    if (mirror === null) {
+      setAttempts(MAX_MIRROR_RETRIES);
+      return;
+    }
+    setAttempts((a) => a + 1);
+    if (attempts + 1 < MAX_MIRROR_RETRIES) {
+      setTimeout(() => setNonce((n) => n + 1), 2000);
+    }
+  };
+
+  const statusLine =
+    mirror?.status === 'streaming'
+      ? `mirror: ${mirror.pipeline}${mirror.fps ? ` ~${mirror.fps}fps` : ''}`
+      : mirror?.status === 'error'
+        ? `mirror off: ${mirror.reason ?? 'error'}`
+        : null;
+
   return (
     <div className="pane center">
       <div className="pane-head">
@@ -21,9 +105,17 @@ export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps)
         {route && <span className="route-chip">{route}</span>}
       </div>
       <div className="screen">
-        {src ? (
+        {useMirror ? (
           <div className="device-frame">
-            <img src={src} alt="device screenshot" />
+            <img
+              src={`/api/device/mirror?t=${nonce}`}
+              alt="live device mirror"
+              onError={onMirrorError}
+            />
+          </div>
+        ) : fallbackSrc ? (
+          <div className="device-frame">
+            <img src={fallbackSrc} alt="device screenshot" />
           </div>
         ) : (
           <div className="empty empty-guide">
@@ -33,6 +125,12 @@ export function DevicePane({ liveShotSeq, fallbackSeq, route }: DevicePaneProps)
           </div>
         )}
       </div>
+      {(statusLine || mirror?.hint) && (
+        <div className="mirror-footer">
+          {statusLine}
+          {mirror?.hint ? <span className="mirror-hint"> — {mirror.hint}</span> : null}
+        </div>
+      )}
     </div>
   );
 }

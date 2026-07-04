@@ -4,18 +4,17 @@ import type { AgentEvent, Family } from './types';
 import { CSS, FAMILIES } from './theme';
 import { appOf, latestByFamily, latestByTool, routeOf } from './derive';
 import { useEventStream } from './hooks/useEventStream';
-import { Header, type View } from './components/Header';
+import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { Timeline } from './components/Timeline';
 import { DevicePane } from './components/DevicePane';
 import { StatePane } from './components/StatePane';
-import { RegressionView } from './components/RegressionView';
 
 const RENDER_ROWS = 250;
 
 function App(): JSX.Element {
-  const { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount } = useEventStream();
-  const [view, setView] = useState<View>('live');
+  const { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount, mirror } =
+    useEventStream();
   const [selected, setSelected] = useState<number | null>(null);
   const [activeFamilies, setActiveFamilies] = useState<ReadonlySet<Family>>(new Set(FAMILIES));
   const [search, setSearch] = useState('');
@@ -59,43 +58,40 @@ function App(): JSX.Element {
 
   return (
     <div className="app">
-      <Header
-        conn={conn}
-        app={app}
-        route={route ?? undefined}
-        events={events}
-        view={view}
-        onViewChange={setView}
-      />
-      {view === 'live' ? (
-        <div className="panes">
-          <div className="pane left">
-            <FilterBar
-              counts={counts}
-              active={activeFamilies}
-              onToggleFamily={toggleFamily}
-              search={search}
-              onSearch={setSearch}
-              errorsOnly={errorsOnly}
-              onErrorsOnly={setErrorsOnly}
-            />
-            <Timeline
-              events={filtered}
-              totalCount={events.length}
-              selected={selected}
-              onSelect={setSelected}
-            />
-          </div>
-          <DevicePane
-            liveShotSeq={liveShotSeq}
-            fallbackSeq={shotEv && shotEv.ok ? shotEv.seq : null}
-            route={route}
+      <Header conn={conn} app={app} route={route ?? undefined} events={events} />
+      <div className="panes">
+        <div className="pane left">
+          <FilterBar
+            counts={counts}
+            active={activeFamilies}
+            onToggleFamily={toggleFamily}
+            search={search}
+            onSearch={setSearch}
+            errorsOnly={errorsOnly}
+            onErrorsOnly={setErrorsOnly}
           />
-          <StatePane navEv={navEv} storeEv={storeEv} treeEv={treeEv} liveRoute={liveRoute} />
+          <Timeline
+            events={filtered}
+            totalCount={events.length}
+            selected={selected}
+            onSelect={setSelected}
+          />
         </div>
-      ) : (
-        <RegressionView e2eProgress={e2eProgress} e2eDoneCount={e2eDoneCount} />
-      )}
+        <DevicePane
+          mirror={mirror}
+          liveShotSeq={liveShotSeq}
+          fallbackSeq={shotEv && shotEv.ok ? shotEv.seq : null}
+          route={route}
+        />
+        <StatePane
+          navEv={navEv}
+          storeEv={storeEv}
+          treeEv={treeEv}
+          liveRoute={liveRoute}
+          e2eProgress={e2eProgress}
+          e2eDoneCount={e2eDoneCount}
+        />
+      </div>
     </div>
   );
 }

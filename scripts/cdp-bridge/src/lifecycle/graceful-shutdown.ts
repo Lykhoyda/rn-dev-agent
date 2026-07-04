@@ -6,6 +6,13 @@ const DEFAULT_TIMEOUT_MS = 3000;
 export interface GracefulShutdownDeps {
   getClient: () => CDPClient;
   stopFastRunnerFn: () => void;
+  /**
+   * Reaps observe-mirror capture children (idb/ffmpeg/simctl) — GH #182 zombie
+   * class for the live-mirror subsystem. Optional: undefined when the mirror
+   * is config-disabled. MirrorManager.shutdown() is synchronous and idempotent,
+   * so calling it here is safe even if another exit path also calls it.
+   */
+  stopMirrorFn?: () => void;
   exitFn?: (code: number) => never;
   timeoutMs?: number;
 }
@@ -18,7 +25,8 @@ export interface GracefulShutdownDeps {
  *   2. Disconnect the CDPClient — internally clears the 5s background poll setInterval
  *      (the root cause of MCP zombies surviving parent CC quit) and closes the WebSocket.
  *   3. Stop the fast-runner child process (xcodebuild).
- *   4. Race cleanup against DEFAULT_TIMEOUT_MS — if cleanup hangs, force-exit anyway so
+ *   4. Stop the observe-mirror capture pipeline, if present (GH #182 zombie class).
+ *   5. Race cleanup against DEFAULT_TIMEOUT_MS — if cleanup hangs, force-exit anyway so
  *      the parent CC session never waits on a stuck MCP.
  *
  * `exitFn` is injectable so tests can observe the exit code without killing the test runner.
@@ -49,6 +57,14 @@ export function buildGracefulShutdown(
         logger.warn(
           'MCP',
           `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      try {
+        deps.stopMirrorFn?.();
+      } catch (err) {
+        logger.warn(
+          'MCP',
+          `shutdown: stopMirror failed: ${err instanceof Error ? err.message : err}`,
         );
       }
     })();

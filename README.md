@@ -32,8 +32,8 @@ This checks **10 prerequisites** and fixes what it can automatically:
 |-------|----------|-------------|
 | Node.js >= 22 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
-| rn-fast-runner (iOS) | iOS targets only — ships in-tree; one-time `xcodebuild build-for-testing` | No |
-| rn-android-runner (Android) | Android targets only — ships in-tree; built/installed on first use | No |
+| rn-fast-runner (iOS) | iOS targets only — ships in-tree; prebuilt artifact on releases, one-time `xcodebuild build-for-testing` fallback | No |
+| rn-android-runner (Android) | Android targets only — ships in-tree; prebuilt artifact on releases, Gradle build fallback on first use | No |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes |
 | iOS Simulator / Android Emulator | One platform | No |
 | Metro dev server | Yes | No |
@@ -41,6 +41,8 @@ This checks **10 prerequisites** and fixes what it can automatically:
 | ffmpeg | Optional | No |
 
 If auto-install fails for any dependency, the setup command gives step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+
+**Prebuilt runners:** on a released version the device runners install from a verified prebuilt artifact (a SHA-256-checked local cache, then the GitHub Release asset for your exact plugin version), so the first `device_snapshot action=open` skips the multi-minute cold `xcodebuild` / Gradle build. Resolution is fail-open — offline, a checksum mismatch, or a dev/unreleased checkout transparently falls back to the on-machine build (`/rn-dev-agent:doctor` shows `prebuilt v<X> (cache/download)` vs `local-built`). Force the local build with `RN_RUNNER_BUILD=local`.
 
 ## Usage
 

@@ -11,7 +11,10 @@ import {
   cacheSnapshot,
   getAdbSerial,
 } from '../agent-device-wrapper.js';
-import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import {
+  consumePendingFastRunnerArtifactNote,
+  stopFastRunner,
+} from '../runners/rn-fast-runner-client.js';
 import {
   stopAndroidRunner,
   resolveAndroidSerial,
@@ -270,10 +273,15 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
             allowArtifactRebuild: true,
           });
           if (!ready.ok) {
+            // GH #382: a failed start may have left a pending artifact note —
+            // discard it so it never leaks onto a later successful result.
+            consumePendingFastRunnerArtifactNote();
             releaseDeviceLockForSession();
             return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
           }
-          upgradeNote = ready.note;
+          // GH #382: an upgrade note wins; otherwise surface the artifact note
+          // (e.g. "downloaded prebuilt runner (~4 MB)").
+          upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
           // A bare simctl launch foregrounds a running PID without relaunch —
           // safe whether or not attachOnly; ignore errors (app may be frontmost).
           await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {

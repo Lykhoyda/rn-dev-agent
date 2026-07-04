@@ -8,7 +8,8 @@ const DEFAULT_TIMEOUT_MS = 3000;
  *   2. Disconnect the CDPClient — internally clears the 5s background poll setInterval
  *      (the root cause of MCP zombies surviving parent CC quit) and closes the WebSocket.
  *   3. Stop the fast-runner child process (xcodebuild).
- *   4. Race cleanup against DEFAULT_TIMEOUT_MS — if cleanup hangs, force-exit anyway so
+ *   4. Stop the observe-mirror capture pipeline, if present (GH #182 zombie class).
+ *   5. Race cleanup against DEFAULT_TIMEOUT_MS — if cleanup hangs, force-exit anyway so
  *      the parent CC session never waits on a stuck MCP.
  *
  * `exitFn` is injectable so tests can observe the exit code without killing the test runner.
@@ -33,6 +34,12 @@ export function buildGracefulShutdown(deps) {
             }
             catch (err) {
                 logger.warn('MCP', `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`);
+            }
+            try {
+                deps.stopMirrorFn?.();
+            }
+            catch (err) {
+                logger.warn('MCP', `shutdown: stopMirror failed: ${err instanceof Error ? err.message : err}`);
             }
         })();
         // Timeout is NOT unref'd: it must keep the event loop alive so it can fire

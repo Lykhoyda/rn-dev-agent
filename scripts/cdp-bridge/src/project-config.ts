@@ -93,7 +93,7 @@ export function readExpoSlug(): string | null {
 
 export interface RnAgentConfig {
   cdp?: { autoConnect?: boolean };
-  observe?: { autoStart?: boolean; port?: number };
+  observe?: { autoStart?: boolean; port?: number; mirror?: { enabled?: boolean; fps?: number } };
 }
 
 let warnedBadConfig = false;
@@ -195,4 +195,37 @@ export function resolveObservePort(
     return { port: cfgPort, source: 'config' };
   }
   return { port: DEFAULT_OBSERVE_PORT, source: 'default' };
+}
+
+export const DEFAULT_MIRROR_FPS = 20;
+const MIRROR_FPS_MIN = 5;
+const MIRROR_FPS_MAX = 30;
+
+export interface MirrorConfigResolution {
+  enabled: boolean;
+  fps: number;
+  source: 'env' | 'config' | 'default';
+}
+
+/** Spec 2026-07-04 (observe live mirror): env > config > default; errors fail open. */
+export function resolveMirrorConfig(
+  deps: { env?: string; readConfig?: () => RnAgentConfig | null } = {},
+): MirrorConfigResolution {
+  const envRaw = 'env' in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
+  let cfg: RnAgentConfig | null = null;
+  try {
+    cfg = (deps.readConfig ?? readRnAgentConfig)();
+  } catch {
+    cfg = null;
+  }
+  const rawFps = cfg?.observe?.mirror?.fps;
+  const fps =
+    typeof rawFps === 'number' && Number.isFinite(rawFps)
+      ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps)))
+      : DEFAULT_MIRROR_FPS;
+  if (envRaw === '0' || envRaw === 'false') return { enabled: false, fps, source: 'env' };
+  if (envRaw === '1' || envRaw === 'true') return { enabled: true, fps, source: 'env' };
+  const cfgEnabled = cfg?.observe?.mirror?.enabled;
+  if (typeof cfgEnabled === 'boolean') return { enabled: cfgEnabled, fps, source: 'config' };
+  return { enabled: true, fps, source: 'default' };
 }

@@ -142,6 +142,9 @@ export interface LiveCaptureDeps {
   readShotFile: (path: string) => { buf: Buffer; contentType: string } | null;
   pushLive: (frame: { shot?: { buf: Buffer; contentType: string }; route?: string }) => void;
   tmpPath: () => string;
+  /** GH #206 + mirror spec: while the MJPEG mirror is streaming, the per-tool
+   * screenshot is redundant — the browser already sees live pixels. */
+  isMirrorActive?: () => boolean;
 }
 
 let inFlight = false;
@@ -179,14 +182,16 @@ async function runCapture(deps: LiveCaptureDeps): Promise<void> {
   const platform = deps.getPlatform();
   if (!platform) return;
   const frame: { shot?: { buf: Buffer; contentType: string }; route?: string } = {};
-  try {
-    const shot = await deps.captureScreenshot(platform, deps.tmpPath());
-    if (shot.ok) {
-      const bytes = deps.readShotFile(shot.path);
-      if (bytes) frame.shot = bytes;
+  if (!deps.isMirrorActive?.()) {
+    try {
+      const shot = await deps.captureScreenshot(platform, deps.tmpPath());
+      if (shot.ok) {
+        const bytes = deps.readShotFile(shot.path);
+        if (bytes) frame.shot = bytes;
+      }
+    } catch {
+      /* screenshot best-effort */
     }
-  } catch {
-    /* screenshot best-effort */
   }
   try {
     const route = await deps.readRoute();
@@ -205,6 +210,7 @@ interface BuildLiveDepsInput {
   captureScreenshot: LiveCaptureDeps['captureScreenshot'];
   readRoute: (client: unknown) => Promise<string | null>;
   readShotFile: LiveCaptureDeps['readShotFile'];
+  isMirrorActive?: () => boolean;
 }
 
 function asDevicePlatform(p: string | undefined): 'ios' | 'android' | null {
@@ -233,5 +239,6 @@ export function buildLiveDeps(input: BuildLiveDepsInput): LiveCaptureDeps {
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
     tmpPath: () => join(tmpdir(), `rn-observe-live-${process.pid}.jpg`),
+    isMirrorActive: input.isMirrorActive,
   };
 }

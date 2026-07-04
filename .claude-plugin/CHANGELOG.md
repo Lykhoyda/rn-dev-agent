@@ -1,5 +1,52 @@
 # rn-dev-agent-plugin
 
+## 0.63.0
+
+### Minor Changes
+
+- dabe8cc: Prebuilt runner artifacts (Story 01, #382): the iOS rn-fast-runner and Android
+  rn-android-runner now resolve from a verified prebuilt artifact — a SHA-256-checked
+  local cache, then a download of the release asset for the exact plugin version —
+  before falling back to the on-machine build. This removes the multi-minute cold
+  `xcodebuild` / Gradle build from the first `device_snapshot action=open` once a
+  release ships the artifacts. Resolution is fail-open: any missing manifest, offline
+  state, 404, checksum mismatch, or unsafe archive falls back to the local build with a
+  one-line `meta.note`, never a hard failure. `RN_RUNNER_BUILD=local` forces the local
+  build. `cdp_status` / `/doctor` now report runner provenance (`prebuilt v<X>` vs
+  `local-built`). Until a release ships the artifacts, builds resolve to `local` by
+  design.
+
+## 0.62.4
+
+### Patch Changes
+
+- 8740f75: Observe UI: single-page layout — the Live/Regression view split is gone. The right column now has five tabs (route | store | tree | actions | e2e): learned actions run from the main page next to the live mirror, and E2E suite runs + history live in the e2e tab. The mirror status/hint moved to a slim footer so the device pane keeps its full height.
+
+## 0.62.3
+
+### Patch Changes
+
+- 0abb27a: Engineering rule: all new code must be TypeScript. CI gains a typescript-only gate (`scripts/check-typescript-only.sh`) that fails when a `.js`/`.mjs`/`.cjs` file appears outside the grandfathered baseline (`scripts/js-migration-baseline.txt`, 344 pre-rule files slated for migration). Shrinking the baseline (migrating to TS) passes automatically; growing it requires an explicit, reviewable baseline edit.
+
+## 0.62.2
+
+### Patch Changes
+
+- f2c9fa4: SessionStart auto-installs idb in the background (`brew install idb-companion && pipx install fb-idb`) for the observe live mirror's 20-30fps fast path — never blocks session start (detached worker, pidfile guard, 24h failure backoff). `/doctor` and `/setup` gain an idb row: OK / INSTALLING (background) / MISSING with the manual command.
+- a33f19d: Observe UI: continuous live mirroring of the simulator/emulator screen (Maestro-style MJPEG). New `GET /api/device/mirror` stream — idb (20–30fps) or simctl loop (~6fps) on iOS, adb screenrecord+ffmpeg on Android emulators and physical devices. Zero capture cost with no tab open; per-tool-call screenshots are skipped while the mirror streams. Config: `observe.mirror.enabled` / `observe.mirror.fps`, env `RN_AGENT_OBSERVE_MIRROR=0` to disable.
+
+## 0.62.1
+
+### Patch Changes
+
+- 396e862: rn-android-runner `findText` refuses missing/blank `text` with a typed
+  `INVALID_ARGUMENT` error (#444). Previously `optString("text")` silently
+  defaulted to `""`, falling through to `By.textContains("")` — which matches an
+  arbitrary node — so a malformed request reported `found: true` for whatever
+  element UIAutomator visited first instead of surfacing an argument error. The
+  guard runs in the dispatch when-branch before any selector is constructed;
+  a source-sync test (gh-418 style) enforces it in CI without an emulator.
+
 ## 0.62.0
 
 ### Minor Changes

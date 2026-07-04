@@ -86,6 +86,12 @@ if [ "$has_rn_config" = true ]; then
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)
   bash "$PLUGIN_ROOT/scripts/ensure-ffmpeg.sh" 2>/dev/null || true
 
+  # Ensure idb for the observe live mirror's 20-30fps fast path (optional —
+  # mirror falls back to a ~6fps simctl loop without it). Foreground path is
+  # bounded (GH#252): command checks only; the actual brew/pipx install runs
+  # as a detached background worker with pidfile + 24h-failure backoff.
+  bash "$PLUGIN_ROOT/scripts/ensure-idb.sh" 2>/dev/null || true
+
   # Worktree support: .rn-agent is largely untracked local state (learned
   # actions, e2e config, troubleshooting notes), so a linked git worktree
   # starts without it and the agent loses its learned actions. If this

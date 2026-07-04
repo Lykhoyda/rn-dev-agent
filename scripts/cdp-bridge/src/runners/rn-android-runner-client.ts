@@ -27,6 +27,7 @@ import {
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
+import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -76,6 +77,8 @@ interface AndroidRunnerState {
   startedAt: string;
   protocolVersion: number;
   runnerVersion?: string;
+  // GH #382: prebuilt (cache/download) vs local Gradle build. Surfaced by doctor.
+  provenance?: 'prebuilt' | 'local';
 }
 
 export interface RunAndroidArgs {
@@ -328,8 +331,8 @@ export function resolveAndroidInstallAction(opts: {
  */
 async function ensureAndroidRunnerInstalled(
   deviceId?: string,
-  opts: { forceReinstall?: boolean } = {},
-): Promise<void> {
+  opts: { forceReinstall?: boolean; forceLocalBuild?: boolean } = {},
+): Promise<'prebuilt' | 'local'> {
   // Fail fast if the target isn't online — never start a multi-minute cold build (or an
   // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
   try {
@@ -358,12 +361,25 @@ async function ensureAndroidRunnerInstalled(
   } catch {
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
+  // GH #382: resolve prebuilt APKs (verified cache → release download) before the
+  // local Gradle build. When prebuilt, the resolved paths point at the cache and
+  // the build-then-install branch is skipped (no gradlew on the user's machine).
+  // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
+  const artifacts = await resolveAndroidRunnerArtifacts(
+    getPluginVersion(),
+    { appApk: APK_APP, testApk: APK_TEST },
+    undefined,
+    opts.forceLocalBuild,
+  );
+  const provenance = artifactProvenanceToState(artifacts.provenance);
+  if (artifacts.note) pendingUpgradeNote = artifacts.note;
+
   const action = resolveAndroidInstallAction({
     instrumentationRegistered:
       !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-    apksExist: androidRunnerApksExist(),
+    apksExist: existsSync(artifacts.appApk) && existsSync(artifacts.testApk),
   });
-  if (action === 'reuse') return;
+  if (action === 'reuse') return provenance;
 
   if (action === 'build-then-install') {
     try {
@@ -381,10 +397,10 @@ async function ensureAndroidRunnerInstalled(
   }
 
   try {
-    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_APP), {
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.appApk), {
       timeout: ADB_INSTALL_TIMEOUT_MS,
     });
-    await execFileAsync('adb', buildAdbInstallArgs(deviceId, APK_TEST), {
+    await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.testApk), {
       timeout: ADB_INSTALL_TIMEOUT_MS,
     });
   } catch (err) {
@@ -393,6 +409,7 @@ async function ensureAndroidRunnerInstalled(
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  return provenance;
 }
 
 export function isAndroidRunnerAvailable(): boolean {
@@ -610,6 +627,12 @@ export interface StartAndroidRunnerOpts {
   allowArtifactRebuild?: boolean;
   /** Internal: set by the rebuild retry so the install action can't 'reuse'. */
   _forceReinstall?: boolean;
+  /**
+   * GH #382 (Codex P1): set by the rebuild retry so artifact resolution bypasses
+   * the prebuilt tier and Gradle-rebuilds from source — a stale prebuilt APK must
+   * not be re-selected when healing a missing-command surface.
+   */
+  _forceLocalBuild?: boolean;
 }
 
 // GH #418: retry-once wrapper for the fresh-open case — the attempt spawns the
@@ -632,6 +655,7 @@ export async function startAndroidRunner(
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
+        _forceLocalBuild: true,
       });
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
       return state;
@@ -671,9 +695,12 @@ async function startAndroidRunnerAttempt(
     // unreachable/unhealthy: fall through — the fresh start below supersedes it.
   }
 
-  // Self-install on first use (no external CLI) — build/install the in-tree runner APKs
-  // if the instrumentation isn't on the device yet. Mirrors rn-fast-runner's cold build.
-  await ensureAndroidRunnerInstalled(deviceId, { forceReinstall });
+  // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
+  // the in-tree runner APKs if the instrumentation isn't on the device yet.
+  const provenance = await ensureAndroidRunnerInstalled(deviceId, {
+    forceReinstall,
+    forceLocalBuild: opts._forceLocalBuild === true,
+  });
 
   let hostPort = await findFreePort(devicePort);
   try {
@@ -733,6 +760,7 @@ async function startAndroidRunnerAttempt(
         startedAt: new Date().toISOString(),
         protocolVersion: RUNNER_PROTOCOL_VERSION,
         ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
+        provenance,
       };
       runnerState = state;
       if (serial) {

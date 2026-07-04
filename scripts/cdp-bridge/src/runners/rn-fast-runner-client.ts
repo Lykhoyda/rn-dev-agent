@@ -33,6 +33,7 @@ import {
 import type { RunnerIncompatibilityReason } from './protocol.js';
 import type { QuiescenceStatus } from './quiescence.js';
 import { buildRunnerQuiescenceEnv } from './quiescence.js';
+import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 
 const DEFAULT_PORT = 22088;
 const READY_TIMEOUT_MS = 30_000;
@@ -406,6 +407,19 @@ export const runnerRebuildBudget = {
   },
 };
 
+// GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
+// runner unavailable ...; building locally") set while startFastRunner resolves
+// artifacts. Consumed by the open / mid-flow dispatch paths and attached as a
+// meta.note. Mirrors the Android pendingUpgradeNote discipline: the consumer must
+// discard it on a failed start so a stale note never leaks onto a later result.
+let pendingFastRunnerArtifactNote: string | undefined;
+
+export function consumePendingFastRunnerArtifactNote(): string | undefined {
+  const note = pendingFastRunnerArtifactNote;
+  pendingFastRunnerArtifactNote = undefined;
+  return note;
+}
+
 // --- Lifecycle ---
 
 /**
@@ -473,6 +487,9 @@ export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
+  // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
+  // by bypassing the prebuilt artifact tier.
+  opts: { forceLocalBuild?: boolean } = {},
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
@@ -484,7 +501,19 @@ export async function startFastRunner(
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
 
-  const derivedDataPath = derivedDataPathForRunner();
+  // GH #382: resolve a prebuilt artifact (verified cache → release download)
+  // before the local build. When prebuilt, derivedDataPath points at the cached
+  // DerivedData layout so hasBuiltTestProduct is true and the plan skips
+  // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
+  // build-local returns the local DerivedData path (unchanged cold path).
+  const artifacts = await resolveIosRunnerArtifacts(
+    getPluginVersion(),
+    derivedDataPathForRunner(),
+    undefined,
+    opts.forceLocalBuild,
+  );
+  const derivedDataPath = artifacts.derivedDataPath;
+  if (artifacts.note) pendingFastRunnerArtifactNote = artifacts.note;
   const plan = resolveRunnerStartPlan({
     projectPath,
     scheme: 'RnFastRunner',
@@ -542,6 +571,7 @@ export async function startFastRunner(
         startedAt: new Date().toISOString(),
         protocolVersion: RUNNER_PROTOCOL_VERSION,
         ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
+        provenance: artifactProvenanceToState(artifacts.provenance),
         ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
       };
       runnerState = state;

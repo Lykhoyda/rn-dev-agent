@@ -8,7 +8,7 @@ Run the rn-dev-agent onboarding flow. Two phases: diagnose what's installed, the
 
 ## Phase 1 — Diagnose
 
-Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 10 prerequisite checks and present the table.
+Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 16 prerequisite checks and present the table.
 
 **Abort thresholds.** Only the rows that block ALL plugin functionality count as critical for onboarding:
 

@@ -88,3 +88,11 @@ export interface E2eRunDetail {
   totals: { total: number; passed: number; failed: number; skipped: number };
   results: E2eFlowResult[];
 }
+
+export interface MirrorState {
+  status: 'starting' | 'streaming' | 'error' | 'idle';
+  pipeline?: string;
+  fps?: number;
+  hint?: string;
+  reason?: string;
+}
