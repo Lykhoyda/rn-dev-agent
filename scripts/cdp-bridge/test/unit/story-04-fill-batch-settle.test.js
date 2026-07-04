@@ -4,10 +4,14 @@ import { focusDelayAfterPreTap } from '../../dist/tools/device-interact.js';
 import { buildRunIOSArgs, buildRunAndroidArgs } from '../../dist/agent-device-wrapper.js';
 
 const withSettle = JSON.stringify({
-  ok: true, data: {}, meta: { settle: { method: 'screen-static', settled: true } },
+  ok: true,
+  data: {},
+  meta: { settle: { method: 'screen-static', settled: true } },
 });
 const withTimeoutSettle = JSON.stringify({
-  ok: true, data: {}, meta: { settle: { method: 'timeout', settled: false } },
+  ok: true,
+  data: {},
+  meta: { settle: { method: 'timeout', settled: false } },
 });
 const withoutSettle = JSON.stringify({ ok: true, data: {} });
 
@@ -40,7 +44,10 @@ test('buildRunIOSArgs fill honors --at-x/--at-y pin and skips @ref re-resolution
 });
 
 test('buildRunIOSArgs fill rejects non-finite pins (falls back to @ref path)', () => {
-  const args = buildRunIOSArgs(['fill', '@e3', 'hi', '--at-x', 'Infinity', '--at-y', '240'], 'com.test');
+  const args = buildRunIOSArgs(
+    ['fill', '@e3', 'hi', '--at-x', 'Infinity', '--at-y', '240'],
+    'com.test',
+  );
   assert.equal(args._staleRef, '@e3'); // empty ref map → stale sentinel, NOT bogus coords
 });
 
@@ -104,7 +111,9 @@ test('device_fill pins press and fill to pre-resolved coords', async () => {
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'com.test' });
   updateRefMapFromFlat([
     {
-      ref: '@e3', type: 'TextField', identifier: 'email',
+      ref: '@e3',
+      type: 'TextField',
+      identifier: 'email',
       rect: { x: 100, y: 220, width: 200, height: 40 },
     },
   ]);
@@ -119,7 +128,10 @@ test('device_fill pins press and fill to pre-resolved coords', async () => {
     const press = calls.find((c) => c.cliArgs[0] === 'press');
     assert.deepEqual(press.cliArgs, ['press', '200', '240']); // center of seeded rect
     const fill = calls.find((c) => c.cliArgs[0] === 'fill');
-    assert.ok(fill.cliArgs.includes('--at-x') && fill.cliArgs.includes('--at-y'), 'fill not pinned');
+    assert.ok(
+      fill.cliArgs.includes('--at-x') && fill.cliArgs.includes('--at-y'),
+      'fill not pinned',
+    );
     assert.deepEqual(
       fill.cliArgs.slice(fill.cliArgs.indexOf('--at-x'), fill.cliArgs.indexOf('--at-x') + 4),
       ['--at-x', '200', '--at-y', '240'],

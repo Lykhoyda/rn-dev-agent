@@ -321,7 +321,14 @@ export function buildRunIOSArgs(
         const px = Number(atX),
           py = Number(atY);
         if (Number.isFinite(px) && Number.isFinite(py)) {
-          return { command: 'type', x: px, y: py, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+          return {
+            command: 'type',
+            x: px,
+            y: py,
+            text,
+            ...extra,
+            ...(bundleId ? { bundleId } : {}),
+          };
         }
       }
       if (ref && ref.startsWith('@')) {

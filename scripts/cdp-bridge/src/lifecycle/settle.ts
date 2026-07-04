@@ -183,7 +183,8 @@ export function buildIosProbes(bundleId?: string): SettleProbes {
 export function buildAndroidProbes(bundleId?: string): SettleProbes {
   const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
   return {
-    isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
+    isWindowUpdating: (timeoutMs) =>
+      androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
     snapshotHash: async () => {
       const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
       return nodes ? hashSnapshotNodes(nodes) : null;

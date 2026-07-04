@@ -18,8 +18,13 @@ import {
 const jsonResponse = (body) => new Response(JSON.stringify(body), { status: 200 });
 
 const iosState = () => ({
-  schemaVersion: 1, pid: process.pid, port: 22090,
-  deviceId: 'TEST-UDID', bundleId: 'com.test', startedAt: '', protocolVersion: 1,
+  schemaVersion: 1,
+  pid: process.pid,
+  port: 22090,
+  deviceId: 'TEST-UDID',
+  bundleId: 'com.test',
+  startedAt: '',
+  protocolVersion: 1,
 });
 
 afterEach(() => {
@@ -58,14 +63,20 @@ test('buildIosProbes.isScreenStatic maps envelope → boolean, failure → null'
   setIosFetch(async () => jsonResponse({ ok: true, data: { static: false }, v: 1 }));
   const probes = buildIosProbes('com.test');
   assert.equal(await probes.isScreenStatic(), false);
-  setIosFetch(async () => { throw new Error('boom'); });
+  setIosFetch(async () => {
+    throw new Error('boom');
+  });
   assert.equal(await probes.isScreenStatic(), null);
 });
 
 test('buildAndroidProbes.isWindowUpdating posts timeoutMs and maps {updating}', async () => {
   _setAndroidRunnerStateForTest({
-    schemaVersion: 1, hostPort: 23456, devicePort: 7100, pid: process.pid,
-    startedAt: '', protocolVersion: 1,
+    schemaVersion: 1,
+    hostPort: 23456,
+    devicePort: 7100,
+    pid: process.pid,
+    startedAt: '',
+    protocolVersion: 1,
   });
   let posted;
   setAndroidFetch(async (_url, init) => {
@@ -124,12 +135,18 @@ test('settleAfterMutation skips non-mutating verbs, errors, per-call opt-out, an
 test('settleAfterMutation swallows a throwing waiter (advisory, never fails the action)', async () => {
   const { settleAfterMutation } = await import('../../dist/agent-device-wrapper.js');
   const { okResult } = await import('../../dist/utils.js');
-  const out = await settleAfterMutation(okResult({ tapped: true }), { platform: 'ios', verb: 'tap' }, {
-    enabled: () => true,
-    capabilities: () => [],
-    probes: () => ({ snapshotHash: async () => 'h', sleep: async () => {}, now: () => 0 }),
-    wait: async () => { throw new Error('boom'); },
-  });
+  const out = await settleAfterMutation(
+    okResult({ tapped: true }),
+    { platform: 'ios', verb: 'tap' },
+    {
+      enabled: () => true,
+      capabilities: () => [],
+      probes: () => ({ snapshotHash: async () => 'h', sleep: async () => {}, now: () => 0 }),
+      wait: async () => {
+        throw new Error('boom');
+      },
+    },
+  );
   assert.equal(JSON.parse(out.content[0].text).data.tapped, true);
 });
 
@@ -137,7 +154,10 @@ test('attachMeta merges timings_ms instead of clobbering', async () => {
   const { attachMeta } = await import('../../dist/agent-device-wrapper.js');
   const { okResult } = await import('../../dist/utils.js');
   const base = okResult({}, { meta: { timings_ms: { dispatch: 12 } } });
-  const out = attachMeta(base, { timings_ms: { settle: 34 }, settle: { method: 'snapshot-eq', settled: true } });
+  const out = attachMeta(base, {
+    timings_ms: { settle: 34 },
+    settle: { method: 'snapshot-eq', settled: true },
+  });
   const envelope = JSON.parse(out.content[0].text);
   assert.deepEqual(envelope.meta.timings_ms, { dispatch: 12, settle: 34 });
 });
@@ -158,7 +178,12 @@ test('meta.settle survives surfaceKeyboardGuard post-processing', async () => {
 test('waitForSettle clamps non-finite/oversized budgets', async () => {
   const { waitForSettle, SETTLE_MAX_BUDGET_MS } = await import('../../dist/lifecycle/settle.js');
   let t = 0;
-  const clock = { now: () => t, sleep: async (ms) => { t += ms; } };
+  const clock = {
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+  };
   let i = 0;
   const out = await waitForSettle({
     platform: 'android',
@@ -171,7 +196,8 @@ test('waitForSettle clamps non-finite/oversized budgets', async () => {
 });
 
 test('end-to-end: runNative ios tap → runner /command + settle probe → meta.settle', async () => {
-  const { runNative, _setActiveSessionForTest } = await import('../../dist/agent-device-wrapper.js');
+  const { runNative, _setActiveSessionForTest } =
+    await import('../../dist/agent-device-wrapper.js');
   const { _setPluginVersionForTest } = await import('../../dist/runners/protocol.js');
   const { spawn } = await import('node:child_process');
   // Disposable child as the fake runner pid: this test enters the PRODUCTION
@@ -182,14 +208,30 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
   _setPluginVersionForTest(null); // disables version-skew gate
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'com.test' });
   _setFastRunnerStateForTest({ ...iosState(), pid: dummy.pid, port: 22091 });
-  const REQUIRED = ['tap', 'type', 'drag', 'longPress', 'pinch', 'snapshot', 'screenshot', 'back', 'keyboardDismiss'];
+  const REQUIRED = [
+    'tap',
+    'type',
+    'drag',
+    'longPress',
+    'pinch',
+    'snapshot',
+    'screenshot',
+    'back',
+    'keyboardDismiss',
+  ];
   setIosFetch(async (url, init) => {
     if (String(url).includes('/health')) {
-      return jsonResponse({ ok: true, protocolVersion: 1, capabilities: ['SCREEN_STATIC'], commands: REQUIRED });
+      return jsonResponse({
+        ok: true,
+        protocolVersion: 1,
+        capabilities: ['SCREEN_STATIC'],
+        commands: REQUIRED,
+      });
     }
     const body = JSON.parse(init.body);
     if (body.command === 'tap') return jsonResponse({ ok: true, data: { tapped: true }, v: 1 });
-    if (body.command === 'isScreenStatic') return jsonResponse({ ok: true, data: { static: true }, v: 1 });
+    if (body.command === 'isScreenStatic')
+      return jsonResponse({ ok: true, data: { static: true }, v: 1 });
     return jsonResponse({ ok: true, data: {}, v: 1 });
   });
   try {
@@ -207,16 +249,24 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
 
 test('android probes degrade to null when the pinned host port no longer matches', async () => {
   _setAndroidRunnerStateForTest({
-    schemaVersion: 1, hostPort: 23456, devicePort: 7100, pid: process.pid,
-    startedAt: '', protocolVersion: 1,
+    schemaVersion: 1,
+    hostPort: 23456,
+    devicePort: 7100,
+    pid: process.pid,
+    startedAt: '',
+    protocolVersion: 1,
   });
   setAndroidFetch(async () => {
     throw new Error('must not post — pinned port mismatch');
   });
   const probes = buildAndroidProbes('com.test'); // pins 23456
   _setAndroidRunnerStateForTest({
-    schemaVersion: 1, hostPort: 29999, devicePort: 7100, pid: process.pid,
-    startedAt: '', protocolVersion: 1,
+    schemaVersion: 1,
+    hostPort: 29999,
+    devicePort: 7100,
+    pid: process.pid,
+    startedAt: '',
+    protocolVersion: 1,
   });
   assert.equal(await probes.isWindowUpdating(100), null);
   assert.equal(await probes.snapshotHash(), null);

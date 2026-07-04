@@ -329,9 +329,7 @@ export function findInputForPressable(nodes, pressableRef) {
 }
 // Story 04 (#385): thread a caller-supplied settle budget into runNative.
 function settleOpts(args) {
-    return args.settleTimeoutMs !== undefined
-        ? { settle: { timeoutMs: args.settleTimeoutMs } }
-        : {};
+    return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
 }
 export function createDevicePressHandler() {
     return withSession(async (args) => {
@@ -625,7 +623,15 @@ export function createDeviceFillHandler(getClient) {
                     stabilityPrior = value;
                     // #385: retypes skip settle — the nativeSettle CDP read-back that
                     // follows is their stability check; a UI-settle here only adds latency.
-                    await runNative(['fill', ref, args.text, ...pinArgs, '--clear-first', '--delay-ms', String(decision.delayMs)], { settle: { enabled: false } });
+                    await runNative([
+                        'fill',
+                        ref,
+                        args.text,
+                        ...pinArgs,
+                        '--clear-first',
+                        '--delay-ms',
+                        String(decision.delayMs),
+                    ], { settle: { enabled: false } });
                 }
                 const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
                 if (!maestro.isError) {

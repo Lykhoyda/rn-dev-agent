@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { hashSnapshotNodes } from '../../dist/lifecycle/settle-hash.js';
 
 const node = (over = {}) => ({
-  ref: '@e0', type: 'Button', label: 'Save', identifier: 'save-btn',
-  rect: { x: 100, y: 200, width: 120, height: 44 }, ...over,
+  ref: '@e0',
+  type: 'Button',
+  label: 'Save',
+  identifier: 'save-btn',
+  rect: { x: 100, y: 200, width: 120, height: 44 },
+  ...over,
 });
 
 test('identical node lists hash identically', () => {
@@ -58,7 +62,10 @@ test('synthetic ref churn alone does NOT change the hash', () => {
 });
 
 test('node added/removed changes the hash', () => {
-  assert.notEqual(hashSnapshotNodes([node()]), hashSnapshotNodes([node(), node({ identifier: 'x' })]));
+  assert.notEqual(
+    hashSnapshotNodes([node()]),
+    hashSnapshotNodes([node(), node({ identifier: 'x' })]),
+  );
 });
 
 test('empty list hashes deterministically', () => {

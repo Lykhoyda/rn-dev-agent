@@ -460,9 +460,7 @@ interface PressArgs {
 function settleOpts(args: { settleTimeoutMs?: number }): {
   settle?: { timeoutMs: number };
 } {
-  return args.settleTimeoutMs !== undefined
-    ? { settle: { timeoutMs: args.settleTimeoutMs } }
-    : {};
+  return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
 }
 
 export function createDevicePressHandler(): (args: PressArgs) => Promise<ToolResult> {
@@ -834,7 +832,15 @@ export function createDeviceFillHandler(
           // #385: retypes skip settle — the nativeSettle CDP read-back that
           // follows is their stability check; a UI-settle here only adds latency.
           await runNative(
-            ['fill', ref, args.text, ...pinArgs, '--clear-first', '--delay-ms', String(decision.delayMs)],
+            [
+              'fill',
+              ref,
+              args.text,
+              ...pinArgs,
+              '--clear-first',
+              '--delay-ms',
+              String(decision.delayMs),
+            ],
             { settle: { enabled: false } },
           );
         }

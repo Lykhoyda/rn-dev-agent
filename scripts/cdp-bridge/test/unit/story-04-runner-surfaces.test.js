@@ -51,8 +51,17 @@ test('story-04 iOS: isScreenStatic is a case label in isRunnerLifecycleCommand',
 });
 
 const kotlinDir = join(
-  repoRoot, 'scripts', 'rn-android-runner', 'app', 'src', 'androidTest',
-  'java', 'dev', 'lykhoyda', 'rndevagent', 'androidrunner',
+  repoRoot,
+  'scripts',
+  'rn-android-runner',
+  'app',
+  'src',
+  'androidTest',
+  'java',
+  'dev',
+  'lykhoyda',
+  'rndevagent',
+  'androidrunner',
 );
 
 test('story-04 Android: SUPPORTED_COMMANDS and dispatch both know isWindowUpdating', () => {
