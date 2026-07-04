@@ -430,11 +430,9 @@ function isAndroidSession() {
     return !!process.env.ANDROID_SERIAL;
 }
 const FOCUS_DELAY_MS = 150;
-// Story 04 (#385): the fixed focus delay is now the FALLBACK. Explicit
-// waitForKeyboardMs always wins (B122 Pressable-wrapped inputs); a pre-tap
-// whose envelope carries meta.settle already waited for UI stability, so the
-// extra 150ms adds nothing; only a settle-less pre-tap (RN_SETTLE=0, legacy
-// runner path failure) keeps the legacy delay.
+// #385: explicit waitForKeyboardMs always wins (B122 Pressable-wrapped
+// inputs); a pre-tap whose envelope carries meta.settle already waited for UI
+// stability, so the fixed 150ms is only the settle-less fallback.
 export function focusDelayAfterPreTap(preTapEnvelopeText, waitForKeyboardMs) {
     if (waitForKeyboardMs !== undefined)
         return waitForKeyboardMs;
@@ -579,11 +577,9 @@ export function createDeviceFillHandler(getClient) {
                 }
             }
         }
-        // M2 guard (#385): resolve the target's coords ONCE. The pre-tap's settle
-        // re-snapshots and rebuilds the @ref map (post-keyboard screen), so any
-        // later @ref re-resolution inside this call could target a different
-        // element. Pinning makes the settle's ref-map refresh harmless here while
-        // keeping the map fresh for the NEXT tool.
+        // #385: resolve the target's coords ONCE. The pre-tap's settle re-snapshots
+        // and rebuilds the @ref map (post-keyboard screen), so a later @ref
+        // re-resolution inside this call could target a different element.
         const pinned = isRefMapFresh() ? refCenter(ref) : null;
         const pinArgs = pinned ? ['--at-x', String(pinned.x), '--at-y', String(pinned.y)] : [];
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
@@ -627,9 +623,8 @@ export function createDeviceFillHandler(getClient) {
                         break;
                     settleAnchor = value;
                     stabilityPrior = value;
-                    // M1 (#385): corrective retypes pin coords AND skip settle — the
-                    // nativeSettle CDP read-back that follows is their stability check;
-                    // a UI-settle here is redundant latency (~6s/retype worst case).
+                    // #385: retypes skip settle — the nativeSettle CDP read-back that
+                    // follows is their stability check; a UI-settle here only adds latency.
                     await runNative(['fill', ref, args.text, ...pinArgs, '--clear-first', '--delay-ms', String(decision.delayMs)], { settle: { enabled: false } });
                 }
                 const maestro = await maestroFillFallback(ref, args.text, 'ios', true);

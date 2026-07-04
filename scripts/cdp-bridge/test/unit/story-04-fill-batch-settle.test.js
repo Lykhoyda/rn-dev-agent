@@ -56,6 +56,45 @@ test('buildRunAndroidArgs fill honors --at-x/--at-y pin', () => {
   assert.equal(args._staleRef, undefined);
 });
 
+test('batch delay: explicit always wins; settle on → 0, settle off → legacy 300', async () => {
+  const { resolveBatchDelayMs } = await import('../../dist/tools/device-batch.js');
+  assert.equal(resolveBatchDelayMs(500, {}), 500);
+  assert.equal(resolveBatchDelayMs(0, { RN_SETTLE: '0' }), 0);
+  assert.equal(resolveBatchDelayMs(undefined, {}), 0);
+  assert.equal(resolveBatchDelayMs(undefined, { RN_SETTLE: '0' }), 300);
+});
+
+test('device_batch threads per-step settle opts into runNative (2500ms budget, settle:false hatch)', async () => {
+  const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
+    await import('../../dist/agent-device-wrapper.js');
+  const { createDeviceBatchHandler } = await import('../../dist/tools/device-batch.js');
+  const { okResult } = await import('../../dist/utils.js');
+  _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'com.test' });
+  const calls = [];
+  _setRunAgentDeviceForTest(async (cliArgs, opts) => {
+    calls.push({ cliArgs, opts });
+    return okResult({ nodes: [] });
+  });
+  try {
+    const handler = createDeviceBatchHandler();
+    await handler({
+      steps: [
+        { action: 'press', ref: 'e1' },
+        { action: 'press', ref: 'e2', settle: false },
+      ],
+      finalSnapshot: 'none',
+      delayMs: 0,
+    });
+    const presses = calls.filter((c) => c.cliArgs[0] === 'press');
+    assert.equal(presses.length, 2);
+    assert.deepEqual(presses[0].opts, { settle: { timeoutMs: 2500 } });
+    assert.deepEqual(presses[1].opts, { settle: { enabled: false } });
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
+});
+
 test('device_fill pins press and fill to pre-resolved coords', async () => {
   const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
     await import('../../dist/agent-device-wrapper.js');

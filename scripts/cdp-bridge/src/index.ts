@@ -1650,10 +1650,21 @@ trackedTool(
             .number()
             .optional()
             .describe('Per-step timeout override in ms. Default 15000.'),
+          settle: z
+            .boolean()
+            .optional()
+            .describe(
+              'Default true: after this step mutates the screen, wait for the UI to stabilize (capped 2500ms; see meta.settle). Set false to skip the settle wait for this step (raw speed over stability).',
+            ),
         }),
       )
       .describe('Ordered list of UI interaction steps'),
-    delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
+    delayMs: z
+      .number()
+      .optional()
+      .describe(
+        'Delay between steps in ms. Default: 0 while settle is on (settle waits for actual UI stability between steps), 300 when RN_SETTLE=0. Pass an explicit value to override either way.',
+      ),
     screenshotOn: z
       .enum(['none', 'failure', 'end', 'each'])
       .default('failure')
