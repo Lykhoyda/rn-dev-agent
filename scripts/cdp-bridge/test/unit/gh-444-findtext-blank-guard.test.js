@@ -31,7 +31,9 @@ function findTextWhenBranch() {
   const src = readFileSync(KOTLIN_DISPATCHER, 'utf8');
   // The dispatch when-branch: from `"findText" ->` up to the next when-label
   // or the else-branch. Tolerates both expression and block bodies.
-  const m = src.match(/"findText"\s*->\s*([\s\S]*?)(?=\n\s*(?:\/\/[^\n]*\n\s*)*(?:"\w+(?:",\s*"\w+)*"\s*->|else\s*->))/);
+  const m = src.match(
+    /"findText"\s*->\s*([\s\S]*?)(?=\n\s*(?:\/\/[^\n]*\n\s*)*(?:"\w+(?:",\s*"\w+)*"\s*->|else\s*->))/,
+  );
   assert.ok(m, 'findText when-branch not found in CommandDispatcher.kt');
   return m[1];
 }
