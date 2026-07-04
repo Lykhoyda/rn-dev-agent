@@ -55,7 +55,7 @@ async function waitForSettle(opts: {platform, appId, budgetMs?, initialSnapshotH
 
 ## Acceptance criteria
 
-- After `device_press` on a button that opens a new screen: the tool returns only once the target screen is static; `meta.settle.method` recorded; no fixed sleeps execute on the settle-enabled press/fill paths. Two documented exceptions: the 150ms focus constant survives as the settle-less fallback (`RN_SETTLE=0` or legacy-path failure), and the Android clipboard-workaround path keeps its 300ms sleep (upstream of the dispatch choke point — explicit follow-up in the #385 plan).
+- After `device_press` on a button that opens a new screen: the tool returns only once the target screen is static; `meta.settle.method` recorded; no fixed sleeps execute on the settle-enabled press/fill paths. Two documented exceptions: the 150ms focus constant survives as the settle-less fallback (`RN_SETTLE=0` or legacy-path failure), and the Android clipboard-workaround path keeps its 300ms sleep (upstream of the dispatch choke point — tracked in #443 item 4).
 - On a static screen, settle overhead ≤ 150 ms on Android (window-gate short-circuit) and ≤ ~250 ms on iOS (one screen-static probe).
 - On the Reanimated fixture (Story 03): settle returns `method: 'timeout'` at budget rather than hanging — a perpetually-animating screen must degrade gracefully, matching Maestro's bounded loops.
 - `device_batch` TaskWizard walk passes with zero step-transition races across 10 consecutive runs (currently flaky without manual waits).
