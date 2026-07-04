@@ -456,6 +456,21 @@ function isNoFocusedInputError(result) {
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
+function extractSettleMeta(result) {
+    try {
+        const envelope = JSON.parse(result.content[0].text);
+        const out = {};
+        if (envelope.meta?.settle !== undefined)
+            out.settle = envelope.meta.settle;
+        if (typeof envelope.meta?.timings_ms?.settle === 'number') {
+            out.settleMs = envelope.meta.timings_ms.settle;
+        }
+        return out;
+    }
+    catch {
+        return {};
+    }
+}
 function cdpClientOrNull(getClient) {
     try {
         const c = getClient();
@@ -602,6 +617,9 @@ export function createDeviceFillHandler(getClient) {
             // make corruption worse (multi-review H1). Android keeps the legacy result.
             if (client && jsTestId && !androidSession) {
                 const tNative = Date.now();
+                // #385: the verified-native path re-wraps the result — carry the
+                // primary fill's settle telemetry forward instead of dropping it.
+                const primarySettle = extractSettleMeta(primary);
                 let settleAnchor = await readValueBefore(client, jsTestId);
                 let stabilityPrior = null;
                 for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
@@ -613,7 +631,13 @@ export function createDeviceFillHandler(getClient) {
                                 textEntryPath: attempt === 0 ? 'native' : 'native-retype',
                                 verify: jsVerifyMeta(outcome),
                                 retypes: attempt,
-                                timings_ms: { nativeType: Date.now() - tNative },
+                                ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+                                timings_ms: {
+                                    nativeType: Date.now() - tNative,
+                                    ...(primarySettle.settleMs !== undefined
+                                        ? { settle: primarySettle.settleMs }
+                                        : {}),
+                                },
                             },
                         });
                     }
@@ -667,12 +691,22 @@ export function createDeviceFillHandler(getClient) {
         if (snap.ok) {
             const resolvedRef = findInputForPressable(snap.nodes, ref);
             if (resolvedRef && resolvedRef !== ref) {
-                const innerTap = await runNative(['press', resolvedRef], settleOpts(args));
+                // #385: same pin-once guard as the primary path — the inner tap's settle
+                // re-snapshots and renumbers the positional map, so the fill must not
+                // re-resolve resolvedRef afterwards (fetchSnapshotNodes above just
+                // refreshed the map, so the pin resolves against the current screen).
+                const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
+                const innerPinArgs = innerPin
+                    ? ['--at-x', String(innerPin.x), '--at-y', String(innerPin.y)]
+                    : [];
+                const innerTap = innerPin
+                    ? await runNative(['press', String(innerPin.x), String(innerPin.y)], settleOpts(args))
+                    : await runNative(['press', resolvedRef], settleOpts(args));
                 if (!innerTap.isError) {
                     const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
                     if (delay > 0)
                         await sleep(delay);
-                    const resolved = await runNative(['fill', resolvedRef, args.text]);
+                    const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
                     if (!resolved.isError) {
                         try {
                             const envelope = JSON.parse(resolved.content[0].text);
