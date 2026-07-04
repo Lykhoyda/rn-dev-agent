@@ -2513,10 +2513,7 @@ process.on('exit', () => {
   try {
     mirrorManager?.shutdown();
   } catch (err) {
-    logger.warn(
-      'MCP',
-      `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`,
-    );
+    logger.warn('MCP', `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`);
   }
 });
 

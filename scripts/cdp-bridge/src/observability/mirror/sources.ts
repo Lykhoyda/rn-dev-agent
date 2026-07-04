@@ -356,7 +356,5 @@ export async function createMirrorSource(
     return new AndroidScreenrecordSource(target.deviceId);
   }
   const hasIdb = await detectIdb();
-  return hasIdb
-    ? new IosIdbSource(target.deviceId, fps)
-    : new IosSimctlLoopSource(target.deviceId);
+  return hasIdb ? new IosIdbSource(target.deviceId, fps) : new IosSimctlLoopSource(target.deviceId);
 }

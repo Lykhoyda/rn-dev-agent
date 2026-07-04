@@ -1,12 +1,14 @@
 // scripts/cdp-bridge/test/unit/mirror-jpeg-stream.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { JpegFrameExtractor, MAX_FRAME_BYTES } from '../../dist/observability/mirror/jpeg-stream.js';
+import {
+  JpegFrameExtractor,
+  MAX_FRAME_BYTES,
+} from '../../dist/observability/mirror/jpeg-stream.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
 const EOI = Buffer.from([0xff, 0xd9]);
-const jpeg = (fill, size = 16) =>
-  Buffer.concat([SOI, Buffer.alloc(size, fill), EOI]);
+const jpeg = (fill, size = 16) => Buffer.concat([SOI, Buffer.alloc(size, fill), EOI]);
 
 test('extracts a single complete frame from one chunk', () => {
   const x = new JpegFrameExtractor();
@@ -50,7 +52,9 @@ test('reassembles a frame whose SOI is split across chunks', () => {
 test('discards garbage before SOI (multipart headers, ffmpeg noise)', () => {
   const x = new JpegFrameExtractor();
   const f = jpeg(4);
-  const frames = x.push(Buffer.concat([Buffer.from('--boundary\r\nContent-Type: image/jpeg\r\n\r\n'), f]));
+  const frames = x.push(
+    Buffer.concat([Buffer.from('--boundary\r\nContent-Type: image/jpeg\r\n\r\n'), f]),
+  );
   assert.equal(frames.length, 1);
   assert.deepEqual(frames[0], f);
 });

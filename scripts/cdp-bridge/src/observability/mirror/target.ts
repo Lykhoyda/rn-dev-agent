@@ -38,7 +38,8 @@ export function buildMirrorTargetResolver(
       if (!udid) {
         return {
           ok: false,
-          reason: 'no single booted iOS simulator — boot exactly one or start a session with a deviceId',
+          reason:
+            'no single booted iOS simulator — boot exactly one or start a session with a deviceId',
         };
       }
       return { ok: true, target: { platform: 'ios', deviceId: udid } };

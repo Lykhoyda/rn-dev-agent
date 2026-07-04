@@ -36,7 +36,10 @@ test('android: exactly one serial ok; zero and many refuse', async () => {
   const android = { ...base, getPlatform: () => 'android' };
   const one = await buildMirrorTargetResolver(android)();
   assert.deepEqual(one, { ok: true, target: { platform: 'android', deviceId: 'emulator-5554' } });
-  const none = await buildMirrorTargetResolver({ ...android, listAndroidSerials: async () => [] })();
+  const none = await buildMirrorTargetResolver({
+    ...android,
+    listAndroidSerials: async () => [],
+  })();
   assert.equal(none.ok, false);
   const many = await buildMirrorTargetResolver({
     ...android,

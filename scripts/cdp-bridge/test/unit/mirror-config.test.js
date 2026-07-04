@@ -34,7 +34,9 @@ test('config enabled:false respected when env unset', () => {
 });
 
 test('fps: config value used, clamped to 5..30, junk → default', () => {
-  const mk = (fps) => resolveMirrorConfig({ env: undefined, readConfig: () => ({ observe: { mirror: { fps } } }) }).fps;
+  const mk = (fps) =>
+    resolveMirrorConfig({ env: undefined, readConfig: () => ({ observe: { mirror: { fps } } }) })
+      .fps;
   assert.equal(mk(12), 12);
   assert.equal(mk(1), 5);
   assert.equal(mk(120), 30);
@@ -43,6 +45,11 @@ test('fps: config value used, clamped to 5..30, junk → default', () => {
 });
 
 test('config read errors fail open (enabled, defaults)', () => {
-  const r = resolveMirrorConfig({ env: undefined, readConfig: () => { throw new Error('boom'); } });
+  const r = resolveMirrorConfig({
+    env: undefined,
+    readConfig: () => {
+      throw new Error('boom');
+    },
+  });
   assert.deepEqual(r, { enabled: true, fps: DEFAULT_MIRROR_FPS, source: 'default' });
 });
