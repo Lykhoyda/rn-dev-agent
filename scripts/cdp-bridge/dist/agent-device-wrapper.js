@@ -465,7 +465,12 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             const [target, yOrDuration, durationMaybe] = positionals;
             if (target?.startsWith('@')) {
                 const duration = Number(yOrDuration);
-                const center = refCenter(target);
+                // Final-review fix (#386): mirrors the tap/type cases in this same
+                // function (and the iOS builder) — an over-age ref map must be
+                // treated as stale so it heals via _staleRef instead of serving a
+                // wrong-element long-press from coordinates captured on a screen that
+                // may no longer be on-screen.
+                const center = isRefMapFresh() ? refCenter(target) : null;
                 if (!center) {
                     return {
                         command: 'longPress',

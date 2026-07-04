@@ -72,7 +72,8 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
-import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, buildLiveDeps, } from './observability/live-device.js';
+import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
+import { invalidateLastSnapshotHash } from './fast-runner-ref-map.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema, setObserveE2eDeps, startObserveServer, } from './tools/observe.js';
 import { autostartObserve } from './observability/autostart.js';
@@ -235,10 +236,24 @@ function trackedTool(name, desc, schema, handler) {
     // here and runs regardless of liveEnabled. GH #206 live capture layers on top.
     const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
     const wrapped = async (...a) => {
-        const result = await base(...a);
         const args = a[0];
-        if (toolInvalidatesSnapshotCache(name, args))
-            markSnapshotDirty();
+        let result;
+        try {
+            result = await base(...a);
+        }
+        finally {
+            // A mutating tool may have changed the screen even on a thrown/rejected
+            // call (dispatch landed, then something downstream failed), so both
+            // fail-safe invalidations run on the error path too — not only after a
+            // clean return. Story 05 (#386): the tap-retry baseline hash shares the
+            // same boundary as the GH #321 snapshot-cache dirty flag above it — see
+            // toolInvalidatesRetryBaseline's doc comment for why native device verbs
+            // are excluded (they manage it themselves via settle).
+            if (toolInvalidatesSnapshotCache(name, args))
+                markSnapshotDirty();
+            if (toolInvalidatesRetryBaseline(name, args))
+                invalidateLastSnapshotHash();
+        }
         if (installLiveCapture && isStateMutating(name, args)) {
             void maybeCaptureLiveFrame(liveDeps);
         }

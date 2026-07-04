@@ -27,7 +27,7 @@ import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
-import { getCachedMetadata, isRefMapFresh, refCenter } from '../fast-runner-ref-map.js';
+import { getCachedMetadata, isRefMapFresh, lookupRef, refCenter } from '../fast-runner-ref-map.js';
 import {
   resolveJsTestId,
   attemptJsFill,
@@ -660,6 +660,24 @@ function jsVerifyMeta(outcome: FillVerifyOutcome): 'exact' | 'transformed' | 'un
       : 'unverifiable';
 }
 
+// Multi-review "H3" guard: a cached identifier may only seed the JS-first
+// testID resolution when the ref is BOTH map-fresh AND present in the
+// CURRENT snapshot generation. Pre-#386 signature retention, getCachedMetadata
+// returned null for any ref not in the latest snapshot, so `isRefMapFresh()`
+// alone was sufficient. Since 4ff56662, metadataMap retains signatures for ref
+// ids absent from the newest snapshot (to heal stale taps by identity), so
+// getCachedMetadata can return an OLD-generation identifier even when the map
+// is otherwise fresh. lookupRef reads refMap, which IS still cleared every
+// generation, so `lookupRef(ref) !== null` proves the ref exists in the
+// CURRENT generation — restoring H3 (a testID reused across screens, e.g.
+// 'input-email' on both Login and Signup, can no longer resolve to a
+// retained-but-stale generation's identifier).
+export function resolveCachedIdentifier(ref: string): string | undefined {
+  const bareRef = ref.replace(/^@/, '');
+  if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
+  return getCachedMetadata(bareRef)?.identifier;
+}
+
 async function maestroFillFallback(
   ref: string,
   text: string,
@@ -760,15 +778,14 @@ export function createDeviceFillHandler(
     }
 
     // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
-    // The cached-identifier resolution honors the same ref-map freshness gate as the
-    // native coordinate path (multi-review H3) so a stale snapshot can't map @eN to a
-    // reused testID on a since-navigated screen. Explicit args.testID is caller-asserted
+    // resolveCachedIdentifier gates on BOTH ref-map freshness AND current-generation
+    // presence (multi-review H3, restored post-#386 signature retention — see its
+    // doc comment) so a stale/retained-but-absent ref can't map @eN to a reused
+    // testID on a since-navigated screen. Explicit args.testID is caller-asserted
     // and stays ungated. Never returns the field's value (could be a password) — the
     // `verify` classification conveys success without echoing the text (multi-review BLOCKER).
     const client = cdpClientOrNull(getClient);
-    const cachedIdentifier = isRefMapFresh()
-      ? getCachedMetadata(ref.replace(/^@/, ''))?.identifier
-      : undefined;
+    const cachedIdentifier = resolveCachedIdentifier(ref);
     const jsTestId = client
       ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier })
       : null;

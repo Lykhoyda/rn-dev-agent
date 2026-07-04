@@ -78,6 +78,40 @@ export function toolInvalidatesSnapshotCache(
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 
+// Story 05 (#386): native device verbs manage the tap-retry baseline hash
+// (fast-runner-ref-map's lastSnapshotHash) themselves via
+// settleAfterMutationWithOutcome, which either refreshes it (settle probe
+// re-snapshots) or invalidates it on a blind mutation. Invalidating it again
+// here AFTER those verbs return would erase a freshly-refreshed baseline and
+// defeat tap-sequence change detection — the story's whole point.
+export const BASELINE_SELF_MANAGED_TOOLS = new Set<string>([
+  'device_press',
+  'device_longpress',
+  'device_fill',
+  'device_swipe',
+  'device_scroll',
+  'device_scrollintoview',
+  'device_pinch',
+  'device_back',
+  'device_batch',
+  'device_find',
+]);
+
+/**
+ * Story 05 (#386): should this tool call invalidate the tap-retry baseline
+ * hash? True for tools that mutate the screen through a path OTHER than the
+ * runNative dispatch choke point (cdp_interact, cdp_navigate, device_deeplink,
+ * maestro_run, cdp_reload, …) — those never touch the baseline on their own,
+ * so a stale baseline would compare a later tap against the wrong screen.
+ * Reuses toolInvalidatesSnapshotCache so pure reads are excluded for free.
+ */
+export function toolInvalidatesRetryBaseline(
+  tool: string,
+  args?: Record<string, unknown>,
+): boolean {
+  return toolInvalidatesSnapshotCache(tool, args) && !BASELINE_SELF_MANAGED_TOOLS.has(tool);
+}
+
 /**
  * Registration-time gate: could this tool EVER trigger a live capture (for
  * some args)? Used to decide whether to install the per-call wrapper at all.
