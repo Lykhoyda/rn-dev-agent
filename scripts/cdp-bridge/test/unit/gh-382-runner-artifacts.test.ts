@@ -146,7 +146,7 @@ function makeDeps(cfg = {}) {
     mkdirp: (p) => files.add(join(p, '.dir')),
     rm: (p) => {
       calls.rm.push(p);
-      for (const f of [...files]) if (f === p || f.startsWith(p + '/')) files.delete(f);
+      for (const f of files) if (f === p || f.startsWith(p + '/')) files.delete(f);
     },
   };
   return { deps, files, shas, calls };

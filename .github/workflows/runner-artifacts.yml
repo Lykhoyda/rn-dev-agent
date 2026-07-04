@@ -153,7 +153,7 @@ jobs:
         env:
           VERSION: ${{ needs.detect.outputs.version }}
         run: |
-          node scripts/build-runner-manifest.mjs \
+          node scripts/build-runner-manifest.mts \
             --version "$VERSION" \
             --ios "rn-fast-runner-$VERSION-sim.zip" \
             --android "rn-android-runner-$VERSION.zip" \

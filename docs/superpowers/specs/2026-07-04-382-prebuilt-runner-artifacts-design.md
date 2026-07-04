@@ -157,10 +157,10 @@ every current build resolves cleanly to `build-local`. CI overwrites it at relea
     → zip `Debug-iphonesimulator/` + `*.xctestrun` as `rn-fast-runner-<version>-sim.zip`.
   - **Android job** (ubuntu): `./gradlew assembleDebug assembleDebugAndroidTest`
     → zip both APKs as `rn-android-runner-<version>.zip`.
-  - **Publish**: `node scripts/build-runner-manifest.mjs` computes SHA-256 + bytes, writes
+  - **Publish**: `node scripts/build-runner-manifest.mts` computes SHA-256 + bytes, writes
     `runner-manifest.json`, creates GitHub Release `v<version>`, uploads both zips, commits the
     manifest. Gated on the existing version-sync check so artifact version == package version.
-- `scripts/build-runner-manifest.mjs` — manifest generator (pure enough to smoke-test locally with
+- `scripts/build-runner-manifest.mts` — manifest generator (pure enough to smoke-test locally with
   fixture files).
 
 ## Scope boundaries (this PR)

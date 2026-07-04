@@ -5,7 +5,7 @@
 // verifying the release assets.
 //
 // Usage (CI, after building the zips):
-//   node scripts/build-runner-manifest.mjs \
+//   node scripts/build-runner-manifest.mts \
 //     --version 0.62.3 \
 //     --ios path/to/rn-fast-runner-0.62.3-sim.zip \
 //     --android path/to/rn-android-runner-0.62.3.zip \
@@ -47,7 +47,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.version) {
     console.error(
-      'usage: build-runner-manifest.mjs --version <v> [--ios <zip>] [--android <zip>] ' +
+      'usage: build-runner-manifest.mts --version <v> [--ios <zip>] [--android <zip>] ' +
         '[--xcode-build-version <v>] [--out <path>]',
     );
     process.exit(1);

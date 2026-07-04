@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hashAsset, assembleManifest } from '../../../build-runner-manifest.mjs';
+import { hashAsset, assembleManifest } from '../../../build-runner-manifest.mts';
 
 function withTempFile(name, content, fn) {
   const dir = mkdtempSync(join(tmpdir(), 'gh382-manifest-'));
