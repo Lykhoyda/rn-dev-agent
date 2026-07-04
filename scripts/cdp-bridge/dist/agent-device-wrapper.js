@@ -5,7 +5,8 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, getLastSnapshotHash, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
@@ -68,6 +69,7 @@ export function setActiveSession(info) {
 export function clearActiveSession() {
     activeSession = null;
     clearRefMap();
+    recordUiChange();
     try {
         unlinkSync(SESSION_FILE);
     }
@@ -462,10 +464,21 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'longpress': {
             const [target, yOrDuration, durationMaybe] = positionals;
             if (target?.startsWith('@')) {
-                const center = refCenter(target);
-                if (!center)
-                    return { command: 'longPress', _staleRef: target, ...withBundle };
                 const duration = Number(yOrDuration);
+                // Final-review fix (#386): mirrors the tap/type cases in this same
+                // function (and the iOS builder) — an over-age ref map must be
+                // treated as stale so it heals via _staleRef instead of serving a
+                // wrong-element long-press from coordinates captured on a screen that
+                // may no longer be on-screen.
+                const center = isRefMapFresh() ? refCenter(target) : null;
+                if (!center) {
+                    return {
+                        command: 'longPress',
+                        _staleRef: target,
+                        ...(Number.isNaN(duration) ? {} : { durationMs: duration }),
+                        ...withBundle,
+                    };
+                }
                 return {
                     command: 'longPress',
                     x: center.x,
@@ -767,18 +780,28 @@ export function attachMetaNote(result, note) {
 // into an error; every path out of here returns the original result (with
 // meta.settle attached when the engine ran). Dynamic import keeps the
 // wrapper↔settle↔client module graph acyclic at load time.
-export async function settleAfterMutation(result, ctx, deps = {}) {
+//
+// Story 05 (#386): also returns the raw SettleOutcome (null when settle never
+// ran) so callers can inspect hierarchyChanged. A mutating verb that exits
+// without a hash observation invalidates the ref-map's last snapshot hash —
+// the screen may have changed unobserved, and a later tap comparing against
+// the stale baseline would get a WRONG change verdict.
+export async function settleAfterMutationWithOutcome(result, ctx, deps = {}) {
     if (result.isError)
-        return result;
+        return { result, outcome: null }; // dispatch never landed — baseline keeps
     if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
-        return result;
-    if (ctx.settle?.enabled === false)
-        return result;
+        return { result, outcome: null };
+    if (ctx.settle?.enabled === false) {
+        invalidateLastSnapshotHash(); // mutated + settled blind
+        return { result, outcome: null };
+    }
     try {
         const settle = await import('./lifecycle/settle.js');
         const enabled = deps.enabled ?? settle.settleEnabled;
-        if (!enabled(process.env))
-            return result;
+        if (!enabled(process.env)) {
+            invalidateLastSnapshotHash();
+            return { result, outcome: null };
+        }
         const capabilities = deps.capabilities
             ? deps.capabilities(ctx.platform)
             : ctx.platform === 'ios'
@@ -795,15 +818,159 @@ export async function settleAfterMutation(result, ctx, deps = {}) {
             capabilities,
             probes,
             ...(ctx.settle?.timeoutMs !== undefined ? { budgetMs: ctx.settle.timeoutMs } : {}),
+            ...(ctx.initialSnapshotHash !== undefined
+                ? { initialSnapshotHash: ctx.initialSnapshotHash }
+                : {}),
         });
-        return attachMeta(result, {
-            settle: { method: outcome.method, settled: outcome.settled },
-            timings_ms: { settle: outcome.ms },
-        });
+        if (outcome.hierarchyChanged === undefined)
+            invalidateLastSnapshotHash();
+        return {
+            result: attachMeta(result, {
+                settle: {
+                    method: outcome.method,
+                    settled: outcome.settled,
+                    ...(outcome.hierarchyChanged !== undefined
+                        ? { hierarchyChanged: outcome.hierarchyChanged }
+                        : {}),
+                },
+                timings_ms: { settle: outcome.ms },
+            }),
+            outcome,
+        };
     }
     catch {
-        return result;
+        invalidateLastSnapshotHash();
+        return { result, outcome: null };
     }
+}
+export async function settleAfterMutation(result, ctx, deps = {}) {
+    return (await settleAfterMutationWithOutcome(result, ctx, deps)).result;
+}
+export function selfHealEnabled(env) {
+    const v = env.RN_SELF_HEAL?.trim().toLowerCase();
+    return v !== '0' && v !== 'false';
+}
+const RETRYABLE_TAP_COMMANDS = new Set(['tap', 'longPress']);
+// Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
+// gestures (--count/--double-tap) would change semantics on a re-tap; fills
+// have their own read-back verification and a retype would duplicate text;
+// hold gestures (--hold-ms, from device_press holdMs / device_longpress by ref,
+// routed as ['press', ref, '--hold-ms'] → command 'tap') are a deliberate timed
+// interaction, so re-dispatching would change the requested action. Genuine
+// coordinate long-presses carry duration positionally (command 'longPress', no
+// --hold-ms flag) and stay eligible.
+export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
+    const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
+        opts.retryIfNoChange !== false &&
+        selfHealEnabled(process.env) &&
+        !cliArgs.includes('--double-tap') &&
+        !cliArgs.includes('--count') &&
+        !cliArgs.includes('--hold-ms') &&
+        x !== undefined &&
+        y !== undefined;
+    return { eligible, targetKey: `${builtCommand}@${x},${y}` };
+}
+function flagNoUiChange(result, targetKey) {
+    const distinct = recordNoUiChange(targetKey);
+    return attachMeta(result, {
+        noUiChange: true,
+        ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
+    });
+}
+// Story 05 (#386): settle the first dispatch with change detection; if the
+// hierarchy did not change, presume the tap was swallowed and retry EXACTLY
+// once (2 attempts total, Maestro's rule). Still unchanged → success with
+// meta.noUiChange (a no-op tap is legitimate — the verifier decides). The
+// advisory contract holds: nothing here turns a succeeded action into an error.
+export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
+    const preHash = policy.eligible ? (getLastSnapshotHash() ?? undefined) : undefined;
+    const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) }, deps);
+    if (!policy.eligible || preHash === undefined || first.result.isError)
+        return first.result;
+    if (first.outcome?.hierarchyChanged !== false) {
+        if (first.outcome?.hierarchyChanged === true)
+            recordUiChange();
+        return first.result;
+    }
+    const second = await dispatch();
+    if (second.isError) {
+        return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
+    }
+    const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
+    if (settled.outcome?.hierarchyChanged === false) {
+        return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
+    }
+    if (settled.outcome?.hierarchyChanged === true)
+        recordUiChange();
+    return attachMeta(settled.result, { tapRetried: true });
+}
+const MAX_STALE_CANDIDATES = 5;
+function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
+    const message = reason === 'ambiguous'
+        ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements — refusing to guess-tap`
+        : `Element at ref ${ref} no longer hittable — UI re-rendered since snapshot`;
+    const hint = reason === 'ambiguous'
+        ? 'Multiple elements share the cached identity. The ref-map was refreshed by this call — pick the intended ref from `candidates` and retry.'
+        : reason === 'snapshot-failed'
+            ? 'Snapshot infrastructure failed during re-resolution. Check cdp_status / reopen the device session, then retry.'
+            : 'Element not re-resolvable by identity (it changed or unmounted). Call device_snapshot action=snapshot and re-find the target.';
+    return failResult(message, 'STALE_REF', {
+        cachedMetadata,
+        reResolution: reason,
+        candidates: candidates.slice(0, MAX_STALE_CANDIDATES),
+        hint,
+    });
+}
+function extractSnapshotNodes(result) {
+    if (result.isError)
+        return null;
+    try {
+        const env = JSON.parse(result.content[0].text);
+        if (env.ok === false)
+            return null;
+        return Array.isArray(env.data?.nodes) ? env.data.nodes : null;
+    }
+    catch {
+        return null;
+    }
+}
+// Story 05 (#386): re-resolve a stale @ref by identity instead of refusing.
+// The snapshot closure must be the platform's real snapshot (it also refreshes
+// the ref-map as a side effect). Signature + metadata are captured BEFORE the
+// snapshot replaces the map.
+export async function healStaleRef(staleRef, snapshot) {
+    const t0 = Date.now();
+    const cachedMetadata = getCachedMetadata(staleRef);
+    const sig = getCachedSignature(staleRef);
+    if (!sig)
+        return { kind: 'failed', result: staleRefFail(staleRef, 'no-signature', cachedMetadata) };
+    let nodes;
+    try {
+        nodes = extractSnapshotNodes(await snapshot());
+    }
+    catch {
+        nodes = null;
+    }
+    if (!nodes)
+        return { kind: 'failed', result: staleRefFail(staleRef, 'snapshot-failed', cachedMetadata) };
+    const outcome = refreshRef(sig, nodes);
+    if (outcome.kind === 'unique') {
+        const r = outcome.node.rect;
+        return {
+            kind: 'healed',
+            x: Math.round(r.x + r.width / 2),
+            y: Math.round(r.y + r.height / 2),
+            newRef: outcome.node.ref,
+            ms: Date.now() - t0,
+        };
+    }
+    if (outcome.kind === 'ambiguous') {
+        return {
+            kind: 'failed',
+            result: staleRefFail(staleRef, 'ambiguous', cachedMetadata, outcome.candidates),
+        };
+    }
+    return { kind: 'failed', result: staleRefFail(staleRef, 'absent', cachedMetadata) };
 }
 export async function runNative(cliArgs, opts = {}) {
     if (_runAgentDeviceOverrideForTest) {
@@ -846,13 +1013,34 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
+        let healMeta = null;
+        if (ios._staleRef && selfHealEnabled(process.env)) {
+            const healed = await healStaleRef(ios._staleRef, () => runIOS({
+                command: 'snapshot',
+                interactiveOnly: true,
+                ...(appId ? { bundleId: appId } : {}),
+            }));
+            if (healed.kind === 'failed')
+                return healed.result;
+            ios.x = healed.x;
+            ios.y = healed.y;
+            delete ios._staleRef;
+            healMeta = {
+                reResolved: true,
+                reResolvedRef: healed.newRef,
+                timings_ms: { reResolve: healed.ms },
+            };
+        }
         let result = await runIOS(ios);
-        result = await settleAfterMutation(result, {
+        const iosPolicy = tapRetryPolicy(cliArgs, ios.command, ios.x, ios.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
+        result = await settleWithRetryIfNoChange(result, () => runIOS(ios), {
             platform: 'ios',
             verb: cliArgs[0],
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
-        });
+        }, iosPolicy);
+        if (healMeta)
+            result = attachMeta(result, healMeta);
         return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
     }
     // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
@@ -921,13 +1109,35 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
+        let healMeta = null;
+        if (android._staleRef && selfHealEnabled(process.env)) {
+            const healed = await healStaleRef(android._staleRef, () => runAndroid({
+                command: 'snapshot',
+                interactiveOnly: true,
+                deviceId: activeSession?.deviceId,
+                ...(appId ? { bundleId: appId } : {}),
+            }));
+            if (healed.kind === 'failed')
+                return healed.result;
+            android.x = healed.x;
+            android.y = healed.y;
+            delete android._staleRef;
+            healMeta = {
+                reResolved: true,
+                reResolvedRef: healed.newRef,
+                timings_ms: { reResolve: healed.ms },
+            };
+        }
         let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
-        result = await settleAfterMutation(result, {
+        const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
+        result = await settleWithRetryIfNoChange(result, () => runAndroid({ ...android, deviceId: activeSession?.deviceId }), {
             platform: 'android',
             verb: cliArgs[0],
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
-        });
+        }, androidPolicy);
+        if (healMeta)
+            result = attachMeta(result, healMeta);
         const note = consumePendingAndroidUpgradeNote();
         return note ? attachMetaNote(result, note) : result;
     }

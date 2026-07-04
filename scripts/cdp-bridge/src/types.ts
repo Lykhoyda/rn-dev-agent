@@ -245,6 +245,9 @@ export type ToolErrorCode =
   | 'NATIVE_LOG_UNAVAILABLE' // CDP-016
   // D1206 Tier 2 Sprint A/B post-review batch 2026-04-30.
   | 'TESTID_NOT_FOUND' // device_batch testID-keyed step / expect_visible_by_testid
+  // GH #386 (Story 05 Task 8): device_batch testID resolved to >1 element for
+  // a mutating step (press / fill / find+tap) — refuse rather than guess-tap.
+  | 'AMBIGUOUS_TESTID'
   | 'ASSERTION_FAILED' // expect_redux / expect_route / expect_text / expect_visible_by_testid
   | 'SNAPSHOT_FAILED' // agent-device snapshot returned ok:false (distinct from "not present")
   | 'RN_FAST_RUNNER_DOWN' // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)

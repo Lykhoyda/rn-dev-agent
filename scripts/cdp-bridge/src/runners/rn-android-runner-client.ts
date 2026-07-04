@@ -979,6 +979,8 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
       'STALE_REF',
       {
         cachedMetadata: getCachedMetadata(args._staleRef),
+        reResolution: 'self-heal-disabled',
+        candidates: [],
         hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
       },
     );

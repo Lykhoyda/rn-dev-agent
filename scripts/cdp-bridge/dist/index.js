@@ -72,7 +72,8 @@ import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
-import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, buildLiveDeps, } from './observability/live-device.js';
+import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
+import { invalidateLastSnapshotHash } from './fast-runner-ref-map.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema, setObserveE2eDeps, setObserveMirror, startObserveServer, } from './tools/observe.js';
 import { autostartObserve } from './observability/autostart.js';
@@ -277,10 +278,24 @@ function trackedTool(name, desc, schema, handler) {
     // here and runs regardless of liveEnabled. GH #206 live capture layers on top.
     const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
     const wrapped = async (...a) => {
-        const result = await base(...a);
         const args = a[0];
-        if (toolInvalidatesSnapshotCache(name, args))
-            markSnapshotDirty();
+        let result;
+        try {
+            result = await base(...a);
+        }
+        finally {
+            // A mutating tool may have changed the screen even on a thrown/rejected
+            // call (dispatch landed, then something downstream failed), so both
+            // fail-safe invalidations run on the error path too — not only after a
+            // clean return. Story 05 (#386): the tap-retry baseline hash shares the
+            // same boundary as the GH #321 snapshot-cache dirty flag above it — see
+            // toolInvalidatesRetryBaseline's doc comment for why native device verbs
+            // are excluded (they manage it themselves via settle).
+            if (toolInvalidatesSnapshotCache(name, args))
+                markSnapshotDirty();
+            if (toolInvalidatesRetryBaseline(name, args))
+                invalidateLastSnapshotHash();
+        }
         if (installLiveCapture && isStateMutating(name, args)) {
             void maybeCaptureLiveFrame(liveDeps);
         }
@@ -846,7 +861,7 @@ trackedTool('device_find', 'Find a UI element by visible text and optionally int
         .optional()
         .describe('Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.'),
 }, createDeviceFindHandler());
-trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session.', {
+trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).', {
     ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
     count: z
@@ -877,6 +892,10 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. 
         .max(30000)
         .optional()
         .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
+    retryIfNoChange: z
+        .boolean()
+        .optional()
+        .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDevicePressHandler());
 trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
@@ -947,6 +966,10 @@ trackedTool('device_longpress', 'Long press on an element or coordinates. Use fo
         .max(10000)
         .optional()
         .describe('Hold duration in ms (default 1000)'),
+    retryIfNoChange: z
+        .boolean()
+        .optional()
+        .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDeviceLongPressHandler());
 trackedTool('device_scroll', 'Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.', {
     direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),

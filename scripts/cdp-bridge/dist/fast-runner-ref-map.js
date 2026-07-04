@@ -1,7 +1,9 @@
+import { hashSnapshotNodes } from './lifecycle/settle-hash.js';
 let refMap = new Map();
 let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
+let lastSnapshotHash = null;
 export function updateRefMap(nodes) {
     refMap.clear();
     screenRect = null;
@@ -48,6 +50,7 @@ export function clearRefMap() {
     metadataMap.clear();
     screenRect = null;
     lastUpdated = 0;
+    lastSnapshotHash = null;
 }
 export function hasRefMap() {
     return refMap.size > 0;
@@ -93,29 +96,82 @@ export function flattenXCUITree(tree) {
     return { nodes, refMap: localRefMap };
 }
 export function updateRefMapFromFlat(nodes) {
+    // refMap IS cleared (coordinates must never be served across generations —
+    // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
+    // positional, so ids absent from this snapshot cannot collide with current
+    // ones; retaining their signatures (with their ORIGIN generation's
+    // flatIndex/nodeCount) lets a later stale tap heal by identity after a
+    // re-render (Story 05 acceptance: dense→sparse→tap-original-ref, #386).
+    // Colliding keys are overwritten by metadataMap.set below.
     refMap.clear();
-    metadataMap.clear();
     screenRect = null;
-    for (const node of nodes) {
+    const hashed = [];
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
         if (!node.ref || !node.rect)
             continue;
         const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
-        const meta = { type: node.type };
+        const meta = { type: node.type, flatIndex: i, nodeCount: nodes.length };
         if (node.label !== undefined)
             meta.label = node.label;
         if (node.identifier !== undefined)
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
+        hashed.push(node);
         if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
             screenRect = node.rect;
         }
+    }
+    // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
+    // dereferences node.rect.* unconditionally, and a malformed entry must not
+    // throw mid-update. For real runner data the filtered subset equals the full
+    // array (both mappers pre-filter !rect), so comparability with the settle
+    // probes is preserved. Fail-open on hash error (matches settle.ts).
+    try {
+        lastSnapshotHash = hashSnapshotNodes(hashed);
+    }
+    catch {
+        lastSnapshotHash = null;
     }
     lastUpdated = Date.now();
 }
 export function getCachedMetadata(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;
-    return metadataMap.get(key) ?? null;
+    const rec = metadataMap.get(key);
+    if (!rec)
+        return null;
+    const meta = { type: rec.type };
+    if (rec.label !== undefined)
+        meta.label = rec.label;
+    if (rec.identifier !== undefined)
+        meta.identifier = rec.identifier;
+    return meta;
+}
+export function getCachedSignature(ref) {
+    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    const rec = metadataMap.get(key);
+    if (!rec)
+        return null;
+    const sig = {
+        type: rec.type,
+        flatIndex: rec.flatIndex,
+        nodeCount: rec.nodeCount,
+    };
+    if (rec.label !== undefined)
+        sig.label = rec.label;
+    if (rec.identifier !== undefined)
+        sig.identifier = rec.identifier;
+    return sig;
+}
+export function getLastSnapshotHash() {
+    return lastSnapshotHash;
+}
+// Story 05 (#386): called when a mutating verb settles without any hash
+// observation — the screen may have changed unobserved, so the baseline must
+// not be compared against. Fail-open beats fail-wrong.
+export function invalidateLastSnapshotHash() {
+    lastSnapshotHash = null;
 }
 function metadataMatches(a, b) {
     return a.type === b.type && a.label === b.label && a.identifier === b.identifier;
@@ -158,4 +214,28 @@ export function flattenAndroidAccessibilityTree(nodes) {
         localRefMap.set(key, node.rect);
     }
     return { nodes, refMap: localRefMap };
+}
+function identityMatches(sig, node) {
+    return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
+}
+// Story 05 (#386): re-bind a stale ref to the live tree by identity attrs
+// (type/label/identifier — bounds excluded; enabled/hittable are state, not
+// identity). Maestro's rule: tap only on a UNIQUE match. The flat index is a
+// tie-breaker only when the tree shape is unchanged — never a primary key.
+export function refreshRef(sig, nodes) {
+    const matches = [];
+    for (let i = 0; i < nodes.length; i++) {
+        if (identityMatches(sig, nodes[i]))
+            matches.push({ node: nodes[i], index: i });
+    }
+    if (matches.length === 0)
+        return { kind: 'absent' };
+    if (matches.length === 1)
+        return { kind: 'unique', node: matches[0].node };
+    if (nodes.length === sig.nodeCount) {
+        const atSameIndex = matches.filter((m) => m.index === sig.flatIndex);
+        if (atSameIndex.length === 1)
+            return { kind: 'unique', node: atSameIndex[0].node };
+    }
+    return { kind: 'ambiguous', candidates: matches.map((m) => m.node) };
 }

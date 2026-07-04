@@ -72,7 +72,8 @@ export async function waitForSettle(opts: WaitForSettleOpts): Promise<SettleOutc
       // false immediately when the frontmost package differs (e.g. after a back
       // that left the app). Benign: nothing of ours left to settle.
       await probes.sleep(WINDOW_GATE_SETTLED_SLEEP_MS);
-      return { settled: true, method: 'window-gate', ms: elapsed() };
+      const change = await postSettleChange(probes, initialSnapshotHash);
+      return { settled: true, method: 'window-gate', ms: elapsed(), ...change };
     }
     // updating or probe failure → pay for snapshot polling below
   }
@@ -81,7 +82,10 @@ export async function waitForSettle(opts: WaitForSettleOpts): Promise<SettleOutc
     const tierDeadline = Math.min(SCREEN_STATIC_TIER_MS, budgetMs);
     while (elapsed() < tierDeadline) {
       const isStatic = await safeProbe(() => probes.isScreenStatic!());
-      if (isStatic === true) return { settled: true, method: 'screen-static', ms: elapsed() };
+      if (isStatic === true) {
+        const change = await postSettleChange(probes, initialSnapshotHash);
+        return { settled: true, method: 'screen-static', ms: elapsed(), ...change };
+      }
       if (isStatic === null) break; // probe infra failed — don't burn the tier budget
       const nap = Math.min(SCREEN_STATIC_POLL_INTERVAL_MS, tierDeadline - elapsed());
       if (nap > 0) await probes.sleep(nap);
@@ -124,6 +128,19 @@ async function safeProbe<T>(fn: () => Promise<T>): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+// Story 05 (#386): the fast tiers (window-gate / screen-static) never take a
+// snapshot, so a caller that wants change detection pays exactly one hash
+// probe post-settle. Callers that omit initialSnapshotHash pay nothing.
+async function postSettleChange(
+  probes: SettleProbes,
+  initialSnapshotHash: string | undefined,
+): Promise<{ hierarchyChanged?: boolean }> {
+  if (initialSnapshotHash === undefined) return {};
+  const hash = await safeProbe(() => probes.snapshotHash());
+  if (typeof hash !== 'string') return {};
+  return { hierarchyChanged: hash !== initialSnapshotHash };
 }
 
 // --- Production probe builders ---

@@ -79,42 +79,46 @@ export function salientizeSnapshotData(data) {
  *
  * Exported for unit tests; pure once a snapshot envelope is provided.
  */
-export function findRefByTestID(snapshotEnvelope, testID) {
+export function findRefsByTestID(snapshotEnvelope, testID) {
     try {
         const env = JSON.parse(snapshotEnvelope);
         if (env.ok === false)
-            return null;
+            return [];
         // Daemon/CLI shape — flat array.
         const nodes = env.data?.nodes;
         if (Array.isArray(nodes)) {
-            const hit = nodes.find((n) => n.identifier === testID);
-            return hit?.ref ? bareRef(hit.ref) : null;
+            return nodes
+                .filter((n) => n.identifier === testID && typeof n.ref === 'string')
+                .map((n) => bareRef(n.ref));
         }
         // Fast-runner shape — nested tree.
         if (env.data?.tree) {
-            const hit = findRefInTree(env.data.tree, testID);
-            return hit ? bareRef(hit) : null;
+            const refs = [];
+            collectRefsInTree(env.data.tree, testID, refs);
+            return refs;
         }
-        return null;
+        return [];
     }
     catch {
-        return null;
+        return [];
     }
+}
+// GH #386 (Story 05 Task 8): back-compat wrapper — first match or null. Kept
+// for callers/tests that only ever cared about a single ref; batch call sites
+// now go through findRefsByTestID directly so they can refuse on ambiguity.
+export function findRefByTestID(snapshotEnvelope, testID) {
+    return findRefsByTestID(snapshotEnvelope, testID)[0] ?? null;
 }
 function bareRef(ref) {
     return ref.startsWith('@') ? ref.slice(1) : ref;
 }
-function findRefInTree(node, testID) {
+function collectRefsInTree(node, testID, out) {
     if (node.identifier === testID && typeof node.ref === 'string')
-        return node.ref;
+        out.push(bareRef(node.ref));
     if (Array.isArray(node.children)) {
-        for (const child of node.children) {
-            const hit = findRefInTree(child, testID);
-            if (hit)
-                return hit;
-        }
+        for (const child of node.children)
+            collectRefsInTree(child, testID, out);
     }
-    return null;
 }
 /**
  * Phase 128 (post-review #5/#6): peek the agent-device envelope's ok flag
@@ -138,8 +142,19 @@ async function resolveTestIDViaSnapshot(testID) {
     const envelope = result.content?.[0]?.text ?? null;
     const snapshotFailed = snapshotEnvelopeFailed(envelope);
     if (snapshotFailed)
-        return { ref: null, envelope, snapshotFailed: true };
-    return { ref: findRefByTestID(envelope, testID), envelope, snapshotFailed: false };
+        return { refs: [], envelope, snapshotFailed: true };
+    return { refs: findRefsByTestID(envelope, testID), envelope, snapshotFailed: false };
+}
+// GH #386 (Story 05 Task 8): batch shares the unique-match POLICY with the
+// rest of the self-healing-taps story ("never guess-tap") — it matches by
+// user-supplied testID against envelope JSON rather than the refreshRef
+// signature matcher, so it shares the rule, not the matcher implementation.
+function ambiguousTestIDFail(testID, refs) {
+    return failResult(`testID "${testID}" matches ${refs.length} elements — refusing to guess-tap`, 'AMBIGUOUS_TESTID', {
+        testID,
+        candidates: refs.slice(0, 5).map((r) => `@${r}`),
+        hint: 'Make the testID unique, or target a specific @ref from device_snapshot instead.',
+    });
 }
 // #385: batch steps get a LOWER settle budget than standalone verbs — a
 // 10-step walk on an animating screen at the 6000ms default would take up to
@@ -170,7 +185,7 @@ async function executeStep(step) {
             // Phase 128 (post-review #5/#6): distinguish snapshot infrastructure
             // failure from "testID not present" so the user gets the right hint.
             if (step.testID) {
-                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
                 if (snapshotFailed) {
                     return failResult(`Snapshot failed while resolving testID "${step.testID}" — agent-device unreachable, daemon crashed, or snapshot timed out`, 'SNAPSHOT_FAILED', {
                         testID: step.testID,
@@ -178,6 +193,12 @@ async function executeStep(step) {
                         hint: 'Run cdp_status / device_list to verify the device + agent-device session are healthy. This is NOT a "testID missing" condition.',
                     });
                 }
+                // GH #386: a bare inspection find (no tap) is permissive — refusing a
+                // read loses capability the caller never asked to spend (review
+                // consensus #5). Only gate the refusal when a tap would follow.
+                if (refs.length > 1 && step.tap)
+                    return ambiguousTestIDFail(step.testID, refs);
+                const ref = refs[0];
                 if (!ref) {
                     return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
@@ -189,6 +210,9 @@ async function executeStep(step) {
                 return okResult({
                     resolved: ref,
                     testID: step.testID,
+                    ...(refs.length > 1
+                        ? { ambiguous: true, candidates: refs.slice(0, 5).map((r) => `@${r}`) }
+                        : {}),
                     snapshotEnvelopePreviewBytes: envelope?.length ?? 0,
                 });
             }
@@ -217,10 +241,13 @@ async function executeStep(step) {
         }
         case 'press': {
             if (step.testID) {
-                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
                 if (snapshotFailed) {
                     return failResult(`Snapshot failed while resolving testID "${step.testID}" for press — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
                 }
+                if (refs.length > 1)
+                    return ambiguousTestIDFail(step.testID, refs);
+                const ref = refs[0];
                 if (!ref) {
                     return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
@@ -237,10 +264,13 @@ async function executeStep(step) {
             if (!step.text)
                 return failResult('fill requires text');
             if (step.testID) {
-                const { ref, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
+                const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
                 if (snapshotFailed) {
                     return failResult(`Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
                 }
+                if (refs.length > 1)
+                    return ambiguousTestIDFail(step.testID, refs);
+                const ref = refs[0];
                 if (!ref) {
                     return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
                         testID: step.testID,
@@ -353,6 +383,14 @@ export function createDeviceBatchHandler() {
             }
             if (step.action === 'snapshot' && success) {
                 finalSnapshot = extractData(result);
+            }
+            else if (step.action === 'find' && success && step.testID !== undefined && !step.tap) {
+                // GH #386: expose the testID-find-without-tap payload — the only find
+                // variant whose ok payload carries the ambiguous/candidates info —
+                // otherwise it's computed but never reaches the batch caller.
+                // Text-based finds and find+tap keep their pre-existing shape
+                // (no per-step data).
+                stepResult.data = extractData(result);
             }
             results.push(stepResult);
             if (!success && !step.optional) {

@@ -74,6 +74,38 @@ export function toolInvalidatesSnapshotCache(tool, args) {
         return args?.action === 'click';
     return !SNAPSHOT_CACHE_READS.has(tool);
 }
+// Story 05 (#386): the exclusion is ONLY for single-action tools that leave a
+// VALID current-screen baseline (lastSnapshotHash) for the next tap —
+// invalidating after them would erase it and defeat tap-sequence change
+// detection. Exactly two kinds qualify: retry-eligible tap verbs (their settle
+// refreshes the hash to the post-tap screen and does NOT invalidate), and
+// device_find (snapshot, or click routed through a tap). Everything else must
+// invalidate:
+//   - swipe/scroll take the iOS fastSwipe path that returns BEFORE any settle
+//     (baseline left stale) — the exact hazard this hook exists for;
+//   - pinch/back/fill/scrollintoview do settle, but as non-retry-eligible
+//     verbs their settle exits hierarchyChanged===undefined → already
+//     invalidates, so the hook's invalidation is a harmless no-op;
+//   - device_batch runs steps under a per-step Promise.race timeout whose
+//     native action can keep mutating the screen AFTER the batch returns
+//     (device-batch.ts documents this), so it cannot guarantee a valid
+//     baseline — invalidate and let the next tap fail-open.
+export const BASELINE_SELF_MANAGED_TOOLS = new Set([
+    'device_press',
+    'device_longpress',
+    'device_find',
+]);
+/**
+ * Story 05 (#386): should this tool call invalidate the tap-retry baseline
+ * hash? True for tools that mutate the screen through a path OTHER than the
+ * runNative dispatch choke point (cdp_interact, cdp_navigate, device_deeplink,
+ * maestro_run, cdp_reload, …) — those never touch the baseline on their own,
+ * so a stale baseline would compare a later tap against the wrong screen.
+ * Reuses toolInvalidatesSnapshotCache so pure reads are excluded for free.
+ */
+export function toolInvalidatesRetryBaseline(tool, args) {
+    return toolInvalidatesSnapshotCache(tool, args) && !BASELINE_SELF_MANAGED_TOOLS.has(tool);
+}
 /**
  * Registration-time gate: could this tool EVER trigger a live capture (for
  * some args)? Used to decide whether to install the per-call wrapper at all.
