@@ -299,7 +299,7 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           echo "RN_IOS_TEST_DESTINATION=id=$UDID" >> "$GITHUB_ENV"
       # Preinstalled Xcode 16.x on macos-15 — same choice as codeql.yml.
-      - name: xcodebuild test (skip-list: server entry + device-dependent test)
+      - name: "xcodebuild test (skip-list: server entry + device-dependent test)"
         if: ${{ needs.changes.outputs.ios == 'true' }}
         run: |
           xcodebuild -version
