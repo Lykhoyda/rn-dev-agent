@@ -223,6 +223,27 @@ test('sources never emit after stop()', async () => {
   assert.equal(rec.getExit(), null);
 });
 
+test('AndroidScreenrecordSource: ffmpeg.stdin error (EPIPE) does not throw unhandled', async () => {
+  const spawned = [];
+  const src = new AndroidScreenrecordSource('emulator-5554', {
+    spawnFn: (cmd) => {
+      const p = fakeProc();
+      spawned.push({ cmd, p });
+      return p;
+    },
+    restartDelayMs: 0,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  const ffmpeg = spawned.find((s) => s.cmd === 'ffmpeg');
+  // Emitting 'error' on a PassThrough with no listener would throw synchronously —
+  // the fix must have attached a listener to ffmpeg.stdin.
+  ffmpeg.p.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+  await tick();
+  src.stop();
+  assert.ok(true, 'no unhandled error thrown');
+});
+
 test('SIMCTL_HINT names idb', () => {
   assert.match(SIMCTL_HINT, /idb/);
 });

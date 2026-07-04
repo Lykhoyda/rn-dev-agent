@@ -224,8 +224,13 @@ export class AndroidScreenrecordSource {
         ]);
         this.adb = adb;
         this.ffmpeg = ffmpeg;
-        if (ffmpeg.stdin)
+        if (ffmpeg.stdin) {
+            // pipe() does not forward destination errors: if ffmpeg dies mid-write,
+            // an unhandled EPIPE on its stdin would crash the bridge process. The
+            // process-level close/error handlers own recovery; this only swallows.
+            ffmpeg.stdin.on('error', () => { });
             adb.stdout.pipe(ffmpeg.stdin);
+        }
         ffmpeg.stdout.on('data', (chunk) => {
             if (!this.active)
                 return;
