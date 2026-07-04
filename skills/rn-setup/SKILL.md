@@ -144,7 +144,18 @@ command -v ffmpeg && ffmpeg -version 2>&1 | head -1
 ```
 If missing: `brew install ffmpeg` (not critical — videos work without it, GIF conversion doesn't)
 
-### 10. Physical device prerequisites (optional — M9 / Phase 111)
+### 10. idb (optional — fast screen mirroring)
+```bash
+command -v idb && command -v idb_companion
+```
+Both binaries present → the observe UI's live mirror uses `idb video-stream`
+(20–30fps). Missing → the mirror still works via a ~6fps `simctl screenshot`
+loop. SessionStart auto-installs in the background (`scripts/ensure-idb.sh`);
+if `~/.rn-dev-agent/idb/install.pid` exists and its PID is alive, report
+"installing in background (log: ~/.rn-dev-agent/idb/install.log)" instead of
+MISSING. Manual install: `brew install idb-companion && pipx install fb-idb`.
+
+### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
 Only runs if a physical device is USB-connected. Simulators/emulators skip
 this section. Runs two checks + applies one (safe, reversible) side-effect:
@@ -164,7 +175,7 @@ need WiFi they can `adb connect <ip>` manually — the script then treats the
 device as physical and runs `adb reverse` over the TCP transport (works
 the same as USB).
 
-### 11. Plugin version freshness
+### 12. Plugin version freshness
 
 Compare the locally installed plugin version against the latest GitHub
 release. Read-only — never auto-updates. The user runs
@@ -207,7 +218,7 @@ command is read-only and not expected to run that often per hour, so no
 caching is required for v1. If rate-limit complaints surface, add a 24h
 on-disk cache at `~/.cache/rn-dev-agent/upgrade-check.json`.
 
-### 12. Vercel rules sync freshness
+### 13. Vercel rules sync freshness
 
 Verify the vendored Vercel agent-skills content is present and not stale.
 Read-only check; does NOT auto-sync (user runs the resync command if BEHIND).
@@ -244,6 +255,7 @@ Present results as a table:
 | CDP connection | CONNECTED | — |
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
+| idb (screen mirror fast path) | OK / INSTALLING (background) / MISSING | If MISSING: `brew install idb-companion && pipx install fb-idb` (optional — mirror falls back to ~6fps simctl) |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
@@ -276,7 +288,7 @@ Setup is boring — agents skip it and pay for it later.
 - Proceeding with feature dev when setup shows any RED row
 - Suggesting `sudo npm install -g` without first checking if nvm is available
 - Treating a device-runner `RN_FAST_RUNNER_DOWN` / `RN_ANDROID_RUNNER_DOWN` error as something that "self-heals" without checking the runner build artifacts (checks 3 / 3b)
-- Claiming "setup passed" without showing the 11-row table with evidence (row 10 may be "N/A" when no physical device is connected and row 11 may be "OFFLINE" when GitHub is unreachable — both are still evidence)
+- Claiming "setup passed" without showing the full results table with evidence (row 10 may be "N/A" when no physical device is connected and row 11 may be "OFFLINE" when GitHub is unreachable — both are still evidence)
 
 ## Verification — Setup Complete When
 
@@ -289,5 +301,6 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] `curl -s http://127.0.0.1:8081/status` returns `packager-status:running`
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` AND `capabilities.helpersInjected: true`
 - [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
+- [ ] idb row is `OK`, `INSTALLING (background)`, or `MISSING` with the manual command — never blocks setup (mirror falls back to simctl)
 - [ ] Plugin-version row is `OK` (installed = latest) / `OFFLINE` (acceptable) / `AHEAD (dev install)` — if `BEHIND`, surface the `/plugin update rn-dev-agent` instruction; user decides whether to update before continuing
-- [ ] Present the 11-row results table to the user — no hidden failures
+- [ ] Present the full results table to the user — no hidden failures
