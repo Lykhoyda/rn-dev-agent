@@ -88,6 +88,8 @@ jobs:
         run: npm run lint
       - name: oxfmt check
         run: npm run format:check
+      - name: typescript-only gate
+        run: bash scripts/check-typescript-only.sh
 
   version-sync:
     name: Version sync check
