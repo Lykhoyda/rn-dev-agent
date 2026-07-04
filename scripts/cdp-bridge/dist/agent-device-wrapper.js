@@ -5,7 +5,7 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, } from './fast-runner-ref-map.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
@@ -462,10 +462,16 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'longpress': {
             const [target, yOrDuration, durationMaybe] = positionals;
             if (target?.startsWith('@')) {
-                const center = refCenter(target);
-                if (!center)
-                    return { command: 'longPress', _staleRef: target, ...withBundle };
                 const duration = Number(yOrDuration);
+                const center = refCenter(target);
+                if (!center) {
+                    return {
+                        command: 'longPress',
+                        _staleRef: target,
+                        ...(Number.isNaN(duration) ? {} : { durationMs: duration }),
+                        ...withBundle,
+                    };
+                }
                 return {
                     command: 'longPress',
                     x: center.x,
@@ -800,6 +806,78 @@ export async function settleAfterMutation(result, ctx, deps = {}) {
         return result;
     }
 }
+export function selfHealEnabled(env) {
+    const v = env.RN_SELF_HEAL?.trim().toLowerCase();
+    return v !== '0' && v !== 'false';
+}
+const MAX_STALE_CANDIDATES = 5;
+function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
+    const message = reason === 'ambiguous'
+        ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements — refusing to guess-tap`
+        : `Element at ref ${ref} no longer hittable — UI re-rendered since snapshot`;
+    const hint = reason === 'ambiguous'
+        ? 'Multiple elements share the cached identity. The ref-map was refreshed by this call — pick the intended ref from `candidates` and retry.'
+        : reason === 'snapshot-failed'
+            ? 'Snapshot infrastructure failed during re-resolution. Check cdp_status / reopen the device session, then retry.'
+            : 'Element not re-resolvable by identity (it changed or unmounted). Call device_snapshot action=snapshot and re-find the target.';
+    return failResult(message, 'STALE_REF', {
+        cachedMetadata,
+        reResolution: reason,
+        candidates: candidates.slice(0, MAX_STALE_CANDIDATES),
+        hint,
+    });
+}
+function extractSnapshotNodes(result) {
+    if (result.isError)
+        return null;
+    try {
+        const env = JSON.parse(result.content[0].text);
+        if (env.ok === false)
+            return null;
+        return Array.isArray(env.data?.nodes) ? env.data.nodes : null;
+    }
+    catch {
+        return null;
+    }
+}
+// Story 05 (#386): re-resolve a stale @ref by identity instead of refusing.
+// The snapshot closure must be the platform's real snapshot (it also refreshes
+// the ref-map as a side effect). Signature + metadata are captured BEFORE the
+// snapshot replaces the map.
+export async function healStaleRef(staleRef, snapshot) {
+    const t0 = Date.now();
+    const cachedMetadata = getCachedMetadata(staleRef);
+    const sig = getCachedSignature(staleRef);
+    if (!sig)
+        return { kind: 'failed', result: staleRefFail(staleRef, 'no-signature', cachedMetadata) };
+    let nodes;
+    try {
+        nodes = extractSnapshotNodes(await snapshot());
+    }
+    catch {
+        nodes = null;
+    }
+    if (!nodes)
+        return { kind: 'failed', result: staleRefFail(staleRef, 'snapshot-failed', cachedMetadata) };
+    const outcome = refreshRef(sig, nodes);
+    if (outcome.kind === 'unique') {
+        const r = outcome.node.rect;
+        return {
+            kind: 'healed',
+            x: Math.round(r.x + r.width / 2),
+            y: Math.round(r.y + r.height / 2),
+            newRef: outcome.node.ref,
+            ms: Date.now() - t0,
+        };
+    }
+    if (outcome.kind === 'ambiguous') {
+        return {
+            kind: 'failed',
+            result: staleRefFail(staleRef, 'ambiguous', cachedMetadata, outcome.candidates),
+        };
+    }
+    return { kind: 'failed', result: staleRefFail(staleRef, 'absent', cachedMetadata) };
+}
 export async function runNative(cliArgs, opts = {}) {
     if (_runAgentDeviceOverrideForTest) {
         return _runAgentDeviceOverrideForTest(cliArgs, opts);
@@ -838,6 +916,24 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
+        let healMeta = null;
+        if (ios._staleRef && selfHealEnabled(process.env)) {
+            const healed = await healStaleRef(ios._staleRef, () => runIOS({
+                command: 'snapshot',
+                interactiveOnly: true,
+                ...(appId ? { bundleId: appId } : {}),
+            }));
+            if (healed.kind === 'failed')
+                return healed.result;
+            ios.x = healed.x;
+            ios.y = healed.y;
+            delete ios._staleRef;
+            healMeta = {
+                reResolved: true,
+                reResolvedRef: healed.newRef,
+                timings_ms: { reResolve: healed.ms },
+            };
+        }
         let result = await runIOS(ios);
         result = await settleAfterMutation(result, {
             platform: 'ios',
@@ -845,6 +941,8 @@ export async function runNative(cliArgs, opts = {}) {
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
         });
+        if (healMeta)
+            result = attachMeta(result, healMeta);
         return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
     }
     // `find` is intentionally NOT in this Set — Android, like iOS, treats `device_find`
@@ -913,6 +1011,25 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
+        let healMeta = null;
+        if (android._staleRef && selfHealEnabled(process.env)) {
+            const healed = await healStaleRef(android._staleRef, () => runAndroid({
+                command: 'snapshot',
+                interactiveOnly: true,
+                deviceId: activeSession?.deviceId,
+                ...(appId ? { bundleId: appId } : {}),
+            }));
+            if (healed.kind === 'failed')
+                return healed.result;
+            android.x = healed.x;
+            android.y = healed.y;
+            delete android._staleRef;
+            healMeta = {
+                reResolved: true,
+                reResolvedRef: healed.newRef,
+                timings_ms: { reResolve: healed.ms },
+            };
+        }
         let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
         result = await settleAfterMutation(result, {
             platform: 'android',
@@ -920,6 +1037,8 @@ export async function runNative(cliArgs, opts = {}) {
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
         });
+        if (healMeta)
+            result = attachMeta(result, healMeta);
         const note = consumePendingAndroidUpgradeNote();
         return note ? attachMetaNote(result, note) : result;
     }
