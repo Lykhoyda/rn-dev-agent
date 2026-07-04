@@ -3,56 +3,14 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { startSupervisor } from '../helpers/supervisor-harness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SUPERVISOR = resolve(__dirname, '../../dist/supervisor.js');
 const FAKE = resolve(__dirname, '../fixtures/fake-worker.mjs');
 const CRASHER = resolve(__dirname, '../fixtures/crashing-worker.mjs');
 
-function startSupervisor(workerPath, extraEnv = {}) {
-  const child = spawn(process.execPath, [SUPERVISOR, '--no-lock'], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, RN_BRIDGE_WORKER_PATH: workerPath, ...extraEnv },
-  });
-  let buf = '';
-  const pendingLines = [];
-  const waiters = [];
-  child.stdout.on('data', (c) => {
-    buf += c.toString('utf8');
-    const parts = buf.split('\n');
-    buf = parts.pop() ?? '';
-    for (const p of parts) {
-      if (!p.length) continue;
-      const w = waiters.shift();
-      if (w) w(p);
-      else pendingLines.push(p);
-    }
-  });
-  const nextLine = () =>
-    new Promise((resolveLine, reject) => {
-      const queued = pendingLines.shift();
-      if (queued !== undefined) return resolveLine(queued);
-      const t = setTimeout(
-        () => reject(new Error('timeout waiting for supervisor stdout line')),
-        15_000,
-      );
-      waiters.push((line) => {
-        clearTimeout(t);
-        resolveLine(line);
-      });
-    });
-  let id = 0;
-  const send = (method, params = {}) => {
-    id += 1;
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    return id;
-  };
-  const notify = (method) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
-  return { child, nextLine, send, notify };
-}
-
 test('GH#264 supervisor: kill -9 worker → in-flight error, respawn, handshake replayed once, new pid serves', async () => {
-  const s = startSupervisor(FAKE);
+  const s = startSupervisor({ workerPath: FAKE });
   try {
     const initId = s.send('initialize');
     const initRes = JSON.parse(await s.nextLine());
@@ -80,7 +38,7 @@ test('GH#264 supervisor: kill -9 worker → in-flight error, respawn, handshake 
 });
 
 test('GH#264 supervisor: graceful SIGTERM exits 0 without respawn', async () => {
-  const s = startSupervisor(FAKE);
+  const s = startSupervisor({ workerPath: FAKE });
   const initId = s.send('initialize');
   await s.nextLine();
   const exited = new Promise((resolveExit) => s.child.on('exit', (code) => resolveExit(code)));
@@ -90,7 +48,7 @@ test('GH#264 supervisor: graceful SIGTERM exits 0 without respawn', async () => 
 });
 
 test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error names last exit', async () => {
-  const s = startSupervisor(CRASHER, { RN_BRIDGE_MAX_RESPAWNS: '2' });
+  const s = startSupervisor({ workerPath: CRASHER, env: { RN_BRIDGE_MAX_RESPAWNS: '2' } });
   try {
     // The crasher dies pre-handshake repeatedly; after the budget the
     // supervisor stays alive and answers requests with the terminal error.
@@ -108,7 +66,10 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
 });
 
 test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervisor (plan-review BLOCKER)', async () => {
-  const s = startSupervisor('/nonexistent/worker.js', { RN_BRIDGE_MAX_RESPAWNS: '2' });
+  const s = startSupervisor({
+    workerPath: '/nonexistent/worker.js',
+    env: { RN_BRIDGE_MAX_RESPAWNS: '2' },
+  });
   try {
     await new Promise((r) => setTimeout(r, 1500)); // spawn errors burn the budget
     assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');
@@ -123,7 +84,7 @@ test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervis
 });
 
 test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer writes stays intact (plan-review BLOCKER)', async () => {
-  const s = startSupervisor(FAKE);
+  const s = startSupervisor({ workerPath: FAKE });
   try {
     s.send('initialize');
     await s.nextLine();
@@ -149,7 +110,7 @@ test('GH#264 supervisor: non-ASCII JSON split mid-codepoint across raw Buffer wr
 test('GH#264 supervisor: SIGUSR2 hot-reload respawns without burning the crash budget (PR #273 review)', async () => {
   // fake-worker has no SIGUSR2 handler, so default disposition terminates it
   // (signal exit) — the supervisor must treat that as the REQUESTED reload.
-  const s = startSupervisor(FAKE, { RN_BRIDGE_MAX_RESPAWNS: '1' });
+  const s = startSupervisor({ workerPath: FAKE, env: { RN_BRIDGE_MAX_RESPAWNS: '1' } });
   try {
     const initId = s.send('initialize');
     const initRes = JSON.parse(await s.nextLine());
@@ -185,7 +146,7 @@ test("GH#264 supervisor: dead worker's partial stdout frame does not contaminate
   // splitter must not prefix the fresh worker's first line with that tail —
   // otherwise the replayed-initialize answer corrupts and garbage reaches
   // the client.
-  const s = startSupervisor(PARTIAL);
+  const s = startSupervisor({ workerPath: PARTIAL });
   try {
     const initId = s.send('initialize');
     // First incarnation never answers (partial frame only) and exits 1;
