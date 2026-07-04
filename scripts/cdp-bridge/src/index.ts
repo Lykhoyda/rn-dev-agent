@@ -1181,6 +1181,15 @@ trackedTool(
       .describe(
         'Sleep this many ms after tap to let keyboard focus settle — useful in sequential press+fill flows where focus would otherwise not propagate.',
       ),
+    settleTimeoutMs: z
+      .number()
+      .int()
+      .min(500)
+      .max(30000)
+      .optional()
+      .describe(
+        'Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.',
+      ),
   },
   createDevicePressHandler(),
 );
@@ -1205,6 +1214,15 @@ trackedTool(
       .optional()
       .describe(
         "Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token.",
+      ),
+    settleTimeoutMs: z
+      .number()
+      .int()
+      .min(500)
+      .max(30000)
+      .optional()
+      .describe(
+        'Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.',
       ),
   },
   createDeviceFillHandler(getClient),
@@ -1632,10 +1650,21 @@ trackedTool(
             .number()
             .optional()
             .describe('Per-step timeout override in ms. Default 15000.'),
+          settle: z
+            .boolean()
+            .optional()
+            .describe(
+              'Default true: after this step mutates the screen, wait for the UI to stabilize (capped 2500ms; see meta.settle). Set false to skip the settle wait for this step (raw speed over stability).',
+            ),
         }),
       )
       .describe('Ordered list of UI interaction steps'),
-    delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
+    delayMs: z
+      .number()
+      .optional()
+      .describe(
+        'Delay between steps in ms. Default: 0 while settle is on (settle waits for actual UI stability between steps), 300 when RN_SETTLE=0. Pass an explicit value to override either way.',
+      ),
     screenshotOn: z
       .enum(['none', 'failure', 'end', 'each'])
       .default('failure')

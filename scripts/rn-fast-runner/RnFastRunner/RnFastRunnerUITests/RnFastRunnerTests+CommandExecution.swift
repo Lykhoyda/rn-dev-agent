@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 extension RnFastRunnerTests {
@@ -600,6 +601,27 @@ extension RnFastRunnerTests {
 #else
       // Return path relative to app container root (tmp/ maps to NSTemporaryDirectory)
       return Response(ok: true, data: DataPayload(message: "tmp/\(fileName)"))
+#endif
+    case .isScreenStatic:
+#if os(macOS)
+      return Response(
+        ok: false,
+        error: ErrorPayload(code: "UNSUPPORTED_OPERATION", message: "isScreenStatic is iOS/tvOS-only"))
+#else
+      // Settle probe (#385): two full-screen captures ~100ms apart, compared by
+      // SHA-256 on-runner so only a boolean crosses the wire (Maestro's
+      // ScreenDiffHandler split).
+      let first = XCUIScreen.main.screenshot()
+      sleepFor(0.1)
+      let second = XCUIScreen.main.screenshot()
+      guard let firstPng = runnerPngData(for: first.image),
+            let secondPng = runnerPngData(for: second.image) else {
+        return Response(
+          ok: false,
+          error: ErrorPayload(message: "Failed to encode screenshots for isScreenStatic"))
+      }
+      let isStatic = SHA256.hash(data: firstPng) == SHA256.hash(data: secondPng)
+      return Response(ok: true, data: DataPayload(message: "isScreenStatic", static: isStatic))
 #endif
     case .back, .backInApp:
       if tapInAppBackControl(app: activeApp) {

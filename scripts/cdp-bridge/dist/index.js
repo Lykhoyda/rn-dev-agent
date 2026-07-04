@@ -828,6 +828,13 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. 
         .max(5000)
         .optional()
         .describe('Sleep this many ms after tap to let keyboard focus settle — useful in sequential press+fill flows where focus would otherwise not propagate.'),
+    settleTimeoutMs: z
+        .number()
+        .int()
+        .min(500)
+        .max(30000)
+        .optional()
+        .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
 }, createDevicePressHandler());
 trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
@@ -843,6 +850,13 @@ trackedTool('device_fill', 'Type text into an input field by its @ref from devic
         .string()
         .optional()
         .describe("Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token."),
+    settleTimeoutMs: z
+        .number()
+        .int()
+        .min(500)
+        .max(30000)
+        .optional()
+        .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
 }, createDeviceFillHandler(getClient));
 trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true for a precise unclamped gesture duration via the in-tree runner — needed for momentum-sensitive UIs like UIDatePicker wheels where a normalized/clamped duration causes overshoot. Requires an open session.', {
     direction: z
@@ -1120,9 +1134,16 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
             .number()
             .optional()
             .describe('Per-step timeout override in ms. Default 15000.'),
+        settle: z
+            .boolean()
+            .optional()
+            .describe('Default true: after this step mutates the screen, wait for the UI to stabilize (capped 2500ms; see meta.settle). Set false to skip the settle wait for this step (raw speed over stability).'),
     }))
         .describe('Ordered list of UI interaction steps'),
-    delayMs: z.number().default(300).describe('Delay between steps in ms (default 300)'),
+    delayMs: z
+        .number()
+        .optional()
+        .describe('Delay between steps in ms. Default: 0 while settle is on (settle waits for actual UI stability between steps), 300 when RN_SETTLE=0. Pass an explicit value to override either way.'),
     screenshotOn: z
         .enum(['none', 'failure', 'end', 'each'])
         .default('failure')

@@ -1,8 +1,8 @@
 # Story 04 — Shared two-tier settle engine + capability flags
 
-**Status:** Proposed (2026-07-02)
+**Status:** Implemented (2026-07-04, #385)
 **Epic:** [Maestro adoption](README.md)
-**Impact:** Replaces fixed sleeps (`FOCUS_DELAY_MS=150` etc.) with a principled "UI is stable" invariant applied after every mutating action, on both platforms, from one implementation
+**Impact:** Replaces fixed sleeps (`FOCUS_DELAY_MS=150` etc.) with a principled "UI is stable" invariant applied after every mutating native `device_*` verb, on both platforms, from one implementation (`cdp_interact` JS-path settling is a deferred follow-up — see Open questions)
 **Effort:** M
 **Depends on:** Story 02 (capability negotiation via `/health`); pairs with Story 03 (bypass makes *us* responsible for settling)
 
@@ -41,9 +41,9 @@ async function waitForSettle(opts: {platform, appId, budgetMs?, initialSnapshotH
 ### Wiring
 
 - `runNative()` already knows which verbs mutate (`SNAPSHOT_MUTATING_VERBS`, `agent-device-wrapper.ts:265-277` — it uses them to dirty the snapshot cache). After a mutating verb succeeds, call `waitForSettle` and attach `meta.timings_ms.settle` + `meta.settle.method`.
-- `device_fill`: replace the fixed `FOCUS_DELAY_MS=150` tap→fill delay with `waitForSettle`; keep read-back verification unchanged (it verifies *content*, settle verifies *stability* — complementary).
-- `device_batch`: settle between steps by default; per-step `settle: false` escape hatch.
-- Timeout budget arithmetic: adopt Maestro's `adjustedToLatestInteraction` trick (`Orchestra.kt:1646-1649`) — a slow settle eats into the *next* lookup's budget rather than stacking timeouts.
+- `device_fill`: skip the fixed `FOCUS_DELAY_MS=150` tap→fill delay whenever the pre-tap's envelope carries `meta.settle` (the 150ms constant survives ONLY as the settle-less fallback — `RN_SETTLE=0` or a legacy-path failure); keep read-back verification unchanged (it verifies *content*, settle verifies *stability* — complementary). As implemented (#385), the fill also pins its target coords once up front (`--at-x/--at-y`) so the settle's ref-map refresh cannot retarget it mid-call, and corrective retypes skip settle (their stability check is the read-back).
+- `device_batch`: settle between steps by default (batch-scoped 2500ms budget); per-step `settle: false` escape hatch.
+- Timeout budget arithmetic: adopt Maestro's `adjustedToLatestInteraction` trick (`Orchestra.kt:1646-1649`) — a slow settle eats into the *next* lookup's budget rather than stacking timeouts. **Deferred to Story 05** (#385 shares one budget across tiers *within* a settle; cross-tool carryover needs the interaction clock Story 05's re-resolution loop introduces).
 - Env `RN_SETTLE=0` global opt-out; per-call `settleTimeoutMs` override.
 
 ## Implementation steps
@@ -55,7 +55,7 @@ async function waitForSettle(opts: {platform, appId, budgetMs?, initialSnapshotH
 
 ## Acceptance criteria
 
-- After `device_press` on a button that opens a new screen: the tool returns only once the target screen is static; `meta.settle.method` recorded; no fixed sleeps remain in the press/fill paths (grep-enforced).
+- After `device_press` on a button that opens a new screen: the tool returns only once the target screen is static; `meta.settle.method` recorded; no fixed sleeps execute on the settle-enabled press/fill paths. Two documented exceptions: the 150ms focus constant survives as the settle-less fallback (`RN_SETTLE=0` or legacy-path failure), and the Android clipboard-workaround path keeps its 300ms sleep (upstream of the dispatch choke point — tracked in #443 item 4).
 - On a static screen, settle overhead ≤ 150 ms on Android (window-gate short-circuit) and ≤ ~250 ms on iOS (one screen-static probe).
 - On the Reanimated fixture (Story 03): settle returns `method: 'timeout'` at budget rather than hanging — a perpetually-animating screen must degrade gracefully, matching Maestro's bounded loops.
 - `device_batch` TaskWizard walk passes with zero step-transition races across 10 consecutive runs (currently flaky without manual waits).

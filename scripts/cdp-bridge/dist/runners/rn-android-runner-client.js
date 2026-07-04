@@ -319,6 +319,16 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
     }
     return false;
 }
+// Story 04 (#385): capabilities from the last successful /health probe. Warm
+// before any mutating verb — startAndroidRunner probes /health on the reuse
+// and readiness paths. Consumed by the settle engine.
+let lastKnownCapabilities = [];
+export function getAndroidRunnerCapabilities() {
+    return lastKnownCapabilities;
+}
+export function _resetCapabilitiesForTest() {
+    lastKnownCapabilities = [];
+}
 export async function probeAndroidRunnerHealthInfo(port) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
@@ -329,6 +339,18 @@ export async function probeAndroidRunnerHealthInfo(port) {
         if (!resp.ok)
             return { reachable: false };
         const body = (await resp.json());
+        const capabilities = Array.isArray(body.capabilities)
+            ? body.capabilities.filter((c) => typeof c === 'string')
+            : undefined;
+        // Cache scope: a healthy reply refreshes; an unhealthy reply only clears
+        // when it came from the LIVE runner's port — probing a stale/foreign port
+        // must not erase capabilities learned from the live runner.
+        if (body.ok === true) {
+            lastKnownCapabilities = capabilities ?? [];
+        }
+        else if (runnerState?.hostPort === port) {
+            lastKnownCapabilities = [];
+        }
         return {
             reachable: true,
             ok: body.ok === true,
@@ -336,12 +358,15 @@ export async function probeAndroidRunnerHealthInfo(port) {
                 ? { protocolVersion: body.protocolVersion }
                 : {}),
             ...(typeof body.runnerVersion === 'string' ? { runnerVersion: body.runnerVersion } : {}),
+            ...(capabilities !== undefined ? { capabilities } : {}),
             ...(Array.isArray(body.commands)
                 ? { commands: body.commands.filter((c) => typeof c === 'string') }
                 : {}),
         };
     }
     catch {
+        if (runnerState?.hostPort === port)
+            lastKnownCapabilities = [];
         return { reachable: false };
     }
     finally {
@@ -639,6 +664,51 @@ async function postCommand(body) {
     }
     return parsed;
 }
+export function getAndroidRunnerHostPort() {
+    return runnerState?.hostPort ?? null;
+}
+// Story 04 (#385): thin settle probes. They deliberately skip startAndroidRunner's
+// ensure path (runAndroid runs it on EVERY dispatch — a 10-poll snapshot-eq tier
+// must not pay 10 ensure round-trips) and pin the forwarded host port captured
+// right after the mutating dispatch. If the live runner state has since changed
+// (device switch, restart), the probe degrades to null instead of posting to the
+// wrong port — the endpoint assumption is CHECKED, not hidden.
+export async function androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort) {
+    if (pinnedHostPort !== undefined && runnerState?.hostPort !== pinnedHostPort)
+        return null;
+    try {
+        const body = { command: 'isWindowUpdating', timeoutMs };
+        if (bundleId)
+            body.appBundleId = bundleId;
+        const resp = await postCommand(body);
+        const updating = resp.data?.updating;
+        return resp.ok && typeof updating === 'boolean' ? updating : null;
+    }
+    catch {
+        return null;
+    }
+}
+export async function androidSnapshotNodesViaProbe(bundleId, pinnedHostPort) {
+    if (pinnedHostPort !== undefined && runnerState?.hostPort !== pinnedHostPort)
+        return null;
+    try {
+        const body = { command: 'snapshot', interactiveOnly: true };
+        if (bundleId)
+            body.appBundleId = bundleId;
+        const resp = await postCommand(body);
+        if (!resp.ok || !resp.data || typeof resp.data !== 'object')
+            return null;
+        const data = resp.data;
+        if (!Array.isArray(data.nodes))
+            return null;
+        const flat = mapRunnerNodesToFlat(data.nodes);
+        updateRefMapFromFlat(flat);
+        return flat;
+    }
+    catch {
+        return null;
+    }
+}
 function mapRunnerNodesToFlat(nodes) {
     const out = [];
     let synthCounter = 0;
@@ -687,6 +757,8 @@ export async function runAndroid(args) {
         body.exact = args.exact;
     if (args.durationMs !== undefined)
         body.durationMs = args.durationMs;
+    if (args.timeoutMs !== undefined)
+        body.timeoutMs = args.timeoutMs;
     if (args.scale !== undefined)
         body.scale = args.scale;
     if (args.interactiveOnly !== undefined)

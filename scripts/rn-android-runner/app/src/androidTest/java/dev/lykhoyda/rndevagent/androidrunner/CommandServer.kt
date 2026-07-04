@@ -18,7 +18,7 @@ class CommandServer(port: Int, private val pluginVersion: String? = null) : Nano
             val body = JSONObject()
                 .put("ok", true)
                 .put("protocolVersion", RunnerProtocol.VERSION)
-                .put("capabilities", JSONArray())
+                .put("capabilities", JSONArray(listOf("WINDOW_UPDATE")))
                 .put("commands", JSONArray(CommandDispatcher.SUPPORTED_COMMANDS))
             if (pluginVersion != null) body.put("runnerVersion", pluginVersion)
             return json(Response.Status.OK, body)

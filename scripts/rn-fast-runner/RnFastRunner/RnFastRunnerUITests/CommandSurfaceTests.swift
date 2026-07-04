@@ -19,4 +19,17 @@ final class CommandSurfaceTests: XCTestCase {
     XCTAssertNil(CommandType(rawValue: "dismissKeyboard"))
     XCTAssertNil(CommandType(rawValue: "definitelyBogusVerb"))
   }
+
+  // Story 04 (#385): the settle probe verb backs the SCREEN_STATIC capability
+  // and must stay a lifecycle command (no activation preamble — it is a pure
+  // screen read that always follows an already-activated mutating verb).
+  // Deliberately NOT in the required set above: REQUIRED_IOS_COMMANDS mirrors
+  // the bridge gate, and gating on this verb would force cold rebuilds of
+  // every pre-settle artifact instead of the designed snapshot-poll degrade.
+  func testSettleProbeVerbIsLifecycle() {
+    guard let verb = CommandType(rawValue: "isScreenStatic") else {
+      return XCTFail("CommandType missing isScreenStatic")
+    }
+    XCTAssertTrue(isRunnerLifecycleCommand(verb))
+  }
 }
