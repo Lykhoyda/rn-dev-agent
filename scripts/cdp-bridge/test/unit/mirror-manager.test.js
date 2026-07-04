@@ -175,3 +175,62 @@ test('shutdown ends clients and stays reusable', async () => {
   await tick();
   assert.equal(c2.status, 200, 'manager usable after shutdown (observe restart)');
 });
+
+test('createSource rejection → error status, clients ended, next attach retries', async () => {
+  const statuses = [];
+  let calls = 0;
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => {
+      calls++;
+      if (calls === 1) throw new Error('spawn exploded');
+      return fakeSource();
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  const err = statuses.find((s) => s.status === 'error');
+  assert.ok(err, 'error status pushed');
+  assert.match(err.reason, /spawn exploded/);
+  assert.equal(c.ended, true);
+  assert.equal(mgr.isStreaming(), false);
+  const c2 = fakeClient();
+  mgr.attach(c2);
+  await tick();
+  assert.equal(calls, 2, 'second attach retried createSource');
+});
+
+test('one client whose write throws does not break broadcast to others', async () => {
+  const { mgr, src } = build();
+  const bad = fakeClient();
+  bad.write = () => {
+    throw new Error('destroyed');
+  };
+  const good = fakeClient();
+  mgr.attach(bad);
+  mgr.attach(good);
+  await tick();
+  src.frame(jpeg(1));
+  assert.ok(Buffer.concat(good.chunks).includes(jpeg(1)), 'good client still served');
+  src.frame(jpeg(2));
+  assert.ok(Buffer.concat(good.chunks).includes(jpeg(2)));
+});
+
+test('a client whose end() throws does not prevent ending the others', async () => {
+  const { mgr, statuses } = build({
+    resolution: { ok: false, reason: 'nope' },
+  });
+  const bad = fakeClient();
+  bad.end = () => {
+    throw new Error('already destroyed');
+  };
+  const good = fakeClient();
+  mgr.attach(bad);
+  mgr.attach(good);
+  await tick();
+  assert.equal(good.ended, true, 'good client ended despite bad sibling');
+  assert.equal(statuses.find((s) => s.status === 'error').reason, 'nope');
+});

@@ -89,7 +89,13 @@ export class MirrorManager {
     }
 
     if (this.latest) {
-      entry.ready = client.write(framePart(this.latest));
+      try {
+        entry.ready = client.write(framePart(this.latest));
+      } catch {
+        // Destroyed socket — don't keep a dead client registered.
+        this.clients.delete(entry);
+        return;
+      }
     }
 
     if (this.state === 'idle' || this.state === 'error') {
@@ -130,7 +136,11 @@ export class MirrorManager {
 
   private endAllClients(): void {
     for (const entry of this.clients) {
-      entry.client.end();
+      try {
+        entry.client.end();
+      } catch {
+        // Ignore — client socket is already gone; still end the others.
+      }
     }
     this.clients.clear();
   }
@@ -139,55 +149,79 @@ export class MirrorManager {
     const part = framePart(frame);
     for (const entry of this.clients) {
       if (!entry.ready) continue;
-      if (!entry.client.write(part)) entry.ready = false;
+      try {
+        if (!entry.client.write(part)) entry.ready = false;
+      } catch {
+        // Destroyed socket — drop this client and keep serving the rest.
+        this.clients.delete(entry);
+      }
     }
   }
 
   private async startPipeline(): Promise<void> {
     const myCycle = ++this.cycle;
-    const resolution = await this.deps.resolveTarget();
-    if (myCycle !== this.cycle) return;
+    let platform: string | undefined;
+    let deviceId: string | undefined;
+    try {
+      const resolution = await this.deps.resolveTarget();
+      if (myCycle !== this.cycle) return;
 
-    if (!resolution.ok) {
+      if (!resolution.ok) {
+        this.state = 'error';
+        this.deps.pushStatus({
+          type: 'mirror',
+          status: 'error',
+          reason: resolution.reason,
+          hint: resolution.hint,
+        });
+        this.endAllClients();
+        return;
+      }
+
+      const { target } = resolution;
+      platform = target.platform;
+      deviceId = target.deviceId;
+      this.deps.pushStatus({
+        type: 'mirror',
+        status: 'starting',
+        platform: target.platform,
+        deviceId: target.deviceId,
+      });
+
+      const source = await this.deps.createSource(target);
+      if (myCycle !== this.cycle) {
+        // Superseded (shutdown/grace-stop) while resolving/creating — no client
+        // is waiting on this attempt; stop it immediately rather than leaking it.
+        source.stop();
+        return;
+      }
+      this.source = source;
+
+      const sink: MirrorFrameSink = {
+        onFrame: (frame) => {
+          if (myCycle !== this.cycle) return;
+          this.onSourceFrame(frame, target, source);
+        },
+        onExit: (err) => {
+          if (myCycle !== this.cycle) return;
+          this.onSourceExit(err);
+        },
+      };
+      source.start(sink);
+    } catch (err) {
+      if (myCycle !== this.cycle) return;
+      this.cycle += 1;
+      this.source = null;
       this.state = 'error';
       this.deps.pushStatus({
         type: 'mirror',
         status: 'error',
-        reason: resolution.reason,
-        hint: resolution.hint,
+        reason: err instanceof Error ? err.message : String(err),
+        platform,
+        deviceId,
       });
       this.endAllClients();
-      return;
     }
-
-    const { target } = resolution;
-    this.deps.pushStatus({
-      type: 'mirror',
-      status: 'starting',
-      platform: target.platform,
-      deviceId: target.deviceId,
-    });
-
-    const source = await this.deps.createSource(target);
-    if (myCycle !== this.cycle) {
-      // Superseded (shutdown/grace-stop) while resolving/creating — no client
-      // is waiting on this attempt; stop it immediately rather than leaking it.
-      source.stop();
-      return;
-    }
-    this.source = source;
-
-    const sink: MirrorFrameSink = {
-      onFrame: (frame) => {
-        if (myCycle !== this.cycle) return;
-        this.onSourceFrame(frame, target, source);
-      },
-      onExit: (err) => {
-        if (myCycle !== this.cycle) return;
-        this.onSourceExit(err);
-      },
-    };
-    source.start(sink);
   }
 
   private onSourceFrame(frame: Buffer, target: MirrorTarget, source: MirrorSource): void {
