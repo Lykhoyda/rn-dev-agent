@@ -38,7 +38,12 @@ import {
   type FlatNode,
   type RefreshOutcome,
 } from './fast-runner-ref-map.js';
-import { recordUiChange } from './lifecycle/no-change-tracker.js';
+import {
+  recordNoUiChange,
+  recordUiChange,
+  WEDGED_DISTINCT_TARGETS,
+  WEDGED_RUNTIME_HINT,
+} from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import {
   getStateDir,
@@ -865,7 +870,12 @@ export async function ensureFastRunner(deviceId: string, bundleId: string): Prom
 // path is untouched when the override is null.
 type RunAgentDeviceFn = (
   cliArgs: string[],
-  opts?: { skipSession?: boolean; platform?: 'ios' | 'android' | null; settle?: SettlePerCallOpts },
+  opts?: {
+    skipSession?: boolean;
+    platform?: 'ios' | 'android' | null;
+    settle?: SettlePerCallOpts;
+    retryIfNoChange?: boolean;
+  },
 ) => Promise<ToolResult>;
 let _runAgentDeviceOverrideForTest: RunAgentDeviceFn | null = null;
 
@@ -1031,6 +1041,81 @@ export function selfHealEnabled(env: NodeJS.ProcessEnv): boolean {
   return v !== '0' && v !== 'false';
 }
 
+const RETRYABLE_TAP_COMMANDS = new Set<string>(['tap', 'longPress']);
+
+export interface TapRetryPolicy {
+  eligible: boolean;
+  targetKey: string;
+}
+
+// Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
+// gestures (--count/--double-tap) would change semantics on a re-tap; fills
+// have their own read-back verification and a retype would duplicate text.
+export function tapRetryPolicy(
+  cliArgs: string[],
+  builtCommand: string,
+  x: number | undefined,
+  y: number | undefined,
+  opts: { retryIfNoChange?: boolean },
+): TapRetryPolicy {
+  const eligible =
+    RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
+    opts.retryIfNoChange !== false &&
+    selfHealEnabled(process.env) &&
+    !cliArgs.includes('--double-tap') &&
+    !cliArgs.includes('--count') &&
+    x !== undefined &&
+    y !== undefined;
+  return { eligible, targetKey: `${builtCommand}@${x},${y}` };
+}
+
+function flagNoUiChange(result: ToolResult, targetKey: string): ToolResult {
+  const distinct = recordNoUiChange(targetKey);
+  return attachMeta(result, {
+    noUiChange: true,
+    ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
+  });
+}
+
+// Story 05 (#386): settle the first dispatch with change detection; if the
+// hierarchy did not change, presume the tap was swallowed and retry EXACTLY
+// once (2 attempts total, Maestro's rule). Still unchanged → success with
+// meta.noUiChange (a no-op tap is legitimate — the verifier decides). The
+// advisory contract holds: nothing here turns a succeeded action into an error.
+export async function settleWithRetryIfNoChange(
+  firstResult: ToolResult,
+  dispatch: () => Promise<ToolResult>,
+  ctx: SettleContext,
+  policy: TapRetryPolicy,
+  deps: SettleAfterMutationDeps = {},
+): Promise<ToolResult> {
+  const preHash = policy.eligible ? (getLastSnapshotHash() ?? undefined) : undefined;
+  const first = await settleAfterMutationWithOutcome(
+    firstResult,
+    { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) },
+    deps,
+  );
+  if (!policy.eligible || preHash === undefined || first.result.isError) return first.result;
+  if (first.outcome?.hierarchyChanged !== false) {
+    if (first.outcome?.hierarchyChanged === true) recordUiChange();
+    return first.result;
+  }
+  const second = await dispatch();
+  if (second.isError) {
+    return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
+  }
+  const settled = await settleAfterMutationWithOutcome(
+    second,
+    { ...ctx, initialSnapshotHash: preHash },
+    deps,
+  );
+  if (settled.outcome?.hierarchyChanged === false) {
+    return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
+  }
+  if (settled.outcome?.hierarchyChanged === true) recordUiChange();
+  return attachMeta(settled.result, { tapRetried: true });
+}
+
 const MAX_STALE_CANDIDATES = 5;
 
 type StaleReason = 'absent' | 'ambiguous' | 'no-signature' | 'snapshot-failed';
@@ -1124,6 +1209,7 @@ export async function runNative(
     skipSession?: boolean;
     platform?: 'ios' | 'android' | null;
     settle?: SettlePerCallOpts;
+    retryIfNoChange?: boolean;
   } = {},
 ): Promise<ToolResult> {
   if (_runAgentDeviceOverrideForTest) {
@@ -1184,12 +1270,24 @@ export async function runNative(
       };
     }
     let result = await runIOS(ios);
-    result = await settleAfterMutation(result, {
-      platform: 'ios',
-      verb: cliArgs[0],
-      ...(appId ? { appId } : {}),
-      ...(opts.settle ? { settle: opts.settle } : {}),
-    });
+    const iosPolicy = tapRetryPolicy(
+      cliArgs,
+      ios.command,
+      ios.x,
+      ios.y,
+      opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {},
+    );
+    result = await settleWithRetryIfNoChange(
+      result,
+      () => runIOS(ios),
+      {
+        platform: 'ios',
+        verb: cliArgs[0],
+        ...(appId ? { appId } : {}),
+        ...(opts.settle ? { settle: opts.settle } : {}),
+      },
+      iosPolicy,
+    );
     if (healMeta) result = attachMeta(result, healMeta);
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
   }
@@ -1294,12 +1392,24 @@ export async function runNative(
       };
     }
     let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
-    result = await settleAfterMutation(result, {
-      platform: 'android',
-      verb: cliArgs[0],
-      ...(appId ? { appId } : {}),
-      ...(opts.settle ? { settle: opts.settle } : {}),
-    });
+    const androidPolicy = tapRetryPolicy(
+      cliArgs,
+      android.command,
+      android.x,
+      android.y,
+      opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {},
+    );
+    result = await settleWithRetryIfNoChange(
+      result,
+      () => runAndroid({ ...android, deviceId: activeSession?.deviceId }),
+      {
+        platform: 'android',
+        verb: cliArgs[0],
+        ...(appId ? { appId } : {}),
+        ...(opts.settle ? { settle: opts.settle } : {}),
+      },
+      androidPolicy,
+    );
     if (healMeta) result = attachMeta(result, healMeta);
     const note = consumePendingAndroidUpgradeNote();
     return note ? attachMetaNote(result, note) : result;

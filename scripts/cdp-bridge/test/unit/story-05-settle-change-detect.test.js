@@ -158,6 +158,47 @@ test('settle disabled per-call on a mutating verb → baseline invalidated', asy
   clearRefMap();
 });
 
+test('settle disabled per-env on a mutating verb → baseline invalidated', async () => {
+  const { updateRefMapFromFlat, clearRefMap, getLastSnapshotHash } =
+    await import('../../dist/fast-runner-ref-map.js');
+  clearRefMap();
+  updateRefMapFromFlat([
+    { ref: '@e0', type: 'Button', rect: { x: 0, y: 0, width: 100, height: 40 } },
+  ]);
+  await settleAfterMutationWithOutcome(
+    okResult({}),
+    { platform: 'ios', verb: 'tap' },
+    { enabled: () => false },
+  );
+  assert.equal(getLastSnapshotHash(), null);
+  clearRefMap();
+});
+
+test('settle threw → baseline invalidated, original result returned', async () => {
+  const { updateRefMapFromFlat, clearRefMap, getLastSnapshotHash } =
+    await import('../../dist/fast-runner-ref-map.js');
+  clearRefMap();
+  updateRefMapFromFlat([
+    { ref: '@e0', type: 'Button', rect: { x: 0, y: 0, width: 100, height: 40 } },
+  ]);
+  const original = okResult({ tapped: true });
+  const { result } = await settleAfterMutationWithOutcome(
+    original,
+    { platform: 'ios', verb: 'tap' },
+    {
+      enabled: () => true,
+      capabilities: () => [],
+      probes: () => ({ snapshotHash: async () => 'H', sleep: async () => {}, now: () => 0 }),
+      wait: async () => {
+        throw new Error('settle engine exploded');
+      },
+    },
+  );
+  assert.equal(getLastSnapshotHash(), null);
+  assert.equal(result, original);
+  clearRefMap();
+});
+
 test('settleAfterMutationWithOutcome returns outcome + attaches meta.settle.hierarchyChanged', async () => {
   const { result, outcome } = await settleAfterMutationWithOutcome(
     okResult({ tapped: true }),

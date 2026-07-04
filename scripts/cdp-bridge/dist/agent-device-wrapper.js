@@ -5,8 +5,8 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
-import { recordUiChange } from './lifecycle/no-change-tracker.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, getLastSnapshotHash, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
 /**
@@ -840,6 +840,54 @@ export function selfHealEnabled(env) {
     const v = env.RN_SELF_HEAL?.trim().toLowerCase();
     return v !== '0' && v !== 'false';
 }
+const RETRYABLE_TAP_COMMANDS = new Set(['tap', 'longPress']);
+// Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
+// gestures (--count/--double-tap) would change semantics on a re-tap; fills
+// have their own read-back verification and a retype would duplicate text.
+export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
+    const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
+        opts.retryIfNoChange !== false &&
+        selfHealEnabled(process.env) &&
+        !cliArgs.includes('--double-tap') &&
+        !cliArgs.includes('--count') &&
+        x !== undefined &&
+        y !== undefined;
+    return { eligible, targetKey: `${builtCommand}@${x},${y}` };
+}
+function flagNoUiChange(result, targetKey) {
+    const distinct = recordNoUiChange(targetKey);
+    return attachMeta(result, {
+        noUiChange: true,
+        ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
+    });
+}
+// Story 05 (#386): settle the first dispatch with change detection; if the
+// hierarchy did not change, presume the tap was swallowed and retry EXACTLY
+// once (2 attempts total, Maestro's rule). Still unchanged → success with
+// meta.noUiChange (a no-op tap is legitimate — the verifier decides). The
+// advisory contract holds: nothing here turns a succeeded action into an error.
+export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
+    const preHash = policy.eligible ? (getLastSnapshotHash() ?? undefined) : undefined;
+    const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) }, deps);
+    if (!policy.eligible || preHash === undefined || first.result.isError)
+        return first.result;
+    if (first.outcome?.hierarchyChanged !== false) {
+        if (first.outcome?.hierarchyChanged === true)
+            recordUiChange();
+        return first.result;
+    }
+    const second = await dispatch();
+    if (second.isError) {
+        return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
+    }
+    const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
+    if (settled.outcome?.hierarchyChanged === false) {
+        return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
+    }
+    if (settled.outcome?.hierarchyChanged === true)
+        recordUiChange();
+    return attachMeta(settled.result, { tapRetried: true });
+}
 const MAX_STALE_CANDIDATES = 5;
 function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
     const message = reason === 'ambiguous'
@@ -965,12 +1013,13 @@ export async function runNative(cliArgs, opts = {}) {
             };
         }
         let result = await runIOS(ios);
-        result = await settleAfterMutation(result, {
+        const iosPolicy = tapRetryPolicy(cliArgs, ios.command, ios.x, ios.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
+        result = await settleWithRetryIfNoChange(result, () => runIOS(ios), {
             platform: 'ios',
             verb: cliArgs[0],
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
-        });
+        }, iosPolicy);
         if (healMeta)
             result = attachMeta(result, healMeta);
         return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
@@ -1061,12 +1110,13 @@ export async function runNative(cliArgs, opts = {}) {
             };
         }
         let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
-        result = await settleAfterMutation(result, {
+        const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
+        result = await settleWithRetryIfNoChange(result, () => runAndroid({ ...android, deviceId: activeSession?.deviceId }), {
             platform: 'android',
             verb: cliArgs[0],
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
-        });
+        }, androidPolicy);
         if (healMeta)
             result = attachMeta(result, healMeta);
         const note = consumePendingAndroidUpgradeNote();
