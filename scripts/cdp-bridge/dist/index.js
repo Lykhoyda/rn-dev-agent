@@ -1694,7 +1694,14 @@ setObserveE2eDeps({
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in
 // reconnection.ts (the zombie cause) is cleared on every exit.
-const shutdown = buildGracefulShutdown({ getClient, stopFastRunnerFn: stopFastRunner });
+// GH #182 (mirror subsystem): stopMirrorFn reaps idb/ffmpeg/simctl capture children
+// via MirrorManager.shutdown() — synchronous + idempotent, safe to call from here
+// and again from the process.on('exit') net below.
+const shutdown = buildGracefulShutdown({
+    getClient,
+    stopFastRunnerFn: stopFastRunner,
+    stopMirrorFn: () => mirrorManager?.shutdown(),
+});
 process.on('uncaughtException', (err) => {
     logger.error('MCP', `Uncaught exception: ${err.message}`);
     void shutdown(1);
@@ -1762,6 +1769,18 @@ const stopParentWatch = startParentDeathWatch({
 });
 process.on('exit', () => stopParentWatch());
 process.on('exit', () => removeObserveState());
+// GH #182 zombie class for observe-mirror: catch-all net alongside the shutdown()
+// path above. Covers cases that never call shutdown() at all — e.g. the fatal
+// main().catch() handler below (process.exit(1) direct) and any other exit — so
+// idb/ffmpeg/simctl capture children are always reaped. Synchronous + idempotent.
+process.on('exit', () => {
+    try {
+        mirrorManager?.shutdown();
+    }
+    catch (err) {
+        logger.warn('MCP', `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`);
+    }
+});
 async function main() {
     logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
     if (logger.logFilePath) {

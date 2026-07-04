@@ -126,6 +126,73 @@ test('gracefulShutdown: stopFastRunner throw is non-fatal (B76/D644)', async () 
   assert.deepEqual(exits, [0], 'exit still called despite stopFastRunner throw');
 });
 
+// ── GH #182 zombie class (observe-mirror follow-up): stopMirrorFn wiring ──
+
+test('gracefulShutdown: calls stopMirrorFn during cleanup (GH #182 mirror zombie)', async () => {
+  const { client } = mockClient();
+  let stopMirrorCalls = 0;
+  const { exits, exitFn } = captureExit();
+
+  const shutdown = buildGracefulShutdown({
+    getClient: () => client,
+    stopFastRunnerFn: () => {},
+    stopMirrorFn: () => {
+      stopMirrorCalls += 1;
+    },
+    exitFn,
+    timeoutMs: 1000,
+  });
+
+  await shutdown(0);
+
+  assert.equal(stopMirrorCalls, 1, 'stopMirrorFn called once during cleanup');
+  assert.deepEqual(exits, [0], 'exit still called');
+});
+
+test('gracefulShutdown: omitted stopMirrorFn is a no-op (mirror config-disabled)', async () => {
+  const { client, calls } = mockClient();
+  const { exits, exitFn } = captureExit();
+
+  // No stopMirrorFn passed — mirrors the config-disabled case where
+  // `mirrorManager` is undefined and `stopMirrorFn: () => mirrorManager?.shutdown()`
+  // is never wired at the call site either.
+  const shutdown = buildGracefulShutdown({
+    getClient: () => client,
+    stopFastRunnerFn: () => {},
+    exitFn,
+    timeoutMs: 1000,
+  });
+
+  await shutdown(0);
+
+  assert.equal(calls.disconnect, 1, 'disconnect still called');
+  assert.deepEqual(exits, [0], 'exit still called without stopMirrorFn');
+});
+
+test('gracefulShutdown: stopMirrorFn throw is non-fatal (GH #182 mirror zombie)', async () => {
+  const { client, calls } = mockClient();
+  let stopFastRunnerCalls = 0;
+  const { exits, exitFn } = captureExit();
+
+  const shutdown = buildGracefulShutdown({
+    getClient: () => client,
+    stopFastRunnerFn: () => {
+      stopFastRunnerCalls += 1;
+    },
+    stopMirrorFn: () => {
+      throw new Error('mirror boom');
+    },
+    exitFn,
+    timeoutMs: 1000,
+  });
+
+  await shutdown(0);
+
+  assert.equal(calls.disconnect, 1, 'disconnect was called');
+  assert.equal(stopFastRunnerCalls, 1, 'stopFastRunner still called despite stopMirrorFn throw');
+  assert.deepEqual(exits, [0], 'exit still called despite stopMirrorFn throw');
+});
+
 test('gracefulShutdown: timeout forces exit if cleanup hangs (B76/D644)', async () => {
   // disconnect() never resolves — simulates a stuck cleanup path. The shutdown's
   // setTimeout is NOT unref'd in production code, so it keeps the event loop alive
