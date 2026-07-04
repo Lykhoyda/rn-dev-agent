@@ -35,27 +35,38 @@ export async function hideExpoDevMenu(client, opts = {}) {
     const retries = Math.max(0, opts.retries ?? 0);
     const retryDelayMs = opts.retryDelayMs ?? 500;
     let outcome = { dismissed: false, reason: 'Dev menu hide not attempted.' };
+    // Sticky success: the settle loop fires the hide up to `retries + 1` times to
+    // beat the present-animation no-op, but an earlier dismissal must never be
+    // downgraded by a later transient eval failure — so a `dismissed:true` outcome
+    // is only ever replaced by another `dismissed:true`.
     for (let attempt = 0; attempt <= retries; attempt++) {
         let value;
         try {
             const result = await client.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION);
             if (result.error) {
-                outcome = { dismissed: false, reason: `Dev menu hide eval failed: ${result.error}` };
+                if (!outcome.dismissed) {
+                    outcome = { dismissed: false, reason: `Dev menu hide eval failed: ${result.error}` };
+                }
             }
             else {
                 value = result.value;
             }
         }
         catch (err) {
-            outcome = {
-                dismissed: false,
-                reason: `Dev menu hide eval threw: ${err instanceof Error ? err.message : String(err)}`,
-            };
+            if (!outcome.dismissed) {
+                outcome = {
+                    dismissed: false,
+                    reason: `Dev menu hide eval threw: ${err instanceof Error ? err.message : String(err)}`,
+                };
+            }
         }
         if (value === 'no_module')
             return parseSentinel(value);
-        if (value !== undefined)
-            outcome = parseSentinel(value);
+        if (value !== undefined) {
+            const parsed = parseSentinel(value);
+            if (parsed.dismissed || !outcome.dismissed)
+                outcome = parsed;
+        }
         if (attempt < retries) {
             await new Promise((r) => setTimeout(r, retryDelayMs));
         }

@@ -86,6 +86,19 @@ test('hideExpoDevMenu: no_module short-circuits retries', async () => {
   assert.equal(calls.count, 1);
 });
 
+test('hideExpoDevMenu: a later transient eval error does not downgrade an earlier success', async () => {
+  const { client } = clientReturning({ value: 'ok:hideMenu' }, { error: 'WebSocket closed' });
+  const r = await hideExpoDevMenu(client, { retries: 1, retryDelayMs: 0 });
+  assert.equal(r.dismissed, true);
+  assert.equal(r.method, 'hideMenu');
+});
+
+test('hideExpoDevMenu: a later eval throw does not downgrade an earlier success', async () => {
+  const { client } = clientReturning({ value: 'ok:hideMenu' }, { throw: 'blip' });
+  const r = await hideExpoDevMenu(client, { retries: 1, retryDelayMs: 0 });
+  assert.equal(r.dismissed, true);
+});
+
 test('autoDismissDevMenuMeta: iOS + dismissed → meta with method', async () => {
   const client = {
     connectedTarget: { platform: 'ios' },
