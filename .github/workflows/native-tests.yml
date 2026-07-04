@@ -1,0 +1,133 @@
+# Story 06 Phase A (#387): execute the native runner unit suites.
+# Shape copied from codeql.yml: a fast ubuntu `changes` pre-flight, then
+# per-platform jobs that either run the tests or post a green skip notice —
+# checks ALWAYS post, so the maintainer's "CI green" merge rule stays sound
+# without required-status-check config.
+name: Native tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: native-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect native changes
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.detect.outputs.ios }}
+      android: ${{ steps.detect.outputs.android }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect native-source changes
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Push to main: always run both lanes (image/toolchain drift check).
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if echo "$CHANGED" | grep -qE '^scripts/rn-fast-runner/|^scripts/test-native-ios\.sh$|^\.github/workflows/native-tests\.yml$'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -qE '^scripts/rn-android-runner/|^\.github/workflows/native-tests\.yml$'; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "android=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  android-unit:
+    name: Android unit (JVM)
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Skip notice (Android unchanged)
+        if: ${{ needs.changes.outputs.android != 'true' }}
+        run: echo "No rn-android-runner changes in this PR — skipping the JVM unit tests. Push-to-main runs them unconditionally."
+      - name: Checkout
+        if: ${{ needs.changes.outputs.android == 'true' }}
+        uses: actions/checkout@v4
+      - name: Set up Java
+        if: ${{ needs.changes.outputs.android == 'true' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle (cache)
+        if: ${{ needs.changes.outputs.android == 'true' }}
+        uses: gradle/actions/setup-gradle@v4
+      - name: gradlew testDebugUnitTest
+        if: ${{ needs.changes.outputs.android == 'true' }}
+        working-directory: scripts/rn-android-runner
+        run: ./gradlew testDebugUnitTest --no-daemon
+      - name: Upload JUnit report (on failure)
+        if: ${{ failure() && needs.changes.outputs.android == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-report
+          path: scripts/rn-android-runner/app/build/reports/tests/
+          retention-days: 7
+
+  ios-unit:
+    name: iOS unit (simulator)
+    needs: changes
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Skip notice (iOS unchanged)
+        if: ${{ needs.changes.outputs.ios != 'true' }}
+        run: echo "No rn-fast-runner changes in this PR — skipping the simulator unit tests. Push-to-main runs them unconditionally."
+      - name: Checkout
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        uses: actions/checkout@v4
+      # De-flake: codeql.yml only ever BUILDS for the simulator SDK; this is the
+      # first workflow to BOOT a simulator on CI, where cold-boot timeouts are a
+      # documented macos-15 image issue (runner-images #12862, #12777). Pre-boot
+      # and wait, and fall back to any iPhone if the image drops "iPhone 16".
+      - name: Pre-boot simulator
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available
+          UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name == "iPhone 16")][0].udid // empty')"
+          if [ -z "$UDID" ]; then
+            echo "No 'iPhone 16' on this image — falling back to the first available iPhone" >&2
+            UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          fi
+          [ -n "$UDID" ]
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          echo "RN_IOS_TEST_DESTINATION=id=$UDID" >> "$GITHUB_ENV"
+      # Preinstalled Xcode 16.x on macos-15 — same choice as codeql.yml.
+      - name: "xcodebuild test (skip-list: server entry + device-dependent test)"
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        run: |
+          xcodebuild -version
+          bash scripts/test-native-ios.sh
+      - name: Upload xcresult (on failure)
+        if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-xcresult
+          path: scripts/rn-fast-runner/build/native-tests.xcresult
+          retention-days: 7
