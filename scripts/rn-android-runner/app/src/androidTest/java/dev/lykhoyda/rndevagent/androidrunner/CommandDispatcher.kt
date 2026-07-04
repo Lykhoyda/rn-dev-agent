@@ -45,11 +45,14 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
             "pinch", "findText", "isWindowUpdating",
         )
 
-        // GH #378: cold-start-only relaunch wait. Reached solely on a confirmed
-        // cold state (no app window, hence no IME to stall By.pkg), so it is kept
-        // well under the TS client's 10s non-slow command budget — a hung launch
-        // now fails fast instead of masquerading as a RUNNER_TIMEOUT.
-        const val FOREGROUND_READY_TIMEOUT_MS = 5_000L
+        // GH #378: cold-start-only relaunch wait. The windows-based fast-path below
+        // means this is reached only on a confirmed cold state (no app window, hence
+        // no IME to stall By.pkg), so it no longer needs shortening to dodge the IME
+        // stall. Kept at the original 10s: a genuinely cold RN/debug app can take
+        // several seconds to expose its first By.pkg node, and slow verbs
+        // (snapshot/type) get 35s client-side — a tighter cap would regress
+        // cold-launch success without helping the stall the windows check already ends.
+        const val FOREGROUND_READY_TIMEOUT_MS = 10_000L
     }
 
     init {
