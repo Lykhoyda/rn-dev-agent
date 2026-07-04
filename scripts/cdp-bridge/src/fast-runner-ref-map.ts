@@ -53,13 +53,13 @@ export interface RefSignature {
 
 interface StoredRefRecord extends RefMetadata {
   flatIndex: number;
+  nodeCount: number;
 }
 
 let refMap = new Map<string, ElementRect>();
 let metadataMap = new Map<string, StoredRefRecord>();
 let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
-let lastSnapshotNodeCount = 0;
 let lastSnapshotHash: string | null = null;
 
 export function updateRefMap(nodes: SnapshotNode[]): void {
@@ -116,7 +116,6 @@ export function clearRefMap(): void {
   metadataMap.clear();
   screenRect = null;
   lastUpdated = 0;
-  lastSnapshotNodeCount = 0;
   lastSnapshotHash = null;
 }
 
@@ -165,8 +164,14 @@ export function flattenXCUITree(tree: XCUITreeNode): {
 }
 
 export function updateRefMapFromFlat(nodes: FlatNode[]): void {
+  // refMap IS cleared (coordinates must never be served across generations —
+  // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
+  // positional, so ids absent from this snapshot cannot collide with current
+  // ones; retaining their signatures (with their ORIGIN generation's
+  // flatIndex/nodeCount) lets a later stale tap heal by identity after a
+  // re-render (Story 05 acceptance: dense→sparse→tap-original-ref, #386).
+  // Colliding keys are overwritten by metadataMap.set below.
   refMap.clear();
-  metadataMap.clear();
   screenRect = null;
 
   const hashed: FlatNode[] = [];
@@ -176,7 +181,7 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
     const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
     refMap.set(key, node.rect);
 
-    const meta: StoredRefRecord = { type: node.type, flatIndex: i };
+    const meta: StoredRefRecord = { type: node.type, flatIndex: i, nodeCount: nodes.length };
     if (node.label !== undefined) meta.label = node.label;
     if (node.identifier !== undefined) meta.identifier = node.identifier;
     metadataMap.set(key, meta);
@@ -187,7 +192,6 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
     }
   }
 
-  lastSnapshotNodeCount = nodes.length;
   // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
   // dereferences node.rect.* unconditionally, and a malformed entry must not
   // throw mid-update. For real runner data the filtered subset equals the full
@@ -218,7 +222,7 @@ export function getCachedSignature(ref: string): RefSignature | null {
   const sig: RefSignature = {
     type: rec.type,
     flatIndex: rec.flatIndex,
-    nodeCount: lastSnapshotNodeCount,
+    nodeCount: rec.nodeCount,
   };
   if (rec.label !== undefined) sig.label = rec.label;
   if (rec.identifier !== undefined) sig.identifier = rec.identifier;

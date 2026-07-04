@@ -3,7 +3,6 @@ let refMap = new Map();
 let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
-let lastSnapshotNodeCount = 0;
 let lastSnapshotHash = null;
 export function updateRefMap(nodes) {
     refMap.clear();
@@ -51,7 +50,6 @@ export function clearRefMap() {
     metadataMap.clear();
     screenRect = null;
     lastUpdated = 0;
-    lastSnapshotNodeCount = 0;
     lastSnapshotHash = null;
 }
 export function hasRefMap() {
@@ -98,8 +96,14 @@ export function flattenXCUITree(tree) {
     return { nodes, refMap: localRefMap };
 }
 export function updateRefMapFromFlat(nodes) {
+    // refMap IS cleared (coordinates must never be served across generations —
+    // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
+    // positional, so ids absent from this snapshot cannot collide with current
+    // ones; retaining their signatures (with their ORIGIN generation's
+    // flatIndex/nodeCount) lets a later stale tap heal by identity after a
+    // re-render (Story 05 acceptance: dense→sparse→tap-original-ref, #386).
+    // Colliding keys are overwritten by metadataMap.set below.
     refMap.clear();
-    metadataMap.clear();
     screenRect = null;
     const hashed = [];
     for (let i = 0; i < nodes.length; i++) {
@@ -108,7 +112,7 @@ export function updateRefMapFromFlat(nodes) {
             continue;
         const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
-        const meta = { type: node.type, flatIndex: i };
+        const meta = { type: node.type, flatIndex: i, nodeCount: nodes.length };
         if (node.label !== undefined)
             meta.label = node.label;
         if (node.identifier !== undefined)
@@ -119,7 +123,6 @@ export function updateRefMapFromFlat(nodes) {
             screenRect = node.rect;
         }
     }
-    lastSnapshotNodeCount = nodes.length;
     // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
     // dereferences node.rect.* unconditionally, and a malformed entry must not
     // throw mid-update. For real runner data the filtered subset equals the full
@@ -153,7 +156,7 @@ export function getCachedSignature(ref) {
     const sig = {
         type: rec.type,
         flatIndex: rec.flatIndex,
-        nodeCount: lastSnapshotNodeCount,
+        nodeCount: rec.nodeCount,
     };
     if (rec.label !== undefined)
         sig.label = rec.label;

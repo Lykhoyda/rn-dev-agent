@@ -7,6 +7,7 @@ import {
   getCachedMetadata,
   getLastSnapshotHash,
   invalidateLastSnapshotHash,
+  lookupRef,
 } from '../../dist/fast-runner-ref-map.js';
 import { hashSnapshotNodes } from '../../dist/lifecycle/settle-hash.js';
 
@@ -65,6 +66,42 @@ test('invalidateLastSnapshotHash nulls the baseline without touching refs', () =
   invalidateLastSnapshotHash();
   assert.equal(getLastSnapshotHash(), null);
   assert.notEqual(getCachedSignature('@e0'), null); // refs still resolvable
+});
+
+// Story 05 acceptance (re-render case): a settle-refresh REPLACES the ref map,
+// but ids absent from the new snapshot are positional and cannot collide — their
+// signatures must survive so a later stale tap can still heal by identity.
+test('retains signatures for non-colliding ids across updates', () => {
+  updateRefMapFromFlat(nodes); // gen 1: @e0..@e2, nodeCount 3
+  const sparse = [{ ref: '@e0', type: 'Other', label: 'Header', rect: rect(0, 0) }];
+  updateRefMapFromFlat(sparse); // gen 2: only @e0, nodeCount 1
+
+  // @e2 has no key in gen 2 → retained with its ORIGIN generation's counts
+  assert.deepEqual(getCachedSignature('@e2'), {
+    type: 'TextField',
+    identifier: 'name-input',
+    flatIndex: 2,
+    nodeCount: 3,
+  });
+  // @e0 collides → overwritten with the NEW identity + new generation's counts
+  assert.deepEqual(getCachedSignature('@e0'), {
+    type: 'Other',
+    label: 'Header',
+    flatIndex: 0,
+    nodeCount: 1,
+  });
+  // Coordinates are NOT retained — only the CURRENT snapshot is tappable
+  assert.equal(lookupRef('@e2'), null);
+  // Hash baseline tracks the newest update
+  assert.equal(getLastSnapshotHash(), hashSnapshotNodes(sparse));
+});
+
+test('clearRefMap drops retained signatures too', () => {
+  updateRefMapFromFlat(nodes);
+  updateRefMapFromFlat([{ ref: '@e0', type: 'Other', label: 'Header', rect: rect(0, 0) }]);
+  clearRefMap();
+  assert.equal(getCachedSignature('@e2'), null); // retained entry gone
+  assert.equal(getCachedSignature('@e0'), null); // current entry gone
 });
 
 test('flatIndex is the raw array position when skipped entries are interleaved; hash is guarded', () => {
