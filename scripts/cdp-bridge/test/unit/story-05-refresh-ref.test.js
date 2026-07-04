@@ -20,7 +20,11 @@ const sig = (over = {}) => ({
 });
 
 test('unique: exactly one attrs-minus-bounds match, even at a new position', () => {
-  const nodes = [btn('@e0', 'Other', 'x', 0), btn('@e1', 'Cancel', undefined, 50), btn('@e2', 'Save', 'save-btn', 400)];
+  const nodes = [
+    btn('@e0', 'Other', 'x', 0),
+    btn('@e1', 'Cancel', undefined, 50),
+    btn('@e2', 'Save', 'save-btn', 400),
+  ];
   const out = refreshRef(sig(), nodes);
   assert.equal(out.kind, 'unique');
   assert.equal(out.node.ref, '@e2');
@@ -42,10 +46,7 @@ test('testID changed but label same → absent', () => {
 });
 
 test('ambiguous: two identical siblings, tree shape changed → candidates, no guess', () => {
-  const nodes = [
-    btn('@e0', 'Save', 'save-btn', 0),
-    btn('@e1', 'Save', 'save-btn', 50),
-  ];
+  const nodes = [btn('@e0', 'Save', 'save-btn', 0), btn('@e1', 'Save', 'save-btn', 50)];
   const out = refreshRef(sig({ nodeCount: 3 }), nodes); // 2 !== 3 → shape changed
   assert.equal(out.kind, 'ambiguous');
   assert.equal(out.candidates.length, 2);

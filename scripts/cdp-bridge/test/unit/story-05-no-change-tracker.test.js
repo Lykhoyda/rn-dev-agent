@@ -48,9 +48,7 @@ test('clearActiveSession resets the no-change streak (source wiring)', () => {
 
   // Extract the clearActiveSession function body — from the function declaration
   // to the closing brace of the function.
-  const m = src.match(
-    /export function clearActiveSession\(\):\s*void\s*\{([\s\S]*?)\n\}/,
-  );
+  const m = src.match(/export function clearActiveSession\(\):\s*void\s*\{([\s\S]*?)\n\}/);
   assert.ok(m, 'clearActiveSession function not found in agent-device-wrapper.ts');
   const functionBody = m[1];
 
