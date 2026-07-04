@@ -240,6 +240,17 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 extra.delayMs = delayMs;
             if (cliArgs.includes('--clear-first'))
                 extra.clearFirst = true;
+            // Story 04 (#385) M2 guard: an explicit --at-x/--at-y pin bypasses @ref
+            // re-resolution entirely — device_fill resolves coords ONCE before its
+            // pre-tap so the settle's ref-map refresh can't retarget the fill.
+            const atX = optionValue(cliArgs, '--at-x');
+            const atY = optionValue(cliArgs, '--at-y');
+            if (atX !== undefined && atY !== undefined) {
+                const px = Number(atX), py = Number(atY);
+                if (Number.isFinite(px) && Number.isFinite(py)) {
+                    return { command: 'type', x: px, y: py, text, ...extra, ...(bundleId ? { bundleId } : {}) };
+                }
+            }
             if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
@@ -396,6 +407,16 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'type': {
             const ref = positionals[0];
             const text = positionals.slice(1).join(' ');
+            // Story 04 (#385) M2 guard — mirrors buildRunIOSArgs: a --at-x/--at-y pin
+            // bypasses @ref re-resolution so a settle-refreshed map can't retarget.
+            const atX = optionValue(cliArgs, '--at-x');
+            const atY = optionValue(cliArgs, '--at-y');
+            if (atX !== undefined && atY !== undefined) {
+                const px = Number(atX), py = Number(atY);
+                if (Number.isFinite(px) && Number.isFinite(py)) {
+                    return { command: 'type', x: px, y: py, text, ...withBundle };
+                }
+            }
             if (ref && ref.startsWith('@')) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)

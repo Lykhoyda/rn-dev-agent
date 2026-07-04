@@ -27,6 +27,23 @@ test('delimiter-lookalike content in labels cannot alias node boundaries', () =>
   assert.notEqual(hashSnapshotNodes(tricky), hashSnapshotNodes(split));
 });
 
+test('raw control bytes in app-controlled strings cannot alias field/node boundaries', () => {
+  const controlBytes = [node({ label: 'a\0b\x01c', identifier: '' })];
+  const shifted = [node({ label: 'a', identifier: 'b\x01c' })];
+  assert.notEqual(hashSnapshotNodes(controlBytes), hashSnapshotNodes(shifted));
+});
+
+test('enabled/hittable state flips register as UI change', () => {
+  assert.notEqual(
+    hashSnapshotNodes([node({ enabled: true, hittable: true })]),
+    hashSnapshotNodes([node({ enabled: false, hittable: true })]),
+  );
+  assert.notEqual(
+    hashSnapshotNodes([node({ enabled: true, hittable: true })]),
+    hashSnapshotNodes([node({ enabled: true, hittable: false })]),
+  );
+});
+
 test('a real transition (moved element) DOES change the hash', () => {
   const moved = node({ rect: { x: 100, y: 420, width: 120, height: 44 } });
   assert.notEqual(hashSnapshotNodes([node()]), hashSnapshotNodes([moved]));

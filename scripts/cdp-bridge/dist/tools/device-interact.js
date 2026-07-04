@@ -9,7 +9,7 @@ import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
-import { getCachedMetadata, isRefMapFresh } from '../fast-runner-ref-map.js';
+import { getCachedMetadata, isRefMapFresh, refCenter } from '../fast-runner-ref-map.js';
 import { resolveJsTestId, attemptJsFill, settleRead, classifyFillVerification, decideNativeRetype, } from './fill-verify.js';
 const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
@@ -430,6 +430,26 @@ function isAndroidSession() {
     return !!process.env.ANDROID_SERIAL;
 }
 const FOCUS_DELAY_MS = 150;
+// Story 04 (#385): the fixed focus delay is now the FALLBACK. Explicit
+// waitForKeyboardMs always wins (B122 Pressable-wrapped inputs); a pre-tap
+// whose envelope carries meta.settle already waited for UI stability, so the
+// extra 150ms adds nothing; only a settle-less pre-tap (RN_SETTLE=0, legacy
+// runner path failure) keeps the legacy delay.
+export function focusDelayAfterPreTap(preTapEnvelopeText, waitForKeyboardMs) {
+    if (waitForKeyboardMs !== undefined)
+        return waitForKeyboardMs;
+    if (preTapEnvelopeText) {
+        try {
+            const envelope = JSON.parse(preTapEnvelopeText);
+            if (envelope.meta?.settle !== undefined)
+                return 0;
+        }
+        catch {
+            /* fall through to legacy delay */
+        }
+    }
+    return FOCUS_DELAY_MS;
+}
 const NO_FOCUSED_INPUT_RE = /no focused text input|no focused element|element is not focused/i;
 function isNoFocusedInputError(result) {
     if (!result.isError)
@@ -559,18 +579,28 @@ export function createDeviceFillHandler(getClient) {
                 }
             }
         }
-        const focusWaitMs = args.waitForKeyboardMs ?? FOCUS_DELAY_MS;
+        // M2 guard (#385): resolve the target's coords ONCE. The pre-tap's settle
+        // re-snapshots and rebuilds the @ref map (post-keyboard screen), so any
+        // later @ref re-resolution inside this call could target a different
+        // element. Pinning makes the settle's ref-map refresh harmless here while
+        // keeping the map fresh for the NEXT tool.
+        const pinned = isRefMapFresh() ? refCenter(ref) : null;
+        const pinArgs = pinned ? ['--at-x', String(pinned.x), '--at-y', String(pinned.y)] : [];
         // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
         // press+fill+press+fill flows where the previous call left focus on a different field.
-        const preTap = await runNative(['press', ref]);
+        const preTap = pinned
+            ? await runNative(['press', String(pinned.x), String(pinned.y)], settleOpts(args))
+            : await runNative(['press', ref], settleOpts(args));
         if (preTap.isError) {
             // If we can't even tap the element, fall straight through to fill — it may still
             // work via the fast-runner coordinate path, and we want its error message, not ours.
         }
         else {
-            await sleep(focusWaitMs);
+            const delay = focusDelayAfterPreTap(preTap.content?.[0]?.text, args.waitForKeyboardMs);
+            if (delay > 0)
+                await sleep(delay);
         }
-        const primary = await runNative(['fill', ref, args.text]);
+        const primary = await runNative(['fill', ref, args.text, ...pinArgs], settleOpts(args));
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -597,14 +627,10 @@ export function createDeviceFillHandler(getClient) {
                         break;
                     settleAnchor = value;
                     stabilityPrior = value;
-                    await runNative([
-                        'fill',
-                        ref,
-                        args.text,
-                        '--clear-first',
-                        '--delay-ms',
-                        String(decision.delayMs),
-                    ]);
+                    // M1 (#385): corrective retypes pin coords AND skip settle — the
+                    // nativeSettle CDP read-back that follows is their stability check;
+                    // a UI-settle here is redundant latency (~6s/retype worst case).
+                    await runNative(['fill', ref, args.text, ...pinArgs, '--clear-first', '--delay-ms', String(decision.delayMs)], { settle: { enabled: false } });
                 }
                 const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
                 if (!maestro.isError) {
@@ -640,9 +666,11 @@ export function createDeviceFillHandler(getClient) {
         if (snap.ok) {
             const resolvedRef = findInputForPressable(snap.nodes, ref);
             if (resolvedRef && resolvedRef !== ref) {
-                const innerTap = await runNative(['press', resolvedRef]);
+                const innerTap = await runNative(['press', resolvedRef], settleOpts(args));
                 if (!innerTap.isError) {
-                    await sleep(focusWaitMs);
+                    const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
+                    if (delay > 0)
+                        await sleep(delay);
                     const resolved = await runNative(['fill', resolvedRef, args.text]);
                     if (!resolved.isError) {
                         try {

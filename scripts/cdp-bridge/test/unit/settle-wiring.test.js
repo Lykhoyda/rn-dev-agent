@@ -173,9 +173,15 @@ test('waitForSettle clamps non-finite/oversized budgets', async () => {
 test('end-to-end: runNative ios tap → runner /command + settle probe → meta.settle', async () => {
   const { runNative, _setActiveSessionForTest } = await import('../../dist/agent-device-wrapper.js');
   const { _setPluginVersionForTest } = await import('../../dist/runners/protocol.js');
+  const { spawn } = await import('node:child_process');
+  // Disposable child as the fake runner pid: this test enters the PRODUCTION
+  // runNative lifecycle, and a stale classification would reap (SIGTERM) the
+  // recorded pid — process.pid here would kill the test process itself
+  // (observed before the fetchImpl health-probe fix; keep it impossible).
+  const dummy = spawn('sleep', ['300'], { stdio: 'ignore' });
   _setPluginVersionForTest(null); // disables version-skew gate
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'com.test' });
-  _setFastRunnerStateForTest({ ...iosState(), port: 22091 });
+  _setFastRunnerStateForTest({ ...iosState(), pid: dummy.pid, port: 22091 });
   const REQUIRED = ['tap', 'type', 'drag', 'longPress', 'pinch', 'snapshot', 'screenshot', 'back', 'keyboardDismiss'];
   setIosFetch(async (url, init) => {
     if (String(url).includes('/health')) {
@@ -195,6 +201,7 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
   } finally {
     _setPluginVersionForTest(undefined);
     _setActiveSessionForTest(null);
+    dummy.kill();
   }
 });
 
