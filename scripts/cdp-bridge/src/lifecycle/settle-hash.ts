@@ -8,7 +8,10 @@ const BOUNDS_QUANTUM_PX = 4;
 
 export function normalizeNodeForHash(node: FlatNode): string {
   const q = (v: number): number => Math.round(v / BOUNDS_QUANTUM_PX);
-  return [
+  // JSON-encoded tuple: labels/identifiers are app-controlled strings that may
+  // contain any bytes — JSON escaping makes the per-node encoding unambiguous,
+  // and the newline separator below cannot collide with escaped content.
+  return JSON.stringify([
     node.identifier ?? '',
     node.type,
     node.label ?? '',
@@ -16,14 +19,14 @@ export function normalizeNodeForHash(node: FlatNode): string {
     q(node.rect.y),
     q(node.rect.width),
     q(node.rect.height),
-  ].join('\0');
+  ]);
 }
 
 export function hashSnapshotNodes(nodes: FlatNode[]): string {
   const h = createHash('sha256');
   for (const node of nodes) {
     h.update(normalizeNodeForHash(node));
-    h.update('\x01');
+    h.update('\n');
   }
   return h.digest('hex');
 }

@@ -11,9 +11,20 @@ test('identical node lists hash identically', () => {
   assert.equal(hashSnapshotNodes([node()]), hashSnapshotNodes([node()]));
 });
 
-test('sub-4px bounds jitter does NOT change the hash', () => {
+test('same-quantization-bucket jitter (±1px within a 4px bucket) does NOT change the hash', () => {
   const jittered = node({ rect: { x: 101, y: 201, width: 120, height: 44 } });
   assert.equal(hashSnapshotNodes([node()]), hashSnapshotNodes([jittered]));
+});
+
+test('bucket-crossing movement registers (quantization is bucketed, not a distance threshold)', () => {
+  const crossed = node({ rect: { x: 102, y: 200, width: 120, height: 44 } });
+  assert.notEqual(hashSnapshotNodes([node()]), hashSnapshotNodes([crossed]));
+});
+
+test('delimiter-lookalike content in labels cannot alias node boundaries', () => {
+  const tricky = [node({ label: 'a\nb', identifier: '' })];
+  const split = [node({ label: 'a', identifier: '' }), node({ label: 'b', identifier: '' })];
+  assert.notEqual(hashSnapshotNodes(tricky), hashSnapshotNodes(split));
 });
 
 test('a real transition (moved element) DOES change the hash', () => {
