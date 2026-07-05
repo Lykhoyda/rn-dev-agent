@@ -168,7 +168,23 @@ const makeReplayDeps = () => {
             mustOk(await interact({ action: 'typeText', testID: id, text, animated: false }), `type "${id}"`);
         },
         treeFor: async (id) => {
-            const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text);
+            const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
+                filter: id,
+                depth: 12,
+                ...(interactiveOnly ? { interactiveOnly: true } : {}),
+            })).content[0].text);
+            let env = await fetchTree(false);
+            // The filtered tree can exceed the injected helper's 50KB safeStringify
+            // guard on heavy screens, which replaces the payload with
+            // {__agent_truncated} and silently blinds the oracle (device-found during
+            // #397 T11: 115KB → truncated → probe never routed). Retry with the
+            // salient digest (GH #321) — it carries interactive testIDs at ~1/10th
+            // the size. Full tree stays primary because the digest excludes
+            // pure-text labels that assertVisible steps may target.
+            const d = env.ok ? env.data : null;
+            if (d && typeof d === 'object' && '__agent_truncated' in d) {
+                env = await fetchTree(true);
+            }
             // getTree wraps the node(s) under `.tree` — unwrap to the node/matches the
             // oracle + dispatch walk, else isExactPresent sees zero testIDs.
             return env.ok ? unwrapTree(env.data) : null;
