@@ -3,14 +3,22 @@ name: Runner artifacts
 # GH #382 (Story 01): publish prebuilt runner artifacts so the first
 # device_snapshot action=open never pays the multi-minute cold build.
 #
-# SCAFFOLD — this workflow cannot be exercised outside a real release run (it
-# needs macOS + Android CI runners and a version bump). It is wired to fire once
-# per release: on push to main it detects a plugin.json version bump (i.e. the
-# changesets "Version Packages" PR just merged), builds both runners, attaches
-# the zips to a GitHub Release v<version>, and commits runner-manifest.json (the
+# The gate is STATE-based, not event-based: any trigger (push, schedule,
+# dispatch) checks whether the GitHub Release for the CURRENT plugin.json
+# version already carries both runner zips + runner-manifest.json, and builds
+# only what's missing. This is what makes the pipeline self-healing:
+#   - release.yml merges the Version Packages PR as github-actions with
+#     GITHUB_TOKEN, and GitHub's recursion guard suppresses workflow triggers
+#     for GITHUB_TOKEN-initiated pushes (B258) — so a push-only gate NEVER
+#     fires on the normal automated release path. The scheduled sweep catches
+#     those releases within a few hours.
+#   - A partially failed run (one runner built, the other died) is healed the
+#     same way: assets incomplete -> rebuild both, uploads use --clobber.
+# Successful zips attach to Release v<version>; runner-manifest.json (the
 # client's offline SHA-256 trust root — see scripts/cdp-bridge/src/runners/
-# runner-artifacts.ts). Until this runs for a released version, clients resolve
-# to the local build (provenance 'local'); that is by design, not a failure.
+# runner-artifacts.ts) is committed to main. Until this succeeds for a released
+# version, clients resolve to the local build (provenance 'local') — degraded,
+# not broken.
 #
 # PREREQUISITES (repo settings, cannot be set from this file):
 #   - Settings > Actions > General > Workflow permissions: "Read and write"
@@ -21,10 +29,14 @@ name: Runner artifacts
 on:
   push:
     branches: [main]
+  schedule:
+    # Sweep for releases the push trigger can't see (GITHUB_TOKEN bot merges,
+    # B258) and for partially-failed builds. Off-hour minute to dodge load.
+    - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
       force_version:
-        description: Build+publish artifacts for this exact version (skips bump detection)
+        description: Build+publish artifacts for this exact version (skips the missing-assets check)
         required: false
         default: ''
 
@@ -36,18 +48,17 @@ permissions:
 
 jobs:
   detect:
-    name: Detect version bump
+    name: Detect missing runner artifacts
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
       changed: ${{ steps.v.outputs.changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
-        with:
-          fetch-depth: 2
       - id: v
-        name: Compare plugin.json version to the previous commit
+        name: Check whether release v<version> already has all artifacts
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_VERSION: ${{ github.event.inputs.force_version }}
         run: |
           CUR=$(jq -r '.version' .claude-plugin/plugin.json)
@@ -56,14 +67,16 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git show HEAD~1:.claude-plugin/plugin.json > /tmp/prev.json 2>/dev/null || echo '{}' > /tmp/prev.json
-          PREV=$(jq -r '.version // "none"' /tmp/prev.json)
-          echo "current=$CUR previous=$PREV"
           echo "version=$CUR" >> "$GITHUB_OUTPUT"
-          if [ "$CUR" != "$PREV" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
+          ASSETS=$(gh release view "v$CUR" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if echo "$ASSETS" | grep -qxF "rn-fast-runner-$CUR-sim.zip" \
+            && echo "$ASSETS" | grep -qxF "rn-android-runner-$CUR.zip" \
+            && echo "$ASSETS" | grep -qxF "runner-manifest.json"; then
+            echo "release v$CUR is complete — nothing to build"
             echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release v$CUR missing or incomplete — building"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Create the release for this version (idempotent)
         if: steps.v.outputs.changed == 'true'
@@ -174,8 +187,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add runner-manifest.json
-          # [skip ci] keeps CI off a manifest-only commit; it changes no version,
-          # so this workflow does not re-trigger (detect -> changed=false).
+          # [skip ci] keeps CI off a manifest-only commit; even on a scheduled
+          # sweep the release is complete by now (detect -> changed=false).
           git commit -m "chore(release): runner-manifest for v$VERSION [skip ci]" \
             || { echo "manifest unchanged"; exit 0; }
           # If branch protection rejects this push, route it through a PR instead.
