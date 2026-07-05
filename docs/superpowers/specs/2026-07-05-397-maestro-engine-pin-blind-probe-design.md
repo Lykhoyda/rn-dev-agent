@@ -51,7 +51,7 @@ export const MAESTRO_RUNNER_PIN = {
   - The checksum validates the FINAL BINARY only. The install path remains upstream's `curl | bash` — the checksum does NOT protect installer-script execution (upstream publishes no installer checksum to verify against). This is a documented scope limit, not an oversight.
   - The BLOCKING control by default is the installer: it fails closed on a just-downloaded mismatch (delete + exit 1).
   - Runtime classification is **informational by default** — telemetry + warn-once + doctor visibility. Rationale: a pre-existing local binary may be a deliberate user build; the pin's threat model is untested behavioral drift (B223 class), not local-filesystem compromise (an attacker who can replace `~/.maestro-runner/bin` can replace `node`). Runtime fail-closed was considered and rejected — it would brick replay on a benign upstream re-release.
-  - **Opt-in strict mode:** `RN_ENGINE_PIN_STRICT=1` makes `maestro_run`/replay refuse (`failResult`, actionable message) when the pin status is `drift-newer`/`drift-older`/`checksum-mismatch` — the explicit posture for users who want the pin enforced at runtime.
+  - **Opt-in strict mode:** `RN_ENGINE_PIN_STRICT=1` makes `maestro_run`/replay refuse (`failResult`, actionable message) when the pin status is `drift-newer`/`drift-older`/`checksum-mismatch`. Scope stated precisely: strict mode enforces **proven divergence**, not availability — `unverified` (no hash shipped for this platform, or hashing failed) and `unknown-version` (detection gap) do NOT refuse, otherwise strict-mode users on platforms without a manifest hash could never replay at all.
 - Any detection error ⇒ `unknown-version`, no throw — **fail-open**, the engine still runs.
 
 Drift surfacing: warn **once per process** via the existing `shouldWarnFallback()` mechanism at the first maestro invocation (`chooseMaestroDispatch` call sites get the status attached to their result meta); subsequent runs carry it quietly in `meta`.
@@ -61,7 +61,7 @@ Drift surfacing: warn **once per process** via the existing `shouldWarnFallback(
 - The upstream installer supports pinning: `curl … | bash -s -- --version <V>` (verified 2026-07-05 against `open.devicelab.dev`). Fresh installs install **exactly** `MAESTRO_RUNNER_PIN_VERSION="1.0.9"`.
 - Post-install: `shasum -a 256` the binary; on mismatch for a known platform key the installer **fails closed** — deletes the just-downloaded binary and exits 1 with the expected/got hashes (codex-pair HIGH: a fresh download that doesn't match the pin is exactly what the hash exists to catch, and failing an install is actionable, not session-blocking). RUNTIME detection of a mismatched pre-existing binary stays warn-once + surfaced `pin.status: 'checksum-mismatch'` — a local binary may be a deliberate user build, and the drift-class threat model (untested behavior) is covered by the warning; fail-closed at runtime would brick replay on a benign upstream re-release.
 - An **already-installed** different version is NOT auto-reinstalled: print the drift note (respect deliberate local upgrades; the runtime warn-once covers the session).
-- Shell↔TS pin sync enforced by a grep-based unit test (D1292 tri-file precedent): test reads both files, asserts the version strings match.
+- Shell↔TS pin sync enforced by a grep-based unit test (D1292 tri-file precedent): test reads both files and asserts BOTH duplicated pin fields match — the version string and the darwin-arm64 sha256.
 
 ### Component: surfacing — `cdp_status` + doctor
 

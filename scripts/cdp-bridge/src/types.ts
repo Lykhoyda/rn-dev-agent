@@ -1,3 +1,5 @@
+import type { ReplayEngineStatus } from './domain/engine-pin.js';
+
 export interface CDPMessage {
   id?: number;
   method?: string;
@@ -194,6 +196,12 @@ export interface StatusResult {
    * creates or migrates the DB.
    */
   actionStore?: string;
+  /**
+   * GH #397: which replay engine will run + version-vs-pin + known quirks.
+   * Computed lazily from getEngineStatus() (process-cached); omitted only if
+   * detection itself throws (fail-open).
+   */
+  replayEngine?: ReplayEngineStatus;
   /**
    * M1b (Phase 100+): multiplexer proxy state. `active: true` means React Native
    * DevTools can coexist with the MCP by connecting to `port` on localhost.
