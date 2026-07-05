@@ -45,7 +45,7 @@ export const MAESTRO_RUNNER_PIN = {
 `getEngineStatus()` (same module, injected resolvers for tests):
 
 - Detects the binary (existing `~/.maestro-runner/bin` path logic), runs `--version` via argv-mode `execFile` with an explicit 5 s timeout (timeout/error ⇒ `unknown-version`, never blocks), hashes the file. Both cached per process.
-- Classifies: `pinned-ok | drift-newer | drift-older | checksum-mismatch | unknown-version | not-installed`. Version comparison is numeric per segment (no semver dep).
+- Classifies: `pinned-ok | unverified | drift-newer | drift-older | checksum-mismatch | unknown-version | not-installed`. Version comparison is numeric per segment (no semver dep).
 - `checksum-mismatch` only when the version string MATCHES the pin but the hash differs for a known platform key. `pinned-ok` strictly means version AND hash verified; a missing platform key or a failed hash computation classifies `unverified` (informational — no caveat, no warning, not refused by strict mode). Malformed version strings classify `unknown-version` (never NaN-compare equal).
 - **Trust story, stated explicitly (scope + defaults considered and decided):**
   - The checksum validates the FINAL BINARY only. The install path remains upstream's `curl | bash` — the checksum does NOT protect installer-script execution (upstream publishes no installer checksum to verify against). This is a documented scope limit, not an oversight.
