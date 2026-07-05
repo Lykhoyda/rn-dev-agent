@@ -8,6 +8,7 @@ import {
   buildReplayEngineStatus,
   enginePinCaveat,
   getEngineStatus,
+  strictPinRefusal,
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
 } from '../../dist/domain/engine-pin.js';
@@ -128,4 +129,21 @@ test('gh-397: _setEngineStatusForTest seeds the cache (for maestro-run tests)', 
   _setEngineStatusForTest(seeded);
   assert.equal(await getEngineStatus(), seeded);
   _resetEngineStatusForTest();
+});
+
+test('gh-397: strictPinRefusal refuses proven divergence only, and only when opted in', () => {
+  const st = (cls: Parameters<typeof buildReplayEngineStatus>[0]) =>
+    buildReplayEngineStatus(cls, '1.1.0', false);
+  assert.equal(strictPinRefusal(st('drift-newer'), undefined), null, 'no env, no refusal');
+  assert.equal(strictPinRefusal(st('drift-newer'), '0'), null);
+  assert.equal(strictPinRefusal(null, '1'), null, 'no status, no refusal');
+  for (const cls of ['drift-newer', 'drift-older', 'checksum-mismatch'] as const) {
+    const msg = strictPinRefusal(st(cls), '1');
+    assert.ok(msg !== null, `${cls} must refuse under strict`);
+    assert.match(msg, /RN_ENGINE_PIN_STRICT/);
+  }
+  for (const cls of ['pinned-ok', 'unverified', 'unknown-version', 'not-installed'] as const) {
+    assert.equal(strictPinRefusal(st(cls), '1'), null, `${cls} must NOT refuse (not proven drift)`);
+  }
+  assert.ok(strictPinRefusal(st('drift-older'), 'true') !== null, "'true' also opts in");
 });

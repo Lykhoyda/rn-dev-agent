@@ -109,6 +109,20 @@ export function enginePinCaveat(status: ReplayEngineStatus): string | null {
   return null;
 }
 
+export function strictPinRefusal(
+  status: ReplayEngineStatus | null,
+  envValue: string | undefined,
+): string | null {
+  const strict = envValue === '1' || envValue === 'true';
+  if (!strict || !status) return null;
+  // Strict mode refuses PROVEN divergence only — 'unverified' (no hash shipped
+  // for this platform / hashing failed) and 'unknown-version' (detection gap)
+  // never refuse, or strict-mode users without a manifest hash could never run.
+  const cls = status.pin.status;
+  if (cls !== 'drift-newer' && cls !== 'drift-older' && cls !== 'checksum-mismatch') return null;
+  return `maestro_run refused: RN_ENGINE_PIN_STRICT is set and the engine pin status is ${cls} (installed ${status.version ?? 'unknown'}, pinned ${status.pin.pinned}). Reinstall the pin via ensure-maestro-runner.sh, or unset RN_ENGINE_PIN_STRICT.`;
+}
+
 export interface EngineStatusResolvers {
   binPath?: () => string | null;
   execVersion?: (bin: string) => Promise<string>;
@@ -128,7 +142,7 @@ export function _setEngineStatusForTest(s: ReplayEngineStatus): void {
 }
 
 function defaultCliPresent(): boolean {
-  const r = spawnSync('which', ['maestro'], { encoding: 'utf8' });
+  const r = spawnSync('which', ['maestro'], { encoding: 'utf8', timeout: 2000 });
   return r.status === 0 && r.stdout.trim().length > 0;
 }
 
@@ -176,6 +190,10 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
   return buildReplayEngineStatus(cls, version, cliPresent);
 }
 
+// Single-flight, process-wide: concurrent callers (cdp_status, maestro_run)
+// share one detection promise. `resolvers` exists ONLY for tests, which must
+// pair it with _resetEngineStatusForTest — a resolver call after the cache is
+// warm returns the cached status by design (no per-resolver keying).
 export function getEngineStatus(resolvers?: EngineStatusResolvers): Promise<ReplayEngineStatus> {
   if (!cachedStatus) {
     cachedStatus = detect(resolvers ?? {}).catch(() =>

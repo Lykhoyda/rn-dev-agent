@@ -277,6 +277,13 @@ export type ToolErrorCode =
   | 'TRANSPORT_BLIND'
   // GH #317 Phase 2
   | 'UNSUPPORTED_STEP'
+  // GH #397 Phase 2: probe-routed CDP/JS replay failed — maestro was never
+  // attempted, so this is NOT transport-blindness evidence (may be app drift
+  // or a stale anchor); non-decisive for the blind-probe latch.
+  | 'FALLBACK_REPLAY_FAILED'
+  // GH #397 Phase 1: RN_ENGINE_PIN_STRICT=1 and the engine pin status is a
+  // proven divergence (drift-newer / drift-older / checksum-mismatch).
+  | 'ENGINE_PIN_MISMATCH'
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
