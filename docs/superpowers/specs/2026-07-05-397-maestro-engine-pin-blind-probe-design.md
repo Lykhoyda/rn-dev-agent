@@ -86,7 +86,7 @@ Two-stage gate, every stage fail-open to today's behavior. The gate applies to *
 - Global opt-out: `RN_BLIND_PROBE=0` (or `false`) disables the proactive gate entirely (same env-toggle pattern as `RN_SETTLE`/`RN_SELF_HEAL`), restoring today's maestro-first behavior — the escape hatch if cdp-js routing misbehaves on an at-risk runtime.
 
 **Stage 2 — oracle (can the fallback anchor?):**
-- The action's first anchor testID (`firstTestId(steps)`, exists) resolves in the live CDP component tree via the existing CDP replay dispatch's `isVisible`.
+- The action's first anchor testID — via the existing `firstReplayTestId(action.body, params)`, which normalizes the WHOLE flow and returns null if ANY step is outside the cdp-js grammar (so a supported-first-step/unsupported-later-step action never probe-routes) — resolves in the live CDP component tree.
 - Anchor found ⇒ **skip maestro entirely**; replay through the existing fallback path; `RunRecord.transport: 'cdp-js'` plus new additive-optional `blindProbe?: { atRisk: 'ios26' | 'prior-transport-blind', skippedMaestro: true }`; tool meta mirrors it.
 - Anchor not found / CDP disconnected / action has no tap-or-assert step ⇒ fall through to the normal maestro path (reactive fallback unchanged).
 

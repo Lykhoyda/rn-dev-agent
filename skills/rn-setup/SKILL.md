@@ -102,11 +102,16 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
 Then re-check: `command -v maestro-runner || ~/.maestro-runner/bin/maestro-runner --version`
 
 If it still fails, give the user these manual instructions:
-1. `curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash` — downloads ~24MB binary
+1. `curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.0.9` — downloads the ~24MB binary at the plugin's tested pin
 2. If curl fails: check internet, proxy settings, or firewall
 3. After install, add to PATH: `export PATH="$HOME/.maestro-runner/bin:$PATH"` (add to `~/.zshrc` or `~/.bashrc`)
 4. Fallback: install Maestro CLI instead: `brew install maestro` (slower but compatible)
 5. Verify: `maestro-runner --version` should print a version number
+
+The plugin pins the tested engine version (GH #397; the pin lives in `scripts/cdp-bridge/src/domain/engine-pin.ts`, currently `1.0.9`). `cdp_status` → `replayEngine` reports `engine`, `version`, `pin.status` (`pinned-ok` / `unverified` / `drift-newer` / `drift-older` / `checksum-mismatch` / `unknown-version` / `not-installed`), and the engine's known quirks. Report the row as:
+- `pinned-ok` → healthy, e.g. `maestro-runner 1.0.9 (pinned, quirks: android-hidekeyboard-noop, requires-adb-on-ios)`
+- drift/checksum states → WARN with the installed vs pinned versions; a drifted install still works but is untested (B223-class behavior changes arrive silently). Reinstall the pin with the command in step 1 above.
+- `unverified` → informational only (no hash shipped for this platform, or hashing failed); not a failure.
 
 ### 5. iOS Simulator (if macOS)
 ```bash
