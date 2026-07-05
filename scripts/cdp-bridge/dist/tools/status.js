@@ -14,6 +14,7 @@ import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 import { storeMode } from '../domain/action-state-store.js';
+import { getEngineStatus } from '../domain/engine-pin.js';
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -76,6 +77,15 @@ async function buildStatusResult(client) {
     const deviceSession = await getDeviceSessionHealth({
         detectForeign: async (udid) => (await detectIosExternalRunner(undefined, udid)) ? { detected: true } : null,
     });
+    // GH #397: replay-engine identity + version-vs-pin. Process-cached after the
+    // first call; omitted entirely if detection throws (fail-open).
+    let replayEngine;
+    try {
+        replayEngine = await getEngineStatus();
+    }
+    catch {
+        /* fail-open: omit */
+    }
     // GH #303: worktree-disambiguation diagnostics — best-effort, fail-open.
     const projectRoot = resolveBridgeProjectRoot() ?? undefined;
     let candidates;
@@ -143,6 +153,7 @@ async function buildStatusResult(client) {
         bridge: bridgeEnvState(process.env),
         deviceSession,
         actionStore: storeMode(projectRoot ?? ''),
+        replayEngine,
         proxy: {
             active: client.isProxyActive,
             port: client.proxyMultiplexer?.port ?? null,

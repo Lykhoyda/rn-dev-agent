@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS run_records (
   failure_detail  TEXT,
   transport       TEXT,
   auto_repair_json TEXT,
-  duration_ms     INTEGER
+  duration_ms     INTEGER,
+  device_id       TEXT,
+  blind_probe_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repair_records (
@@ -100,6 +102,22 @@ export function openActionDb(projectRoot, opts = {}) {
         mkdirSync(dirname(dbPath), { recursive: true });
         const db = new Ctor(dbPath);
         db.exec(SCHEMA);
+        // GH #397: additive columns for DBs created before the blind-probe fields.
+        // CREATE TABLE IF NOT EXISTS never alters an existing table, so each new
+        // column needs an idempotent ALTER — "duplicate column name" is the only
+        // expected error and means the column already exists.
+        for (const alter of [
+            'ALTER TABLE run_records ADD COLUMN device_id TEXT',
+            'ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT',
+        ]) {
+            try {
+                db.exec(alter);
+            }
+            catch (e) {
+                if (!String(e).includes('duplicate column name'))
+                    throw e;
+            }
+        }
         const handle = {
             db,
             close: () => db.close(),
@@ -117,8 +135,8 @@ export function openActionDb(projectRoot, opts = {}) {
                     }
                     db.prepare(`INSERT INTO run_records
                (action_id, ts, trigger, status, failure_code, failure_detail,
-                transport, auto_repair_json, duration_ms)
-             VALUES (?,?,?,?,?,?,?,?,?)`).run(actionId, record.timestamp, record.trigger, record.status, record.failureCode ?? null, record.failureDetail ?? null, record.transport ?? null, record.autoRepair ? JSON.stringify(record.autoRepair) : null, record.durationMs);
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record.timestamp, record.trigger, record.status, record.failureCode ?? null, record.failureDetail ?? null, record.transport ?? null, record.autoRepair ? JSON.stringify(record.autoRepair) : null, record.durationMs, record.deviceId ?? null, record.blindProbe ? JSON.stringify(record.blindProbe) : null);
                     // Trim oldest rows beyond cap
                     db.prepare(`DELETE FROM run_records
              WHERE action_id = ?
@@ -206,6 +224,16 @@ export function openActionDb(projectRoot, opts = {}) {
                         rec.transport = 'cdp-js';
                     if (r.auto_repair_json)
                         rec.autoRepair = JSON.parse(String(r.auto_repair_json));
+                    if (r.device_id)
+                        rec.deviceId = String(r.device_id);
+                    if (r.blind_probe_json) {
+                        try {
+                            rec.blindProbe = JSON.parse(String(r.blind_probe_json));
+                        }
+                        catch {
+                            /* malformed mirror row — omit the field rather than fail the load */
+                        }
+                    }
                     return rec;
                 });
                 const repairHistory = repairRows.map((r) => {

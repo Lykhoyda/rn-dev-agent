@@ -59,7 +59,8 @@ import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
-import { setForeignGateUdidProvider, foreignFlowGate } from './lifecycle/foreign-flow-gate.js';
+import { setForeignGateUdidProvider, foreignFlowGate, foreignGateUdid, } from './lifecycle/foreign-flow-gate.js';
+import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
 import { getActiveSession, markSnapshotDirty } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -202,6 +203,15 @@ setForeignGateUdidProvider(() => {
     const s = getActiveSession();
     return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
 });
+// GH #397 Phase 2: device context for cdp_run_action's proactive blind-probe.
+// Reuses the foreign-gate UDID provider (iOS session only ⇒ null otherwise, so
+// the gate stays inert without a session — fail-open by design).
+const blindProbeContext = async () => {
+    const udid = foreignGateUdid();
+    if (!udid)
+        return null;
+    return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
+};
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
 // though the arrow body only runs later.
@@ -1625,6 +1635,7 @@ trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end aut
 createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
+    blindProbeContext,
 }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
@@ -1693,6 +1704,7 @@ const triggerE2eRun = async (pattern) => {
 const runActionHandler = createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
+    blindProbeContext,
 });
 setObserveE2eDeps({
     token: e2eCsrfToken,

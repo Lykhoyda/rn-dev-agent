@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
+import { getEngineStatus, enginePinCaveat, strictPinRefusal } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
@@ -174,6 +175,15 @@ export function createMaestroRunHandler() {
             }
         }
         const finalArgs = assembleMaestroArgs(baseArgs, paramArgs);
+        // GH #397: engine-pin visibility. Detection is process-cached and fail-open
+        // (null on error). The caveat rides the existing warn-once mechanism below;
+        // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
+        const engineStatus = dispatch.runner === 'maestro-runner' ? await getEngineStatus().catch(() => null) : null;
+        const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
+        const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
+        if (strictRefusal) {
+            return failResult(strictRefusal, 'ENGINE_PIN_MISMATCH');
+        }
         try {
             const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, 
             // 10MB buffer: a multi-step flow with screenshots + app console/network
@@ -202,10 +212,14 @@ export function createMaestroRunHandler() {
                 outputTruncated: false,
                 ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
                 ...(dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {}),
+                ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
+                    ? { enginePin: engineStatus.pin }
+                    : {}),
             };
             // GH #356/B223: a degradedReason (Android hideKeyboard with no Maestro CLI)
-            // is a caveat surfaced the same way as a fallbackReason.
-            const caveat = dispatch.fallbackReason ?? dispatch.degradedReason;
+            // is a caveat surfaced the same way as a fallbackReason. GH #397: so is
+            // an engine-pin drift (warn-once via the same mechanism).
+            const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? undefined;
             if (passed) {
                 // B59 (Gemini review, conf 82): on success-with-fallback, only emit
                 // a loud warning the FIRST time per process so a 100-flow loop
@@ -255,6 +269,11 @@ export function createMaestroRunHandler() {
                 ...summary,
                 timedOut,
                 outputTruncated,
+                // GH #397: a drifted/mismatched engine causing a real failure is
+                // exactly when the pin state matters — carry it on this path too.
+                ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
+                    ? { enginePin: engineStatus.pin }
+                    : {}),
             });
             return failResult(failAug.message, failAug.meta);
         }
