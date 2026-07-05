@@ -8,6 +8,14 @@
 //   3. Reconcile knownQuirks (retest each listed quirk; add/remove entries).
 //   4. Update version + sha256 here AND in ensure-maestro-runner.sh; add a changeset.
 
+import { execFile as execFileCb, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { getMaestroRunnerPath } from '../maestro-invoke.js';
+
+const execFile = promisify(execFileCb);
+
 export const MAESTRO_RUNNER_PIN = {
   version: '1.0.9',
   sha256: {
@@ -29,6 +37,7 @@ export const MAESTRO_RUNNER_PIN = {
 
 export type EnginePinClassification =
   | 'pinned-ok'
+  | 'unverified'
   | 'drift-newer'
   | 'drift-older'
   | 'checksum-mismatch'
@@ -58,12 +67,13 @@ export function classifyEnginePin(
   platformKey: string,
 ): EnginePinClassification {
   if (!detected.installed) return 'not-installed';
-  if (!detected.version) return 'unknown-version';
+  if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version)) return 'unknown-version';
   const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
   if (cmp > 0) return 'drift-newer';
   if (cmp < 0) return 'drift-older';
   const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (expected && detected.sha256 && detected.sha256 !== expected) return 'checksum-mismatch';
+  if (!expected || !detected.sha256) return 'unverified';
+  if (detected.sha256 !== expected) return 'checksum-mismatch';
   return 'pinned-ok';
 }
 
@@ -97,4 +107,80 @@ export function enginePinCaveat(status: ReplayEngineStatus): string | null {
     return `maestro-runner reports the pinned version ${status.pin.pinned} but its binary checksum does not match the manifest — possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
   }
   return null;
+}
+
+export interface EngineStatusResolvers {
+  binPath?: () => string | null;
+  execVersion?: (bin: string) => Promise<string>;
+  hashFile?: (bin: string) => string | null;
+  cliPresent?: () => boolean;
+  platformKey?: string;
+}
+
+let cachedStatus: Promise<ReplayEngineStatus> | null = null;
+
+export function _resetEngineStatusForTest(): void {
+  cachedStatus = null;
+}
+
+export function _setEngineStatusForTest(s: ReplayEngineStatus): void {
+  cachedStatus = Promise.resolve(s);
+}
+
+function defaultCliPresent(): boolean {
+  const r = spawnSync('which', ['maestro'], { encoding: 'utf8' });
+  return r.status === 0 && r.stdout.trim().length > 0;
+}
+
+async function defaultExecVersion(bin: string): Promise<string> {
+  const { stdout, stderr } = await execFile(bin, ['--version'], {
+    timeout: 5000,
+    encoding: 'utf8',
+  });
+  return stdout + '\n' + stderr;
+}
+
+function defaultHashFile(bin: string): string | null {
+  return createHash('sha256').update(readFileSync(bin)).digest('hex');
+}
+
+function safeBool(fn: () => boolean): boolean {
+  try {
+    return fn();
+  } catch {
+    return false;
+  }
+}
+
+async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineStatus> {
+  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
+  const cliPresent = safeBool(resolvers.cliPresent ?? defaultCliPresent);
+  const platformKey = resolvers.platformKey ?? `${process.platform}-${process.arch}`;
+  if (!binPath) {
+    return buildReplayEngineStatus('not-installed', null, cliPresent);
+  }
+  let version: string | null = null;
+  try {
+    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
+    version = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
+  } catch {
+    version = null;
+  }
+  let sha256: string | null = null;
+  try {
+    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha256 = null;
+  }
+  const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
+  return buildReplayEngineStatus(cls, version, cliPresent);
+}
+
+export function getEngineStatus(resolvers?: EngineStatusResolvers): Promise<ReplayEngineStatus> {
+  if (!cachedStatus) {
+    cachedStatus = detect(resolvers ?? {}).catch(() =>
+      buildReplayEngineStatus('unknown-version', null, false),
+    );
+  }
+  return cachedStatus;
 }

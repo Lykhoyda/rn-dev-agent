@@ -7,6 +7,9 @@ import {
   compareVersions,
   buildReplayEngineStatus,
   enginePinCaveat,
+  getEngineStatus,
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
 } from '../../dist/domain/engine-pin.js';
 
 const KEY = 'darwin-arm64';
@@ -39,8 +42,22 @@ test('gh-397: classification truth table', () => {
   assert.equal(classifyEnginePin(d('1.0.8', 'f'.repeat(64)), KEY), 'drift-older');
   assert.equal(classifyEnginePin(d('1.0.9', 'f'.repeat(64)), KEY), 'checksum-mismatch');
   assert.equal(classifyEnginePin(d('1.0.9', PIN_HASH), KEY), 'pinned-ok');
-  assert.equal(classifyEnginePin(d('1.0.9', 'f'.repeat(64)), 'linux-x64'), 'pinned-ok');
-  assert.equal(classifyEnginePin(d('1.0.9', null), KEY), 'pinned-ok');
+  assert.equal(
+    classifyEnginePin(d('1.0.9', 'f'.repeat(64)), 'linux-x64'),
+    'unverified',
+    'no manifest hash for this platform — pinned-ok must mean version AND hash verified',
+  );
+  assert.equal(
+    classifyEnginePin(d('1.0.9', null), KEY),
+    'unverified',
+    'expected hash exists but hashing failed — must not claim pinned-ok',
+  );
+  assert.equal(
+    classifyEnginePin(d('1.0.x', PIN_HASH), KEY),
+    'unknown-version',
+    'malformed version must not compare equal via NaN',
+  );
+  assert.equal(classifyEnginePin(d('1.0.9-beta', PIN_HASH), KEY), 'unknown-version');
 });
 
 test('gh-397: buildReplayEngineStatus picks engine + carries quirk ids', () => {
@@ -64,4 +81,51 @@ test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
   const bad = enginePinCaveat(buildReplayEngineStatus('checksum-mismatch', '1.0.9', true));
   assert.ok(bad !== null);
   assert.match(bad, /checksum/i);
+});
+
+test('gh-397: getEngineStatus detects via injected resolvers and caches', async () => {
+  _resetEngineStatusForTest();
+  let execCalls = 0;
+  const resolvers = {
+    binPath: () => '/fake/maestro-runner',
+    execVersion: async () => {
+      execCalls++;
+      return 'maestro-runner 1.0.9\n  Commit:  c25dc55';
+    },
+    hashFile: () => PIN_HASH,
+    cliPresent: () => false,
+    platformKey: KEY,
+  };
+  const s1 = await getEngineStatus(resolvers);
+  assert.equal(s1.pin.status, 'pinned-ok');
+  assert.equal(s1.version, '1.0.9');
+  const s2 = await getEngineStatus(resolvers);
+  assert.equal(execCalls, 1, 'second call must hit the cache');
+  assert.equal(s2, s1);
+});
+
+test('gh-397: getEngineStatus fails open on resolver errors', async () => {
+  _resetEngineStatusForTest();
+  const s = await getEngineStatus({
+    binPath: () => '/fake/maestro-runner',
+    execVersion: async () => {
+      throw new Error('spawn failure');
+    },
+    hashFile: () => {
+      throw new Error('EACCES');
+    },
+    cliPresent: () => true,
+    platformKey: KEY,
+  });
+  assert.equal(s.pin.status, 'unknown-version');
+  assert.equal(s.engine, 'maestro-runner');
+  _resetEngineStatusForTest();
+});
+
+test('gh-397: _setEngineStatusForTest seeds the cache (for maestro-run tests)', async () => {
+  _resetEngineStatusForTest();
+  const seeded = buildReplayEngineStatus('drift-newer', '1.1.0', false);
+  _setEngineStatusForTest(seeded);
+  assert.equal(await getEngineStatus(), seeded);
+  _resetEngineStatusForTest();
 });
