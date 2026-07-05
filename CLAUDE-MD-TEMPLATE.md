@@ -111,6 +111,12 @@ afterward — discovery is a one-time cost, replay is the steady state.
 | **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
 | **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |
 | **Assert state** | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` | Macro-Asserts — embed internal-state assertions inside replays. Maestro asserts pixels; these assert what the app actually believes |
+| **Lock** (promote to regression) | `/rn-dev-agent:lock-e2e <id>` (calls `cdp_lock_e2e_test`) | Runs the action once strict (no repair); freezes the passing flow to `.rn-agent/e2e/<id>.yaml` as an immutable regression test |
+| **Regression suite** | `cdp_run_e2e_suite` | Replays all locked tests strict; persists a suite-run report (verdict + per-test results). Also runnable from the observe UI's e2e tab |
+
+**Authoring a new action by hand?** Use the `creating-actions` skill — it walks
+the full contract (inventory-dedup scan, selector grounding, M7 header, flow
+diagram, pre-replay validation, replay-to-promote).
 
 **Canonical loop.** Record a verified walk once → save as an action → in the
 next session, `list-learned-actions` surfaces it for the agent → `run-action`
@@ -212,6 +218,7 @@ are documented exceptions, not defaults.
 | Type into a field | `device_fill(ref=…, text=…)` | `xcrun simctl spawn booted … keyboard`, `adb shell input text` |
 | Open an in-app URL / deep link | `device_deeplink` / `cdp_navigate` / `cdp_nav_graph` | `xcrun simctl openurl`, `adb shell am start -a android.intent.action.VIEW` |
 | Read app state (Redux/Zustand/Jotai/RQ) | `cdp_store_state(path=…)` | `console.log` + log-tailing, dispatching probes via `cdp_evaluate` |
+| Read/clear app storage (MMKV) | `cdp_mmkv` (get/set/delete/has/keys/clear); `device_reset_state` for full reset preflight | raw Nitro poking via `cdp_evaluate`, `simctl uninstall` to clear state |
 | Inspect React internals | `cdp_component_tree(filter=…)`, `cdp_component_state` | guessing from screenshots, walking the fiber via raw `cdp_evaluate` |
 | Check connection / Metro / errors | `cdp_status` | `curl http://localhost:8081/json`, `xcrun simctl list`, `adb devices` |
 | Read JS errors / console / network | `cdp_error_log`, `cdp_console_log`, `cdp_network_log` | `tail -f` log files, `adb logcat | grep` (those are NATIVE-error fallbacks only — see Error Recovery below) |
@@ -232,7 +239,6 @@ default.
 | Condition | Escape | Why |
 |---|---|---|
 | Multiple Hermes targets, `cdp_connect` picked the wrong one | `curl -s http://localhost:8081/json` to enumerate, then `cdp_connect(targetId="…")` | The plugin can't disambiguate without the explicit ID |
-| Multi-device routing bug — `device_screenshot` captured the wrong platform | `xcrun simctl io <UDID> screenshot` (iOS) / `adb -s <id> exec-out screencap -p` (Android) | Tracked: [Lykhoyda/rn-dev-agent#60](https://github.com/Lykhoyda/rn-dev-agent/issues/60) |
 | `cdp_error_log` empty but app is broken | `collect_logs` (parallel JS+native) — drops to native log streams | Native crashes don't surface in the JS error buffer |
 | App fully crashed / picker stuck | `xcrun simctl terminate` + manual relaunch + `cdp_connect force: true` | When `cdp_reload` can't recover |
 
@@ -288,20 +294,23 @@ Use `cdp_status` — it checks Metro, CDP connection, app info, active errors, a
 
 #### "I need to see what's on screen"
 - **Accessibility tree (for interaction):** `device_snapshot` — returns the full UI tree with @ref handles you can tap/fill. **First action on any new screen.**
-- **React component tree (for debugging):** `cdp_component_tree(filter="<testID>")` — returns fiber tree with props/state. **Always filter** — never dump the full tree (wastes 10K+ tokens)
+- **"What can I tap here?" on a novel screen:** `cdp_component_tree(interactiveOnly: true)` — a salient digest of only the actionable nodes (`{testID, role, text, label, placeholder, disabled}`). Hundreds of tokens instead of the full fiber tree's thousands.
+- **React component tree (for debugging):** `cdp_component_tree(filter="<testID>")` — returns fiber tree with props/state. **Always filter or use `interactiveOnly`** — never dump the full tree (wastes 10K+ tokens)
 - **Visual screenshot:** `device_screenshot` — captures the screen as an image
+- Repeated `device_find` calls on an unchanged screen are near-free — the snapshot is cached and auto-invalidated by any mutating tool call, so don't contort call order to avoid a re-find.
 
 #### "I need to tap a button / fill an input"
 - **If you don't know the testID / @ref yet**: `device_snapshot` FIRST.
 - **Know the @ref** (from `device_snapshot`): `device_press(ref="@e3")`
 - **Know the visible text**: `device_find(text="Submit", action="click")` — finds and taps in one call
 - **Fill a text input**: `device_fill(ref="@e5", text="hello@example.com")`
-- **Multiple steps at once**: `device_batch` — chain press/fill/swipe actions in one call
+- **Multiple steps at once**: `device_batch` — chain press/fill/swipe actions in one call. Its implicit final snapshot defaults to `salient` (actionable nodes only); pass `finalSnapshot: 'none'` for action-only batches you verify via `expect_*`/`cdp_store_state`, or `'full'` for the complete node list.
 - **Swipe/scroll**: `device_swipe`, `device_scroll`, `device_scrollintoview`
 - **Long press**: `device_longpress(ref="@e7")` or with coordinates
 - **NEVER** use `xcrun simctl` or `adb input` for UI interaction
-- **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the new `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode.
+- **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode. `cdp_interact` also resolves RNTL-style selectors — `role`/`name`/`text`/`placeholder` — and fails closed on ambiguity rather than picking the wrong element.
 - **For UNKNOWN elements** (need to discover what's on screen): `device_snapshot` first, then `device_press(ref="@eN")`.
+- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique and retries a no-effect tap once (`meta.reResolved` / `meta.tapRetried`). Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
 
 #### "I need to navigate to a specific screen"
 - **Best option:** `cdp_nav_graph(action="go", screen="ProfileScreen")` — scans navigation graph, plans route, navigates in one call
@@ -318,16 +327,16 @@ Use `cdp_status` — it checks Metro, CDP connection, app info, active errors, a
 - **Verification caveat:** `cdp_dispatch` to force state is a shortcut. Only use during exploration/debugging.
 
 #### "I need to read or clear app storage (MMKV)"
-For apps using `react-native-mmkv@^3` (Nitro-based):
+Use `cdp_mmkv` — actions `get | set | delete | has | keys | clear`, with typed
+reads (`string`/`number`/`boolean`). Requires `react-native-mmkv@^3` (Nitro-based);
+older TurboModule versions are not reachable and return `__agent_error`.
 
-```typescript
-// Via cdp_evaluate:
-const factory = globalThis.NitroModulesProxy.createHybridObject('MMKVFactory')
-const mmkv = factory.createMMKV({ id: factory.defaultMMKVInstanceId })
-const value = mmkv.getString('MyKey')         // read
-mmkv.remove('CooldownTimestamps')             // clear
-mmkv.set('MyKey', 'value')                    // write
-```
+For a full test-reset (revoke permissions + clear MMKV keys + force-stop +
+relaunch + reconnect CDP), use `device_reset_state` — one atomic preflight call
+instead of hand-chaining four tools.
+
+Raw `cdp_evaluate` against `globalThis.NitroModulesProxy` is the fallback only
+when `cdp_mmkv` reports MMKV unavailable.
 
 **Verification caveat:** clearing state keys (cooldowns, flags, timestamps) to
 unblock a test is a bypass. State it openly when you do it — do not silently
@@ -353,6 +362,13 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 2. Call `cdp_connect platform: "android"|"ios" force: true` to re-pin
 3. If multiple Hermes targets exist (reload sometimes spawns extras), use `targetId:` with the exact id from `curl -s http://localhost:8081/json`
 
+**iOS expo-dev-client dev menu:** `cdp_reload` best-effort auto-dismisses it after
+reconnect. If the bottom sheet is still covering the app, use
+`cdp_dev_settings(action="hideDevMenu")` — it dismisses over CDP with no touch,
+so Hermes stays attached and the in-memory store survives (a coordinate tap/swipe
+on the sheet can detach the debugger). `disableDevMenu` suppresses shake-to-show
+before proof recordings.
+
 #### "I need to manage device permissions"
 - **Query:** `device_permission(action="query", permission="notifications")`
 - **Grant/revoke:** `device_permission(action="grant", permission="camera")`
@@ -360,8 +376,10 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 
 #### "I need to write or run E2E tests"
 - **Generate a Maestro test:** `maestro_generate` — creates persistent YAML test file from structured steps
-- **Run a single flow:** `maestro_run(flow="path/to/flow.yaml")`
+- **Run a single flow:** `maestro_run(flow="path/to/flow.yaml")` — returns structured `steps[]`, `failedStep`, and partial progress on timeout
 - **Run all flows:** `maestro_test_all` — regression suite across all `.rn-agent/actions/` flows
+- **Freeze a proven action as a regression test:** `/rn-dev-agent:lock-e2e <action-id>` (calls `cdp_lock_e2e_test`) — runs the action once strict (no auto-repair) and freezes it to `.rn-agent/e2e/` only if it passes. Parameterized actions need their params covered by the project's e2e config, or they're refused.
+- **Run the locked suite:** `cdp_run_e2e_suite` — replays all locked tests strict, persists a suite-run report with verdict + per-test results (also runnable from the observe UI's e2e tab)
 - Prefer `maestro-runner` over classic Maestro (3x faster, no JVM)
 
 #### "I need to capture proof for a PR"
@@ -374,37 +392,39 @@ If `device_list` shows more than one booted device (e.g., both an iOS simulator 
 
 1. Call `cdp_status platform: "android"` or `platform: "ios"` to pin CDP to one target
 2. Pass `platform:` explicitly to **all** `device_*` tools thereafter
-3. If `device_screenshot` captures the wrong platform despite `platform:`, fall back to:
-   - **Android:** `adb -s <emulator-id> exec-out screencap -p > out.png`
-   - **iOS:** `xcrun simctl io <UDID> screenshot out.png`
-4. If `device_deeplink` routes to the wrong device, use:
-   - **Android:** `adb -s <emulator-id> shell am start -a android.intent.action.VIEW -d "<url>"`
-   - **iOS:** `xcrun simctl openurl <UDID> "<url>"` (may trigger a "Open in App?" system dialog on Expo Dev Client builds)
 
-This is a known plugin issue — see [Lykhoyda/rn-dev-agent#60](https://github.com/Lykhoyda/rn-dev-agent/issues/60) for tracking and escape-hatch patterns.
+An explicit `platform:` on `device_screenshot` resolves the booted device
+directly and captures via raw `simctl` / `adb` (GH #60 — fixed), so
+wrong-platform captures should no longer occur. If routing still misbehaves
+(e.g. `device_deeplink` to the wrong device), the last-resort manual forms are:
 
-### iOS Device Runtime — In-tree `rn-fast-runner`
+- **Android:** `adb -s <emulator-id> shell am start -a android.intent.action.VIEW -d "<url>"`
+- **iOS:** `xcrun simctl openurl <UDID> "<url>"` (may trigger a "Open in App?" system dialog on Expo Dev Client builds)
 
-After PR #164 (D1219), iOS device automation is owned by the **in-tree `rn-fast-runner`** XCTest project that ships with the plugin. iOS no longer requires `agent-device` to be globally installed. The user-facing tool surface (`device_press`, `device_fill`, `device_swipe`, …) is unchanged — only the underlying transport.
+If you hit a wrong-device routing case the tools can't handle, report it via `/rn-dev-agent:send-feedback`.
+
+### Device Runtime — In-tree runners (`rn-fast-runner` iOS, `rn-android-runner` Android)
+
+Device automation on BOTH platforms is owned by in-tree runners that ship with the plugin: `rn-fast-runner` (XCTest) on iOS and `rn-android-runner` (UIAutomator instrumentation) on Android. The legacy `agent-device` dependency is fully removed — there is no daemon-socket/CLI fallback tier, no global install, and `RN_ANDROID_RUNNER=0` now errors with `RUNNER_DISABLED` instead of silently falling back. The user-facing tool surface (`device_press`, `device_fill`, `device_swipe`, …) is unchanged — only the transport.
 
 What this means in practice:
 
-- **iOS-only projects** can ignore any "agent-device not installed" warning from the SessionStart banner — it's informational. Only flag the warning as actionable if you're targeting Android.
-- **First-time iOS setup** needs a one-time pre-build of the runner so `xcodebuild test-without-building` has artifacts to launch:
-  ```bash
-  cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && \
-    xcodebuild build-for-testing \
-      -project RnFastRunner.xcodeproj \
-      -scheme RnFastRunner \
-      -destination "platform=iOS Simulator,id=<UDID>" \
-      -derivedDataPath ../build/DerivedData
-  ```
-  After that, the runner spawns lazily on the first `device_snapshot action=open`.
-- **Stale upstream `AgentDeviceRunner`** may still be alive on the simulator from a previous install — it will fight `rn-fast-runner` for foreground focus and cause "main thread execution timed out" or RUNNER_LEAK shapes. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`, so this normally self-heals. Opt out with `RN_DEVICE_KILL_LEGACY=0`; to clean up manually: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}`.
-- **`device_fill` may report "main thread execution timed out" on iOS even though the text lands in the field.** This is a known XCTest-internal quiescence behavior (`XCUIElement.typeText()` bypasses the runner's skip-quiescence shim). The TS client treats this specific error shape as success on `.type` and surfaces `meta.runnerTimeoutShim: true`. If you see this, the side-effect succeeded — proceed; do not retry, because a retry would double-type.
-- **`device_find` non-exact + `device_scrollintoview`** are TS-side orchestrators on iOS (snapshot → fuzzy-match / viewport-check → fastSwipe loop). They never touch the legacy `agent-device find/scrollintoview` CLI, so they don't respawn the upstream runner.
+- **Zero manual setup on either platform.** Runners resolve from a **prebuilt artifact** first — a SHA-256-checked local cache, then a download of the release asset matching the exact plugin version — and only fall back to an on-machine build (`xcodebuild` / Gradle) when no artifact is available. Resolution is fail-open: offline, 404, or checksum mismatch degrades to the local build with a one-line `meta.note`, never a hard failure. A local iOS cold build persists a reusable `.xctestrun`, so even self-built runners pay the multi-minute build at most once. Force a source build with `RN_RUNNER_BUILD=local`. `cdp_status` / `/rn-dev-agent:doctor` report provenance (`prebuilt v<X>` vs `local-built`).
+- **Runner staleness self-heals.** Runners version their wire protocol and enumerate supported commands in `/health`; the bridge reaps + reinstalls a stale runner transparently (one restart, `meta.note: "runner upgraded"`). `device_snapshot action=open` auto-invalidates and rebuilds an artifact missing required verbs; mid-flow tools refuse fast with `RUNNER_COMMANDS_STALE` instead of silently building. Only a mismatch that survives reinstall surfaces `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Handshake visible at `cdp_status` → `deviceSession.runnerProtocol`.
+- **Legacy upstream `AgentDeviceRunner` apps** from an old install are detected and `simctl uninstall`ed at iOS device-open (an installed XCUITest runner relaunches itself into the foreground mid-flow, backgrounding your app and wedging CDP). Opt out with `RN_DEVICE_KILL_LEGACY=0`.
+- **XCTest's idle-wait (quiescence) is bypassed by default on iOS.** RN apps with looping animations/Reanimated worklets never report idle, which used to stall queries and snapshots. Opt out with `RN_QUIESCENCE_BYPASS=0`; audit via `meta.quiescenceBypass` and `cdp_status.deviceSession.runnerCapabilities`. `XCUIElement.typeText` runs its own internal sync, so `device_fill` may still report "main thread execution timed out" even though the text landed — the client treats that shape as success (`meta.runnerTimeoutShim: true`). If you see it, proceed; do not retry, a retry would double-type.
+- **Foreign automation is arbitrated, not collided with.** While a foreign Maestro/XCUITest session drives the target simulator, `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms) instead of cascading into a runner leak. CDP reads stay free; `device_screenshot` still serves pixels via simctl. Disable with `RN_IOS_FOREIGN_GUARD=0`.
+- **The bridge survives Metro restarts.** The MCP entry point is a supervisor holding zero network sockets; killing whatever listens on 8081 kills only the worker, which is respawned with the session intact (`cdp_status` → `bridge.workerRestarts`). Opt out with `RN_BRIDGE_SUPERVISOR=0`.
 
-Android dispatch is unchanged — still 3-tier `agent-device` (daemon socket → fast-runner → CLI). Multi-device routing rules in the section above still apply.
+Built-in reliability layers on `device_*` interactions (all default-ON, each with an opt-out):
+
+| Layer | What it does | Surfaced as | Opt out |
+|---|---|---|---|
+| **Settle engine** | Every mutating `device_*` verb waits for the UI to actually stabilize (window-update probe / screenshot-static compare, snapshot-hash fallback) instead of fixed sleeps. `device_batch` settles between steps by default. | `meta.settle: {method, settled}` | `RN_SETTLE=0` global, `settle: false` per batch step, `settleTimeoutMs` budget knob |
+| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once; `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
+| **Keyboard guard** | Before a guarded tap, the runner detects a software keyboard occluding the tap point and auto-dismisses it. iOS is verify-or-refuse: when no safe dismiss control exists (iPhone standard QWERTY), the tap is REFUSED with `KEYBOARD_OCCLUDED` rather than corrupting the focused field. | `meta.keyboardGuard` | `RN_KEYBOARD_GUARD=0` |
+
+Three consecutive no-change taps on distinct targets surface a wedged-runtime hint — reboot the simulator rather than blaming app code.
 
 ### Required Dev Setup for Full Tool Coverage
 
@@ -464,13 +484,20 @@ Tool calls must follow this sequence to avoid race conditions:
 
 **Common mistake:** Querying `cdp_store_state` immediately after a tap returns stale state. Always take a `device_snapshot` between interaction and CDP queries to let React finish rendering.
 
+Mutating `device_*` verbs now settle internally (they wait for the UI to
+stabilize before returning — check `meta.settle`), so a `device_press` that
+returned `settled: true` is usually safe to query after. The explicit
+snapshot-between-interaction-and-query rule still fully applies after JS-side
+mutations (`cdp_interact`, `cdp_navigate`, `cdp_dispatch`) — those don't run
+the runner's settle engine.
+
 ### Anti-Patterns — Do Not Do
 
 1. `curl http://localhost:8081/json` — use `cdp_status` (except for multi-target enumeration, see above)
 2. `xcrun simctl list` / `adb devices` for status — use `cdp_status`
 3. `xcrun simctl openurl` / `adb shell am start` for in-app navigation — use `cdp_nav_graph` or `device_deeplink`
 4. `xcrun simctl` / `adb input` for UI taps — use `device_press` / `device_find`
-5. `device_press(ref=@eN)` with a stale ref from an earlier-screen snapshot (the "13:55 experiment" failure mode — refs don't survive step transitions) — use `cdp_interact(testID=…)` or `device_batch.{find,press,fill}(testID=…)` for known testIDs, which re-resolve per call
+5. `device_press(ref=@eN)` with a stale ref from an earlier-screen snapshot (refs don't survive step transitions) — use `cdp_interact(testID=…)` or `device_batch.{find,press,fill}(testID=…)` for known testIDs, which re-resolve per call. Self-healing re-resolution catches the unique-match case, but ambiguous matches still fail with `STALE_REF`
 6. Coordinate taps (`input tap 640 2300`) without prior `device_snapshot`
 7. **Deep-linking past the entry point during verification** (see Verification Discipline)
 8. **Forcing transient route params (`isNewPolicy=true`, `fromSuccess=true`) during verification**
@@ -491,7 +518,14 @@ Tool calls must follow this sequence to avoid race conditions:
 | `cdp_store_state` returns stale data | `device_snapshot` first | Read before React finished rendering | Always snapshot before store reads |
 | Network request missing | `cdp_network_log(filter="...")` | Request not yet made or filtered | Widen filter or check `cdp_console_log` for fetch errors |
 | `cdp_reload` reports `reconnected: false` | Wait 5-10s | New Hermes target not yet registered | `cdp_connect force: true`; if ambiguous target, pass `targetId:` |
-| `device_screenshot` captures the wrong platform | — | Multi-device routing bug | Pass `platform:` explicitly, or fall back to raw `adb screencap` / `simctl io` |
+| `BUSY_FOREIGN_FLOW` refusal | `cdp_status` | A foreign Maestro/XCUITest session is driving the simulator | Wait for it to finish or stop the foreign automation; CDP reads and `device_screenshot` still work |
+| `RUNNER_COMMANDS_STALE` / `RUNNER_PROTOCOL_MISMATCH` | `cdp_status` → `deviceSession.runnerProtocol` | Runner artifact predates the installed plugin | `device_snapshot action=open` auto-invalidates + rebuilds; only a surviving mismatch needs the rebuild commands in the error |
+| `KEYBOARD_OCCLUDED` refusal (iOS) | `device_snapshot` | Software keyboard covers the tap point and no safe dismiss control exists | Scroll the target into view (`device_scrollintoview`), or fill remaining fields first so the keyboard drops |
+| `maestro_run` fails with `RUNTIME_DEGRADED` hint | — | Simulator runtime is wedged (taps report success, `onPress` never fires) | `xcrun simctl shutdown/boot` the simulator, relaunch, retry — don't chase app code |
+| `APP_NOT_INSTALLED` | — | Relaunch/recovery target isn't installed (e.g. after clearState) | Follow the `simctl install` advice in the error, then reconnect |
+| Replay fails, `meta.cdpJsFallback` present | `cdp_status` | iOS 26.x WDA reads an empty a11y tree (TRANSPORT_BLIND) | The CDP/JS replay fallback engages automatically; a `cdp-unreachable` skip means fix the CDP connection first |
+| All `cdp_*`/`device_*` tools missing after a plugin upgrade | `/mcp` | A live bridge from the PREVIOUS plugin install is still running | `/mcp` → reconnect the rn-dev-agent server (cheap) before restarting Claude Code |
+| Verifying against stale code with Metro running | `cdp_status` → `metro.candidates`, `projectRoot`/`servingCwd` | Connected Metro serves a different worktree | Point Metro at this worktree or `cdp_connect(port=…)` to the right one — the status warning names the mismatch |
 | `cdp_interact accessibilityLabel="..."` fails (label matching is fuzzy) | Prefer testID-keyed calls: `cdp_interact(testID="...")` or `device_batch` with `testID=` field. Fall back to `device_snapshot` + `device_press(ref="@eN")` only when no testID exists. | Label matching unreliable; testID matching is exact and fiber-tree-resolved | — |
 | "Disconnected due to opening a second DevTools window" / React Native DevTools keeps getting kicked | `cdp_status` → `autoConnect` field | RN allows one debugger frontend per app; bridge auto-reconnects by default (agent-first) | Set `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`. Bridge then reconnects only on explicit tool calls and yields again when DevTools reopens. Note: **any** CDP tool call — including `cdp_status` — reclaims the seat while it runs; passive mode only stops *background* re-grabs. |
 
@@ -499,14 +533,15 @@ Tool calls must follow this sequence to avoid race conditions:
 
 Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
-2. Look for `.maestro/subflows/login.yaml` — use if available
-3. `cdp_auto_login` — auto-detects auth screen and runs login subflow
+2. Scan `/rn-dev-agent:list-learned-actions login` — a saved login action with `produces: { authenticated: true }` is the preferred prologue (replay via `cdp_run_action`, ~4s; see Hybrid composition)
+3. Otherwise look for `.maestro/subflows/login.yaml`, or `cdp_auto_login` — auto-detects auth screen and runs the login subflow
 4. `cdp_navigation_state` — verify arrival at home/target screen
 
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state
 2. Grant/revoke as needed — **remember: some permissions (camera/mic/location) kill the app process; notifications on Android usually do not**
 3. If revoked and the app died, relaunch + `cdp_status` to reconnect before continuing
+4. For a full clean-slate preflight (permissions + MMKV keys + force-stop + relaunch + reconnect), `device_reset_state` does it in one atomic call
 
 ### Verification Flow
 
@@ -535,7 +570,11 @@ After implementing any feature, in this order:
 | `/rn-dev-agent:build-and-test` | Need to build from scratch (EAS/local), install, and test |
 | `/rn-dev-agent:debug-screen` | Screen is broken, blank, or showing unexpected content |
 | `/rn-dev-agent:check-env` | Verify Metro, CDP, simulator are ready before starting work |
+| `/rn-dev-agent:doctor` | Diagnose installation health — runners, Metro, CDP, helpers, ffmpeg/idb, plugin version. Read-only |
+| `/rn-dev-agent:list-learned-actions [keyword]` | Inventory of saved actions + UI skeleton + feedback memories — run before any manual `device_*` walk |
+| `/rn-dev-agent:run-action <id> [-e K=V]` | Replay a saved action with pre-flights + auto-repair |
+| `/rn-dev-agent:lock-e2e <action-id>` | Freeze a proven action into a strict locked regression test |
 | `/rn-dev-agent:proof-capture` | Feature is done, need PR-ready video + screenshots + PR body |
 | `/rn-dev-agent:nav-graph` | Need to understand or query the app's navigation structure |
-| `/rn-dev-agent:observe` | Watch the agent live in a browser — read-only `127.0.0.1` UI with the tool-call timeline, latest device screenshot, and route/store/component-tree panels (deep-redacted, opt-in) |
+| `/rn-dev-agent:observe` | The observe web UI autostarts with the session at `http://127.0.0.1:7333` — tool-call timeline, live device mirror (MJPEG), route/store/tree panels, learned-actions runner, e2e tab. Use the command to get the URL, `stop`, or `restart`; opt out via `observe.autoStart: false` or `RN_AGENT_OBSERVE_AUTOSTART=0` |
 | `/rn-dev-agent:send-feedback` | Report a plugin bug or issue (creates sanitized GitHub issue) |
