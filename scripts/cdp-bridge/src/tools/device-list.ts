@@ -367,7 +367,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   // capturing the other platform via agent-device's broken `--platform`
   // routing defeats the entire purpose of passing the arg. Re-evidence on
   // the user-reported regression: an OOM-unstable emulator leaves
-  // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmu
+  // `adb devices` returning the emulator as `offline`, parseAdbDevicesEmuAll
   // skips it, the fallback fires, iOS screen is returned.
   const rawResultOk = (path: string, platform: 'ios' | 'android'): ToolResult => ({
     content: [

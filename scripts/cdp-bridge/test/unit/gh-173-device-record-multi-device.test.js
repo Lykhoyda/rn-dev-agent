@@ -45,7 +45,7 @@ test('parseAllBootedIosDevices: empty / malformed JSON yields empty list', () =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('parseAllAdbDevices: returns emulators AND physical devices (multi-device disambiguation)', () => {
-  // Note: parseAdbDevicesEmu in device-screenshot-raw.ts only matches
+  // Note: parseAdbDevicesEmuAll in device-screenshot-raw.ts only matches
   // emulator-* — for device_record's multi-device check we need physical
   // devices to count too. This test pins that distinction.
   const stdout =
