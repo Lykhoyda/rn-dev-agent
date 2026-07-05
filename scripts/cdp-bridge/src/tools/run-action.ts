@@ -57,6 +57,8 @@ import {
   type CdpReplayDeps,
 } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
+import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
+import type { BlindProbeAtRisk } from '../domain/blind-probe-gate.js';
 
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
@@ -225,6 +227,14 @@ export interface RunActionDeps {
    * probe runs — a single attempt silently disabled the fallback in the field.
    */
   probeRetry?: { attempts: number; delayMs: number };
+  /**
+   * GH #397 Phase 2: device context for the proactive blind-probe.
+   * null ⇒ gate inert (today's behavior). Production wiring lives in index.ts.
+   */
+  blindProbeContext?: () => Promise<{
+    deviceId: string | null;
+    iosRuntimeMajor: number | null;
+  } | null>;
 }
 
 /** GH #423: why the CDP/JS fallback did not replay — surfaced in failure meta. */
@@ -267,6 +277,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     attempts: Math.min(Math.max(1, probeRetryRaw.attempts), 5),
     delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5000),
   };
+  const blindProbeContext = deps.blindProbeContext ?? (async () => null);
   return async (args: RunActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -304,12 +315,111 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const timeoutMs = args.timeoutMs ?? 120_000;
     const t0 = Date.now();
 
+    // GH #397: deviceId threading. Handler-scoped (not inside the try) because
+    // the outer catch also persists a RunRecord and must carry the device too.
+    let probeDeviceId: string | null = null;
+    const persistRunWithDevice = (record: RunRecord): Promise<void> =>
+      persistRun(
+        args.actionId,
+        projectRoot,
+        probeDeviceId ? { ...record, deviceId: probeDeviceId } : record,
+      );
+
     // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
     // body so a thrown exception (maestroRun timeout, repairAction
     // throwing through withSession, etc.) is caught and surfaces as a
     // structured failResult WITH a persisted RunRecord, instead of
     // bubbling up unwrapped to the MCP framework.
     try {
+      // GH #397 Phase 2: proactive blind-probe. On at-risk iOS runtimes
+      // (>= 26, or a recent device-matched TRANSPORT_BLIND) with a CDP-visible
+      // anchor, skip the doomed ~40s WDA attempt and replay via CDP/JS
+      // directly. Every branch fails open to the maestro-first path below.
+      // Opt out globally with RN_BLIND_PROBE=0.
+      let atRisk: BlindProbeAtRisk | null = null;
+      const blindProbeDisabled =
+        process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+      if (args.platform !== 'android' && !blindProbeDisabled) {
+        const ctx = await blindProbeContext().catch(() => null);
+        if (ctx) {
+          probeDeviceId = ctx.deviceId;
+          atRisk = evaluateBlindProbeGate({
+            platform: args.platform,
+            iosRuntimeMajor: ctx.iosRuntimeMajor,
+            deviceId: ctx.deviceId,
+            runHistory: action.state.runHistory,
+          }).atRisk;
+        }
+      }
+
+      if (atRisk) {
+        const replayDeps = getReplayDeps(args);
+        const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
+        if (replayDeps && probe) {
+          const tProbe = Date.now();
+          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          if (probeOutcome.found) {
+            const tReplay = Date.now();
+            try {
+              const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
+              const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
+              const blindProbe = { atRisk, skippedMaestro: true };
+              const autoRepair: AutoRepairOutcome = {
+                attempted: false,
+                outcome: 'skipped',
+                // The probe+replay IS this run's first (and only) attempt —
+                // maestro was skipped by design.
+                phases: { firstAttemptMs: Date.now() - tProbe },
+              };
+              await persistRunWithDevice({
+                timestamp: new Date().toISOString(),
+                durationMs: Date.now() - t0,
+                status: replay.passed ? 'pass' : 'fail',
+                failureCode: replay.passed ? undefined : 'FALLBACK_REPLAY_FAILED',
+                failureDetail: replay.reason,
+                trigger,
+                autoRepair,
+                transport: 'cdp-js',
+                blindProbe,
+              });
+              if (replay.passed) {
+                return okResult({
+                  passed: true,
+                  actionId: args.actionId,
+                  transport: 'cdp-js',
+                  blindProbe,
+                  timings_ms,
+                  autoRepair,
+                  durationMs: Date.now() - t0,
+                  flowFile: action.filePath,
+                });
+              }
+              // NOT 'TRANSPORT_BLIND': maestro was never attempted, so no
+              // blindness was observed — this may be app drift or a stale
+              // anchor. FALLBACK_REPLAY_FAILED is non-decisive for the latch,
+              // so the genuine latch record ages out and maestro gets retried.
+              return failResult(
+                `cdp_run_action: ${args.actionId} probe-routed to CDP/JS (at-risk: ${atRisk}) and failed at step ${replay.failedStepIndex}: ${replay.reason}. Maestro was not attempted; rerun with RN_BLIND_PROBE=0 to force the engine path.`,
+                'FALLBACK_REPLAY_FAILED',
+                {
+                  actionId: args.actionId,
+                  transport: 'cdp-js',
+                  blindProbe,
+                  timings_ms,
+                  failedStepIndex: replay.failedStepIndex,
+                },
+              );
+            } catch (e) {
+              if (!(e instanceof UnsupportedStepError)) throw e;
+              // Defensive only: firstReplayTestId() already returns null when
+              // the flow contains ANY unsupported step (it normalizes the whole
+              // flow), so this catch is normally unreachable — kept so a
+              // grammar divergence can never block the maestro path below.
+            }
+          }
+        }
+      }
+
       // ─── First attempt ───────────────────────────────────────────────
       // Issue #120: capture per-phase timing so MTTR analysis (#105) can
       // distinguish "fast detection / slow repair" from "slow detection
@@ -334,7 +444,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           outcome: 'skipped',
           phases: { firstAttemptMs },
         };
-        await persistRun(args.actionId, projectRoot, {
+        await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'pass',
@@ -371,7 +481,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             refusedReason: 'ROUTE_DRIFT',
             phases: { firstAttemptMs },
           };
-          await persistRun(args.actionId, projectRoot, {
+          await persistRunWithDevice({
             timestamp: new Date().toISOString(),
             durationMs: Date.now() - t0,
             status: 'fail',
@@ -431,7 +541,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                 outcome: 'skipped',
                 phases: { firstAttemptMs },
               };
-              await persistRun(args.actionId, projectRoot, {
+              await persistRunWithDevice({
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status,
@@ -493,7 +603,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
               phases: { firstAttemptMs },
             };
         const { actionCode, toolCode } = classifyFailure(failure);
-        await persistRun(args.actionId, projectRoot, {
+        await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -554,7 +664,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           refusedReason,
           phases: { firstAttemptMs, repairMs },
         };
-        await persistRun(args.actionId, projectRoot, {
+        await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -588,7 +698,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       if (!reloadedAction) {
         // Shouldn't happen — repair just wrote it. Defensive surface.
         // Persist the failure RunRecord so MTTR sees the outcome.
-        await persistRun(args.actionId, projectRoot, {
+        await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -668,7 +778,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ...(nextFailedSelector ? { nextFailedSelector } : {}),
       };
 
-      await persistRun(args.actionId, projectRoot, {
+      await persistRunWithDevice({
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - t0,
         status: retryPassed ? 'pass' : 'fail',
@@ -714,7 +824,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         refusedReason: 'INTERNAL_ERROR',
       };
       try {
-        await persistRun(args.actionId, projectRoot, {
+        await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
