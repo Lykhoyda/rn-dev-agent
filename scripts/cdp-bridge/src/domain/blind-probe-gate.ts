@@ -73,13 +73,16 @@ export async function getIosRuntimeMajorForUdid(
   execFn: ExecFn = (cmd, args) => execFile(cmd, args, { timeout: 5000, encoding: 'utf8' }),
 ): Promise<number | null> {
   if (runtimeCache.has(udid)) return runtimeCache.get(udid) ?? null;
-  let major: number | null = null;
   try {
     const { stdout } = await execFn('xcrun', ['simctl', 'list', 'devices', '--json']);
-    major = parseIosRuntimeMajorForUdid(JSON.parse(stdout), udid);
+    const major = parseIosRuntimeMajorForUdid(JSON.parse(stdout), udid);
+    // Cache only successful parses (null here means "udid is not an iOS sim",
+    // a valid durable answer). An exec/parse FAILURE is transient — returning
+    // uncached null keeps the gate fail-open now without pinning this UDID to
+    // not-at-risk for the worker's lifetime.
+    runtimeCache.set(udid, major);
+    return major;
   } catch {
-    major = null;
+    return null;
   }
-  runtimeCache.set(udid, major);
-  return major;
 }

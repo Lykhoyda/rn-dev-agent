@@ -15,9 +15,10 @@ afterEach(() => {
   project.cleanup();
 });
 
-function replayFixtureYaml(
-  { id = 'demo', selector = 'fab-create-task' }: { id?: string; selector?: string } = {},
-): string {
+function replayFixtureYaml({
+  id = 'demo',
+  selector = 'fab-create-task',
+}: { id?: string; selector?: string } = {}): string {
   return [
     'appId: com.test.app',
     '---',

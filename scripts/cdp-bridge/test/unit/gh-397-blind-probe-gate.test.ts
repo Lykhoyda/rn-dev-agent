@@ -188,5 +188,15 @@ test('gh-397: getIosRuntimeMajorForUdid caches per udid and fails open', async (
     throw new Error('no xcrun');
   };
   assert.equal(await getIosRuntimeMajorForUdid('U2', boom), null);
+  const recovered = async () => ({
+    stdout: JSON.stringify({
+      devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [{ udid: 'U2' }] },
+    }),
+  });
+  assert.equal(
+    await getIosRuntimeMajorForUdid('U2', recovered),
+    26,
+    'a transient exec failure must not pin the UDID to not-at-risk',
+  );
   _resetIosRuntimeCacheForTest();
 });

@@ -6,11 +6,7 @@ import { join } from 'node:path';
 import { appendRunRecord } from '../../dist/domain/reusable-action.js';
 import type { ActionRuntimeState, RunRecord } from '../../src/domain/reusable-action.js';
 
-export function appendRunRecordToSidecar(
-  projectRoot: string,
-  id: string,
-  record: RunRecord,
-): void {
+export function appendRunRecordToSidecar(projectRoot: string, id: string, record: RunRecord): void {
   const path = join(projectRoot, '.rn-agent', 'state', `${id}.state.json`);
   const state = JSON.parse(readFileSync(path, 'utf8')) as ActionRuntimeState;
   const next = appendRunRecord(state, record);
