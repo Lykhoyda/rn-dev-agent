@@ -138,25 +138,12 @@ test('parseSimctlBootedAll: returns [] on no Booted device or malformed JSON', a
   assert.deepEqual(parseSimctlBootedAll('{}'), []);
 });
 
-test('parseAdbDevicesEmu: returns first emulator-N device, skips offline/unauthorized', async () => {
-  const { parseAdbDevicesEmu } = await import(RAW_MOD);
-  // adb devices output format. Note: physical device IDs are typically
-  // alphanumeric without the emulator- prefix, so they're skipped.
-  const stdout =
-    'List of devices attached\n' +
-    'emulator-5554\toffline\n' +
-    'physical-abc-123\tdevice\n' +
-    'emulator-5556\tdevice\n' +
-    'emulator-5558\tunauthorized\n';
-  assert.equal(parseAdbDevicesEmu(stdout), 'emulator-5556');
-});
-
-test('parseAdbDevicesEmu: returns null when no online emulator', async () => {
-  const { parseAdbDevicesEmu } = await import(RAW_MOD);
-  assert.equal(parseAdbDevicesEmu(''), null);
-  assert.equal(parseAdbDevicesEmu('List of devices attached\n'), null);
-  assert.equal(parseAdbDevicesEmu('List of devices attached\nemulator-5554\toffline\n'), null);
-});
+// GH #428: the first-pick parseAdbDevicesEmu was removed — with several
+// emulators booted and no session binding it silently captured the wrong
+// device. The Android adb-devices parser + exactly-one-or-refuse resolver
+// (parseAdbDevicesEmuAll / resolveAndroidEmu) are covered in
+// gh-428-android-raw-screenshot.test.ts, mirroring the iOS parseSimctlBootedAll
+// tests above.
 
 // ── tryRawScreenshot orchestrator ───────────────────────────────────
 
