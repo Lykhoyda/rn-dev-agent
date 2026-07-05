@@ -81,7 +81,10 @@ jobs:
     name: Build rn-fast-runner (iOS)
     needs: detect
     if: needs.detect.outputs.changed == 'true'
-    runs-on: macos-14
+    # macos-15 ships Xcode 16.x — required since RnFastRunner.xcodeproj moved to
+    # project format 77 (Xcode 15.4 on macos-14 refuses to open it). Same runner
+    # choice as native-tests.yml and codeql.yml, which build this project green.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
       - name: build-for-testing (no code signing, both arches)
