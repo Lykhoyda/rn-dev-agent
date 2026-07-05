@@ -1,6 +1,6 @@
 # Story 06 — Native runner tests in CI + LLM-behavior evals
 
-**Status:** Proposed (2026-07-02)
+**Status:** Phase A implemented (2026-07-05, #387); Phases B/C proposed
 **Epic:** [Maestro adoption](README.md)
 **Impact:** The highest-risk layer (native gesture/snapshot/keyboard-guard behavior) currently has zero automated execution; this adds three graduated coverage tiers
 **Effort:** M (Phase A is S; Phases B/C are M)
@@ -19,8 +19,11 @@ CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, 
 
 ### Phase A — run the existing native tests (cheap, do first)
 
+> **Implemented 2026-07-05** (#387): `.github/workflows/native-tests.yml` + `scripts/test-native-ios.sh` + root `test:native:*` npm scripts.
+> Triage notes: (1) a red on `QuiescenceBypassTests.testProbeResolvedAtBundleLoad` means the CI Xcode's private quiescence selectors drifted ("degrade loudly" by design, #384) — an Xcode-compat issue, not a plugin bug. (2) Any future subclass of `RnFastRunnerTests` inherits the 24-hour `testCommand` and MUST be added to the skip-list in `scripts/test-native-ios.sh`. (3) NEVER move the skips into `RnFastRunnerUITests.xctestplan` as `skippedTests` — `build-for-testing` bakes them into the `.xctestrun` that the PRODUCTION launch (`test-without-building -only-testing:…/testCommand`) consumes, and skips subtract from the only-set, so the runner would never boot.
+
 - **Android JVM tests** (ubuntu runner, ~1 min): `(cd scripts/rn-android-runner && ./gradlew testDebugUnitTest)` — covers `KeyboardGuardTest.kt` and future pure-Kotlin logic. Gradle cache via `actions/setup-java` + `gradle/actions/setup-gradle`.
-- **iOS unit tests** (macOS runner): `xcodebuild test -project scripts/rn-fast-runner/... -scheme RnFastRunner -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:RnFastRunnerTests` — the pure-logic tests (KeyboardGuard predicates, parsers) need a simulator host but no app fixture. Budget ~8–10 min; run on PRs that touch `scripts/rn-fast-runner/**` or `scripts/rn-android-runner/**` (path filter), and always on main.
+- **iOS unit tests** (macOS runner): `bash scripts/test-native-ios.sh` — `xcodebuild test` on the `RnFastRunner` scheme with a SKIP-list (`-skip-testing:RnFastRunnerUITests/RnFastRunnerTests`, the production server entry that never returns; `-skip-testing:RnFastRunnerUITests/SnapshotForegroundRegressionTest`, needs the test app installed). New test classes in the folder run automatically (Xcode 16 synchronized groups). Budget ~8–12 min; path-filtered on PRs, unconditional on main.
 - Wire both into the required-checks set for merge (consistent with the existing pre-merge CI-green rule).
 
 ### Phase B — nightly device smoke (golden command set)

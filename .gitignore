@@ -20,6 +20,10 @@ scripts/rn-fast-runner/build/
 scripts/rn-fast-runner/**/xcuserdata/
 scripts/rn-fast-runner/**/DerivedData/
 
+# Gradle build artifacts for the imported Android runner
+scripts/rn-android-runner/.gradle/
+scripts/rn-android-runner/**/build/
+
 # Local worktrees for isolated feature work
 .worktrees/
 
