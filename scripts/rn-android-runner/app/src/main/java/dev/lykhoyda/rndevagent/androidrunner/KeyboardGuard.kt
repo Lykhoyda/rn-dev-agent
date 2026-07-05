@@ -5,6 +5,6 @@ object KeyboardGuard {
         val width = imeRight - imeLeft
         val height = imeBottom - imeTop
         if (width <= 0 || height < minHeightPx) return false
-        return false
+        return tapX in imeLeft until imeRight && tapY in imeTop until imeBottom
     }
 }
