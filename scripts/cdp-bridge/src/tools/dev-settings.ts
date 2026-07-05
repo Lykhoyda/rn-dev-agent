@@ -1,12 +1,14 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { hideExpoDevMenu } from './expo-dev-menu.js';
 
 type DevAction =
   | 'reload'
   | 'toggleInspector'
   | 'togglePerfMonitor'
   | 'dismissRedBox'
-  | 'disableDevMenu';
+  | 'disableDevMenu'
+  | 'hideDevMenu';
 
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
@@ -16,7 +18,7 @@ const RESOLVE_DEV_SETTINGS = `(function() {
   return null;
 })()`;
 
-const ACTION_EXPRESSIONS: Record<DevAction, string> = {
+const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu'>, string> = {
   reload: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.reload) throw new Error("DevSettings not available"); ds.reload(); return "ok"; })()`,
   toggleInspector: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.toggleElementInspector) throw new Error("DevSettings not available"); ds.toggleElementInspector(); return "ok"; })()`,
   togglePerfMonitor: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds) throw new Error("DevSettings not available"); if (ds.togglePerformanceMonitor) { ds.togglePerformanceMonitor(); } else if (ds.togglePerfMonitor) { ds.togglePerfMonitor(); } else { return "no_method_available"; } return "ok"; })()`,
@@ -42,6 +44,14 @@ const ACTION_EXPRESSIONS: Record<DevAction, string> = {
 
 export function createDevSettingsHandler(getClient: () => CDPClient) {
   return withConnection(getClient, async (args: { action: DevAction }, client) => {
+    if (args.action === 'hideDevMenu') {
+      const outcome = await hideExpoDevMenu(client);
+      if (outcome.dismissed) {
+        return okResult({ action: args.action, executed: true, method: outcome.method });
+      }
+      return warnResult({ action: args.action, executed: false }, outcome.reason);
+    }
+
     const expression = ACTION_EXPRESSIONS[args.action];
 
     try {

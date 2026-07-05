@@ -1,5 +1,6 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
 
 let sessionReloadCount = 0;
 export function getSessionReloadCount(): number {
@@ -224,10 +225,13 @@ export function createReloadHandler(
       }
     }
 
+    const devMenuMeta = await autoDismissDevMenuMeta(client);
+    const mergedMeta = { ...forceMeta, ...devMenuMeta };
+
     sessionReloadCount++;
     return okResult(
       { reloaded: true, type: 'full', reconnected: true },
-      Object.keys(forceMeta).length > 0 ? { meta: forceMeta } : undefined,
+      Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : undefined,
     );
   });
 }
