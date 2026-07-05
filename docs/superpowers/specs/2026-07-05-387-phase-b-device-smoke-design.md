@@ -106,7 +106,7 @@ seeded-bug acceptance check). Permissions: `contents: read`, `issues: write`
 - **iOS smoke** (`macos-15`, timeout ~35 min): checkout → Node 22 → `npm ci` →
   restore runner DerivedData cache (key: hash of `scripts/rn-fast-runner/**` +
   Xcode version); on miss `xcodebuild build-for-testing` into the client's
-  expected path (`scripts/rn-fast-runner/RnFastRunner/build/DerivedData`, the
+  expected path (`scripts/rn-fast-runner/build/DerivedData`, the
   warm-path location `hasBuiltTestProduct` checks) → build/restore fixture →
   boot pinned simulator (Phase A's UDID-resolution pattern, iPhone 16 preferred)
   → `simctl install` fixture → run golden-set driver.
@@ -116,7 +116,7 @@ seeded-bug acceptance check). Permissions: `contents: read`, `issues: write`
   fixture APK → inside the emulator step: `adb install` fixture → run driver.
 - Simulator/emulator logs + screenshots uploaded as artifacts on failure.
 
-### Golden-set driver — `scripts/cdp-bridge/test/smoke/device-smoke.mjs`
+### Golden-set driver — `scripts/cdp-bridge/test/smoke/device-smoke.ts`
 
 `node:test`, reusing `test/helpers/supervisor-harness.js`: spawn
 `dist/supervisor.js` over MCP stdio, cwd = tmp project dir, env
