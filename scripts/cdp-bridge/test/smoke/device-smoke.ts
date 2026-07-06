@@ -222,13 +222,13 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
 
     // device_scrollintoview does exactly ONE blind swipe when the target is
     // absent from the snapshot (device-interact.ts:1383) — row 80 is several
-    // screens away (~10 rows visible per screen), so scroll until the row is
-    // IN a snapshot, then let the verb finish on its supported path.
-    // Android: a full-amplitude fling (amount 1) on a loaded emulator can make
-    // the UiAutomator drag gesture exceed the runner's 10s budget; a shorter
-    // drag completes fast and still advances several rows. iOS List needs the
-    // fuller gesture to cover ground within the iteration budget.
-    const scrollAmount = PLATFORM === 'android' ? 0.5 : 1;
+    // screens away, so scroll until the row is IN a snapshot, then let the verb
+    // finish on its supported path. Full amplitude (amount 1) on both platforms:
+    // at SWIPE_FRACTION 0.4, amount 1 travels ~0.4*height per scroll (~5+ rows),
+    // reaching row 80 well inside the 30-iteration budget. (A brief amount-0.5
+    // Android trial fell ~5 rows short at 30 scrolls; the CI emulator runs all
+    // 30 drags with zero RUNNER_TIMEOUT, so the shorter drag bought nothing.)
+    const scrollAmount = 1;
     let rowVisible = false;
     for (let i = 0; i < 30 && !rowVisible; i++) {
       const scroll = record(
