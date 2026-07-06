@@ -1,5 +1,11 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { E2eProgress, E2eRunDetail, E2eRunIndexEntry, E2eRunResult } from '../types';
+import type {
+  E2eFlowResult,
+  E2eProgress,
+  E2eRunDetail,
+  E2eRunIndexEntry,
+  E2eRunResult,
+} from '../types';
 import { csrfToken } from '../derive';
 
 interface E2ePanelProps {
@@ -77,7 +83,7 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
           </button>
           {e2eProgress && (
             <span className="reg-progress mono">
-              test {e2eProgress.completed}/{e2eProgress.total} — {e2eProgress.lastTestId}
+              test {e2eProgress.completed}/{e2eProgress.total} · {e2eProgress.lastTestId}
             </span>
           )}
           {verdict && (
@@ -89,39 +95,19 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
           )}
           {verdict === 'empty' && (
             <span className="reg-empty-hint">
-              No locked tests — lock one with cdp_lock_e2e_test
+              No locked tests · lock one with cdp_lock_e2e_test
             </span>
           )}
         </div>
         {result?.data?.results && result.data.results.length > 0 && (
-          <div className="reg-results">
-            <table className="reg-table">
-              <thead>
-                <tr>
-                  <th>Test ID</th>
-                  <th>Result</th>
-                  <th>Classification</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.data.results.map((r) => (
-                  <tr
-                    key={r.testId}
-                    className={newlyFailing.includes(r.testId) ? 'reg-newly-failing' : ''}
-                  >
-                    <td className="reg-testid">{r.testId}</td>
-                    <td className={r.passed ? 'reg-pass' : 'reg-fail'}>
-                      {r.passed ? 'pass' : 'fail'}
-                    </td>
-                    <td>
-                      <span className={`reg-badge reg-badge-${r.classification}`}>
-                        {r.classification}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="result-list">
+            {result.data.results.map((r) => (
+              <FlowResultRow
+                key={r.testId}
+                result={r}
+                newlyFailing={newlyFailing.includes(r.testId)}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -130,92 +116,93 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
         {history.length === 0 ? (
           <div className="empty">no runs yet</div>
         ) : (
-          <table className="reg-table">
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>Finished</th>
-                <th>Verdict</th>
-                <th>Pass/Fail/Skip</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h) => (
-                <HistoryRow
-                  key={h.runId}
-                  entry={h}
-                  open={openRun === h.runId}
-                  detail={runDetails[h.runId]}
-                  onToggle={() => toggleRun(h.runId)}
-                />
-              ))}
-            </tbody>
-          </table>
+          history.map((h) => (
+            <HistoryItem
+              key={h.runId}
+              entry={h}
+              open={openRun === h.runId}
+              detail={runDetails[h.runId]}
+              onToggle={() => toggleRun(h.runId)}
+            />
+          ))
         )}
       </div>
     </div>
   );
 }
 
-interface HistoryRowProps {
+interface FlowResultRowProps {
+  result: E2eFlowResult;
+  newlyFailing?: boolean;
+}
+
+function FlowResultRow({ result: r, newlyFailing }: FlowResultRowProps): JSX.Element {
+  return (
+    <>
+      <div className={newlyFailing ? 'result-row newly-failing' : 'result-row'}>
+        <span className={`result-mark ${r.passed ? 'reg-pass' : 'reg-fail'}`}>
+          {r.passed ? '✓' : '✗'}
+        </span>
+        <span className="reg-testid result-id" title={r.testId}>
+          {r.testId}
+        </span>
+        {r.durationMs != null && <span className="result-ms mono">{r.durationMs}ms</span>}
+        <span className={`reg-badge reg-badge-${r.classification}`}>{r.classification}</span>
+      </div>
+      {r.errorExcerpt && <div className="errx">{r.errorExcerpt}</div>}
+    </>
+  );
+}
+
+interface HistoryItemProps {
   entry: E2eRunIndexEntry;
   open: boolean;
   detail?: E2eRunDetail | 'loading' | 'error';
   onToggle: () => void;
 }
 
-function HistoryRow({ entry: h, open, detail, onToggle }: HistoryRowProps): JSX.Element {
+function HistoryItem({ entry: h, open, detail, onToggle }: HistoryItemProps): JSX.Element {
   return (
-    <>
-      <tr className="hist-row" onClick={onToggle}>
-        <td className="reg-testid">
-          {open ? '▾ ' : '▸ '}
+    <div className="hist-item">
+      <button className="hist-toggle" onClick={onToggle}>
+        <span className="hist-caret">{open ? '▾' : '▸'}</span>
+        <span className="reg-testid hist-id" title={h.runId}>
           {h.runId}
-        </td>
-        <td>{new Date(h.finishedAt).toLocaleTimeString()}</td>
-        <td
-          className={
+        </span>
+        <span className="hist-time">{new Date(h.finishedAt).toLocaleTimeString()}</span>
+        <span className="hist-totals mono">
+          <span className="reg-pass">{h.totals.passed}✓</span>{' '}
+          <span className={h.totals.failed > 0 ? 'reg-fail' : 'reg-none'}>{h.totals.failed}✗</span>
+          {h.totals.skipped > 0 && <span className="reg-none"> {h.totals.skipped} skip</span>}
+        </span>
+        <span
+          className={`hist-verdict ${
             h.verdict === 'green' ? 'reg-pass' : h.verdict === 'empty' ? 'reg-none' : 'reg-fail'
-          }
+          }`}
         >
           {h.verdict === 'green' ? 'PASS' : h.verdict === 'empty' ? 'NO TESTS' : 'FAIL'}
-        </td>
-        <td>
-          {h.totals.passed}/{h.totals.failed}/{h.totals.skipped}
-        </td>
-      </tr>
+        </span>
+      </button>
       {open && (
-        <tr className="hist-detail">
-          <td colSpan={4}>
-            {detail === 'loading' || detail === undefined ? (
-              <div className="empty">loading run…</div>
-            ) : detail === 'error' ? (
-              <div className="empty">failed to load run detail</div>
-            ) : (
-              <>
-                <div className="hist-meta mono">
-                  {detail.platform} · {Math.round(detail.durationMs / 1000)}s ·{' '}
-                  {new Date(detail.startedAt).toLocaleTimeString()} →{' '}
-                  {new Date(detail.finishedAt).toLocaleTimeString()}
-                </div>
-                {detail.results.map((r) => (
-                  <div key={r.testId}>
-                    <span className={r.passed ? 'reg-pass' : 'reg-fail'}>
-                      {r.passed ? '✓' : '✗'}
-                    </span>{' '}
-                    <span className="reg-testid">{r.testId}</span>{' '}
-                    <span className={`reg-badge reg-badge-${r.classification}`}>
-                      {r.classification}
-                    </span>
-                    {r.durationMs != null && <span className="mono"> {r.durationMs}ms</span>}
-                    {r.errorExcerpt && <div className="errx">{r.errorExcerpt}</div>}
-                  </div>
-                ))}
-              </>
-            )}
-          </td>
-        </tr>
+        <div className="hist-body">
+          {detail === 'loading' || detail === undefined ? (
+            <div className="empty">loading run…</div>
+          ) : detail === 'error' ? (
+            <div className="empty">failed to load run detail</div>
+          ) : (
+            <>
+              <div className="hist-meta mono">
+                {detail.platform} · {Math.round(detail.durationMs / 1000)}s ·{' '}
+                {new Date(detail.startedAt).toLocaleTimeString()} →{' '}
+                {new Date(detail.finishedAt).toLocaleTimeString()}
+              </div>
+              {detail.results.map((r) => (
+                <FlowResultRow key={r.testId} result={r} />
+              ))}
+            </>
+          )}
+        </div>
       )}
-    </>
+    </div>
   );
 }

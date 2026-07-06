@@ -10,9 +10,9 @@ const PAYLOAD_TABS = ['route', 'store', 'tree'] as const;
 type PayloadTab = (typeof PAYLOAD_TABS)[number];
 
 const EMPTY_HINT: Record<PayloadTab, string> = {
-  route: 'no navigation state yet — run cdp_navigation_state',
-  store: 'no store snapshot yet — run cdp_store_state',
-  tree: 'no component tree yet — run cdp_component_tree',
+  route: 'no navigation state yet · run cdp_navigation_state',
+  store: 'no store snapshot yet · run cdp_store_state',
+  tree: 'no component tree yet · run cdp_component_tree',
 };
 
 function isPayloadTab(t: Tab): t is PayloadTab {
