@@ -59,7 +59,11 @@ jobs:
             UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid // empty')"
           fi
           [ -n "$UDID" ]
-          xcrun simctl boot "$UDID" || true
+          # Shut down any pre-booted simulators first: device_snapshot open
+          # resolves "the booted iOS device" and refuses on >1 booted. The
+          # macos image can auto-boot a default sim, so boot EXACTLY one.
+          xcrun simctl shutdown all || true
+          xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           echo "SMOKE_UDID=$UDID" >> "$GITHUB_ENV"
       - name: Build runner (cache miss only)
