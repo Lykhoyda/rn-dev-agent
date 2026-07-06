@@ -13,6 +13,8 @@
     "test": "cd scripts/cdp-bridge && npm test",
     "test:native:android": "cd scripts/rn-android-runner && ./gradlew testDebugUnitTest --no-daemon",
     "test:native:ios": "bash scripts/test-native-ios.sh",
+    "smoke:ios": "SMOKE_PLATFORM=ios node scripts/cdp-bridge/test/smoke/device-smoke.ts",
+    "smoke:android": "SMOKE_PLATFORM=android node scripts/cdp-bridge/test/smoke/device-smoke.ts",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
