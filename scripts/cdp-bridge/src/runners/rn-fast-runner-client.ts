@@ -653,9 +653,15 @@ export async function fastSwipe(
   x2: number,
   y2: number,
   durationMs?: number,
+  bundleId?: string,
 ): Promise<FastRunnerResponse> {
   const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
   if (durationMs != null) body.durationMs = durationMs;
+  // Without appBundleId the runner's executeOnMain clears its target and
+  // activates the RnFastRunner HOST app — the drag then lands on the host's
+  // blank screen (ok:true, zero movement) and steals foreground from the
+  // target (#387 Phase B device-proven).
+  if (bundleId) body.appBundleId = bundleId;
   const resp = await postCommand(body);
   return resp as unknown as FastRunnerResponse;
 }

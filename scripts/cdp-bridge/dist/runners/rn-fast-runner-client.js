@@ -518,10 +518,16 @@ export function stopFastRunner(deviceId) {
     }
     clearStateFile();
 }
-export async function fastSwipe(x1, y1, x2, y2, durationMs) {
+export async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
     const body = { command: 'drag', x: x1, y: y1, x2, y2 };
     if (durationMs != null)
         body.durationMs = durationMs;
+    // Without appBundleId the runner's executeOnMain clears its target and
+    // activates the RnFastRunner HOST app — the drag then lands on the host's
+    // blank screen (ok:true, zero movement) and steals foreground from the
+    // target (#387 Phase B device-proven).
+    if (bundleId)
+        body.appBundleId = bundleId;
     const resp = await postCommand(body);
     return resp;
 }
