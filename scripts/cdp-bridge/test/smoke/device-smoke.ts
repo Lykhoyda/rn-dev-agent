@@ -175,6 +175,11 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
         attachOnly: true,
       }),
     );
+    if (open.envelope?.ok !== true) {
+      // Surface the worker's stderr: the open envelope swallows the underlying
+      // runner spawn / xcodebuild error (RN_FAST_RUNNER_DOWN just says "retry").
+      console.error('--- supervisor stderr (open failure) ---\n' + s.stderrText().slice(-4000));
+    }
     assert.equal(open.envelope?.ok, true, `open failed: ${open.text.slice(0, 500)}`);
 
     let snap = record('snapshot', await callTool(s, 'device_snapshot', { action: 'snapshot' }));
