@@ -86,7 +86,12 @@ import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
-import { setForeignGateUdidProvider, foreignFlowGate } from './lifecycle/foreign-flow-gate.js';
+import {
+  setForeignGateUdidProvider,
+  foreignFlowGate,
+  foreignGateUdid,
+} from './lifecycle/foreign-flow-gate.js';
+import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
 import { getActiveSession, markSnapshotDirty } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -223,10 +228,28 @@ const makeReplayDeps = (): CdpReplayDeps | null => {
       );
     },
     treeFor: async (id: string) => {
-      const env = JSON.parse((await tree({ filter: id, depth: 12 })).content[0].text) as {
-        ok?: boolean;
-        data?: unknown;
-      };
+      const fetchTree = async (interactiveOnly: boolean) =>
+        JSON.parse(
+          (
+            await tree({
+              filter: id,
+              depth: 12,
+              ...(interactiveOnly ? { interactiveOnly: true } : {}),
+            })
+          ).content[0].text,
+        ) as { ok?: boolean; data?: unknown };
+      let env = await fetchTree(false);
+      // The filtered tree can exceed the injected helper's 50KB safeStringify
+      // guard on heavy screens, which replaces the payload with
+      // {__agent_truncated} and silently blinds the oracle (device-found during
+      // #397 T11: 115KB → truncated → probe never routed). Retry with the
+      // salient digest (GH #321) — it carries interactive testIDs at ~1/10th
+      // the size. Full tree stays primary because the digest excludes
+      // pure-text labels that assertVisible steps may target.
+      const d = env.ok ? (env.data as Record<string, unknown> | null) : null;
+      if (d && typeof d === 'object' && '__agent_truncated' in d) {
+        env = await fetchTree(true);
+      }
       // getTree wraps the node(s) under `.tree` — unwrap to the node/matches the
       // oracle + dispatch walk, else isExactPresent sees zero testIDs.
       return env.ok ? unwrapTree(env.data) : null;
@@ -262,6 +285,15 @@ setForeignGateUdidProvider(() => {
   const s = getActiveSession();
   return s?.platform === 'ios' && s.deviceId ? s.deviceId : null;
 });
+
+// GH #397 Phase 2: device context for cdp_run_action's proactive blind-probe.
+// Reuses the foreign-gate UDID provider (iOS session only ⇒ null otherwise, so
+// the gate stays inert without a session — fail-open by design).
+const blindProbeContext = async () => {
+  const udid = foreignGateUdid();
+  if (!udid) return null;
+  return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
+};
 
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
@@ -2358,6 +2390,7 @@ trackedTool(
   createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
+    blindProbeContext,
   }),
 );
 
@@ -2446,6 +2479,7 @@ const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
 const runActionHandler = createRunActionHandler({
   getLiveRoute: () => readLiveRoute(getClient()),
   replayDeps: makeReplayDeps,
+  blindProbeContext,
 });
 
 setObserveE2eDeps({

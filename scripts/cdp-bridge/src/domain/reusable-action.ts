@@ -49,6 +49,11 @@ export type ActionFailureCode =
   // GH #317 Phase 2: a CDP/JS transport-blind replay ran and the flow failed —
   // distinct from a generic UNKNOWN error so run-history/MTTR can tell them apart.
   | 'TRANSPORT_BLIND'
+  // GH #397 Phase 2: a PROBE-ROUTED CDP/JS replay failed. Maestro was never
+  // attempted, so no transport blindness was observed — the failure may be app
+  // drift or a stale anchor. Non-decisive for the blind-probe latch (it must
+  // not self-sustain).
+  | 'FALLBACK_REPLAY_FAILED'
   | 'UNKNOWN';
 
 /**
@@ -261,6 +266,10 @@ export interface RunRecord {
   /** GH #317 Phase 2: set to 'cdp-js' only when the run was replayed via the
    *  CDP/JS fallback. Absent ⇒ maestro (healthy run-history JSON unchanged). */
   transport?: 'cdp-js';
+  /** GH #397: simulator UDID / device serial the run targeted (additive, optional). */
+  deviceId?: string;
+  /** GH #397 Phase 2: set when the proactive blind-probe routed this run. */
+  blindProbe?: { atRisk: 'ios26' | 'prior-transport-blind'; skippedMaestro: boolean };
 }
 
 /** A single self-repair attempt (only emitted on successful repair). */
@@ -455,6 +464,9 @@ export function shouldAutoPromoteToActive(
   metadata: M7Metadata,
   lastRun: RunRecord | undefined,
 ): boolean {
+  // GH #397: a probe-routed cdp-js pass validated only the narrower fallback
+  // grammar — never promote on it. "active" means validated on the full engine.
+  if (lastRun?.blindProbe?.skippedMaestro) return false;
   return metadata.status === 'experimental' && lastRun?.status === 'pass';
 }
 

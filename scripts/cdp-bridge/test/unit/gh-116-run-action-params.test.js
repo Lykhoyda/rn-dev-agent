@@ -8,7 +8,7 @@
 // - maestro_run appends -e KEY=VALUE args to the maestro-runner argv
 // - cdp_run_action forwards params to the first maestro_run call
 // - cdp_run_action forwards params to the post-repair retry maestro_run call
-import { test, mock } from 'node:test';
+import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 const RUN_ACTION_PATH = '../../dist/tools/run-action.js';
@@ -17,6 +17,14 @@ const RUN_ACTION_PATH = '../../dist/tools/run-action.js';
 // maestro_run key validation (kept lightweight — invokes the handler with
 // inline mocks rather than booting the full dispatch tier)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// GH #397: seed the engine-pin status so these handler tests never depend on
+// the machine's real installed maestro-runner version (a drifted local install
+// would otherwise flip okResult → warnResult inside the handler).
+const { _setEngineStatusForTest, _resetEngineStatusForTest, buildReplayEngineStatus } =
+  await import('../../dist/domain/engine-pin.js');
+beforeEach(() => _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', '1.0.9', false)));
+afterEach(() => _resetEngineStatusForTest());
 
 test('maestro_run: rejects malformed param keys (shell-injection guard)', async () => {
   const { createMaestroRunHandler } = await import('../../dist/tools/maestro-run.js');
