@@ -1,5 +1,11 @@
 # rn-dev-agent-plugin
 
+## 0.65.3
+
+### Patch Changes
+
+- 552d151: Fix the nightly device-smoke workflow failing at setup: it ran `npm ci` inside `scripts/cdp-bridge`, which fights the root lockfile and triggers the root `prepare: husky` without husky installed (exit 127). Both lanes now install from the repo root (npm workspaces resolves the cdp-bridge deps) with `HUSKY=0`.
+
 ## 0.65.2
 
 ### Patch Changes
