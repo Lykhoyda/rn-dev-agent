@@ -1,12 +1,18 @@
 # Story 06 — Native runner tests in CI + LLM-behavior evals
 
-**Status:** Phase A implemented (2026-07-05, #387); Phases B/C proposed
+**Status:** Phase A shipped (2026-07-05, #387); Phase B workflow shipped (2026-07-06, #387) — one-week-green + seeded-bug acceptance pending its first scheduled runs (post-merge, not a merge gate); Phase C proposed
 **Epic:** [Maestro adoption](README.md)
 **Impact:** The highest-risk layer (native gesture/snapshot/keyboard-guard behavior) currently has zero automated execution; this adds three graduated coverage tiers
 **Effort:** M (Phase A is S; Phases B/C are M)
 **Depends on:** Story 01 for Phase B (prebuilt artifacts make device smoke affordable)
 
 ## Problem
+
+> **Historical (pre-Phase-A) framing.** Phase A now executes the native unit suites
+> (`native-tests.yml`) and Phase B drives them on-device nightly
+> (`nightly-device-smoke.yml`); the "only compiled, never executed" gap below is what
+> those phases closed. What remains is Phase C (LLM-behavior evals) and Phase B's
+> post-merge week-of-green acceptance.
 
 CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, lint/format, and changeset guards — but the native runners are only **compiled** (CodeQL, ~17 min macOS job), never **executed**. The Swift suites (`RnFastRunnerTests+*.swift`, `KeyboardGuardTests.swift`, `SnapshotForegroundRegressionTest.swift`) and the Kotlin JVM test (`KeyboardGuardTest.kt`) exist in-tree and run only when a developer remembers to. Device behavior is validated by manual smoke sessions recorded in docs (e.g. the Pixel_9_Pro Task-10 run in `BUGS.md`). D1288's lesson applies at layer scale: green TS suites say nothing about the layer where the hardest bugs live.
 
@@ -28,9 +34,43 @@ CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, 
 
 ### Phase B — nightly device smoke (golden command set)
 
-Nightly macOS job (not per-PR — simulators are too slow/flaky for the merge gate):
+> **Implemented 2026-07-06** (#387): `.github/workflows/nightly-device-smoke.yml` +
+> `test-fixtures/{ios,android}-fixture/` + `scripts/cdp-bridge/test/smoke/device-smoke.ts`
+> + root `smoke:{ios,android}` scripts.
+>
+> Triage notes:
+> - **Runner provenance is main-HEAD, not the release artifact** (deviation from the
+>   original plan, deliberate): the smoke lanes cache-build the runner from the tested
+>   commit (`RN_RUNNER_BUILD=local`) so a red night is a real regression, never
+>   release lag. The released artifacts (Story 01) get their own nightly
+>   **artifact-integrity lane** (download → sha256/bytes/traversal/contents vs
+>   `runner-manifest.json`) — the two signals are kept separate on purpose.
+> - **Native contract fixtures, not Expo/RN** (deliberate): the golden set is `device_*`
+>   (L2), which drives any app via XCUITest/UIAutomator2; CDP (L1) is already covered by
+>   2900+ TS unit cases against mock Hermes. A CDP-driving RN fixture lane is a named
+>   deferral (Phase B2).
+> - **The keyboard-guard assertion is platform-divergent by #370 contract**: Android
+>   dismisses (`meta.keyboardGuard: "dismissed"`); iPhone standard QWERTY refuses
+>   (`KEYBOARD_OCCLUDED`, `dismiss_failed`) because XCTest `swipeDown` on the keyboard
+>   corrupts the focused field. The driver fails loudly (not silently passes) if the
+>   software keyboard never appears — set `show_ime_with_hard_keyboard 1` (Android) and
+>   `ConnectHardwareKeyboard=false` (iOS).
+> - Two runner bugs were found by the smoke before CI: `fastSwipe` omitted the target
+>   `appBundleId` (drags no-op'd on the runner's own host app), and the Android
+>   screen-rect heuristic + missing package-visibility `<queries>` broke scroll and
+>   re-foreground. Both fixed with unit coverage.
 
-1. Download the prebuilt runner artifact for the current main build (Story 01) — no xcodebuild in the smoke job itself.
+The numbered steps below are the ORIGINAL design; the "Implemented" blockquote above
+records where the shipped workflow deliberately deviated (main-HEAD runner provenance
+instead of downloading the release artifact; native fixtures instead of Expo). Read the
+blockquote as authoritative for the current contract.
+
+Nightly job (not per-PR — simulators/emulators are too slow/flaky for the merge gate):
+
+1. ~~Download the prebuilt runner artifact for the current main build (Story 01)~~ →
+   **as-built:** cache-build the runner from the tested commit (`RN_RUNNER_BUILD=local`)
+   so a red night is a real regression, not release lag; the released artifacts get a
+   separate integrity lane.
 2. Boot a pinned simulator (e.g. iPhone 16 / iOS 18 runtime; add an iOS 26 lane when the runner image supports it) and, in a parallel lane, a pinned AVD via `reactivecircus/android-emulator-runner`.
 3. Install a **minimal fixture app** (a tiny native/Expo prebuild app committed under `test-fixtures/`, or the seed-experience app if install-ready) exposing: a button with testID, a text field, a scrollable list, a keyboard-occlusion layout, a Reanimated loop screen (Story 03's fixture).
 4. Drive the golden set through the *real bridge* (spawn `dist/supervisor.js`, speak MCP over stdio — reuse the integration-test harness): `device_snapshot open` → `snapshot` → `device_press @ref` → `device_fill` (verify read-back) → `device_scroll` → `device_screenshot` → keyboard-guard scenario → `device_snapshot close`.

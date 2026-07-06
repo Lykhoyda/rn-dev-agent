@@ -14,10 +14,10 @@ on:
 
 concurrency: nightly-device-smoke
 
+# Least privilege: smoke + integrity jobs only read the repo. The report job
+# escalates to issues:write / actions:read in its own block.
 permissions:
   contents: read
-  issues: write
-  actions: read
 
 jobs:
   ios-smoke:
@@ -167,7 +167,9 @@ jobs:
             [ "$ACTUAL" = "$BYTES" ] || { echo "size mismatch for $NAME: manifest=$BYTES actual=$ACTUAL" >&2; exit 1; }
           done
           for Z in *.zip; do
-            if unzip -l "$Z" | awk 'NR>3 {print $4}' | grep -E '^/|(^|/)\.\.(/|$)'; then
+            # -Z1: one full entry path per line (machine-readable), so an entry
+            # with spaces or an embedded ../ is checked as a whole path.
+            if unzip -Z1 "$Z" | grep -E '^/|(^|/)\.\.(/|$)'; then
               echo "suspicious path in $Z" >&2
               exit 1
             fi
@@ -183,20 +185,33 @@ jobs:
     if: always() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read
     steps:
       - name: Open/refresh or close the tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RED: ${{ contains(needs.*.result, 'failure') }}
+          # Red = NOT all-success: cancelled / timed_out / skipped all count as
+          # a failed night, not a pass.
+          RED: ${{ !(needs.ios-smoke.result == 'success' && needs.android-smoke.result == 'success' && needs.artifact-integrity.result == 'success') }}
         run: |
           set -euo pipefail
           PREV=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly-device-smoke.yml \
             --event schedule --limit 2 --json databaseId,conclusion \
             --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0].conclusion // \"none\"")
-          echo "this-red=$RED previous=$PREV"
+          # Previous run is red only if a prior scheduled run EXISTS and did not
+          # succeed (cancelled / timed_out / failure). "none" = no prior run, so
+          # the first-ever red night never pages on its own.
+          PREV_RED=false
+          case "$PREV" in
+            none | success) PREV_RED=false ;;
+            *) PREV_RED=true ;;
+          esac
+          echo "this-red=$RED previous=$PREV (prev-red=$PREV_RED)"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --label nightly-smoke-red --state open --json number --jq '.[0].number // empty')
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$RED" = "true" ] && [ "$PREV" = "failure" ]; then
+          if [ "$RED" = "true" ] && [ "$PREV_RED" = "true" ]; then
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still red: $RUN_URL"
             else
