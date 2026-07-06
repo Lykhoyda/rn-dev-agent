@@ -145,6 +145,10 @@ button { font: inherit; }
   flex: none; padding: 3px 12px; text-align: center; font-size: 11px; color: #565f89;
   background: #1a1b26; border-top: 1px solid #2a2b3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.mirror-banner {
+  flex: none; padding: 5px 12px; font-size: 11px; line-height: 1.45;
+  color: #e0af68; background: #1a1b26; border-bottom: 1px solid #2a2b3d;
+}
 
 /* ── Tabs / state pane ──────────────────────────────────── */
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 7px 10px; background: #1a1b26; border-bottom: 1px solid #2a2b3d; }
