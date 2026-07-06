@@ -98,12 +98,20 @@ export function DevicePane({
         ? `mirror off: ${mirror.reason ?? 'error'}`
         : null;
 
+  // A hint on a *streaming* status is the backend saying the pipeline works
+  // but a better one is available (simctl fallback → install idb); that is
+  // advice, not a failure, so it gets the header banner. Hints on error
+  // statuses stay in the footer next to the failure reason.
+  const streamingHint = mirror?.status === 'streaming' ? mirror.hint : undefined;
+  const footerHint = mirror?.status === 'streaming' ? undefined : mirror?.hint;
+
   return (
     <div className="pane center">
       <div className="pane-head">
         Device
         {route && <span className="route-chip">{route}</span>}
       </div>
+      {streamingHint && <div className="mirror-banner">{streamingHint}</div>}
       <div className="screen">
         {useMirror ? (
           <div className="device-frame">
@@ -125,10 +133,10 @@ export function DevicePane({
           </div>
         )}
       </div>
-      {(statusLine || mirror?.hint) && (
+      {(statusLine || footerHint) && (
         <div className="mirror-footer">
           {statusLine}
-          {mirror?.hint ? <span className="mirror-hint"> — {mirror.hint}</span> : null}
+          {footerHint ? <span className="mirror-hint"> — {footerHint}</span> : null}
         </div>
       )}
     </div>

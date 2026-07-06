@@ -80,7 +80,7 @@ if [ "$has_rn_config" = true ]; then
   # The script handles its own user-facing output; only bubble up a banner
   # warning when an opt-in install actually failed.
   if ! bash "$PLUGIN_ROOT/scripts/ensure-idb-companion.sh" 2>&1; then
-    INSTALL_WARNINGS+=("WARNING: opt-in idb-companion install failed. Run: brew install idb-companion (required for physical iOS device automation)")
+    INSTALL_WARNINGS+=("WARNING: opt-in idb-companion install failed. Run: brew tap facebook/fb && brew install idb-companion (required for physical iOS device automation)")
   fi
 
   # Ensure ffmpeg for video-to-GIF conversion (optional — not critical)

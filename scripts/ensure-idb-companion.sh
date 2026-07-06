@@ -14,7 +14,8 @@
 #     non-macOS).
 #
 # Opt-in auto-install (RN_DEV_AGENT_AUTO_INSTALL_IDB=1):
-#   - Attempts `brew install idb-companion` synchronously. The install can
+#   - Attempts `brew tap facebook/fb && brew install idb-companion`
+#     synchronously (the formula lives in the facebook/fb tap). The install can
 #     take many minutes on first run (Homebrew may compile from source);
 #     opt-in gating prevents this from blocking SessionStart by default.
 #   - Returns exit 1 only when the install was attempted and failed.
@@ -88,7 +89,7 @@ if [ "${RN_DEV_AGENT_AUTO_INSTALL_IDB:-}" != "1" ]; then
   echo "idb-companion is required to drive taps/snapshots on a physical iPhone."
   echo ""
   echo "To install manually:"
-  echo "  brew install idb-companion"
+  echo "  brew tap facebook/fb && brew install idb-companion"
   echo ""
   echo "To auto-install on the next session (warning: brew install can take"
   echo "several minutes on first run while compiling from source):"
@@ -104,7 +105,7 @@ echo "and RN_DEV_AGENT_AUTO_INSTALL_IDB=1 — attempting install."
 if ! command -v brew >/dev/null 2>&1; then
   echo "Homebrew is not installed. Install manually:"
   echo "  1. Install Homebrew from https://brew.sh"
-  echo "  2. Run: brew install idb-companion"
+  echo "  2. Run: brew tap facebook/fb && brew install idb-companion"
   # Exit 0 here: brew-missing is not an "install attempted and failed" state
   # — we never even tried. The user already has clear instructions; we don't
   # want detect-rn-project.sh to bubble up a contradictory failure banner.
@@ -115,7 +116,7 @@ echo "Installing idb-companion via Homebrew..."
 echo "(This may take several minutes — Homebrew may compile from source.)"
 echo ""
 
-if brew install idb-companion 2>&1; then
+if brew tap facebook/fb 2>&1 && brew install idb-companion 2>&1; then
   echo ""
   if command -v idb_companion >/dev/null 2>&1 || command -v idb-companion >/dev/null 2>&1; then
     echo "idb-companion installed successfully."
@@ -131,7 +132,7 @@ fi
 
 echo ""
 echo "idb-companion installation failed. Install manually:"
-echo "  brew install idb-companion"
+echo "  brew tap facebook/fb && brew install idb-companion"
 echo ""
 echo "To stop auto-retry on every session, unset the opt-in env var:"
 echo "  unset RN_DEV_AGENT_AUTO_INSTALL_IDB"

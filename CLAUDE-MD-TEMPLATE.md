@@ -3,6 +3,10 @@
 Copy the section below into your project's `CLAUDE.md` file to ensure Claude
 always uses the rn-dev-agent plugin tools instead of raw bash commands.
 
+The `<!-- rn-dev-agent:template-end -->` sentinel on the last line is part of
+the template body: `/rn-dev-agent:setup` uses it to delimit the injected block
+when diffing a project's copy against this file for refresh. Keep it last.
+
 ---
 
 ## React Native Development (rn-dev-agent)
@@ -578,3 +582,5 @@ After implementing any feature, in this order:
 | `/rn-dev-agent:nav-graph` | Need to understand or query the app's navigation structure |
 | `/rn-dev-agent:observe` | The observe web UI autostarts with the session at `http://127.0.0.1:7333` — tool-call timeline, live device mirror (MJPEG), route/store/tree panels, learned-actions runner, e2e tab. Use the command to get the URL, `stop`, or `restart`; opt out via `observe.autoStart: false` or `RN_AGENT_OBSERVE_AUTOSTART=0` |
 | `/rn-dev-agent:send-feedback` | Report a plugin bug or issue (creates sanitized GitHub issue) |
+
+<!-- rn-dev-agent:template-end -->

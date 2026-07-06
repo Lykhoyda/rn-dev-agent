@@ -21,8 +21,8 @@ export class RestartGate {
         return this.exits.length < this.limit;
     }
 }
-export const SIMCTL_HINT = 'install idb for smoother mirroring (brew install idb-companion && pipx install fb-idb)';
-const IDB_HINT = 'idb not found — brew install idb-companion && pipx install fb-idb';
+export const SIMCTL_HINT = 'install idb for smoother mirroring (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb)';
+const IDB_HINT = 'idb not found — brew tap facebook/fb && brew install idb-companion && pipx install fb-idb';
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // setTimeout(fn, 0) is clamped and raced against the timers phase, so a 0ms
