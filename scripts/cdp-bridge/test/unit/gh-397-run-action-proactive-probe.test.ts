@@ -216,6 +216,11 @@ test('gh-397: RN_BLIND_PROBE=0 disables the gate even on at-risk runtimes', asyn
     const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
     assert.equal(readEnvelope(result).data.transport, undefined);
     assert.equal(counter.calls, 1, 'maestro path with the gate disabled');
+    assert.equal(
+      lastRun('demo').deviceId,
+      'UDID-1',
+      'deviceId still threads while opted out — a clean pass must be able to clear the latch',
+    );
   } finally {
     delete process.env.RN_BLIND_PROBE;
   }

@@ -198,16 +198,22 @@ export function createRunActionHandler(deps = {}) {
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
             const blindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
-            if (args.platform !== 'android' && !blindProbeDisabled) {
+            if (args.platform !== 'android') {
+                // Resolve the device context even when the gate is opted out: a clean
+                // maestro pass recorded WITHOUT deviceId can never clear a prior
+                // device-matched latch (strict matching), which would defeat the
+                // documented "rerun with RN_BLIND_PROBE=0" recovery workflow.
                 const ctx = await blindProbeContext().catch(() => null);
                 if (ctx) {
                     probeDeviceId = ctx.deviceId;
-                    atRisk = evaluateBlindProbeGate({
-                        platform: args.platform,
-                        iosRuntimeMajor: ctx.iosRuntimeMajor,
-                        deviceId: ctx.deviceId,
-                        runHistory: action.state.runHistory,
-                    }).atRisk;
+                    if (!blindProbeDisabled) {
+                        atRisk = evaluateBlindProbeGate({
+                            platform: args.platform,
+                            iosRuntimeMajor: ctx.iosRuntimeMajor,
+                            deviceId: ctx.deviceId,
+                            runHistory: action.state.runHistory,
+                        }).atRisk;
+                    }
                 }
             }
             if (atRisk) {
