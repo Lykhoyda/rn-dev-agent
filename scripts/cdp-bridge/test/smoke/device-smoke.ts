@@ -28,10 +28,14 @@ if (PLATFORM !== 'ios' && PLATFORM !== 'android') {
 function assertFixtureInstalled() {
   try {
     if (PLATFORM === 'ios') {
-      execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', APP_ID], { stdio: 'pipe' });
+      execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', APP_ID], {
+        stdio: 'pipe',
+        timeout: 10_000,
+      });
     } else {
       const out = execFileSync('adb', ['shell', 'pm', 'path', APP_ID], {
         stdio: 'pipe',
+        timeout: 10_000,
       }).toString();
       if (!out.includes('package:')) throw new Error('not installed');
     }
@@ -237,6 +241,14 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
       const look = record(
         `snapshot-scroll-${i}`,
         await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+      );
+      // Assert the snapshot itself succeeded — otherwise a failing snapshot
+      // would silently loop 30× and report "row 80 never appeared", hiding the
+      // real bridge/runner error.
+      assert.equal(
+        look.envelope?.ok,
+        true,
+        `snapshot during scroll failed: ${look.text.slice(0, 500)}`,
       );
       rowVisible = Boolean(
         look.envelope?.data?.nodes?.some(
