@@ -46,6 +46,37 @@ copyable at narrow pane widths.
   footer shows status line only.
 - Error status push: hint still renders in the footer, no banner.
 
+## Scope additions (same story, requested mid-implementation)
+
+### Correct idb install command (brew tap)
+
+`idb-companion` lives in the `facebook/fb` tap, not homebrew-core — plain
+`brew install idb-companion` errors. Every live surface now uses
+`brew tap facebook/fb && brew install idb-companion`:
+
+- `SIMCTL_HINT` / `IDB_HINT` (`src/observability/mirror/sources.ts`)
+- `scripts/ensure-idb.sh` — both the executed worker install and all messages
+- `scripts/ensure-idb-companion.sh` — executed install + all messages
+- `scripts/check-physical-devices.sh`, `hooks/detect-rn-project.sh`,
+  `commands/doctor.md`, `skills/rn-setup/SKILL.md`,
+  `scripts/test/ensure-idb.test.sh` (expected string)
+
+CHANGELOGs and historical specs/plans keep the old command (records, not
+guidance).
+
+### `/setup` CLAUDE.md template sync check
+
+`commands/setup.md` Step A no longer skips when the marker is present. It
+extracts the project's injected block (marker heading →
+`<!-- rn-dev-agent:template-end -->` sentinel; legacy blocks without the
+sentinel end at the next `## ` heading or EOF — the template body has exactly
+one `## ` heading), diffs it against the current template body, and when they
+differ proposes an in-place replacement (diff + y/n confirm, warning that
+in-block local edits are overwritten; content outside the block is preserved).
+`CLAUDE-MD-TEMPLATE.md` gains the end sentinel as its last body line plus a
+preamble note telling template editors to keep it last. Refreshing a legacy
+block upgrades it to sentinel-delimited.
+
 ## Ship
 
 Patch changeset for `rn-dev-agent-cdp` + `rn-dev-agent-plugin`; PR from
