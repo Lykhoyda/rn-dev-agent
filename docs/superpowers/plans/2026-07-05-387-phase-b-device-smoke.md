@@ -32,6 +32,17 @@
 
 ## PR 1 — make the artifact pipeline fire
 
+> **SUPERSEDED at execution start (2026-07-06).** Tasks 1–3 shipped independently on
+> main while this session was suspended: PR #473 ("self-healing runner-artifacts
+> gate — state-based check + scheduled sweep", B258) implements a superset of
+> Task 1 (the state check runs on EVERY trigger, 6-hourly sweep at `23 */6 * * *`),
+> and PR #470 fixed the iOS artifact build (macos-15/Xcode 16). No release.yml
+> dispatch step exists — the sweep's ≤6 h lag was accepted instead (their call,
+> equivalent outcome). Proven end-to-end: `runner-manifest.json` on main is
+> populated for v0.64.6 with real sha256/bytes for both platforms. Only PR 2
+> (Tasks 4–9) remains to execute; the integrity lane verifies the already-published
+> release. Tasks 1–3 below are retained for the record, NOT for execution.
+
 ### Task 1: Catch-up sweep in `runner-artifacts.yml`
 
 The pipeline's `detect` job only reacts to a version-bump push — an event that can never fire because `release.yml` merges Version PRs with `GITHUB_TOKEN` (GitHub suppresses workflow triggers for pushes made with that token; bump commits `c4b7afe8`/`462ac66f`/`8e9b844c`/`3fe5e328` have zero runner-artifacts runs). This task makes the workflow level-triggered: on a nightly schedule (and on plain `workflow_dispatch`), it publishes whenever the current version's release is missing any runner asset or the committed manifest lags.
