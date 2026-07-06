@@ -46,17 +46,26 @@ jobs:
       - name: Pre-boot simulator
         run: |
           set -euo pipefail
-          UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name == "iPhone 16")][0].udid // empty')"
+          # Prefer an ALREADY-BOOTED iPhone as the target. device_snapshot open
+          # refuses on >1 booted, but a blanket `shutdown all` + fresh boot
+          # cold-boots the target and the XCUITest runner launch then times out
+          # (device-proven RN_FAST_RUNNER_DOWN). Reusing the image's warm sim and
+          # only shutting down EXTRAS keeps the runner launch fast AND leaves
+          # exactly one booted.
+          UDID="$(xcrun simctl list devices booted --json | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid // empty')"
           if [ -z "$UDID" ]; then
-            echo "No 'iPhone 16' on this image — falling back to the first available iPhone" >&2
-            UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid // empty')"
+            UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name == "iPhone 16")][0].udid // empty')"
+            if [ -z "$UDID" ]; then
+              echo "No 'iPhone 16' on this image — falling back to the first available iPhone" >&2
+              UDID="$(xcrun simctl list devices available --json | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid // empty')"
+            fi
+            [ -n "$UDID" ]
+            xcrun simctl boot "$UDID"
           fi
-          [ -n "$UDID" ]
-          # Shut down any pre-booted simulators first: device_snapshot open
-          # resolves "the booted iOS device" and refuses on >1 booted. The
-          # macos image can auto-boot a default sim, so boot EXACTLY one.
-          xcrun simctl shutdown all || true
-          xcrun simctl boot "$UDID"
+          # Shut down every OTHER booted sim so open sees exactly one.
+          for d in $(xcrun simctl list devices booted --json | jq -r '[.devices[] | .[] | .udid] | .[]'); do
+            [ "$d" = "$UDID" ] || xcrun simctl shutdown "$d" || true
+          done
           xcrun simctl bootstatus "$UDID" -b
           echo "SMOKE_UDID=$UDID" >> "$GITHUB_ENV"
       - name: Build runner (fresh — no DerivedData cache)
@@ -79,6 +88,10 @@ jobs:
       - name: Run golden set
         env:
           SMOKE_DEBUG_DIR: ${{ runner.temp }}/smoke-debug
+          # CI simulators install+launch+attach the XCUITest runner slower than
+          # a dev machine — widen the 30s ready gate so a slow warm launch is
+          # not a false RN_FAST_RUNNER_DOWN.
+          RN_FAST_RUNNER_READY_TIMEOUT_MS: '120000'
         run: npm run smoke:ios
       - name: Collect simulator diagnostics (on failure)
         if: failure()
