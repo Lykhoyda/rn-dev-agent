@@ -342,15 +342,51 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     } else {
       kb = record('keyboard-guard', await callTool(s, 'device_press', { ref: preFillBottomRef }));
       const guard = kb.envelope?.meta?.keyboardGuard;
-      // no_keyboard = the soft IME never appeared (environment problem), not a
-      // contract result — fail with the fix rather than let it masquerade.
+      // The guard ran and the tap was NOT blocked-through the keyboard. Accept
+      // both non-blocked outcomes: "dismissed" (tap point inside the IME frame →
+      // dismiss then tap) and "not_occluded" (keyboard up but the point landed
+      // at/below the frame edge — emulator keyboard geometry varies run-to-run,
+      // so which one fires is not deterministic). The exact shouldDismiss
+      // predicate is unit-tested precisely in Phase A's KeyboardGuardTest.kt;
+      // here we only pin that the guard evaluated on-device and did not wrongly
+      // block. Reject the environment-problem / disabled states.
       assert.notEqual(
         guard,
         'no_keyboard',
         'Soft keyboard never appeared — the emulator needs `adb shell settings put secure show_ime_with_hard_keyboard 1` (the nightly workflow sets it)',
       );
+      assert.notEqual(guard, 'off', 'keyboard guard was disabled (RN_KEYBOARD_GUARD=0?)');
       assert.equal(kb.envelope?.ok, true, `keyboard-guard press failed: ${kb.text.slice(0, 500)}`);
-      assert.equal(guard, 'dismissed', 'Android must dismiss the keyboard first');
+      assert.ok(
+        guard === 'dismissed' || guard === 'not_occluded',
+        `expected keyboardGuard dismissed|not_occluded, got "${guard}": ${kb.text.slice(0, 300)}`,
+      );
+      // Prove the guarded tap actually LANDED on the button (a tap swallowed by
+      // the IME/nav area still reports ok:true). Read the observable counter —
+      // dismissing a still-open keyboard first so the bottom bar is in the tree
+      // (a still-open keyboard means the counter is occluded, not absent).
+      let postKb = record(
+        'snapshot-post-kbguard',
+        await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+      );
+      if (!refFor(postKb.envelope, 'fixture_bottom_count')) {
+        // device_back only runs when the counter is hidden → a keyboard is up,
+        // so back dismisses the IME rather than navigating the app.
+        record('dismiss-kb', await callTool(s, 'device_back', {}));
+        postKb = record(
+          'snapshot-post-back',
+          await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+        );
+      }
+      const bottomCount = postKb.envelope?.data?.nodes?.find(
+        (n: any) => n.identifier === 'fixture_bottom_count',
+      );
+      assert.ok(bottomCount, 'fixture_bottom_count must be visible after dismissing the keyboard');
+      assert.match(
+        bottomCount.label ?? '',
+        /bottom taps: 1/,
+        `guarded tap must increment the bottom counter (proves it landed, not swallowed): got "${bottomCount.label}"`,
+      );
     }
 
     const neg = record(
