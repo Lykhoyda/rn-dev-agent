@@ -281,6 +281,12 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     }
 
     snap = record('snapshot-3', await callTool(s, 'device_snapshot', { action: 'snapshot' }));
+    // Capture the bottom button ref NOW, while the keyboard is down and the
+    // button is visible — needed for the keyboard-guard step below, because on
+    // Android the button disappears from the tree once the keyboard occludes it
+    // (see the platform branch there).
+    const preFillBottomRef = refFor(snap.envelope, 'fixture_bottom_button');
+    assert.ok(preFillBottomRef, 'fixture_bottom_button missing from the pre-fill snapshot');
     const fill = record(
       'fill',
       await callTool(s, 'device_fill', {
@@ -290,23 +296,49 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     );
     assert.equal(fill.envelope?.ok, true, `fill failed: ${fill.text.slice(0, 500)}`);
 
-    // Keyboard-guard scenario (#370 contract): the fill above left the
-    // keyboard up; the bottom bar sits under it by fixture design.
-    // FRESH snapshot first — @eN refs are positional snapshot tokens, and the
-    // keyboard's arrival rewrote the tree, so a pre-fill ref would silently
-    // bind to a different element at the same index (device-proven: it tapped
-    // a list row dead-center instead of the bottom button).
-    snap = record(
-      'snapshot-post-fill',
-      await callTool(s, 'device_snapshot', { action: 'snapshot' }),
-    );
-    const bottomRef = refFor(snap.envelope, 'fixture_bottom_button');
-    assert.ok(bottomRef, 'fixture_bottom_button missing from the post-fill snapshot');
-    const kb = record('keyboard-guard', await callTool(s, 'device_press', { ref: bottomRef }));
-    const guard = kb.envelope?.meta?.keyboardGuard;
-    if (PLATFORM === 'android') {
-      // no_keyboard = environment problem (soft IME never appeared), not a
-      // contract result — fail with the fix, don't let it masquerade.
+    // Keyboard-guard scenario (#370 contract): the fill left the keyboard up and
+    // the bottom bar is occluded by it (fixture uses adjustNothing / ignoresSafeArea).
+    // The platforms diverge in TWO ways here:
+    //   - iOS XCUITest still reports the occluded button, so re-snapshot for a
+    //     fresh ref and press it → the guard must REFUSE (KEYBOARD_OCCLUDED /
+    //     dismiss_failed): XCTest swipeDown on a QWERTY keyboard corrupts fields.
+    //   - Android UiAutomator DROPS occluded views, so the button is gone from a
+    //     post-fill snapshot. Press the pre-fill ref instead (its cached coords
+    //     are under the keyboard now) WITHOUT re-snapshotting — a snapshot would
+    //     repopulate the ref-map and invalidate it. The guard must DISMISS.
+    let kb: ToolReply;
+    if (PLATFORM === 'ios') {
+      snap = record(
+        'snapshot-post-fill',
+        await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+      );
+      const bottomRef = refFor(snap.envelope, 'fixture_bottom_button');
+      assert.ok(
+        bottomRef,
+        'iOS: fixture_bottom_button should remain in the post-fill snapshot (XCUITest reports occluded elements)',
+      );
+      kb = record('keyboard-guard', await callTool(s, 'device_press', { ref: bottomRef }));
+      assert.notEqual(
+        kb.envelope?.ok,
+        true,
+        `iOS keyboard-guard scenario invalid: the tap went through (keyboardGuard=${kb.envelope?.meta?.keyboardGuard}). ` +
+          'The software keyboard likely never appeared on this headless simulator — environment problem, not a contract pass.',
+      );
+      assert.match(
+        kb.text,
+        /KEYBOARD_OCCLUDED/,
+        `expected KEYBOARD_OCCLUDED: ${kb.text.slice(0, 500)}`,
+      );
+      assert.match(
+        kb.text,
+        /dismiss_failed/,
+        `expected keyboardGuard=dismiss_failed: ${kb.text.slice(0, 500)}`,
+      );
+    } else {
+      kb = record('keyboard-guard', await callTool(s, 'device_press', { ref: preFillBottomRef }));
+      const guard = kb.envelope?.meta?.keyboardGuard;
+      // no_keyboard = the soft IME never appeared (environment problem), not a
+      // contract result — fail with the fix rather than let it masquerade.
       assert.notEqual(
         guard,
         'no_keyboard',
@@ -314,20 +346,6 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
       );
       assert.equal(kb.envelope?.ok, true, `keyboard-guard press failed: ${kb.text.slice(0, 500)}`);
       assert.equal(guard, 'dismissed', 'Android must dismiss the keyboard first');
-    } else {
-      assert.notEqual(
-        kb.envelope?.ok,
-        true,
-        `iOS keyboard-guard scenario invalid: the tap went through (keyboardGuard=${guard}). ` +
-          'The software keyboard likely never appeared on this headless simulator — environment problem, not a contract pass.',
-      );
-      const body = kb.text;
-      assert.match(body, /KEYBOARD_OCCLUDED/, `expected KEYBOARD_OCCLUDED: ${body.slice(0, 500)}`);
-      assert.match(
-        body,
-        /dismiss_failed/,
-        `expected keyboardGuard=dismiss_failed: ${body.slice(0, 500)}`,
-      );
     }
 
     const neg = record(
