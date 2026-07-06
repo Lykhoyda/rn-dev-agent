@@ -4,8 +4,9 @@ name: Nightly device smoke
 # (dist/supervisor.js over MCP stdio) against the contract fixtures, plus an
 # artifact-integrity lane for the Story 01 release artifacts. Nightly and NOT
 # merge-gating by design; alerting fires only on 2 consecutive red scheduled
-# runs (report job). Smoke lanes build main-HEAD runners (cached) —
-# RUNNER_COMMANDS_STALE noise from old release bits is impossible here.
+# runs (report job). Smoke lanes build main-HEAD runners fresh (the iOS
+# DerivedData is NOT cached — a restored one drives an unreliable warm
+# launch) — RUNNER_COMMANDS_STALE noise from old release bits is impossible.
 
 on:
   schedule:
@@ -40,14 +41,6 @@ jobs:
         env:
           HUSKY: '0'
         run: npm ci
-      - name: Xcode version for the cache key
-        run: echo "XCODE_V=$(xcodebuild -version | head -1 | tr ' ' '-')" >> "$GITHUB_ENV"
-      - name: Restore runner DerivedData
-        id: dd-cache
-        uses: actions/cache@v4
-        with:
-          path: scripts/rn-fast-runner/build/DerivedData
-          key: rn-fast-runner-dd-${{ runner.os }}-${{ env.XCODE_V }}-${{ hashFiles('scripts/rn-fast-runner/**') }}
       - name: Disable simulator hardware keyboard (software keyboard must appear)
         run: defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
       - name: Pre-boot simulator
@@ -66,8 +59,12 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           echo "SMOKE_UDID=$UDID" >> "$GITHUB_ENV"
-      - name: Build runner (cache miss only)
-        if: steps.dd-cache.outputs.cache-hit != 'true'
+      - name: Build runner (fresh — no DerivedData cache)
+        # No actions/cache: a RESTORED DerivedData drives an unreliable
+        # test-without-building warm launch (RN_FAST_RUNNER_DOWN,
+        # device-proven), while a fresh build-for-testing then warm launch is
+        # the known-good path. A ~5 min build per nightly is well within the
+        # 40 min lane timeout and the ≤45 min nightly budget.
         run: |
           xcodebuild build-for-testing \
             -project scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
