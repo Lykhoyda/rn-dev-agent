@@ -49,13 +49,65 @@ function stopFixture() {
   // counter, so `open` would attach mid-state and the count assertions drift.
   try {
     if (PLATFORM === 'ios') {
-      execFileSync('xcrun', ['simctl', 'terminate', 'booted', APP_ID], { stdio: 'pipe' });
+      execFileSync('xcrun', ['simctl', 'terminate', 'booted', APP_ID], {
+        stdio: 'pipe',
+        timeout: 10_000,
+      });
     } else {
-      execFileSync('adb', ['shell', 'am', 'force-stop', APP_ID], { stdio: 'pipe' });
+      execFileSync('adb', ['shell', 'am', 'force-stop', APP_ID], {
+        stdio: 'pipe',
+        timeout: 10_000,
+      });
     }
   } catch {
-    // Not running — fine.
+    // Not running (or a wedged probe) — fine.
   }
+}
+
+function fixtureRunning(): boolean {
+  try {
+    if (PLATFORM === 'ios') {
+      const out = execFileSync('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], {
+        stdio: 'pipe',
+        timeout: 3_000,
+      }).toString();
+      return out.includes(`UIKitApplication:${APP_ID}`);
+    }
+    const out = execFileSync('adb', ['shell', 'pidof', APP_ID], {
+      stdio: 'pipe',
+      timeout: 3_000,
+    }).toString();
+    return out.trim().length > 0;
+  } catch {
+    // A wedged/timed-out probe reads as "not running" — the outer poll retries,
+    // then fails cleanly at its own wall-clock deadline rather than blocking.
+    return false;
+  }
+}
+
+async function launchFixture() {
+  // The driver owns the fixture lifecycle: launch it OURSELVES and open the
+  // session with attachOnly (the documented race-free path). Launch-at-open
+  // proved flaky on a loaded emulator — the bridge's `adb shell monkey` has a
+  // 10s timeout that a cold app on a busy host can exceed.
+  if (PLATFORM === 'ios') {
+    execFileSync('xcrun', ['simctl', 'launch', 'booted', APP_ID], {
+      stdio: 'pipe',
+      timeout: 20_000,
+    });
+  } else {
+    execFileSync(
+      'adb',
+      ['shell', 'monkey', '-p', APP_ID, '-c', 'android.intent.category.LAUNCHER', '1'],
+      { stdio: 'pipe', timeout: 20_000 },
+    );
+  }
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (fixtureRunning()) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`fixture ${APP_ID} did not start within 20s of launch`);
 }
 
 async function rpc(s: any, method: string, params?: unknown) {
@@ -87,6 +139,7 @@ const refFor = (snapEnvelope: any, identifier: string) =>
 test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
   assertFixtureInstalled();
   stopFixture();
+  await launchFixture();
   mkdirSync(DEBUG_DIR, { recursive: true });
   const cwd = mkdtempSync(join(tmpdir(), 'rn-agent-smoke-'));
   const s = startSupervisor({ cwd, lineTimeoutMs: 600_000, env: { RN_RUNNER_BUILD: 'local' } });
@@ -111,7 +164,12 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
 
     const open = record(
       'open',
-      await callTool(s, 'device_snapshot', { action: 'open', platform: PLATFORM, appId: APP_ID }),
+      await callTool(s, 'device_snapshot', {
+        action: 'open',
+        platform: PLATFORM,
+        appId: APP_ID,
+        attachOnly: true,
+      }),
     );
     assert.equal(open.envelope?.ok, true, `open failed: ${open.text.slice(0, 500)}`);
 
@@ -162,12 +220,19 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     // absent from the snapshot (device-interact.ts:1383) — row 80 is several
     // screens away (~10 rows visible per screen), so scroll until the row is
     // IN a snapshot, then let the verb finish on its supported path.
+    // Android: a full-amplitude fling (amount 1) on a loaded emulator can make
+    // the UiAutomator drag gesture exceed the runner's 10s budget; a shorter
+    // drag completes fast and still advances several rows. iOS List needs the
+    // fuller gesture to cover ground within the iteration budget.
+    const scrollAmount = PLATFORM === 'android' ? 0.5 : 1;
     let rowVisible = false;
-    for (let i = 0; i < 20 && !rowVisible; i++) {
+    for (let i = 0; i < 30 && !rowVisible; i++) {
       const scroll = record(
         `scroll-${i}`,
-        await callTool(s, 'device_scroll', { direction: 'down', amount: 1 }),
+        await callTool(s, 'device_scroll', { direction: 'down', amount: scrollAmount }),
       );
+      // Fail honestly on any scroll error, including RUNNER_TIMEOUT — a golden
+      // smoke must not mask a runner-command timeout behind a retry.
       assert.equal(scroll.envelope?.ok, true, `scroll failed: ${scroll.text.slice(0, 500)}`);
       const look = record(
         `snapshot-scroll-${i}`,
@@ -179,7 +244,7 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
         ),
       );
     }
-    assert.ok(rowVisible, 'row 80 never appeared in a snapshot after 20 scrolls');
+    assert.ok(rowVisible, 'row 80 never appeared in a snapshot after 30 scrolls');
 
     const into = record(
       'scrollintoview',
