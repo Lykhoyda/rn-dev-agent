@@ -361,6 +361,32 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
         guard === 'dismissed' || guard === 'not_occluded',
         `expected keyboardGuard dismissed|not_occluded, got "${guard}": ${kb.text.slice(0, 300)}`,
       );
+      // Prove the guarded tap actually LANDED on the button (a tap swallowed by
+      // the IME/nav area still reports ok:true). Read the observable counter —
+      // dismissing a still-open keyboard first so the bottom bar is in the tree
+      // (a still-open keyboard means the counter is occluded, not absent).
+      let postKb = record(
+        'snapshot-post-kbguard',
+        await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+      );
+      if (!refFor(postKb.envelope, 'fixture_bottom_count')) {
+        // device_back only runs when the counter is hidden → a keyboard is up,
+        // so back dismisses the IME rather than navigating the app.
+        record('dismiss-kb', await callTool(s, 'device_back', {}));
+        postKb = record(
+          'snapshot-post-back',
+          await callTool(s, 'device_snapshot', { action: 'snapshot' }),
+        );
+      }
+      const bottomCount = postKb.envelope?.data?.nodes?.find(
+        (n: any) => n.identifier === 'fixture_bottom_count',
+      );
+      assert.ok(bottomCount, 'fixture_bottom_count must be visible after dismissing the keyboard');
+      assert.match(
+        bottomCount.label ?? '',
+        /bottom taps: 1/,
+        `guarded tap must increment the bottom counter (proves it landed, not swallowed): got "${bottomCount.label}"`,
+      );
     }
 
     const neg = record(
