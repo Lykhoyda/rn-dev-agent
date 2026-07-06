@@ -1173,7 +1173,14 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
     if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs);
+          const resp = await fastSwipe(
+            args.x1,
+            args.y1,
+            args.x2,
+            args.y2,
+            args.durationMs,
+            getActiveSession()?.appId,
+          );
           if (resp.ok) {
             return okResult({
               x1: args.x1,
@@ -1213,7 +1220,14 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       const duration = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration);
+          const resp = await fastSwipe(
+            coords.x1,
+            coords.y1,
+            coords.x2,
+            coords.y2,
+            duration,
+            getActiveSession()?.appId,
+          );
           if (resp.ok) {
             return okResult({
               direction: args.direction,
@@ -1278,7 +1292,14 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     if (isFastRunnerAvailable()) {
       try {
-        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);
+        const resp = await fastSwipe(
+          x1,
+          y1,
+          x2,
+          y2,
+          DEFAULT_SWIPE_DURATION_MS,
+          getActiveSession()?.appId,
+        );
         if (resp.ok) {
           return okResult({
             direction: args.direction,

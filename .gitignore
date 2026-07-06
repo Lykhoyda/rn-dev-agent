@@ -45,3 +45,8 @@ scripts/cdp-bridge/eval/
 .rn-agent/state/e2e-runs/
 # E2E param values (may hold secrets) — local/personal, never committed
 .rn-agent/e2e.config.json
+
+# Story 06 Phase B fixtures (#387)
+test-fixtures/ios-fixture/build/
+test-fixtures/android-fixture/.gradle/
+test-fixtures/android-fixture/**/build/

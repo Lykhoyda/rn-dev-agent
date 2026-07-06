@@ -11,8 +11,15 @@ export function updateRefMap(nodes) {
         if (!node.ref || !node.rect)
             continue;
         refMap.set(node.ref, node.rect);
-        if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
-            screenRect = node.rect;
+        // Largest (0,0)-anchored rect wins: with interactive windows in the
+        // Android snapshot (#370), the status bar (0,0,w,~156) precedes the app
+        // window, and first-match sent direction gestures into the status bar
+        // (#387 Phase B device-proven).
+        if (node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
+            if (!screenRect ||
+                node.rect.width * node.rect.height > screenRect.width * screenRect.height) {
+                screenRect = node.rect;
+            }
         }
     }
     lastUpdated = Date.now();
