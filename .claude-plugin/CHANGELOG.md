@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.65.2
+
+### Patch Changes
+
+- 57e7699: Fix two Android device-control defects surfaced by the Story 06 Phase B smoke: (1) with interactive-windows snapshots (#370), the status bar precedes the app window, and the screen-rect heuristic took the first (0,0)-anchored node — so direction-based device_scroll/device_swipe computed gestures inside the status bar; it now picks the largest full-bleed rect. (2) The in-tree rn-android-runner could not re-foreground an app under test on API 30+ because its manifest lacked a package-visibility <queries> declaration (getLaunchIntentForPackage returned null → "No launch intent for package …"); a MAIN/LAUNCHER queries entry restores visibility.
+- 57e7699: Fix device_scroll/device_swipe silently no-oping on iOS: the drag /command body omitted the target appBundleId, so the runner cleared its target, activated its own RnFastRunner host app, and dragged on a blank screen — every coordinate scroll/swipe returned ok:true with zero movement while foreground-stealing from the app under test. All fastSwipe dispatch sites now forward the active session's appId. Found by the Story 06 Phase B golden-set smoke before it ever reached CI.
+- 57e7699: Story 06 Phase B: add a nightly device-smoke workflow that drives the golden device\_\* command set through the real bridge (MCP over stdio) against tiny native contract fixtures (test-fixtures/{ios,android}-fixture) on a booted simulator/emulator, plus a release-artifact-integrity lane and 2-consecutive-red tracking-issue alerting. Local `npm run smoke:ios` / `smoke:android` run the same golden set against a developer's own device.
+
 ## 0.65.1
 
 ### Patch Changes
