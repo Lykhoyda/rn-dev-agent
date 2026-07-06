@@ -1220,14 +1220,19 @@ Expected: iOS + Android smoke lanes and integrity lane green (integrity requires
 ```bash
 git checkout -b scratch/387-seeded-tap-offset origin/main
 ```
-In `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Interaction.swift`, find the tap command's coordinate computation and add a deliberate `+ 120` to the y coordinate (marker comment `// DO NOT MERGE — seeded bug for #387 Phase B acceptance`). Push the branch, then:
+In `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Interaction.swift`, find the tap command's coordinate computation and add a deliberate `+ 120` to the y coordinate (marker comment `// DO NOT MERGE — seeded bug for #387 Phase B acceptance`). Commit and push the mutation — `gh workflow run --ref` uses the REMOTE branch, so an uncommitted edit would dispatch an unmutated tree and the red run would prove nothing:
 
 ```bash
+git add scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Interaction.swift
+git commit -S -m "test(story-06): DO NOT MERGE — seeded tap offset for #387 Phase B acceptance"
+git push -u origin scratch/387-seeded-tap-offset
 gh workflow run nightly-device-smoke.yml --ref scratch/387-seeded-tap-offset
 ```
-Expected: iOS smoke lane RED (counter never increments → the `count: 1` assertion fails). Record the run URL, then delete the branch:
+Expected: iOS smoke lane RED (counter never increments → the `count: 1` assertion fails). Record the run URL, then delete both branches:
 
 ```bash
+git checkout feat/387-phase-b-device-smoke
+git branch -D scratch/387-seeded-tap-offset
 git push origin --delete scratch/387-seeded-tap-offset
 ```
 

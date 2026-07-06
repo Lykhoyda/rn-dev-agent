@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="8dp">
+
+    <!-- textAllCaps=false: device_find exact-matches "Increment" case-sensitively;
+         the platform default would render/announce "INCREMENT". -->
+    <Button
+        android:id="@+id/fixture_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textAllCaps="false"
+        android:text="Increment" />
+
+    <TextView
+        android:id="@+id/fixture_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="count: 0" />
+
+    <EditText
+        android:id="@+id/fixture_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="type here"
+        android:inputType="text" />
+
+    <ListView
+        android:id="@+id/fixture_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <EditText
+            android:id="@+id/fixture_bottom_input"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:hint="bottom"
+            android:inputType="text" />
+
+        <Button
+            android:id="@+id/fixture_bottom_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAllCaps="false"
+            android:text="Tap" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/fixture_bottom_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="bottom taps: 0" />
+</LinearLayout>
