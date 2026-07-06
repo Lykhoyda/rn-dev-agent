@@ -31,8 +31,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install bridge deps
-        working-directory: scripts/cdp-bridge
+      - name: Install workspace deps
+        # Install from the repo root so npm workspaces resolves the cdp-bridge
+        # deps against the root lockfile (a `npm ci` inside scripts/cdp-bridge
+        # fights the root lockfile and runs the root `prepare: husky` without
+        # husky installed — ci.yml installs from root for the same reason).
+        # HUSKY=0 skips the git-hook install, which is pointless in CI.
+        env:
+          HUSKY: '0'
         run: npm ci
       - name: Xcode version for the cache key
         run: echo "XCODE_V=$(xcodebuild -version | head -1 | tr ' ' '-')" >> "$GITHUB_ENV"
@@ -102,8 +108,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install bridge deps
-        working-directory: scripts/cdp-bridge
+      - name: Install workspace deps
+        # Install from the repo root so npm workspaces resolves the cdp-bridge
+        # deps against the root lockfile (a `npm ci` inside scripts/cdp-bridge
+        # fights the root lockfile and runs the root `prepare: husky` without
+        # husky installed — ci.yml installs from root for the same reason).
+        # HUSKY=0 skips the git-hook install, which is pointless in CI.
+        env:
+          HUSKY: '0'
         run: npm ci
       - name: Set up Java
         uses: actions/setup-java@v4
