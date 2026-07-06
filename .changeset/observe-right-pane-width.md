@@ -23,6 +23,8 @@ stacked rows designed for a narrow column:
   reusing the same row layout.
 - Pane guards: `.pane.right` gets `min-width: 340px`, tabs wrap instead of
   overflowing, long live routes break instead of pushing the pane wide.
-- The left timeline column drops from 40% to 33% (`min-width: 380px`),
-  giving the reclaimed width to the device mirror; timeline summaries
-  already ellipsize.
+- Layout rebalance: the left timeline column drops from 40% to 33%
+  (`min-width: 380px`; summaries already ellipsize), and the device pane no
+  longer greedily takes all remaining width — the mirror is a portrait phone
+  screen capped at ~100vh, so the pane is capped at 400px and the state pane
+  absorbs the surplus instead.
