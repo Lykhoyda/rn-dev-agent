@@ -1,0 +1,24 @@
+---
+title: "cdp_connect"
+description: "Explicitly connect to a Hermes debug target"
+sidebar:
+  order: 1
+---
+
+Explicitly connect to a Hermes debug target. Use when you need to target a specific platform, port, or bundle, or reconnect after a manual disconnect. When multiple Hermes targets exist (common after app restarts on Expo Dev Client — zombie `host.exp.Exponent` pages linger alongside fresh app pages), pass `targetId` (exact id from cdp_targets) or `bundleId` (e.g. "com.myapp") to disambiguate. Use force=true to always reconnect regardless of current state.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `metroPort` | `unknown` | No |  |  | Metro port to connect to (default: auto-detect 8081/8082/19000/19006) |
+| `platform` | `unknown` | No |  |  |  |
+| `targetId` | `unknown` | No |  |  |  |
+| `bundleId` | `unknown` | No |  |  |  |
+| `force` | `unknown` | No | `false` |  |  |
+
+## Usage
+
+```
+cdp_connect()
+```

@@ -63,7 +63,7 @@ Replace `adb forward` with direct adb-server tunneling from Node: a ~150-line cl
 ## Acceptance criteria
 
 - A wedged Android instrumentation (simulated: SIGSTOP the process) is detected as `stale` and transparently reaped+restarted on the next device tool call — today it wedges until the 35 s command timeout, every call.
-- `git grep -n 'runnerTimeoutShim' scripts/cdp-bridge/src/runners/` returns exactly one implementation site.
+- `git grep -n 'runnerTimeoutShim' packages/rn-dev-agent-core/src/runners/` returns exactly one implementation site.
 - Behavioral pin: full existing unit suite green with both clients on the shared core; no envelope shape changes.
 - (Phase 3) Two projects on two emulators run concurrently with zero host-port allocation; `adb forward --list` shows no plugin-owned forwards.
 

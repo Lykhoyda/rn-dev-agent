@@ -1,4 +1,6 @@
 node_modules/
+.yarn/cache/
+.yarn/install-state.gz
 
 .claude/*
 !.claude/commands/
@@ -16,13 +18,16 @@ reports
 drivers/
 
 # Xcode build artifacts for the imported iOS runner
-scripts/rn-fast-runner/build/
-scripts/rn-fast-runner/**/xcuserdata/
-scripts/rn-fast-runner/**/DerivedData/
+packages/rn-fast-runner/build/
+packages/rn-fast-runner/**/xcuserdata/
+packages/rn-fast-runner/**/DerivedData/
+packages/rn-fast-runner/**/project.xcworkspace/xcshareddata/
+packages/codex-plugin/scripts/rn-fast-runner/**/project.xcworkspace/xcshareddata/
 
 # Gradle build artifacts for the imported Android runner
-scripts/rn-android-runner/.gradle/
-scripts/rn-android-runner/**/build/
+packages/rn-android-runner/.gradle/
+packages/rn-android-runner/.kotlin/
+packages/rn-android-runner/**/build/
 
 # Local worktrees for isolated feature work
 .worktrees/
@@ -36,9 +41,9 @@ scripts/rn-android-runner/**/build/
 # line covers everything including future additions.
 .codex-pair/
 
-# cdp-bridge eval harnesses (local-only dev scaffolding — live-gate scripts
+# core eval harnesses (local-only dev scaffolding — live-gate scripts
 # driven against booted devices, e.g. eval/live-gate-gh253.mjs; not shipped)
-scripts/cdp-bridge/eval/
+packages/rn-dev-agent-core/eval/
 .brainstorm-tmp/
 
 # E2E regression run records (machine state); locked tests under .rn-agent/e2e/ stay tracked

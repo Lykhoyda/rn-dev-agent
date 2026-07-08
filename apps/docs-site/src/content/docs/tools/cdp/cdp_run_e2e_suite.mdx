@@ -1,0 +1,20 @@
+---
+title: "cdp_run_e2e_suite"
+description: "Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results"
+---
+
+Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `pattern` | `string` | No |  |  | Regex filter over locked-test ids |
+| `projectRoot` | `string` | No |  |  |  |
+| `deviceId` | `string` | No |  |  |  |
+
+## Usage
+
+```
+cdp_run_e2e_suite()
+```

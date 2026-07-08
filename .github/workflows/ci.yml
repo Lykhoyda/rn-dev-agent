@@ -23,15 +23,12 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
           node-version: 22
-          cache: npm
-          # Cache against the root lockfile now that scripts/cdp-bridge is
-          # an npm workspace member (PR #158 — changesets adoption).
-          cache-dependency-path: package-lock.json
+          cache: yarn
+          cache-dependency-path: yarn.lock
 
-      # Install from repo root so the npm workspaces config resolves
-      # correctly. `npm ci` inside scripts/cdp-bridge would fight the
-      # root lockfile.
-      - run: npm ci
+      # Install from repo root so Yarn resolves the workspace graph once.
+      - run: corepack enable
+      - run: corepack yarn install --immutable
 
       # GH#432: build + freshness in one gate. Users run the COMMITTED dist;
       # an unconditional rebuild here silently repairs a stale artifact in CI
@@ -41,11 +38,11 @@ jobs:
 
       - name: Unit tests
         run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'
-        working-directory: scripts/cdp-bridge
+        working-directory: packages/rn-dev-agent-core
 
       - name: Integration tests
         run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'
-        working-directory: scripts/cdp-bridge
+        working-directory: packages/rn-dev-agent-core
 
       # Runs at repo root (no working-directory) — guards the changeset CI gate.
       - name: Changeset-guard unit test
@@ -73,6 +70,17 @@ jobs:
       - name: Dist-freshness guard unit test
         run: bash scripts/test/check-dist-fresh.test.sh
 
+      # GH#498: workspace package split contract for core/shared/host adapters.
+      - name: Agent package split guard
+        run: bash scripts/check-agent-package-sync.sh
+
+      - name: Agent package split guard unit test
+        run: bash scripts/test/check-agent-package-sync.test.sh
+
+      # GH#498: docs-site is now a deliverable app workspace.
+      - name: Docs app build
+        run: corepack yarn workspace rn-dev-agent-docs build
+
   lint-format:
     name: Lint & format
     runs-on: ubuntu-latest
@@ -81,13 +89,14 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — Phase 134.5 SHA pin
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+          cache: yarn
+          cache-dependency-path: yarn.lock
+      - run: corepack enable
+      - run: corepack yarn install --immutable
       - name: oxlint
-        run: npm run lint
+        run: corepack yarn lint
       - name: oxfmt check
-        run: npm run format:check
+        run: corepack yarn format:check
       - name: typescript-only gate
         run: bash scripts/check-typescript-only.sh
 
@@ -124,7 +133,8 @@ jobs:
     name: Web bundle freshness
     runs-on: ubuntu-latest
     # PR-only: rebuilds the observability SPA and fails if the committed
-    # single-file bundle drifted from source (npm ci → deterministic).
+    # single-file bundle drifted from source. The observability SPA remains
+    # embedded inside the core package because it ships as part of the MCP dist.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — Phase 134.5 SHA pin

@@ -2,7 +2,7 @@
 # Stop hook gate logic: emit a decision:block synthesis instruction exactly once
 # per session, only when the buffer has new entries.
 set -uo pipefail
-HOOK="$(cd "$(dirname "$0")/../.." && pwd)/hooks/troubleshooting-sync.sh"
+HOOK="$(cd "$(dirname "$0")/../.." && pwd)/packages/claude-plugin/hooks/troubleshooting-sync.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/.rn-agent/local"
 buf="$tmp/.rn-agent/local/session-buffer.jsonl"

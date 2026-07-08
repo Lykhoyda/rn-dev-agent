@@ -10,7 +10,7 @@
 
 Two related gaps, both confirmed by code inspection:
 
-1. **The runner HTTP `/command` contract is unversioned.** The JS-injection contract *is* versioned (`__HELPERS_VERSION__` with an idempotent re-inject guard, `scripts/cdp-bridge/src/injected-helpers.ts:9-11`), but neither the Swift nor the Kotlin runner carries any `protocolVersion` in requests, responses, or `/health`. A bridge upgrade against a still-running older runner (or vice versa) has no compatibility guard. This exact class fired live on 2026-07-01: the supervisor ran plugin cache 0.57.3 while the mirrored dist was 0.57.1, and nothing detected the skew.
+1. **The runner HTTP `/command` contract is unversioned.** The JS-injection contract *is* versioned (`__HELPERS_VERSION__` with an idempotent re-inject guard, `packages/rn-dev-agent-core/src/injected-helpers.ts:9-11`), but neither the Swift nor the Kotlin runner carries any `protocolVersion` in requests, responses, or `/health`. A bridge upgrade against a still-running older runner (or vice versa) has no compatibility guard. This exact class fired live on 2026-07-01: the supervisor ran plugin cache 0.57.3 while the mirrored dist was 0.57.1, and nothing detected the skew.
 2. **Runner state lives at fixed, project-global `/tmp` paths** — `/tmp/rn-fast-runner-state.json` (`rn-fast-runner-client.ts:19`) and `/tmp/rn-android-runner-state.json` (`rn-android-runner-client.ts:20`). Correctness of cross-project reuse relies solely on `shouldReuseRunner` deviceId matching. The session file was already migrated off `/tmp` for a symlink-race CVE (`agent-device-wrapper.ts:56-73`); the runner state files were not.
 
 ## What Maestro does
@@ -21,12 +21,12 @@ Maestro sidesteps most of this by never reusing a runner across driver versions 
 
 ### Protocol version handshake
 
-- New `scripts/cdp-bridge/src/runners/protocol.ts`:
+- New `packages/rn-dev-agent-core/src/runners/protocol.ts`:
   ```ts
   export const RUNNER_PROTOCOL_VERSION = 1;
   export const MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
   ```
-- Swift (`scripts/rn-fast-runner/RnFastRunner/.../RunnerProtocol.swift`) and Kotlin (`scripts/rn-android-runner/app/.../RunnerProtocol.kt`) mirror the constant. A unit test on the TS side greps all three files and asserts the constants agree (same pattern as the existing version-sync CI guard).
+- Swift (`packages/rn-fast-runner/RnFastRunner/.../RunnerProtocol.swift`) and Kotlin (`packages/rn-android-runner/app/.../RunnerProtocol.kt`) mirror the constant. A unit test on the TS side greps all three files and asserts the constants agree (same pattern as the existing version-sync CI guard).
 - `/health` response becomes:
   ```json
   {"ok": true, "protocolVersion": 1, "runnerVersion": "0.58.0", "capabilities": ["SCREEN_STATIC"]}

@@ -20,7 +20,7 @@ maestro-runner (DeviceLab.dev Go implementation, currently v1.0.9 at `~/.maestro
 
 ### Phase 1 — Version pinning, compat gate, doctor surfacing (S)
 
-- Pin the **tested** maestro-runner version in a committed manifest (`scripts/cdp-bridge/src/e2e/` or alongside `maestro-invoke.ts`): `{version, sha256 per platform, knownQuirks: ["android-hidekeyboard-noop"]}`.
+- Pin the **tested** maestro-runner version in a committed manifest (`packages/rn-dev-agent-core/src/e2e/` or alongside `maestro-invoke.ts`): `{version, sha256 per platform, knownQuirks: ["android-hidekeyboard-noop"]}`.
 - `ensure-maestro-runner.sh`: install exactly the pinned version, verify checksum; on a locally-newer/older binary, warn with the drift note instead of silently proceeding.
 - `cdp_status` + `/doctor`: report engine (`maestro-runner 1.0.9 (pinned, quirks: …)` vs `Maestro CLI fallback`), so every session log records which engine ran.
 - Upgrade ritual: bumping the pin requires the golden replay set green (Phase 5 / Story 06 harness) — the #369 class gets caught at upgrade time, not mid-session.

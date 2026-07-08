@@ -15,10 +15,12 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Fixture repo: a git repo with a mix of baseline, new, and excluded JS.
 git -C "$TMP" init -q
-mkdir -p "$TMP/scripts/cdp-bridge/dist" "$TMP/third_party/x" "$TMP/test/unit" "$TMP/scripts"
+git -C "$TMP" config commit.gpgsign false
+mkdir -p "$TMP/packages/rn-dev-agent-core/dist" "$TMP/packages/codex-plugin/rn-dev-agent-core/dist" "$TMP/third_party/x" "$TMP/test/unit" "$TMP/scripts"
 echo "x" > "$TMP/test/unit/legacy.test.js"
 echo "x" > "$TMP/scripts/tool.mjs"
-echo "x" > "$TMP/scripts/cdp-bridge/dist/generated.js"
+echo "x" > "$TMP/packages/rn-dev-agent-core/dist/generated.js"
+echo "x" > "$TMP/packages/codex-plugin/rn-dev-agent-core/dist/generated.js"
 echo "x" > "$TMP/third_party/x/vendored.js"
 git -C "$TMP" add -A
 git -C "$TMP" -c user.email=t@t -c user.name=t commit -qm fixture

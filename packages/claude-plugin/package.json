@@ -1,0 +1,14 @@
+{
+  "name": "rn-dev-agent-plugin",
+  "version": "0.64.6",
+  "private": true,
+  "description": "Claude Code rn-dev-agent plugin package and changesets version source for host manifests.",
+  "license": "MIT",
+  "dependencies": {
+    "rn-dev-agent-core": "workspace:*",
+    "rn-dev-agent-shared-agent-knowledge": "workspace:*"
+  },
+  "scripts": {
+    "check": "bash ../../scripts/check-agent-package-sync.sh"
+  }
+}

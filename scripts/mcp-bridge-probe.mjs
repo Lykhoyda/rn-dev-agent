@@ -36,6 +36,7 @@ function realpathOr(p) {
 
 try {
   const pluginRoot = arg('--plugin-root');
+  const coreRoot = arg('--core-root');
   const upgraded = arg('--upgraded') === '1';
   if (!pluginRoot) process.exit(0);
 
@@ -85,8 +86,9 @@ try {
   // reclaimed (for pre-0.39 locks with no recorded PPID, reparented-to-init
   // is the orphan signal). Unreadable mtime/PPID never downgrades a holder —
   // matching lockfile.ts fail-safe semantics.
-  let liveBlocker =
-    alive && /\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js(?:\s|$)/.test(psArgs);
+  const bridgeArgPattern =
+    /\/(?:scripts\/cdp-bridge|packages\/rn-dev-agent-core|rn-dev-agent-core)\/dist\/(?:supervisor|index)\.js(?:\s|$)/;
+  let liveBlocker = alive && bridgeArgPattern.test(psArgs);
   if (liveBlocker) {
     try {
       if (Date.now() - statSync(lockPath).mtimeMs > 24 * 60 * 60 * 1000) liveBlocker = false;
@@ -135,7 +137,9 @@ try {
     process.exit(0);
   }
 
-  const currentDistRaw = join(resolve(pluginRoot), 'scripts', 'cdp-bridge', 'dist');
+  const currentDistRaw = coreRoot
+    ? join(resolve(coreRoot), 'dist')
+    : join(resolve(pluginRoot), '..', 'rn-dev-agent-core', 'dist');
   const currentDist = realpathOr(currentDistRaw);
 
   // Current-install check FIRST via exact containment — \S-based parsing
@@ -152,7 +156,9 @@ try {
   // Best-effort path extraction, for display and the symlinked-spawn case
   // only. A space-containing path parses truncated or not at all — the stale
   // verdict above is unaffected.
-  const m = psArgs.match(/\/\S*\/scripts\/cdp-bridge\/dist\/(?:supervisor|index)\.js/);
+  const m = psArgs.match(
+    /\/\S*\/(?:scripts\/cdp-bridge|packages\/rn-dev-agent-core|rn-dev-agent-core)\/dist\/(?:supervisor|index)\.js/,
+  );
   const holderDist = m ? dirname(m[0]) : null;
 
   if (holderDist !== null && realpathOr(holderDist) === currentDist) {

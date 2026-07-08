@@ -147,7 +147,7 @@ fi
   echo "E2E proof captured with rn-dev-agent. See [PROOF.md](PROOF.md) for the full verification flow."
   echo ""
   echo "---"
-  echo "_Generated with [rn-dev-agent](https://github.com/anthropics/claude-react-native-dev-plugin)_"
+  echo "_Generated with [rn-dev-agent](https://github.com/Lykhoyda/rn-dev-agent)_"
 } > "$OUTPUT"
 
 echo "PR body generated: $OUTPUT"

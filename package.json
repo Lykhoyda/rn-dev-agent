@@ -1,18 +1,26 @@
 {
   "name": "rn-dev-agent-workspace",
   "private": true,
-  "description": "Root manifest for changesets-driven version management. Contains no runtime code — actual packages live in scripts/cdp-bridge/ (the MCP server) and .claude-plugin/ (synthetic, mirrors the Claude Code plugin manifest version).",
+  "description": "Yarn workspace for rn-dev-agent's core MCP server, host plugins, and shared agent knowledge.",
+  "packageManager": "yarn@4.17.0",
   "workspaces": [
-    "scripts/cdp-bridge",
-    ".claude-plugin"
+    "apps/*",
+    "packages/*"
   ],
   "scripts": {
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
-    "release-cdp-bridge": "cd scripts/cdp-bridge && npm publish",
-    "test": "cd scripts/cdp-bridge && npm test",
-    "test:native:android": "cd scripts/rn-android-runner && ./gradlew testDebugUnitTest --no-daemon",
-    "test:native:ios": "bash scripts/test-native-ios.sh",
+    "build:core": "yarn workspace rn-dev-agent-core build",
+    "build:codex-runtime": "yarn build:core && node scripts/build-codex-runtime.ts",
+    "build:docs": "yarn workspace rn-dev-agent-docs build",
+    "docs:generate": "yarn workspace rn-dev-agent-docs generate",
+    "release-core": "yarn workspace rn-dev-agent-core npm publish",
+    "release-cdp-bridge": "yarn release-core",
+    "test": "yarn workspace rn-dev-agent-core test",
+    "test:integration": "yarn workspace rn-dev-agent-core test:integration",
+    "test:native:android": "yarn workspace rn-dev-agent-android-runner test",
+    "test:native:ios": "yarn workspace rn-dev-agent-ios-runner test",
+    "check:agent-packages": "bash scripts/check-agent-package-sync.sh",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
@@ -21,12 +29,23 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",
+    "esbuild": "^0.28.1",
     "husky": "^9.1.7",
     "oxfmt": "0.55.0",
     "oxlint": "^1.70.0"
   },
   "overrides": {
     "ip-address": ">=10.1.1",
-    "hono": ">=4.12.18"
+    "hono": ">=4.12.18",
+    "esbuild": "^0.28.1",
+    "@hono/node-server": ">=1.19.13",
+    "fast-uri": ">=3.1.2"
+  },
+  "resolutions": {
+    "ip-address": ">=10.1.1",
+    "hono": ">=4.12.18",
+    "esbuild": "^0.28.1",
+    "@hono/node-server": ">=1.19.13",
+    "fast-uri": ">=3.1.2"
   }
 }

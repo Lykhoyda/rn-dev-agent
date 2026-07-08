@@ -4,14 +4,14 @@
 // Deliberate friction, same philosophy as require-changeset.sh: adding,
 // removing, or renaming a tool means running this, reviewing the diff, and
 // committing. Run from the repo root AFTER a build:
-//   (cd scripts/cdp-bridge && npm run build) && node scripts/update-tool-registry.mjs
+//   corepack yarn workspace rn-dev-agent-core build && node scripts/update-tool-registry.mjs
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { startSupervisor } from './cdp-bridge/test/helpers/supervisor-harness.js';
+import { startSupervisor } from '../packages/rn-dev-agent-core/test/helpers/supervisor-harness.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const BRIDGE = resolve(here, 'cdp-bridge');
+const BRIDGE = resolve(here, '../packages/rn-dev-agent-core');
 const GOLDEN = resolve(BRIDGE, 'test/fixtures/tool-registry.json');
 
 const s = startSupervisor({ supervisorPath: resolve(BRIDGE, 'dist/supervisor.js') });

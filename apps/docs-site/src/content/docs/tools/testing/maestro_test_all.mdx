@@ -1,0 +1,24 @@
+---
+title: "maestro_test_all"
+description: "Discover and run all Maestro flows in "
+sidebar:
+  order: 37
+---
+
+Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `platform` | `unknown` | No |  |  | Target platform (auto-detected from session) |
+| `flowDir` | `unknown` | No |  |  | Directory to scan for .yaml flows (default: &lt;project&gt;/.rn-agent/actions/) |
+| `pattern` | `unknown` | No |  |  | Regex pattern to filter flow files (e.g. "cart|checkout") |
+| `timeoutPerFlow` | `unknown` | No | `120000` | min: 5000, max: 300000, integer | Timeout per flow in ms |
+| `stopOnFailure` | `boolean` | No | `false` |  | Stop after first failure |
+
+## Usage
+
+```
+maestro_test_all()
+```

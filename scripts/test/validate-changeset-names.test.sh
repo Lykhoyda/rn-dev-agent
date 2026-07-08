@@ -32,7 +32,7 @@ mkdir -p "$tmp/.changeset"
 echo "# changesets readme" > "$tmp/.changeset/README.md"
 
 VALID='rn-dev-agent-plugin
-rn-dev-agent-cdp'
+rn-dev-agent-core'
 
 reset_changesets() { find "$tmp/.changeset" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -delete; }
 
@@ -49,13 +49,13 @@ check "invalid name (B215 rn-dev-agent) fails" 1 $?
 reset_changesets
 
 # 3. the other valid workspace package name -> passes
-printf -- '---\n"rn-dev-agent-cdp": minor\n---\nfix\n' > "$tmp/.changeset/a.md"
+printf -- '---\n"rn-dev-agent-core": minor\n---\nfix\n' > "$tmp/.changeset/a.md"
 WORKSPACE_PACKAGES="$VALID" REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "second valid name passes" 0 $?
 reset_changesets
 
 # 4. multiple valid names in one changeset -> passes
-printf -- '---\n"rn-dev-agent-plugin": patch\n"rn-dev-agent-cdp": minor\n---\nfix\n' > "$tmp/.changeset/a.md"
+printf -- '---\n"rn-dev-agent-plugin": patch\n"rn-dev-agent-core": minor\n---\nfix\n' > "$tmp/.changeset/a.md"
 WORKSPACE_PACKAGES="$VALID" REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "multiple valid names pass" 0 $?
 reset_changesets
@@ -86,9 +86,9 @@ reset_changesets
 # 9. valid names derived from a real workspace (no WORKSPACE_PACKAGES override)
 mkdir -p "$tmp/pkg-a" "$tmp/pkg-b"
 printf -- '{"name":"rn-dev-agent-plugin"}\n' > "$tmp/pkg-a/package.json"
-printf -- '{"name":"rn-dev-agent-cdp"}\n' > "$tmp/pkg-b/package.json"
+printf -- '{"name":"rn-dev-agent-core"}\n' > "$tmp/pkg-b/package.json"
 printf -- '{"private":true,"workspaces":["pkg-a","pkg-b"]}\n' > "$tmp/package.json"
-printf -- '---\n"rn-dev-agent-cdp": patch\n---\nok\n' > "$tmp/.changeset/a.md"
+printf -- '---\n"rn-dev-agent-core": patch\n---\nok\n' > "$tmp/.changeset/a.md"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "name validated against scanned workspace passes" 0 $?
 printf -- '---\n"rn-dev-agent": patch\n---\nbad\n' > "$tmp/.changeset/a.md"

@@ -5,7 +5,10 @@
 # Exit codes: 0 = success, 1 = error (non-fatal, hook continues).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CDP_DIR="$SCRIPT_DIR/cdp-bridge"
+CDP_DIR="$SCRIPT_DIR/../packages/rn-dev-agent-core"
+if [ ! -d "$CDP_DIR" ]; then
+  CDP_DIR="$SCRIPT_DIR/cdp-bridge"
+fi
 CURRENT_VERSION=$(node -e "console.log(require('$CDP_DIR/package.json').version)" 2>/dev/null || echo "unknown")
 
 install_persistent() {

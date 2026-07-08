@@ -7,7 +7,8 @@
 # and tracked for migration; anything not in that baseline fails this check.
 #
 # Excluded from the rule (generated or vendored, never hand-written):
-#   scripts/cdp-bridge/dist/   — tsc output (git-tracked by design)
+#   packages/rn-dev-agent-core/dist/ — tsc output (git-tracked by design)
+#   packages/codex-plugin/rn-dev-agent-core/dist/ — bundled Codex plugin runtime
 #   **/web-dist/               — vite bundle output
 #   third_party/               — vendored upstream
 #   node_modules               — never tracked anyway
@@ -29,7 +30,7 @@ if [ ! -f "$BASELINE" ]; then
 fi
 
 current="$(git -C "$ROOT" ls-files '*.js' '*.mjs' '*.cjs' |
-  grep -v -E '^scripts/cdp-bridge/dist/|/web-dist/|^third_party/|(^|/)node_modules/' || true)"
+  grep -v -E '^packages/rn-dev-agent-core/dist/|^packages/codex-plugin/rn-dev-agent-core/dist/|/web-dist/|^third_party/|(^|/)node_modules/' || true)"
 
 violations="$(comm -23 <(printf '%s\n' "$current" | sort) <(sort "$BASELINE"))"
 

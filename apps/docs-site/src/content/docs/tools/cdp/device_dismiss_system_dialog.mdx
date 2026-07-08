@@ -1,0 +1,20 @@
+---
+title: "device_dismiss_system_dialog"
+description: "Tap an OS-level system dialog dismiss button — e"
+---
+
+Tap an OS-level system dialog dismiss button — e.g. "Cancel", "Donu2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog but for the negative action. Handles both ASCII and typographic apostrophes in "Donu2019t Allow". Session-less.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `label` | `unknown` | No |  |  |  |
+| `platform` | `unknown` | No |  |  |  |
+| `timeoutMs` | `unknown` | No |  | min: 1000, max: 60000, integer | Maestro invocation timeout (default 15000ms). |
+
+## Usage
+
+```
+device_dismiss_system_dialog()
+```

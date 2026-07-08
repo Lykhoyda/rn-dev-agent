@@ -5,8 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WEB="$ROOT/scripts/cdp-bridge/src/observability/web"
-BUNDLE="scripts/cdp-bridge/dist/observability/web-dist/index.html"
+WEB="$ROOT/packages/rn-dev-agent-core/src/observability/web"
+BUNDLE="packages/rn-dev-agent-core/dist/observability/web-dist/index.html"
 
 # Deterministic rebuild: npm ci installs the lockfile-exact tree, so CI cannot
 # drift the bundle via a newer in-range dep and false-fail every PR.
@@ -15,7 +15,7 @@ BUNDLE="scripts/cdp-bridge/dist/observability/web-dist/index.html"
 if ! git -C "$ROOT" diff --quiet -- "$BUNDLE"; then
   echo "ERROR: committed SPA bundle is stale."
   echo "  $BUNDLE does not match a fresh rebuild of src/observability/web/."
-  echo "  Fix: (cd scripts/cdp-bridge && npm run build:web) && git add $BUNDLE"
+  echo "  Fix: corepack yarn workspace rn-dev-agent-core build:web && git add $BUNDLE"
   git -C "$ROOT" --no-pager diff --stat -- "$BUNDLE" || true
   exit 1
 fi

@@ -4,7 +4,7 @@
 // Fetches the three upstream skills (react-best-practices, composition-patterns,
 // react-native-skills) from vercel-labs/agent-skills at a pinned commit SHA,
 // wipes-and-replaces the local third_party/ mirror, and regenerates the
-// routing index at skills/rn-best-practices/rules.index.json plus the
+// routing index at packages/shared-agent-knowledge/skills/rn-best-practices/rules.index.json plus the
 // integrity manifest at third_party/.../UPSTREAM.lock.json.
 //
 // Modes:
@@ -40,7 +40,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
 const VENDOR_ROOT = path.join(REPO_ROOT, 'third_party', 'vercel-labs', 'agent-skills');
-const ADAPTER_ROOT = path.join(REPO_ROOT, 'skills', 'rn-best-practices');
+const ADAPTER_ROOT = path.join(
+  REPO_ROOT,
+  'packages',
+  'shared-agent-knowledge',
+  'skills',
+  'rn-best-practices',
+);
 
 const UPSTREAM_REPO = 'vercel-labs/agent-skills';
 const UPSTREAM_SKILLS = ['react-best-practices', 'composition-patterns', 'react-native-skills'];
@@ -275,7 +281,7 @@ function buildRulesIndex(lock) {
         fileGlobs: ['**/*.{tsx,jsx}'],
         checkerRule: null,
         checkable: false,
-        upstream_path: `skills/rn-best-practices/references/rn-dev-agent/${file}`,
+        upstream_path: `packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/${file}`,
         applicable_when: fm.impactDescription || '',
       });
     }

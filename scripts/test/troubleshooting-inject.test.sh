@@ -2,7 +2,7 @@
 # SessionStart hook must echo the troubleshooting doc when present in an RN project,
 # and emit nothing extra when absent.
 set -uo pipefail
-HOOK="$(cd "$(dirname "$0")/../.." && pwd)/hooks/detect-rn-project.sh"
+HOOK="$(cd "$(dirname "$0")/../.." && pwd)/packages/claude-plugin/hooks/detect-rn-project.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 # Minimal RN project so the hook's main branch runs.

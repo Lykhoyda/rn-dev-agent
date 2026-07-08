@@ -1,0 +1,22 @@
+---
+title: "cdp_component_tree"
+description: "Get React component tree"
+sidebar:
+  order: 6
+---
+
+Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree — NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) — the cheapest way to perceive a novel screen for live interaction.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `filter` | `unknown` | No |  |  |  |
+| `depth` | `number` | No | `4` | min: 1, max: 12, integer | Max depth (default 4, max 12) |
+| `interactiveOnly` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+cdp_component_tree()
+```

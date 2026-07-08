@@ -1,0 +1,24 @@
+---
+title: "device_fill"
+description: "Type text into an input field by its @ref from device_snapshot"
+sidebar:
+  order: 24
+---
+
+Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `ref` | `string` | Yes |  |  | Input field ref from device_snapshot (e.g. "e5" or "@e5") |
+| `text` | `string` | Yes |  |  | Text to type into the field |
+| `waitForKeyboardMs` | `unknown` | No |  | min: 0, max: 5000, integer |  |
+| `testID` | `unknown` | No |  |  |  |
+| `settleTimeoutMs` | `unknown` | No |  | min: 500, max: 30000, integer |  |
+
+## Usage
+
+```
+device_fill(ref: <string>, text: <string>)
+```

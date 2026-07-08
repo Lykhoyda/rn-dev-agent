@@ -51,13 +51,13 @@ redact() {
 # --- Collect plugin version ---
 
 plugin_version="unknown"
-if [ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
-  plugin_version=$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/.claude-plugin/plugin.json'))['version'])" 2>/dev/null || echo "unknown")
+if [ -f "$PLUGIN_ROOT/packages/claude-plugin/plugin.json" ]; then
+  plugin_version=$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/packages/claude-plugin/plugin.json'))['version'])" 2>/dev/null || echo "unknown")
 fi
 
 cdp_version="unknown"
-if [ -f "$PLUGIN_ROOT/scripts/cdp-bridge/package.json" ]; then
-  cdp_version=$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/scripts/cdp-bridge/package.json'))['version'])" 2>/dev/null || echo "unknown")
+if [ -f "$PLUGIN_ROOT/packages/rn-dev-agent-core/package.json" ]; then
+  cdp_version=$(python3 -c "import json; print(json.load(open('$PLUGIN_ROOT/packages/rn-dev-agent-core/package.json'))['version'])" 2>/dev/null || echo "unknown")
 fi
 
 # --- Collect environment info ---
@@ -122,8 +122,8 @@ fi
 # --- Collect MCP tool count ---
 
 tool_count="unknown"
-if [ -f "$PLUGIN_ROOT/scripts/cdp-bridge/src/index.ts" ]; then
-  tool_count=$(grep -c "trackedTool(" "$PLUGIN_ROOT/scripts/cdp-bridge/src/index.ts" 2>/dev/null || echo "unknown")
+if [ -f "$PLUGIN_ROOT/packages/rn-dev-agent-core/src/index.ts" ]; then
+  tool_count=$(grep -c "trackedTool(" "$PLUGIN_ROOT/packages/rn-dev-agent-core/src/index.ts" 2>/dev/null || echo "unknown")
 fi
 
 # --- Collect agent-device info ---

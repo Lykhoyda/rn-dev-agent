@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # GH #397: install exactly the TESTED engine version. Kept in sync with
-# scripts/cdp-bridge/src/domain/engine-pin.ts by gh-397-pin-sync.test.ts.
+# packages/rn-dev-agent-core/src/domain/engine-pin.ts by gh-397-pin-sync.test.ts.
 MAESTRO_RUNNER_PIN_VERSION="1.0.9"
 MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923"
 
