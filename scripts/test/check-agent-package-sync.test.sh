@@ -42,6 +42,8 @@ write_valid_repo() {
     "$tmp/packages/codex-plugin/skills" \
     "$tmp/packages/codex-plugin/templates" \
     "$tmp/packages/codex-plugin/rn-dev-agent-core/dist" \
+    "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist" \
+    "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/web-dist" \
     "$tmp/packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj" \
     "$tmp/packages/rn-android-runner/app" \
     "$tmp/packages/shared-agent-knowledge/skills/using-rn-dev-agent" \
@@ -85,6 +87,8 @@ write_valid_repo() {
   printf '%s\n' '{"name":"rn-dev-agent-core-codex-runtime","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/codex-plugin/rn-dev-agent-core/package.json"
   printf '%s\n' 'console.log("worker fixture")' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/index.js"
   printf '%s\n' 'console.log("learned-actions fixture")' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js"
+  printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html"
+  printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/web-dist/index.html"
   printf '%s\n' 'import { writeFileSync } from "node:fs";' 'writeFileSync(process.env.LAUNCHER_PROBE_FILE, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js"
   printf '%s\n' '{"name":"rn-dev-agent-shared-agent-knowledge"}' > "$tmp/packages/shared-agent-knowledge/package.json"
   printf '%s\n' '{"canonicalSources":{"skills":"./skills","commands":"./commands","agents":"./agents","templates":"./templates/rn-agent"},"nativeRunners":{"ios":"../rn-fast-runner","android":"../rn-android-runner"},"hostOutputs":{"claude":{"manifest":"../claude-plugin/.claude-plugin/plugin.json","legacyManifest":"../claude-plugin/plugin.json","rootMarketplace":"../../.claude-plugin/marketplace.json","packageMarketplace":"../claude-plugin/.claude-plugin/marketplace.json","legacyMarketplace":"../claude-plugin/marketplace.json","package":"../claude-plugin/package.json","hooks":"../claude-plugin/hooks","skills":"../claude-plugin/skills","commands":"../claude-plugin/commands","agents":"../claude-plugin/agents","templates":"../claude-plugin/templates/rn-agent"},"codex":{"manifest":"../codex-plugin/.codex-plugin/plugin.json","mcp":"../codex-plugin/.mcp.json","launcher":"../codex-plugin/bin/cdp-supervisor.ts","runtime":"../codex-plugin/rn-dev-agent-core/dist/supervisor.js","runnerManifest":"../codex-plugin/runner-manifest.json","nativeRunnerScripts":"../codex-plugin/scripts","skills":"../codex-plugin/skills","commands":"../codex-plugin/commands","agents":"../codex-plugin/agents","templates":"../codex-plugin/templates/rn-agent"}},"apps":{"docsSite":{"path":"../../apps/docs-site"}}}' > "$tmp/packages/shared-agent-knowledge/source-map.json"
