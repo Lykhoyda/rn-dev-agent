@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix",
+    "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix && yarn build:codex-runtime",
     "build:core": "yarn workspace rn-dev-agent-core build",
     "build:codex-runtime": "yarn build:core && node scripts/build-codex-runtime.ts",
     "build:docs": "yarn workspace rn-dev-agent-docs build",

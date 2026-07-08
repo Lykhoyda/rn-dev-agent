@@ -52,6 +52,7 @@ write_valid_repo() {
     "$tmp/packages/shared-agent-knowledge/templates/rn-agent"
 
   printf '%s\n' '{"packageManager":"yarn@4.17.0","type":"module","workspaces":["apps/*","packages/*"]}' > "$tmp/package.json"
+  printf '%s\n' '# CLAUDE template fixture' > "$tmp/CLAUDE-MD-TEMPLATE.md"
   printf '%s\n' '{"ignore":["rn-dev-agent-codex-plugin","rn-dev-agent-android-runner","rn-dev-agent-ios-runner","rn-dev-agent-shared-agent-knowledge","rn-dev-agent-docs"]}' > "$tmp/.changeset/config.json"
   printf '%s\n' 'enableGlobalCache: true' 'nodeLinker: node-modules' 'yarnPath: .yarn/releases/yarn-4.17.0.cjs' > "$tmp/.yarnrc.yml"
   printf '%s\n' 'yarn release fixture' > "$tmp/.yarn/releases/yarn-4.17.0.cjs"
@@ -74,6 +75,7 @@ write_valid_repo() {
   printf '%s\n' '{"name":"rn-dev-agent-docs","scripts":{"build":"yarn generate && astro build"}}' > "$tmp/apps/docs-site/package.json"
   printf '%s\n' '{"name":"rn-dev-agent-core","version":"4.5.6","bin":"./dist/supervisor.js"}' > "$tmp/packages/rn-dev-agent-core/package.json"
   printf '%s\n' '{"name":"rn-dev-agent-plugin","version":"1.2.3","dependencies":{"rn-dev-agent-core":"workspace:*","rn-dev-agent-shared-agent-knowledge":"workspace:*"}}' > "$tmp/packages/claude-plugin/package.json"
+  /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/claude-plugin/CLAUDE-MD-TEMPLATE.md"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
@@ -81,6 +83,7 @@ write_valid_repo() {
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/.claude-plugin/marketplace.json"
   printf '%s\n' '{"hooks":{}}' > "$tmp/packages/claude-plugin/hooks/hooks.json"
   printf '%s\n' '{"name":"rn-dev-agent-codex-plugin","type":"module","dependencies":{"rn-dev-agent-core":"workspace:*","rn-dev-agent-shared-agent-knowledge":"workspace:*"}}' > "$tmp/packages/codex-plugin/package.json"
+  /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./skills/","mcpServers":"./.mcp.json"}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
   printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["-e","const V='\''1.2.3'\'';require(\"child_process\").spawn(process.execPath,[\"bin/cdp-supervisor.ts\"],{stdio:\"inherit\"})"],"tool_timeout_sec":900}}}' > "$tmp/packages/codex-plugin/.mcp.json"
   /bin/cp "$REPO_ROOT/packages/codex-plugin/bin/cdp-supervisor.ts" "$tmp/packages/codex-plugin/bin/cdp-supervisor.ts"

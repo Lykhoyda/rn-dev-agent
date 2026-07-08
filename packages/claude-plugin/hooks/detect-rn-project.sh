@@ -58,12 +58,15 @@ if [ "$has_rn_config" = true ]; then
     echo ""
   fi
 
-  # Warn if Node.js is not an LTS version (even numbers: 22, 24, ...)
-  NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null)
+  # Warn if Node.js is not a supported LTS version (22.18+, 24, ...)
+  NODE_VERSION=$(node -e 'console.log(process.versions.node)' 2>/dev/null)
+  NODE_MAJOR=${NODE_VERSION%%.*}
+  NODE_MINOR_TMP=${NODE_VERSION#*.}
+  NODE_MINOR=${NODE_MINOR_TMP%%.*}
   if [ -n "$NODE_MAJOR" ] && [ "$((NODE_MAJOR % 2))" -ne 0 ]; then
-    echo "WARNING: Node.js v${NODE_MAJOR} is not an LTS release. rn-dev-agent requires Node >= 22 LTS. Some tools may not work."
-  elif [ -n "$NODE_MAJOR" ] && [ "$NODE_MAJOR" -lt 22 ]; then
-    echo "WARNING: Node.js v${NODE_MAJOR} is below the minimum (22 LTS). Some CDP bridge features may not work."
+    echo "WARNING: Node.js v${NODE_VERSION} is not an LTS release. rn-dev-agent requires Node >= 22.18 LTS. Some tools may not work."
+  elif [ -n "$NODE_MAJOR" ] && { [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "${NODE_MINOR:-0}" -lt 18 ]; }; }; then
+    echo "WARNING: Node.js v${NODE_VERSION} is below the minimum (22.18 LTS). Some CDP bridge features may not work."
   fi
 
   # Track tool installation status for the banner

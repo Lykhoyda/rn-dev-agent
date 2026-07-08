@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
-function isFile(path: string): boolean {
+function isFile(path) {
   try {
     return statSync(path).isFile();
   } catch {
@@ -14,7 +14,7 @@ function isFile(path: string): boolean {
   }
 }
 
-function supervisorCandidates(): string[] {
+function supervisorCandidates() {
   const explicit = process.env.RN_DEV_AGENT_CORE_SUPERVISOR;
   const explicitRoot = process.env.RN_DEV_AGENT_CORE_ROOT;
 
@@ -23,7 +23,7 @@ function supervisorCandidates(): string[] {
     explicitRoot ? join(explicitRoot, 'dist', 'supervisor.js') : null,
     join(pluginRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
     join(pluginRoot, '..', 'rn-dev-agent-core', 'dist', 'supervisor.js'),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  ].filter(Boolean);
 }
 
 const supervisor = supervisorCandidates().find(isFile);
@@ -50,7 +50,7 @@ child.on('error', (error) => {
   process.exit(1);
 });
 
-for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => {
     try {
       child.kill(signal);

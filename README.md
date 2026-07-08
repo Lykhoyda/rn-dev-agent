@@ -63,7 +63,7 @@ This checks **10 prerequisites** and fixes what it can automatically:
 
 | Check | Required | Auto-install |
 |-------|----------|-------------|
-| Node.js >= 22 LTS | Yes | No |
+| Node.js >= 22.18 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only — ships in-tree; prebuilt artifact on releases, one-time `xcodebuild build-for-testing` fallback | No |
 | rn-android-runner (Android) | Android targets only — ships in-tree; prebuilt artifact on releases, Gradle build fallback on first use | No |

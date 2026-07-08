@@ -343,8 +343,22 @@ for (const tool of tools) {
   console.log(`  generated: tools/${category}/${tool.name}.mdx`);
 }
 
-// Copy CHANGELOG.md with frontmatter injection
-const changelog = readFileSync(resolve(ROOT, 'CHANGELOG.md'), 'utf8');
+// Copy package changelogs with frontmatter injection
+const CHANGELOG_SOURCES = [
+  ['Claude plugin', resolve(ROOT, 'packages/claude-plugin/CHANGELOG.md')],
+  ['Core MCP server', resolve(ROOT, 'packages/rn-dev-agent-core/CHANGELOG.md')],
+];
+function packageChangelogSection(label, filePath) {
+  const body = readFileSync(filePath, 'utf8')
+    .trim()
+    .replace(/^# .+\n+/, '')
+    .replace(/^### /gm, '#### ')
+    .replace(/^## /gm, '### ');
+  return `## ${label}\n\n${body}`;
+}
+const changelog = CHANGELOG_SOURCES.map(([label, filePath]) => {
+  return packageChangelogSection(label, filePath);
+}).join('\n\n');
 const changelogOut = resolve(__dirname, '../src/content/docs/changelog.md');
 mkdirSync(dirname(changelogOut), { recursive: true });
 writeFileSync(

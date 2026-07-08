@@ -184,12 +184,14 @@ for path in \
   apps/docs-site/package.json \
   packages/rn-dev-agent-core/package.json \
   packages/claude-plugin/package.json \
+  packages/claude-plugin/CLAUDE-MD-TEMPLATE.md \
   packages/claude-plugin/plugin.json \
   packages/claude-plugin/.claude-plugin/plugin.json \
   packages/claude-plugin/marketplace.json \
   packages/claude-plugin/.claude-plugin/marketplace.json \
   packages/claude-plugin/hooks/hooks.json \
   packages/codex-plugin/package.json \
+  packages/codex-plugin/CLAUDE-MD-TEMPLATE.md \
   packages/codex-plugin/.codex-plugin/plugin.json \
   packages/codex-plugin/.mcp.json \
   packages/codex-plugin/bin/cdp-supervisor.ts \
@@ -261,6 +263,12 @@ expect_synced_native_runner_dir "packages/rn-fast-runner" "packages/codex-plugin
 expect_synced_native_runner_dir "packages/rn-android-runner" "packages/codex-plugin/scripts/rn-android-runner" "Codex Android runner assets"
 if [ -f "$ROOT/runner-manifest.json" ] && [ -f "$ROOT/packages/codex-plugin/runner-manifest.json" ] && ! cmp -s "$ROOT/runner-manifest.json" "$ROOT/packages/codex-plugin/runner-manifest.json"; then
   fail "Codex runner manifest must match runner-manifest.json"
+fi
+if ! cmp -s "$ROOT/CLAUDE-MD-TEMPLATE.md" "$ROOT/packages/claude-plugin/CLAUDE-MD-TEMPLATE.md"; then
+  fail "Claude package CLAUDE-MD-TEMPLATE.md must match the root template"
+fi
+if ! cmp -s "$ROOT/CLAUDE-MD-TEMPLATE.md" "$ROOT/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"; then
+  fail "Codex package CLAUDE-MD-TEMPLATE.md must match the root template"
 fi
 
 expect_eq "$(json '.packageManager // empty' "$ROOT/package.json")" "yarn@$EXPECTED_YARN_VERSION" "root packageManager"

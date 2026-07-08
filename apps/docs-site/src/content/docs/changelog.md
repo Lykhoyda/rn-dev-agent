@@ -3,1193 +3,1358 @@ title: "Changelog"
 description: "Release history for rn-dev-agent"
 ---
 
-# Changelog
-
-All notable changes to rn-dev-agent will be documented in this file.
-
-Format follows [Keep a Changelog](https://keepachangelog.com/).
-
-## [0.44.44] — 2026-05-13
-
-### Fixed (GH #119 — AutoRepairOutcome cascading-selector clarification)
-
-- **`AutoRepairOutcome.nextFailedSelector`**: new optional field, populated
-  when auto-repair succeeded but the post-repair retry failed on a DIFFERENT
-  selector. Lets MTTR analysis distinguish "patch didn't work" from
-  "cascading failure — patch worked, next selector broke." Without this,
-  the telemetry made every cascading failure look like a failed patch.
-- Absent when retry passed (happy path) OR when retry failed on the
-  SAME selector as the patch (= patch didn't actually fix it). Codex
-  flagged the misclassification at conf 85 in the PR #115 review.
-- 3 new regression tests cover the three cases. Suite 1312 → 1315 passing.
-
-## [0.44.43] — 2026-05-13
-
-### Added (GH #116 — wire cdp_run_action into /run-action slash command)
-
-- **`maestro_run` now accepts `params: Record<string, string>`** that get
-  forwarded to maestro-runner as `-e KEY=VALUE` argv pairs. Keys must
-  match `[A-Z_][A-Z0-9_]*` (Maestro env-style convention) — anything
-  else is refused at the handler boundary so a hostile payload can't
-  become a shell-injectable flag. Values must be strings. Since the
-  invocation uses `execFile` (not `exec`), values are passed as
-  separate argv entries — shell metacharacters are inert by construction.
-- **`cdp_run_action` forwards `params`** through to both the first
-  `maestro_run` call AND the post-repair retry, so a parameterised flow
-  replays identically after auto-repair.
-- **`/rn-dev-agent:run-action` slash command** is rewritten to call
-  `cdp_run_action` via MCP rather than shelling out to maestro-runner
-  directly. User invocations of `run-action wizard-create-task -e
-  TITLE=...` now benefit from auto-repair, structured RunRecords, and
-  the GH #120 per-phase timing. The slash command still parses args
-  locally (positional + `-e` + `--platform` + `--dry-run` + new
-  `--no-auto-repair`) but delegates execution to the MCP tool.
-- `--dry-run` keeps the bash-only path since `cdp_run_action` always
-  executes.
-- 6 new handler tests cover: malformed-key refusal (5 shell-injection
-  shapes), non-string-value refusal, well-formed key acceptance,
-  cdp_run_action's params forwarding to the first maestro_run call,
-  end-to-end params threading via a real temp project fixture, and
-  params persistence into the post-repair retry path.
-  Suite: 1312 → 1318 passing.
-
-### Note
-
-Step #4 of issue #116 ("Live smoke: replay wizard-create-task with
--e TITLE=foo end-to-end on a booted simulator") is left for a
-maintainer-driven verification — it requires a live simulator with the
-test app and is outside the scope of this code-only PR.
-
-## [0.44.42] — 2026-05-13
-
-### Hardened (GH #113 — saveAction precondition becomes a runtime soft-assertion)
-
-- **`saveAction` now throws `SaveActionPreconditionError`** when the
-  on-disk YAML has been edited externally since the in-memory action was
-  loaded. Previously the "caller already gated actionWasEditedExternally"
-  contract was implicit, surfaced only in a comment block. A future caller
-  (e.g. the planned #104 auto-repair-on-failure wiring) could silently
-  clobber a real human edit if it missed the contract.
-- **Bypassed on first write** (file doesn't exist yet) since there's no
-  prior state to protect.
-- Both current callers (`cdp_repair_action`, `cdp_record_test_save_as_action`)
-  gate correctly, so the new guard fires only for misbehaving new callers.
-- Error message references `GH #113`, the offending YAML path, and points
-  the developer at `actionWasEditedExternally` / `saveActionWithCAS`.
-- 3 new regression tests; suite: 1312 → 1315 passing.
-- One `stat()` per save on the happy path — negligible cost.
-
-## [0.44.41] — 2026-05-13
-
-### Fixed (GH #112 — sidecar-io Windows path bug)
-
-- **`sidecarPathFor` now extracts the basename via `split(/[\\/]/).pop()`**
-  instead of `split('/').pop()`. The old form returned the entire
-  backslash-containing path as a single segment on Windows, producing
-  absurd deeply-nested directory trees through subsequent
-  `join(parent, 'state', base)`. PR #109's atomic-writer trusted this
-  output and `ensureDir`-ed it, making the pre-existing latent bug more
-  impactful. Gemini flagged at conf 88 in the PR #109 multi-LLM review.
-- 4 new regression tests cover POSIX-style paths, `.yml` extension,
-  Windows-style backslash input, and mixed-separator input. The fix
-  works on both POSIX and Windows runtimes since the separator split
-  is explicit rather than platform-native. Suite: 1312 → 1316 passing.
-
-## [0.44.40] — 2026-05-13
-
-### Hardened (GH #111 — atomic-writer concurrent pairWrite races)
-
-- **`pairWrite` now uses unique `.tmp.<pid>.<time36>.<rand36>` suffixes** so
-  two concurrent writers against the same action don't share a tmp namespace.
-  Without this, `cleanupOrphans` could `unlinkSync` writer A's in-flight tmp
-  file mid-rename, producing an opaque ENOENT for the user. Gemini flagged
-  the failure mode at conf 82 in the PR #109 multi-LLM review.
-- **`cleanupOrphans` is age-bounded**: scans the target directory for files
-  matching the path prefix and only unlinks orphans older than
-  `ORPHAN_MAX_AGE_MS = 5 minutes`. Concurrent writer's fresh tmp file
-  preserved; crashed process's stale tmp file becomes eligible for sweep
-  after 5 minutes.
-- **New `_readdir` test seam** for deterministic cleanup mocking.
-- 7 new regression tests cover unique-stamp generation, stale-orphan sweep,
-  fresh-orphan preservation, prefix anchoring, missing-dir tolerance, the
-  exported constant value, and round-trip orphan-free state across 5
-  repeated `pairWrite` calls. Three existing tests updated to match the
-  new `.tmp.<stamp>` filename shape. Suite: 1312 → 1319 passing.
-
-## [0.44.39] — 2026-05-13
-
-### Hardened (GH #110 — agent-device test seam fuse)
-
-- **`_setRunAgentDeviceForTest` is now one-way fused.** Once any production
-  `runAgentDevice` call has dispatched in this process, attempting to install
-  a new override throws with `blown fuse — a production runAgentDevice call
-  (cliArgs[0]="...") already dispatched in this process. ... (GH #110
-  hardening)`. The fuse fires BEFORE any tier selection (Codex review
-  conf 90), so a production call that throws downstream still seals the
-  seam.
-- **No reset escape hatch.** A reset seam would be functionally equivalent
-  to no fuse — any code that could call reset is the same code that could
-  leak the override (Codex review conf 90). Tests that genuinely need both
-  production and override paths should use Node 22's
-  `node --test --test-isolation=process` to get a fresh worker per file.
-- **Throw, not no-op** (Codex review conf 95). Silent no-op would let a
-  forgotten `afterEach(() => _setRunAgentDeviceForTest(null))` route a
-  test through the real `agent-device` CLI, producing `ENOENT` errors that
-  look nothing like a test-seam bug. The fuse error message includes the
-  `cliArgs[0]` that blew it, so post-mortem debugging can identify which
-  production call leaked first — that's the test missing its cleanup.
-- 5 new subprocess-isolated regression tests cover: override is honored
-  pre-fuse; setting null pre-fuse re-arms cleanly; production dispatch
-  blows the fuse before tier completion; error message carries GH #110 +
-  remediation hint; standard afterEach `null` cleanup remains legal.
-  Suite: 1312 → 1317 passing.
-
-## [0.44.38] — 2026-05-13
-
-### Added (GH #106 — flow + skeleton bundling in experience export/import)
-
-- **`exportExperience()` now bundles `.rn-agent/actions/*.yaml` flows and
-  `.rn-agent/skeleton.yaml`** alongside heuristics + failure stats —
-  matching what the `rn-agent-export` / `rn-agent-import` command docs
-  have advertised since D1204. Until now the underlying script handled
-  only heuristics, so a teammate exporting + importing got the muscle
-  memory metadata but not the actual reusable actions that ARE the L3
-  corpus.
-- New `src/experience/flow-bundle.ts` exposes pure anonymize/restore
-  helpers: rewrites `appId:` between `com.example.<slug>` (export) and
-  the local project's bundleId (import), truncates author-prose comment
-  lines longer than 200 chars while preserving M7 fields verbatim, and
-  extracts `${VAR}` placeholders so the importer can surface them.
-- **Placeholder manifest comments** (Codex review A, HIGH conf): on
-  import, if a flow contains `${UPPER_CASE_VARS}`, prepend a
-  `# placeholders: VAR1, VAR2 — supply via -e KEY=VALUE on replay` line
-  above the M7 header. Codex's call: don't suffix every placeholder flow
-  with `.needs-review.yaml` (that punishes correctly-authored flows);
-  don't go silent (violates spirit of acceptance criterion); use a
-  grep-able comment instead.
-- **`appId:` rewrite is line-wise** (Codex review B, HIGH conf), so
-  legitimate multi-line top sections (a `# shared across envs` comment
-  above `appId:`) round-trip cleanly. Hard-fails only when zero `appId:`
-  lines exist.
-- **Conflict semantics**: an imported flow whose `id` already exists
-  locally lands at `<id>.imported.yaml` so the user can diff and merge
-  manually. Same pattern for skeleton (`skeleton.imported.yaml`).
-- **Status forced to `experimental`** on import — keeps imported flows
-  from claiming `active` before a local replay proves they work.
-- **Sidecars are not bundled.** Per-developer runtime state (`runHistory`,
-  `repairHistory`, `stats`) is exactly what shouldn't travel; on import
-  the local `loadOrInitSidecar` seeds a fresh sidecar on first replay.
-- **`--no-flows` / `--no-skeleton` opt-outs** on both `ExportOptions`
-  and `ImportOptions` (default both true).
-- **Defense in depth**: import-side flow `id` is re-validated against
-  `^[A-Za-z0-9_-]+$` so a hand-crafted bundle with a path-traversal id
-  can't escape `.rn-agent/actions/`. Malformed flows are skipped with a
-  one-line stderr log.
-- 29 new tests — 18 pure-helper tests on `flow-bundle.ts` + 11
-  integration tests with real temp dirs covering export, import,
-  opt-outs, conflict-rename, malformed-bundle defense in depth, and
-  no-app.json fallback. Suite: 1312 → 1341 passing.
-
-## [0.44.37] — 2026-05-12
-
-### Added (GH #91 acceptance #3 closeout — per-project verification config)
-
-- **`verification.successShapes` and `verification.mutationMethods` per-project
-  overrides** in `.rn-agent/config.json` for the mutation-absence detector.
-  Closes the last open acceptance criterion on GH #91. Detector itself shipped
-  in `fed0dd0` (Apr 28).
-- New `loadVerificationConfig(projectRoot)` reads the config once per project
-  root and caches the result. Defaults are preserved (no behavior change) on
-  missing file, parse error, missing `verification` block, empty arrays, or
-  all-invalid regex strings — apps that don't opt in see zero change.
-- **ReDoS-via-typo guard** (Codex review conf 90): patterns longer than 200
-  chars are dropped before compilation, and matched-input length is capped
-  at 256 chars in `isSuccessShape`. Bounds regex evaluation cost on the
-  `cdp_navigate` / `cdp_navigation_state` / `proof_step` hot path so a
-  developer typo can't stall the MCP event loop.
-- **Empty-array means defaults**, not "disable detection" (Codex review conf
-  92). Silent loss of a safety net is the worse failure mode; explicit disable
-  is reserved for a future `verification.disable: true` flag.
-- **Observability**: one stderr log line on first config load per project root
-  (`[verification] loaded config from .../.rn-agent/config.json (patterns: N,
-  methods: M)`). Makes "is my config picked up?" a one-line check, without
-  needing SIGHUP/watcher reload machinery.
-- 18 new tests cover the loader, overrides, ReDoS guards, cache behavior, and
-  the observability log. Suite: 1312 → 1330 tests, all passing.
-
-### Notes
-
-- `device_press` / `cdp_interact` wirings remain **intentionally deferred** as
-  documented in the original `fed0dd0` commit message: these tools don't carry
-  nav-state intent, and the success-shape signal is captured downstream by the
-  next `cdp_navigation_state` call. Adding nav-state fetches per tap would
-  bloat the hot path for noise this PR considers low-value.
-
-## [0.44.36] — 2026-05-12
-
-### Fixed (Phase 134.2-followup — device_deeplink url injection)
-
-- **`device_deeplink` now POSIX-quotes the caller-supplied `url`** before
-  passing it through `adb shell am start -d <url>`. The Phase 134.2 fix
-  validated `packageName` but missed `url`. Deepsec revalidation
-  (run `20260512193352`) re-flagged the deeplink as HIGH because the
-  `url` arg still flowed unescaped into the Android remote shell, where
-  argv is joined with spaces and re-interpreted as a raw command line.
-  A URL like `myapp://path;reboot` would have executed `reboot` after
-  the `am start` completed.
-- Two-layer defense:
-  1. **Validation at the handler boundary**: reject any `url` that
-     contains control characters or newlines (which would break out of
-     the POSIX-quoted string itself), or exceeds 4096 chars.
-  2. **POSIX single-quote wrap**: every shell metacharacter inside the
-     URL (`;`, `|`, `$`, `` ` ``, `&`) becomes inert. Same pattern as
-     `device-interact.ts:524` (`buildAdbInputTextArgv`).
-- Legitimate URLs with `&`, `?`, `=`, `#` continue to work — the quote
-  wrap makes those literal arguments to `am start -d`, not shell
-  expansion targets.
-
-### Internal
-
-- 4 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`:
-  - newline-injected URL rejected
-  - control-char-bearing URL rejected
-  - oversized URL (>4096 chars) rejected
-  - legitimate URL with query+fragment passes validation
-- Full unit suite: 1308 → 1312 passing, 0 failing.
-- Closes the **last HIGH-severity** finding from the original deepsec
-  scan. Post-merge: **CRITICAL = 0, HIGH = 0** (100% security-class
-  findings closed).
-
-## [0.44.35] — 2026-05-12
-
-### Fixed (Phase 134.5 — workflow + correctness sweep, closes 3 MEDIUM + 2 BUG)
-
-- **GitHub Actions pinned to immutable commit SHAs.** Both `ci.yml`
-  and `deploy-docs.yml` previously used mutable `@v4` tags — a moved
-  tag (or compromised maintainer account) would silently substitute
-  different code on the next run. Now pinned to:
-  - `actions/checkout@de0fac2e…` (v6.0.2)
-  - `actions/setup-node@48b55a01…` (v6.4.0)
-  - `actions/upload-pages-artifact@fc324d35…` (v5.0.0)
-  - `actions/deploy-pages@cd2ce8fc…` (v5.0.0)
-
-  Per [GitHub's official security-hardening guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions):
-  "Pinning an action to a full-length commit SHA is currently the only
-  way to use an action as an immutable release."
-- **`deploy-docs.yml` per-job least-privilege permissions.** Previously
-  `pages: write` + `id-token: write` were granted at the workflow level,
-  so the `build` job (which only needs `contents: read`) had Pages-write
-  and OIDC capability it didn't use. Those permissions are now scoped
-  to the `deploy` job only.
-- **`maestro_test_all`'s `pattern` arg now guards against regex DoS.**
-  Caller-supplied `pattern` is length-capped (256 chars) and
-  RegExp construction is try/catch wrapped; on any error, discovery
-  proceeds without filtering rather than crashing.
-- **`cdp_connect`'s already-connected `bundleId` check uses
-  word-boundary matching** instead of `includes()`. Prevents
-  false-positive "already connected" when the live target is e.g.
-  `com.example.app-test` and the caller asked for `com.example.app`.
-
-### Internal
-
-- Workflows: SHA-pin comments include the resolved version name
-  (`# v6.0.2`) so Dependabot can read both and bump them together.
-- `tools/connection.ts` bundleId match uses a regex with non-bundle-id
-  boundary characters (`[^A-Za-z0-9._-]`) — bundle IDs share `.` and
-  `-` with their surrounding context, so `\b` alone wouldn't work.
-
-## [0.44.34] — 2026-05-12
-
-### Fixed (Phase 134.4 — CDP multiplexer trust boundary, closes 1 HIGH)
-
-- **CDP multiplexer now requires a per-instance capability token** in
-  the WebSocket upgrade path. Previously any process that could
-  discover the ephemeral loopback port could connect and send
-  arbitrary CDP commands (`Runtime.evaluate`, `Page.navigate`, etc.)
-  to the running Hermes runtime, **bypassing Claude Code's
-  tool-permission prompts entirely**. This included a browser tab
-  scanning local ports, a sibling shell, or any malicious process
-  with loopback access.
-- The token is 32 bytes of `crypto.randomBytes` (43 char base64url),
-  unique per multiplexer instance, included in the WebSocket URL
-  path as `ws://127.0.0.1:<port>/<token>`. The `verifyClient`
-  handler uses `timingSafeEqual` on equal-length buffers to compare
-  — no timing side channel leaks the token.
-- The exposed `proxyUrl` (from `client.startProxy()`) and the
-  DevTools URL (from `cdp_open_devtools`) automatically include the
-  token. Without the token in the path, the multiplexer returns
-  `401 Unauthorized` at upgrade time.
-- **Token never appears in logs** — log lines reference
-  `ws://127.0.0.1:<port>/<token>` literally, not the actual value.
-
-### Internal
-
-- New exports from `cdp/multiplexer.ts`: `generateCapabilityToken()`
-  and `verifyConsumerPath(reqUrl, expectedToken)`. Both pure
-  functions for unit testing. `CDPMultiplexer.token` getter for
-  callers building DevTools URLs.
-- 9 new unit tests cover the token verification truth table:
-  legitimate token accepted; wrong token / missing token / empty
-  token / length mismatch / query-style appendage / non-string
-  inputs all rejected. Plus uniqueness across instances.
-- Implements the deepsec recommendation: per-proxy high-entropy
-  capability token required during WebSocket upgrade, rejection
-  before consumer registration.
-
-## [0.44.33] — 2026-05-12
-
-### Fixed (Phase 134.3 — path containment, closes 2 HIGH + 3 MEDIUM)
-
-- **Action IDs are validated against a strict regex** at every MCP tool
-  boundary that uses them as a path segment under `.rn-agent/actions/`.
-  `cdp_run_action` and `cdp_repair_action` reject IDs like `../etc/passwd`
-  with `BAD_FILENAME` before any file read. Closes 2 deepsec HIGH
-  path-traversal findings.
-- **`actionPathFor` enforces both regex + assertWithinDir** as
-  defense-in-depth. Even if a future caller bypasses the boundary
-  regex, the path resolution refuses to land outside the actions dir.
-- **`device_screenshot` rejects paths containing `..` segments.** A
-  malicious agent could otherwise pass `path: '../../../etc/passwd'`
-  and overwrite arbitrary files. Absolute paths to legitimate
-  locations (e.g. `~/Desktop`) remain allowed.
-- **Default screenshot filename gets a random suffix** so parallel
-  same-millisecond calls can't clobber each other's output. Was
-  `/tmp/rn-screenshot-<ts>.jpg`; now `/tmp/rn-screenshot-<ts>-<rand>.jpg`.
-- **`cross_platform_verify scanDir` rejects `..` traversal.** Refuses
-  to enumerate the filesystem outside the caller's directory.
-
-### Internal
-
-- New module `scripts/cdp-bridge/src/domain/path-safety.ts` —
-  `isValidActionId`, `assertValidActionId`, `assertWithinDir`,
-  `isWithinDir`, `pathHasTraversal`, plus `PathTraversalError`. Reused
-  across action-store, repair-action, run-action, device-list,
-  cross-platform-verify. Same chokepoint discipline as Phase 134.1
-  (Maestro validator) and 134.2 (bundle-ID validation).
-- 12 new unit tests cover path-traversal payloads, absolute paths,
-  control chars, sibling-dir prefix collision, and the backward-parity
-  path. Total test count: 1284 → 1296 passing, 0 failing.
-- Implements proposed D1214 from workspace ROADMAP Phase 134.1
-  ("Tool-supplied paths must pass `assertWithinDir(p, projectActionsDir)`
-  before any `fs.write*` / `createWriteStream` call").
-
-## [0.44.32] — 2026-05-12
-
-### Fixed (Phase 134.2 — adb shell-arg hardening, closes 5 HIGH)
-
-- **`appId` / `packageName` are validated against the bundle-ID regex
-  before any `adb shell` invocation.** In the prompt-injection threat
-  model, `adb shell <cmd> <appId>` re-interprets argv under the device
-  shell — a metachar-laden `appId` becomes command injection on the
-  connected Android device/emulator. Each tool now rejects malformed
-  bundle IDs at its handler boundary with `INVALID_APPID` /
-  `DEVICE_RESET_INVALID_APPID` / `INVALID_PACKAGE_NAME`. Closes 5
-  deepsec HIGH findings.
-
-### Sites hardened
-
-- `device_permission` (`tools/device-permission.ts`) — both
-  grant/revoke/reset and query actions
-- `device_reset_state` (`tools/device-reset-state.ts`) — at the entry
-  point, before any of permission / terminate / launch helpers run
-- `device_deeplink` (`tools/device-deeplink.ts`) — `packageName` arg
-  passed to `adb shell am start -n <packageName>` is now validated;
-  `packageName` remains optional
-- `device_snapshot` action=open with attachOnly=true
-  (`tools/device-session.ts`) — `appId` reaching `adb shell pidof
-  <appId>` is validated
-
-### Internal
-
-- All 5 sites reuse `isValidBundleId` from `domain/maestro-validator.ts`
-  (introduced in Phase 134.1). Single regex chokepoint — no per-call-
-  site validation logic to drift. Implements proposed D1213 (workspace
-  ROADMAP Phase 134.1).
-- 13 new unit tests in `phase-134-2-adb-shell-arg-hardening.test.js`
-  cover newline injection, shell metachars (`;`, `|`, backtick, `$()`),
-  and the backward-parity path (valid + hyphenated bundle IDs).
-- Full unit suite: 1284 passing, 0 failing.
-- New error codes added to `types.ts`: `INVALID_APPID`,
-  `DEVICE_RESET_INVALID_APPID`, `INVALID_PACKAGE_NAME`.
-
-## [0.44.31] — 2026-05-12
-
-### Fixed (Phase 134.1 — Maestro/YAML hardening, closes 7 CRITICAL + 2 HIGH)
-
-- **`runScript` and other host-executing Maestro directives are now rejected
-  by default.** New central validator at
-  `scripts/cdp-bridge/src/domain/maestro-validator.ts` enforces a strict
-  command allowlist on every Maestro-emitting AND Maestro-executing path.
-  In the prompt-injection threat model — where a malicious project file
-  can reach the agent — this closes the highest-impact RCE class: 7 CRITICAL
-  deepsec findings from the 2026-05-12 baseline scan.
-- **`appId` / bundle IDs are validated against a strict reverse-DNS regex.**
-  No string concatenation into the Maestro YAML header anywhere; all flow
-  construction goes through `buildMaestroFlow()` which serializes via the
-  `yaml` library. Newline / `---` / unicode-line-break injection in
-  `app.json` slugs no longer becomes Maestro directive injection.
-- **Project-supplied login flows (`auto-login.ts`) are now parse-and-inline,
-  not blind-replay.** Previously `.maestro/subflows/login.yaml` was loaded
-  with only a `clearState: true` strip and wrapped in `runFlow: file: ...`.
-  The new flow parses + validates the project file, then inlines the
-  validated commands directly into the wrapper — `runFlow` is no longer in
-  the allowlist, so the indirection can't smuggle a malicious flow back in.
-- **`maestro_test_all` no longer trusts disk content.** Every discovered
-  `.yaml` is read + parse-and-validated + re-serialized to a canonical temp
-  file before execution. Auto-discovery was the highest-trust gap in the
-  codebase: a single prompt-injected save earlier in a session would have
-  let attacker steps replay on every subsequent test_all invocation.
-- **Test-recorder fixes** (`test-recorder-generators.ts`): `produces` keys
-  now pass through `stripNewlines` (closes the comment-escape CRITICAL);
-  swipe directions are enum-constrained (closes the recording-replay CRITICAL).
-- **`replaceIdSelector` refuses unsafe testIDs** — the running app's
-  snapshot is attacker-controlled in the threat model; testIDs containing
-  newlines or document separators no longer become Maestro injection
-  vectors during auto-repair.
-
-### Multi-LLM review fixes (caught before merge)
-
-- Allowlist extended with `swipeUp`/`swipeDown`/`swipeLeft`/`swipeRight` —
-  test-recorder emits the shorthand form, without these every recorded
-  action with a swipe would have failed at replay (both Codex 92% and
-  Gemini 98% confidence — a real regression the test-recorder round-trip
-  test now guards against).
-- Bundle-ID regex allows hyphens — Apple's CFBundleIdentifier docs permit
-  them, Expo apps commonly use them (`com.my-app.testapp`). Earlier
-  hyphen-less regex would have refused legitimate apps.
-- `auto-login` no longer double-prepends `launchApp` when the project's
-  flow already begins with one.
-- `maestro-run` uses unique-per-call temp filenames so parallel calls
-  can't race on a shared `/tmp/rn-maestro-inline.yaml`.
-- Dropped over-strict `---` substring rejection — `\n` rejection already
-  catches the actual document-separator attack; mid-scalar `---` (in
-  legitimate text like "section --- title") is harmless when emitted
-  through `yaml.stringify`.
-
-### Internal
-
-- 26 new validator unit tests (`phase-134-1-maestro-validator.test.js`)
-  cover the exact deepsec attack vectors plus the multi-LLM-caught
-  regressions (hyphenated bundle IDs, swipe shorthand round-trip).
-- Files migrated through the validator: `maestro-invoke.ts`,
-  `maestro-run.ts`, `maestro-generate.ts`, `maestro-test-all.ts`,
-  `auto-login.ts`, `test-recorder-generators.ts`, `repair-engine.ts`.
-- Full unit suite: 1271 passing, 0 failing. TypeScript compiles clean.
-- Proposed decisions logged in workspace ROADMAP Phase 134.1:
-  - **D1212**: Reject `runScript` by default in plugin-emitted and
-    plugin-replayed Maestro flows.
-  - **D1213**: Strict bundle-ID regex at every `appId` boundary.
-
-## [0.44.30] — 2026-05-12
-
-### Fixed (Phase 134.0 — Android capturer exit-code race, deepsec follow-up)
-
-- **`defaultAndroidCapturer` no longer reports success on adb non-zero exit
-  when the stream finished first.** The prior implementation settled on
-  whichever of `out.on('finish')` or `proc.on('close', code)` fired first.
-  Node doesn't order these events, so a truncated/corrupt screenshot
-  could be reported as `ok: true` when adb exited non-zero AFTER the
-  WriteStream drained. The new two-track settle requires BOTH
-  `streamFinished === true` AND `procCode === 0` before reporting
-  success; on any failure path the partial file is unlinked so
-  `resizeWithSips` never reads a corrupt artifact.
-- The decision logic is extracted as a pure
-  `resolveCaptureOutcome(streamFinished, procCode)` helper exported for
-  unit testing; the event-wiring stays small enough to read at a glance.
-- Caught by the first deepsec full-repo scan (run
-  `20260512130956-afb409ef9132fae2`) — a class of race that neither the
-  PR-A multi-LLM review (Codex + Gemini) flagged because their attention
-  was on the stream-flush race, not the exit-code race. Phase 134 of the
-  workspace ROADMAP sequences the remaining 7 CRITICAL + 11 HIGH
-  findings from the same scan.
-
-### Internal
-
-- 3 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
-  `resolveCaptureOutcome` truth table (pending / success / failure
-  including the exact deepsec scenario: `streamFinished=true,
-  procCode=non-zero`). Full unit suite: 1245 passing, 0 failing.
-
-## [0.44.29] — 2026-05-12
-
-### Fixed (GH #136 — PR-A: Multi-Device Screenshot Routing)
-
-- **`device_screenshot platform: "ios" | "android"` now disambiguates reliably
-  when both an iOS sim and an Android emu are booted.** Previously the call
-  routed through `agent-device --platform`, which silently fell back to the
-  active session and returned a wrong-platform image (iPhone-resolution JPEG
-  when `platform: "android"` was requested). The explicit-platform path now
-  resolves the booted device directly via `xcrun simctl list -j devices
-  booted` (iOS) or `adb devices` (Android), then captures via
-  `xcrun simctl io <UDID> screenshot --type=jpeg <path>` or
-  `adb -s <emu-id> exec-out screencap -p` — bypassing agent-device entirely.
-- **Backward-safe by design.** The raw path fires only when the caller passes
-  `platform` explicitly. Calls that omit the field (the common single-device
-  case) keep the existing `runAgentDevice` flow exactly. Any failure in the
-  raw path (resolver miss, command error, missing `xcrun`/`adb`) gracefully
-  degrades to `runAgentDevice` — no new error surface for users.
-
-### Internal
-
-- New module `scripts/cdp-bridge/src/tools/device-screenshot-raw.ts` —
-  pure parsers (`parseSimctlBootedUDID`, `parseAdbDevicesEmu`) plus the
-  `tryRawScreenshot` orchestrator, with test seams (`_setForTest`,
-  `_resetForTest`) for resolver/capturer injection.
-- New `_setRunAgentDeviceForTest` / `_resetRunAgentDeviceForTest` seams on
-  `device-list.ts` for integration tests, mirroring the GH #136 PR-B picker
-  convention.
-- 14 new unit tests in `gh-136-screenshot-raw-platform.test.js` cover the
-  pure parsers, orchestrator branches (both iOS and Android arms,
-  success + capturer-failure for each), raw-vs-fallback dispatch, and
-  that the resize pipeline + EPHEMERAL_PATH advisory still wrap the raw
-  result identically. Full unit suite at 1242 passing, 0 failing.
-- Multi-LLM review (Codex + Gemini, parallel) flagged an Android
-  `WriteStream` flush race in the default capturer: `out.end()` returns
-  before bytes drain, so the promise could resolve `ok: true` while
-  `resizeWithSips` reads a truncated PNG (>64KB pipe buffer = real risk
-  for high-res emulators). Fixed by waiting on the `'finish'` event and
-  destroying the stream on timeout / proc-error paths. The fix is to
-  `defaultAndroidCapturer` only — iOS uses `execFile`-completion
-  ordering which doesn't have this race.
-
-## [0.44.28] — 2026-05-07
-
-### Fixed (GH #136 — PR-B: Dev-Client Picker Reliability)
-
-- **`cdp_status` no longer hangs 60s on the Expo Dev Client picker.** The
-  picker probe now runs **before** `autoConnect` instead of inside the
-  post-failure catch block. When the picker is up, the plugin dismisses it
-  first, then connects normally — no Metro discovery timeout to wait through.
-- **`dismissPicker` now matches LAN IPs and `.local` hostnames.** Replaces
-  the literal `localhost / 127.0.0.1 / 10.0.2.2` list with a three-pass
-  matcher: literal IPs (backward parity), `<host>:<port>` port-pattern
-  matching with port range validation, then first non-footer row below the
-  picker title. Catches the previously-missed real-world setups.
-- **Auto-advance race detection.** `dismissPicker` re-probes
-  `isDevClientPickerShowing()` before tapping; if the picker auto-dismissed
-  mid-flight (single-server case has ~3-5s grace), returns success without
-  tapping. Closes the ~30% race failure for Maestro flows wrapping
-  post-launch in `runFlow when: visible: "DEVELOPMENT SERVERS"`.
-- **Tighter `waitForBundle` cadence.** 100ms polling for the first second,
-  500ms thereafter, 10s overall budget (was 2s polling + 20s budget).
-  Single-server pickers settle in ~200ms.
-
-### Internal
-
-- New pure helpers `parsePortPatternEntry` and `parseFirstServerEntry` in
-  `scripts/cdp-bridge/src/tools/dev-client-picker.ts` — testable without
-  the agent-device CLI in the loop.
-- New `runAgentDeviceFn` and `hasActiveSessionFn` test seams (underscore-
-  prefixed exports) follow the codebase convention from
-  `gh-61-b1-deep-link-depth.test.js`.
-- 18 new unit tests covering helpers, dismissPicker integration,
-  auto-advance race, and the cdp_status flow inversion.
-
-### Versions
-
-- Plugin: 0.44.27 → **0.44.28**
-- MCP server (cdp-bridge): 0.38.22 → **0.38.23**
-
-## [0.42.0] — 2026-04-22
-
-M6 / Phase 112 — Object.freeze test recorder. Closes the **last remaining Phase 90 metro-mcp pattern-adoption story**. Adds a new `cdp_record_test_*` tool family (7 tools) that records real user interactions on the running app and emits replayable Maestro YAML or Detox JS — without any app code changes. Bumps MCP server to 0.36.0 (new tools). All Phase 90 Tier 3 + Tier 4 (M6-M11) now shipped.
-
-### How it works
-React's `createElement` calls `Object.freeze(props)` in dev mode before sealing them. `cdp_record_test_start` monkey-patches `Object.freeze` inside Hermes — when React asks to freeze a props object that has `onPress`/`onLongPress`/`onChangeText`/`onSubmitEditing`/`onScroll*`, we wrap each handler with event-emission BEFORE letting the freeze proceed. Already-mounted scroll containers are caught via a fiber re-render walk (`stateNode.forceUpdate()` for class, `renderer.overrideProps(fiber, ['__mcpInit'], 1)` for function). Route is captured via the `onCommitFiberRoot` hook reading `__RN_AGENT.getNavState()`, cached into a closure variable so the Object.freeze hot-path stays synchronous.
-
-### Three deliberate deviations from metro-mcp's reference
-1. **Finger-direction swipe semantics** — `dy > 0` (contentOffset increased; finger went UP) emits `direction: 'up'`, matching Maestro's `swipeUp` and Detox's `.swipe('up')`. metro-mcp emits the inverted content-delta direction, producing YAML that replays in the wrong direction.
-2. **500-event cap with priority eviction** — long sessions are capped; on overflow, oldest `swipe`/`type` events are dropped first (taps + navigates carry higher information value). `truncated: true` bubbles up to the `stop` envelope.
-3. **Route caching via the commit hook** — eliminates per-event CDP round-trips. metro-mcp expects the user app to install `globalThis.__METRO_MCP_NAV_REF__`; we instead read our existing `__RN_AGENT.getNavState()` once per React commit and cache the active route name in the IIFE closure.
-
-### Added
-- **NEW `scripts/cdp-bridge/src/cdp/test-recorder-helpers.ts`** — five injected JS string constants (`DEV_CHECK_JS`, `START_RECORDING_JS`, `STOP_RECORDING_JS`, `READ_EVENTS_JS`, `buildAnnotationJs(note)` template). The Object.freeze interceptor IIFE is ~250 lines, mirrors metro-mcp's structure with the deviations above. Includes the M8 1..5 renderer-loop port for fiber root resolution and a session-token (`__METRO_MCP_REC_SESSION__`) so stale wrappers from a prior start-stop cycle gracefully no-op when a new session begins.
-- **NEW `scripts/cdp-bridge/src/tools/test-recorder.ts`** — 7 handler factories (`createRecordTestStartHandler`, `createRecordTestStopHandler`, `createRecordTestGenerateHandler`, `createRecordTestAnnotateHandler`, `createRecordTestSaveHandler`, `createRecordTestLoadHandler`, `createRecordTestListHandler`), the `RecordedEvent` discriminated union, module-level `storedEvents` state, and pure helpers (`deduplicateEvents`, `sanitizeFilename`, `getRecordingsDir`, `typeCounts`). Test-only DI hooks (`_resetState`, `_setStoredEvents`, `_getStoredEvents`) for hermetic integration tests.
-- **NEW `scripts/cdp-bridge/src/tools/test-recorder-generators.ts`** — `generateMaestro` + `generateDetox` + selector helpers (`maestroSelector`, `detoxSelector`, `nextSelector`). All user-controlled string interpolation (annotations, testName, bundleId, route names) goes through `stripNewlines()` to prevent comment-context escape (Gemini/Codex review).
-- **7 new tools registered in `src/index.ts`**: `cdp_record_test_start`, `cdp_record_test_stop`, `cdp_record_test_generate`, `cdp_record_test_annotate`, `cdp_record_test_save`, `cdp_record_test_load`, `cdp_record_test_list`. Storage location: `<projectRoot>/.rn-agent/recordings/<sanitized>.json`. Appium format accepted in zod schema but returns `NOT_IMPLEMENTED` at runtime — Maestro + Detox cover our use cases.
-- **11 new error codes** in `ToolErrorCode` (`DEV_MODE_REQUIRED`, `EVAL_FAILED`, `BAD_RESPONSE`, `START_FAILED`, `NO_EVENTS`, `NOT_IMPLEMENTED`, `NOT_RECORDING`, `NO_PROJECT_ROOT`, `BAD_FILENAME`, `LOAD_FAILED`, `BAD_RECORDING`).
-- **`__HELPERS_VERSION__` 15 → 16** in `injected-helpers.ts` to invalidate cached helpers on devices that connected before this release.
-
-### Tests
-Running total: 549 → **605 passing**, zero failures. **+56 M6 tests** across 5 files:
-- `test-recorder-deduplicate.test.js` (6) — type/tap collision rules
-- `test-recorder-storage.test.js` (5) — sanitizeFilename, getRecordingsDir
-- `test-recorder-generators.test.js` (15) — Maestro YAML + Detox JS output snapshots, swipe direction semantic, newline sanitization regression
-- `test-recorder-js-guard.test.js` (14) — structural invariants of the injected JS strings (Object.freeze override, cleanup, session token, 1..5 renderer loop, eviction policy, all 7 handler names, fiber re-render walk, finger-direction comment)
-- `test-recorder-integration.test.js` (15) — handler-level mock-CDP round-trips including DEV gate, start→stop→generate flow, save→load round-trip, NO_EVENTS / NOT_IMPLEMENTED / LOAD_FAILED error paths
-
-### Review
-Multi-LLM (Gemini + Codex). Three high-confidence findings, all applied inline before commit:
-- **Codex (conf 95) + Gemini (conf 90)** — newline injection in generators. Annotation `note`, `testName`, `bundleId`, and route names are user-controlled strings interpolated into single-line YAML/JS comments. A multi-line note (`"reached checkout\nstep:malicious"`) escapes the comment context and either corrupts Maestro YAML (stray top-level mapping) or executes arbitrary JS in Detox tests. Fix: `stripNewlines()` helper in generators applied at every interpolation site, plus regression tests asserting attack strings stay inside comments.
-- **Codex (conf 85)** — Detox `submit` fallback used `device.pressBack()` which is Android-only and semantically wrong (back button vs return key). Fix: replaced with `// submit: missing testID/label — replay manually` comment.
-- **Gemini (conf 80)** — start-stop-start within a single MCP process leaves stale wrappers on already-frozen props from session 1. Their captured `__currentRoute` closure is stale in session 2 and they emit events with wrong route. Fix: session token (`globalThis.__METRO_MCP_REC_SESSION__` + closure-captured `sessionId`); each wrapper checks the current global token against its captured token before emitting. Stale wrappers from prior sessions silently call through to the original handler without recording.
-
-### Notes for users
-- This is a Dev Client / dev-mode feature only. Calling `cdp_record_test_start` on a release build returns `DEV_MODE_REQUIRED` (release builds pre-freeze props at Metro bundling time, so the interceptor can never fire).
-- Recordings are stored project-locally (`<projectRoot>/.rn-agent/recordings/`) — commit them with feature branches or `.gitignore` the directory if you prefer ephemeral recording.
-- The existing `maestro_generate` (replay-based, no recording required) stays available for the case where you already know the steps.
-
-## [0.41.0] — 2026-04-22
-
-M9 / Phase 111 — `/rn-dev-agent:setup` now detects USB-connected physical devices and applies (or hints at) the required prerequisites. Closes the Phase 90 Tier 4 M9 story. Auto-runs `adb reverse tcp:8081 tcp:8081` on each physical Android so the device can reach Metro. Checks for `idb-companion` on physical iOS and prints `brew install idb-companion` when missing. Documents WiFi-debugging as unsupported (matching metro-mcp's stance).
-
-**MCP server unchanged** — this is the first story in the Phase 90 pattern-adoption batch with no `scripts/cdp-bridge/` changes. MCP stays at 0.35.0.
-
-### Added
-- **NEW `scripts/check-physical-devices.sh`** (executable). OS-aware bash probe. Android path uses `adb devices` filtered by `emulator-` prefix exclusion, iterates results, auto-runs `adb -s <dev> reverse tcp:8081 tcp:8081`. iOS path (gated on `uname -s == Darwin`) uses `xcrun xctrace list devices`, awk-extracts the `== Devices ==` section, positive-filters for iOS form factors (iPhone/iPad/iPod/Apple TV/Apple Vision/Apple Watch) to exclude the host Mac, checks both `idb_companion` and `idb-companion` binary names on PATH. Linux/WSL hosts see an explicit "Physical iOS probe skipped (requires macOS; host is $HOST_OS)" line rather than a misleading "no iOS device".
-- **New step 10 in `skills/rn-setup/SKILL.md`** — "Physical device prerequisites (optional)" invokes the script. Advisory — exits 0 in all cases. No-op when no physical devices are connected.
-- **8 structural test guards** in `scripts/cdp-bridge/test/unit/physical-devices-script-guard.test.js` — pin the script's invariants (exists + executable, bash shebang, expected probes, emulator filter, form-factor filter, idb-companion binary-name coverage, brew install hint, WiFi stance).
-
-### Changed
-- **`skills/rn-setup/SKILL.md`**: "9 checks" / "9-row" language updated to "10 checks" / "10-row" in three downstream references (Rationalizations, Red Flags, Verification checklist). New row added to the output-format table. New physical-device item added to the Verification checklist.
-
-### Tests
-Running total: 541 → **549 passing**, zero failures. 8 new structural guards — live functional smoke happens during every `/setup` invocation.
-
-### Review
-Multi-LLM (Gemini + Codex). Gemini clean (0 findings). Codex caught two valid issues both applied inline:
-- **Confidence 90** — stale "9 checks" / "9-row" copy after adding section 10. Fixed.
-- **Confidence 85** — no OS guard meant Linux/WSL hosts would silently show "No physical iOS detected" without context. Fixed — `HOST_OS` detected + iOS branch gated on `Darwin`.
-
-Gemini dismissals validated: awk section filter correct against live xctrace output (anchored regex handles "== Devices Offline ==" and name-mid-line `== ` cases); adb reverse is idempotent; idb-companion binary check covers both brew-published variants; form-factor regex correctly matches "Apple TV HD"-style prefix names.
-
-### Live smoke
-Ran on dev machine with no physical devices connected. First run misreported the MacBook itself as a "physical iOS device" — `xcrun xctrace list devices` surfaces the host Mac under `== Devices ==` for Mac Catalyst targeting. Fixed via positive form-factor filter; re-ran correctly reports "No physical iOS devices detected" and explicitly labels Host OS.
-
-### Known limits
-- **`adb reverse` auto-run is stateful** — idempotent per-device port-forwarding, but still a side effect. Documented as expected setup behavior.
-- **`idb-companion` not auto-installed** — brew installs are slow and can fail; hint-only is the canonical pattern for missing deps in this skill.
-- **WiFi debugging not supported automatically** — matches metro-mcp. Users can `adb connect <ip>` manually and the script runs `adb reverse` over the TCP transport.
-- **Structural-only tests** — no `bats` dependency. Live smoke during `/setup` is the functional validation.
-
-### Refs
-D668 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 111 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Physical Device Setup".
-
-## [0.40.0] — 2026-04-22
-
-M10 / Phase 110 — architecture detection + CPU profiler hint. Closes the Phase 90 Tier 4 M10 story. `cdp_status.app.architecture` now surfaces one of `'new' | 'old' | 'unknown'` based on Fabric/bridge globals inside the running app. When `cdp_cpu_profile` fails AND the target is running on Old Architecture, the error result now includes an advisory hint pointing to `cdp_heap_usage` as an alternative and suggesting `newArchitecture: true` in `app.json`. MCP server bumped to 0.35.0.
-
-### Added
-- **`cdp_status.app.architecture`** — new optional field: `'new'` when `globalThis.nativeFabricUIManager` is present (Fabric loaded), `'old'` when `globalThis.__fbBatchedBridge` is present and Fabric is absent (classic bridge), `'unknown'` when neither signal exists or the probe throws. Fabric wins on transient "both present" interop state.
-- **`OLD_ARCH_PROFILER_HINT` exported constant** in `scripts/cdp-bridge/src/tools/profiling.ts`. Attached as `meta.hint` to `cdp_cpu_profile` failures when the architecture probe returns `'old'`.
-- **`narrowArchitecture` exported helper** in `scripts/cdp-bridge/src/tools/status.ts`. Whitelists the union — any unexpected string or missing value collapses to `'unknown'`, so TypeScript's union guarantee holds at runtime regardless of what future helper bundles emit.
-
-### Changed
-- **`__HELPERS_VERSION__` bumped 14 → 15** in `injected-helpers.ts`. Forces Hermes re-injection on next connect so apps pick up the new `getAppInfo()` shape. Existing freshness check (D502) triggers re-injection automatically.
-- **`getAppInfo()` extended** to compute architecture at probe time (wrapped in try/catch — probe failure defaults to `'unknown'`).
-- **`buildStatusResult()` AND the `__DEV__=false` recovery retry path** both write `status.app.architecture` so consumers see consistent values regardless of whether the recovery branch fired.
-- **`cpuProfile` error catch** now performs a single-shot architecture probe (via new internal `safeProbeArchitecture`) before returning `failResult`. Probe failure → `'unknown'` → no hint.
-
-### Tests
-- **16 new tests**. 6 detection in `test/unit/injected-helpers.test.js` (Fabric-only, bridge-only, neither, both-present → `'new'`, null-Fabric guard, helpers version = 15). 10 in new `test/unit/m10-architecture.test.js` (3 `narrowArchitecture` tests, 4 status-handler integration tests, 3 profiler-hint integration tests including a probe-itself-throws path).
-
-Running total: 525 → **541 passing**, zero failures.
-
-### Review
-Multi-LLM (Gemini + Codex). Both clean — zero high-confidence findings. Independently validated: Fabric is always object-typed in RN (never function); the extra error-path probe adds only ~50-200ms to an already-failed CPU profile call; `narrowArchitecture` whitelist is injection-safe; `__DEV__=false` recovery-path parity is complete; v14 → v15 cache invalidation is clean via the existing `__v` freshness check.
-
-### Known limits
-- **Fabric-wins on "both present"** is a deliberate heuristic for interop-mode transients. Documented.
-- **`'unknown'` is non-actionable** — consumers should treat as "skip arch-specific hints," not as "assume old."
-- **Profiler hint is advisory, not blocking** — `cdp_cpu_profile` still runs on Old Arch; some profiles do succeed. Hint only fires on actual failures.
-
-### Refs
-D667 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 110 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Related: D502 (helper freshness check catches stale v14 caches), M8/D663 (prior `__HELPERS_VERSION__` bump pattern).
-
-## [0.39.0] — 2026-04-22
-
-M11 / Phase 108 — Metro `--clear` hint on empty buffers. Closes the Phase 90 Tier 4 UX story from the metro-mcp pattern adoption audit. When `cdp_console_log` or `cdp_network_log` return empty results AND the CDP session has been idle for more than 60s (measured as `max(connectedAt, lastEventAt)`), the tool result now includes `meta.hint` suggesting `npx expo start --clear` / `npx react-native start --reset-cache`. This surfaces a failure mode (stale Metro bundle cache) that previously required users to find it in a troubleshooting doc. MCP server bumped to 0.34.0.
-
-Version note: M11 was originally tagged 0.37.0 (reserved before M7 shipped). Main moved to 0.38.0 before this PR merged, so M11 rebased to 0.39.0 above M7. The 0.37.0 reservation was abandoned; no `## [0.37.0]` entry exists.
-
-### Added
-- **`scripts/cdp-bridge/src/tools/metro-clear-hint.ts`** — pure helper. Exports `METRO_CLEAR_HINT_THRESHOLD_MS = 60_000`, `METRO_CLEAR_HINT_TEXT`, and `shouldShowMetroClearHint(deps, resultIsEmpty): boolean` where `deps = { connectedAt, lastEventAt?, now }`. Idle reference is `max(connectedAt, lastEventAt ?? connectedAt)` — any activity resets the clock.
-- **`CDPClient._connectedAt`** — timestamp of the current connection; null when disconnected. Reset via `buildResettableState` so every reconnect (including B132 proxy auto-resume) re-stamps correctly.
-- **`CDPClient._timeNowFn`** — injectable clock. Constructor now accepts `new CDPClient(port?, timeNowFn?)` (backwards compat). Defaults to `Date.now`.
-- **`DeviceBufferManager.getLastPush(deviceKey): number | undefined`** — public accessor over the existing internal `lastPush` map. Used by `cdp_network_log` to gauge per-device idle time.
-
-### Changed (forward-compatible)
-- **`cdp_console_log`** — on empty `entries`, wraps the result with `{ meta: { hint: METRO_CLEAR_HINT_TEXT } }` when the connection has been idle for > 60s. Console has no per-buffer `lastPush` today (it queries in-app `__RN_AGENT.getConsole()` rather than our ring buffer), so the idle reference falls back to `connectedAt` only.
-- **`cdp_network_log`** — same pattern as console, but passes `lastEventAt = client.networkBufferManager.getLastPush(scope)`. For `scope === 'all'` (cross-device query), falls back to `connectedAt` only since there's no single-device `lastPush` to consult.
-
-### Tests
-- **20 new tests**: 10 pure-helper at `test/unit/metro-clear-hint.test.js` (threshold boundaries, null-connectedAt, both-timestamp-max permutations, exactly-at-threshold, undefined-lastEventAt fallback, hint-text content); 10 integration at `test/unit/metro-clear-hint-integration.test.js` (CDPClient surface: null-on-fresh, injected fn returned, Date.now default; console-log handler: present / below / above threshold; network-log handler: present / recent-push / stale-both / scope='all').
-- **Mock helper extended** — `test/helpers/mock-cdp-client.js` gained `connectedAt` + `now` getters with sane defaults that suppress the hint unless explicitly overridden.
-
-Running total after rebase onto M7-included main: 505 → **525 passing**, zero failures.
-
-### Review
-Multi-LLM (Gemini + Codex) on original PR. Both clean. Gemini verified the B132 auto-resume path correctly re-stamps `_connectedAt` via the existing `handleClose → resetState → reconnect → connectToTarget` chain. Codex flagged one sub-threshold observation (clock-skew between `DeviceBufferManager.push` using real `Date.now()` vs. CDPClient using the injected `_timeNowFn`) — moot in production where both are `Date.now`.
-
-### Known limits
-- **Stateless — fires every call past threshold** on genuinely idle apps. Accepted per design; LLM context usually absorbs repeated hints.
-
-### Refs
-D665 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 108 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: troubleshooting "Empty Results or Stale Data" (top-3 user issue).
-
-## [0.38.0] — 2026-04-22
-
-M7 / Phase 109 — fast-runner tri-state liveness probe. Closes the Phase 90 Tier 3 M7 story and functionally retires the shape-equivalent leftover from R3. Previously `isFastRunnerAvailable()` only checked PID; a process whose PID was alive but whose HTTP server had wedged was reported as available, and every iOS `device_press` / `device_fill` / `device_swipe` stalled on a 10s fetch timeout before falling through to the daemon. M7 adds a `probeFastRunnerLiveness()` helper that distinguishes `'alive' | 'stale' | 'dead'` via PID check + `/health` probe, plus an explicit `reapStaleFastRunner()` helper for the SIGTERM→grace→SIGKILL escalation. `tryFastRunner` is rewired to branch on the tri-state. MCP server bumped to 0.33.0.
-
-Version note: this release skipped 0.37.0 (reserved for M11 PR #53 at the time). Main moved past 0.37.0 before M11 merged, so M11 shipped as 0.39.0 above this entry instead of slotting in below.
-
-### Added
-- **`FastRunnerLiveness` type** + `probeFastRunnerLiveness(deps?)` + `reapStaleFastRunner(deps?)` in `scripts/cdp-bridge/src/fast-runner-session.ts`. All deps injectable (`getState`, `processAlive`, `httpProbe`, `clearState`, `sendSignal`, `sleep`) for hermetic tests — mirrors the `lockfile.ts` pattern.
-- **Tri-state probe semantics**: `'alive'` when `/health` returns `{ok:true}`; `'stale'` on any HTTP error or `ok:false` (including AbortError, ECONNREFUSED, 500, timeout); `'dead'` when no state file or PID has exited (and state is cleared).
-- **Graceful reap**: SIGTERM → 500ms grace → SIGKILL if still alive → clear state. ESRCH tolerance on signal send.
-
-### Changed
-- **`tryFastRunner` in `scripts/cdp-bridge/src/agent-device-wrapper.ts`** now awaits the tri-state probe at entry. `'alive'` proceeds; `'stale'` reaps + returns null (daemon fallthrough); `'dead'` + iOS cold-launches via `startFastRunner`; `'dead'` + non-iOS returns null.
-- **`fastHealthCheck` refactored** to delegate to the new `defaultHttpProbe` helper (single source of truth for the `/health` call shape). Wrapped in try/catch to preserve its original boolean contract — caught during review.
-
-### Fixed
-- **Dangling ChildProcess handle after reap** (Gemini review finding, confidence 84): `clearStateFile()` now nulls `runnerProcess` alongside `runnerState`. Self-heals via `on('exit')` but closes the window cleanly so a concurrent `stopFastRunner()` doesn't double-signal a dead PID.
-
-### Tests
-- **17 new tests** in `test/unit/fast-runner-liveness.test.js`. 8 probe variations (null state, dead PID, alive+healthy, alive+ok:false, HTTP 500, AbortError, ECONNREFUSED, timeout forwarding) + 2 cleanup invariants (probe is read-only on living processes; only `'dead'` discovery clears state) + 6 reap variations (no-op on null state, SIGTERM-only success, SIGTERM-ignored→SIGKILL, ESRCH tolerance, graceMs override, default graceMs) + 1 default-timeout check. All hermetic.
-
-Running total: 488 → **505 passing**, zero failures.
-
-### Known limits
-- **Concurrent `'dead'` probes can race two `xcodebuild` spawns** if two DIFFERENT MCP tool calls arrive within the 30s startup window. Flagged sub-threshold (Gemini, confidence 82) — MCP SDK serializes tool invocations per connection, so the race window is narrow. Will follow up with in-flight promise cache on `startFastRunner` if observed in practice.
-- **SIGKILL on xcodebuild PID may orphan `xctest` children** briefly. macOS launchd reaps within seconds.
-- **Legacy `isFastRunnerAvailable(): boolean`** retained for sync callers (e.g., post-spawn check, status tool). Documented as coarse in JSDoc.
-- **Stale detection conflates "hung" with "misbehaving-but-responsive"**: a runner returning `{ok:false}` is reaped even if it might self-recover. Conservative — prefer respawn over hang.
-
-### Review
-Multi-LLM (Gemini + Codex). Two findings applied. Codex (confidence 90): the `fastHealthCheck` refactor dropped its outer try/catch — fixed by re-wrapping. Gemini (confidence 84): reap left `runnerProcess` dangling — fixed by nulling in `clearStateFile`. Two sub-threshold findings deferred (concurrent dead-probe race, SIGKILL xcodebuild orphan) — noted in Known Limits.
-
-### R3 relationship
-Story R3 ("fast-runner restart") from Phase 85 was marked DONE during the Phase 92 stability sweep with the note that the implementation shape differed from the original spec (PID probe instead of `/ping`; restart integrated into session open). M7 ships the full spec: tri-state `/health` probe, explicit stale detection, graceful reap. The functional gap R3 left is closed.
-
-### Refs
-D666 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 109 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference: `src/plugins/devtools.ts::tryFocusExisting`.
-
-## [0.36.1] — 2026-04-21
-
-B133 / Phase 107 — M8 loose ends. Closes the carveout logged during M8's Phase 106 review (Gemini finding, flagged at confidence 85, folded out of M8 per story boundary). Ports the 1..5 `getFiberRoots` probe into `cdp_set_shared_value` so that tool works on apps where `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers` is empty or missing. Also refreshes the `cdp_open_devtools` tool description, which had been frozen at M1a-era text and was factually misleading after M1b (Phase 104) and B132 (Phase 105) shipped. MCP server bumped to 0.31.1.
-
-### Fixed
-- **B133**: `cdp_set_shared_value` inline renderer walk in `src/index.ts:356-397`. Replaced the stale `Array.from(hook.renderers.keys())` loop with the 1..5 `getFiberRoots` probe pattern — mirrors M8's `findActiveRenderer` and `REACT_READY_PROBE_JS`. Intentional divergence: the `allRoots` accumulator is preserved (not early-return) because Reanimated worklets can mount in a secondary renderer at a different ID from the React DOM/native renderer, and `cdp_set_shared_value` must tolerate that to locate its target testID.
-
-### Changed
-- **`cdp_open_devtools` tool description** in `src/index.ts:798`. Old text stopped at M1a/Phase 100 detection; new text honestly reflects the Phase 100 (M1a) → Phase 104 (M1b CDPClient proxy wiring) → Phase 105 (B132 auto-resume) chain. Returns shape now documents `hermesWsUrl` + `proxyPort` that the handler has been emitting since M1b.
-
-### Tests
-- **3 new structural guard tests** at `scripts/cdp-bridge/test/unit/shared-value-renderer-probe-guard.test.js`. Walks all `src/*.ts` and fails on any reintroduction of `hook.renderers.keys()`. Pins `index.ts` to contain the 1..5 probe loop + the `typeof getFiberRoots === 'function'` guard. Pattern mirrors the existing `screenshot-bypass-guard.test.js` (B121).
-
-Running total: 485 → **488 passing**, zero failures.
-
-### Review
-Multi-LLM (Gemini + Codex). Both clean. Gemini validated the fix matches what they flagged during M8 review. Codex noted the `allRoots` accumulator divergence from M8's pattern is intentionally correct for worklet-aware fiber walks.
-
-### Refs
-D664 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 107 in `rn-dev-agent-workspace/docs/ROADMAP.md`. Parent: D663 / M8 / Phase 106.
-
-## [0.36.0] — 2026-04-21
-
-M8 / Phase 106 — renderer 1..5 probe for fiber root resolution. Closes the Tier 3 story from the Phase 90 metro-mcp pattern adoption audit. Two places in the plugin gated React introspection on `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.size > 0` — `injected-helpers.ts::findActiveRenderer` (used by 9 downstream consumers) and `cdp/setup.ts::waitForReact` (the 30s readiness gate before helper injection). Both now brute-probe `getFiberRoots(i)` for i in 1..5, mirroring metro-mcp's `FIBER_ROOT_JS` pattern. Apps where `hook.renderers` is empty or missing (React Native macros, Reanimated worklets, React DevTools loaded ahead of first render) now return live fiber trees instead of silent empties. MCP server bumped to 0.31.0.
-
-### Added
-- **`REACT_READY_PROBE_JS` exported constant** in `scripts/cdp-bridge/src/injected-helpers.ts`. Eval-ready IIFE string with the same 1..5 `getFiberRoots` probe as `findActiveRenderer`. Single source of truth for the cross-file readiness invariant — `setup.ts` now imports and awaits it directly instead of reconstructing a narrower inline check.
-
-### Changed (behavioral, forward-compatible)
-- **`findActiveRenderer()` in the injected helper bundle** now brute-probes `getFiberRoots(1..5)` instead of iterating `hook.renderers.entries()`. Dropped the early-return guard `!hook.renderers || hook.renderers.size === 0` that caused silent empty-tree returns on affected apps. `__HELPERS_VERSION__` bumped 13 → 14 so in-flight sessions pick up the new helper on next connect.
-- **`waitForReact` in `cdp/setup.ts`** now awaits `REACT_READY_PROBE_JS` instead of `__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers?.size > 0`. Without this companion fix M8's helper change was blunted — `waitForReact` would time out 30s on exactly the apps M8 was meant to help before injection began. Side benefit: the new probe refuses to declare "ready" until a fiber root actually exists, tightening the gate's semantic correctness.
-
-### Tests
-- **10 new tests** in `scripts/cdp-bridge/test/unit/injected-helpers.test.js`. 5 for `findActiveRenderer` (happy-path, skip-to-renderer-4, renderers-map-empty, all-empty, missing-getFiberRoots) and 5 for `REACT_READY_PROBE_JS` (run in isolated `vm` sandboxes — pin the probe's public behavior so helper + probe can't silently diverge). Running total: 475 → **485**, zero failures.
-
-### Known limits
-- **Renderer IDs 6+ unreachable** — matches metro-mcp's identical bound. Never observed in practice.
-- **`cdp_set_shared_value` in `src/index.ts:359-363`** still uses the `hook.renderers.keys()` pattern. Out-of-scope for M8; filed as **B133** for a separate PR. Low-severity since `cdp_set_shared_value` is a niche proof-capture tool.
-
-### Review
-Multi-LLM (Gemini + Codex). Codex clean. Gemini flagged `setup.ts`'s sibling readiness gate at confidence 85 — originally scoped out of M8, folded in on user direction to preserve end-to-end benefit. Would have shipped as half-a-fix otherwise.
-
-### Refs
-D663 in `rn-dev-agent-workspace/docs/DECISIONS.md`. Phase 106 in `rn-dev-agent-workspace/docs/ROADMAP.md`. metro-mcp reference pattern: `src/utils/fiber.ts` FIBER_ROOT_JS.
-
-## [0.35.0] — 2026-04-21
-
-B132 / Phase 105 — proxy auto-resume across reconnect. Closes the known limitation logged during M1b review: the multiplexer captured `hermesUrl` once at `startProxy` time, so any event that invalidated the target URL (hot reload, target eviction, Metro restart) left the proxy routing to a dead upstream with every MCP call silently timing out. This release auto-suspends the proxy when the MCP's CDP WebSocket closes, runs the normal reconnect loop directly against Hermes, then auto-resumes the proxy against the refreshed target URL. MCP server bumped to 0.30.0.
-
-### Added
-- **`CDPClient._proxyDesired` intent flag**. Tracks user's standing wish for a proxy separately from the live `_proxyUrl`. Set by successful `startProxy()`, cleared by `stopProxy()` / `disconnect()`. Preserved across internal `_suspendProxy()` so auto-resume knows to re-allocate.
-- **`CDPClient._suspendProxy()` / `_resumeProxy()` internal lifecycle**. `_suspendProxy` clears `_proxyUrl` synchronously (so the reconnect loop observes cleared state before the multiplexer's HTTP server finishes its async shutdown) and tears down the old multiplexer best-effort. `_resumeProxy` rehydrates a fresh multiplexer against the CURRENT `_connectedTarget.webSocketDebuggerUrl`.
-- **`ReconnectContext.afterReconnect?: () => Promise<void>`**. New optional callback fired inside `reconnect()` after `discoverAndConnect` resolves successfully. Used by CDPClient to auto-resume the proxy. Hook failures are caught + logged, never propagated — a post-reconnect hook cannot undo a successful reconnect.
-- **`CDPClient._softReconnectDirect()`**. Bypasses the new `softReconnect` wrapper for internal callers like `_doStartProxy`, avoiding infinite-rollback where the wrapper would suspend the just-allocated multiplexer. Named method (not inline call) so tests can stub the direct path independently of the public `softReconnect`.
-
-### Changed (behavioral, forward-compatible)
-- **`CDPClient.softReconnect()` now wraps with suspend→reconnect→resume** when a proxy is active. Covers all auto-recovery paths (e.g., `cdp_status`'s `__DEV__=false` recovery). When no proxy is active, behavior is unchanged.
-- **`CDPClient.handleClose()` now fires-and-forgets `_suspendProxy()` before delegating to the reconnect machinery**. `_suspendProxy` is ordered so its synchronous preamble (clearing `_proxyUrl`) runs before `handleCloseFn` returns control — guaranteeing the reconnect loop's `discoverAndConnect → connectToTarget → ctx.getProxyUrl()` sees `null`. Multiplexer HTTP server shutdown runs concurrently but harmlessly (no one still routes to it).
-
-### Fixed
-- **B132: stale `hermesUrl` in multiplexer after target change or Metro reload** — see Added. The multiplexer now rehydrates against the fresh target URL on every reconnect, eliminating the silent "proxy routes to dead upstream" failure mode.
-
-### Testing
-- 462 → 475 tests passing (+13): 10 CDPClient proxy-lifecycle tests (`_suspendProxy` sync behavior, `_resumeProxy` guards + one-shot failure policy, `softReconnect` wrapper suspend+resume, `stopProxy`/`disconnect` clearing desired flag, end-to-end URL rehydration via both `softReconnect` wrapper and `afterReconnect` callback trigger paths) + 3 reconnect-loop tests (`afterReconnect` fires exactly once on success, undefined-callback backwards compat, hook failure doesn't propagate).
-
-### Multi-review outcome
-Gemini + Codex both returned clean (no high-confidence issues). Six critical race-condition questions verified: suspend-before-reconnect ordering, double-resume hazard on preemption, `_doStartProxy` rollback correctness, `_resumeProxy` failure policy, `_startProxyInFlight` concurrency sharing, end-to-end test soundness. One below-threshold observation from Gemini (the end-to-end test exercised the softReconnect-wrapper path but not the `afterReconnect` trigger specifically) closed with an additional focused test.
-
-### Policy choices documented
-- **`_resumeProxy` failure → clear `_proxyDesired`** (predictable over resilient). Silent-retry-on-every-reconnect would mask structural bugs. User sees the log warning once and can re-run `cdp_open_devtools` to retry manually.
-- **`handleClose` uses `void this._suspendProxy()`** (fire-and-forget). The synchronous preamble is sufficient to redirect the reconnect; awaiting `mux.stop()` would block the `handleClose` path unnecessarily.
-
-### Refs
-- D662 in DECISIONS.md. Phase 105 in ROADMAP.md. B132 closed in BUGS.md. Parent: D661 / Phase 104 (M1b, 2026-04-21). Branch: `fix/b132-proxy-auto-resume`.
-
----
-
-## [0.34.0] — 2026-04-21
-
-M1b / Phase 104 — CDP proxy routing integration. Completes the M1 story split from 2026-04-20: on RN < 0.85, `cdp_open_devtools` now starts the multiplexer proxy automatically and re-routes the MCP's own CDP WebSocket through it, so React Native DevTools can connect to the same proxy as a second consumer. Both coexist on single-debugger Hermes without evicting each other. MCP server bumped to 0.29.0.
-
-### Added
-- **`CDPClient.startProxy(opts?)` / `stopProxy()`**. Lifecycle methods that create/dispose the multiplexer and soft-reconnect the MCP's CDP WebSocket to route through it. Idempotent when already active.
-- **`cdp_status.proxy` block**. Reports `{ active, port, url, consumerCount }`. `consumerCount` observes the 1 → 2 transition when DevTools connects.
-- **`cdp_open_devtools` proxy-active mode**. New fields: `hermesWsUrl` (direct Hermes URL, upstream of proxy) and `proxyPort` (bound loopback port). `devtoolsUrl` now always non-null and points DevTools at `ws=127.0.0.1:PROXY_PORT` when proxy-active.
-- **`CDPMultiplexer` bounded resources**. `hermesBufferMaxSize` option (default 1000) with drop-oldest enforcement in `sendToHermes()`; `routingTimeoutMs` option (default 60s) with periodic sweeper. Test-only getters `hermesBufferSize` / `routingTableSize` for regression assertions.
-
-### Changed (behavioral, forward-compatible)
-- **`cdp_open_devtools` mode rename**: `'proxy-required'` → `'proxy-active'` when RN < 0.85 is detected (or version probe fails — conservative default). Previously: returned workaround guidance + null `devtoolsUrl`. Now: proxy auto-starts, `devtoolsUrl` populated, DevTools is usable immediately. The old `'proxy-required'` mode no longer exists.
-- **`CDPClient.disconnect()` tears down multiplexer** if one is active. The only reliable SIGTERM hook for the proxy; matches the precedent set by `MetroEventsClient` cleanup in the same path.
-- **`CDPMultiplexer.start()` failure cleanup** sets `state='stopping'` during cleanup (matching `stop()`), not `'stopped'` before. Closes a concurrent-start race where a second caller would observe "stopped" and allocate on top of in-flight teardown.
-
-### Fixed
-- **Unbounded `hermesBuffer` during CONNECTING window** — messages from fast/misbehaving consumers could pile up between `new WebSocket(hermesUrl)` and the `open` event. Cap + drop-oldest now enforced.
-- **`routingTable` leaks when Hermes goes partial-death** — entries allocated per consumer→upstream request were only cleaned up on close events. Unresponsive-but-not-closed upstreams leaked routing entries indefinitely. Periodic sweeper evicts entries past `routingTimeoutMs`.
-
-### Testing
-- 451 → 462 tests passing (+11): 3 prereq regression tests (hermesBuffer drop-oldest, routing sweeper, failed-start cleanup) + 1 open-devtools startProxy-error path + 10 CDPClient lifecycle tests. 2 existing cdp_open_devtools tests rewritten for `proxy-active` mode. Shared helper `test/helpers/mock-hermes.js` extracted for reuse across proxy tests.
-
-### Multi-review fixes (applied pre-commit)
-- **`CDPClient.startProxy` concurrency guard** (flagged by both Gemini + Codex at 92-95% confidence). Two parallel callers would each allocate a `CDPMultiplexer`; the second overwrote `_multiplexer` and orphaned the first (port bound, sweeper running, unreferenced). Fixed with an `_startProxyInFlight` promise cache that serializes concurrent callers on the same in-flight promise and clears in a `finally` so failed attempts don't poison retries.
-- **Rollback-path test coverage** (flagged by both at 85-90% confidence). The catch block tearing the multiplexer back down when `softReconnect` throws post-allocation was unreachable by the existing mock-client tests (`softReconnect` never rejected). Added 3 tests using a real mock Hermes that exercise the rollback, the concurrency guard, and the in-flight-cache-clears-on-failure behavior.
-
-### Known limitation logged (B132)
-Stale `hermesUrl` after target change or bundle reload — multiplexer captures the URL once at `startProxy` time. If Hermes regenerates the URL (reload, eviction, Metro restart), the proxy forwards to a dead upstream until `cdp_disconnect` + re-run `cdp_open_devtools`. Pre-existing M1a design limit, not introduced by M1b. Filed as B132 in BUGS.md for follow-up (requires multiplexer upstream-refresh API or client-level teardown-and-restart on target change).
-
-### Refs
-- D661 in DECISIONS.md. Phase 104 in ROADMAP.md. Parent: M1a / D654 (Phase 100, 2026-04-20). Branch: `feat/m1b-cdp-proxy-routing`.
-
----
-
-## [0.33.0] — 2026-04-21
-
-Phase 90 metro-mcp pattern adoption (Tier 1 + Tier 2) plus story-driven bug sweep. MCP server bumped to 0.28.0. Seven PRs merged on main since v0.25.0 without intermediate public releases; v0.33.0 is the first public-release checkpoint for all of it.
-
-### Added
-- **`cdp_metro_events` MCP tool** (M5 / D656). Read Metro reporter events (`bundle_build_started` / `bundle_build_done` / `bundle_build_failed`, reloads) captured by the `MetroEventsClient` attached alongside every CDP session. Accepts `limit` / `type` filter / `clearErrors`. Returns `{ eventsConnected, lastBuild, buildErrors, events, count, eventsReason?, hint? }`.
-- **`cdp_open_devtools` MCP tool** (M1a / D654). Reports the React Native DevTools frontend URL + whether DevTools can coexist with the MCP session on the current RN version. On RN ≥ 0.85 returns a direct URL (native multi-debugger). On RN < 0.85 returns explicit guidance — full proxy auto-wiring deferred to M1b.
-- **`cdp_status.metro` fields `eventsConnected` / `lastBuild` / `buildErrors` / `eventsReason`** (M5 + B129). Surface bundler state and incompatibility reasons. On Expo-managed projects `eventsReason: "expo-cli-incompatible"` is set because Expo CLI hijacks `/events` for its manifest protocol.
-- **`cdp_status.capabilities.supportsMultipleDebuggers`** (M1a / D654). True when RN ≥ 0.85.
-- **Single-instance MCP lockfile** at `/tmp/rn-dev-agent-cdp-${uid}-${hash}.lock` (M3 / D652). Two Claude Code windows in the same project no longer fight over the single Hermes CDP slot — the second exits with code 11 and an actionable stderr message. `--no-lock` CLI flag for CI parallelism. Three-tier stale-lock reclaim: PID alive (`kill(pid, 0)`) + process name (`ps -p <pid> -o args=`) + mtime < 24h.
-- **`cdp_network_log` + `cdp_network_body` gain optional `device` arg** (M4 / D655). Default scope is the active device; pass `"all"` for a chronologically-merged union across every device.
-- **`rn-best-practices` rule 5.2** (R7 / D650). Documents the `presentation: 'transparentModal'` blank-white bug on RN 0.76.7 + Bridgeless + react-native-screens 4.4.x and the dark BlurView workaround.
-
-### Changed (behavioral, forward-compatible)
-- **Exponential reconnect with jitter** replaces the old linear 1.5s × 30 retry loop (M2 / D653). Curve: `[0, 500, 1000, 2000, 4000, 8000, 16000, 30000, ...]` ±500ms jitter. Attempt 0 returns 0ms so hot-reload reconnects stay instant. Metro CPU wake-ups in the first 60s of an outage drop from ~40 to ~7 attempts (5× less hammering). `interruptibleSleep` polls the dispose / soft-reconnect flags every 500ms so `softReconnect`'s 3s bail window still preempts a 30s cap sleep.
-- **`DeviceBufferManager` for network events** is now a process-scoped singleton at `src/cdp/network-buffer-manager.ts` (B128 / D657). Previously owned by `CDPClient`, so `cdp_connect(force:true)` / `cdp_restart` wiped all per-device buffers. Now buffers survive the canonical platform-switch use case. Memory unchanged (100 × 10 = 1000 entries total).
-- **Platform inference reads Metro's `deviceName`** before falling back to package-list heuristics (B131 / D660). Dual-install bundles (same `com.example.app` on both iOS sim + Android emulator) are now correctly disambiguated by `"iPhone 17 Pro"` vs `"sdk_gphone16k_arm64 - 17 - API 37"` instead of defaulting to iOS + `ambiguousPlatform: true`.
-- **Runner-leak recovery `closeSession` wrapper** now also calls `clearActiveSession()` + `stopFastRunner()` (B130 / D659). Matches the normal close path. Stale fast-runner ref-map no longer survives recovery, so the post-recovery snapshot lands via daemon/CLI (with `@eN` refs) instead of fast-runner (tree-shaped, no refs) — which means `device_fill` / `press` / `find` actually work after recovery fires.
-
-### Fixed
-- **B128: per-device buffers wiped on reconnect** — see Changed. Root cause: `DeviceBufferManager` lifetime was tied to CDPClient instance, not MCP process.
-- **B129: Expo `/events` endpoint incompatibility surfaces silently** — `MetroEventsClient` now probes HTTP GET `/events` before WS upgrade. If the body matches the Expo manifest shape (`runtimeVersion` string OR `launchAsset.url` string), marks state `'incompatible'` with `eventsReason: "expo-cli-incompatible"` and an actionable hint. Probe failure (timeout / non-200) falls through to WS attempt — doesn't mark incompatible.
-- **B130: `device_fill` "No snapshot in session" after runner-leak recovery** — see Changed.
-- **B131: `cdp_connect({platform: "android"})` errored with "no matches" on dual-install bundles** — see Changed.
-- **M2 multi-review catch: `softReconnect` preemption race at 30s cap** — `interruptibleSleep` polls the dispose/soft-reconnect flags every 500ms so preemption latency stays bounded regardless of the sleep duration.
-- **M5 multi-review catches** — double-schedule on initial connect failure (error + close both fired), `start()` during reconnecting double-connected, port mismatch after CDP port change, `stop()` during CONNECTING state crashed the process via unhandled handshake-abort error. All four fixed with targeted regression tests.
-- **M3 pre-release multi-review catch**: `ps -p <pid> -o comm=` returned only `"node"` for Node-launched scripts, which meant the `cdp-bridge` needle match would NEVER succeed in production → the lockfile would be a no-op. Switched to `-o args=` which returns the full command line. This bug would have shipped silently without multi-review.
-
-### Performance
-- **Unit test suite: 24,246ms → 3,151ms (87% faster)** after adding `skipIncompatibilityProbe: true` to pre-B129 MetroEventsClient tests that use the WS-only mock server. The mock doesn't respond to HTTP GET; every test was paying a 1500ms probe timeout.
-- **Screenshot downscale via sips** (B120/D647 from 0.26.0 — first public release). `device_screenshot` auto-resizes to max 800px width via macOS `sips`, saving ~35–46% on iPhone captures with no readability loss.
-
-### Tests
-272 → **448** (+176 across the series):
-- M3: 14 hermetic unit + 4 real-process regression (stale-lock reclaim, multi-project coexistence, process-name validation against a real child process)
-- M2: 8 curve tests + 6 interruptibleSleep tests
-- M1a: 7 pure-function + 10 multiplexer integration + 5 tool handler
-- M4: 20 DeviceBufferManager tests + updates to 6 pre-existing network-tool tests
-- M5: 13 feature + 4 pass-1 regression + 1 pass-2 crash regression
-- B128-B131: 4 singleton + 10 Expo detector + 2 recovery-close-wrapper contract + 7 deviceName inference
-
-### Multi-review
-Every feature PR and the fix PR went through a 2-pass multi-review (Gemini + Codex in parallel). Pass 1 blockers caught and fixed pre-merge. Three of the M3/M2/M5 blockers would have silently degraded or broken production had they shipped without review. The pattern "hermetic injection for unit coverage + at least one integration test per feature exercising the real default against a real external thing" captured in D652 and reinforced by every subsequent fix.
-
-### Live validation
-All three cross-platform validation stories (M4 network isolation, M5 Metro events, device interaction parity) and the B128-B131 fix validation story executed live against both iOS and Android simulators. 8/8 assertions pass in the B128-B131 validation. Artifacts in `docs/stories/*.md` and `docs/proof/*.jpg` in the workspace repo.
-
-### Upgrade notes
-- **Required action: restart Claude Code after `/plugin update rn-dev-agent`** to load the new MCP server. `/reload-plugins` alone does not respawn MCP subprocesses.
-- **Expected behavior change (B131):** `cdp_connect({platform: "android"})` now succeeds on apps with the same bundleId installed on both iOS and Android. Callers that relied on explicit `targetId` for disambiguation are unaffected — the platform filter is now an additional valid path.
-- **Expected behavior change (B128):** network buffers persist across `cdp_connect(force:true)` / `cdp_restart`. To explicitly wipe, call `cdp_network_log({clear: true})` (scoped to active device) or pass `device: "<key>"` for a specific device.
-- **Expected behavior change (B129):** on Expo-managed projects, `cdp_status.metro.eventsConnected` is now correctly `false` (previously `true` with silent empty events). Applications watching `lastBuild` should also watch `eventsReason` for the `"expo-cli-incompatible"` signal.
-- **Two-window workflow (M3):** opening the same project in two Claude Code windows now exits the second MCP with code 11 and the conflict message. Kill PID or close the other window to resolve.
-
-### Validation matrix
-| Area | iOS | Android |
-|---|---|---|
-| CDP connect + targets | ✅ | ✅ (after B131 fix) |
-| Per-device network buffers | ✅ | ✅ |
-| Cross-device `'all'` merge | ✅ | ✅ |
-| Metro events (Expo → incompatible) | ✅ | ✅ |
-| `device_fill` post-recovery | ✅ (B130) | n/a (no runner-leak on Android) |
-| `cdp_open_devtools` native mode | n/a (RN 0.76 < 0.85) | n/a |
-| Single-instance lockfile | ✅ | ✅ |
-
-### Backlog state
-- **Closed:** M3 + M2 + M1a + M4 + M5 + R7 (Phase 85) + B128-B131. Phase 90 Tier 1 + Tier 2 complete.
-- **Open (carveouts):** M1b (CDPClient proxy routing — needs live simulator for end-to-end verification); Tier 3 (M6 test recorder, M7 fast-runner liveness, M8 renderer 1..5 loop); Tier 4 (M9–M11 polish).
-- **Noted during validation but not blocking:** `cdp_store_state` dot-path resolver breaks on hyphenated Zustand keys; stale `agent-device` daemon sessions (`rn-agent-recovery-*`) persist across MCP boots and cause `DEVICE_IN_USE` on first session open. Workarounds: pass `storeType` without `path`; `agent-device close --session <name>`.
-
-## [0.25.0] — 2026-04-19
-
-Three-PR stability sprint: zombie target disambiguation (B111), MCP process lifecycle hardening (B76 + zombie cleanup), and security documentation (B5). MCP server bumped to 0.20.0. Skipped 0.24.0 because the inter-PR version coordination jumped from 0.23.0 → 0.24.0 (PR #32) → 0.25.0 (PR #33) on main without a public release at the intermediate step.
-
-### Added
-- **`cdp_restart` MCP tool** — in-process soft state reset (disconnect + new CDPClient + autoConnect). Recovers from stuck connection state without losing the CC session. Does NOT reload new dist/ — that still requires a full Claude Code restart (B76/D644).
-- **`cdp.bundleId` field on `cdp_status`** — surfaces the connected target's `description` (Metro reports the bundleId there) for "which app am I connected to?" debugging (B111/D643).
-- **README `## Security` section** — documents that `cdp_evaluate` runs unrestricted JS in the app's Hermes runtime; recommends local-dev-only usage and treating the agent like a developer with shell access (B5/PR #34).
-
-### Fixed
-- **B111 (CRITICAL — silent data corruption): CDP target selection picked zombie over fresh app target.** `selectTarget` now hard-fails on explicit `targetId` / `bundleId` mismatch with actionable warnings listing available ids/descriptions; `autoConnect` auto-populates `preferredBundleId` from `resolveBundleId(platform)`; bundleId/preferredBundleId matching is case-insensitive; deterministic sort tie-break (page-id desc → preferredBundleId-matched first → ascending lex by full id) (D643).
-- **B76: MCP server cannot be restarted within a session** — fixed via the new `cdp_restart` tool for in-process reset. SIGUSR2 handler retained for future supervisor wiring (CC does not auto-respawn MCP subprocesses today) (D644).
-- **MCP zombie subprocesses surviving parent CC quit** — root cause: the 5s `setInterval` background Metro poll held the Node event loop alive indefinitely when CC closed stdin without SIGTERM. New `lifecycle/graceful-shutdown.ts` factory funnels SIGTERM/SIGINT/SIGHUP/SIGUSR2/`stdin.end`/`uncaughtException` into a single idempotent shutdown path (clears bgPoll → disconnects CDP → stops fast-runner → exit) with a 3s timeout race for stuck cleanup (D644).
-- **`CDPClient.disconnect()` race safety** — added 2-line idempotent guard so concurrent `cdp_restart` + signal-shutdown don't race (D644).
-- **Latent production bug surfaced by CI: `setTimeout(...).unref()` on the load-bearing graceful-shutdown timeout** meant the timer wouldn't fire when the event loop had no other work, defeating its purpose. Removed `.unref()` so the timer always keeps the loop alive long enough to force-exit (D644 follow-up).
-
-### Verified-stale (closed via empirical sweep, no code change in this release)
-- **B73 (HIGH): MCP dies on Metro restart** — verified empirically already fixed by historical reconnect loop + background poll pattern (D622). MCP survives Metro death and auto-reconnects when Metro returns.
-- **B84, B100, B110, B112** — fixes had already shipped through earlier hardening phases; BUGS.md was stale.
-- **All Phase 85 R-stories (R1-R10 except R7)** — closed; R7 (transparentModal) noted as react-native-screens upstream.
-
-### Tests
-249 → **272** (+23). New: 10 for B111 (selectTarget hard-fail, case-insensitive, deterministic sort tie-break, discoverAndConnect throw-on-empty); 13 for B76 (gracefulShutdown factory + cdp_restart handler, including a concurrent-race test that proves idempotency under parallel invocation).
-
-### Multi-review
-PRs #32 (B111) and #33 (B76) reviewed independently by Gemini + Codex. PR #32: 0 high-confidence issues. PR #33: 1 important (SIGUSR1 → SIGUSR2 to avoid Node `--inspect` collision) + 3 advisories — all 4 applied as follow-ups before merge.
-
-### Upgrade notes
-- Restart Claude Code after `/plugin update rn-dev-agent` to pick up the new MCP server (`/reload-plugins` does NOT restart MCP subprocesses).
-- New tool `cdp_restart` is available immediately. Use it for in-session state reset without losing CC context. Loading new `dist/` after `npm run build` still requires a full CC quit + reopen.
-- **Behavioral change (B111):** callers that previously passed an explicit `targetId` or `bundleId` that didn't match any target used to silently connect to whatever sorted first; now they get a clear error with the available ids/descriptions listed. Any caller relying on the old silent-fallthrough behavior was already getting wrong data — the new error is strictly better.
-- **Behavioral change (B76):** SIGINT, SIGHUP, and stdin EOF now route through graceful shutdown (previously only SIGTERM). Subprocess termination is cleaner; no zombie MCP processes after CC quit.
-
-### Validation
-- 5-gate live smoke for B76 fix (CC restart → `cdp_restart` tool present → invocation → MCP PID unchanged) — all green.
-- 4-gate live smoke for B111 fix (kill Metro test → bad targetId reject → bad bundleId reject → auto-select picks live target) — all green.
-- B73 verification trace at `docs/proof/b73-b76-mcp-lifecycle/b73-verification.log` in the workspace repo.
-
-### Backlog state
-Plugin code-side stability backlog effectively cleared after this release. All Phase 85 R-stories closed (R7 deferred as upstream). Remaining open items in BUGS.md are out-of-scope for plugin code (workspace test-app cosmetic, environmental Hermes/Android, accepted-tradeoff items).
-
-## [0.23.0] — 2026-04-16
-
-Major session of correctness and performance fixes surfaced by end-to-end benchmarks and a live feature-dev run. MCP server bumped to 0.18.0.
-
-### Added
-- **`cdp_native_errors` MCP tool** — reads `xcrun simctl log show` on iOS / `adb logcat -d` on Android, parses known native-module / bundle-fetch / FATAL EXCEPTION patterns, dedupes by message body. Fills the gap when `cdp_error_log` / `cdp_console_log` stay empty because native errors fired before `__RN_AGENT` injected. `cdp_status` also emits a suspicion hint pointing at this tool when `connected && !helpersInjected && !hasRedBox && errorCount === 0` (B114/D642).
-- **`targetId` + `bundleId` filters on `cdp_connect`** — disambiguate zombie Expo Go host pages from real app targets (B111/D635).
-- **`attachOnly: true` on `device_snapshot`** — skip app launch when it's already running; verifies via `xcrun simctl spawn booted launchctl list` / `adb shell pidof`. Prevents the ~12s app-restart cascade. Exported `isAppRunning(platform, bundleId, probes?)` helper (B112/D641).
-- **Platform-aware CDP timeouts** — `defaultTimeout(platform)` and `timeoutForMethod(method, platform)` apply a 2× Android multiplier via a single constant `ANDROID_MULTIPLIER`. `CDPClient` routes `Runtime.evaluate` paths through it using `this._connectedTarget?.platform`. iOS unchanged (B118/D637).
-- **`platform` param on `device_screenshot`** — inherits from `client.connectedTarget?.platform` or accepts explicit override. When no active session is open, the wrapper appends `--platform <p>` to agent-device CLI args. Session-bound dispatch remains the canonical path (B117/D638, partial — upstream agent-device CLI ignores `--platform` without a session; workaround via open session).
-- **`simctl listapps` cross-check in platform inference** — `cdp/discovery.ts::inferPlatforms` now reads both `adb shell pm list packages` AND `xcrun simctl listapps booted`; targets installed on both platforms are flagged with `ambiguousPlatform: true`. Readers are injectable for unit testing (B116/D639).
-- **Tab-dispatch fix for `cdp_nav_graph`** — `buildTabNavigateArgs(tab, screen, params)` emits the flat `ref.navigate(tab, params)` when target === tab, nested form when they differ. Prevents self-referential `navigate('TasksTab', { screen: 'TasksTab' })` that left RN stuck on the old tab (B115/D640).
-
-### Fixed
-- **B110: MCP server reports stale version** — server version now read from `package.json` at module load; `sync-versions.sh` gained a regex guard against hardcoded `version:` literals in src/ (D630).
-- **B113: `device_screenshot --format` always rejected** — agent-device >= 0.8.0 doesn't accept `--format`. Refactored into `buildScreenshotArgs()` + thin delegate; now uses `--out <path>` explicitly, extension drives encoding (D636).
-- **Freshness probe caching** — 2s TTL per `connectionGeneration`, WeakMap-keyed. Saves 30-150ms per back-to-back tool call by skipping redundant `__RN_AGENT.__v` round-trips (D631).
-- **Structured error codes on `ResultEnvelope`** — `ToolErrorCode` union (`STALE_TARGET`, `HELPERS_STALE`, `RECONNECT_TIMEOUT`, `NOT_CONNECTED`, `HELPERS_NOT_INJECTED`). Agents can branch on `code` instead of regex on error text. Back-compat preserved (D634).
-- **Extracted `cdp/recovery.ts`** — `probeFreshness()` + `recoverFromStaleTarget()` moved out of `utils.ts`. Replaced error-string matching for stale detection with the `__RN_AGENT.__v` probe as the primary signal (D633).
-- **`RingBuffer` requestId index** — optional `indexKey` extractor builds a parallel `Map<key, item>`; `getByKey(id)` is O(1). Swapped 5 call sites (`event-handlers.ts` ×4, `tools/network-body.ts` ×1) from `findLast` → `getByKey` (D632).
-
-### Refactors
-- **CDP module extraction continued** — `cdp/connect.ts` (213 lines), `cdp/helper-expr.ts`, `cdp/recovery.ts` (99 lines). CDPClient facade shrunk further; every module now has a typed Context interface instead of reaching into the facade directly.
-- **`cdp/state.ts` setter-based `ResettableState` interface** — replaces `as unknown as CDPResettableState` cast. Renaming a private field on `CDPClient` now produces a real TypeScript error.
-
-### Benchmarks validated live
-
-Cross-platform benchmark (Task Power User flow + Priority Filter Row feature):
-- **iOS (iPhone 17 Pro, iOS 26.3)**: 3.37s / 29 calls / 0 failures (`cdp_interact` p50 7ms)
-- **Android (Pixel_9_Pro, API 37) pre-fix**: 16.11s / 32 calls / 3 failures (incl. 5.3s `typeText` timeout)
-- **Android post-fix**: ~7.2s / 24 calls / 0 failures — **55% faster, zero false-negative timeouts** (`cdp_interact` p50 16ms, p95 45ms)
-
-### Test count
-158 → **249** (+91 this release cycle).
-
-### Decisions logged
-D630 through D642 in `rn-dev-agent-workspace/docs/DECISIONS.md`.
-
-## [0.22.0] — 2026-04-16
-
-### Added
-- **`cdp_set_shared_value` tool** — Drive Reanimated SharedValue animations by testID for proof captures when gesture/scroll synthesis is unavailable. Walks the React fiber tree, finds the named prop, sets `.value` on the JS thread (D623).
-- **Fast-runner auto-restart** — When fast-runner dies mid-session, `tryFastRunner` automatically attempts one restart using the session's deviceId. `isFastRunnerAvailable()` now probes process liveness via `kill(pid, 0)` instead of just checking state file (D620).
-- **Reload counter + NativeWind corruption warning** — `cdp_status` warns after 5+ `cdp_reload` calls in a session: "NativeWind stylesheet may be corrupted" (D622).
-- **Auto-open device session in Phase 5.5** — The 8-phase pipeline skill now mandates opening a device session at verification start, preventing fallback to bash commands (D619).
-- **9 new unit tests** for deviceId parsing — covers all 4 agent-device response shapes, UDID regex validation, priority ordering, and edge cases. Test count: 139 → 148 (D625).
-
-### Fixed
-- **B103: `cdp_navigate` false success** — Fallback navigation path now verifies the target screen exists in the navigation state after dispatch. Returns error if screen not found in any navigator (D616).
-- **B106: `device_scroll`/`device_swipe` deadlock on Reanimated screens** — Routes through fast-runner HID synthesis when available, bypassing agent-device daemon's `waitForIdle` which deadlocks with Reanimated worklets (D610).
-- **B107: `deviceId` parsing for agent-device v0.8.0** — Parses `data.device_udid`, `data.id`, and `data.device.id` (when object). Prefers `device_udid` over generic `id`. Validates against UDID regex before `ensureFastRunner` (D611, D618).
-- **R2: `device_screenshot` ignores requested path** — Fast-runner screenshot tier now copies the captured PNG to the requested output path instead of always writing to `/tmp` (D617).
-- **R5: Scroll amount semantics diverge** — Dropped `* 2` factor in fast-runner scroll computation to match agent-device daemon's interpretation of `amount` (D621).
-- **MCP-only proof capture enforcement** — Added "Never use `xcrun simctl` for screenshots" and "Never use `sleep` for settling" to skill boundaries (D624).
-
-### Security
-- **hono 4.12.12 → 4.12.14** — Fixes HTML injection in JSX SSR (Dependabot #5). Transitive dep of `@modelcontextprotocol/sdk`.
-
-### Changed
-- MCP tool count: 51 → 52 (`cdp_set_shared_value`). CDP tools: 24 → 25.
-- Plugin version: 0.21.1 → 0.22.0. MCP server: 0.16.0 → 0.17.0.
-- Decisions logged: D610-D625 (16 new).
-
-## [0.21.1] — 2026-04-15
-
-### Fixed
-- **MCP tools unavailable in spawned subagents** (GH #31) — Agents split into protocol playbooks (parent-session-only) and spawnable workers.
-
-## [0.19.2] — 2026-04-13
-
-### Fixed
-- **MCP server reconnection failure after upgrade** (#30) — Renaming the `mcpServers` key from `rn-dev-agent-cdp` to `cdp` in v0.19.1 broke Claude Code session reconnection. Added upgrade detection in SessionStart hook: compares plugin version against last-seen version, outputs restart notice on upgrade.
-
-### Added
-- **Convention D605:** MCP server keys in `plugin.json` must never be renamed in minor or patch versions. Major versions may rename with explicit migration notes.
-
-### Migration from v0.19.1
-If CDP tools fail after upgrading, restart Claude Code to reinitialize MCP servers. This is a one-time issue caused by the server key rename in v0.19.1.
-
-## [0.9.0] — 2026-04-02
-
-### Added
-- **Experience Engine (Phases A-D)** — self-improving failure pattern learning system:
-  - **Phase B: Classification + Retrieval** — normalized error signatures, failure family matching, three-layer experience cascade (seed → project → user), environment fingerprint filtering
-  - **Phase B: Ghost Recovery** — auto-recovers FF_STALE_CDP transparently (depth-1 circuit breaker, 30s cooldown, 15s timeout)
-  - **Phase C: Compaction + Promotion** — telemetry scanner, candidate generator, auto-promotes ghost recoveries, stale heuristic decay, `rn-agent-compact` command
-  - **Phase D: Sharing + Polish** — anonymized export/import, experience health dashboard, `rn-agent-export`, `rn-agent-import`, `rn-agent-health` commands
-- **Auto-handle Dev Client picker** (#9) — `cdp_status` detects and dismisses the Expo Dev Client server picker via `device_find`, auto-retries CDP connection after dismissal
-- **`FF_DEV_CLIENT_PICKER`** failure family in seed experience
-
-### Changed
-- MCP tool count: 25 (unchanged). Command count: 6 → 10 (4 new experience engine commands).
-- `cdp_status` refactored: extracted `buildStatusResult()` helper, picker detection in catch block
-- `record_proof.sh` standardized video output (#14): always MP4 with `-movflags +faststart`, `ffprobe` validation before copy, graceful fallback preserving correct extension
-- All command/skill `.mov` references updated to `.mp4`
-- Zod schemas tightened: `count`, `holdMs`, `durationMs`, `amount`, `scale` now have min/max bounds
-
-### Fixed
-- **ENAMETOOLONG on marketplace install** (#6) — changed to local source `"./"` in marketplace.json
-- **Shell globbing vulnerability** in `androidClipboardFill` — escape `*?[]{}` chars
-- **Missing `-s` device serial** in adb calls — added `getAdbSerial()` helper
-- **Platform detection gap** — `isAndroidSession()` falls back to `ANDROID_SERIAL` env
-- **Misleading `disableDevMenu` fallback** — removed unrelated `setIsDebuggingRemotely` call
-- **`ANDROID_SDK_ROOT` not honored** in run.sh — maps to `ANDROID_HOME`
-- **Ineffective `ANDROID_SERIAL` export** — persisted to file for cross-process access
-- **Inexact package matching** in post-edit health check — exact match with `grep -cxF`
-- **Video corruption** (#14) — record to temp, convert on stop, validate with ffprobe
-- **Double `.mp4.mp4` extension** — strip any extension before appending .mp4
-
-## [0.8.0] — 2026-03-30
-
-### Added
-- **`device_longpress`** — long press by @ref or coordinates with configurable duration. Enables context menus, drag initiation, hold-to-delete.
-- **`device_scroll`** — native directional scroll with configurable amount (0-1). Smoother than swipe for list scrolling.
-- **`device_scrollintoview`** — scroll until element visible by text or @ref. Works with ScrollView content (FlatList virtualizes, so elements must be rendered).
-- **`device_pinch`** — pinch/zoom gesture with scale factor and optional center point. iOS simulator only.
-- **`device_press` enhanced** — added `doubleTap`, `count` (repeated taps), and `holdMs` (long press via ref) options.
-- **`device_swipe` enhanced** — now supports coordinate-based swipes (`x1,y1,x2,y2,durationMs`) for precise gestures (drag-to-reorder, bottom sheets, pull-to-refresh). Direction shortcut still works, now delegates to native scroll.
-
-### Changed
-- MCP tool count: 21 → 25 (4 new device gesture tools).
-
-## [0.7.2] — 2026-03-30
-
-### Added
-- **`disableDevMenu` action** for `cdp_dev_settings` (#8) — suppresses shake-to-show dev menu via `DevSettings.setIsShakeToShowDevMenuEnabled(false)`. Auto-called before proof recordings.
-- **Pre-recording readiness check** in proof-capture and rn-feature-dev Phase 8 (#8) — verifies valid navigation route (not Dev Client picker) and disables dev menu before recording starts.
-- **Dev Client clearState warning** in rn-testing skill (#8) — all Maestro YAML examples updated to not use `clearState:true`.
-
-### Changed
-- rn-tester agent Safety Constraints now explicitly forbid `clearState:true` with Dev Client builds.
-
-## [0.7.1] — 2026-03-30
-
-### Added
-- **Video label subcommand** (`record_proof.sh label`) — adds timed text labels to proof videos in a dedicated dark bar below the video content. Cross-platform (works on any .mp4). Uses Pillow for rendering, auto-installs in venv if missing.
-
-## [0.7.0] — 2026-03-30
-
-### Added
-- **Android emulator readiness script** (`scripts/ensure-android-ready.sh`) — checks boot completion, cleans stale port forwarding, auto-selects `ANDROID_SERIAL`, warns about Play Protect. Runs on SessionStart.
-- **Android text input workaround** — `device_fill` auto-detects Android sessions and chunks long/special-char strings into safe 10-char segments via `adb shell input text`.
-- **Android app installation check** in post-edit health check — verifies `expo.android.package` via `adb shell pm list packages`.
-- **Android-Specific Testing Rules** section in rn-testing skill — maestro-runner enforcement, text input best practices, boot timing, Play Protect.
-- **2 new failure families** — `FF_MAESTRO_GRPC_ANDROID` and `FF_ANDROID_TEXT_INPUT_CRASH` in seed experience.
-- **3 new platform quirks** — `PQ_ANDROID_MAESTRO_GRPC`, `PQ_ANDROID_TEXT_INPUT_CRASH`, `PQ_ANDROID_PLAY_PROTECT`.
-
-### Changed
-- **maestro-runner enforced on Android** — all agents (rn-tester, rn-debugger) and skills now require maestro-runner over classic Maestro for Android flows. Classic Maestro's gRPC driver is unreliable (upstream #998).
-- All Maestro commands now include `--platform` flag explicitly.
-
-### Fixed
-- **Maestro gRPC UNAVAILABLE on Android** (#7) — bypassed by enforcing maestro-runner which uses HTTP to UIAutomator2 instead of gRPC.
-- **`mobile_type_keys` crashes app on Android** (#7) — special characters and long strings now auto-chunked.
-
-## [0.6.1] — 2026-03-30
-
-### Fixed
-- **ENAMETOOLONG on marketplace install** (#6) — repo renamed from `react-native-dev-claude-plugin` to `rn-dev-agent`, shortening marketplace qualifier from 39 to 21 chars on every cached path.
-- Shortened 9 long reference filenames in `skills/rn-best-practices/references/` (max 42 → 31 chars).
-- Updated all internal references: plugin.json, marketplace.json, README install commands, troubleshooting, and source clone instructions.
-
-## [0.5.0] — 2026-03-20
-
-### Added
-- **`collect_logs` tool** — multi-source log collection from JS console, native iOS (`xcrun simctl log stream`), and native Android (`adb logcat`) in parallel. Results merged by timestamp.
-- **App-Side Dev Bridge** (`@rn-dev-agent/runtime`) — stable public API replacing fragile fiber walks for navigation state, store state, console, and errors. Local `dev-bridge.ts` for test-app integration.
-- **Vercel RN Best Practices skill** — 36 rules from `vercel-labs/agent-skills` + 3 custom rules. Pass 4 keyword-triggered reviewer integration.
-- **Post-edit health check hook** — detects app crashes after source file edits via PostToolUse hook. Gated on active CDP session to avoid false positives.
-- **MCP server resilience** — reconnect window extended to 46s (30 attempts), background Metro poll for auto-reconnect after Metro restart.
-- **DiagnosticsScreen** (test-app) — dev-only screen with FlashList log viewer, level filter pills, and pull-to-refresh for `collect_logs` validation.
-- **GlobalSearchModal** (test-app) — FlashList with heterogeneous items, cross-store search, text highlighting.
-- **TaskStatsCard** (test-app) — Reanimated animated progress bar with staggered entries.
-- **Auto-update guide** in README for marketplace plugin users.
-- **Navigation debugging recipe** — B75 nested navigator patterns documented in `skills/rn-debugging/references/`.
-
-### Changed
-- Plugin now requires Node.js >= 22 (LTS).
-- Reviewer agent (Pass 4) loads best-practice rules based on keyword triggers in reviewed code.
-- Architect agent references CRITICAL/HIGH rules when designing component architecture.
-- `cdp_status` reports `capabilities.bridgeDetected` and `capabilities.bridgeVersion`.
-- Bridge-aware routing in navigation state, store state, console log, error log, and dispatch tools.
-- Health check hook gated on active CDP session flag file (`/tmp/rn-dev-agent-cdp-active`).
-- Bridgeless mode target detection checks both `.title` and `.description` fields.
-
-### Fixed
-- Post-edit health check false positives outside RN projects (GH #1).
-- Post-edit health check false positives when app not installed or simulator booted without app (GH #2).
-- Console double-wrapping on Fast Refresh via global sentinel.
-- Store auto-detection re-scans globals on every call instead of caching first result.
-- Bridge detector validates required methods instead of accepting any truthy global.
-- Reconnect resets bridge state in `handleClose()` and `softReconnect()`.
-
-## [0.1.0] — 2026-03-09
-
-### Added
-- Initial release.
-- 19 MCP tools: 11 CDP (status, evaluate, reload, component tree, navigation state, store state, error log, network log, console log, interact, dev settings) + 8 device (list, screenshot, snapshot, find, press, fill, swipe, back).
-- 3 skills: rn-device-control, rn-testing, rn-debugging.
-- 5 agents: rn-tester, rn-debugger, rn-code-explorer, rn-code-architect, rn-code-reviewer.
-- 5 commands: rn-feature-dev, test-feature, debug-screen, check-env, build-and-test.
-- Injected helpers IIFE for Hermes runtime introspection.
-- Ring buffers for console (200), network (100), and error (50) events.
-- Network fallback for RN < 0.83 via fetch/XHR monkey-patches.
-- Auto-discovery across Metro ports 8081/8082/19000/19006.
-- maestro-runner and agent-device auto-installation hooks.
+## Claude plugin
+
+### 0.65.10
+
+#### Patch Changes
+
+- bfb5e10: Android device-smoke keyboard-guard step: accept both non-blocked guard outcomes (`dismissed` and `not_occluded`) instead of pinning `dismissed`. Which one fires depends on the emulator's exact keyboard geometry (whether the bottom button's tap point lands inside the IME frame or at/below its edge), which varies run-to-run. The smoke now verifies the guard evaluated on-device and did not wrongly block the tap; the precise `shouldDismiss` predicate stays unit-tested in `KeyboardGuardTest.kt`.
+
+### 0.65.9
+
+#### Patch Changes
+
+- 60720e1: Make the rn-fast-runner warm-launch ready gate overridable via `RN_FAST_RUNNER_READY_TIMEOUT_MS` (default 30s) so a slow CI simulator that needs longer to install+launch+attach the XCUITest runner is not a false `RN_FAST_RUNNER_DOWN`. The nightly iOS device-smoke lane also now reuses the image's already-booted (warm) simulator and shuts down only extras, instead of a blanket `shutdown all` that cold-boots the target and makes the runner launch time out.
+
+### 0.65.8
+
+#### Patch Changes
+
+- fd8909d: Nightly iOS device-smoke lane: build the rn-fast-runner fresh each run instead of restoring DerivedData from cache. A restored DerivedData drove an unreliable `test-without-building` warm launch (`RN_FAST_RUNNER_DOWN`), whereas a fresh `build-for-testing` then warm launch is the known-good path. The ~5 min build is well within the 40 min lane timeout and the nightly budget.
+
+### 0.65.7
+
+#### Patch Changes
+
+- 27f320d: Nightly device-smoke fixes: (1) the iOS lane now shuts down any pre-booted simulators before booting exactly one, so `device_snapshot open` (which refuses on >1 booted iOS device) resolves deterministically. (2) The keyboard-guard step is platform-split: Android UiAutomator drops occluded views, so the occluded bottom button is absent from a post-fill snapshot — the driver now presses the pre-fill ref (its cached coords are under the keyboard) without re-snapshotting, exercising the Android dismiss contract; iOS keeps its re-snapshot + refusal-contract path (XCUITest reports occluded elements).
+
+### 0.65.6
+
+#### Patch Changes
+
+- 41d6bd9: Fix direction `device_scroll`/`device_swipe` computing a no-op gesture on Android when no snapshot node spans the full window. The screen rect (used to size direction gestures) was picked as the largest `(0,0)`-anchored node; on some Android snapshots that is a ~128px top-chrome strip while the scrollable content sits below it, so scrolls dragged ~50px in the status bar and never moved the list. The screen rect is now the union bounding box of all node rects (max extent), recovering the true viewport on both platforms.
+
+### 0.65.5
+
+#### Patch Changes
+
+- 8c18951: Observe UI: surface the idb install hint as a banner under the device pane header while mirroring runs on the ~6fps simctl fallback, instead of an ellipsized footer line that truncated the brew command. Error hints stay in the footer. The idb install command is corrected everywhere to include the required tap (`brew tap facebook/fb && brew install idb-companion`) — including the executed installs in `ensure-idb.sh` / `ensure-idb-companion.sh`, which previously failed on untapped machines. `/rn-dev-agent:setup` now diffs an already-injected CLAUDE.md template block against the plugin's current CLAUDE-MD-TEMPLATE.md and offers an in-place refresh when stale (new `<!-- rn-dev-agent:template-end -->` sentinel delimits the block; legacy blocks are upgraded on refresh).
+
+### 0.65.4
+
+#### Patch Changes
+
+- df5c76e: Nightly device-smoke Android lane: scroll the golden-set list at full amplitude (amount 1) so row 80 is reached within the 30-scroll budget. The earlier amount-0.5 guard (added for a local emulator's drag latency) fell ~5 rows short on CI, where all 30 drags run with zero RUNNER_TIMEOUT — the shorter drag bought nothing.
+
+### 0.65.3
+
+#### Patch Changes
+
+- 552d151: Fix the nightly device-smoke workflow failing at setup: it ran `npm ci` inside `scripts/cdp-bridge`, which fights the root lockfile and triggers the root `prepare: husky` without husky installed (exit 127). Both lanes now install from the repo root (npm workspaces resolves the cdp-bridge deps) with `HUSKY=0`.
+
+### 0.65.2
+
+#### Patch Changes
+
+- 57e7699: Fix two Android device-control defects surfaced by the Story 06 Phase B smoke: (1) with interactive-windows snapshots (#370), the status bar precedes the app window, and the screen-rect heuristic took the first (0,0)-anchored node — so direction-based device_scroll/device_swipe computed gestures inside the status bar; it now picks the largest full-bleed rect. (2) The in-tree rn-android-runner could not re-foreground an app under test on API 30+ because its manifest lacked a package-visibility <queries> declaration (getLaunchIntentForPackage returned null → "No launch intent for package …"); a MAIN/LAUNCHER queries entry restores visibility.
+- 57e7699: Fix device_scroll/device_swipe silently no-oping on iOS: the drag /command body omitted the target appBundleId, so the runner cleared its target, activated its own RnFastRunner host app, and dragged on a blank screen — every coordinate scroll/swipe returned ok:true with zero movement while foreground-stealing from the app under test. All fastSwipe dispatch sites now forward the active session's appId. Found by the Story 06 Phase B golden-set smoke before it ever reached CI.
+- 57e7699: Story 06 Phase B: add a nightly device-smoke workflow that drives the golden device\_\* command set through the real bridge (MCP over stdio) against tiny native contract fixtures (test-fixtures/{ios,android}-fixture) on a booted simulator/emulator, plus a release-artifact-integrity lane and 2-consecutive-red tracking-issue alerting. Local `npm run smoke:ios` / `smoke:android` run the same golden set against a developer's own device.
+
+### 0.65.1
+
+#### Patch Changes
+
+- f74b5b7: Observe UI: make the right state pane fit its width, and slim the timeline
+  column.
+
+  The right pane is a fixed ~26% column (~340-450px), but the actions tab
+  rendered a 5-column table and the e2e tab 3- and 4-column tables. Tables
+  cannot shrink below their column content, so at typical window widths the
+  Status/Params/Run columns were clipped clean off the pane — the Run button
+  was unreachable — and action ids line-wrapped mid-word. Both tabs now render
+  stacked rows designed for a narrow column:
+
+  - **Actions**: one item per action — id (truncating, full value on hover) +
+    status badge + Run on the first line, intent wrapped below (2-line clamp),
+    param inputs flex-wrapping to the available width instead of fixed 110px
+    columns, result/output underneath.
+  - **E2E**: suite results and run history as one-line rows — pass/fail mark,
+    truncating test/run id, duration, classification badge or `2✓ 1✗` totals +
+    verdict — with error excerpts wrapping below and the expanded run detail
+    reusing the same row layout.
+  - Pane guards: `.pane.right` gets `min-width: 340px`, tabs wrap instead of
+    overflowing, long live routes break instead of pushing the pane wide.
+  - Layout rebalance: the left timeline column drops from 40% to 33%
+    (`min-width: 380px`; summaries already ellipsize), and the device pane no
+    longer greedily takes all remaining width — the mirror is a portrait phone
+    screen capped at ~100vh, so the pane is capped at 400px and the state pane
+    absorbs the surplus instead.
+
+### 0.65.0
+
+#### Minor Changes
+
+- 24842f8: Story 13 (#397) Phases 1–2: maestro-runner engine pinning and a proactive blind-probe. The installer now installs the tested pin (`1.0.9`) exactly, verifies its checksum fail-closed on fresh downloads, and warns on local drift; `cdp_status.replayEngine` + `/doctor` report engine, version-vs-pin, and known quirks; `maestro_run` carries `enginePin` meta and warns once on drift (opt-in hard enforcement: `RN_ENGINE_PIN_STRICT=1`). `cdp_run_action` on at-risk iOS runtimes (>= 26, or a recent device-matched `TRANSPORT_BLIND` with clean-pass reset) probes the CDP tree first and, when the action's anchor is visible, skips the doomed ~40s WDA attempt and replays via CDP/JS directly — `RunRecord` gains additive `deviceId`/`blindProbe`, probe-routed failures classify as `FALLBACK_REPLAY_FAILED` (never false `TRANSPORT_BLIND`), probe-routed passes never auto-promote, and the DB mirror persists the new fields. Opt out with `RN_BLIND_PROBE=0`.
+
+### 0.64.6
+
+#### Patch Changes
+
+- 6534bf3: Make the Runner artifacts workflow self-healing (B258, second half): the gate
+  is now state-based — any trigger checks whether release `v<plugin.json version>`
+  already carries both runner zips + `runner-manifest.json` and builds only when
+  something is missing — and a 6-hourly scheduled sweep catches the releases the
+  push trigger structurally cannot see. release.yml merges Version Packages PRs
+  as `github-actions` with `GITHUB_TOKEN`, and GitHub's recursion guard suppresses
+  workflow triggers for `GITHUB_TOKEN`-initiated pushes, so under the normal
+  automated release path the artifact build NEVER fired (v0.64.4 and v0.64.5
+  both shipped artifact-less and needed manual `workflow_dispatch` backfills).
+  The state-based gate also heals partially failed builds: incomplete assets →
+  rebuild both runners, uploads `--clobber`.
+
+### 0.64.5
+
+#### Patch Changes
+
+- f4368e4: Fix the release-triggered iOS runner-artifact build (Runner artifacts workflow):
+  the `build-ios` job ran on `macos-14` (Xcode 15.4), which cannot open
+  `RnFastRunner.xcodeproj` in project format 77 — its first real invocation (the
+  v0.64.2 release push) failed with "future Xcode project file format (77)" and
+  the runner manifest was never generated, so installs kept resolving to local
+  builds. The job now runs on `macos-15` (Xcode 16.x), matching `native-tests.yml`
+  and `codeql.yml`, which already build this project green.
+
+### 0.64.4
+
+#### Patch Changes
+
+- 588dedc: Sync CLAUDE-MD-TEMPLATE.md (the operating manual `/setup` injects into user
+  projects) with everything shipped since 0.49.0. The template still documented
+  the pre-0.55 world: it told agents to run a manual multi-minute `xcodebuild`
+  pre-build (obsolete since prebuilt runner artifacts, #382), described Android
+  dispatch as "3-tier agent-device" (removed entirely in 0.55.0), routed MMKV
+  through raw `cdp_evaluate` Nitro poking (superseded by `cdp_mmkv`), and framed
+  multi-device screenshot routing as an open bug (#60 — fixed).
+
+  Updated: in-tree runner section rewritten around prebuilt-artifact resolution,
+  protocol/command staleness self-healing, quiescence bypass, and the foreign-flow
+  arbiter; new reliability-layers table (settle engine, self-healing taps,
+  keyboard guard) with opt-out env vars; perception guidance for
+  `cdp_component_tree(interactiveOnly)`, `device_batch finalSnapshot`, and cached
+  `device_find`; E2E lock/suite flow (`/lock-e2e`, `cdp_lock_e2e_test`,
+  `cdp_run_e2e_suite`) in the actions lifecycle; dev-menu dismiss via
+  `cdp_dev_settings hideDevMenu`; `device_reset_state` in the auth/permission
+  pre-flight; nine new error-recovery rows (BUSY_FOREIGN_FLOW,
+  RUNNER_COMMANDS_STALE, KEYBOARD_OCCLUDED, RUNTIME_DEGRADED, APP_NOT_INSTALLED,
+  TRANSPORT_BLIND fallback, post-upgrade zero-tools recovery, wrong-worktree
+  Metro); Key Commands table gains doctor / list-learned-actions / run-action /
+  lock-e2e and the autostarting observe UI description.
+
+### 0.64.3
+
+#### Patch Changes
+
+- d041bac: Harden the Android **raw** screenshot capture path (`device_screenshot`, GH #428),
+  mirroring the iOS hardening from #427:
+
+  - **Truncate-before-success**: raw capture now stages `adb exec-out screencap`
+    bytes in a unique sibling temp file and `renameSync`s onto the caller's path
+    only after both the write stream drains and adb exits 0. A failed or timed-out
+    capture can no longer truncate-then-delete an existing file the tool never
+    created.
+  - **Multi-emulator first-pick**: with several emulators booted and no session
+    binding, resolution now refuses (exactly-one-or-null via `resolveAndroidEmu`)
+    instead of silently grabbing the first emulator — matching iOS
+    exactly-one-or-refuse. Sessions still bind to their device id.
+  - **adb child leak on stream error**: a write-stream error (ENOSPC/EACCES) now
+    unpipes and kills the `adb` child before settling, instead of leaving it
+    running blocked on stdout.
+
+### 0.64.2
+
+#### Patch Changes
+
+- 277bc81: Story 06 Phase A (#387): the native runner unit suites now execute in CI.
+  `native-tests.yml` runs `gradlew testDebugUnitTest` (ubuntu) and
+  `xcodebuild test` with a skip-list (macos-15, simulator) — path-filtered with
+  green skip notices on TS-only PRs, unconditional on pushes to main. Local
+  entry points: `npm run test:native:android` / `npm run test:native:ios`.
+  Also removes a dangling `RnFastRunnerTests` testable from the shared scheme.
+
+### 0.64.1
+
+#### Patch Changes
+
+- f583249: `cdp_dev_settings` gains a `hideDevMenu` action that dismisses the iOS
+  expo-dev-client dev menu bottom sheet over CDP via `ExpoDevMenu.hideMenu()`
+  (#335). Because it runs through `client.evaluate` instead of a coordinate
+  tap/swipe, it never triggers the touch-induced Hermes detach the issue
+  describes — the JS thread stays attached and the in-memory store survives.
+  `cdp_reload` now also best-effort auto-dismisses the menu on iOS after
+  reconnect, so the agent lands on the app instead of behind the sheet. The
+  dismiss resolves the `ExpoDevMenu` native module through a multi-tier chain
+  (`globalThis.expo.modules` → `NativeModules` → TurboModule proxies) and is a
+  silent no-op on non-expo builds.
+
+### 0.64.0
+
+#### Minor Changes
+
+- d6f72f7: Story 05 (#386) self-healing taps: stale `@ref` taps re-resolve inline by identity signature (unique-match only; ambiguous/absent STALE_REF now lists candidates), swallowed taps retry exactly once via settle-hash change detection (`meta.reResolved` / `meta.tapRetried` / `meta.noUiChange`), 3 consecutive no-change taps on distinct targets surface a wedged-runtime hint, and `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). Opt-outs: `retryIfNoChange: false` per call, `RN_SELF_HEAL=0` global.
+
+### 0.63.0
+
+#### Minor Changes
+
+- dabe8cc: Prebuilt runner artifacts (Story 01, #382): the iOS rn-fast-runner and Android
+  rn-android-runner now resolve from a verified prebuilt artifact — a SHA-256-checked
+  local cache, then a download of the release asset for the exact plugin version —
+  before falling back to the on-machine build. This removes the multi-minute cold
+  `xcodebuild` / Gradle build from the first `device_snapshot action=open` once a
+  release ships the artifacts. Resolution is fail-open: any missing manifest, offline
+  state, 404, checksum mismatch, or unsafe archive falls back to the local build with a
+  one-line `meta.note`, never a hard failure. `RN_RUNNER_BUILD=local` forces the local
+  build. `cdp_status` / `/doctor` now report runner provenance (`prebuilt v<X>` vs
+  `local-built`). Until a release ships the artifacts, builds resolve to `local` by
+  design.
+
+### 0.62.4
+
+#### Patch Changes
+
+- 8740f75: Observe UI: single-page layout — the Live/Regression view split is gone. The right column now has five tabs (route | store | tree | actions | e2e): learned actions run from the main page next to the live mirror, and E2E suite runs + history live in the e2e tab. The mirror status/hint moved to a slim footer so the device pane keeps its full height.
+
+### 0.62.3
+
+#### Patch Changes
+
+- 0abb27a: Engineering rule: all new code must be TypeScript. CI gains a typescript-only gate (`scripts/check-typescript-only.sh`) that fails when a `.js`/`.mjs`/`.cjs` file appears outside the grandfathered baseline (`scripts/js-migration-baseline.txt`, 344 pre-rule files slated for migration). Shrinking the baseline (migrating to TS) passes automatically; growing it requires an explicit, reviewable baseline edit.
+
+### 0.62.2
+
+#### Patch Changes
+
+- f2c9fa4: SessionStart auto-installs idb in the background (`brew install idb-companion && pipx install fb-idb`) for the observe live mirror's 20-30fps fast path — never blocks session start (detached worker, pidfile guard, 24h failure backoff). `/doctor` and `/setup` gain an idb row: OK / INSTALLING (background) / MISSING with the manual command.
+- a33f19d: Observe UI: continuous live mirroring of the simulator/emulator screen (Maestro-style MJPEG). New `GET /api/device/mirror` stream — idb (20–30fps) or simctl loop (~6fps) on iOS, adb screenrecord+ffmpeg on Android emulators and physical devices. Zero capture cost with no tab open; per-tool-call screenshots are skipped while the mirror streams. Config: `observe.mirror.enabled` / `observe.mirror.fps`, env `RN_AGENT_OBSERVE_MIRROR=0` to disable.
+
+### 0.62.1
+
+#### Patch Changes
+
+- 396e862: rn-android-runner `findText` refuses missing/blank `text` with a typed
+  `INVALID_ARGUMENT` error (#444). Previously `optString("text")` silently
+  defaulted to `""`, falling through to `By.textContains("")` — which matches an
+  arbitrary node — so a malformed request reported `found: true` for whatever
+  element UIAutomator visited first instead of surfacing an argument error. The
+  guard runs in the dispatch when-branch before any selector is constructed;
+  a source-sync test (gh-418 style) enforces it in CI without an emulator.
+
+### 0.62.0
+
+#### Minor Changes
+
+- 683a132: Story 04 (#385): shared two-tier settle engine. Every mutating device\_\* verb now waits for the UI to actually stabilize instead of relying on fixed sleeps: Android gates on a new `isWindowUpdating` runner probe (capability `WINDOW_UPDATE`) then falls back to snapshot-hash equality polling; iOS polls a new on-runner `isScreenStatic` SHA-256 screenshot compare (capability `SCREEN_STATIC`, Maestro's 3s screen-settle budget) with the same snapshot-hash fallback. Results surface `meta.settle: {method, settled}` + `meta.timings_ms.settle`. `device_fill` drops its fixed 150ms focus delay when settle ran and pins its target coordinates once up front (`--at-x/--at-y`) so the settle's ref-map refresh can never retarget the fill mid-call; its corrective retypes skip settle (their stability check is the CDP read-back). `device_batch` settles between steps by default at a batch-scoped 2500ms budget (per-step `settle: false` escape hatch) and its blanket 300ms inter-step delay defaults to 0 while settle is on. Legacy runner artifacts (no new capabilities) transparently degrade to snapshot polling — no rebuild required, the new verbs are deliberately NOT in the required-command gate. Opt out globally with `RN_SETTLE=0` or per batch step with `settle: false`; tune the per-call budget with `settleTimeoutMs` (a budget knob, not a disable switch). A perpetually-animating screen settles via hierarchy stability or returns `method: 'timeout'` at budget — bounded, never hanging.
+
+### 0.61.2
+
+#### Patch Changes
+
+- 04ce7bf: SessionStart hook no longer misleads after a plugin upgrade (GH #419): the upgrade notice now recommends the field-proven cheap recovery — `/mcp` → reconnect the rn-dev-agent server — before a full Claude Code restart; a new read-only lockfile probe (`scripts/mcp-bridge-probe.mjs`) explicitly flags a live bridge still running from a PREVIOUS plugin install (the cause of zero-tool sessions after marketplace upgrades) naming its PID and path; and the banner no longer asserts a static "76 MCP tools" count that can't reflect actual registration — it states the installed plugin version and tells the agent the reconnect recovery path when ToolSearch finds no cdp*\*/device*\* tools.
+
+### 0.61.1
+
+#### Patch Changes
+
+- c15bc52: iOS `device_screenshot` honors the caller's `path` (#422): iOS pixels now route
+  to `xcrun simctl io screenshot` even with an rn-fast-runner session open — the
+  runner's screenshot verb writes inside its own sandbox and returns a relative
+  `tmp/…` path the host can never serve, which blanked the observe UI panel and
+  broke `sips` resizing (`meta.resize.reason: no-dimensions`). simctl was already
+  the flow-active and runner-down backend; it is now the sole iOS pixel path
+  ("pixels → simctl", D1249). Android is unchanged (its runner honors `outPath`
+  host-side). Defense-in-depth: the observe recorder rejects relative screenshot
+  paths instead of resolving them against the bridge cwd.
+- c15bc52: `cdp_run_action` no longer dead-ends in an opaque UNKNOWN when WDA dies at
+  launch (#423). Root cause chain from the field failure: the #317 CDP/JS replay
+  fallback covers this exact case, but its single tree probe ran while CDP was
+  mid-reconnect (the failed flow had just relaunched the app), was silently
+  swallowed, and the fallback never engaged. The probe now retries (bounded,
+  default 3×1.5s) until the probe testID is actually present — tolerating both a
+  reconnecting CDP and a still-mounting app — and every skip is surfaced as
+  `meta.cdpJsFallback: { attempted: false, reason }`
+  (`no-replay-deps | no-probe-testid | cdp-unreachable | testid-not-in-tree`).
+  A `cdp-unreachable` skip appends actionable guidance (check `cdp_status`,
+  reconnect, stop foreign XCUITest automation) instead of a bare
+  "failure not auto-repairable". Also (#422 hardening): the simctl UDID parsers
+  now only consider iOS runtimes (a booted paired watchOS/tvOS simulator can
+  neither win the screenshot UDID pick nor make the single iPhone look ambiguous
+  to `resolveIosUdid`), and raw captures bind to the open device session's UDID
+  when platforms match instead of picking the first booted device.
+- c15bc52: iOS cold start persists a reusable `.xctestrun` (#424): `startFastRunner()` now
+  runs `xcodebuild build-for-testing` first when no test product exists and then
+  launches via the same `test-without-building` path as every warm start, instead
+  of a single bare `xcodebuild test` — which never writes a `.xctestrun`, so
+  self-built runners were permanently "not prebuilt" and every runner death cost
+  another multi-minute cold build. The build phase keeps the 360s cold timeout;
+  the launch phase uses the standard 30s ready window. The #418 stale-artifact
+  rebuild tier funnels through the same path, so it also leaves a reusable
+  artifact now.
+
+### 0.61.0
+
+#### Minor Changes
+
+- 8a21532: Command-surface gate (#418, B235): both native runners enumerate their supported
+  commands in `/health.commands` (iOS derives it from `CommandType.allCases`, Android
+  from a sync-tested `SUPPORTED_COMMANDS` list) and the liveness gate classifies a
+  runner missing any bridge-required verb as stale (`missing-commands`). Remediation
+  is tiered: `device_snapshot action=open` auto-invalidates the stale artifact and
+  rebuilds — iOS deletes DerivedData and cold-builds (once per plugin version, behind a
+  checkout-scoped build lock), Android deletes the runner APKs so self-install
+  Gradle-rebuilds; mid-flow device tools refuse fast with `RUNNER_COMMANDS_STALE`
+  instead of silently building. An unknown verb reaching the iOS runner now returns a
+  typed `UNSUPPORTED_COMMAND` error instead of a raw Swift decode failure. Root cause
+  of B235 fixed: the explicit iOS keyboard-dismiss path posted `dismissKeyboard`,
+  which no Swift artifact ever accepted — the wire verb is now `keyboardDismiss`.
+  `cdp_status` surfaces `deviceSession.runnerProtocol.missingCommands`. Hardening
+  from per-edit review: the iOS runner validates client-supplied Content-Length
+  (400 on invalid instead of crash/hang) and Android foregrounds alias verbs
+  (press/fill/scroll) before dispatch.
+
+### 0.60.0
+
+#### Minor Changes
+
+- d5acd6b: Observe web UI overhaul: session header (connection, app, route, duration, call/error stats),
+  filterable + searchable timeline with follow/pause autoscroll, device-screenshot hero pane with
+  route chip, guided empty states, inline param inputs for learned actions (server now honors
+  UI-provided params), expandable action output, and E2E run-history drill-down with per-flow
+  error excerpts. The SPA is split from one 670-line file into focused modules.
+
+#### Patch Changes
+
+- d5acd6b: SessionStart hook links `.rn-agent` from the main checkout when running in a git worktree, so learned actions, e2e config, and troubleshooting notes stay available (previously they silently disappeared in worktrees).
+
+### 0.59.0
+
+#### Minor Changes
+
+- d12f18f: feat(rn-fast-runner): quiescence bypass — make XCTest's private quiescence wait a no-op inside the iOS runner (#384, Story 03). RN apps with Reanimated worklets/looping animations never report idle, so XCTest queries and snapshots stalled until per-symptom patches (runner-timeout shim, HID-synthesis scroll, 35s budgets) caught them; the bypass removes the idle-wait at the root — the same WebDriverAgent-lineage approach Maestro uses. Probes both private selector variants (`waitForQuiescenceIncludingAnimationsIdle:` and the Xcode-16 `:isPreEvent:` form), swizzles exactly one (classic preferred), and degrades loudly (`RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE`) when Apple drifts the API — the runner keeps working without the bypass. Default ON; opt out with `RN_QUIESCENCE_BYPASS=0` (resolved at runner spawn; threaded as `TEST_RUNNER_RN_QUIESCENCE_BYPASS` because xcodebuild only forwards `TEST_RUNNER_`-prefixed vars). Note: `XCUIElement.typeText` runs its own internal sync, so the type-timeout shim remains as a safety net. Auditable via `meta.quiescenceBypass` on the first command after boot, `QUIESCENCE_BYPASS` in `/health.capabilities`, and `cdp_status.deviceSession.runnerCapabilities`.
+- 0cfa78a: The observe web UI now autostarts when the MCP worker boots in an RN project, listening on a
+  stable default port (7333, `http://127.0.0.1:7333`) with an ephemeral fallback on collision.
+  New `.rn-agent/config.json` block `{ "observe": { "autoStart": boolean, "port": number } }`
+  plus `RN_AGENT_OBSERVE_AUTOSTART` env override (precedence env > config > default, matching
+  `cdp.autoConnect`). The `observe` tool gains a `restart` action; `stop` is session-scoped.
+  The live URL is recorded in a per-project state file and announced at SessionStart.
+
+### 0.58.1
+
+#### Patch Changes
+
+- 3cf6787: fix(device_batch): testID steps failed with a misleading STALE_REF on the in-tree runners (#396). `findRefByTestID` passed the envelope's ref through verbatim; the in-tree iOS/Android runners emit `@`-prefixed refs (`@e68`), so the testID branches of `device_batch` (find+tap / press / fill) composed `@@e68`, which missed the ref-map (`lookupRef` strips exactly one `@`) and surfaced as `Element at ref @@e68 no longer hittable — UI re-rendered since snapshot` even though the snapshot was taken fresh that same step. `findRefByTestID` now returns the canonical bare id in both the flat-nodes and nested-tree envelope shapes, restoring the documented "re-resolve at execution time" contract; the GH #114 producer-consumer contract tests are updated to pin the bare-id contract for the in-tree producers.
+
+### 0.58.0
+
+#### Minor Changes
+
+- 694a57d: feat(protocol): version the native runner /command wire protocol + move runner state out of /tmp (#383). Both runners' `GET /health` now reports `{protocolVersion, runnerVersion, capabilities}` and every response carries a `"v"` stamp; the bridge classifies a reachable runner with a missing/older/newer protocol or a skewed `runnerVersion` as stale and transparently reaps + reinstalls it (the first device tool call after upgrading from a pre-protocol plugin pays one runner restart — `meta.note: "runner upgraded (protocol/version mismatch)"`). Only a mismatch that survives reinstall surfaces the new typed error `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Runner state files move from fixed shared `/tmp` paths to per-device hardened files (0600, symlink-refusing, atomic) under the app-support state dir (`runner-state/ios-<udid>.json`, `android-<serial>.json`; Android persists only under a resolved serial) via a shared `util/secure-state-file.ts` also adopted by the session file; a live pre-upgrade runner pointed at by the legacy `/tmp` state is adopted once, reaped, and relaunched before the `/tmp` files are deleted, and a grep-enforced test keeps `/tmp` out of the runner clients. `cdp_status` → `deviceSession.runnerProtocol` surfaces the handshake.
+
+### 0.57.4
+
+#### Patch Changes
+
+- b1e0ad6: feat(keyboard-guard): in-runner keyboard-occlusion guard for live `device_press`/`device_longpress` taps on iOS + Android (#370). Before a guarded tap, the runner probes for a visible software keyboard whose frame contains the tap point (containment on a sane rect — non-empty, min height 120pt iOS / 150px Android, so accessory bars don't false-trigger) and auto-dismisses first when occluded. Android dismissal is `pressBack` + a bounded `waitForIdle(1500)` (≈3.6s measured incl. bounded idle), gated on a TYPE_INPUT_METHOD window with sane bounds so it never navigates back otherwise — requires `FLAG_RETRIEVE_INTERACTIVE_WINDOWS`, now enabled at dispatcher init. iOS is verify-or-refuse: only the safe dismiss-control tap ("Hide keyboard"/"Dismiss keyboard"/"Done") is used, then re-verified; on iPhone standard QWERTY, which has no such control, the runner REFUSES the tap with `KEYBOARD_OCCLUDED … keyboardGuard=dismiss_failed` instead of tapping the keyboard, because XCTest's `swipeDown` on the keyboard triggers QuickPath slide-typing and corrupts the focused field (device-proven). Every guarded gesture returns `meta.keyboardGuard`: `"off" | "no_keyboard" | "not_occluded" | "dismissed"` (plus `dismiss_failed` inside the iOS refusal error). Opt out with `RN_KEYBOARD_GUARD=0`/`false`, resolved TS-side per command (`guardKeyboard` on the wire; absent → guard stays ON, so older clients keep guarding). Scope is command-handler tap/longPress only — `tapSeries`, by-text taps, element-center taps, the focus-tap inside type/fill, swipes/scrolls/drags, and `doubleTap` are explicitly unguarded. Follow-up #379 tracks a JS-first (`Keyboard.dismiss()`) auto-heal for the iOS refusal case; #378 tracks a pre-existing Android `foreground()` pre-flight stall surfaced (not fixed) during verification.
+
+### 0.57.3
+
+#### Patch Changes
+
+- a6112e6: fix(record): `device_record stop` no longer crashes on macOS with `adb_args[@]: unbound variable` (#374). In `record_proof.sh` the Android stop branch expanded an empty `adb_args` array unguarded (`"${adb_args[@]}"`); under `set -euo pipefail` on bash 3.2 (the macOS default `/bin/bash`) that is an unbound-variable error, aborting the stop before the pull/convert — so recording finalize (and, via a leftover Android `.pid`, even iOS stops) failed. All three expansions now use the `+`-default guard already present elsewhere in the file. Regression-guarded by a static invariant test (effective on bash 5.x CI) plus a behavioral reproduction gated to bash < 4.4.
+
+### 0.57.2
+
+#### Patch Changes
+
+- 0a9a732: fix(interact): cdp_interact no longer corrupts react-hook-form Controller-wrapped inputs (#336). `setFieldValue` keeps a string a string for string-typed fields (a digit-string injected as a number is coerced back to string only when the field currently holds a string — number/boolean fields are untouched). `press` gains an optional `value`: when provided, `onPress` receives the value instead of a synthetic event, so radio/chip-style controls whose onPress sets a form value select correctly. HELPERS_VERSION bumped to 33.
+
+### 0.57.1
+
+#### Patch Changes
+
+- d61985f: fix(actions): inject `- hideKeyboard` before button taps that follow text entry when generating/saving Maestro action flows, and route Android hideKeyboard replays to the official Maestro CLI (#356, Phase 1). Bottom-pinned taps (submit/continue) previously landed on the soft keyboard during replays — the single biggest source of flaky replays. `generateMaestro` now tracks soft-keyboard state and emits a `hideKeyboard` step before a `tap`/`long_press` that follows an `inputText`, reset on navigation. `hideKeyboard` is a no-op when no keyboard is showing and Maestro re-resolves the selector after dismiss, so the injection is safe. Device verification surfaced that maestro-runner v1.0.9 silently no-ops `hideKeyboard` on Android (B223), so `maestro_run` now prefers the official Maestro CLI for Android flows containing `hideKeyboard` (verified to dismiss the keyboard on-device), warning when the CLI is unavailable; iOS is unaffected (maestro-runner honors hideKeyboard there). Live `device_*` taps (the in-runner guard) and existing-corpus backfill are deferred to later phases.
+
+### 0.57.0
+
+#### Minor Changes
+
+- 98d3fb7: Add an RNTL-style discovery resolver to the injected helpers. `resolveLadder` finds elements by `byRole(+name)` / `byText` / `byPlaceholder` — ported from React Native Testing Library (matcher + normalizer, accessible-name, role, hidden, host-kind) — with fail-closed truncation and fail-closed multiplicity (never silently picks the wrong element), hidden-element exclusion by default, and a selector bundle (`testID` / `text` / `accessibleName` / `role` / `placeholder` / `anchors`). `interact()` routes `role`/`name`/`text`/`placeholder` selectors through the ladder. Includes RNTL `matchDeepestOnly` so a composite+host fiber pair (e.g. `Text`+`RCTText`) resolves to a single on-device element instead of fail-closing as ambiguous.
+
+### 0.56.0
+
+#### Minor Changes
+
+- dd95747: Bump the plugin manifest so installed users receive the recently-merged cdp-bridge work via `/plugin update`. Until now the changesets flow only versioned the internal `rn-dev-agent-cdp` package, leaving `plugin.json` / `marketplace.json` pinned at 0.55.5 — so the plugin's cache key never moved and updates never reached installs even though the bundled `dist/` had advanced.
+
+  This release ships, to installed users:
+
+  - **observe Regression "Run" reaches the device (#351):** the per-action Run resolves the connected app's project root via bundleId instead of falling back to `process.cwd()`, so clicking Run no longer fails with `NO_PROJECT_ROOT`.
+  - **iOS 26.x action replay (#353, Phase 2):** when WebDriverAgent reads an empty accessibility tree, `cdp_run_action` falls back to a CDP/JS transport so replays still drive the app.
+  - **Durable action store (#359, Phase 1):** run/repair history persists in a derived, gitignored node:sqlite store (dual-write mirror of the JSON sidecars; graceful degradation when node:sqlite is unavailable); `cdp_status` reports the active `actionStore` backend.
+  - **CI now runs nested unit test dirs (#340).**
+
+### 0.55.5
+
+#### Patch Changes
+
+- 577b13b: cdp_repair_action now reports TRANSPORT_BLIND when the failed Maestro selector is present in the live rn-fast-runner snapshot — the iOS 26.2 + bridgeless empty-a11y-tree case (GH #317) — instead of the misleading "no confident replacement". cdp_run_action surfaces it as a terminal refusal with refusedReason TRANSPORT_BLIND. Diagnostic-only; restoring replay on that runtime is Phase 2.
+
+### 0.55.4
+
+#### Patch Changes
+
+- 9a0f632: Live-sim speedup (GH #321, quick win #4): `device_batch` returns a **salient final
+  payload** by default and gains a `finalSnapshot` option (`salient` | `full` |
+  `none`).
+
+  `device_batch` already collapses N interactions into one MCP round-trip, but its
+  `final_snapshot` was always the full a11y node list (large) and it always took an
+  implicit trailing snapshot. Now:
+
+  - `salient` (default) — `final_snapshot` is compacted to only actionable nodes
+    (Button/TextField/Switch/Slider/Cell/Link/…), each `{ ref, type, label,
+identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
+    actionable elements are preserved so follow-up `device_press(ref)` still works.
+  - `none` — skips the implicit trailing snapshot entirely (~1,450 ms saved) for
+    action-only batches verified via `expect_*`/`cdp_store_state`.
+  - `full` — the legacy complete node list.
+
+  An explicit `snapshot` step or `screenshotOn:'end'` still populates the payload;
+  the option only governs the implicit trailing snapshot and its shape. `rn-tester`
+  now recommends a single `device_batch` for known multi-step sequences.
+
+### 0.55.3
+
+#### Patch Changes
+
+- e4d9e3b: Live-sim speedup (GH #321, quick win #3): `cdp_component_tree(interactiveOnly: true)`
+  returns a compact **salient digest** of a screen — only actionable nodes
+  (Pressable/Button/TextInput/Switch/Link and `accessibilityRole` controls) with a
+  minimal `{ testID, role, text, label, placeholder, disabled }` shape, dropping
+  props, hook state, and nesting.
+
+  This is the perception _payload_ (token) lever, complementary to the cached-find
+  _round-trip_ lever: answering "what can I tap here?" on a novel screen now costs
+  hundreds of tokens instead of the full fiber tree's thousands. Implemented as an
+  `interactiveOnly` mode in the injected `__RN_AGENT.getTree()` (HELPERS_VERSION 26) — a bounded BFS over every renderer root that collects interactive fibers and
+  their text. `rn-tester` is updated to prefer it for perceiving novel screens.
+
+### 0.55.2
+
+#### Patch Changes
+
+- 3186f64: Live-sim speedup (GH #321): `device_find` now reuses the snapshot it already
+  captured instead of issuing a redundant runner round-trip — but only while that
+  snapshot is still a faithful picture of the screen.
+
+  A snapshot cache already existed (`cacheSnapshot`) but nothing read it for
+  targeting, so every `device_find` re-snapshotted. On the live iOS test-app a warm
+  `device_find` measured ~1,449 ms — essentially one full XCUITest accessibility
+  snapshot (~1,435 ms) plus matching. Reusing a valid cache drops a repeated find on
+  an unchanged screen to ~0.004 ms (in-memory filter), saving ~1.45 s per avoided
+  find.
+
+  Correctness is gated on a two-condition validity check, not just a TTL: the cache
+  must be clean AND within the freshness budget. Invalidation is **fail-safe and
+  centralized at the MCP tool boundary** (`trackedTool`): every tool call that is not
+  on an explicit read allowlist marks the cache dirty — so JS-level mutations that
+  bypass the native dispatch path (`cdp_interact`, `cdp_navigate`, the `fastSwipe`
+  swipe/scroll path, `device_deeplink`, `cdp_dispatch`/`cdp_reload`/`maestro_run`, …)
+  all invalidate it, and any future tool defaults to "invalidate" until proven a pure
+  read. The native `runNative` choke point also marks dirty as defense-in-depth for
+  direct (intra-composite) handler calls. A tap or navigation therefore forces a
+  fresh snapshot — the cache is never reused against a screen it no longer describes.
+  Only the `device_find` handler opts in (`allowCache`); all other snapshot callers
+  are unchanged.
+
+### 0.55.1
+
+#### Patch Changes
+
+- 65fc134: Fix #312: harden the Maestro step-line parser (`maestro-step-parser.ts`), which structures `maestro_run` results from the runner's untrusted combined stdout+stderr.
+
+  - **B211** — cap the `verb` field to `MAX_FIELD`; previously only `name` was bounded, so a step-shaped line with a multi-KB first token could bloat the MCP response across up to 1000 steps.
+  - **B212** — anchor `parseSteps` on the runner's leading indentation (horizontal-whitespace-only `^[ \t]+`, matched against the un-trimmed line) so an unindented (column-0) app-log line shaped like `✓/✗ … (N.Ns)` can no longer be mistaken for a step and poison `lastStep`/`failedStep`/the failure headline. `\r`/`\v`/`\f`/NBSP-prefixed lines are rejected too (JS `\s` would have re-admitted them). `parseTapLatencies` (#263) inherits the same hardening.
+  - A new `combineRunnerOutput(stdout, stderr)` helper joins the streams for parsing without the blanket `.trim()` that would strip the first step line's indent (dropping `launchApp` from `meta.steps`); it uses native `.trimEnd()` to stay linear on multi-MB output.
+  - Stripped stale review-provenance comments per the repo's no-unnecessary-comments convention.
+
+### 0.55.0
+
+#### Minor Changes
+
+- 9c3b1d2: Harden device-control conflicts: add an Android serial-scoped device lock (parity with iOS) that engages on a normal emulator, separate the Android runner's probed host port from its fixed device-listener port (`adb forward`), and let the iOS runner self-assign a free port when 22088 is taken.
+- 1954ef1: Android `rn-android-runner` now self-installs on first use (parity with the iOS `rn-fast-runner` cold build): `startAndroidRunner` installs the prebuilt APKs — and cold-builds them via Gradle if absent — when the instrumentation isn't on the device yet. No external CLI or manual `gradlew + adb install` step is required; this makes the `/setup` and `/doctor` "builds/installs on first use" promise true on Android.
+- fec0464: Remove the agent-device dependency entirely. The Android daemon-socket + CLI fallback tiers are deleted; session open/close/list and find now route natively (simctl/adb + the in-tree rn-fast-runner / rn-android-runner), the Android dispatch gained an ensure-on-dispatch choke point (parity with iOS), session open validates the appId and acquires the device lock before any side-effect, RN_ANDROID_RUNNER=0 now errors (RUNNER_DISABLED) instead of silently falling back, and the agent-device install script + its SessionStart hook are gone. The in-tree runners are the sole device backend; the foreign-AgentDeviceRunner cleanup (self-heal for old installs) is retained.
+
+#### Patch Changes
+
+- d591710: Fix #303: Metro-port discovery now prefers the port with an attached Hermes target over a merely-running one, and when several Metros have an app it auto-selects the one whose serving directory matches this worktree's project root (resolved via `findProjectRoot` + realpath, containment-aware). `cdp_status` surfaces all candidate Metros (`metro.candidates`) plus `projectRoot`/`servingCwd`, and warns when the connected Metro serves a different worktree — catching the silent trap where an agent verifies against the wrong worktree's JS bundle even with a single Metro running. `cdp_targets` (`discoverForList`) prefers the attached port too. Fail-open throughout (macOS `lsof`; degrades to prior behavior off-darwin or when paths can't be resolved).
+
+### 0.54.7
+
+#### Patch Changes
+
+- 8305bbd: `maestro_run` now returns structured per-step results and partial progress on timeout (GH #211).
+
+  The result gains `steps[]` (`{index,name,verb,status,durationMs}`), `failedStep`, `reason` (sanitized `{kind,selector}` — never the raw runner log), `lastStep` (progress marker), `timedOut`, and `outputTruncated`. On timeout the partial steps are returned instead of a bare failure, and the failure headline names the failing/last step. Parsed from maestro-runner stdout (the JVM Maestro CLI fallback degrades fail-open to empty steps); `tapOn` latencies for #263 now derive from the shared parser. Additive — `output` is preserved for `run-action` consumers.
+
+### 0.54.6
+
+#### Patch Changes
+
+- 16f0a0d: `maestro_run` now flags a wedged simulator runtime (GH #263).
+
+  When a flow fails AND the median latency of its successful `tapOn` steps exceeds a floor (default 1500ms, `RN_RUNTIME_DEGRADED_FLOOR_MS`), the result gains a `RUNTIME_DEGRADED` hint and `meta.runtimeDegraded` — "the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown/boot), relaunch, and retry." This replaces the misleading "Element not found" that previously sent the agent chasing app code when the real cause was a degraded simulator (taps reported success but `onPress` never fired). Detection is purely additive — it never changes a pass/fail verdict, never fires on a passing run, and only counts successful taps (a failed tap's duration is the step timeout, which would otherwise false-positive an ordinary element-not-found failure). Fail-open: unparseable output → no hint.
+
+### 0.54.5
+
+#### Patch Changes
+
+- 6c77108: `/observe` device panels now refresh live (GH #206).
+
+  The observability layer was a passive recorder of tool observations — the screenshot only updated on `device_screenshot` calls and the route only on navigation-family tools, so driving the app with `cdp_interact`/`cdp_navigate` left both panels stale. A fire-and-forget hook now captures a fresh screenshot (simctl/adb, OS-level) + route (CDP nav-state) after each state-mutating tool and delivers them via a dedicated live SSE channel (`{type:'live'}` + `/api/live-screenshot`), so the timeline stays clean. Platform resolves from the active device session or the connected CDP target (so a purely CDP-driven flow with no agent-device session still refreshes). Gated on a connected `/observe` tab, skipped during Maestro flows, single-flight trailing-coalesce, opt-out with `RN_OBSERVE_LIVE=0`.
+
+### 0.54.4
+
+#### Patch Changes
+
+- 64531c8: Bump esbuild to 0.28.1 across the build toolchains to clear the HIGH Dependabot advisory (GHSA-gv7w-rqvm-qjhr).
+
+  The advisory is in esbuild's Deno installer (binary-integrity RCE via `NPM_CONFIG_REGISTRY`) — a code path this repo never executes (esbuild is consumed as an npm transitive dep via Vite/Astro, not Deno), so it was never exploitable here. Still, both the observability web UI (`scripts/cdp-bridge/src/observability/web/`) and the docs site carried the vulnerable transitive esbuild, so both now pin it to the patched 0.28.1 via an npm `overrides`. The observability Vite build also sets `build.target: 'esnext'` (it's an internal localhost-only dev tool viewed in a modern browser) to sidestep an esbuild 0.28 regression that refused to downlevel destructuring to Vite's default old-browser baseline; the single-file bundle was rebuilt. `npm audit` is clean in both subtrees.
+
+### 0.54.3
+
+#### Patch Changes
+
+- a88d139: `cdp_network_log` no longer returns two entries per request (GH #214).
+
+  Root cause: setup sends `Network.enable` (mode `cdp`), then `probeNetworkDomain` fires a probe fetch and watches the buffer. On RN ≥ 0.83 the CDP Network domain _does_ deliver events, but when they don't flush within the probe window — a false negative documented after platform switches / reloads (GH #59 #9) — the probe returns `none` and setup injects the fetch/XHR hook **without disabling the still-enabled Network domain**. Both paths then capture every request (CDP numeric-id entries + hook UUID-id entries), and the existing exact-id dedup can't collapse them because the two id schemes never collide.
+
+  Fix: when setup falls back to the hook, it now disables the CDP Network domain first, so the hook is the single capture source. This also makes `cdp_status`'s `networkDomain: false` truthful instead of a label over a still-running domain — the "capability flag out of sync" symptom in the report was the same root cause. Read-time fuzzy dedup was deliberately rejected: it would collapse legitimately-identical rapid requests (a real double-mutation) and hide bugs — the opposite of what the reporter needed.
+
+### 0.54.2
+
+#### Patch Changes
+
+- 0386204: `cdp_mmkv` delete and boolean reads now work on the Nitro react-native-mmkv line (GH #209).
+
+  - `delete` was calling `mmkv.delete(key)` — a JS-wrapper-class method that doesn't exist on the raw Nitro hybrid object the tool actually talks to (`createHybridObject('MMKVFactory').createMMKV(...)`), whose spec exposes `remove(key)`. The generated expression now prefers `remove()`, falls back to `delete()` for wrapper-shaped objects, and reports a named error (instead of a bare TypeError) when neither exists. This unblocks first-class auth/storage resets for logged-out replays on iOS — previously a raw `cdp_evaluate` escape hatch every time.
+  - `get` with `type: 'boolean'` emitted `mmkv.getBool(key)`, which exists on no MMKV surface (hybrid object and wrapper both spell it `getBoolean`) — broken since the tool shipped. Now fixed.
+  - The follow-up enhancement from the issue (a `clearKeys:` action-YAML directive for self-contained auth-gated replays) is tracked as GH #286.
+
+- 0466d15: `/send-feedback` no longer presents weeks-old telemetry as "recent" (GH #266).
+
+  Root cause: the per-tool-call telemetry writer was removed with the Experience Engine (GH #200, v0.49 era), but `collect-feedback.sh` kept reading the orphaned `~/.claude/rn-agent/telemetry/*.jsonl` files and shipped their tail as "Recent Tool Activity" in filed issues. The collector now cross-checks the newest event's age: fresh events (<24h, legacy plugin versions still writing) ship as before with `telemetry_status: "ok"`; otherwise events are omitted and `telemetry_status` reports `stale (last event N days ago — …)` or `none` explicitly. The `/send-feedback` issue template renders the status line instead of an empty/misleading activity table, and the empty-telemetry edge no longer emits a single bogus `{}` event.
+
+### 0.54.1
+
+#### Patch Changes
+
+- bd5d585: Recovery paths now detect "app not installed" and resolve their relaunch target truthfully (GH #262, absorbs #194 BUG 2).
+
+  - `cdp_status` APP_DETACHED auto-relaunch: when `simctl launch` fails AND `get_app_container`'s stderr carries the `NSPOSIXErrorDomain code=2` marker (allowlist-only, stderr-only — argv-spoof-proof), the tool returns a distinct `APP_NOT_INSTALLED` code with install advice — including a shell-quoted `simctl install` line for the newest matching `.app` snapshot from the last clearState (GH #201 dir, mtime-sorted budgeted scan). Ambiguous probe verdicts fail open to the existing `APP_DETACHED` behavior. Concurrent recoveries are serialized, and a confirmed missing bundle is cached (with a cheap re-probe) so the diagnosis is never masked by `budget-exhausted`.
+  - `cdp_restart hardReset=true`: the relaunch target resolves through `explicit arg > connectedTarget > cache > active-session appId > strict per-platform app.json` (no iOS←Android fallback), simctl targets the active session's UDID when one exists, failed launches are classified the same way in `hardResetSteps`, and a successful hard reset resets the detached-recovery budget.
+
+- 81c386a: `device_screenshot` no longer blames "device transitioning state" when the target directory doesn't exist (GH #265).
+
+  - `captureAndResizeScreenshot` now `mkdir -p`'s the parent of the derived output path before any dispatch tier runs (simctl raw, rn-fast-runner, agent-device daemon/CLI, adb stream) — new directories are the expected case, since the tool's own advisories steer agents toward fresh `docs/proof/<slug>/` paths. The fix covers `device_screenshot`, `device_batch` auto-captures, and `proof_step`, all of which funnel through the same helper.
+  - When the directory itself cannot be created (e.g. a file blocks an intermediate path segment), the tool short-circuits before probing any device and returns an honest `SCREENSHOT_FAILED` with `reason: 'target-dir-unavailable'` naming the offending path — never the device-state guess.
+  - A leading `~/` in the screenshot path is now expanded to the real home directory (Node never expands `~`, so mkdir would otherwise create a literal `./~/` under the bridge cwd and report success into the wrong location). Unexpandable forms (`~user/...`, bare `~`) are refused with an actionable error.
+
+### 0.54.0
+
+#### Minor Changes
+
+- 85a6b60: Agent model upgrades + skill efficiency pass.
+
+  **Agents**: all agents now run on `opus` (rn-tester, rn-code-explorer, rn-code-reviewer up from sonnet; rn-debugger unchanged); `rn-code-architect` moves to `fable` — the top model tier for the pipeline's single deep-reasoning blueprint step. Model-tier prose synced in the router skill and docs-site.
+
+  **Skills** (token efficiency + correctness, verified by a confined-subagent retrieval test):
+
+  - `rn-feature-development` 5,076 → ~3,960 words (−22%): Phase 8 no longer duplicates the proof protocol — `commands/proof-capture.md` is the single source of truth, with pipeline deltas (architect's flow table as source, persist-as-action via creating-actions Steps 3–6, `cdp_run_action` smoke-test, Deviations section) listed on top; 8 repeated per-phase evaluator lines collapsed into one core principle; description rewritten trigger-only (a workflow-summarizing description makes the body get skipped).
+  - `using-rn-dev-agent` (always loaded at session start) 2,065 → ~1,825 words: HELPERS_NOT_INJECTED recovery protocol moved to `rn-debugging` (its natural home) with a routing pointer left behind; stale surface counts fixed (76 MCP tools / 14 commands).
+  - `rn-testing`: M7 header section slimmed to a 5-key table + creating-actions pointer (the full glossary lives there) — same heading kept for existing citations.
+  - `rn-best-practices` / `rn-setup`: descriptions rewritten trigger-only (dropped the rot-prone rule-count inventory; added concrete failure-phrase triggers).
+  - Stale claims fixed everywhere: `maestro_run`/`cdp_run_action` DO forward `params` since #272 (proof-capture + feature-dev said otherwise); broken section citation in `run-action.md`; dangling "Step 1.4" cross-references from the old inline Phase 8; smoke-test now consistently `cdp_run_action` (RunRecord + auto-promotion) with plain `maestro_run` reserved for the on-camera replay.
+
+### 0.53.0
+
+#### Minor Changes
+
+- eff45cd: #202 Phase 6 / #186 — foreign Maestro sessions become arbiter refusals; plugin maestro_run is the canonical surface.
+
+  While a foreign Maestro/XCUITest session drives the target simulator (UDID-scoped detection, 5 s TTL, fail-open), local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms measured) — pointing at the safe L1 reads — instead of colliding into the ~44 s runner-leak cascade. L1 introspection stays free; `device_screenshot` serves pixels via its simctl fallback; a ~10 s teardown grace after the plugin's own flows prevents self-false-positives while WDA dies. The two historical reasons to leave the plugin surface are live-gate-verified closed and #201 is closed — including a new fix: the clearState `--app-file` resolution is snapshotted outside the device container (the installed-container path used to be deleted by clearState itself before the reinstall could read it). `RN_IOS_FOREIGN_GUARD=0` disables both the warning and the refusal (`RN_IOS_FOREIGN_WARN=0` remains a deprecated alias). The foreign-runner `ps` scan now uses `-ww` (command-column truncation could silently drop the UDID → false negatives).
+
+### 0.52.0
+
+#### Minor Changes
+
+- c05c058: #202 Phase 5 / #264 — the bridge now survives Metro restarts (supervisor split).
+
+  The MCP entry point is now `dist/supervisor.js`: a thin stdio shim holding zero network sockets (immune to `lsof -ti tcp:8081 | xargs kill -9`, which used to SIGKILL the whole server and cost the session all 77 tools). It spawns the real bridge as a worker, and on worker death: errors in-flight calls with `-32000` ("retry the call"), respawns it (max 3 per rolling 60 s, then a terminal crash-loop error), and replays the cached MCP `initialize` handshake so the session continues seamlessly. Visibility: `cdp_status` → `bridge: { supervised, workerRestarts, lastWorkerExit }`. Opt out with `RN_BRIDGE_SUPERVISOR=0` (legacy single process). `SIGUSR2` now performs a real hot-reload (worker restart + handshake replay).
+
+### 0.51.0
+
+#### Minor Changes
+
+- abe4411: New `creating-actions` skill — guided authoring of reusable Maestro actions.
+
+  Walks the agent through the full authoring contract: inventory-dedup scan before authoring (via `learned-actions.mjs`), creation-path choice (recorder vs direct YAML vs `maestro_generate`), selector grounding (never invent a testID), a **required ASCII flow diagram** of screens/transitions annotated with exact testIDs and `${PARAMS}` (embedded in the YAML header — glyph-first lines so the M7 parser can't misread a diagram line as metadata, which would otherwise silently overwrite fields like `status`), the M7 header contract, pre-replay validation (header round-trip through the inventory parser, placeholder↔params coverage, selector audit), and replay-to-promote via `cdp_run_action` (never hand-set `active`). Ships with a full M7 field reference (`references/m7-header-reference.md`) and a toolchain-validated worked example (`examples/add-product-to-cart.yaml` — verified against `parseM7Header`, `learned-actions.mjs`, and Maestro's syntax checker). Routed from `using-rn-dev-agent` (decision tree + skill map) and cross-linked from `rn-testing`'s M7 section.
+
+### 0.50.0
+
+#### Minor Changes
+
+- 73c6bf4: #202 Phase 4 — eradicate legacy runner apps, not just processes.
+
+  At iOS device-open, `ensureSingleRunner` now detects the legacy upstream runner apps installed on the target simulator (`com.callstack.agentdevice.runner` + `.uitests.xctrunner`) and `simctl uninstall`s them. Killing the host processes (Phase 1) was insufficient: iOS relaunches an installed XCUITest runner into the foreground mid-`maestro_run`, backgrounding the app under test and wedging CDP. Scanned at every device-open (one `simctl listapps`, ~150–350 ms measured — no memo, so a reinstall by another session is always caught); error-safe (warnings, never a blocked session); opt out with `RN_DEVICE_KILL_LEGACY=0`. Results surface as `removedApps` + `meta.timings_ms.appEradication`.
+
+### 0.49.0
+
+#### Minor Changes
+
+- 58c4886: Debugger-seat coexistence with React Native DevTools + silent hook-mode network capture.
+
+  - New opt-out for background auto-reconnect: `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` `{ "cdp": { "autoConnect": false } }`. In passive mode the bridge yields the single RN debugger seat to the visual DevTools and reconnects only on explicit tool calls. Resolved mode is visible in `cdp_status` → `autoConnect` and `/doctor`.
+  - Hook-mode network capture (RN < 0.83 fallback) no longer transports entries via `console.log("__RN_NET__:…")` — entries go to an in-app ring buffer drained on demand, so Metro logs and the user's DevTools console stay clean.
+
+### 0.48.5
+
+#### Patch Changes
+
+- 6190178: fix(#253): `cdp_repair_action` no longer hardcodes `targetPlatform='ios'` — Android auto-repair works against an emulator. The repair orchestrator now derives the platform from the active device session via `detectPlatform()` (booted-device probe fallback when no session is open; `'ios'` only as the final no-session, no-device fallback). Previously an Android repair foregrounded the app via `xcrun simctl`, snapshotted through the iOS short-circuit, and bootstrapped the iOS fast-runner — so Android selector drift always escalated as a hard failure instead of self-healing.
+
+### 0.48.4
+
+#### Patch Changes
+
+- e5404ed: fix(#249): Maestro pass detection no longer flips passing flows to failed when app logs contain the substring `FAILED`. The exit-0 secondary guard in `maestro_run`, `maestro_test_all`, and the inline maestro fallback used a bare `output.includes('FAILED')` over combined stdout+stderr — app/console output like a `FETCH_FAILED` Redux action or a `LOGIN_FAILED` analytics event marked a genuinely passing flow as failed and triggered pointless auto-repair. All three call sites now share `outputIndicatesFlowFailure`, which keys on Maestro's own terminal status lines (`Test FAILED` / `Flow FAILED` / a `[FAILED]` step marker / a bare `FAILED` line) instead of a substring.
+- 070586d: fix(#250): `cdp_interact` no longer reports success when the app's own handler throws. The injected interact dispatch caught handler exceptions (`onPress`/`onChangeText`/`setValue` raising — unmounted component, missing context, thrown validation) and returned `success: true, action_executed: true`, which the tool layer surfaced as a non-error warning — so agents proceeded against a screen that may be in an error state. The helper now reports `success: false` (keeping `action_executed: true` to distinguish "dispatched but handler threw" from "couldn't dispatch"), and the tool layer maps it to a structured error with `meta.actionExecuted`, `meta.handlerError`, and a check-`cdp_error_log` hint. HELPERS_VERSION bumped to 25 so connected sessions re-inject.
+- 8269476: fix(#251,#252): startup hardening. The project single-instance lock (`Lockfile.acquire`) now uses the same atomic `openSync('wx')` exclusive-create pattern as `DeviceLock` — the previous read-then-write let two bridges starting in the same instant both "acquire" the lock, with the second silently truncating the first; the loser now gets a structured conflict, stale-holder reclaim narrows the steal window with a re-read before unlink, and fs infra errors fail open (`degraded: true`) instead of crashing the bridge at boot. Separately, SessionStart is now bounded: the hook declares an explicit 120s timeout and the maestro-runner installer's `curl | bash` carries `--connect-timeout 10 --max-time 90`, so a stalled CDN can no longer block session start indefinitely; a CI guard (`session-start-bounded.test.sh`) pins both.
+
+### 0.48.3
+
+#### Patch Changes
+
+- 609c825: fix(B191,B192): post-flow lifecycle hardening follow-ups to #243/#244. `isAndroidConnectionFailure` now also classifies `startAndroidRunner`'s startup-failure shapes (`exited before readiness`, `Failed to spawn Android runner instrumentation`) into the structured retryable `RN_ANDROID_RUNNER_DOWN` instead of letting a startup crash escape as a raw exception. And `isBenignSessionGoneError` no longer runs its session-gone regex over unparseable (non-JSON) close payloads — with no error field to scope the match to, they surface unchanged, so a real close failure whose raw text merely mentions "no active session" can't be silently swallowed.
+
+### 0.48.2
+
+#### Patch Changes
+
+- c9d447d: fix(#243,#244): Android post-flow lifecycle. `rn-android-runner` readiness is now gated on its own `GET /health` instead of the `adb logcat` ring buffer — a prior runner's stale ready line (same tag + fixed port) used to fire readiness before the new socket bound, so the first `device_*` after a Maestro flow returned a bare `fetch failed`. When the runner genuinely can't come up, `runAndroid` now surfaces a structured `RN_ANDROID_RUNNER_DOWN` with a retry hint. Separately, `device_snapshot action=close` now tolerates an underlying session that a flow already tore down (the #237 slot-release): it cleans up local state and returns ok, so `open → flow → close` round-trips cleanly instead of erroring `SESSION_NOT_FOUND`.
+
+### 0.48.1
+
+#### Patch Changes
+
+- 51976e8: fix(#237): Android instrumentation-slot handoff — `runFlowParked` now releases the single Android `UiAutomation` slot before a Maestro flow (`maestro_run`/`maestro_test_all`/`cdp_auto_login`), fixing `UIAutomator2 server not ready after 30s`. It stops the in-tree `rn-android-runner`, `am force-stop`s our two instrumentation packages (the decisive device-side release), and — gated by `RN_DEVICE_KILL_LEGACY` — kills a stale legacy `agent-device` daemon by its specific PID (never `pkill`, guarded against our own process tree so the MCP server is never collateral). Best-effort and idempotent; iOS behavior is unchanged.
+
+### 0.48.0
+
+#### Minor Changes
+
+- de6a8d8: fix(#191): JS-first text entry — `device_fill` now prefers the deterministic React `onChangeText` path when CDP is connected and the ref resolves to a testID (via its cached snapshot identifier), settle-polls the field value to verify it (defeating the debounced-`onChangeText` read race), and on the native fallback runs a bounded clear+retype (real `clearFirst` + per-character delay) when the value is corrupted, escalating to a verified maestro fallback before erroring. Adds best-effort iOS predictive-keyboard suppression at session-open and a new `TEXT_ENTRY_UNVERIFIED` error code for the exhausted-and-still-corrupted case. Additive `meta` only (`textEntryPath`, `verify`, `timings_ms`); no breaking change for existing callers. NOTE: `device_batch` fills are not yet JS-first (they call the runner directly) — tracked as a follow-up.
+
+### 0.47.5
+
+#### Patch Changes
+
+- 72d17b5: Fix #210: iOS device-session visibility + self-healing. `cdp_status` now reports `deviceSession: { sessionOpen, rnFastRunner: 'alive'|'stale'|'dead', appId?, deviceId?, foreignRunner? }` so the agent can see the XCUITest runner state before calling `device_*` (iOS-gated — Android leaves `rnFastRunner:'dead'` and skips the probe/scan). `device_find/press/fill` now auto-spawn the runner from the dispatch choke point when a session or booted simulator exists and the rig is prebuilt — cold-build-safe: a missing prebuilt rig returns an actionable `RN_FAST_RUNNER_DOWN` error naming `device_snapshot action=open` instead of a silent multi-minute `xcodebuild`. `device_screenshot` now falls back to `xcrun simctl io screenshot` (or `adb`) whenever the runner can't serve it — including while a Maestro flow owns the device — so it never hard-fails on iOS. Also fixes a latent bug where an omitted-platform `device_snapshot action=open` stored `platform: undefined`, skipping the iOS dispatch branch.
+
+  Reframes the issue's "ride Maestro's WDA" suggestion (rejected: WDA is per-flow/ephemeral with no session to ride, and a WDA client would add a second XCUITest backend rather than unify; mid-flow pixels use simctl, mid-flow state uses CDP introspection). (GH #210, B186, D1249)
+
+### 0.47.4
+
+#### Patch Changes
+
+- 75a9573: Fix #182: the CDP MCP no longer fails with `-32000: Connection closed` when an orphaned bridge from a dead Claude Code session holds the single-instance lock.
+
+  Root cause: when CC dies abnormally (SIGKILL/crash/window-close on macOS) without closing the child's stdin or signaling it, the bridge becomes a **live orphan** — still running, still holding the project lock. The existing reclaim (PID-dead / mtime>24h / process-name) can't recover a _live_ owner, so the next session hard-failed for up to 24h. Four composing fixes:
+
+  - **Parent-death self-exit (prevent).** A `getppid()` poll (`lifecycle/parent-watch.ts`) captures the bridge's PPID at startup and self-exits (releasing the lock) when it _changes_ — i.e. the original Claude Code host died and the bridge was reparented. This catches the abnormal-death cases stdin-EOF + signal handlers miss. It compares against the startup PPID rather than testing `=== 1` so a bridge whose host runs as PID 1 (a container with no init system) is never falsely killed.
+  - **Orphaned-owner reclaim (recover).** `Lockfile.isLockLive` reclaims a _live_ owner whose parent **changed** from the PPID it recorded at acquire (`ps -o ppid=`) — so a new session self-heals past an existing orphan instead of hard-failing. A null PPID lookup fails safe; pre-0.39 locks with no recorded `ppid` fall back to a legacy `PPID===1` reclaim.
+  - **Heartbeat (recover wedged).** The lock body carries `lastHeartbeat`, refreshed every ~10s; a live owner whose heartbeat goes stale (>90s) is wedged and reclaimable — mirroring the device-lock's self-healing. Pre-0.39 locks without `lastHeartbeat` fall back to the existing mtime check (back-compat).
+  - **Usurp self-terminate (sleep/wake safety).** `Lockfile.touch()` now returns whether we still own the lock. If a contender reclaimed our slot while the laptop slept (heartbeat expired → reclaimed → we wake), the next heartbeat detects the foreign PID and self-terminates instead of running as a second bridge on the same device. This also makes the (pre-existing, non-atomic) reclaim path self-correcting within one tick.
+
+  Together these eliminate the manual `kill <pid> && rm <lock>` workaround. 15 #182 unit tests (incl. container-safety, sleep/wake usurp, and a real `ps -o ppid=` check); unit suite 1744/1744; `tsc` clean. (GH #182, B185, D1246)
+
+### 0.47.3
+
+#### Patch Changes
+
+- b29a8e4: Fix `cdp_console_log` and harden the helper-expr injection guard. The guard that validates injected-helper calls before `Runtime.evaluate` banned any call containing `{}`, which broke `cdp_console_log` — it passes a JSON object argument (`getConsole({"level":"all","limit":50})`) and was refused with "helper-expr: refusing to interpolate untrusted call". The guard now validates that the argument list is **pure JSON data** (object/array literals included) instead of banning `{}` characters. This fixes `cdp_console_log` (and any object-arg helper call, e.g. `dispatchAction`) **and tightens security**: the old `[^;{}]*` regex let nested calls such as `getConsole(stealSecrets())` through; those are now rejected. The one non-JSON token a call site emits — `undefined` (store-state's absent path/type) — is normalized to `null` for validation only; the original call is interpolated unchanged. Verified: 1710/1710 unit tests pass (incl. 10 new helper-expr tests) and live `cdp_console_log` returns the console buffer (69 entries). (B180)
+- bc577e9: Fix the CDP connection wedge (GH #208): `cdp_status` no longer dead-locks on "Already connecting to Metro..." and no longer misreports a detached app as "Metro not found". Three root causes were addressed:
+
+  - **RC1 — reconnect-storm wedge.** When the app detaches but Metro stays up, the WS-close reconnect loop holds `isReconnecting()` true for up to ~12 min (30 attempts × 30s cap, then re-armed indefinitely by the background poll). `autoConnect`'s guard threw "Already connecting" for every `cdp_status`/`cdp_*` call in that window. `cdp_status` now **preempts** an active reconnect storm via `softReconnect()` (the existing 3s `softReconnectRequested` handshake) for one fresh attempt instead of refusing, and surfaces the live `reconnectState` (attempt N/30) on any connect failure so it reads as progress, not a dead end.
+  - **RC2 — misleading error.** "Metro up but 0 Hermes targets" now throws a typed `AppDetachedError` ("Metro is up … advertises 0 Hermes debug targets — the app isn't attached") instead of being conflated with the genuine "Metro not found" (now reserved for `discoverMetroPort` returning null).
+  - **RC3 — no auto-recovery.** New `recoverDetached()` cold-restarts a detached iOS app (`simctl terminate` + `launch`) → reconnects → confirms with a real CDP liveness probe. Bounded to 3 consecutive attempts/session, skips while a Maestro flow holds the arbiter lease, iOS-only, opt-out via `RN_AUTO_RELAUNCH_ON_DETACH=0`. Cold-restart (vs recover-wedge's bare launch) is acceptable because it only fires when the app is ALREADY detached — never against a working app.
+
+  Hardened via a Codex + Gemini multi-review: `cdp_status` now honors an explicit `args.platform` during a storm (tears down + reconnects rather than reusing the storm's target), auto-relaunch is skipped when the caller pinned a non-iOS platform (never cold-restarts an unrelated iOS session), `simctl launch` failures are surfaced instead of hidden behind "still detached", and the post-recovery status read can no longer throw out of the handler.
+
+  19 new unit tests; full suite 1729/1729; `tsc --noEmit` clean. Live false-positive guard verified: the real `discover()` against Metro does not fire `AppDetachedError` while a target is present. Scoping: the literal-0-targets case is fixed; the RN-0.85 "C++ target present, 0 Hermes" flavor remains B156/B184 territory (recover-wedge path). (GH #208, B181, D1245)
+
+### 0.47.2
+
+#### Patch Changes
+
+- dc49a98: Fix B178: CDP introspection returning zero frames on Expo SDK 56 / RN 0.85. The B177 Origin fix used `localhost`, which clears `@react-native/dev-middleware`'s loopback gate (no 401) but trips Expo SDK 56's **second** origin gate in `createDebugMiddleware` (`isMatchingOrigin`): it requires the `Origin` host to equal the dev server's `serverBaseUrl` host (`127.0.0.1`), and a mismatch is force-closed via `socket.terminate()` → a **1006 abnormal close right after connect, before any CDP frame relays**. Switching `metroOrigin` to emit `127.0.0.1` clears **both** gates (and bare RN's single gate), fully restoring `cdp_status` / `cdp_component_tree` / `cdp_store_state` / `cdp_evaluate` on RN 0.85. Verified end-to-end against a live RN 0.85 app: `Runtime.evaluate` plus Redux / Zustand / navigation reads now relay. (B178 / D1242)
+- de2353b: Fix CDP-bridge connection failure on React Native 0.85 / Expo SDK 56. RN 0.85's Metro inspector proxy (`@react-native/dev-middleware`) now enforces a WebSocket `Origin` allowlist (loopback hostnames only) as a CSRF defense and returns **HTTP 401** to the bridge's header-less `ws` clients — breaking `cdp_status` and all CDP introspection on the newest RN. A new `metroOrigin()` helper (`scripts/cdp-bridge/src/ws-origin.ts`) synthesizes a loopback `Origin` matching the dev-server port; it is now sent on all three Metro WebSocket clients (`cdp/connect.ts`, `cdp/multiplexer.ts`, `metro/events-client.ts`). Verified end-to-end: the handshake now succeeds against an RN 0.85 / SDK 56 app (proven: no-Origin → 401, loopback Origin → OPEN). (B177 / D1240)
+
+### 0.47.1
+
+#### Patch Changes
+
+- 6835fbf: #202 Phase 3: formalize the three-layer device-control contract (L1 introspection / L2 interaction / L3 flow) in the docs, and add a proactive, informational `FOREIGN_RUNNER_ACTIVE` warning. When `device_snapshot action=open` finds a foreign maestro automation session driving the simulator (UDID-scoped) and rn-dev-agent is not itself running a flow, the open result now carries `meta.foreignRunner` + a heads-up that interleaving `device_*` may trigger a re-foreground (CDP reads are unaffected). Opt out with `RN_IOS_FOREIGN_WARN=0`. The reactive recovery for an actual leak shipped earlier in #188; this is the complementary proactive signal.
+
+### 0.47.0
+
+#### Minor Changes
+
+- 6e8af52: #202 Phase 2a: a process-wide in-memory `DeviceSessionArbiter` now serializes the three device-control planes — `flow` (Maestro) is exclusive; `introspection` (CDP reads) and `interaction` (`device_*`) coexist. A read or tap issued while a Maestro flow is running refuses fast with `BUSY_FLOW_ACTIVE` instead of interleaving with it. The flow tools (`maestro_run`, `maestro_test_all`, `cdp_auto_login`) park the in-tree fast-runner for the flow's duration and mark CDP stale afterward so the next read reconnects. Diagnostics (`cdp_status`), connection management, and session-less tools stay unarbitrated and always work; a wedged arbiter (a leaked plane lease) is cleared via `cdp_status({ resetArbiter: true })`.
+- 6e8af52: Phase 1 of device-control hardening (#202): `ensureSingleRunner()` now kills stale `AgentDeviceRunner` processes scoped to the target simulator and clears orphaned `~/.agent-device/daemon.{json,lock}` (default-on; opt out with `RN_DEVICE_KILL_LEGACY=0`). Fast-runner state is no longer reused across simulators. `maestro_run` auto-resolves `--app-file` for iOS `clearState` flows (#201).
+- 6e8af52: #202 Phase 2b: `cdp_status` now auto-recovers the JS-thread-paused wedge. When the simulator's foreground is stolen and iOS suspends the app's JS thread (CDP wedged), `cdp_status` parks the fast-runner, re-foregrounds the target app (`simctl launch`, which resumes its JS thread), reconnects, and confirms recovery with a real CDP liveness probe — bounded to 3 consecutive attempts per session (reset on a successful recovery and on `device_snapshot action=open`). It skips when a Maestro flow is running (it would yank the app out from under the flow) and falls back to suggesting `cdp_restart(hardReset=true)`. This replaces the previous dead-end "Debugger is still paused" warning that left the agent to rediscover the fix over many attempts. iOS-only.
+
+#### Patch Changes
+
+- 6e8af52: Fix a batch of bugs, regressions, and reliability issues surfaced by a multi-agent repo audit.
+
+  **Security**
+
+  - Redaction no longer leaks private-key material. `redactString` now applies secret patterns BEFORE truncating (a >2000-char PEM previously had its `-----END-----` marker severed by truncation so the key body passed through), and the PEM rule now matches multi-word labels like `RSA PRIVATE KEY` / `OPENSSH PRIVATE KEY` (the old single-word pattern never matched the most common headers).
+
+  **Device interaction**
+
+  - `device_scroll` no longer throws on Android (and on the iOS fast-runner fallback): a direction-form scroll is now converted to coordinates before dispatch, matching `device_swipe`.
+  - `device_batch` scroll steps no longer crash the whole batch on either platform (same root cause).
+  - A coordinate `device_swipe` with `--count`/`--pattern` but no `durationMs` no longer mis-parses the flag value as a 3 ms duration on iOS (the positional extractor now strips flag values, matching Android).
+  - The Android runner is no longer reused across emulators: `shouldReuseAndroidRunner` checks the bound `deviceId` (parity with iOS `shouldReuseRunner`), so a runner bound to one emulator can't silently drive another.
+  - A wedged-but-alive fast-runner is now reaped: `ensureFastRunner` probes tri-state liveness instead of PID-only, so a hung HTTP listener no longer makes every subsequent command burn the full timeout.
+  - `ensureSingleRunner` is now awaited at session-open so the stale-runner kill completes before the first interaction, and its `ps` failure surfaces as a warning instead of a silent no-op.
+
+  **Actions / Maestro**
+
+  - Actions now auto-promote `experimental → active` on the first clean replay (the documented lifecycle was defined + tested but never wired).
+  - The GH#186 route-drift guard is now active in production (`cdp_run_action` is wired with a CDP-backed live-route reader; it previously defaulted to a no-op).
+  - `maestro_test_all` and the inline Maestro fallback no longer mark passing flows as failed when app/console output merely contains `Error:`, and both now auto-resolve `--app-file` for iOS `clearState` flows (previously only `maestro_run` did). `clearState` detection also recognises the standalone `- clearState` command.
+  - All Maestro `execFile` calls raise `maxBuffer` to 10 MB so a large flow log can't kill the child and mask a passing run.
+  - `cdp_repair_action` `RUNNER_LEAK` refusals are now bucketed as `SNAPSHOT_FAILED` in MTTR telemetry instead of `INTERNAL_ERROR`.
+  - A bare-form `id:` repair now emits a quoted scalar, so a testID containing YAML-special characters can't corrupt the action.
+
+  **Reliability / correctness**
+
+  - `collect_logs` no longer double-shifts Android logcat timestamps by the host UTC offset (which corrupted both the time and the cross-source merge order).
+  - CDP freshness/dev probes attach a no-op catch to the raced `evaluate()` promise so a mid-probe WebSocket close can't surface as an unhandledRejection.
+  - The observability server keeps a small `headersTimeout` (slow-loris guard), broadcasts a `shutdown` event so the browser stops auto-reconnecting after stop, and `Recorder.clear()` notifies subscribers instead of orphaning live SSE streams.
+  - Action IDs now accept dots (`v2.0-login`) per their documented contract while still rejecting `..`.
+  - The post-edit health-check hook's "app not installed → skip" guard works again (`grep -c || echo "0"` produced a two-line `0\n0`).
+  - `learned-actions` resolves the project memory dir correctly for paths containing a dot, and its `${VAR}` extractor accepts digit-bearing keys.
+  - The injected-helpers version is a single source of truth (the post-injection log no longer reports a stale `v11`).
+  - `sync-versions.sh` drops a dead, misleading variable and documents that `rn-dev-agent-cdp` is independently versioned.
+
+  Hardened the previously flaky `proof_step` unit tests (they depended on a machine-global session file) with a dependency-injection seam, making the suite deterministic.
+
+- 6e8af52: #202 Phase 1.5: iOS `device_snapshot action=open` now takes a persisted, UDID-scoped simulator-ownership lock — closing the multi-bridge race where two Claude Code windows (two bridge processes) could drive the same simulator. The second bridge gets a `DEVICE_BUSY` error. The lock self-heals via PID-liveness + a 30s heartbeat (reclaimable once the holder PID is dead or its heartbeat is >90s stale), so it cannot orphan like the legacy `daemon.lock`; on an fs error it fails open (logged) rather than blocking a session.
+
+### 0.46.0
+
+#### Minor Changes
+
+- 3beb8e5: Replace the Experience Engine with a repo-local troubleshooting memory.
+
+  `/rn-agent-compact`, `/rn-agent-health`, `/rn-agent-export`, and `/rn-agent-import`
+  are removed (GH #200: compaction had no runnable entry point and the read path was
+  vestigial). In their place, rn-dev-agent now maintains a gitignored
+  `.rn-agent/local/troubleshooting.md` per repo: failures are captured by a hook,
+  the agent synthesizes them into the doc at session end, and the doc is injected at
+  session start so the agent learns this repo's config and gotchas.
+
+### 0.45.0
+
+#### Minor Changes
+
+- 5c4ca04: Add the read-only observability UI (D1226 "watch the agent live"): an in-process recorder + opt-in SSE server serving a React SPA (timeline | device | state). New `observe` MCP tool + `/rn-dev-agent:observe` slash command. Deep-redacted (args + payload, fail-closed), localhost-only with Host-header + Sec-Fetch-Site guards.
+
+#### Patch Changes
+
+- c4804dc: Add `cdp_dismiss_dev_client_picker` MCP tool (Android) and best-effort Dev
+  Client picker dismissal after Android deep links (#136 sub-3). Routed through a
+  single guarded `clearDevClientPickerIfPresent()` helper; iOS returns an
+  actionable manual-select message instead of touching the legacy agent-device
+  path. Cross-platform iOS support tracked as a follow-up.
+- 2c82b18: Fix iOS runner auto-install and stop force-installing agent-device on iOS-only setups.
+
+  - **rn-fast-runner now self-builds on first use.** `startFastRunner()` falls back to a full `xcodebuild test` (build + test) when no prebuilt `.xctestrun` exists, instead of always using `test-without-building` (which failed on a fresh machine where `build/DerivedData` is gitignored and never produced). The first `device_snapshot action=open` on a clean clone now succeeds — it just cold-builds the rig once (ready-signal timeout widened to 360s for that path). Steady-state spawns still use the fast `test-without-building`.
+  - **agent-device install is gated on a live Android target.** The SessionStart hook (`detect-rn-project.sh`) no longer runs `npm install -g agent-device` unconditionally. Since D1219/PR #164 iOS device control is owned by the in-tree rn-fast-runner, so agent-device is Android-only; the install now only runs when `adb devices` shows a booted device/emulator. iOS-only macOS users stop paying for a dependency they never use.
+  - `/setup` and `/doctor` now offer to run the one-time `xcodebuild build-for-testing` pre-build to move the cold-build cost out of the first interaction (the lazy fallback covers correctness; pre-building just avoids the slow first call).
+
+### 0.44.45
+
+#### Patch Changes
+
+- Deliver the GH #186 maestro-interop fixes that merged in #188 without a version bump (closes #189).
+
+  - `cdp_run_action` now allows `runFlow` (including `when:` conditionals and `{file}` sub-flows) through the Maestro command allowlist, so actions with conditional dialog-handling (Expo dev-server picker, iOS "Open in" dialog) replay through the canonical runner instead of hard-failing with `Command not in allowlist: runFlow (Phase 134.1)`.
+  - Non-destructive runner-leak `reacquire` recovery tier + cross-tool CDP re-pin, avoiding the ~44s relaunch / ~47s STALE_TARGET when maestro-mcp and rn-dev-agent contend for the same iOS device.
+  - Structural route-drift detection: a stale-selector failure on an inserted screen is classified `ROUTE_DRIFT` instead of triggering a wasted fuzzy-repair.
+
+  #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
+
+## Core MCP server
+
+### 0.60.2
+
+#### Patch Changes
+
+- 8c18951: Observe UI: surface the idb install hint as a banner under the device pane header while mirroring runs on the ~6fps simctl fallback, instead of an ellipsized footer line that truncated the brew command. Error hints stay in the footer. The idb install command is corrected everywhere to include the required tap (`brew tap facebook/fb && brew install idb-companion`) — including the executed installs in `ensure-idb.sh` / `ensure-idb-companion.sh`, which previously failed on untapped machines. `/rn-dev-agent:setup` now diffs an already-injected CLAUDE.md template block against the plugin's current CLAUDE-MD-TEMPLATE.md and offers an in-place refresh when stale (new `<!-- rn-dev-agent:template-end -->` sentinel delimits the block; legacy blocks are upgraded on refresh).
+
+### 0.60.1
+
+#### Patch Changes
+
+- f74b5b7: Observe UI: make the right state pane fit its width, and slim the timeline
+  column.
+
+  The right pane is a fixed ~26% column (~340-450px), but the actions tab
+  rendered a 5-column table and the e2e tab 3- and 4-column tables. Tables
+  cannot shrink below their column content, so at typical window widths the
+  Status/Params/Run columns were clipped clean off the pane — the Run button
+  was unreachable — and action ids line-wrapped mid-word. Both tabs now render
+  stacked rows designed for a narrow column:
+
+  - **Actions**: one item per action — id (truncating, full value on hover) +
+    status badge + Run on the first line, intent wrapped below (2-line clamp),
+    param inputs flex-wrapping to the available width instead of fixed 110px
+    columns, result/output underneath.
+  - **E2E**: suite results and run history as one-line rows — pass/fail mark,
+    truncating test/run id, duration, classification badge or `2✓ 1✗` totals +
+    verdict — with error excerpts wrapping below and the expanded run detail
+    reusing the same row layout.
+  - Pane guards: `.pane.right` gets `min-width: 340px`, tabs wrap instead of
+    overflowing, long live routes break instead of pushing the pane wide.
+  - Layout rebalance: the left timeline column drops from 40% to 33%
+    (`min-width: 380px`; summaries already ellipsize), and the device pane no
+    longer greedily takes all remaining width — the mirror is a portrait phone
+    screen capped at ~100vh, so the pane is capped at 400px and the state pane
+    absorbs the surplus instead.
+
+### 0.60.0
+
+#### Minor Changes
+
+- 24842f8: Story 13 (#397) Phases 1–2: maestro-runner engine pinning and a proactive blind-probe. The installer now installs the tested pin (`1.0.9`) exactly, verifies its checksum fail-closed on fresh downloads, and warns on local drift; `cdp_status.replayEngine` + `/doctor` report engine, version-vs-pin, and known quirks; `maestro_run` carries `enginePin` meta and warns once on drift (opt-in hard enforcement: `RN_ENGINE_PIN_STRICT=1`). `cdp_run_action` on at-risk iOS runtimes (>= 26, or a recent device-matched `TRANSPORT_BLIND` with clean-pass reset) probes the CDP tree first and, when the action's anchor is visible, skips the doomed ~40s WDA attempt and replays via CDP/JS directly — `RunRecord` gains additive `deviceId`/`blindProbe`, probe-routed failures classify as `FALLBACK_REPLAY_FAILED` (never false `TRANSPORT_BLIND`), probe-routed passes never auto-promote, and the DB mirror persists the new fields. Opt out with `RN_BLIND_PROBE=0`.
+
+### 0.59.2
+
+#### Patch Changes
+
+- d041bac: Harden the Android **raw** screenshot capture path (`device_screenshot`, GH #428),
+  mirroring the iOS hardening from #427:
+
+  - **Truncate-before-success**: raw capture now stages `adb exec-out screencap`
+    bytes in a unique sibling temp file and `renameSync`s onto the caller's path
+    only after both the write stream drains and adb exits 0. A failed or timed-out
+    capture can no longer truncate-then-delete an existing file the tool never
+    created.
+  - **Multi-emulator first-pick**: with several emulators booted and no session
+    binding, resolution now refuses (exactly-one-or-null via `resolveAndroidEmu`)
+    instead of silently grabbing the first emulator — matching iOS
+    exactly-one-or-refuse. Sessions still bind to their device id.
+  - **adb child leak on stream error**: a write-stream error (ENOSPC/EACCES) now
+    unpipes and kills the `adb` child before settling, instead of leaving it
+    running blocked on stdout.
+
+### 0.59.1
+
+#### Patch Changes
+
+- f583249: `cdp_dev_settings` gains a `hideDevMenu` action that dismisses the iOS
+  expo-dev-client dev menu bottom sheet over CDP via `ExpoDevMenu.hideMenu()`
+  (#335). Because it runs through `client.evaluate` instead of a coordinate
+  tap/swipe, it never triggers the touch-induced Hermes detach the issue
+  describes — the JS thread stays attached and the in-memory store survives.
+  `cdp_reload` now also best-effort auto-dismisses the menu on iOS after
+  reconnect, so the agent lands on the app instead of behind the sheet. The
+  dismiss resolves the `ExpoDevMenu` native module through a multi-tier chain
+  (`globalThis.expo.modules` → `NativeModules` → TurboModule proxies) and is a
+  silent no-op on non-expo builds.
+
+### 0.59.0
+
+#### Minor Changes
+
+- d6f72f7: Story 05 (#386) self-healing taps: stale `@ref` taps re-resolve inline by identity signature (unique-match only; ambiguous/absent STALE_REF now lists candidates), swallowed taps retry exactly once via settle-hash change detection (`meta.reResolved` / `meta.tapRetried` / `meta.noUiChange`), 3 consecutive no-change taps on distinct targets surface a wedged-runtime hint, and `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). Opt-outs: `retryIfNoChange: false` per call, `RN_SELF_HEAL=0` global.
+
+### 0.58.0
+
+#### Minor Changes
+
+- dabe8cc: Prebuilt runner artifacts (Story 01, #382): the iOS rn-fast-runner and Android
+  rn-android-runner now resolve from a verified prebuilt artifact — a SHA-256-checked
+  local cache, then a download of the release asset for the exact plugin version —
+  before falling back to the on-machine build. This removes the multi-minute cold
+  `xcodebuild` / Gradle build from the first `device_snapshot action=open` once a
+  release ships the artifacts. Resolution is fail-open: any missing manifest, offline
+  state, 404, checksum mismatch, or unsafe archive falls back to the local build with a
+  one-line `meta.note`, never a hard failure. `RN_RUNNER_BUILD=local` forces the local
+  build. `cdp_status` / `/doctor` now report runner provenance (`prebuilt v<X>` vs
+  `local-built`). Until a release ships the artifacts, builds resolve to `local` by
+  design.
+
+### 0.57.0
+
+#### Minor Changes
+
+- 8740f75: Observe UI: single-page layout — the Live/Regression view split is gone. The right column now has five tabs (route | store | tree | actions | e2e): learned actions run from the main page next to the live mirror, and E2E suite runs + history live in the e2e tab. The mirror status/hint moved to a slim footer so the device pane keeps its full height.
+
+### 0.56.0
+
+#### Minor Changes
+
+- a33f19d: Observe UI: continuous live mirroring of the simulator/emulator screen (Maestro-style MJPEG). New `GET /api/device/mirror` stream — idb (20–30fps) or simctl loop (~6fps) on iOS, adb screenrecord+ffmpeg on Android emulators and physical devices. Zero capture cost with no tab open; per-tool-call screenshots are skipped while the mirror streams. Config: `observe.mirror.enabled` / `observe.mirror.fps`, env `RN_AGENT_OBSERVE_MIRROR=0` to disable.
+
+### 0.55.1
+
+#### Patch Changes
+
+- 396e862: rn-android-runner `findText` refuses missing/blank `text` with a typed
+  `INVALID_ARGUMENT` error (#444). Previously `optString("text")` silently
+  defaulted to `""`, falling through to `By.textContains("")` — which matches an
+  arbitrary node — so a malformed request reported `found: true` for whatever
+  element UIAutomator visited first instead of surfacing an argument error. The
+  guard runs in the dispatch when-branch before any selector is constructed;
+  a source-sync test (gh-418 style) enforces it in CI without an emulator.
+
+### 0.55.0
+
+#### Minor Changes
+
+- 683a132: Story 04 (#385): shared two-tier settle engine. Every mutating device\_\* verb now waits for the UI to actually stabilize instead of relying on fixed sleeps: Android gates on a new `isWindowUpdating` runner probe (capability `WINDOW_UPDATE`) then falls back to snapshot-hash equality polling; iOS polls a new on-runner `isScreenStatic` SHA-256 screenshot compare (capability `SCREEN_STATIC`, Maestro's 3s screen-settle budget) with the same snapshot-hash fallback. Results surface `meta.settle: {method, settled}` + `meta.timings_ms.settle`. `device_fill` drops its fixed 150ms focus delay when settle ran and pins its target coordinates once up front (`--at-x/--at-y`) so the settle's ref-map refresh can never retarget the fill mid-call; its corrective retypes skip settle (their stability check is the CDP read-back). `device_batch` settles between steps by default at a batch-scoped 2500ms budget (per-step `settle: false` escape hatch) and its blanket 300ms inter-step delay defaults to 0 while settle is on. Legacy runner artifacts (no new capabilities) transparently degrade to snapshot polling — no rebuild required, the new verbs are deliberately NOT in the required-command gate. Opt out globally with `RN_SETTLE=0` or per batch step with `settle: false`; tune the per-call budget with `settleTimeoutMs` (a budget knob, not a disable switch). A perpetually-animating screen settles via hierarchy stability or returns `method: 'timeout'` at budget — bounded, never hanging.
+
+### 0.54.1
+
+#### Patch Changes
+
+- c15bc52: iOS `device_screenshot` honors the caller's `path` (#422): iOS pixels now route
+  to `xcrun simctl io screenshot` even with an rn-fast-runner session open — the
+  runner's screenshot verb writes inside its own sandbox and returns a relative
+  `tmp/…` path the host can never serve, which blanked the observe UI panel and
+  broke `sips` resizing (`meta.resize.reason: no-dimensions`). simctl was already
+  the flow-active and runner-down backend; it is now the sole iOS pixel path
+  ("pixels → simctl", D1249). Android is unchanged (its runner honors `outPath`
+  host-side). Defense-in-depth: the observe recorder rejects relative screenshot
+  paths instead of resolving them against the bridge cwd.
+- c15bc52: `cdp_run_action` no longer dead-ends in an opaque UNKNOWN when WDA dies at
+  launch (#423). Root cause chain from the field failure: the #317 CDP/JS replay
+  fallback covers this exact case, but its single tree probe ran while CDP was
+  mid-reconnect (the failed flow had just relaunched the app), was silently
+  swallowed, and the fallback never engaged. The probe now retries (bounded,
+  default 3×1.5s) until the probe testID is actually present — tolerating both a
+  reconnecting CDP and a still-mounting app — and every skip is surfaced as
+  `meta.cdpJsFallback: { attempted: false, reason }`
+  (`no-replay-deps | no-probe-testid | cdp-unreachable | testid-not-in-tree`).
+  A `cdp-unreachable` skip appends actionable guidance (check `cdp_status`,
+  reconnect, stop foreign XCUITest automation) instead of a bare
+  "failure not auto-repairable". Also (#422 hardening): the simctl UDID parsers
+  now only consider iOS runtimes (a booted paired watchOS/tvOS simulator can
+  neither win the screenshot UDID pick nor make the single iPhone look ambiguous
+  to `resolveIosUdid`), and raw captures bind to the open device session's UDID
+  when platforms match instead of picking the first booted device.
+- c15bc52: iOS cold start persists a reusable `.xctestrun` (#424): `startFastRunner()` now
+  runs `xcodebuild build-for-testing` first when no test product exists and then
+  launches via the same `test-without-building` path as every warm start, instead
+  of a single bare `xcodebuild test` — which never writes a `.xctestrun`, so
+  self-built runners were permanently "not prebuilt" and every runner death cost
+  another multi-minute cold build. The build phase keeps the 360s cold timeout;
+  the launch phase uses the standard 30s ready window. The #418 stale-artifact
+  rebuild tier funnels through the same path, so it also leaves a reusable
+  artifact now.
+
+### 0.54.0
+
+#### Minor Changes
+
+- 8a21532: Command-surface gate (#418, B235): both native runners enumerate their supported
+  commands in `/health.commands` (iOS derives it from `CommandType.allCases`, Android
+  from a sync-tested `SUPPORTED_COMMANDS` list) and the liveness gate classifies a
+  runner missing any bridge-required verb as stale (`missing-commands`). Remediation
+  is tiered: `device_snapshot action=open` auto-invalidates the stale artifact and
+  rebuilds — iOS deletes DerivedData and cold-builds (once per plugin version, behind a
+  checkout-scoped build lock), Android deletes the runner APKs so self-install
+  Gradle-rebuilds; mid-flow device tools refuse fast with `RUNNER_COMMANDS_STALE`
+  instead of silently building. An unknown verb reaching the iOS runner now returns a
+  typed `UNSUPPORTED_COMMAND` error instead of a raw Swift decode failure. Root cause
+  of B235 fixed: the explicit iOS keyboard-dismiss path posted `dismissKeyboard`,
+  which no Swift artifact ever accepted — the wire verb is now `keyboardDismiss`.
+  `cdp_status` surfaces `deviceSession.runnerProtocol.missingCommands`. Hardening
+  from per-edit review: the iOS runner validates client-supplied Content-Length
+  (400 on invalid instead of crash/hang) and Android foregrounds alias verbs
+  (press/fill/scroll) before dispatch.
+
+### 0.53.0
+
+#### Minor Changes
+
+- d5acd6b: Observe web UI overhaul: session header (connection, app, route, duration, call/error stats),
+  filterable + searchable timeline with follow/pause autoscroll, device-screenshot hero pane with
+  route chip, guided empty states, inline param inputs for learned actions (server now honors
+  UI-provided params), expandable action output, and E2E run-history drill-down with per-flow
+  error excerpts. The SPA is split from one 670-line file into focused modules.
+
+### 0.52.0
+
+#### Minor Changes
+
+- d12f18f: feat(rn-fast-runner): quiescence bypass — make XCTest's private quiescence wait a no-op inside the iOS runner (#384, Story 03). RN apps with Reanimated worklets/looping animations never report idle, so XCTest queries and snapshots stalled until per-symptom patches (runner-timeout shim, HID-synthesis scroll, 35s budgets) caught them; the bypass removes the idle-wait at the root — the same WebDriverAgent-lineage approach Maestro uses. Probes both private selector variants (`waitForQuiescenceIncludingAnimationsIdle:` and the Xcode-16 `:isPreEvent:` form), swizzles exactly one (classic preferred), and degrades loudly (`RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE`) when Apple drifts the API — the runner keeps working without the bypass. Default ON; opt out with `RN_QUIESCENCE_BYPASS=0` (resolved at runner spawn; threaded as `TEST_RUNNER_RN_QUIESCENCE_BYPASS` because xcodebuild only forwards `TEST_RUNNER_`-prefixed vars). Note: `XCUIElement.typeText` runs its own internal sync, so the type-timeout shim remains as a safety net. Auditable via `meta.quiescenceBypass` on the first command after boot, `QUIESCENCE_BYPASS` in `/health.capabilities`, and `cdp_status.deviceSession.runnerCapabilities`.
+- 0cfa78a: The observe web UI now autostarts when the MCP worker boots in an RN project, listening on a
+  stable default port (7333, `http://127.0.0.1:7333`) with an ephemeral fallback on collision.
+  New `.rn-agent/config.json` block `{ "observe": { "autoStart": boolean, "port": number } }`
+  plus `RN_AGENT_OBSERVE_AUTOSTART` env override (precedence env > config > default, matching
+  `cdp.autoConnect`). The `observe` tool gains a `restart` action; `stop` is session-scoped.
+  The live URL is recorded in a per-project state file and announced at SessionStart.
+
+### 0.51.1
+
+#### Patch Changes
+
+- 3cf6787: fix(device_batch): testID steps failed with a misleading STALE_REF on the in-tree runners (#396). `findRefByTestID` passed the envelope's ref through verbatim; the in-tree iOS/Android runners emit `@`-prefixed refs (`@e68`), so the testID branches of `device_batch` (find+tap / press / fill) composed `@@e68`, which missed the ref-map (`lookupRef` strips exactly one `@`) and surfaced as `Element at ref @@e68 no longer hittable — UI re-rendered since snapshot` even though the snapshot was taken fresh that same step. `findRefByTestID` now returns the canonical bare id in both the flat-nodes and nested-tree envelope shapes, restoring the documented "re-resolve at execution time" contract; the GH #114 producer-consumer contract tests are updated to pin the bare-id contract for the in-tree producers.
+
+### 0.51.0
+
+#### Minor Changes
+
+- 694a57d: feat(protocol): version the native runner /command wire protocol + move runner state out of /tmp (#383). Both runners' `GET /health` now reports `{protocolVersion, runnerVersion, capabilities}` and every response carries a `"v"` stamp; the bridge classifies a reachable runner with a missing/older/newer protocol or a skewed `runnerVersion` as stale and transparently reaps + reinstalls it (the first device tool call after upgrading from a pre-protocol plugin pays one runner restart — `meta.note: "runner upgraded (protocol/version mismatch)"`). Only a mismatch that survives reinstall surfaces the new typed error `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Runner state files move from fixed shared `/tmp` paths to per-device hardened files (0600, symlink-refusing, atomic) under the app-support state dir (`runner-state/ios-<udid>.json`, `android-<serial>.json`; Android persists only under a resolved serial) via a shared `util/secure-state-file.ts` also adopted by the session file; a live pre-upgrade runner pointed at by the legacy `/tmp` state is adopted once, reaped, and relaunched before the `/tmp` files are deleted, and a grep-enforced test keeps `/tmp` out of the runner clients. `cdp_status` → `deviceSession.runnerProtocol` surfaces the handshake.
+
+### 0.50.4
+
+#### Patch Changes
+
+- b1e0ad6: feat(keyboard-guard): in-runner keyboard-occlusion guard for live `device_press`/`device_longpress` taps on iOS + Android (#370). Before a guarded tap, the runner probes for a visible software keyboard whose frame contains the tap point (containment on a sane rect — non-empty, min height 120pt iOS / 150px Android, so accessory bars don't false-trigger) and auto-dismisses first when occluded. Android dismissal is `pressBack` + a bounded `waitForIdle(1500)` (≈3.6s measured incl. bounded idle), gated on a TYPE_INPUT_METHOD window with sane bounds so it never navigates back otherwise — requires `FLAG_RETRIEVE_INTERACTIVE_WINDOWS`, now enabled at dispatcher init. iOS is verify-or-refuse: only the safe dismiss-control tap ("Hide keyboard"/"Dismiss keyboard"/"Done") is used, then re-verified; on iPhone standard QWERTY, which has no such control, the runner REFUSES the tap with `KEYBOARD_OCCLUDED … keyboardGuard=dismiss_failed` instead of tapping the keyboard, because XCTest's `swipeDown` on the keyboard triggers QuickPath slide-typing and corrupts the focused field (device-proven). Every guarded gesture returns `meta.keyboardGuard`: `"off" | "no_keyboard" | "not_occluded" | "dismissed"` (plus `dismiss_failed` inside the iOS refusal error). Opt out with `RN_KEYBOARD_GUARD=0`/`false`, resolved TS-side per command (`guardKeyboard` on the wire; absent → guard stays ON, so older clients keep guarding). Scope is command-handler tap/longPress only — `tapSeries`, by-text taps, element-center taps, the focus-tap inside type/fill, swipes/scrolls/drags, and `doubleTap` are explicitly unguarded. Follow-up #379 tracks a JS-first (`Keyboard.dismiss()`) auto-heal for the iOS refusal case; #378 tracks a pre-existing Android `foreground()` pre-flight stall surfaced (not fixed) during verification.
+
+### 0.50.3
+
+#### Patch Changes
+
+- a6112e6: fix(record): `device_record stop` no longer crashes on macOS with `adb_args[@]: unbound variable` (#374). In `record_proof.sh` the Android stop branch expanded an empty `adb_args` array unguarded (`"${adb_args[@]}"`); under `set -euo pipefail` on bash 3.2 (the macOS default `/bin/bash`) that is an unbound-variable error, aborting the stop before the pull/convert — so recording finalize (and, via a leftover Android `.pid`, even iOS stops) failed. All three expansions now use the `+`-default guard already present elsewhere in the file. Regression-guarded by a static invariant test (effective on bash 5.x CI) plus a behavioral reproduction gated to bash < 4.4.
+
+### 0.50.2
+
+#### Patch Changes
+
+- 0a9a732: fix(interact): cdp_interact no longer corrupts react-hook-form Controller-wrapped inputs (#336). `setFieldValue` keeps a string a string for string-typed fields (a digit-string injected as a number is coerced back to string only when the field currently holds a string — number/boolean fields are untouched). `press` gains an optional `value`: when provided, `onPress` receives the value instead of a synthetic event, so radio/chip-style controls whose onPress sets a form value select correctly. HELPERS_VERSION bumped to 33.
+
+### 0.50.1
+
+#### Patch Changes
+
+- d61985f: fix(actions): inject `- hideKeyboard` before button taps that follow text entry when generating/saving Maestro action flows, and route Android hideKeyboard replays to the official Maestro CLI (#356, Phase 1). Bottom-pinned taps (submit/continue) previously landed on the soft keyboard during replays — the single biggest source of flaky replays. `generateMaestro` now tracks soft-keyboard state and emits a `hideKeyboard` step before a `tap`/`long_press` that follows an `inputText`, reset on navigation. `hideKeyboard` is a no-op when no keyboard is showing and Maestro re-resolves the selector after dismiss, so the injection is safe. Device verification surfaced that maestro-runner v1.0.9 silently no-ops `hideKeyboard` on Android (B223), so `maestro_run` now prefers the official Maestro CLI for Android flows containing `hideKeyboard` (verified to dismiss the keyboard on-device), warning when the CLI is unavailable; iOS is unaffected (maestro-runner honors hideKeyboard there). Live `device_*` taps (the in-runner guard) and existing-corpus backfill are deferred to later phases.
+
+### 0.50.0
+
+#### Minor Changes
+
+- 98d3fb7: Add an RNTL-style discovery resolver to the injected helpers. `resolveLadder` finds elements by `byRole(+name)` / `byText` / `byPlaceholder` — ported from React Native Testing Library (matcher + normalizer, accessible-name, role, hidden, host-kind) — with fail-closed truncation and fail-closed multiplicity (never silently picks the wrong element), hidden-element exclusion by default, and a selector bundle (`testID` / `text` / `accessibleName` / `role` / `placeholder` / `anchors`). `interact()` routes `role`/`name`/`text`/`placeholder` selectors through the ladder. Includes RNTL `matchDeepestOnly` so a composite+host fiber pair (e.g. `Text`+`RCTText`) resolves to a single on-device element instead of fail-closing as ambiguous.
+
+### 0.49.0
+
+#### Minor Changes
+
+- 5fe66c9: Action corpus run/repair history now persists in a derived, gitignored node:sqlite store (.rn-agent/state/actions.db) alongside the per-action JSON sidecars (Phase 1 dual-write: sidecars stay authoritative, the DB is a rebuildable mirror), with graceful degradation to sidecar-only when node:sqlite is unavailable. The worker enables node:sqlite via a version-gated --experimental-sqlite flag (Node 22.5–23.5); the engines floor stays >=22. cdp_status now reports the active backend as `actionStore`. The learned-actions inventory script is migrated from JavaScript to TypeScript (compiled to dist/).
+
+### 0.48.0
+
+#### Minor Changes
+
+- d3be838: #317 Phase 2: when an action fails on iOS 26.x because WebDriverAgent is blind (empty accessibility tree), `cdp_run_action` now replays the action's id-based steps through the CDP/JS transport and returns a real pass/fail verdict — restoring action replay (and the observe Regression Run button) on iOS 26.x. The fallback fires on both observed blind failure modes — `SELECTOR_NOT_FOUND` (probe = the failed selector) and `UNKNOWN`/WDA-died-at-launch (probe = the action's first testID) — guarded by an exact-match CDP-tree oracle so genuine drift still routes to repair. Fallback verdicts are labeled `transport:'cdp-js'` (handler-level semantics) and failed replays record `failureCode:'TRANSPORT_BLIND'`; unsupported step types (e.g. text-based selectors) fail loudly rather than passing silently.
+
+### 0.47.2
+
+#### Patch Changes
+
+- 8cf8d4e: Fix the observe Regression tab's per-action **Run** button doing nothing. The observe `runAction` wiring resolved the correct project root for `loadAction` but then called the inner `runActionHandler` (`cdp_run_action`) without passing `projectRoot`, so the runner re-derived it from `process.cwd()` (the plugin repo) and failed instantly with `NO_PROJECT_ROOT` before ever reaching the device. The resolved root is now threaded into `runActionHandler`, so a clicked action runs its Maestro flow on the connected app's project. (Follow-up to #348, which fixed the same root-resolution family for the actions list and suite.)
+
+### 0.47.1
+
+#### Patch Changes
+
+- 6dc02a8: Fix the observe Regression tab showing an empty actions list and "Run E2E Suite" always reporting PASS. The observe e2e surface now resolves the project root of the _connected_ app by its bundleId (`findProjectRoot({ bundleId })`), so a stray sibling React Native repo can no longer hijack the heuristic filesystem scan and point the actions list / locked-test discovery at the wrong project. A suite that discovers zero locked tests now reports a distinct `empty` verdict ("NO TESTS") instead of a false-green pass.
+
+### 0.47.0
+
+#### Minor Changes
+
+- 33db4be: feat(e2e): Actions panel in the observe page — list the project's actions and run any one (repairable `cdp_run_action`) with params resolved from `.rn-agent/e2e.config.json`, via `GET /api/e2e/actions` + `POST /api/e2e/actions/run`.
+- 042280b: feat(e2e): params source — `.rn-agent/e2e.config.json` supplies per-test param values (with shared `defaults` + secret redaction) so parameterized actions can be locked and run as e2e tests. `cdp_lock_e2e_test` now accepts a param-needing action when the config covers all its params (else `MISSING_PARAMS` listing the gaps); `cdp_run_e2e_suite` runs param tests with their resolved values (else skips with a clear reason). Secret param values (names in `secretParams`) are redacted to `***` in failure output and run records, and only an action's declared params are passed to Maestro (unrelated defaults never leak).
+- 33db4be: feat(e2e): observe Regression page + CSRF-guarded control endpoint — a top-level Live|Regression toggle with a Run button, live progress, verdict badge, per-test table, and run history, backed by `POST /api/e2e/run` + `GET /api/e2e/runs[/:id]` (host + Sec-Fetch + CSRF + method/content-type guarded; one flow lease).
+
+### 0.46.0
+
+#### Minor Changes
+
+- 8f0b7ff: feat(e2e): regression runner engine — `cdp_lock_e2e_test` promotes a verified (param-free) action into a frozen, executable locked e2e test, and `cdp_run_e2e_suite` runs all locked tests strict (no auto-repair) on the booted sim, persisting a suite-run report with verdict, per-test classification (regression vs infra, params skipped), and a newly-failing-since-last-green diff. Engine only; observe page + CSRF HTTP trigger land in a follow-up.
+
+### 0.45.8
+
+#### Patch Changes
+
+- 7731024: chore: adopt oxlint + oxfmt as the lint/format layer, format the codebase (code only — prose docs excluded), and add a blocking CI lint-format gate.
+
+### 0.45.7
+
+#### Patch Changes
+
+- 8305bbd: `maestro_run` now returns structured per-step results and partial progress on timeout (GH #211).
+
+  The result gains `steps[]` (`{index,name,verb,status,durationMs}`), `failedStep`, `reason` (sanitized `{kind,selector}` — never the raw runner log), `lastStep` (progress marker), `timedOut`, and `outputTruncated`. On timeout the partial steps are returned instead of a bare failure, and the failure headline names the failing/last step. Parsed from maestro-runner stdout (the JVM Maestro CLI fallback degrades fail-open to empty steps); `tapOn` latencies for #263 now derive from the shared parser. Additive — `output` is preserved for `run-action` consumers.
+
+### 0.45.6
+
+#### Patch Changes
+
+- 16f0a0d: `maestro_run` now flags a wedged simulator runtime (GH #263).
+
+  When a flow fails AND the median latency of its successful `tapOn` steps exceeds a floor (default 1500ms, `RN_RUNTIME_DEGRADED_FLOOR_MS`), the result gains a `RUNTIME_DEGRADED` hint and `meta.runtimeDegraded` — "the simulator test runtime is likely wedged; reboot it (xcrun simctl shutdown/boot), relaunch, and retry." This replaces the misleading "Element not found" that previously sent the agent chasing app code when the real cause was a degraded simulator (taps reported success but `onPress` never fired). Detection is purely additive — it never changes a pass/fail verdict, never fires on a passing run, and only counts successful taps (a failed tap's duration is the step timeout, which would otherwise false-positive an ordinary element-not-found failure). Fail-open: unparseable output → no hint.
+
+### 0.45.5
+
+#### Patch Changes
+
+- 6c77108: `/observe` device panels now refresh live (GH #206).
+
+  The observability layer was a passive recorder of tool observations — the screenshot only updated on `device_screenshot` calls and the route only on navigation-family tools, so driving the app with `cdp_interact`/`cdp_navigate` left both panels stale. A fire-and-forget hook now captures a fresh screenshot (simctl/adb, OS-level) + route (CDP nav-state) after each state-mutating tool and delivers them via a dedicated live SSE channel (`{type:'live'}` + `/api/live-screenshot`), so the timeline stays clean. Platform resolves from the active device session or the connected CDP target (so a purely CDP-driven flow with no agent-device session still refreshes). Gated on a connected `/observe` tab, skipped during Maestro flows, single-flight trailing-coalesce, opt-out with `RN_OBSERVE_LIVE=0`.
+
+### 0.45.4
+
+#### Patch Changes
+
+- 64531c8: Bump esbuild to 0.28.1 across the build toolchains to clear the HIGH Dependabot advisory (GHSA-gv7w-rqvm-qjhr).
+
+  The advisory is in esbuild's Deno installer (binary-integrity RCE via `NPM_CONFIG_REGISTRY`) — a code path this repo never executes (esbuild is consumed as an npm transitive dep via Vite/Astro, not Deno), so it was never exploitable here. Still, both the observability web UI (`scripts/cdp-bridge/src/observability/web/`) and the docs site carried the vulnerable transitive esbuild, so both now pin it to the patched 0.28.1 via an npm `overrides`. The observability Vite build also sets `build.target: 'esnext'` (it's an internal localhost-only dev tool viewed in a modern browser) to sidestep an esbuild 0.28 regression that refused to downlevel destructuring to Vite's default old-browser baseline; the single-file bundle was rebuilt. `npm audit` is clean in both subtrees.
+
+### 0.45.3
+
+#### Patch Changes
+
+- a88d139: `cdp_network_log` no longer returns two entries per request (GH #214).
+
+  Root cause: setup sends `Network.enable` (mode `cdp`), then `probeNetworkDomain` fires a probe fetch and watches the buffer. On RN ≥ 0.83 the CDP Network domain _does_ deliver events, but when they don't flush within the probe window — a false negative documented after platform switches / reloads (GH #59 #9) — the probe returns `none` and setup injects the fetch/XHR hook **without disabling the still-enabled Network domain**. Both paths then capture every request (CDP numeric-id entries + hook UUID-id entries), and the existing exact-id dedup can't collapse them because the two id schemes never collide.
+
+  Fix: when setup falls back to the hook, it now disables the CDP Network domain first, so the hook is the single capture source. This also makes `cdp_status`'s `networkDomain: false` truthful instead of a label over a still-running domain — the "capability flag out of sync" symptom in the report was the same root cause. Read-time fuzzy dedup was deliberately rejected: it would collapse legitimately-identical rapid requests (a real double-mutation) and hide bugs — the opposite of what the reporter needed.
+
+### 0.45.2
+
+#### Patch Changes
+
+- 0386204: `cdp_mmkv` delete and boolean reads now work on the Nitro react-native-mmkv line (GH #209).
+
+  - `delete` was calling `mmkv.delete(key)` — a JS-wrapper-class method that doesn't exist on the raw Nitro hybrid object the tool actually talks to (`createHybridObject('MMKVFactory').createMMKV(...)`), whose spec exposes `remove(key)`. The generated expression now prefers `remove()`, falls back to `delete()` for wrapper-shaped objects, and reports a named error (instead of a bare TypeError) when neither exists. This unblocks first-class auth/storage resets for logged-out replays on iOS — previously a raw `cdp_evaluate` escape hatch every time.
+  - `get` with `type: 'boolean'` emitted `mmkv.getBool(key)`, which exists on no MMKV surface (hybrid object and wrapper both spell it `getBoolean`) — broken since the tool shipped. Now fixed.
+  - The follow-up enhancement from the issue (a `clearKeys:` action-YAML directive for self-contained auth-gated replays) is tracked as GH #286.
+
+### 0.45.1
+
+#### Patch Changes
+
+- bd5d585: Recovery paths now detect "app not installed" and resolve their relaunch target truthfully (GH #262, absorbs #194 BUG 2).
+
+  - `cdp_status` APP_DETACHED auto-relaunch: when `simctl launch` fails AND `get_app_container`'s stderr carries the `NSPOSIXErrorDomain code=2` marker (allowlist-only, stderr-only — argv-spoof-proof), the tool returns a distinct `APP_NOT_INSTALLED` code with install advice — including a shell-quoted `simctl install` line for the newest matching `.app` snapshot from the last clearState (GH #201 dir, mtime-sorted budgeted scan). Ambiguous probe verdicts fail open to the existing `APP_DETACHED` behavior. Concurrent recoveries are serialized, and a confirmed missing bundle is cached (with a cheap re-probe) so the diagnosis is never masked by `budget-exhausted`.
+  - `cdp_restart hardReset=true`: the relaunch target resolves through `explicit arg > connectedTarget > cache > active-session appId > strict per-platform app.json` (no iOS←Android fallback), simctl targets the active session's UDID when one exists, failed launches are classified the same way in `hardResetSteps`, and a successful hard reset resets the detached-recovery budget.
+
+- 81c386a: `device_screenshot` no longer blames "device transitioning state" when the target directory doesn't exist (GH #265).
+
+  - `captureAndResizeScreenshot` now `mkdir -p`'s the parent of the derived output path before any dispatch tier runs (simctl raw, rn-fast-runner, agent-device daemon/CLI, adb stream) — new directories are the expected case, since the tool's own advisories steer agents toward fresh `docs/proof/<slug>/` paths. The fix covers `device_screenshot`, `device_batch` auto-captures, and `proof_step`, all of which funnel through the same helper.
+  - When the directory itself cannot be created (e.g. a file blocks an intermediate path segment), the tool short-circuits before probing any device and returns an honest `SCREENSHOT_FAILED` with `reason: 'target-dir-unavailable'` naming the offending path — never the device-state guess.
+  - A leading `~/` in the screenshot path is now expanded to the real home directory (Node never expands `~`, so mkdir would otherwise create a literal `./~/` under the bridge cwd and report success into the wrong location). Unexpandable forms (`~user/...`, bare `~`) are refused with an actionable error.
+
+### 0.45.0
+
+#### Minor Changes
+
+- eff45cd: #202 Phase 6 / #186 — foreign Maestro sessions become arbiter refusals; plugin maestro_run is the canonical surface.
+
+  While a foreign Maestro/XCUITest session drives the target simulator (UDID-scoped detection, 5 s TTL, fail-open), local `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms measured) — pointing at the safe L1 reads — instead of colliding into the ~44 s runner-leak cascade. L1 introspection stays free; `device_screenshot` serves pixels via its simctl fallback; a ~10 s teardown grace after the plugin's own flows prevents self-false-positives while WDA dies. The two historical reasons to leave the plugin surface are live-gate-verified closed and #201 is closed — including a new fix: the clearState `--app-file` resolution is snapshotted outside the device container (the installed-container path used to be deleted by clearState itself before the reinstall could read it). `RN_IOS_FOREIGN_GUARD=0` disables both the warning and the refusal (`RN_IOS_FOREIGN_WARN=0` remains a deprecated alias). The foreign-runner `ps` scan now uses `-ww` (command-column truncation could silently drop the UDID → false negatives).
+
+### 0.44.0
+
+#### Minor Changes
+
+- c05c058: #202 Phase 5 / #264 — the bridge now survives Metro restarts (supervisor split).
+
+  The MCP entry point is now `dist/supervisor.js`: a thin stdio shim holding zero network sockets (immune to `lsof -ti tcp:8081 | xargs kill -9`, which used to SIGKILL the whole server and cost the session all 77 tools). It spawns the real bridge as a worker, and on worker death: errors in-flight calls with `-32000` ("retry the call"), respawns it (max 3 per rolling 60 s, then a terminal crash-loop error), and replays the cached MCP `initialize` handshake so the session continues seamlessly. Visibility: `cdp_status` → `bridge: { supervised, workerRestarts, lastWorkerExit }`. Opt out with `RN_BRIDGE_SUPERVISOR=0` (legacy single process). `SIGUSR2` now performs a real hot-reload (worker restart + handshake replay).
+
+### 0.43.0
+
+#### Minor Changes
+
+- abe4411: Expose `params` in the `maestro_run` and `cdp_run_action` MCP tool schemas.
+
+  Both handlers have accepted `params` since GH #116 (forwarded to maestro as `-e KEY=VALUE` on the first attempt AND the post-repair retry), but the zod registrations omitted the field — and zod strips unknown keys by default, so a caller's parameter bindings were **silently dropped** at the tool-call layer and a parameterised action failed at runtime with unset `${VAR}` placeholders. Found by Codex review on PR #272 (the new `creating-actions` skill recommends `cdp_run_action({ actionId, params, trigger })`, which was un-callable as advertised; `commands/run-action.md` documented the same call shape). Key-format validation (`/^[A-Z_][A-Z0-9_]*$/`) stays in the handler. Wiring test pins both registrations.
+
+### 0.42.0
+
+#### Minor Changes
+
+- 73c6bf4: #202 Phase 4 — eradicate legacy runner apps, not just processes.
+
+  At iOS device-open, `ensureSingleRunner` now detects the legacy upstream runner apps installed on the target simulator (`com.callstack.agentdevice.runner` + `.uitests.xctrunner`) and `simctl uninstall`s them. Killing the host processes (Phase 1) was insufficient: iOS relaunches an installed XCUITest runner into the foreground mid-`maestro_run`, backgrounding the app under test and wedging CDP. Scanned at every device-open (one `simctl listapps`, ~150–350 ms measured — no memo, so a reinstall by another session is always caught); error-safe (warnings, never a blocked session); opt out with `RN_DEVICE_KILL_LEGACY=0`. Results surface as `removedApps` + `meta.timings_ms.appEradication`.
+
+### 0.41.0
+
+#### Minor Changes
+
+- 58c4886: Debugger-seat coexistence with React Native DevTools + silent hook-mode network capture.
+
+  - New opt-out for background auto-reconnect: `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` `{ "cdp": { "autoConnect": false } }`. In passive mode the bridge yields the single RN debugger seat to the visual DevTools and reconnects only on explicit tool calls. Resolved mode is visible in `cdp_status` → `autoConnect` and `/doctor`.
+  - Hook-mode network capture (RN < 0.83 fallback) no longer transports entries via `console.log("__RN_NET__:…")` — entries go to an in-app ring buffer drained on demand, so Metro logs and the user's DevTools console stay clean.
+
+### 0.40.5
+
+#### Patch Changes
+
+- 6190178: fix(#253): `cdp_repair_action` no longer hardcodes `targetPlatform='ios'` — Android auto-repair works against an emulator. The repair orchestrator now derives the platform from the active device session via `detectPlatform()` (booted-device probe fallback when no session is open; `'ios'` only as the final no-session, no-device fallback). Previously an Android repair foregrounded the app via `xcrun simctl`, snapshotted through the iOS short-circuit, and bootstrapped the iOS fast-runner — so Android selector drift always escalated as a hard failure instead of self-healing.
+
+### 0.40.4
+
+#### Patch Changes
+
+- e5404ed: fix(#249): Maestro pass detection no longer flips passing flows to failed when app logs contain the substring `FAILED`. The exit-0 secondary guard in `maestro_run`, `maestro_test_all`, and the inline maestro fallback used a bare `output.includes('FAILED')` over combined stdout+stderr — app/console output like a `FETCH_FAILED` Redux action or a `LOGIN_FAILED` analytics event marked a genuinely passing flow as failed and triggered pointless auto-repair. All three call sites now share `outputIndicatesFlowFailure`, which keys on Maestro's own terminal status lines (`Test FAILED` / `Flow FAILED` / a `[FAILED]` step marker / a bare `FAILED` line) instead of a substring.
+- 070586d: fix(#250): `cdp_interact` no longer reports success when the app's own handler throws. The injected interact dispatch caught handler exceptions (`onPress`/`onChangeText`/`setValue` raising — unmounted component, missing context, thrown validation) and returned `success: true, action_executed: true`, which the tool layer surfaced as a non-error warning — so agents proceeded against a screen that may be in an error state. The helper now reports `success: false` (keeping `action_executed: true` to distinguish "dispatched but handler threw" from "couldn't dispatch"), and the tool layer maps it to a structured error with `meta.actionExecuted`, `meta.handlerError`, and a check-`cdp_error_log` hint. HELPERS_VERSION bumped to 25 so connected sessions re-inject.
+- 8269476: fix(#251,#252): startup hardening. The project single-instance lock (`Lockfile.acquire`) now uses the same atomic `openSync('wx')` exclusive-create pattern as `DeviceLock` — the previous read-then-write let two bridges starting in the same instant both "acquire" the lock, with the second silently truncating the first; the loser now gets a structured conflict, stale-holder reclaim narrows the steal window with a re-read before unlink, and fs infra errors fail open (`degraded: true`) instead of crashing the bridge at boot. Separately, SessionStart is now bounded: the hook declares an explicit 120s timeout and the maestro-runner installer's `curl | bash` carries `--connect-timeout 10 --max-time 90`, so a stalled CDN can no longer block session start indefinitely; a CI guard (`session-start-bounded.test.sh`) pins both.
+
+### 0.40.3
+
+#### Patch Changes
+
+- 609c825: fix(B191,B192): post-flow lifecycle hardening follow-ups to #243/#244. `isAndroidConnectionFailure` now also classifies `startAndroidRunner`'s startup-failure shapes (`exited before readiness`, `Failed to spawn Android runner instrumentation`) into the structured retryable `RN_ANDROID_RUNNER_DOWN` instead of letting a startup crash escape as a raw exception. And `isBenignSessionGoneError` no longer runs its session-gone regex over unparseable (non-JSON) close payloads — with no error field to scope the match to, they surface unchanged, so a real close failure whose raw text merely mentions "no active session" can't be silently swallowed.
+
+### 0.40.2
+
+#### Patch Changes
+
+- c9d447d: fix(#243,#244): Android post-flow lifecycle. `rn-android-runner` readiness is now gated on its own `GET /health` instead of the `adb logcat` ring buffer — a prior runner's stale ready line (same tag + fixed port) used to fire readiness before the new socket bound, so the first `device_*` after a Maestro flow returned a bare `fetch failed`. When the runner genuinely can't come up, `runAndroid` now surfaces a structured `RN_ANDROID_RUNNER_DOWN` with a retry hint. Separately, `device_snapshot action=close` now tolerates an underlying session that a flow already tore down (the #237 slot-release): it cleans up local state and returns ok, so `open → flow → close` round-trips cleanly instead of erroring `SESSION_NOT_FOUND`.
+
+### 0.40.1
+
+#### Patch Changes
+
+- 51976e8: fix(#237): Android instrumentation-slot handoff — `runFlowParked` now releases the single Android `UiAutomation` slot before a Maestro flow (`maestro_run`/`maestro_test_all`/`cdp_auto_login`), fixing `UIAutomator2 server not ready after 30s`. It stops the in-tree `rn-android-runner`, `am force-stop`s our two instrumentation packages (the decisive device-side release), and — gated by `RN_DEVICE_KILL_LEGACY` — kills a stale legacy `agent-device` daemon by its specific PID (never `pkill`, guarded against our own process tree so the MCP server is never collateral). Best-effort and idempotent; iOS behavior is unchanged.
+
+### 0.40.0
+
+#### Minor Changes
+
+- de6a8d8: fix(#191): JS-first text entry — `device_fill` now prefers the deterministic React `onChangeText` path when CDP is connected and the ref resolves to a testID (via its cached snapshot identifier), settle-polls the field value to verify it (defeating the debounced-`onChangeText` read race), and on the native fallback runs a bounded clear+retype (real `clearFirst` + per-character delay) when the value is corrupted, escalating to a verified maestro fallback before erroring. Adds best-effort iOS predictive-keyboard suppression at session-open and a new `TEXT_ENTRY_UNVERIFIED` error code for the exhausted-and-still-corrupted case. Additive `meta` only (`textEntryPath`, `verify`, `timings_ms`); no breaking change for existing callers. NOTE: `device_batch` fills are not yet JS-first (they call the runner directly) — tracked as a follow-up.
+
+### 0.39.4
+
+#### Patch Changes
+
+- 72d17b5: Fix #210: iOS device-session visibility + self-healing. `cdp_status` now reports `deviceSession: { sessionOpen, rnFastRunner: 'alive'|'stale'|'dead', appId?, deviceId?, foreignRunner? }` so the agent can see the XCUITest runner state before calling `device_*` (iOS-gated — Android leaves `rnFastRunner:'dead'` and skips the probe/scan). `device_find/press/fill` now auto-spawn the runner from the dispatch choke point when a session or booted simulator exists and the rig is prebuilt — cold-build-safe: a missing prebuilt rig returns an actionable `RN_FAST_RUNNER_DOWN` error naming `device_snapshot action=open` instead of a silent multi-minute `xcodebuild`. `device_screenshot` now falls back to `xcrun simctl io screenshot` (or `adb`) whenever the runner can't serve it — including while a Maestro flow owns the device — so it never hard-fails on iOS. Also fixes a latent bug where an omitted-platform `device_snapshot action=open` stored `platform: undefined`, skipping the iOS dispatch branch.
+
+  Reframes the issue's "ride Maestro's WDA" suggestion (rejected: WDA is per-flow/ephemeral with no session to ride, and a WDA client would add a second XCUITest backend rather than unify; mid-flow pixels use simctl, mid-flow state uses CDP introspection). (GH #210, B186, D1249)
+
+### 0.39.3
+
+#### Patch Changes
+
+- 75a9573: Fix #182: the CDP MCP no longer fails with `-32000: Connection closed` when an orphaned bridge from a dead Claude Code session holds the single-instance lock.
+
+  Root cause: when CC dies abnormally (SIGKILL/crash/window-close on macOS) without closing the child's stdin or signaling it, the bridge becomes a **live orphan** — still running, still holding the project lock. The existing reclaim (PID-dead / mtime>24h / process-name) can't recover a _live_ owner, so the next session hard-failed for up to 24h. Four composing fixes:
+
+  - **Parent-death self-exit (prevent).** A `getppid()` poll (`lifecycle/parent-watch.ts`) captures the bridge's PPID at startup and self-exits (releasing the lock) when it _changes_ — i.e. the original Claude Code host died and the bridge was reparented. This catches the abnormal-death cases stdin-EOF + signal handlers miss. It compares against the startup PPID rather than testing `=== 1` so a bridge whose host runs as PID 1 (a container with no init system) is never falsely killed.
+  - **Orphaned-owner reclaim (recover).** `Lockfile.isLockLive` reclaims a _live_ owner whose parent **changed** from the PPID it recorded at acquire (`ps -o ppid=`) — so a new session self-heals past an existing orphan instead of hard-failing. A null PPID lookup fails safe; pre-0.39 locks with no recorded `ppid` fall back to a legacy `PPID===1` reclaim.
+  - **Heartbeat (recover wedged).** The lock body carries `lastHeartbeat`, refreshed every ~10s; a live owner whose heartbeat goes stale (>90s) is wedged and reclaimable — mirroring the device-lock's self-healing. Pre-0.39 locks without `lastHeartbeat` fall back to the existing mtime check (back-compat).
+  - **Usurp self-terminate (sleep/wake safety).** `Lockfile.touch()` now returns whether we still own the lock. If a contender reclaimed our slot while the laptop slept (heartbeat expired → reclaimed → we wake), the next heartbeat detects the foreign PID and self-terminates instead of running as a second bridge on the same device. This also makes the (pre-existing, non-atomic) reclaim path self-correcting within one tick.
+
+  Together these eliminate the manual `kill <pid> && rm <lock>` workaround. 15 #182 unit tests (incl. container-safety, sleep/wake usurp, and a real `ps -o ppid=` check); unit suite 1744/1744; `tsc` clean. (GH #182, B185, D1246)
+
+### 0.39.2
+
+#### Patch Changes
+
+- bc577e9: Fix the CDP connection wedge (GH #208): `cdp_status` no longer dead-locks on "Already connecting to Metro..." and no longer misreports a detached app as "Metro not found". Three root causes were addressed:
+
+  - **RC1 — reconnect-storm wedge.** When the app detaches but Metro stays up, the WS-close reconnect loop holds `isReconnecting()` true for up to ~12 min (30 attempts × 30s cap, then re-armed indefinitely by the background poll). `autoConnect`'s guard threw "Already connecting" for every `cdp_status`/`cdp_*` call in that window. `cdp_status` now **preempts** an active reconnect storm via `softReconnect()` (the existing 3s `softReconnectRequested` handshake) for one fresh attempt instead of refusing, and surfaces the live `reconnectState` (attempt N/30) on any connect failure so it reads as progress, not a dead end.
+  - **RC2 — misleading error.** "Metro up but 0 Hermes targets" now throws a typed `AppDetachedError` ("Metro is up … advertises 0 Hermes debug targets — the app isn't attached") instead of being conflated with the genuine "Metro not found" (now reserved for `discoverMetroPort` returning null).
+  - **RC3 — no auto-recovery.** New `recoverDetached()` cold-restarts a detached iOS app (`simctl terminate` + `launch`) → reconnects → confirms with a real CDP liveness probe. Bounded to 3 consecutive attempts/session, skips while a Maestro flow holds the arbiter lease, iOS-only, opt-out via `RN_AUTO_RELAUNCH_ON_DETACH=0`. Cold-restart (vs recover-wedge's bare launch) is acceptable because it only fires when the app is ALREADY detached — never against a working app.
+
+  Hardened via a Codex + Gemini multi-review: `cdp_status` now honors an explicit `args.platform` during a storm (tears down + reconnects rather than reusing the storm's target), auto-relaunch is skipped when the caller pinned a non-iOS platform (never cold-restarts an unrelated iOS session), `simctl launch` failures are surfaced instead of hidden behind "still detached", and the post-recovery status read can no longer throw out of the handler.
+
+  19 new unit tests; full suite 1729/1729; `tsc --noEmit` clean. Live false-positive guard verified: the real `discover()` against Metro does not fire `AppDetachedError` while a target is present. Scoping: the literal-0-targets case is fixed; the RN-0.85 "C++ target present, 0 Hermes" flavor remains B156/B184 territory (recover-wedge path). (GH #208, B181, D1245)
+
+### 0.39.1
+
+#### Patch Changes
+
+- 6e8af52: Fix a batch of bugs, regressions, and reliability issues surfaced by a multi-agent repo audit.
+
+  **Security**
+
+  - Redaction no longer leaks private-key material. `redactString` now applies secret patterns BEFORE truncating (a >2000-char PEM previously had its `-----END-----` marker severed by truncation so the key body passed through), and the PEM rule now matches multi-word labels like `RSA PRIVATE KEY` / `OPENSSH PRIVATE KEY` (the old single-word pattern never matched the most common headers).
+
+  **Device interaction**
+
+  - `device_scroll` no longer throws on Android (and on the iOS fast-runner fallback): a direction-form scroll is now converted to coordinates before dispatch, matching `device_swipe`.
+  - `device_batch` scroll steps no longer crash the whole batch on either platform (same root cause).
+  - A coordinate `device_swipe` with `--count`/`--pattern` but no `durationMs` no longer mis-parses the flag value as a 3 ms duration on iOS (the positional extractor now strips flag values, matching Android).
+  - The Android runner is no longer reused across emulators: `shouldReuseAndroidRunner` checks the bound `deviceId` (parity with iOS `shouldReuseRunner`), so a runner bound to one emulator can't silently drive another.
+  - A wedged-but-alive fast-runner is now reaped: `ensureFastRunner` probes tri-state liveness instead of PID-only, so a hung HTTP listener no longer makes every subsequent command burn the full timeout.
+  - `ensureSingleRunner` is now awaited at session-open so the stale-runner kill completes before the first interaction, and its `ps` failure surfaces as a warning instead of a silent no-op.
+
+  **Actions / Maestro**
+
+  - Actions now auto-promote `experimental → active` on the first clean replay (the documented lifecycle was defined + tested but never wired).
+  - The GH#186 route-drift guard is now active in production (`cdp_run_action` is wired with a CDP-backed live-route reader; it previously defaulted to a no-op).
+  - `maestro_test_all` and the inline Maestro fallback no longer mark passing flows as failed when app/console output merely contains `Error:`, and both now auto-resolve `--app-file` for iOS `clearState` flows (previously only `maestro_run` did). `clearState` detection also recognises the standalone `- clearState` command.
+  - All Maestro `execFile` calls raise `maxBuffer` to 10 MB so a large flow log can't kill the child and mask a passing run.
+  - `cdp_repair_action` `RUNNER_LEAK` refusals are now bucketed as `SNAPSHOT_FAILED` in MTTR telemetry instead of `INTERNAL_ERROR`.
+  - A bare-form `id:` repair now emits a quoted scalar, so a testID containing YAML-special characters can't corrupt the action.
+
+  **Reliability / correctness**
+
+  - `collect_logs` no longer double-shifts Android logcat timestamps by the host UTC offset (which corrupted both the time and the cross-source merge order).
+  - CDP freshness/dev probes attach a no-op catch to the raced `evaluate()` promise so a mid-probe WebSocket close can't surface as an unhandledRejection.
+  - The observability server keeps a small `headersTimeout` (slow-loris guard), broadcasts a `shutdown` event so the browser stops auto-reconnecting after stop, and `Recorder.clear()` notifies subscribers instead of orphaning live SSE streams.
+  - Action IDs now accept dots (`v2.0-login`) per their documented contract while still rejecting `..`.
+  - The post-edit health-check hook's "app not installed → skip" guard works again (`grep -c || echo "0"` produced a two-line `0\n0`).
+  - `learned-actions` resolves the project memory dir correctly for paths containing a dot, and its `${VAR}` extractor accepts digit-bearing keys.
+  - The injected-helpers version is a single source of truth (the post-injection log no longer reports a stale `v11`).
+  - `sync-versions.sh` drops a dead, misleading variable and documents that `rn-dev-agent-cdp` is independently versioned.
+
+  Hardened the previously flaky `proof_step` unit tests (they depended on a machine-global session file) with a dependency-injection seam, making the suite deterministic.
+
+### 0.39.0
+
+#### Minor Changes
+
+- 5c4ca04: Add the read-only observability UI (D1226 "watch the agent live"): an in-process recorder + opt-in SSE server serving a React SPA (timeline | device | state). New `observe` MCP tool + `/rn-dev-agent:observe` slash command. Deep-redacted (args + payload, fail-closed), localhost-only with Host-header + Sec-Fetch-Site guards.
+
+#### Patch Changes
+
+- c4804dc: Add `cdp_dismiss_dev_client_picker` MCP tool (Android) and best-effort Dev
+  Client picker dismissal after Android deep links (#136 sub-3). Routed through a
+  single guarded `clearDevClientPickerIfPresent()` helper; iOS returns an
+  actionable manual-select message instead of touching the legacy agent-device
+  path. Cross-platform iOS support tracked as a follow-up.
+
+### 0.38.40
+
+#### Patch Changes
+
+- Deliver the GH #186 maestro-interop fixes that merged in #188 without a version bump (closes #189).
+
+  - `cdp_run_action` now allows `runFlow` (including `when:` conditionals and `{file}` sub-flows) through the Maestro command allowlist, so actions with conditional dialog-handling (Expo dev-server picker, iOS "Open in" dialog) replay through the canonical runner instead of hard-failing with `Command not in allowlist: runFlow (Phase 134.1)`.
+  - Non-destructive runner-leak `reacquire` recovery tier + cross-tool CDP re-pin, avoiding the ~44s relaunch / ~47s STALE_TARGET when maestro-mcp and rn-dev-agent contend for the same iOS device.
+  - Structural route-drift detection: a stale-selector failure on an inserted screen is classified `ROUTE_DRIFT` instead of triggering a wasted fuzzy-repair.
+
+  #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.

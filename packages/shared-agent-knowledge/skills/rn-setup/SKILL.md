@@ -22,8 +22,8 @@ This skill checks every prerequisite and installs missing dependencies.
 ```bash
 node --version
 ```
-**Required:** Node.js >= 22 LTS (even-numbered release).
-If odd-numbered (e.g., v25) or < 22: warn the user to install Node 22.
+**Required:** Node.js >= 22.18 LTS (even-numbered release).
+If odd-numbered (e.g., v25), < 22, or Node 22 with minor < 18: warn the user to install current Node 22 LTS.
 - If `nvm` is installed (`command -v nvm`): `nvm install 22 && nvm use 22`
 - If `fnm` is installed: `fnm install 22 && fnm use 22`
 - Otherwise: download from https://nodejs.org/en/download/ or `brew install node@22`
@@ -250,7 +250,7 @@ Present results as a table:
 
 | Check | Status | Action Needed |
 |-------|--------|--------------|
-| Node.js | OK (v22.15.0) | — |
+| Node.js | OK (v22.18.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
 | rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
@@ -281,7 +281,7 @@ Setup is boring — agents skip it and pay for it later.
 
 | Excuse | Reality |
 |--------|---------|
-| "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use v22 LTS. |
+| "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use Node 22.18+ LTS. |
 | "There's no external device CLI to install — surely device control just works" | Both device backends are in-tree (iOS: `rn-fast-runner`; Android: `rn-android-runner`) and there is no `agent-device` install step anymore — but they still need their build artifacts present. The runners build/install lazily on the first `device_*` call, which means the first call cold-builds (slow) if you skipped the pre-build. Verify checks 3 / 3b and offer the one-time pre-build to move that cost out of the first interaction. `RN_ANDROID_RUNNER=0` does NOT fall back to anything — it ERRORS with `RUNNER_DISABLED`. |
 | "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` runs `xcodebuild build-for-testing` + `test-without-building` when no `.xctestrun` exists (#424 — the build artifact persists, so only the FIRST call ever is slow), so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
@@ -298,7 +298,7 @@ Setup is boring — agents skip it and pay for it later.
 
 ## Verification — Setup Complete When
 
-- [ ] Node.js is an even-numbered version >= 22 (v22, v24, NOT v23, v25)
+- [ ] Node.js is an even-numbered version >= 22.18 (v22.18+, v24, NOT v23, v25)
 - [ ] `corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0` shows no WARN/ERR
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
 - [ ] **iOS targets**: `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)

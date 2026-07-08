@@ -16,31 +16,47 @@ This skill checks every prerequisite and installs missing dependencies.
 - When `device_*` tools fail with "session not open" or "command not found"
 - When the user runs `/rn-dev-agent:setup`
 
+## Codex plugin root
+
+Codex installs use a package-local root, not the Claude package root variable.
+For shell snippets below, resolve it first:
+
+```bash
+CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-packages/codex-plugin}}"
+```
+
+`CODEX_PLUGIN_ROOT` must point at the directory containing
+`.codex-plugin/plugin.json`. In this repository that is `packages/codex-plugin`;
+inside an installed Codex plugin it is the installed package directory.
+
 ## Checklist — run each check in order
 
 ### 1. Node.js version
 ```bash
 node --version
 ```
-**Required:** Node.js >= 22 LTS (even-numbered release).
-If odd-numbered (e.g., v25) or < 22: warn the user to install Node 22.
+**Required:** Node.js >= 22.18 LTS (even-numbered release).
+If odd-numbered (e.g., v25), < 22, or Node 22 with minor < 18: warn the user to install current Node 22 LTS.
 - If `nvm` is installed (`command -v nvm`): `nvm install 22 && nvm use 22`
 - If `fnm` is installed: `fnm install 22 && fnm use 22`
 - Otherwise: download from https://nodejs.org/en/download/ or `brew install node@22`
 
 ### 2. CDP bridge dependencies
 ```bash
-cd ${CLAUDE_PLUGIN_ROOT} && corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0 2>&1 | head -5
+test -f "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js" && \
+  test -f "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/index.js"
 ```
-If missing or showing WARN/ERR, run the ensure script:
+Codex packages ship a bundled runtime under `rn-dev-agent-core/dist/`; no
+workspace install is needed in an installed plugin. If missing in a repository
+checkout, rebuild the package runtime from the repository root:
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/../../scripts/ensure-cdp-deps.sh
+corepack yarn build:codex-runtime
 ```
-Then re-check: `cd ${CLAUDE_PLUGIN_ROOT} && corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0 2>&1 | head -5`
+Then re-check the two `test -f` paths above.
 
 If it still fails, give the user manual instructions:
-1. `cd ${CLAUDE_PLUGIN_ROOT} && corepack yarn install --immutable`
-2. `cd ${CLAUDE_PLUGIN_ROOT} && corepack yarn workspace rn-dev-agent-core build`
+1. In a repo checkout: `corepack yarn install --immutable`
+2. In a repo checkout: `corepack yarn build:codex-runtime`
 3. If ENOENT: the plugin directory may be corrupt — reinstall: `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)
@@ -48,8 +64,8 @@ If it still fails, give the user manual instructions:
 iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (see D1219) — the in-tree runner is the sole iOS device backend, there is no external CLI involved. Verify the Xcode project ships with the plugin and the build artifacts are present:
 
 ```bash
-ls ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj 2>/dev/null && \
-  ls ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app 2>/dev/null
+ls "${CODEX_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj" 2>/dev/null && \
+  ls "${CODEX_PLUGIN_ROOT}/scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app" 2>/dev/null
 ```
 
 - **Both present** → OK (built). The runner spawns lazily on the first `device_snapshot action=open` via the fast `xcodebuild test-without-building` path.
@@ -57,7 +73,7 @@ ls ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-fast-runner/RnFastRunner/RnFastRunner
 
   To avoid that first-call latency, **offer to run the one-time pre-build now** ("Pre-build the iOS runner now to avoid a slow first call? [y/n]"). If the user accepts, run it with a booted iOS simulator UDID (substitute from `xcrun simctl list devices booted -j`):
   ```bash
-  cd ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-fast-runner/RnFastRunner && \
+  cd "${CODEX_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner" && \
     xcodebuild build-for-testing \
       -project RnFastRunner.xcodeproj \
       -scheme RnFastRunner \
@@ -78,12 +94,12 @@ Android device automation is owned by the in-tree `rn-android-runner` Gradle pro
 Verify the project ships with the plugin and its prebuilt APKs are present:
 
 ```bash
-ls ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-android-runner/build.gradle.kts 2>/dev/null && \
-  ls ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk 2>/dev/null
+ls "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts" 2>/dev/null && \
+  ls "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk" 2>/dev/null
 ```
 
 - **Both present** → OK. The runner installs its APKs and starts its UiAutomator instrumentation (`dev.lykhoyda.rndevagent.androidrunner`) lazily on the first `device_*` call against a booted emulator. The runner is default-on; opt out with `RN_ANDROID_RUNNER=0` (which now ERRORS with `RUNNER_DISABLED` on a `device_*` call — it does NOT fall back to anything).
-- **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
+- **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner" && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
 - **build.gradle.kts missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
 
 Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
@@ -98,7 +114,7 @@ ls -la ~/.maestro-runner/bin/maestro-runner 2>/dev/null
 ```
 If not there, run the ensure script to attempt automatic installation:
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/../../scripts/ensure-maestro-runner.sh
+curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version 1.0.9
 ```
 Then re-check: `command -v maestro-runner || ~/.maestro-runner/bin/maestro-runner --version`
 
@@ -167,7 +183,16 @@ Only runs if a physical device is USB-connected. Simulators/emulators skip
 this section. Runs two checks + applies one (safe, reversible) side-effect:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/../../scripts/check-physical-devices.sh
+if adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { found=1 } END { exit(found ? 0 : 1) }'; then
+  adb reverse tcp:8081 tcp:8081
+else
+  echo "[skip] no physical Android devices"
+fi
+if command -v idb_companion >/dev/null || command -v idb-companion >/dev/null; then
+  echo "[OK] idb-companion installed"
+else
+  echo "[MISSING] idb-companion — install with: brew tap facebook/fb && brew install idb-companion"
+fi
 ```
 
 Expected outputs:
@@ -188,11 +213,11 @@ release. Read-only — never auto-updates. The user runs
 `/plugin update rn-dev-agent` themselves if the row reports BEHIND.
 
 ```bash
-LOCAL=$(jq -r '.version' "${CLAUDE_PLUGIN_ROOT}/plugin.json" 2>/dev/null)
+LOCAL=$(jq -r '.version' "${CODEX_PLUGIN_ROOT}/.codex-plugin/plugin.json" 2>/dev/null)
 LATEST=$(curl -fsSL --max-time 3 https://api.github.com/repos/Lykhoyda/rn-dev-agent/releases/latest 2>/dev/null | jq -r '.tag_name // empty' | sed 's/^v//')
 
 if [ -z "$LOCAL" ]; then
-  echo "[?] Plugin version: could not read \${CLAUDE_PLUGIN_ROOT}/plugin.json"
+  echo "[?] Plugin version: could not read \${CODEX_PLUGIN_ROOT}/.codex-plugin/plugin.json"
 elif [ -z "$LATEST" ]; then
   echo "[OFFLINE] Plugin version: installed $LOCAL — couldn't reach GitHub for upstream check"
 else
@@ -230,19 +255,18 @@ Verify the vendored Vercel agent-skills content is present and not stale.
 Read-only check; does NOT auto-sync (user runs the resync command if BEHIND).
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/../../scripts/sync-vercel-skills.mjs --check 2>&1 | head -3
+test -s "${CODEX_PLUGIN_ROOT}/skills/rn-best-practices/rules.index.json" && \
+  jq 'length' "${CODEX_PLUGIN_ROOT}/skills/rn-best-practices/rules.index.json"
 ```
 
 Expected outputs:
-- **OK**: `✓ N files in sync (sha=… fetchedAt=…)`. Compute days since
-  `fetchedAt`; if > 30 days, mark row as STALE in the table (still
-  functional, just a recommendation to refresh).
-- **MISSING**: `error: …/UPSTREAM.lock.json missing`. The vendored
-  content was never synced — `rules.index.json` is empty or absent. Surface:
-  "Run: `node ${CLAUDE_PLUGIN_ROOT}/../../scripts/sync-vercel-skills.mjs --fix --ref <sha> --accept-missing-license-file`".
-- **DRIFT**: `✗ N file(s) out of sync`. The on-disk content was modified
-  out-of-band (or upstream LICENSE absence got fixed). Surface the resync
-  command; do not auto-run.
+- **OK**: prints the number of indexed rules. The Codex package carries the
+  generated rules index directly.
+- **MISSING**: `rules.index.json` is absent or empty. The plugin package is
+  incomplete; reinstall or, from a repo checkout, regenerate host outputs.
+- **DRIFT**: only checkable in a repository checkout with the sync script
+  available. Surface the repo command, do not auto-run:
+  `node scripts/sync-vercel-skills.mjs --fix --ref <sha> --accept-missing-license-file`.
 
 ## Output format
 
@@ -250,10 +274,10 @@ Present results as a table:
 
 | Check | Status | Action Needed |
 |-------|--------|--------------|
-| Node.js | OK (v22.15.0) | — |
+| Node.js | OK (v22.18.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
-| rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/../../packages/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
+| rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner" && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
 | maestro-runner | MISSING | Run: npm install -g maestro-runner |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
@@ -264,7 +288,7 @@ Present results as a table:
 | idb (screen mirror fast path) | OK / INSTALLING (background) / MISSING | If MISSING: `brew tap facebook/fb && brew install idb-companion && pipx install fb-idb` (optional — mirror falls back to ~6fps simctl) |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
-| Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT | Run: node ${CLAUDE_PLUGIN_ROOT}/../../scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
+| Vercel rules sync | OK (N rules) / MISSING / DRIFT (repo checkout only) | Repo checkout drift fix: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
 
 If any critical check fails (CDP bridge, **rn-fast-runner on iOS targets**, **rn-android-runner on Android targets**, Metro, or simulator), provide step-by-step instructions to fix it. Do not proceed with feature development until all critical checks pass. Note: iOS-only setups do NOT need `rn-android-runner`; Android-only setups do NOT need `rn-fast-runner` build artifacts.
 
@@ -281,7 +305,7 @@ Setup is boring — agents skip it and pay for it later.
 
 | Excuse | Reality |
 |--------|---------|
-| "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use v22 LTS. |
+| "Node v25 should work fine, it's newer than v22" | Odd-numbered Node releases (v23, v25) are NOT LTS. `ws`, `better-sqlite3`, and other native modules the plugin depends on may fail silently. Use Node 22.18+ LTS. |
 | "There's no external device CLI to install — surely device control just works" | Both device backends are in-tree (iOS: `rn-fast-runner`; Android: `rn-android-runner`) and there is no `agent-device` install step anymore — but they still need their build artifacts present. The runners build/install lazily on the first `device_*` call, which means the first call cold-builds (slow) if you skipped the pre-build. Verify checks 3 / 3b and offer the one-time pre-build to move that cost out of the first interaction. `RN_ANDROID_RUNNER=0` does NOT fall back to anything — it ERRORS with `RUNNER_DISABLED`. |
 | "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` runs `xcodebuild build-for-testing` + `test-without-building` when no `.xctestrun` exists (#424 — the build artifact persists, so only the FIRST call ever is slow), so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
@@ -298,8 +322,8 @@ Setup is boring — agents skip it and pay for it later.
 
 ## Verification — Setup Complete When
 
-- [ ] Node.js is an even-numbered version >= 22 (v22, v24, NOT v23, v25)
-- [ ] `corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0` shows no WARN/ERR
+- [ ] Node.js is an even-numbered version >= 22.18 (v22.18+, v24, NOT v23, v25)
+- [ ] `${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js` and `${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/index.js` exist
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
 - [ ] **iOS targets**: `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)
 - [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)

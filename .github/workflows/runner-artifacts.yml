@@ -174,6 +174,7 @@ jobs:
             --ios "rn-fast-runner-$VERSION-sim.zip" \
             --android "rn-android-runner-$VERSION.zip" \
             --out runner-manifest.json
+          cp runner-manifest.json packages/codex-plugin/runner-manifest.json
           cat runner-manifest.json
       - name: Attach the manifest to the release
         env:
@@ -186,7 +187,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add runner-manifest.json
+          git add runner-manifest.json packages/codex-plugin/runner-manifest.json
           # [skip ci] keeps CI off a manifest-only commit; even on a scheduled
           # sweep the release is complete by now (detect -> changed=false).
           git commit -m "chore(release): runner-manifest for v$VERSION [skip ci]" \

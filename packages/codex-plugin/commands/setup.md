@@ -6,6 +6,14 @@ argument-hint:
 
 Run the rn-dev-agent onboarding flow. Two phases: diagnose what's installed, then inject the project-side wiring the plugin needs. Most users don't read the README — this command does the wiring for them.
 
+For shell snippets, resolve the Codex package root first:
+
+```bash
+CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-packages/codex-plugin}}"
+```
+
+`CODEX_PLUGIN_ROOT` must point at the directory containing `.codex-plugin/plugin.json`.
+
 ## Phase 1 — Diagnose
 
 Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 16 prerequisite checks and present the table.
@@ -22,10 +30,10 @@ Once diagnostics pass, perform the five steps below (A–D inject; E verifies). 
 
 ### A. CLAUDE.md project instructions
 
-The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
+The plugin's full operating manual lives at `${CODEX_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
 
 1. Check whether `CLAUDE.md` exists in the current working directory.
-2. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
+2. Read `${CODEX_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
 3. Inject or refresh:
    - **No CLAUDE.md exists**: create one with the template body.
    - **CLAUDE.md exists, no rn-dev-agent block**: append the template body (look for the marker `## React Native Development (rn-dev-agent)` — if it's missing, append).
@@ -122,7 +130,7 @@ Show the diff before writing.
 
 The plugin reads and writes only inside `<cwd>/.rn-agent/`. Without this directory, every plugin tool that persists state (action recordings, learned flows, nav-graph cache, sidecars) fails with `ENOENT` on first use. This step creates it from a versioned template.
 
-The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
+The template lives at `${CODEX_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
 
 `dev-bridge.ts` and `globals.d.ts` are the user-facing surface for Steps B + C — `dev-bridge.ts` exposes `getBridge()?.registerNavRef(...)` / `registerStores(...)` (DEV-only via `__DEV__` guard) and `globals.d.ts` declares the global types so user code can call them without casts.
 
@@ -134,14 +142,14 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
    - `.rn-agent/actions/` contains any `*.yaml` file
    - `<cwd>/.rn-agent/` exists as a directory at all (even if empty — falls into the partial-add path so we don't try to `mv tmp dst` over it)
    
-   If already scaffolded: read the version from `.scaffold-version` and compare to `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/.scaffold-version`. If they match → skip with a one-liner (`scaffold v<X> already in place`). If they differ → enter **partial-add path** (Step 1a below). Bump `.scaffold-version` on apply.
+   If already scaffolded: read the version from `.scaffold-version` and compare to `${CODEX_PLUGIN_ROOT}/templates/rn-agent/.scaffold-version`. If they match → skip with a one-liner (`scaffold v<X> already in place`). If they differ → enter **partial-add path** (Step 1a below). Bump `.scaffold-version` on apply.
 
-   **Step 1a — partial-add path.** List the relative paths of every file under `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and check which are missing from `<cwd>/.rn-agent/`. **Filter the missing set first**: for any path ending in `.gitkeep`, look at the parent directory in the destination. If the parent already exists AND contains any non-`.gitkeep` file, drop the marker from the missing set — its sole purpose (keeping an empty directory git-trackable) is already satisfied by real content, and copying it would add visual noise next to artifacts (issue #123). For each remaining missing file, copy it individually (e.g. `cp -RL "${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/<relpath>" "$CWD/.rn-agent/<relpath>"`, creating any missing parent directories with `mkdir -p` first). Do NOT use the `mv tmp dst` pattern from Step 2 — `mv` of a directory onto an existing directory creates `dst/tmp/...` rather than merging, leaking nested junk. After copying the missing files, write the new version into `<cwd>/.rn-agent/.scaffold-version`.
+   **Step 1a — partial-add path.** List the relative paths of every file under `${CODEX_PLUGIN_ROOT}/templates/rn-agent/` and check which are missing from `<cwd>/.rn-agent/`. **Filter the missing set first**: for any path ending in `.gitkeep`, look at the parent directory in the destination. If the parent already exists AND contains any non-`.gitkeep` file, drop the marker from the missing set — its sole purpose (keeping an empty directory git-trackable) is already satisfied by real content, and copying it would add visual noise next to artifacts (issue #123). For each remaining missing file, copy it individually (e.g. `cp -RL "${CODEX_PLUGIN_ROOT}/templates/rn-agent/<relpath>" "$CWD/.rn-agent/<relpath>"`, creating any missing parent directories with `mkdir -p` first). Do NOT use the `mv tmp dst` pattern from Step 2 — `mv` of a directory onto an existing directory creates `dst/tmp/...` rather than merging, leaking nested junk. After copying the missing files, write the new version into `<cwd>/.rn-agent/.scaffold-version`.
 
 2. **First-time scaffold.** Build the destination atomically:
    ```bash
    mkdir -p "$CWD/.rn-agent.tmp-$$"
-   cp -RL "${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/." "$CWD/.rn-agent.tmp-$$/"
+   cp -RL "${CODEX_PLUGIN_ROOT}/templates/rn-agent/." "$CWD/.rn-agent.tmp-$$/"
    ```
    The `/.` suffix on the source ensures dotfiles (`.gitignore`, `.scaffold-version`) are included; `cp -RL` dereferences any symlinks. After copy, rename atomically:
    ```bash
