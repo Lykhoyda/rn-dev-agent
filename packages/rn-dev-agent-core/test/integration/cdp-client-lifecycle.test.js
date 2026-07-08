@@ -97,7 +97,7 @@ describe('CDPClient lifecycle', () => {
     }
   });
 
-  test('autoConnect fails when no Hermes targets are available', async () => {
+  test('autoConnect reports empty Metro unless another default Metro has an attached target', async () => {
     const { createServer } = await import('node:http');
     const srv = createServer((req, res) => {
       if (req.url === '/status') {
@@ -122,21 +122,29 @@ describe('CDPClient lifecycle', () => {
     const { port: emptyPort } = srv.address();
     const client = new CDPClient(emptyPort);
     try {
-      await assert.rejects(
-        () => client.autoConnect(emptyPort),
-        (err) => {
-          assert.ok(err instanceof Error);
-          // GH #208 (RC2): a Metro-up-but-0-targets autoConnect now rejects with the
-          // typed AppDetachedError ("…advertises 0 Hermes debug targets…"); the
-          // genuine no-Metro case still surfaces "Metro not found".
-          assert.ok(
-            err.name === 'AppDetachedError' || err.message.includes('Metro not found'),
-            `Unexpected error: ${err.message}`,
-          );
-          return true;
-        },
-      );
+      try {
+        const message = await client.autoConnect(emptyPort);
+        // GH #303: discovery intentionally scans default Metro ports too. A
+        // developer running a real app on :8081 should not make this integration
+        // test fail just because the empty test Metro was not selected.
+        assert.notEqual(
+          client.metroPort,
+          emptyPort,
+          'success is only valid when discovery selected a different attached Metro',
+        );
+        assert.match(message, /Connected to/);
+      } catch (err) {
+        assert.ok(err instanceof Error);
+        // GH #208 (RC2): a Metro-up-but-0-targets autoConnect now rejects with the
+        // typed AppDetachedError ("…advertises 0 Hermes debug targets…"); the
+        // genuine no-Metro case still surfaces "Metro not found".
+        assert.ok(
+          err.name === 'AppDetachedError' || err.message.includes('Metro not found'),
+          `Unexpected error: ${err.message}`,
+        );
+      }
     } finally {
+      await client.disconnect();
       await new Promise((resolve) => srv.close(resolve));
     }
   });

@@ -35,50 +35,39 @@ export function ActionsPanel({ actions }: ActionsPanelProps): JSX.Element {
   };
 
   return (
-    <div className="actions-panel">
-      <div className="pane-head">Actions</div>
-      {actions.length === 0 ? (
-        <div className="empty empty-guide">
-          <div className="empty-title">No learned actions</div>
-          <div>Save a verified flow with cdp_record_test_save_as_action and it appears here.</div>
-        </div>
-      ) : (
-        <table className="reg-table actions-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Intent</th>
-              <th>Status</th>
-              <th>Params</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {actions.map((a) => {
-              const st = states[a.id];
-              const missing = st?.result?.missingParams ?? [];
-              return (
-                <ActionRow
-                  key={a.id}
-                  action={a}
-                  state={st}
-                  missing={missing}
-                  values={paramValues[a.id] ?? {}}
-                  onParam={(k, v) => setParam(a.id, k, v)}
-                  onRun={() => void run(a)}
-                  outputOpen={openOutput === a.id}
-                  onToggleOutput={() => setOpenOutput(openOutput === a.id ? null : a.id)}
-                />
-              );
-            })}
-          </tbody>
-        </table>
-      )}
+    <div className="reg-container">
+      <div className="actions-panel">
+        <div className="pane-head">Actions</div>
+        {actions.length === 0 ? (
+          <div className="empty empty-guide">
+            <div className="empty-title">No learned actions</div>
+            <div>Save a verified flow with cdp_record_test_save_as_action and it appears here.</div>
+          </div>
+        ) : (
+          actions.map((a) => {
+            const st = states[a.id];
+            const missing = st?.result?.missingParams ?? [];
+            return (
+              <ActionItem
+                key={a.id}
+                action={a}
+                state={st}
+                missing={missing}
+                values={paramValues[a.id] ?? {}}
+                onParam={(k, v) => setParam(a.id, k, v)}
+                onRun={() => void run(a)}
+                outputOpen={openOutput === a.id}
+                onToggleOutput={() => setOpenOutput(openOutput === a.id ? null : a.id)}
+              />
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
 
-interface ActionRowProps {
+interface ActionItemProps {
   action: ActionSummary;
   state?: ActionRunState;
   missing: string[];
@@ -89,7 +78,7 @@ interface ActionRowProps {
   onToggleOutput: () => void;
 }
 
-function ActionRow({
+function ActionItem({
   action: a,
   state: st,
   missing,
@@ -98,62 +87,58 @@ function ActionRow({
   onRun,
   outputOpen,
   onToggleOutput,
-}: ActionRowProps): JSX.Element {
+}: ActionItemProps): JSX.Element {
   const res = st?.result;
   return (
-    <>
-      <tr>
-        <td className="reg-testid">{a.id}</td>
-        <td className="actions-intent" title={a.intent}>
-          {a.intent}
-        </td>
-        <td>
-          <span className={`reg-badge actions-status-${a.status}`}>{a.status}</span>
-          {a.mutates && (
-            <span className="actions-mutates" title="mutates state">
-              M
-            </span>
-          )}
-        </td>
-        <td>
-          <span className="actions-params">
-            {(a.params ?? []).map((p) => (
-              <input
-                key={p}
-                className={missing.includes(p) ? 'param-input missing' : 'param-input'}
-                placeholder={p}
-                value={values[p] ?? ''}
-                onChange={(e) => onParam(p, e.target.value)}
-              />
-            ))}
+    <div className="action-item">
+      <div className="action-top">
+        <span className="reg-testid action-id" title={a.id}>
+          {a.id}
+        </span>
+        <span className={`reg-badge actions-status-${a.status}`}>{a.status}</span>
+        {a.mutates && (
+          <span className="actions-mutates" title="mutates state">
+            M
           </span>
-        </td>
-        <td className="actions-run-cell">
-          <button className="actions-run-btn" disabled={st?.running} onClick={onRun}>
-            {st?.running ? '…' : 'Run'}
-          </button>
-          {res && (
-            <span
-              className={res.ok ? 'actions-result-ok' : 'actions-result-fail'}
-              onClick={onToggleOutput}
-              title="show output"
-            >
-              {res.ok
-                ? '✓ output'
-                : res.missingParams
-                  ? `missing: ${res.missingParams.join(', ')}`
-                  : (res.error ?? 'failed')}
-            </span>
-          )}
-        </td>
-      </tr>
-      {outputOpen && res && (res.output || res.error) && (
-        <tr className="action-output">
-          <td colSpan={5}>
-            <pre>{res.output ?? res.error}</pre>
-          </td>
-        </tr>
+        )}
+        <button className="actions-run-btn" disabled={st?.running} onClick={onRun}>
+          {st?.running ? '…' : 'Run'}
+        </button>
+      </div>
+      <div className="action-intent" title={a.intent}>
+        {a.intent}
+      </div>
+      {(a.params ?? []).length > 0 && (
+        <div className="actions-params">
+          {(a.params ?? []).map((p) => (
+            <input
+              key={p}
+              className={missing.includes(p) ? 'param-input missing' : 'param-input'}
+              placeholder={p}
+              value={values[p] ?? ''}
+              onChange={(e) => onParam(p, e.target.value)}
+            />
+          ))}
+        </div>
       )}
-    </>
+      {res && (
+        <div className="action-result">
+          <span
+            className={res.ok ? 'actions-result-ok' : 'actions-result-fail'}
+            onClick={onToggleOutput}
+            title="show output"
+          >
+            {res.ok
+              ? '✓ output'
+              : res.missingParams
+                ? `missing: ${res.missingParams.join(', ')}`
+                : (res.error ?? 'failed')}
+          </span>
+        </div>
+      )}
+      {outputOpen && res && (res.output || res.error) && (
+        <pre className="action-output">{res.output ?? res.error}</pre>
+      )}
+    </div>
   );
 }

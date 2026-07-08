@@ -66,14 +66,28 @@ export function updateRefMap(nodes: SnapshotNode[]): void {
   refMap.clear();
   screenRect = null;
 
+  // Screen rect = the union bounding box of all node rects. A (0,0)-anchored
+  // heuristic is fragile: on some Android snapshots (#387 Phase B device-proven)
+  // NO node spans the full window — the tallest (0,0) node is a ~128px top-chrome
+  // strip, so a "largest (0,0) rect" pick yields a tiny viewport and direction
+  // scrolls compute a ~50px drag in the status bar that never moves the list.
+  // The max extent across all nodes recovers the true viewport on both platforms.
+  let maxRight = 0;
+  let maxBottom = 0;
   for (const node of nodes) {
     if (!node.ref || !node.rect) continue;
     refMap.set(node.ref, node.rect);
 
-    if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
-      screenRect = node.rect;
+    const { x, y, width, height } = node.rect;
+    if (width > 0 && height > 0) {
+      maxRight = Math.max(maxRight, x + width);
+      maxBottom = Math.max(maxBottom, y + height);
     }
   }
+  // width > 300 keeps the same sanity floor the old heuristic used (ignore
+  // degenerate all-tiny-node snapshots rather than emit a bogus rect).
+  screenRect =
+    maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
 
   lastUpdated = Date.now();
 }
@@ -175,6 +189,11 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
   screenRect = null;
 
   const hashed: FlatNode[] = [];
+  // Screen rect = union bounding box of all node rects (same rationale as
+  // updateRefMap — a (0,0)-anchored pick is fragile when no node spans the
+  // full window).
+  let maxRight = 0;
+  let maxBottom = 0;
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (!node.ref || !node.rect) continue;
@@ -187,10 +206,14 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
     metadataMap.set(key, meta);
     hashed.push(node);
 
-    if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
-      screenRect = node.rect;
+    const { x, y, width, height } = node.rect;
+    if (width > 0 && height > 0) {
+      maxRight = Math.max(maxRight, x + width);
+      maxBottom = Math.max(maxBottom, y + height);
     }
   }
+  screenRect =
+    maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
 
   // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
   // dereferences node.rect.* unconditionally, and a malformed entry must not

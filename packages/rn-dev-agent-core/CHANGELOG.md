@@ -1,5 +1,47 @@
 # rn-dev-agent-core
 
+## 0.60.2
+
+### Patch Changes
+
+- 8c18951: Observe UI: surface the idb install hint as a banner under the device pane header while mirroring runs on the ~6fps simctl fallback, instead of an ellipsized footer line that truncated the brew command. Error hints stay in the footer. The idb install command is corrected everywhere to include the required tap (`brew tap facebook/fb && brew install idb-companion`) — including the executed installs in `ensure-idb.sh` / `ensure-idb-companion.sh`, which previously failed on untapped machines. `/rn-dev-agent:setup` now diffs an already-injected CLAUDE.md template block against the plugin's current CLAUDE-MD-TEMPLATE.md and offers an in-place refresh when stale (new `<!-- rn-dev-agent:template-end -->` sentinel delimits the block; legacy blocks are upgraded on refresh).
+
+## 0.60.1
+
+### Patch Changes
+
+- f74b5b7: Observe UI: make the right state pane fit its width, and slim the timeline
+  column.
+
+  The right pane is a fixed ~26% column (~340-450px), but the actions tab
+  rendered a 5-column table and the e2e tab 3- and 4-column tables. Tables
+  cannot shrink below their column content, so at typical window widths the
+  Status/Params/Run columns were clipped clean off the pane — the Run button
+  was unreachable — and action ids line-wrapped mid-word. Both tabs now render
+  stacked rows designed for a narrow column:
+
+  - **Actions**: one item per action — id (truncating, full value on hover) +
+    status badge + Run on the first line, intent wrapped below (2-line clamp),
+    param inputs flex-wrapping to the available width instead of fixed 110px
+    columns, result/output underneath.
+  - **E2E**: suite results and run history as one-line rows — pass/fail mark,
+    truncating test/run id, duration, classification badge or `2✓ 1✗` totals +
+    verdict — with error excerpts wrapping below and the expanded run detail
+    reusing the same row layout.
+  - Pane guards: `.pane.right` gets `min-width: 340px`, tabs wrap instead of
+    overflowing, long live routes break instead of pushing the pane wide.
+  - Layout rebalance: the left timeline column drops from 40% to 33%
+    (`min-width: 380px`; summaries already ellipsize), and the device pane no
+    longer greedily takes all remaining width — the mirror is a portrait phone
+    screen capped at ~100vh, so the pane is capped at 400px and the state pane
+    absorbs the surplus instead.
+
+## 0.60.0
+
+### Minor Changes
+
+- 24842f8: Story 13 (#397) Phases 1–2: maestro-runner engine pinning and a proactive blind-probe. The installer now installs the tested pin (`1.0.9`) exactly, verifies its checksum fail-closed on fresh downloads, and warns on local drift; `cdp_status.replayEngine` + `/doctor` report engine, version-vs-pin, and known quirks; `maestro_run` carries `enginePin` meta and warns once on drift (opt-in hard enforcement: `RN_ENGINE_PIN_STRICT=1`). `cdp_run_action` on at-risk iOS runtimes (>= 26, or a recent device-matched `TRANSPORT_BLIND` with clean-pass reset) probes the CDP tree first and, when the action's anchor is visible, skips the doomed ~40s WDA attempt and replays via CDP/JS directly — `RunRecord` gains additive `deviceId`/`blindProbe`, probe-routed failures classify as `FALLBACK_REPLAY_FAILED` (never false `TRANSPORT_BLIND`), probe-routed passes never auto-promote, and the DB mirror persists the new fields. Opt out with `RN_BLIND_PROBE=0`.
+
 ## 0.59.2
 
 ### Patch Changes

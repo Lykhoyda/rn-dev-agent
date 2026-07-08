@@ -40038,6 +40038,8 @@ function updateRefMapFromFlat(nodes) {
   refMap.clear();
   screenRect = null;
   const hashed = [];
+  let maxRight = 0;
+  let maxBottom = 0;
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (!node.ref || !node.rect)
@@ -40051,10 +40053,13 @@ function updateRefMapFromFlat(nodes) {
       meta.identifier = node.identifier;
     metadataMap.set(key, meta);
     hashed.push(node);
-    if (!screenRect && node.rect.x === 0 && node.rect.y === 0 && node.rect.width > 300) {
-      screenRect = node.rect;
+    const { x, y, width, height } = node.rect;
+    if (width > 0 && height > 0) {
+      maxRight = Math.max(maxRight, x + width);
+      maxBottom = Math.max(maxBottom, y + height);
     }
   }
+  screenRect = maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
   } catch {
@@ -40707,6 +40712,7 @@ __export(rn_fast_runner_client_exports, {
   probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
   reapStaleFastRunner: () => reapStaleFastRunner,
   releaseRunnerRebuildLock: () => releaseRunnerRebuildLock,
+  resolveReadyTimeoutMs: () => resolveReadyTimeoutMs,
   resolveRunnerStartPlan: () => resolveRunnerStartPlan,
   runIOS: () => runIOS,
   runnerRebuildBudget: () => runnerRebuildBudget,
@@ -40717,6 +40723,10 @@ __export(rn_fast_runner_client_exports, {
 import { spawn } from "node:child_process";
 import { join as join10 } from "node:path";
 import { existsSync as existsSync8, readdirSync as readdirSync3, mkdirSync as mkdirSync6, rmSync as rmSync2, statSync as statSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync6 } from "node:fs";
+function resolveReadyTimeoutMs() {
+  const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
+}
 function parseReadySignal(buf) {
   const parser = createReadySignalParser();
   return parser.feed(buf);
@@ -41083,10 +41093,12 @@ function stopFastRunner(deviceId) {
   }
   clearStateFile();
 }
-async function fastSwipe(x1, y1, x2, y2, durationMs) {
+async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
   const body = { command: "drag", x: x1, y: y1, x2, y2 };
   if (durationMs != null)
     body.durationMs = durationMs;
+  if (bundleId)
+    body.appBundleId = bundleId;
   const resp = await postCommand(body);
   return resp;
 }
@@ -41382,7 +41394,7 @@ var init_rn_fast_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     DEFAULT_PORT = 22088;
-    READY_TIMEOUT_MS = 3e4;
+    READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
     HTTP_TIMEOUT_MS = 1e4;
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
@@ -46666,7 +46678,7 @@ function createDeviceSwipeHandler() {
     if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs);
+          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId);
           if (resp.ok) {
             return okResult({
               x1: args.x1,
@@ -46701,7 +46713,7 @@ function createDeviceSwipeHandler() {
       const duration3 = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3);
+          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3, getActiveSession()?.appId);
           if (resp.ok) {
             return okResult({
               direction: args.direction,
@@ -46744,7 +46756,7 @@ function createDeviceScrollHandler() {
     adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     if (isFastRunnerAvailable()) {
       try {
-        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS);
+        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId);
         if (resp.ok) {
           return okResult({
             direction: args.direction,
@@ -59802,8 +59814,8 @@ var init_sources = __esm({
         return this.exits.length < this.limit;
       }
     };
-    SIMCTL_HINT = "install idb for smoother mirroring (brew install idb-companion && pipx install fb-idb)";
-    IDB_HINT = "idb not found \u2014 brew install idb-companion && pipx install fb-idb";
+    SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb)";
+    IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew install idb-companion && pipx install fb-idb";
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
     sleep5 = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
     scheduleAfter = (fn, delayMs) => {

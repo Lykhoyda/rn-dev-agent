@@ -1,5 +1,97 @@
 # rn-dev-agent-plugin
 
+## 0.65.10
+
+### Patch Changes
+
+- bfb5e10: Android device-smoke keyboard-guard step: accept both non-blocked guard outcomes (`dismissed` and `not_occluded`) instead of pinning `dismissed`. Which one fires depends on the emulator's exact keyboard geometry (whether the bottom button's tap point lands inside the IME frame or at/below its edge), which varies run-to-run. The smoke now verifies the guard evaluated on-device and did not wrongly block the tap; the precise `shouldDismiss` predicate stays unit-tested in `KeyboardGuardTest.kt`.
+
+## 0.65.9
+
+### Patch Changes
+
+- 60720e1: Make the rn-fast-runner warm-launch ready gate overridable via `RN_FAST_RUNNER_READY_TIMEOUT_MS` (default 30s) so a slow CI simulator that needs longer to install+launch+attach the XCUITest runner is not a false `RN_FAST_RUNNER_DOWN`. The nightly iOS device-smoke lane also now reuses the image's already-booted (warm) simulator and shuts down only extras, instead of a blanket `shutdown all` that cold-boots the target and makes the runner launch time out.
+
+## 0.65.8
+
+### Patch Changes
+
+- fd8909d: Nightly iOS device-smoke lane: build the rn-fast-runner fresh each run instead of restoring DerivedData from cache. A restored DerivedData drove an unreliable `test-without-building` warm launch (`RN_FAST_RUNNER_DOWN`), whereas a fresh `build-for-testing` then warm launch is the known-good path. The ~5 min build is well within the 40 min lane timeout and the nightly budget.
+
+## 0.65.7
+
+### Patch Changes
+
+- 27f320d: Nightly device-smoke fixes: (1) the iOS lane now shuts down any pre-booted simulators before booting exactly one, so `device_snapshot open` (which refuses on >1 booted iOS device) resolves deterministically. (2) The keyboard-guard step is platform-split: Android UiAutomator drops occluded views, so the occluded bottom button is absent from a post-fill snapshot — the driver now presses the pre-fill ref (its cached coords are under the keyboard) without re-snapshotting, exercising the Android dismiss contract; iOS keeps its re-snapshot + refusal-contract path (XCUITest reports occluded elements).
+
+## 0.65.6
+
+### Patch Changes
+
+- 41d6bd9: Fix direction `device_scroll`/`device_swipe` computing a no-op gesture on Android when no snapshot node spans the full window. The screen rect (used to size direction gestures) was picked as the largest `(0,0)`-anchored node; on some Android snapshots that is a ~128px top-chrome strip while the scrollable content sits below it, so scrolls dragged ~50px in the status bar and never moved the list. The screen rect is now the union bounding box of all node rects (max extent), recovering the true viewport on both platforms.
+
+## 0.65.5
+
+### Patch Changes
+
+- 8c18951: Observe UI: surface the idb install hint as a banner under the device pane header while mirroring runs on the ~6fps simctl fallback, instead of an ellipsized footer line that truncated the brew command. Error hints stay in the footer. The idb install command is corrected everywhere to include the required tap (`brew tap facebook/fb && brew install idb-companion`) — including the executed installs in `ensure-idb.sh` / `ensure-idb-companion.sh`, which previously failed on untapped machines. `/rn-dev-agent:setup` now diffs an already-injected CLAUDE.md template block against the plugin's current CLAUDE-MD-TEMPLATE.md and offers an in-place refresh when stale (new `<!-- rn-dev-agent:template-end -->` sentinel delimits the block; legacy blocks are upgraded on refresh).
+
+## 0.65.4
+
+### Patch Changes
+
+- df5c76e: Nightly device-smoke Android lane: scroll the golden-set list at full amplitude (amount 1) so row 80 is reached within the 30-scroll budget. The earlier amount-0.5 guard (added for a local emulator's drag latency) fell ~5 rows short on CI, where all 30 drags run with zero RUNNER_TIMEOUT — the shorter drag bought nothing.
+
+## 0.65.3
+
+### Patch Changes
+
+- 552d151: Fix the nightly device-smoke workflow failing at setup: it ran `npm ci` inside `scripts/cdp-bridge`, which fights the root lockfile and triggers the root `prepare: husky` without husky installed (exit 127). Both lanes now install from the repo root (npm workspaces resolves the cdp-bridge deps) with `HUSKY=0`.
+
+## 0.65.2
+
+### Patch Changes
+
+- 57e7699: Fix two Android device-control defects surfaced by the Story 06 Phase B smoke: (1) with interactive-windows snapshots (#370), the status bar precedes the app window, and the screen-rect heuristic took the first (0,0)-anchored node — so direction-based device_scroll/device_swipe computed gestures inside the status bar; it now picks the largest full-bleed rect. (2) The in-tree rn-android-runner could not re-foreground an app under test on API 30+ because its manifest lacked a package-visibility <queries> declaration (getLaunchIntentForPackage returned null → "No launch intent for package …"); a MAIN/LAUNCHER queries entry restores visibility.
+- 57e7699: Fix device_scroll/device_swipe silently no-oping on iOS: the drag /command body omitted the target appBundleId, so the runner cleared its target, activated its own RnFastRunner host app, and dragged on a blank screen — every coordinate scroll/swipe returned ok:true with zero movement while foreground-stealing from the app under test. All fastSwipe dispatch sites now forward the active session's appId. Found by the Story 06 Phase B golden-set smoke before it ever reached CI.
+- 57e7699: Story 06 Phase B: add a nightly device-smoke workflow that drives the golden device\_\* command set through the real bridge (MCP over stdio) against tiny native contract fixtures (test-fixtures/{ios,android}-fixture) on a booted simulator/emulator, plus a release-artifact-integrity lane and 2-consecutive-red tracking-issue alerting. Local `npm run smoke:ios` / `smoke:android` run the same golden set against a developer's own device.
+
+## 0.65.1
+
+### Patch Changes
+
+- f74b5b7: Observe UI: make the right state pane fit its width, and slim the timeline
+  column.
+
+  The right pane is a fixed ~26% column (~340-450px), but the actions tab
+  rendered a 5-column table and the e2e tab 3- and 4-column tables. Tables
+  cannot shrink below their column content, so at typical window widths the
+  Status/Params/Run columns were clipped clean off the pane — the Run button
+  was unreachable — and action ids line-wrapped mid-word. Both tabs now render
+  stacked rows designed for a narrow column:
+
+  - **Actions**: one item per action — id (truncating, full value on hover) +
+    status badge + Run on the first line, intent wrapped below (2-line clamp),
+    param inputs flex-wrapping to the available width instead of fixed 110px
+    columns, result/output underneath.
+  - **E2E**: suite results and run history as one-line rows — pass/fail mark,
+    truncating test/run id, duration, classification badge or `2✓ 1✗` totals +
+    verdict — with error excerpts wrapping below and the expanded run detail
+    reusing the same row layout.
+  - Pane guards: `.pane.right` gets `min-width: 340px`, tabs wrap instead of
+    overflowing, long live routes break instead of pushing the pane wide.
+  - Layout rebalance: the left timeline column drops from 40% to 33%
+    (`min-width: 380px`; summaries already ellipsize), and the device pane no
+    longer greedily takes all remaining width — the mirror is a portrait phone
+    screen capped at ~100vh, so the pane is capped at 400px and the state pane
+    absorbs the surplus instead.
+
+## 0.65.0
+
+### Minor Changes
+
+- 24842f8: Story 13 (#397) Phases 1–2: maestro-runner engine pinning and a proactive blind-probe. The installer now installs the tested pin (`1.0.9`) exactly, verifies its checksum fail-closed on fresh downloads, and warns on local drift; `cdp_status.replayEngine` + `/doctor` report engine, version-vs-pin, and known quirks; `maestro_run` carries `enginePin` meta and warns once on drift (opt-in hard enforcement: `RN_ENGINE_PIN_STRICT=1`). `cdp_run_action` on at-risk iOS runtimes (>= 26, or a recent device-matched `TRANSPORT_BLIND` with clean-pass reset) probes the CDP tree first and, when the action's anchor is visible, skips the doomed ~40s WDA attempt and replays via CDP/JS directly — `RunRecord` gains additive `deviceId`/`blindProbe`, probe-routed failures classify as `FALLBACK_REPLAY_FAILED` (never false `TRANSPORT_BLIND`), probe-routed passes never auto-promote, and the DB mirror persists the new fields. Opt out with `RN_BLIND_PROBE=0`.
+
 ## 0.64.6
 
 ### Patch Changes

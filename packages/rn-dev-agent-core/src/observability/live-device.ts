@@ -133,7 +133,9 @@ export function toolInvalidatesRetryBaseline(
 export function mayTriggerLiveCapture(tool: string): boolean {
   return (
     FLOW_MUTATION_TOOLS.has(tool) ||
-    classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find'
+    classifyFamily(tool) === 'interaction' ||
+    tool === 'cdp_navigate' ||
+    tool === 'device_find'
   );
 }
 

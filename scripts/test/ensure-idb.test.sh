@@ -75,7 +75,7 @@ OUT="$(FAKE_UNAME=Linux run_script "$STUBS")"
 STATE="$TMP/state3"
 STUBS="$(mkstubs "")"
 OUT="$(run_script "$STUBS")"
-if echo "$OUT" | grep -q "brew install idb-companion && pipx install fb-idb"; then
+if echo "$OUT" | grep -q "brew tap facebook/fb && brew install idb-companion && pipx install fb-idb"; then
   ok "no-brew: prints manual command"
 else bad "no-brew: missing manual command, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "no-brew: no spawn" || bad "no-brew: unexpected spawn"

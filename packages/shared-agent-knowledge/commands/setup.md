@@ -26,10 +26,14 @@ The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEM
 
 1. Check whether `CLAUDE.md` exists in the current working directory.
 2. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
-3. Inject:
+3. Inject or refresh:
    - **No CLAUDE.md exists**: create one with the template body.
    - **CLAUDE.md exists, no rn-dev-agent block**: append the template body (look for the marker `## React Native Development (rn-dev-agent)` — if it's missing, append).
-   - **CLAUDE.md exists, marker present**: skip with a note ("already injected; re-run after editing CLAUDE-MD-TEMPLATE if you want to refresh").
+   - **CLAUDE.md exists, marker present**: sync-check the injected block against the current template instead of skipping blindly:
+     1. Extract the project's injected block: it starts at the marker heading and ends at the `<!-- rn-dev-agent:template-end -->` sentinel line (inclusive) when present. Legacy injections predate the sentinel — for those, the block ends just before the next `## ` heading after the marker, or at EOF. (The template body contains exactly one `## ` heading, so a second one is user content, not template.)
+     2. Compare the extracted block to the current template body (e.g. write both to temp files and `diff` them, ignoring leading/trailing blank lines).
+     3. **Identical** → skip with a note ("CLAUDE.md template in sync").
+     4. **Different** → the block is stale (or locally edited). Show the diff, warn that local edits *inside* the block will be overwritten (content before/after the block is preserved untouched), and ask "Apply this change? [y/n]". On yes, replace exactly the extracted block with the current template body — a legacy block gains the end sentinel in the process, so future refreshes are precisely delimited.
 4. Show the diff before writing. After writing, confirm with the user.
 
 ### B. NavigationContainer ref — fiber-walk-first, bridge fallback
@@ -168,7 +172,7 @@ Present a summary table at the end:
 | Step | Status | Notes |
 |------|--------|-------|
 | Diagnostics | PASS / PARTIAL (optional rows missing) / FAIL (aborted) | row counts |
-| CLAUDE.md template | INJECTED / SKIPPED (already present) / SKIPPED (user declined) | path |
+| CLAUDE.md template | INJECTED / REFRESHED (was stale) / SKIPPED (in sync) / SKIPPED (user declined) | path |
 | Nav ref | INJECTED / N/A (Expo Router) / SKIPPED (user declined) | filename:line |
 | Zustand stores | INJECTED / N/A (no Zustand) / SKIPPED (user declined) | filename:line, store count |
 | `.rn-agent/` scaffold | CREATED / PARTIAL (added missing files) / SKIPPED (already current) / SKIPPED (user declined) | scaffold version, file count |
@@ -182,7 +186,7 @@ End with:
 ## Idempotency
 
 Re-running `/rn-dev-agent:setup` on an already-onboarded project must be safe:
-- CLAUDE.md template: detects the marker, skips.
+- CLAUDE.md template: detects the marker, diffs the injected block against the current template, refreshes only when stale (with diff + confirmation) — in-sync blocks are skipped.
 - Nav ref: detects existing `globalThis.__NAV_REF__` assignment, skips.
 - Zustand: detects existing `globalThis.__ZUSTAND_STORES__` assignment, skips.
 - `.rn-agent/` scaffold: reads `.rn-agent/.scaffold-version`. If equal to the template's version, skips. If older, lists template files missing from the project and offers to add only those (never overwrites existing files). Presence of any runtime dir (`state/`, `recordings/`, `snapshots/`, `diag/`) or any `actions/*.yaml` also counts as proof the scaffold has run, even if `.scaffold-version` is missing.

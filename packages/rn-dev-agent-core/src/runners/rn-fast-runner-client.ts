@@ -37,7 +37,14 @@ import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-a
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 
 const DEFAULT_PORT = 22088;
-const READY_TIMEOUT_MS = 30_000;
+// Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
+// because a cold/slow CI simulator can need well over 30s to install + launch
+// + attach the XCUITest runner (device-proven on GitHub macos runners).
+export function resolveReadyTimeoutMs(): number {
+  const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+}
+const READY_TIMEOUT_MS = resolveReadyTimeoutMs();
 // A cold `xcodebuild test` compiles the runner project before launching it; on a
 // fresh machine (no prebuilt .xctestrun) that can take several minutes, so the
 // ready-signal timeout is widened for the build path.
@@ -662,9 +669,15 @@ export async function fastSwipe(
   x2: number,
   y2: number,
   durationMs?: number,
+  bundleId?: string,
 ): Promise<FastRunnerResponse> {
   const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
   if (durationMs != null) body.durationMs = durationMs;
+  // Without appBundleId the runner's executeOnMain clears its target and
+  // activates the RnFastRunner HOST app — the drag then lands on the host's
+  // blank screen (ok:true, zero movement) and steals foreground from the
+  // target (#387 Phase B device-proven).
+  if (bundleId) body.appBundleId = bundleId;
   const resp = await postCommand(body);
   return resp as unknown as FastRunnerResponse;
 }
