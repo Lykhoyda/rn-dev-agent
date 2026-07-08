@@ -11,6 +11,18 @@ if [ ! -d "$CDP_DIR" ]; then
 fi
 CURRENT_VERSION=$(node -e "console.log(require('$CDP_DIR/package.json').version)" 2>/dev/null || echo "unknown")
 
+find_yarn_workspace_root() {
+  local dir="$CDP_DIR"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/package.json" ] && [ -f "$dir/yarn.lock" ] && grep -q '"workspaces"' "$dir/package.json"; then
+      echo "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
 install_persistent() {
   local PERSISTENT_DIR="$CLAUDE_PLUGIN_DATA/cdp-node_modules"
   local STAMP_FILE="$PERSISTENT_DIR/.version-stamp"
@@ -68,5 +80,9 @@ fi
 
 # Fallback: install locally (no CLAUDE_PLUGIN_DATA or persistent install failed)
 if [ ! -d "$CDP_DIR/node_modules" ]; then
-  cd "$CDP_DIR" && npm install --production --ignore-scripts --silent 2>/dev/null
+  if WORKSPACE_ROOT="$(find_yarn_workspace_root)"; then
+    cd "$WORKSPACE_ROOT" && corepack yarn install --immutable
+  else
+    cd "$CDP_DIR" && npm install --production --ignore-scripts --silent 2>/dev/null
+  fi
 fi

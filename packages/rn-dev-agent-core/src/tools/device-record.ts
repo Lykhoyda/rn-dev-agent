@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -157,13 +158,45 @@ export function resolveTargetDevice(
   return { ok: false, reason: 'AMBIGUOUS', candidates };
 }
 
-function getPluginRoot(): string {
-  if (process.env.CLAUDE_PLUGIN_ROOT) return process.env.CLAUDE_PLUGIN_ROOT;
-  return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+function compactUnique(paths: Array<string | undefined>): string[] {
+  const out: string[] = [];
+  for (const path of paths) {
+    if (!path || out.includes(path)) continue;
+    out.push(path);
+  }
+  return out;
+}
+
+export function candidateRecordScripts(
+  baseDir = dirname(fileURLToPath(import.meta.url)),
+): string[] {
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+
+  return compactUnique([
+    process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
+    codexPluginRoot ? join(codexPluginRoot, 'scripts', 'record_proof.sh') : undefined,
+    claudePluginRoot ? join(claudePluginRoot, 'scripts', 'record_proof.sh') : undefined,
+    claudePluginRoot ? join(claudePluginRoot, '..', '..', 'scripts', 'record_proof.sh') : undefined,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join(baseDir, '..', '..', 'scripts', 'record_proof.sh'),
+    // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
+    join(baseDir, '..', '..', '..', 'scripts', 'record_proof.sh'),
+    // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
+    join(baseDir, '..', '..', '..', '..', 'scripts', 'record_proof.sh'),
+  ]);
+}
+
+export function resolveRecordScript(baseDir = dirname(fileURLToPath(import.meta.url))): string {
+  if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
+    return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
+  }
+  const candidates = candidateRecordScripts(baseDir);
+  return candidates.find((path) => existsSync(path)) ?? candidates[0];
 }
 
 function getRecordScript(): string {
-  return join(getPluginRoot(), 'scripts', 'record_proof.sh');
+  return resolveRecordScript();
 }
 
 function defaultOutputPath(platform: 'ios' | 'android'): string {

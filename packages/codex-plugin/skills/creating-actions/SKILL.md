@@ -23,7 +23,15 @@ An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<i
 Before authoring anything, check what already exists:
 
 ```bash
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-packages/codex-plugin}"
+CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
+if [ -z "$CODEX_PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
+  CODEX_PLUGIN_ROOT="packages/codex-plugin"
+fi
+if [ -z "$CODEX_PLUGIN_ROOT" ]; then
+  CODEX_PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
+  [ -n "$CODEX_PLUGIN_MANIFEST" ] && CODEX_PLUGIN_ROOT="$(dirname "$(dirname "$CODEX_PLUGIN_MANIFEST")")"
+fi
+test -n "$CODEX_PLUGIN_ROOT" || { echo "rn-dev-agent Codex plugin root not found" >&2; exit 2; }
 node "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" --json --section b \
   --workspace-root "$PWD" --memory-cwd "$PWD" --filter <keyword>
 ```

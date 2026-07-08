@@ -47,6 +47,24 @@ const ADAPTER_ROOT = path.join(
   'skills',
   'rn-best-practices',
 );
+const HOST_RULES_INDEX_PATHS = [
+  path.join(
+    REPO_ROOT,
+    'packages',
+    'claude-plugin',
+    'skills',
+    'rn-best-practices',
+    'rules.index.json',
+  ),
+  path.join(
+    REPO_ROOT,
+    'packages',
+    'codex-plugin',
+    'skills',
+    'rn-best-practices',
+    'rules.index.json',
+  ),
+];
 
 const UPSTREAM_REPO = 'vercel-labs/agent-skills';
 const UPSTREAM_SKILLS = ['react-best-practices', 'composition-patterns', 'react-native-skills'];
@@ -290,6 +308,39 @@ function buildRulesIndex(lock) {
   return rules;
 }
 
+function copyRulesIndexToHostOutputs(indexPath, opts) {
+  const indexContent = fs.readFileSync(indexPath, 'utf8');
+  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+    fs.mkdirSync(path.dirname(hostIndexPath), { recursive: true });
+    fs.writeFileSync(hostIndexPath, indexContent, 'utf8');
+    if (!opts.quiet) console.log(`  wrote ${path.relative(REPO_ROOT, hostIndexPath)}`);
+  }
+}
+
+function checkHostRulesIndexCopies(indexPath) {
+  if (!fs.existsSync(indexPath)) {
+    console.error(`missing: ${path.relative(REPO_ROOT, indexPath)}`);
+    return 1;
+  }
+  const expected = fs.readFileSync(indexPath, 'utf8');
+  let mismatches = 0;
+  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+    if (!fs.existsSync(hostIndexPath)) {
+      console.error(`missing: ${path.relative(REPO_ROOT, hostIndexPath)}`);
+      mismatches++;
+      continue;
+    }
+    const actual = fs.readFileSync(hostIndexPath, 'utf8');
+    if (actual !== expected) {
+      console.error(
+        `drift: ${path.relative(REPO_ROOT, hostIndexPath)} does not match shared rules.index.json`,
+      );
+      mismatches++;
+    }
+  }
+  return mismatches;
+}
+
 async function runFix(args) {
   console.log(`syncing from ${UPSTREAM_REPO}@${args.ref.slice(0, 12)}...`);
 
@@ -368,6 +419,7 @@ async function runFix(args) {
       `  wrote ${path.relative(REPO_ROOT, indexPath)} (${lock.ruleCounts.total} upstream + ${customCount} custom = ${index.length} rules)`,
     );
   }
+  copyRulesIndexToHostOutputs(indexPath, args);
 
   console.log(`✓ sync complete: ${lock.files.length} files, ${index.length} rules`);
 }
@@ -397,6 +449,7 @@ async function runCheck(_args) {
       mismatches++;
     }
   }
+  mismatches += checkHostRulesIndexCopies(path.join(ADAPTER_ROOT, 'rules.index.json'));
   if (mismatches > 0) {
     console.error(
       `✗ ${mismatches} file(s) out of sync — run: node scripts/sync-vercel-skills.mjs --fix --ref ${lock.sha}`,

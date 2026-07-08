@@ -6,9 +6,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  candidateRecordScripts,
   parseStartOutput,
   parseStopOutput,
   parseStatusOutput,
+  resolveRecordScript,
 } from '../../dist/tools/device-record.js';
 
 // ── parseStartOutput ────────────────────────────────────────────────────
@@ -155,8 +157,13 @@ test('createDeviceRecordHandler: invalid action returns failResult', async () =>
 });
 
 test('createDeviceRecordHandler: status when script missing returns fail (not crash)', async () => {
-  const prev = process.env.CLAUDE_PLUGIN_ROOT;
-  process.env.CLAUDE_PLUGIN_ROOT = '/tmp/__rn-dev-agent-test-nonexistent__';
+  const prevRecord = process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
+  const prevCodex = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const prevClaude = process.env.CLAUDE_PLUGIN_ROOT;
+  process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT =
+    '/tmp/__rn-dev-agent-test-missing-record-proof__.sh';
+  delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  delete process.env.CLAUDE_PLUGIN_ROOT;
   try {
     const { createDeviceRecordHandler } = await import('../../dist/tools/device-record.js');
     const handler = createDeviceRecordHandler();
@@ -165,8 +172,12 @@ test('createDeviceRecordHandler: status when script missing returns fail (not cr
     assert.equal(result.isError, true);
     assert.match(JSON.stringify(result), /record_proof\.sh status failed/);
   } finally {
-    if (prev === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
-    else process.env.CLAUDE_PLUGIN_ROOT = prev;
+    if (prevRecord === undefined) delete process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
+    else process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT = prevRecord;
+    if (prevCodex === undefined) delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+    else process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT = prevCodex;
+    if (prevClaude === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = prevClaude;
   }
 });
 
@@ -232,5 +243,45 @@ test('source guard: handler resolves script via getPluginRoot pattern', async ()
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(join(__dirname, '../../dist/tools/device-record.js'), 'utf-8');
   assert.match(src, /CLAUDE_PLUGIN_ROOT/);
+  assert.match(src, /RN_DEV_AGENT_CODEX_PLUGIN_ROOT/);
   assert.match(src, /record_proof\.sh/);
+});
+
+test('resolveRecordScript: prefers packaged Codex plugin script when available', async () => {
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const root = join('/tmp', `rn-dev-agent-record-script-${process.pid}-codex`);
+  const script = join(root, 'scripts', 'record_proof.sh');
+  const prevCodex = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const prevClaude = process.env.CLAUDE_PLUGIN_ROOT;
+  try {
+    mkdirSync(join(root, 'scripts'), { recursive: true });
+    writeFileSync(script, '#!/usr/bin/env bash\n', 'utf8');
+    process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT = root;
+    delete process.env.CLAUDE_PLUGIN_ROOT;
+    assert.equal(resolveRecordScript('/tmp/no-such-base'), script);
+  } finally {
+    if (prevCodex === undefined) delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+    else process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT = prevCodex;
+    if (prevClaude === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = prevClaude;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('candidateRecordScripts: includes Claude package and repo-root fallback paths', () => {
+  const prevClaude = process.env.CLAUDE_PLUGIN_ROOT;
+  const prevCodex = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  try {
+    process.env.CLAUDE_PLUGIN_ROOT = '/repo/packages/claude-plugin';
+    delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+    const candidates = candidateRecordScripts('/repo/packages/rn-dev-agent-core/dist/tools');
+    assert.ok(candidates.includes('/repo/packages/claude-plugin/scripts/record_proof.sh'));
+    assert.ok(candidates.includes('/repo/scripts/record_proof.sh'));
+  } finally {
+    if (prevClaude === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = prevClaude;
+    if (prevCodex === undefined) delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+    else process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT = prevCodex;
+  }
 });

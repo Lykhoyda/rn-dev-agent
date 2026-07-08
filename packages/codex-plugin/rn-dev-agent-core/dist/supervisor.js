@@ -55832,6 +55832,7 @@ var init_device_deeplink = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile23 } from "node:child_process";
+import { existsSync as existsSync23 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname12, join as join28 } from "node:path";
@@ -55904,13 +55905,40 @@ function resolveTargetDevice(candidates, deviceId) {
   }
   return { ok: false, reason: "AMBIGUOUS", candidates };
 }
-function getPluginRoot() {
-  if (process.env.CLAUDE_PLUGIN_ROOT)
-    return process.env.CLAUDE_PLUGIN_ROOT;
-  return join28(dirname12(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+function compactUnique2(paths) {
+  const out = [];
+  for (const path of paths) {
+    if (!path || out.includes(path))
+      continue;
+    out.push(path);
+  }
+  return out;
+}
+function candidateRecordScripts(baseDir = dirname12(fileURLToPath(import.meta.url))) {
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return compactUnique2([
+    process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
+    codexPluginRoot ? join28(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join28(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join28(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join28(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
+    join28(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
+    join28(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+  ]);
+}
+function resolveRecordScript(baseDir = dirname12(fileURLToPath(import.meta.url))) {
+  if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
+    return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
+  }
+  const candidates = candidateRecordScripts(baseDir);
+  return candidates.find((path) => existsSync23(path)) ?? candidates[0];
 }
 function getRecordScript() {
-  return join28(getPluginRoot(), "scripts", "record_proof.sh");
+  return resolveRecordScript();
 }
 function defaultOutputPath(platform) {
   return `/tmp/rn-dev-agent-proof-${platform}-${Date.now()}.mp4`;
@@ -57349,7 +57377,7 @@ var init_nav_graph = __esm({
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
 import { execFile as execFileCb18 } from "node:child_process";
 import { promisify as promisify24 } from "node:util";
-import { existsSync as existsSync23, readFileSync as readFileSync19, writeFileSync as writeFileSync13, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync19, writeFileSync as writeFileSync13, readdirSync as readdirSync7 } from "node:fs";
 import { join as join29 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function matchesAuthPattern(routeName) {
@@ -57383,7 +57411,7 @@ async function isOnAuthScreen(client2) {
 function findLoginFlow(projectRoot) {
   const searchDirs = [join29(projectRoot, ".maestro", "subflows"), join29(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync23(dir))
+    if (!existsSync24(dir))
       continue;
     let files;
     try {
@@ -57472,7 +57500,7 @@ async function handleAutoLogin(client2, opts = {}) {
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync13(wrapperPath, wrapperContent, "utf-8");
   const runnerPath = join29(homedir9(), ".maestro-runner", "bin", "maestro-runner");
-  if (!existsSync23(runnerPath)) {
+  if (!existsSync24(runnerPath)) {
     return {
       loggedIn: false,
       reason: "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
@@ -57997,7 +58025,7 @@ var init_graceful_shutdown = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-generate.js
-import { existsSync as existsSync24, mkdirSync as mkdirSync13, writeFileSync as writeFileSync14 } from "node:fs";
+import { existsSync as existsSync25, mkdirSync as mkdirSync13, writeFileSync as writeFileSync14 } from "node:fs";
 import { join as join30 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
@@ -58058,7 +58086,7 @@ function createMaestroGenerateHandler() {
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync24(outputDir)) {
+    if (!existsSync25(outputDir)) {
       mkdirSync13(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
@@ -58103,11 +58131,11 @@ var init_maestro_generate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync25, readdirSync as readdirSync8, readFileSync as readFileSync20, writeFileSync as writeFileSync15 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync20, writeFileSync as writeFileSync15 } from "node:fs";
 import { join as join31 } from "node:path";
 import { tmpdir as tmpdir9 } from "node:os";
 function discoverFlows(dir, pattern) {
-  if (!existsSync25(dir))
+  if (!existsSync26(dir))
     return [];
   const files = readdirSync8(dir, { recursive: true });
   const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join31(dir, f)).sort();
@@ -60335,7 +60363,7 @@ var init_target = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname14, join as join37 } from "node:path";
-import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync16, renameSync as renameSync5, readFileSync as readFileSync24, readdirSync as readdirSync10, existsSync as existsSync26 } from "node:fs";
+import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync16, renameSync as renameSync5, readFileSync as readFileSync24, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
 import { createHash as createHash6 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join37(projectRoot, ".rn-agent", "e2e");
@@ -60391,13 +60419,13 @@ function freezeLockedTest(projectRoot, source, ctx) {
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync26(filePath))
+  if (!existsSync27(filePath))
     return null;
   return parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync26(dir))
+  if (!existsSync27(dir))
     return [];
   return readdirSync10(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
@@ -60596,7 +60624,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join39 } from "node:path";
-import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync17, renameSync as renameSync6, readFileSync as readFileSync27, existsSync as existsSync27 } from "node:fs";
+import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync17, renameSync as renameSync6, readFileSync as readFileSync27, existsSync as existsSync28 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -60660,7 +60688,7 @@ function writeJsonAtomic(file, value) {
 }
 function loadIndex(projectRoot) {
   const file = join39(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync27(file))
+  if (!existsSync28(file))
     return [];
   try {
     const parsed = JSON.parse(readFileSync27(file, "utf8"));
@@ -60685,7 +60713,7 @@ function writeRunRecord(projectRoot, rec) {
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
   const file = join39(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync27(file))
+  if (!existsSync28(file))
     return null;
   try {
     return JSON.parse(readFileSync27(file, "utf8"));
@@ -60708,7 +60736,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join40 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync7, readFileSync as readFileSync28, readdirSync as readdirSync11, existsSync as existsSync28 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync7, readFileSync as readFileSync28, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
 function requestsDir(projectRoot) {
   return join40(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -60725,7 +60753,7 @@ function writeRequest(projectRoot, req) {
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync28(file))
+  if (!existsSync29(file))
     return null;
   try {
     return JSON.parse(readFileSync28(file, "utf8"));
@@ -60743,7 +60771,7 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync28(dir))
+  if (!existsSync29(dir))
     return [];
   const out = [];
   for (const f of readdirSync11(dir)) {

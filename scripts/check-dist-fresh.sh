@@ -13,8 +13,12 @@ set -euo pipefail
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BRIDGE="$ROOT/packages/rn-dev-agent-core"
 DIST_REL="packages/rn-dev-agent-core/dist"
-CODEX_RUNTIME_REL="packages/codex-plugin/rn-dev-agent-core/dist"
+CODEX_RUNTIME_ROOT_REL="packages/codex-plugin/rn-dev-agent-core"
+CODEX_RUNTIME_REL="$CODEX_RUNTIME_ROOT_REL/dist"
 CODEX_RUNTIME="$ROOT/$CODEX_RUNTIME_REL"
+CODEX_RUNNER_MANIFEST_REL="packages/codex-plugin/runner-manifest.json"
+CODEX_IOS_RUNNER_REL="packages/codex-plugin/scripts/rn-fast-runner"
+CODEX_ANDROID_RUNNER_REL="packages/codex-plugin/scripts/rn-android-runner"
 # corepack yarn build (= tsc) fails closed; bare `npx tsc` would auto-install
 # typescript@latest in non-interactive CI if resolution ever broke.
 BUILD_CMD="${DIST_BUILD_CMD:-corepack yarn build}"
@@ -30,13 +34,20 @@ mkdir -p "$CODEX_RUNTIME"
 find "$CODEX_RUNTIME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 ( cd "$ROOT" && eval "$CODEX_RUNTIME_BUILD_CMD" )
 
-STATUS="$(git -C "$ROOT" status --porcelain -- "$DIST_REL" "$CODEX_RUNTIME_REL")"
+STATUS="$(
+  git -C "$ROOT" status --porcelain -- \
+    "$DIST_REL" \
+    "$CODEX_RUNTIME_ROOT_REL" \
+    "$CODEX_RUNNER_MANIFEST_REL" \
+    "$CODEX_IOS_RUNNER_REL" \
+    "$CODEX_ANDROID_RUNNER_REL"
+)"
 if [ -n "$STATUS" ]; then
-  echo "ERROR: committed MCP artifacts are not a clean rebuild of src/."
+  echo "ERROR: committed MCP artifacts and Codex package outputs are not a clean rebuild of src/."
   echo "$STATUS"
   echo "  ' M' = stale committed file, '??' = emitted but uncommitted, ' D' = orphan no longer emitted"
   echo "  Fix: corepack yarn workspace rn-dev-agent-core build && corepack yarn build:codex-runtime"
-  echo "       git add $DIST_REL $CODEX_RUNTIME_REL"
+  echo "       git add $DIST_REL $CODEX_RUNTIME_ROOT_REL $CODEX_RUNNER_MANIFEST_REL $CODEX_IOS_RUNNER_REL $CODEX_ANDROID_RUNNER_REL"
   exit 1
 fi
 echo "dist fresh"

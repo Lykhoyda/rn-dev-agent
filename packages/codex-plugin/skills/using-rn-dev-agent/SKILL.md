@@ -38,7 +38,7 @@ load the matching skill or command Markdown and run the underlying steps
 directly. For action inventory, the slash command wraps:
 
 ```bash
-node <plugin-root>/../rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
+node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
 ```
 
 For action replay, prefer the MCP tool `cdp_run_action` after the same

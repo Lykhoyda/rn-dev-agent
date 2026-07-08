@@ -6,6 +6,12 @@
         Discovered live during Task 10 smoke-test (EPERM on socket bind).
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
     <application
         android:label="rn-dev-agent Android runner"
         android:theme="@android:style/Theme.Material.Light.NoActionBar" />

@@ -24,7 +24,15 @@ every consumer sees the same inventory.
 ## Run
 
 ```bash
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-packages/codex-plugin}"
+CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
+if [ -z "$CODEX_PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
+  CODEX_PLUGIN_ROOT="packages/codex-plugin"
+fi
+if [ -z "$CODEX_PLUGIN_ROOT" ]; then
+  CODEX_PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
+  [ -n "$CODEX_PLUGIN_MANIFEST" ] && CODEX_PLUGIN_ROOT="$(dirname "$(dirname "$CODEX_PLUGIN_MANIFEST")")"
+fi
+test -n "$CODEX_PLUGIN_ROOT" || { echo "rn-dev-agent Codex plugin root not found" >&2; exit 2; }
 node "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
   --workspace-root "$PWD" \
   --memory-cwd "$PWD" \
@@ -47,7 +55,15 @@ decision-making. **Always use `--json` from a programmatic caller** — the
 human table format is not a stable contract.
 
 ```bash
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-packages/codex-plugin}"
+CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
+if [ -z "$CODEX_PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
+  CODEX_PLUGIN_ROOT="packages/codex-plugin"
+fi
+if [ -z "$CODEX_PLUGIN_ROOT" ]; then
+  CODEX_PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
+  [ -n "$CODEX_PLUGIN_MANIFEST" ] && CODEX_PLUGIN_ROOT="$(dirname "$(dirname "$CODEX_PLUGIN_MANIFEST")")"
+fi
+test -n "$CODEX_PLUGIN_ROOT" || { echo "rn-dev-agent Codex plugin root not found" >&2; exit 2; }
 RESULT=$(node "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
   --json --section b --filter "task creation" --workspace-root "$PWD" --memory-cwd "$PWD")
 echo "$RESULT" | jq '.sections.flows.items[0].path'
@@ -102,10 +118,9 @@ fallback, not a default.
 - The script handles all filesystem scanning + frontmatter parsing — DO NOT
   re-implement it inline (this caused stale logic in the previous version of
   this command).
-- In this repository checkout, `CODEX_PLUGIN_ROOT=packages/codex-plugin`. For
-  an installed Codex plugin, resolve `CODEX_PLUGIN_ROOT` to the installed
-  `rn-dev-agent` plugin root before invoking the helper. Do not use
-  Claude-only plugin-root variables in Codex workflows.
+- Prefer `RN_DEV_AGENT_CODEX_PLUGIN_ROOT`, which the Codex MCP launcher exports
+  for installed plugins. In a repository checkout, use `CODEX_PLUGIN_ROOT=packages/codex-plugin`.
+  Do not use Claude-only plugin-root variables in Codex workflows.
 - The script's project-cwd encoding maps both `/` and `_` to `-`, matching
   Claude Code's `~/.claude/projects/<encoded>/` convention.
 - Output is bounded to 50 entries per section by default (`--max N` to override).

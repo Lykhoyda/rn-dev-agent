@@ -190,12 +190,14 @@ for path in \
   packages/claude-plugin/marketplace.json \
   packages/claude-plugin/.claude-plugin/marketplace.json \
   packages/claude-plugin/hooks/hooks.json \
+  packages/claude-plugin/scripts/record_proof.sh \
   packages/codex-plugin/package.json \
   packages/codex-plugin/CLAUDE-MD-TEMPLATE.md \
   packages/codex-plugin/.codex-plugin/plugin.json \
   packages/codex-plugin/.mcp.json \
   packages/codex-plugin/bin/cdp-supervisor.ts \
   packages/codex-plugin/runner-manifest.json \
+  packages/codex-plugin/scripts/record_proof.sh \
   packages/codex-plugin/rn-dev-agent-core/package.json \
   packages/codex-plugin/rn-dev-agent-core/dist/index.js \
   packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js \
@@ -269,6 +271,12 @@ if ! cmp -s "$ROOT/CLAUDE-MD-TEMPLATE.md" "$ROOT/packages/claude-plugin/CLAUDE-M
 fi
 if ! cmp -s "$ROOT/CLAUDE-MD-TEMPLATE.md" "$ROOT/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"; then
   fail "Codex package CLAUDE-MD-TEMPLATE.md must match the root template"
+fi
+if ! cmp -s "$ROOT/scripts/record_proof.sh" "$ROOT/packages/claude-plugin/scripts/record_proof.sh"; then
+  fail "Claude package record_proof.sh must match scripts/record_proof.sh"
+fi
+if ! cmp -s "$ROOT/scripts/record_proof.sh" "$ROOT/packages/codex-plugin/scripts/record_proof.sh"; then
+  fail "Codex package record_proof.sh must match scripts/record_proof.sh"
 fi
 
 expect_eq "$(json '.packageManager // empty' "$ROOT/package.json")" "yarn@$EXPECTED_YARN_VERSION" "root packageManager"
