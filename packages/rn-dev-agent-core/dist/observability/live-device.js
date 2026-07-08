@@ -123,7 +123,9 @@ export function toolInvalidatesRetryBaseline(tool, args) {
  */
 export function mayTriggerLiveCapture(tool) {
     return (FLOW_MUTATION_TOOLS.has(tool) ||
-        classifyFamily(tool) === 'interaction' || tool === 'cdp_navigate' || tool === 'device_find');
+        classifyFamily(tool) === 'interaction' ||
+        tool === 'cdp_navigate' ||
+        tool === 'device_find');
 }
 let inFlight = false;
 let pending = false;
