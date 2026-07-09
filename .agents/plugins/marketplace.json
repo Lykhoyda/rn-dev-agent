@@ -1,0 +1,18 @@
+{
+  "name": "rn-dev-agent",
+  "interface": { "displayName": "rn-dev-agent" },
+  "plugins": [
+    {
+      "name": "rn-dev-agent",
+      "source": {
+        "source": "local",
+        "path": "./packages/codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering"
+    }
+  ]
+}
