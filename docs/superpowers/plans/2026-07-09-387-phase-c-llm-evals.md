@@ -303,7 +303,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `packages/rn-dev-agent-core/test/evals/server-config.json`
-- Create: `packages/rn-dev-agent-core/test/evals/fixtures/ios-snapshot.json`
+- Create: `packages/rn-dev-agent-core/test/evals/fixtures/device-snapshot.json`
 - Create: `packages/rn-dev-agent-core/test/evals/fixtures/stale-ref-envelope.json`
 - Create: `packages/rn-dev-agent-core/test/evals/tool-correctness.eval.yaml`
 - Create: `packages/rn-dev-agent-core/test/evals/output-usability.eval.yaml`
