@@ -58263,7 +58263,7 @@ var scheduleAfter = (fn, delayMs) => {
 var defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 async function detectIdb(execFileFn = execFile26) {
   return new Promise((resolve4) => {
-    execFileFn("which", ["idb"], { timeout: 3e3 }, (err) => resolve4(!err));
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve4(!err));
   });
 }
 function isEnoent(err) {

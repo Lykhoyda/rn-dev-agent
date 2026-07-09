@@ -38,7 +38,12 @@ const scheduleAfter = (fn, delayMs) => {
 const defaultSpawn = (cmd, args) => spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
 export async function detectIdb(execFileFn = execFile) {
     return new Promise((resolve) => {
-        execFileFn('which', ['idb'], { timeout: 3000 }, (err) => resolve(!err));
+        // B269/B263: PATH presence is not health. fb-idb on an incompatible
+        // Python (e.g. 3.14) crashes on EVERY invocation; selecting the idb tier
+        // for such a client kills the mirror ("idb video-stream keeps exiting")
+        // instead of using the working simctl fallback. Probe a real invocation:
+        // ENOENT, a crash, or a hang all resolve false -> simctl tier.
+        execFileFn('idb', ['--help'], { timeout: 3000 }, (err) => resolve(!err));
     });
 }
 function isEnoent(err) {

@@ -9,6 +9,7 @@ import {
   IosSimctlLoopSource,
   AndroidScreenrecordSource,
   SIMCTL_HINT,
+  detectIdb,
 } from '../../dist/observability/mirror/sources.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
@@ -319,4 +320,32 @@ test('IosSimctlLoopSource: stop() aborts the in-flight capture', async () => {
 
 test('SIMCTL_HINT names idb', () => {
   assert.match(SIMCTL_HINT, /idb/);
+});
+
+// B269/B263: detectIdb must probe a real invocation (a broken client on PATH
+// selects the doomed idb tier and kills the mirror), not PATH presence.
+test('detectIdb: probes `idb --help` and resolves true on exit 0', async () => {
+  const calls = [];
+  const ok = await detectIdb((cmd, args, opts, cb) => {
+    calls.push({ cmd, args });
+    cb(null);
+  });
+  assert.equal(ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'idb');
+  assert.deepEqual(calls[0].args, ['--help']);
+});
+
+test('detectIdb: broken client (non-zero exit) resolves false -> simctl tier', async () => {
+  const ok = await detectIdb((_cmd, _args, _opts, cb) => {
+    cb(Object.assign(new Error('RuntimeError: no current event loop'), { code: 1 }));
+  });
+  assert.equal(ok, false);
+});
+
+test('detectIdb: missing client (ENOENT) resolves false', async () => {
+  const ok = await detectIdb((_cmd, _args, _opts, cb) => {
+    cb(Object.assign(new Error('spawn idb ENOENT'), { code: 'ENOENT' }));
+  });
+  assert.equal(ok, false);
 });
