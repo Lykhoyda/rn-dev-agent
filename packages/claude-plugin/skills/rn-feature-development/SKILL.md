@@ -36,7 +36,8 @@ the simulator, review quality, and produce E2E proof with screenshots.
 - **Evaluator hook**: if `dev/evaluator.md` exists in the plugin root, log
   every phase's events per its matching Phase section there (it defines what
   each phase records; re-verification logs as Phase 5.5-retry); Phase 7
-  finalizes the report and appends high-confidence bugs to `docs/BUGS.md`.
+  finalizes the report and opens or updates GitHub Issues for high-confidence
+  bugs.
 
 ---
 
@@ -355,7 +356,7 @@ verification as complete. This catches platform-specific rendering failures
 4. **Any "MISSING" = FAIL** — do not proceed. Diagnose the cause (missing
    font assets, native rebuild needed, platform-specific API differences).
 5. If the issue requires a native rebuild (e.g., font assets not linked),
-   log it in `docs/BUGS.md` and note it in the verification report.
+   open or update a GitHub Issue and note it in the verification report.
    Verification can proceed with the working platform, but the MISSING
    elements must be documented and the Android column in the results log
    must show the actual status, not a false "PASS".

@@ -675,7 +675,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
    - Repro #243: `device_snapshot action=open platform=android …` → `maestro_run …` → `device_snapshot action=snapshot` (must NOT return `fetch failed` on the first post-flow call).
    - Repro #244: same open → `maestro_run` → `device_snapshot action=close` (must return ok, `sessionAlreadyGone:true`, not `SESSION_NOT_FOUND`).
    - Confirm the **real** CLI error shape for #244; if it differs from `SESSION_NOT_FOUND` / "No active session", widen `isBenignSessionGoneError`'s regex and re-run Task 3 tests.
-4. **Finish the branch** — `superpowers:finishing-a-development-branch`; stacked PR. Update `ROADMAP.md` / `BUGS.md` / `DECISIONS.md` in the sibling workspace via `/end-session`.
+4. **Finish the branch** — `superpowers:finishing-a-development-branch`; stacked PR. Update `ROADMAP.md` / `DECISIONS.md` in the sibling workspace via `/end-session`, and open or update GitHub Issues for bugs.
 
 ## Self-review notes (done while writing)
 

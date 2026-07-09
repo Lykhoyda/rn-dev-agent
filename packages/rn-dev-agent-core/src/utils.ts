@@ -151,8 +151,8 @@ export function withConnection<T>(
         // Concurrency: two simultaneous withConnection callers can both reach
         // this branch and both fire reinjectHelpers. The injected bundle is
         // idempotent (reassigns globalThis.__RN_AGENT), so this is wasted
-        // work but not a correctness bug. Coalescing is logged as a future
-        // optimisation in workspace BUGS.md.
+        // work but not a correctness bug. Coalescing is tracked as a future
+        // optimization in GitHub Issues.
         if (!client.helpersInjected && client.isConnected) {
           try {
             const reinjected = await client.reinjectHelpers(3_000);

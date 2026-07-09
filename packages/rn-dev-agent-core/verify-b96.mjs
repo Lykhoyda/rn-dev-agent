@@ -9,8 +9,8 @@
 // This script was the source of the empirical evidence that disproved the
 // original B96 theory: the "outer single-quote wrapping" pattern is correct
 // on adb 1.0.41 + Android API 37, and removing it breaks shell metacharacter
-// handling. See docs/BUGS.md B96 entry and docs/DECISIONS.md D582 for the
-// full investigation record.
+// handling. See the B96 GitHub Issue and docs/DECISIONS.md D582 for the full
+// investigation record.
 //
 // Usage:
 //   cd packages/rn-dev-agent-core && npm run build && node verify-b96.mjs
