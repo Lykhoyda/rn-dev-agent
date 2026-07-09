@@ -14,7 +14,7 @@ Published install:
 
 ```bash
 /plugin marketplace add Lykhoyda/rn-dev-agent
-/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
+/plugin install rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
 
@@ -32,7 +32,19 @@ root directly, use `/path/to/rn-dev-agent/packages/claude-plugin`.
 
 ### Codex
 
-Local source path: `/path/to/rn-dev-agent/packages/codex-plugin`.
+Install from the marketplace (recommended):
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/codex-plugin/`, and the installed plugin is fully self-contained
+(bundled MCP runtime, native runner sources, runner manifest).
+
+For a local checkout instead, register the package directory
+`/path/to/rn-dev-agent/packages/codex-plugin`.
 
 This checkout ships a Codex package in `packages/codex-plugin/` with
 `.codex-plugin/plugin.json`, `.mcp.json`, package-local shared skill adapters,
@@ -231,7 +243,7 @@ Claude Code
 | "No Hermes target" | Open the app on simulator, ensure Hermes is enabled |
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
-| Plugin not detected | `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent` then `/reload-plugins` |
+| Plugin not detected | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
 | Tools fail after upgrade | Restart Claude Code ([why](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)) |
 | Spawned subagent says "MCP tools unavailable" | Never spawn `rn-tester` / `rn-debugger` via Task tool — MCP stdio doesn't propagate to subprocesses (GH #31). Use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead; protocols run inline in the parent session. |
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles. Kill Metro, restart it, relaunch the app. `cdp_status` warns when reload count is high. |
@@ -262,7 +274,7 @@ The **observability UI** (`/rn-dev-agent:observe`) is opt-in and read-only: it b
 Enable auto-update in the plugin manager (Marketplaces tab), or update manually:
 
 ```bash
-/plugin update rn-dev-agent@Lykhoyda-rn-dev-agent
+/plugin update rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
 

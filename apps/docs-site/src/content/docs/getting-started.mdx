@@ -25,7 +25,7 @@ From inside Claude Code:
 /plugin marketplace add Lykhoyda/rn-dev-agent
 
 # 2. Install the plugin
-/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
+/plugin install rn-dev-agent@rn-dev-agent
 
 # 3. Reload plugins to activate
 /reload-plugins
@@ -44,7 +44,18 @@ plugin package root directly.
 
 ### Codex
 
-Codex uses a separate package directory:
+Install from the marketplace (recommended):
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/codex-plugin/`, and the installed plugin is fully self-contained
+(bundled MCP runtime, native runner sources, runner manifest).
+
+For a local checkout instead, Codex uses a separate package directory:
 
 ```text
 /path/to/rn-dev-agent/packages/codex-plugin
@@ -75,7 +86,7 @@ Enable auto-update in the plugin manager (Marketplaces tab). With auto-update en
 Manual update:
 
 ```bash
-/plugin update rn-dev-agent@Lykhoyda-rn-dev-agent
+/plugin update rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
 

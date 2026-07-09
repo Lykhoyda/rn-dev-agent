@@ -57,7 +57,7 @@ Use `storeType: 'react-query'` explicitly. React Query state is read from the Qu
 ## Plugin issues
 
 <Aside type="tip" title="Plugin not detected">
-In Claude Code, run `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent` then
+In Claude Code, run `/plugin install rn-dev-agent@rn-dev-agent` then
 `/reload-plugins`. For local development, Claude Code uses
 `claude --plugin-dir /path/to/rn-dev-agent`; Codex uses the plugin package path
 `/path/to/rn-dev-agent/packages/codex-plugin`.
@@ -75,7 +75,7 @@ Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache`
 Clear the stale cache first:
 
 ```bash
-rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent
+rm -rf ~/.claude/plugins/cache/rn-dev-agent
 ```
 
 Then retry the update.
@@ -85,7 +85,7 @@ Then retry the update.
 Clear stale cache:
 
 ```bash
-rm -rf ~/.claude/plugins/cache/Lykhoyda-rn-dev-agent ~/.claude/plugins/data/rn-dev-agent-*
+rm -rf ~/.claude/plugins/cache/rn-dev-agent ~/.claude/plugins/data/rn-dev-agent-*
 ```
 
 Then re-add marketplace and install.

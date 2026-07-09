@@ -5,7 +5,11 @@ node_modules/
 .claude/*
 !.claude/commands/
 !.claude/skills/
-.agents
+# .agents is local agent state EXCEPT the committed Codex marketplace manifest
+.agents/*
+!.agents/plugins/
+.agents/plugins/*
+!.agents/plugins/marketplace.json
 .idea
 
 # Project CLAUDE.md kept local-only (contains personal paths/username); not shared.
@@ -62,3 +66,6 @@ packages/rn-dev-agent-core/eval/
 test-fixtures/ios-fixture/build/
 test-fixtures/android-fixture/.gradle/
 test-fixtures/android-fixture/**/build/
+
+# Playwright MCP session artifacts (screenshots/snapshots from browser automation)
+.playwright-mcp/

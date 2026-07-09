@@ -65,7 +65,7 @@ Then re-check the two `test -f` paths above.
 If it still fails, give the user manual instructions:
 1. In a repo checkout: `corepack yarn install --immutable`
 2. In a repo checkout: `corepack yarn build:host-runtimes`
-3. If ENOENT: the plugin directory may be corrupt — reinstall: `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`
+3. If ENOENT: the plugin directory may be corrupt — reinstall: `/plugin install rn-dev-agent@rn-dev-agent`
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)
 
@@ -89,7 +89,7 @@ ls "${CODEX_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodep
       -derivedDataPath ../build/DerivedData
   ```
   Expect `** TEST BUILD SUCCEEDED **`. The artifacts land at `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/`. If the user declines, leave it — the lazy fallback covers correctness; the only cost is a slow first interaction.
-- **xcodeproj missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
+- **xcodeproj missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@rn-dev-agent`.
 
 Skip this check on systems without `xcodebuild` (non-macOS, no Xcode) — `rn-fast-runner` is iOS-only. The plugin still works on those systems for Android via the in-tree `rn-android-runner` (check 3b).
 
@@ -108,7 +108,7 @@ ls "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts" 2>/dev/null
 
 - **Both present** → OK. The runner installs its APKs and starts its UiAutomator instrumentation (`dev.lykhoyda.rndevagent.androidrunner`) lazily on the first `device_*` call against a booted emulator. The runner is default-on; opt out with `RN_ANDROID_RUNNER=0` (which now ERRORS with `RUNNER_DISABLED` on a `device_*` call — it does NOT fall back to anything).
 - **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd "${CODEX_PLUGIN_ROOT}/scripts/rn-android-runner" && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
-- **build.gradle.kts missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`.
+- **build.gradle.kts missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@rn-dev-agent`.
 
 Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
 

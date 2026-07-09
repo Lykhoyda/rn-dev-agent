@@ -93,6 +93,8 @@ write_valid_repo() {
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
+  mkdir -p "$tmp/.agents/plugins"
+  printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","source":{"source":"local","path":"./packages/codex-plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}' > "$tmp/.agents/plugins/marketplace.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/marketplace.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/.claude-plugin/marketplace.json"
   printf '%s\n' '{"hooks":{}}' > "$tmp/packages/claude-plugin/hooks/hooks.json"
