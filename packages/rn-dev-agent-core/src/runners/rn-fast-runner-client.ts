@@ -428,6 +428,29 @@ export function consumePendingFastRunnerArtifactNote(): string | undefined {
   return note;
 }
 
+// #519 review finding 4: a pre-#395 artifact passes every staleness gate
+// (protocol unchanged, no new verbs, runnerVersion env-passed at launch) while
+// still emitting hittable=false for every node. HONEST_HITTABLE is compiled
+// into the artifact's /health capabilities, so its absence on a HEALTHY probe
+// is the one artifact-truthful staleness signal. Advisory only (warn-once,
+// never degrades liveness): forcing a rebuild here would betray the documented
+// "no silent multi-minute xcodebuild" contract.
+let staleHittableWarned = false;
+
+export function _resetStaleHittableWarnForTest(): void {
+  staleHittableWarned = false;
+}
+
+function noteStaleHittableArtifact(capabilities: string[] | undefined): void {
+  if (staleHittableWarned || capabilities?.includes('HONEST_HITTABLE')) return;
+  if (pendingFastRunnerArtifactNote !== undefined) return;
+  staleHittableWarned = true;
+  pendingFastRunnerArtifactNote =
+    'runner artifact predates honest hittable (#395): snapshot hittable values are stale ' +
+    '(always false) — delete packages/rn-fast-runner/build/DerivedData and reopen the ' +
+    'device session to rebuild, or upgrade the plugin.';
+}
+
 // --- Lifecycle ---
 
 /**
@@ -891,6 +914,7 @@ export async function probeFastRunnerLivenessDetailed(
       };
     }
     lastKnownCapabilities = res.capabilities ?? [];
+    noteStaleHittableArtifact(res.capabilities);
     return {
       liveness: 'alive',
       ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),

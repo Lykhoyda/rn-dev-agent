@@ -37,7 +37,8 @@ extension RnFastRunnerTests {
             ok: true,
             protocolVersion: RunnerProtocol.version,
             runnerVersion: RunnerEnv.pluginVersion(),
-            capabilities: QuiescenceStatus.current().capabilities + ["SCREEN_STATIC"],
+            capabilities: QuiescenceStatus.current().capabilities
+              + ["SCREEN_STATIC", "HONEST_HITTABLE"],
             commands: CommandType.allCases.map(\.rawValue)
           )
         )
