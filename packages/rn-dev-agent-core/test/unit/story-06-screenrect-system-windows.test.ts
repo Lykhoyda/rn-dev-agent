@@ -1,10 +1,16 @@
 // Story 06 Phase B (#387): the screen rect that direction scroll/swipe compute
-// their gesture from is the UNION BOUNDING BOX of all snapshot node rects. A
-// (0,0)-anchored heuristic was fragile — device-proven on CI Android, where NO
-// node spans the full window (the tallest (0,0) node is a ~128px top-chrome
-// strip while the scrollable list sits at y=570,h=1590), so a "largest (0,0)
-// rect" pick produced a 128px-tall viewport and every direction scroll dragged
-// ~50px in the status bar, never moving the list.
+// their gesture from is a HITTABLE-FIRST union bounding box of snapshot node
+// rects, with an all-nodes fallback. Two device-proven failure modes shaped it:
+//  - A (0,0)-anchored heuristic broke on CI Android, where NO node spans the
+//    full window (the tallest (0,0) node is a ~128px top-chrome strip while the
+//    scrollable list sits at y=570,h=1590) — direction scrolls dragged ~50px in
+//    the status bar and never moved the list.
+//  - An ALL-nodes union is inflatable by off-screen mounted content (post-merge
+//    review finding): both runners keep content-bearing nodes in the snapshot
+//    with real out-of-viewport coords (RN FlatList windowing) marked
+//    hittable:false — including them pushes gestures off the physical screen
+//    and false-passes scrollintoview's isInViewport. Hittable-only excludes
+//    them; the all-nodes fallback covers snapshots without hittable data.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { updateRefMap, getScreenRect } from '../../dist/fast-runner-ref-map.js';
@@ -42,4 +48,52 @@ test('screen rect: a leading status-bar node does not cap the extent', () => {
 test('screen rect: degenerate all-tiny-node snapshot yields null (sanity floor)', () => {
   updateRefMap([{ ref: 'e0', rect: { x: 0, y: 0, width: 40, height: 40 } }] as never);
   assert.equal(getScreenRect(), null);
+});
+
+test('screen rect: off-screen non-hittable nodes do not inflate the viewport', () => {
+  // RN FlatList windowing shape: rows mounted screens past the fold stay in the
+  // tree with real coords but hittable:false. The viewport must come from the
+  // hittable union (874), not the mounted-content extent (4060).
+  updateRefMap([
+    { ref: 'e0', rect: { x: 0, y: 0, width: 402, height: 874 }, hittable: true },
+    { ref: 'e1', rect: { x: 16, y: 800, width: 370, height: 60 }, hittable: true },
+    { ref: 'e2', rect: { x: 16, y: 1200, width: 370, height: 60 }, hittable: false },
+    { ref: 'e3', rect: { x: 16, y: 4000, width: 370, height: 60 }, hittable: false },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 402, height: 874 });
+});
+
+test('screen rect: falls back to the all-nodes union when no node is hittable', () => {
+  // Older runner artifacts / synthetic snapshots without usable hittable data
+  // keep the pre-hittable behavior instead of yielding null.
+  updateRefMap([
+    { ref: 'e0', rect: { x: 0, y: 0, width: 1080, height: 128 }, hittable: false },
+    { ref: 'e1', rect: { x: 0, y: 570, width: 1080, height: 1590 } },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 1080, height: 2160 });
+});
+
+test('screen rect: tiny hittable seed grows to the overlapping full-window container', () => {
+  // If the only hittable node is a small control, the overlap-growth pulls in
+  // the non-hittable window node that intersects it — the viewport is the
+  // window, not a 40px rect.
+  updateRefMap([
+    { ref: 'e0', rect: { x: 10, y: 10, width: 40, height: 40 }, hittable: true },
+    { ref: 'e1', rect: { x: 0, y: 0, width: 402, height: 874 }, hittable: false },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 402, height: 874 });
+});
+
+test('screen rect: partial hittable coverage grows to the window, not the widest control (Codex P2)', () => {
+  // Application/Window hittable:false with only a wide button hittable at the
+  // top: a hittable-only union would collapse the viewport to y=244 and
+  // direction gestures would compute short top-of-screen drags. The window
+  // overlaps the button, so growth recovers the full 852 — while a disjoint
+  // off-screen row (y=2000) stays excluded.
+  updateRefMap([
+    { ref: 'e0', rect: { x: 0, y: 0, width: 390, height: 852 }, hittable: false },
+    { ref: 'e1', rect: { x: 14, y: 200, width: 361, height: 44 }, hittable: true },
+    { ref: 'e2', rect: { x: 0, y: 2000, width: 390, height: 60 }, hittable: false },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 390, height: 852 });
 });

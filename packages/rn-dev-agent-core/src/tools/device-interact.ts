@@ -18,6 +18,7 @@ import {
 } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
+import { resolveBundleId } from '../project-config.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
@@ -1179,7 +1180,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             args.x2,
             args.y2,
             args.durationMs,
-            getActiveSession()?.appId,
+            getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
           );
           if (resp.ok) {
             return okResult({
@@ -1226,7 +1227,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             coords.x2,
             coords.y2,
             duration,
-            getActiveSession()?.appId,
+            getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
           );
           if (resp.ok) {
             return okResult({
@@ -1298,7 +1299,7 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
           x2,
           y2,
           DEFAULT_SWIPE_DURATION_MS,
-          getActiveSession()?.appId,
+          getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
         );
         if (resp.ok) {
           return okResult({

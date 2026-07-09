@@ -4,31 +4,67 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
+// width > 300 keeps the same sanity floor the old heuristic used (ignore
+// degenerate all-tiny snapshots rather than emit a bogus rect).
+function extentToRect(right, bottom) {
+    return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
+}
+function resolveScreenRect(entries) {
+    let allRight = 0;
+    let allBottom = 0;
+    let hitRight = 0;
+    let hitBottom = 0;
+    const usable = [];
+    for (const e of entries) {
+        const { x, y, width, height } = e.rect;
+        if (width <= 0 || height <= 0)
+            continue;
+        usable.push(e);
+        allRight = Math.max(allRight, x + width);
+        allBottom = Math.max(allBottom, y + height);
+        if (e.hittable === true) {
+            hitRight = Math.max(hitRight, x + width);
+            hitBottom = Math.max(hitBottom, y + height);
+        }
+    }
+    if (hitRight <= 0 || hitBottom <= 0)
+        return extentToRect(allRight, allBottom);
+    // Grow the hittable seed by overlap until stable (bounded — each pass only
+    // ever extends, and stops as soon as nothing new intersects).
+    let right = hitRight;
+    let bottom = hitBottom;
+    for (let pass = 0; pass < 10; pass++) {
+        let grew = false;
+        for (const e of usable) {
+            const { x, y, width, height } = e.rect;
+            const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
+            if (!intersects)
+                continue;
+            if (x + width > right) {
+                right = x + width;
+                grew = true;
+            }
+            if (y + height > bottom) {
+                bottom = y + height;
+                grew = true;
+            }
+        }
+        if (!grew)
+            break;
+    }
+    return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
+}
 export function updateRefMap(nodes) {
     refMap.clear();
     screenRect = null;
-    // Screen rect = the union bounding box of all node rects. A (0,0)-anchored
-    // heuristic is fragile: on some Android snapshots (#387 Phase B device-proven)
-    // NO node spans the full window — the tallest (0,0) node is a ~128px top-chrome
-    // strip, so a "largest (0,0) rect" pick yields a tiny viewport and direction
-    // scrolls compute a ~50px drag in the status bar that never moves the list.
-    // The max extent across all nodes recovers the true viewport on both platforms.
-    let maxRight = 0;
-    let maxBottom = 0;
+    const entries = [];
     for (const node of nodes) {
         if (!node.ref || !node.rect)
             continue;
         refMap.set(node.ref, node.rect);
-        const { x, y, width, height } = node.rect;
-        if (width > 0 && height > 0) {
-            maxRight = Math.max(maxRight, x + width);
-            maxBottom = Math.max(maxBottom, y + height);
-        }
+        entries.push({ rect: node.rect, hittable: node.hittable });
     }
-    // width > 300 keeps the same sanity floor the old heuristic used (ignore
-    // degenerate all-tiny-node snapshots rather than emit a bogus rect).
-    screenRect =
-        maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
+    screenRect = resolveScreenRect(entries);
     lastUpdated = Date.now();
 }
 export function lookupRef(ref) {
@@ -120,11 +156,10 @@ export function updateRefMapFromFlat(nodes) {
     refMap.clear();
     screenRect = null;
     const hashed = [];
-    // Screen rect = union bounding box of all node rects (same rationale as
-    // updateRefMap — a (0,0)-anchored pick is fragile when no node spans the
-    // full window).
-    let maxRight = 0;
-    let maxBottom = 0;
+    // Screen rect: hittable-first union with an all-nodes fallback — same
+    // rationale as updateRefMap (off-screen mounted rows must not inflate the
+    // viewport; a (0,0)-anchored pick is fragile when no node spans the window).
+    const entries = [];
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
         if (!node.ref || !node.rect)
@@ -138,14 +173,9 @@ export function updateRefMapFromFlat(nodes) {
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
         hashed.push(node);
-        const { x, y, width, height } = node.rect;
-        if (width > 0 && height > 0) {
-            maxRight = Math.max(maxRight, x + width);
-            maxBottom = Math.max(maxBottom, y + height);
-        }
+        entries.push({ rect: node.rect, hittable: node.hittable });
     }
-    screenRect =
-        maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
+    screenRect = resolveScreenRect(entries);
     // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
     // dereferences node.rect.* unconditionally, and a malformed entry must not
     // throw mid-update. For real runner data the filtered subset equals the full

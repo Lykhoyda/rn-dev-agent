@@ -200,9 +200,15 @@ jobs:
               exit 1
             fi
           done
-          unzip -l "rn-fast-runner-$V-sim.zip" | grep -q '\.xctestrun' || { echo "iOS zip missing .xctestrun" >&2; exit 1; }
-          unzip -l "rn-android-runner-$V.zip" | grep -q 'app-debug\.apk' || { echo "android zip missing app-debug.apk" >&2; exit 1; }
-          unzip -l "rn-android-runner-$V.zip" | grep -q 'app-debug-androidTest\.apk' || { echo "android zip missing androidTest apk" >&2; exit 1; }
+          # Capture listings once, then match: `unzip -l | grep -q` under
+          # pipefail can false-fail — grep -q exits on first match, unzip takes
+          # SIGPIPE (exit 141) on a long listing, and pipefail turns a
+          # successful match into a red night.
+          IOS_LIST=$(unzip -Z1 "rn-fast-runner-$V-sim.zip")
+          ANDROID_LIST=$(unzip -Z1 "rn-android-runner-$V.zip")
+          grep -q '\.xctestrun' <<<"$IOS_LIST" || { echo "iOS zip missing .xctestrun" >&2; exit 1; }
+          grep -q 'app-debug\.apk' <<<"$ANDROID_LIST" || { echo "android zip missing app-debug.apk" >&2; exit 1; }
+          grep -q 'app-debug-androidTest\.apk' <<<"$ANDROID_LIST" || { echo "android zip missing androidTest apk" >&2; exit 1; }
           echo "artifact integrity OK for v$V"
 
   report:
