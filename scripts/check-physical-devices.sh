@@ -96,7 +96,7 @@ if [ -n "${PHYSICAL_IOS:-}" ]; then
   if command -v idb_companion >/dev/null 2>&1 || command -v idb-companion >/dev/null 2>&1; then
     echo "  [OK] idb-companion installed"
   else
-    echo "  [MISSING] idb-companion — install with: brew tap facebook/fb && brew install idb-companion"
+    echo "  [MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion"
   fi
 elif [ "$HOST_OS" = "Darwin" ]; then
   echo "No physical iOS devices detected (skipping idb-companion check)"

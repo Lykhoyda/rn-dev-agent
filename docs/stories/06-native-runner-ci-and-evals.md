@@ -14,7 +14,7 @@
 > those phases closed. What remains is Phase C (LLM-behavior evals) and Phase B's
 > post-merge week-of-green acceptance.
 
-CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, lint/format, and changeset guards — but the native runners are only **compiled** (CodeQL, ~17 min macOS job), never **executed**. The Swift suites (`RnFastRunnerTests+*.swift`, `KeyboardGuardTests.swift`, `SnapshotForegroundRegressionTest.swift`) and the Kotlin JVM test (`KeyboardGuardTest.kt`) exist in-tree and run only when a developer remembers to. Device behavior is validated by manual smoke sessions recorded in docs (e.g. the Pixel_9_Pro Task-10 run in `BUGS.md`). D1288's lesson applies at layer scale: green TS suites say nothing about the layer where the hardest bugs live.
+CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, lint/format, and changeset guards — but the native runners are only **compiled** (CodeQL, ~17 min macOS job), never **executed**. The Swift suites (`RnFastRunnerTests+*.swift`, `KeyboardGuardTests.swift`, `SnapshotForegroundRegressionTest.swift`) and the Kotlin JVM test (`KeyboardGuardTest.kt`) exist in-tree and run only when a developer remembers to. Device behavior is validated by manual smoke sessions recorded in GitHub Issues and PR proof artifacts. D1288's lesson applies at layer scale: green TS suites say nothing about the layer where the hardest bugs live.
 
 ## What Maestro does
 

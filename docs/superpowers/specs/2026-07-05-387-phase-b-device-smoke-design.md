@@ -67,7 +67,7 @@ recursion guard):
   no manual seed step.
 - The idempotence guard already exists (`gh release create` only if absent;
   uploads use `--clobber`).
-- Bug logged to workspace `BUGS.md`; decision (dispatch + sweep over PAT) to
+- Bug captured as a GitHub Issue; decision (dispatch + sweep over PAT) to
   `DECISIONS.md`.
 
 ### Fixture apps — `test-fixtures/`

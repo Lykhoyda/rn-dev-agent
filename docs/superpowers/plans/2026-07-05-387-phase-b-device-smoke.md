@@ -224,7 +224,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `.changeset/story-01-runner-artifacts-trigger-fix.md`
-- Workspace: append to `/Users/anton_personal/GitHub/rn-dev-agent-workspace/docs/BUGS.md` and `DECISIONS.md`
+- Workspace: append decision notes to `/Users/anton_personal/GitHub/rn-dev-agent-workspace/docs/DECISIONS.md`; open or update GitHub Issues for bugs.
 
 - [ ] **Step 1: Changeset**
 
@@ -245,7 +245,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 2: Workspace bug + decision entries** (next B/D numbers from the files' tails)
 
-BUGS.md entry (adjust the B-number): the trigger bug, root cause (GITHUB_TOKEN recursion guard vs push-triggered detect), evidence (bump commits with no runs), fix (dispatch + sweep).
+GitHub Issue update: the trigger bug, root cause (GITHUB_TOKEN recursion guard vs push-triggered detect), evidence (bump commits with no runs), fix (dispatch + sweep).
 DECISIONS.md entry (adjust the D-number): "Artifact publishing is level-triggered (dispatch-after-merge + nightly catch-up sweep) rather than PAT-based — no new credentials; workflow_dispatch is exempt from the recursion guard."
 Commit both in the workspace repo (pre-authorized).
 
