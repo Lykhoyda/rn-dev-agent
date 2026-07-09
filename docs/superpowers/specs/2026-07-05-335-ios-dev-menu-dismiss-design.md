@@ -191,7 +191,8 @@ seam from `tool-handlers-cdp2.test.js` and the reload harness from
   `rn-dev-agent-plugin`: patch.
 - `docs-site/src/content/docs/dev-client-coverage.md` — remove the iOS "not supported
   yet" gap note; document `hideDevMenu` + auto-dismiss.
-- Append findings to `ROADMAP.md`, `BUGS.md`, `DECISIONS.md` (no backend → postman N/A).
+- Append findings to `ROADMAP.md` / `DECISIONS.md`; open or update GitHub Issues
+  for bugs (no backend → postman N/A).
 - File a follow-up issue for the deferred remount-without-reload primitive, linking #335.
 
 ## Files touched

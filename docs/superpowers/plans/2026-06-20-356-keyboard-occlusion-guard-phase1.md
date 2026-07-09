@@ -350,7 +350,7 @@ Boot the Android emulator, repeat Steps 2–3. Expected: same reliable result. (
 
 - [ ] **Step 5: Record the outcome**
 
-Note the before/after (flaky → reliable) in the PR body and in the workspace `ROADMAP.md`/`BUGS.md` per the project logging rules. Save screenshots under the workspace proof dir.
+Note the before/after (flaky → reliable) in the PR body and in the workspace `ROADMAP.md`; open or update GitHub Issues for bugs per the project logging rules. Save screenshots under the workspace proof dir.
 
 ---
 

@@ -1,2 +1,0 @@
-[      58ms] [ERROR] Failed to load resource: the server responded with a status of 503 (Service Unavailable) @ http://127.0.0.1:49274/:0
-[      95ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:49274/favicon.ico:0

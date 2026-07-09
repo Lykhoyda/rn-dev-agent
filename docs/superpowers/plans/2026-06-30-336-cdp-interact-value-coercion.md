@@ -371,7 +371,7 @@ Boot the Android emulator, repeat Steps 2–3. Capture before/after screenshots 
 
 - [ ] **Step 5: Record the outcome**
 
-Note results in the PR body and the workspace `ROADMAP.md`/`BUGS.md` per the logging rules.
+Note results in the PR body and the workspace `ROADMAP.md`; open or update GitHub Issues for bugs per the logging rules.
 
 ---
 
