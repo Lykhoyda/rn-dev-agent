@@ -22,6 +22,7 @@
     "test:native:ios": "yarn workspace rn-dev-agent-ios-runner test",
     "smoke:ios": "SMOKE_PLATFORM=ios node packages/rn-dev-agent-core/test/smoke/device-smoke.ts",
     "smoke:android": "SMOKE_PLATFORM=android node packages/rn-dev-agent-core/test/smoke/device-smoke.ts",
+    "evals": "node packages/rn-dev-agent-core/test/evals/run-evals.ts",
     "check:agent-packages": "bash scripts/check-agent-package-sync.sh",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -33,8 +34,14 @@
     "@changesets/cli": "^2.27.10",
     "esbuild": "^0.28.1",
     "husky": "^9.1.7",
+    "mcp-server-tester": "patch:mcp-server-tester@npm%3A1.4.1#~/.yarn/patches/mcp-server-tester-npm-1.4.1-6564330b13.patch",
     "oxfmt": "0.55.0",
     "oxlint": "^1.70.0"
+  },
+  "dependenciesMeta": {
+    "mcp-server-tester": {
+      "built": false
+    }
   },
   "overrides": {
     "ip-address": ">=10.1.1",
