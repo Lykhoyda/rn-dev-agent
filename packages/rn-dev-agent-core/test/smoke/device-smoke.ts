@@ -89,11 +89,7 @@ function fixtureRunning(): boolean {
   }
 }
 
-async function launchFixture() {
-  // The driver owns the fixture lifecycle: launch it OURSELVES and open the
-  // session with attachOnly (the documented race-free path). Launch-at-open
-  // proved flaky on a loaded emulator — the bridge's `adb shell monkey` has a
-  // 10s timeout that a cold app on a busy host can exceed.
+function launchFixtureOnce() {
   if (PLATFORM === 'ios') {
     execFileSync('xcrun', ['simctl', 'launch', 'booted', APP_ID], {
       stdio: 'pipe',
@@ -106,12 +102,27 @@ async function launchFixture() {
       { stdio: 'pipe', timeout: 20_000 },
     );
   }
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (fixtureRunning()) return;
-    await new Promise((r) => setTimeout(r, 500));
+}
+
+async function launchFixture() {
+  // The driver owns the fixture lifecycle: launch it OURSELVES and open the
+  // session with attachOnly (the documented race-free path). Launch-at-open
+  // proved flaky on a loaded emulator — the bridge's `adb shell monkey` has a
+  // 10s timeout that a cold app on a busy host can exceed.
+  //
+  // Two launch attempts, ~30s each: a reused-but-cold CI simulator/emulator can
+  // take longer than a single short window to bring the app to foreground
+  // (device-proven: a lone slow launch tripped the old 20s deadline). The
+  // re-launch is idempotent (foregrounds an already-running app).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    launchFixtureOnce();
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (fixtureRunning()) return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
-  throw new Error(`fixture ${APP_ID} did not start within 20s of launch`);
+  throw new Error(`fixture ${APP_ID} did not start within 2x30s of launch`);
 }
 
 async function rpc(s: any, method: string, params?: unknown) {
