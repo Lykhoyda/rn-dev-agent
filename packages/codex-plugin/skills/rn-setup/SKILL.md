@@ -183,7 +183,7 @@ Both binaries present → the observe UI's live mirror uses `idb video-stream`
 loop. SessionStart auto-installs in the background (`scripts/ensure-idb.sh`);
 if `~/.rn-dev-agent/idb/install.pid` exists and its PID is alive, report
 "installing in background (log: ~/.rn-dev-agent/idb/install.log)" instead of
-MISSING. Manual install: `brew tap facebook/fb && brew install idb-companion && pipx install fb-idb`.
+MISSING. Manual install: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb`.
 
 ### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
@@ -199,14 +199,14 @@ fi
 if command -v idb_companion >/dev/null || command -v idb-companion >/dev/null; then
   echo "[OK] idb-companion installed"
 else
-  echo "[MISSING] idb-companion — install with: brew tap facebook/fb && brew install idb-companion"
+  echo "[MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion"
 fi
 ```
 
 Expected outputs:
 - **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed.
 - **Physical iOS present + idb-companion installed**: `[OK] idb-companion installed`.
-- **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew tap facebook/fb && brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
+- **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
 - **No physical devices**: two "skipping" lines. Add "Physical devices" row to the table as "N/A (no devices connected)".
 
 **WiFi debugging is not supported** automatically. Connect by USB. If users
@@ -293,7 +293,7 @@ Present results as a table:
 | CDP connection | CONNECTED | — |
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
-| idb (screen mirror fast path) | OK / INSTALLING (background) / MISSING | If MISSING: `brew tap facebook/fb && brew install idb-companion && pipx install fb-idb` (optional — mirror falls back to ~6fps simctl) |
+| idb (screen mirror fast path) | OK / INSTALLING (background) / MISSING | If MISSING: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb` (optional — mirror falls back to ~6fps simctl) |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules) / MISSING / DRIFT (repo checkout only) | Repo checkout drift fix: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |

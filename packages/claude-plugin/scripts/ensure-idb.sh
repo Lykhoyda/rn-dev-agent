@@ -4,7 +4,7 @@
 # The mirror's iOS fast path is `idb video-stream` (20-30fps MJPEG); without
 # idb it degrades to a ~6fps `simctl screenshot` loop. idb needs two pieces
 # (idb-companion lives in the facebook/fb tap, not homebrew-core):
-#   brew tap facebook/fb && brew install idb-companion   (the macOS daemon)
+#   brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion   (the macOS daemon)
 #   pipx install fb-idb                                   (the Python CLI client)
 #
 # SessionStart contract (GH#252/B196: session start must be BOUNDED): this
@@ -49,7 +49,7 @@ if [ "${1:-}" = "--install-worker" ]; then
   mkdir -p "$STATE_DIR"
   status=ok
   if ! has_companion; then
-    brew tap facebook/fb && brew install idb-companion || status=failed
+    brew tap facebook/fb && { brew trust facebook/fb >/dev/null 2>&1 || true; } && brew install idb-companion || status=failed
   fi
   if ! command -v idb >/dev/null 2>&1; then
     if ! command -v pipx >/dev/null 2>&1; then
@@ -75,7 +75,7 @@ fi
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "idb not installed (optional — enables 20-30fps screen mirroring instead of ~6fps)."
-  echo "Install manually: brew tap facebook/fb && brew install idb-companion && pipx install fb-idb"
+  echo "Install manually: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb"
   exit 0
 fi
 
@@ -97,14 +97,14 @@ if [ -f "$MARKER" ]; then
   read -r LAST_STATUS LAST_TS < "$MARKER" 2>/dev/null || LAST_STATUS=""
   NOW="$(date +%s)"
   if [ "$LAST_STATUS" = "failed" ] && [ -n "${LAST_TS:-}" ] && [ $((NOW - LAST_TS)) -lt "$BACKOFF_SECS" ]; then
-    echo "idb install failed recently — retrying after backoff (manual: brew tap facebook/fb && brew install idb-companion && pipx install fb-idb, log: $LOG)"
+    echo "idb install failed recently — retrying after backoff (manual: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb, log: $LOG)"
     exit 0
   fi
 fi
 
 if [ "${RN_AGENT_IDB_DRY_SPAWN:-}" = "1" ]; then
   echo "spawn --install-worker" >> "$STATE_DIR/spawn.log"
-  echo "idb missing — installing in background (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
+  echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
   exit 0
 fi
 
@@ -112,5 +112,5 @@ nohup bash "$0" --install-worker >> "$LOG" 2>&1 < /dev/null &
 WORKER_PID=$!
 disown "$WORKER_PID" 2>/dev/null || true
 echo "$WORKER_PID" > "$PIDFILE"
-echo "idb missing — installing in background (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
+echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
 exit 0

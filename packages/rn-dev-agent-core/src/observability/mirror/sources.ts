@@ -64,10 +64,10 @@ export interface SpawnedLike {
 }
 
 export const SIMCTL_HINT =
-  'install idb for smoother mirroring (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb)';
+  'install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)';
 
 const IDB_HINT =
-  'idb not found — brew tap facebook/fb && brew install idb-companion && pipx install fb-idb';
+  'idb not found — brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb';
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

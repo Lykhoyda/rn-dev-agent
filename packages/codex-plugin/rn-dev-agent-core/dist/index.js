@@ -58250,8 +58250,8 @@ var RestartGate = class {
     return this.exits.length < this.limit;
   }
 };
-var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb)";
-var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew install idb-companion && pipx install fb-idb";
+var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
+var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
 var sleep5 = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
 var scheduleAfter = (fn, delayMs) => {

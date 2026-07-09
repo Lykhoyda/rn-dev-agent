@@ -59842,8 +59842,8 @@ var init_sources = __esm({
         return this.exits.length < this.limit;
       }
     };
-    SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew install idb-companion && pipx install fb-idb)";
-    IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew install idb-companion && pipx install fb-idb";
+    SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
+    IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
     sleep5 = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
     scheduleAfter = (fn, delayMs) => {
