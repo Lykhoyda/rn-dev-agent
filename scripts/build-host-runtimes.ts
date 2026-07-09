@@ -72,19 +72,23 @@ if (!existsSync(esbuild)) {
 
 const corePackage = JSON.parse(readFileSync(corePackageJson, 'utf8'));
 
-function copyCleanDir(source, target) {
+function copyCleanDir(source, target, excludeSubdirs = []) {
   rmSync(target, { recursive: true, force: true });
   mkdirSync(dirname(target), { recursive: true });
-  cpSync(source, target, { recursive: true });
+  const excluded = excludeSubdirs.map((sub) => join(source, sub));
+  cpSync(source, target, {
+    recursive: true,
+    // Prune build output at copy time: DerivedData's compilation cache is a
+    // hardlink/clone-dedup'd store, so copying it materializes multi-GB of
+    // transient data (ENOSPC) even when the source du reads small.
+    filter: (src) => !excluded.includes(src),
+  });
 }
 
-function stripRunnerBuildOutput(runnerCopyRoot, runnerName) {
-  const junk =
-    runnerName === 'rn-fast-runner'
-      ? [join(runnerCopyRoot, 'build'), join(runnerCopyRoot, 'RnFastRunner', 'DerivedData')]
-      : [join(runnerCopyRoot, '.gradle'), join(runnerCopyRoot, 'app', 'build')];
-  for (const path of junk) rmSync(path, { recursive: true, force: true });
-}
+const RUNNER_BUILD_OUTPUT = {
+  'rn-fast-runner': ['build', join('RnFastRunner', 'DerivedData')],
+  'rn-android-runner': ['.gradle', join('app', 'build')],
+};
 
 // Bundle each runtime entry ONCE into the Codex package, then byte-copy into
 // the Claude package — the two host runtimes are identical by construction
@@ -154,8 +158,7 @@ for (const hostRoot of [codexPluginRoot, claudePluginRoot]) {
   );
   for (const runnerName of ['rn-fast-runner', 'rn-android-runner']) {
     const target = join(hostRoot, 'scripts', runnerName);
-    copyCleanDir(join(repoRoot, 'packages', runnerName), target);
-    stripRunnerBuildOutput(target, runnerName);
+    copyCleanDir(join(repoRoot, 'packages', runnerName), target, RUNNER_BUILD_OUTPUT[runnerName]);
   }
 }
 
