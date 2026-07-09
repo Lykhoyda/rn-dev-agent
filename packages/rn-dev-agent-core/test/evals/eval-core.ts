@@ -65,3 +65,94 @@ export function parseEvalYaml(rawText: string, vars: Record<string, string>): Ev
   });
   return { models: evals.models ?? [], maxSteps: evals.max_steps, fixtures };
 }
+
+export interface ToolCall {
+  name: string;
+  isError: boolean;
+}
+
+export interface TranscriptOutcome {
+  toolCalls: ToolCall[];
+  finalText: string;
+  subtype: string;
+  resultIsError: boolean;
+  numTurns: number;
+  totalCostUsd: number;
+}
+
+interface ContentBlock {
+  type?: string;
+  id?: string;
+  name?: string;
+  text?: string;
+  tool_use_id?: string;
+  is_error?: boolean;
+}
+
+export function parseTranscript(streamJson: string): TranscriptOutcome {
+  const calls = new Map<string, ToolCall>();
+  let result:
+    | { subtype?: string; is_error?: boolean; num_turns?: number; total_cost_usd?: number; result?: unknown }
+    | undefined;
+  for (const raw of streamJson.split('\n')) {
+    const s = raw.trim();
+    if (!s.startsWith('{')) continue;
+    let e: { type?: string; message?: { content?: ContentBlock[] | string } };
+    try {
+      e = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (e.type === 'assistant' && Array.isArray(e.message?.content)) {
+      for (const b of e.message.content) {
+        if (b?.type === 'tool_use' && b.id && b.name) calls.set(b.id, { name: b.name, isError: false });
+      }
+    } else if (e.type === 'user' && Array.isArray(e.message?.content)) {
+      for (const b of e.message.content) {
+        if (b?.type === 'tool_result' && b.tool_use_id && b.is_error === true) {
+          const call = calls.get(b.tool_use_id);
+          if (call) call.isError = true;
+        }
+      }
+    } else if (e.type === 'result') {
+      result = e as typeof result;
+    }
+  }
+  if (!result) throw new Error('claude transcript: no result event (run died mid-flight)');
+  return {
+    toolCalls: [...calls.values()],
+    finalText: typeof result.result === 'string' ? result.result : '',
+    subtype: result.subtype ?? 'unknown',
+    resultIsError: result.is_error === true,
+    numTurns: result.num_turns ?? 0,
+    totalCostUsd: result.total_cost_usd ?? 0,
+  };
+}
+
+// Tool names arrive prefixed (mcp__<server>__<tool>); fixture `required`
+// lists bare tool names. ToolSearch is the deferred-tool loader, never a
+// fixture-satisfying call.
+export function stripMcpPrefix(name: string): string {
+  return name.replace(/^mcp__.+?__/, '');
+}
+
+export interface FixtureCheck {
+  pass: boolean;
+  reasons: string[];
+}
+
+export function checkRequired(outcome: TranscriptOutcome, required: string[]): FixtureCheck {
+  const reasons: string[] = [];
+  for (const req of required) {
+    const hits = outcome.toolCalls.filter(
+      (c) => c.name !== 'ToolSearch' && stripMcpPrefix(c.name) === req,
+    );
+    if (hits.length === 0) {
+      const actual = outcome.toolCalls.map((c) => stripMcpPrefix(c.name)).join(', ') || 'none';
+      reasons.push(`required tool "${req}" was not called (actual: ${actual})`);
+    } else if (!hits.some((c) => !c.isError)) {
+      reasons.push(`required tool "${req}" was called but every call errored`);
+    }
+  }
+  return { pass: reasons.length === 0, reasons };
+}
