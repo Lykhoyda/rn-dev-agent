@@ -3,9 +3,11 @@
 On-demand evals that measure how a real LLM **uses** the rn-dev-agent MCP tool
 surface — not whether the tools work (that is the Phase B device smoke), but
 whether a model picks the right tool, stays honest when a call fails, and can
-read our payloads. They run `mcp-server-tester` against the real server
-(`packages/rn-dev-agent-core/dist/supervisor.js`) with **no device connected**,
-and gate on a committed per-model baseline.
+read our payloads. Each fixture runs as a **headless Claude Code call**
+(`claude -p`) against the real server
+(`packages/rn-dev-agent-core/dist/supervisor.js`) with **no device connected**
+— **subscription-funded, no API key** — and gates on a committed per-model
+baseline.
 
 ## The two families
 
@@ -29,30 +31,44 @@ Both families live as `*.eval.yaml` here and share one baseline.
 ### On demand in CI (canonical)
 
 Dispatch the **LLM evals** workflow (`.github/workflows/llm-evals.yml`) —
-`workflow_dispatch` only. It requires the `ANTHROPIC_API_KEY` repo secret; a
-missing secret is a **RED run with an actionable message**, never a silent
-skip. Inputs: `model` (default `claude-haiku-4-5-20251001`), `filter` (default
-empty). Est. **$1–3 per run** on the default Haiku model.
+`workflow_dispatch` only. It requires the `CLAUDE_CODE_OAUTH_TOKEN` repo secret
+(mint one with `claude setup-token`, needs a Claude subscription); a missing
+secret is a **RED run with an actionable message**, never a silent skip.
+Inputs: `model` (default `claude-haiku-4-5-20251001`), `filter` (default
+empty). Marginal cost **~$0** — the run draws on the subscription's rate-limit
+weight, not per-token billing (the summary still reports the API-equivalent
+dollar figure informationally).
 
 ### Locally
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-… corepack yarn evals
+corepack yarn evals
 ```
 
 `corepack yarn evals` runs `packages/rn-dev-agent-core/test/evals/run-evals.ts`
 (Node 22 type stripping — no build step; the server is the committed `dist/`).
-It spawns the tester per YAML, retries any **file** that had a failure once,
+It needs a **logged-in `claude` CLI** and **no booted simulator/emulator** — a
+preflight refuses when a device is connected (evals must be device-free;
+`EVAL_ALLOW_DEVICE=1` allows an informational, non-gating run). It runs each
+fixture as a `claude -p` call, retries any **file** that had a failure once,
 writes per-YAML `*.junit.xml` + a `summary.md` into `results/` (gitignored),
-then runs the baseline compare.
+then runs the baseline compare. Your local CLI version may drift from the CI
+pin (`@anthropic-ai/claude-code@2.1.205`); **gating runs are canonical in CI**.
+
+**Isolation:** fixtures run with `--setting-sources ""`, `--tools ToolSearch`,
+`--strict-mcp-config`, and an empty scratch cwd, so your local `CLAUDE.md` /
+plugins / MCP config do **not** leak into a run.
 
 Environment:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — (required) | Anthropic key for both the model under test and the llm-judge. |
-| `EVAL_MODEL` | `claude-haiku-4-5-20251001` | Model under test. |
-| `EVAL_FILTER` | empty | Substring on eval YAML file names. **A filtered run is INFORMATIONAL** — the baseline gate is SKIPPED and the run exits 0, because comparing a partial result set against the full baseline would count every omitted fixture as a regression. |
+| `EVAL_MODEL` | `claude-haiku-4-5-20251001` | Model under test (claude CLI `--model`). |
+| `EVAL_JUDGE_MODEL` | `claude-haiku-4-5-20251001` | Judge model for `llm-judge` scorers. |
+| `EVAL_FILTER` | empty | Substring on eval YAML file names; filtered runs are **INFORMATIONAL** — the baseline gate is SKIPPED and the run exits 0, because comparing a partial result set against the full baseline would count every omitted fixture as a regression. |
+| `EVAL_FIXTURE_TIMEOUT_MS` | `180000` | Wall-clock bound per fixture run (no `--max-turns` on the pinned CLI; YAML `max_steps` is advisory). |
+| `EVAL_ALLOW_DEVICE` | unset | `1` = run despite a booted device — informational only, gate skipped. |
+| `CLAUDE_BIN` | `claude` | Claude CLI binary override. |
 
 ## Baseline semantics
 
@@ -71,19 +87,10 @@ node packages/rn-dev-agent-core/test/evals/compare-baseline.ts \
 It **refuses to enshrine failing fixtures** (an all-red first run must not
 become a green gate) unless you pass `--allow-failures` deliberately, justified
 in the PR. Because the baseline is per-model, re-baseline whenever you change
-`EVAL_MODEL`.
-
-## The mcp-server-tester Yarn patch
-
-`mcp-server-tester@1.4.1` hardcoded the retired judge model
-`claude-3-haiku-20240307`. A committed Yarn `patch:`
-(`.yarn/patches/mcp-server-tester-npm-1.4.1-*.patch`) swaps it (and the config
-default) to `claude-haiku-4-5-20251001`. A plain `corepack yarn install
---immutable` from the repo root applies it — no extra step.
-
-The **judge model ≠ the eval model**: the patch pins the judge; `EVAL_MODEL`
-(substituted into each YAML's `models`) is the model under test. They are
-independent knobs.
+`EVAL_MODEL`. The baseline's `testerVersion` now records the **claude CLI
+version** the run used (not a tester package version). Only capture a baseline
+from a **non-informational** run — a `EVAL_FILTER`ed or `EVAL_ALLOW_DEVICE=1`
+run skips the gate and must never become the committed baseline.
 
 ## Authoring fixtures
 
