@@ -8,7 +8,7 @@ Published users install through the Claude Code marketplace:
 
 ```bash
 /plugin marketplace add Lykhoyda/rn-dev-agent
-/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
+/plugin install rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
 
