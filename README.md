@@ -32,7 +32,19 @@ root directly, use `/path/to/rn-dev-agent/packages/claude-plugin`.
 
 ### Codex
 
-Local source path: `/path/to/rn-dev-agent/packages/codex-plugin`.
+Install from the marketplace (recommended):
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/codex-plugin/`, and the installed plugin is fully self-contained
+(bundled MCP runtime, native runner sources, runner manifest).
+
+For a local checkout instead, register the package directory
+`/path/to/rn-dev-agent/packages/codex-plugin`.
 
 This checkout ships a Codex package in `packages/codex-plugin/` with
 `.codex-plugin/plugin.json`, `.mcp.json`, package-local shared skill adapters,

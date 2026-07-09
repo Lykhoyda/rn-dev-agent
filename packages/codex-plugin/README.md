@@ -2,7 +2,20 @@
 
 This package owns the Codex host boundary for rn-dev-agent.
 
-## Installation Path
+## Installation
+
+Install from the marketplace (recommended):
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/codex-plugin/`, and the installed plugin is fully self-contained
+(bundled MCP runtime, native runner sources, runner manifest).
+
+## Local Installation Path
 
 Local Codex installs should point at this package directory:
 

@@ -178,6 +178,7 @@ for path in \
   package.json \
   yarn.lock \
   .claude-plugin/marketplace.json \
+  .agents/plugins/marketplace.json \
   .changeset/config.json \
   .yarnrc.yml \
   "$EXPECTED_YARN_PATH" \
@@ -368,6 +369,9 @@ expect_jq "packages/claude-plugin/plugin.json" \
 expect_jq "packages/claude-plugin/.claude-plugin/plugin.json" \
   '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"' \
   "Claude plugin manifest must spawn the package-local bundled supervisor (installs copy only the package dir)"
+expect_jq ".agents/plugins/marketplace.json" \
+  '.name == "rn-dev-agent" and (.plugins[] | select(.name == "rn-dev-agent") | .source.source == "local" and .source.path == "./packages/codex-plugin")' \
+  "Codex marketplace manifest must resolve the package-owned Codex plugin"
 expect_jq ".claude-plugin/marketplace.json" \
   '.plugins[] | select(.name == "rn-dev-agent") | .source == "./packages/claude-plugin"' \
   "root Claude marketplace must point at the package-owned Claude plugin"

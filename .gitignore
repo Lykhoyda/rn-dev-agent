@@ -62,3 +62,6 @@ packages/rn-dev-agent-core/eval/
 test-fixtures/ios-fixture/build/
 test-fixtures/android-fixture/.gradle/
 test-fixtures/android-fixture/**/build/
+
+# Playwright MCP session artifacts (screenshots/snapshots from browser automation)
+.playwright-mcp/

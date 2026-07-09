@@ -44,7 +44,18 @@ plugin package root directly.
 
 ### Codex
 
-Codex uses a separate package directory:
+Install from the marketplace (recommended):
+
+```bash
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent
+```
+
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/codex-plugin/`, and the installed plugin is fully self-contained
+(bundled MCP runtime, native runner sources, runner manifest).
+
+For a local checkout instead, Codex uses a separate package directory:
 
 ```text
 /path/to/rn-dev-agent/packages/codex-plugin
