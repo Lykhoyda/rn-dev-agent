@@ -79,6 +79,8 @@ Behavior-only Swift change: no wire-shape change (`PROTOCOL_VERSION` unchanged),
 
 **Amendment (2026-07-09, multi-LLM plan review):** settled — no code change. The "runner version constant" idea is non-functional: the version the gate compares is env-passed at spawn (`RN_PLUGIN_VERSION` → `RunnerEnv.pluginVersion()`), not compiled into the artifact, so it cannot detect artifact staleness. Rollout is safe anyway by construction: plugin releases install to per-version cache dirs, and each release's runner artifact is built from that release's sources by `runner-artifacts.yml`. The residual hole is release-process, not runtime (a mislabeled prebuilt artifact would pass the gate) — covered by manifest/artifact evidence in the PR checklist. Dev checkouts must delete `DerivedData` after Swift edits.
 
+**Amendment (2026-07-09, host-runtime regeneration — required):** the canonical runner source is `packages/rn-fast-runner/`, but marketplace installs copy the host package directories, which carry their own generated runner copies under `packages/claude-plugin/scripts/rn-fast-runner/` and `packages/codex-plugin/scripts/rn-fast-runner/`. After editing the canonical Swift, you MUST run `corepack yarn build:host-runtimes` and commit the regenerated host copies — otherwise the fix ships only in the source package and the installed plugins keep the stale runner. Never hand-edit the generated copies. This is a rollout requirement, not optional.
+
 ### 6. Testing
 
 - **Swift unit tests** (Story 06 Phase A native-test rig) for the new predicate: on-screen enabled → `true`; disabled → `false`; center off-viewport → `false`; empty/null frame → `false`. Plus `shouldInclude` cases pinning that filtering is hittable-independent.
@@ -97,7 +99,7 @@ None new — this is a pure computation change inside snapshot capture. No new f
 ## Out of scope
 
 - No coordinate-tap gate changes (no gate refuses on `hittable`; Swift `activateElement` fallback already exists).
-- No Android behavior change unless the parity check finds the same defect.
+- No Android behavior change on this branch. If the parity check finds a defect, it is filed as a separate follow-up issue — never fixed here.
 - No `device_find` ranking-weight retuning.
 - No changes to the `XCUIElement.isHittable`-based collapsed-tab fallback.
 - Story 16 (#409) quality verdicts — related honesty work, separate story.

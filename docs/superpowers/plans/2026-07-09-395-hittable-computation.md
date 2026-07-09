@@ -542,9 +542,9 @@ Close the wizard afterwards (tap `wizard-back-btn` center).
 
 From the same two screens, capture the DEFAULT snapshot (`{"command":"snapshot","interactiveOnly":true,...}` — no `raw`) and compare node counts against the pre-fix baselines recorded during investigation: Tasks screen 127 full nodes, wizard 45 nodes. Expected: within a few nodes of baseline (the decoupling may EXCLUDE a handful of trailing contentless overlay wrappers that the old code included via `hasContent || hittable`; counts must not grow).
 
-- [ ] **Step 6: Bridge-path verification (multi-LLM review SHOULD-FIX: exercise `updateRefMapFromFlat` + live ranking, not just raw curl)**
+- [ ] **Step 6: TS-client mapping + live ranking verification (flag survives the bridge; `rankSnapshotNodes` sees it)**
 
-The curl checks bypass the TS client mapping. Drive one snapshot through the checkout `dist` so the flat-node mapping, ref-map refresh, and `rankSnapshotNodes` all see live data. Kill the manual runner first so the dist client spawns its own from the same rebuilt DerivedData:
+The curl checks bypass the TS client mapping. Drive one snapshot through the checkout `dist` so the flat-node mapping and `rankSnapshotNodes` see live data. This step covers the client mapping + ranking path only — it does NOT exercise the device-wrapper's `updateRefMapFromFlat`/`getCachedScreenRect` refresh (that requires the wrapper entrypoint; see the caveat below, and note the #517 screen-rect union is already covered by the `story-06-screenrect-system-windows` TS unit tests). Kill the manual runner first so the dist client spawns its own from the same rebuilt DerivedData:
 
 ```bash
 pkill -f RnFastRunnerUITests-Runner || true
