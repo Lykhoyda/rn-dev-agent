@@ -81,7 +81,7 @@ export function collectResults(resultsDir: string): Record<string, Verdict> {
 
 export function writeBaseline(
   current: Record<string, Verdict>,
-  opts: { model: string; allowFailures: boolean; path: string },
+  opts: { model: string; allowFailures: boolean; path: string; runnerVersion?: string },
 ): Baseline {
   // A baseline is a promise that these fixtures pass. Refuse to enshrine
   // failures silently (an all-red first run must not become a meaningless
@@ -99,7 +99,7 @@ export function writeBaseline(
   }
   const baseline: Baseline = {
     model: opts.model,
-    testerVersion: '1.4.1',
+    testerVersion: opts.runnerVersion ?? 'unknown',
     capturedAt: new Date().toISOString(),
     fixtures: current,
   };
@@ -124,11 +124,15 @@ function cliMain(): void {
 
   if (args.includes('--write-baseline')) {
     const model = args[args.indexOf('--model') + 1] ?? 'unknown';
+    const runnerVersion = args.includes('--runner-version')
+      ? args[args.indexOf('--runner-version') + 1]
+      : undefined;
     try {
       writeBaseline(current, {
         model,
         allowFailures: args.includes('--allow-failures'),
         path: BASELINE_PATH,
+        runnerVersion,
       });
     } catch (e) {
       console.error((e as Error).message);
