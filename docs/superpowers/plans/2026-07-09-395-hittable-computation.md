@@ -76,14 +76,21 @@ final class SnapshotPredicatesTests: XCTestCase {
     XCTAssertTrue(computeSnapshotHittable(enabled: true, frame: frame, viewport: .infinite))
   }
 
-  func testCenterExactlyOnViewportEdgeCounts() {
+  // Half-open viewport bounds [min, max): a center exactly on the max edge
+  // taps outside the screen, so it is deterministically not hittable.
+  func testCenterOnViewportMaxEdgeIsNotHittable() {
     let frame = CGRect(x: 302, y: 791, width: 200, height: 49)
+    XCTAssertFalse(computeSnapshotHittable(enabled: true, frame: frame, viewport: viewport))
+  }
+
+  func testCenterOnViewportMinEdgeIsHittable() {
+    let frame = CGRect(x: -180, y: 790, width: 360, height: 49)
     XCTAssertTrue(computeSnapshotHittable(enabled: true, frame: frame, viewport: viewport))
   }
 }
 ```
 
-(`testCenterExactlyOnViewportEdgeCounts`: center x = 302+100 = 402 = viewport max-x; `CGRect.contains` includes the max edge point only when the point equals origin+size on one axis — this documents actual `CGRect.contains` behavior. If the assertion fails on this Xcode, flip it to `XCTAssertFalse` and keep the test: its job is to pin the edge behavior, whichever way CGRect resolves it.)
+(Edge policy is explicit, not delegated to `CGRect.contains`: the implementation uses a half-open `[min, max)` bounds check — inclusive min edge, exclusive max edge, the pixel-space convention — so the tests assert deterministically on every Xcode. Center x = 302+100 = 402 = viewport max-x → not hittable; center x = -180+180 = 0 = viewport min-x → hittable.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
