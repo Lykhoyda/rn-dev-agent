@@ -71,9 +71,13 @@ Result: snapshot shapes and sizes stay as they are today (modulo the rare traili
 
 `rn-android-runner` also emits `hittable` (`rn-android-runner-client.ts:969` maps it). Read the Kotlin source and device-check a raw snapshot on the emulator. Expected: UIAutomator's `isVisibleToUser`-backed value is already honest → no change. If the Android runner turns out to compute its own occlusion heuristic with the same defect, fix it with the same predicate in a follow-up commit within this branch (same semantics statement).
 
+**Amendment (2026-07-09, multi-LLM plan review):** the code read found Android has no occlusion defect, but its two `hittable` sources are internally inconsistent — the snapshot path maps UIAutomator's `visible-to-user` while the find-path `uiObjectToJson` maps `isEnabled`; neither equals "enabled AND center-on-screen". Android is explicitly OUT OF SCOPE for this change; cross-platform semantics alignment is a filed follow-up issue, not a claim of existing parity.
+
 ### 5. Rollout / artifact staleness
 
 Behavior-only Swift change: no wire-shape change (`PROTOCOL_VERSION` unchanged), no new command verbs (the #418 `missing-commands` gate won't trigger). Confirm what the #383 version gate keys on: if a prebuilt DerivedData artifact would keep serving the old flag silently after plugin upgrade, bump the runner version constant the liveness gate compares so the standard "runner upgraded (protocol/version mismatch)" restart+rebuild path picks the change up. This must be settled in the implementation plan, not left to chance.
+
+**Amendment (2026-07-09, multi-LLM plan review):** settled — no code change. The "runner version constant" idea is non-functional: the version the gate compares is env-passed at spawn (`RN_PLUGIN_VERSION` → `RunnerEnv.pluginVersion()`), not compiled into the artifact, so it cannot detect artifact staleness. Rollout is safe anyway by construction: plugin releases install to per-version cache dirs, and each release's runner artifact is built from that release's sources by `runner-artifacts.yml`. The residual hole is release-process, not runtime (a mislabeled prebuilt artifact would pass the gate) — covered by manifest/artifact evidence in the PR checklist. Dev checkouts must delete `DerivedData` after Swift edits.
 
 ### 6. Testing
 
