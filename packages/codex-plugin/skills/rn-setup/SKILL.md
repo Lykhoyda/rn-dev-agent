@@ -58,13 +58,13 @@ Codex packages ship a bundled runtime under `rn-dev-agent-core/dist/`; no
 workspace install is needed in an installed plugin. If missing in a repository
 checkout, rebuild the package runtime from the repository root:
 ```bash
-corepack yarn build:codex-runtime
+corepack yarn build:host-runtimes
 ```
 Then re-check the two `test -f` paths above.
 
 If it still fails, give the user manual instructions:
 1. In a repo checkout: `corepack yarn install --immutable`
-2. In a repo checkout: `corepack yarn build:codex-runtime`
+2. In a repo checkout: `corepack yarn build:host-runtimes`
 3. If ENOENT: the plugin directory may be corrupt — reinstall: `/plugin install rn-dev-agent@Lykhoyda-rn-dev-agent`
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)

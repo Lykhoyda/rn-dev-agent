@@ -17,17 +17,24 @@ reports
 # Vendored native drivers (installed by agent-device)
 drivers/
 
-# Xcode build artifacts for the imported iOS runner
+# Xcode build artifacts for the imported iOS runner (source package + the
+# generated host-package copies, which users may self-build in place)
 packages/rn-fast-runner/build/
 packages/rn-fast-runner/**/xcuserdata/
 packages/rn-fast-runner/**/DerivedData/
 packages/rn-fast-runner/**/project.xcworkspace/xcshareddata/
-packages/codex-plugin/scripts/rn-fast-runner/**/project.xcworkspace/xcshareddata/
+packages/*/scripts/rn-fast-runner/build/
+packages/*/scripts/rn-fast-runner/**/xcuserdata/
+packages/*/scripts/rn-fast-runner/**/DerivedData/
+packages/*/scripts/rn-fast-runner/**/project.xcworkspace/xcshareddata/
 
-# Gradle build artifacts for the imported Android runner
+# Gradle build artifacts for the imported Android runner (source + host copies)
 packages/rn-android-runner/.gradle/
 packages/rn-android-runner/.kotlin/
 packages/rn-android-runner/**/build/
+packages/*/scripts/rn-android-runner/.gradle/
+packages/*/scripts/rn-android-runner/.kotlin/
+packages/*/scripts/rn-android-runner/**/build/
 
 # Local worktrees for isolated feature work
 .worktrees/

@@ -77,7 +77,7 @@ than a manual walk-through, and gives you a deterministic re-run after the
 fix. Codified in `feedback_execute_artifacts_before_manual.md`.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/learned-actions.js" \
+node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
   --json --section b --filter "<feature-or-screen-keyword>" \
   --workspace-root "$PWD" --memory-cwd "$PWD" \
   > /tmp/learned-actions.json

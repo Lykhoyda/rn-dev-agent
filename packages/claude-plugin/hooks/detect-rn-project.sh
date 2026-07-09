@@ -23,9 +23,18 @@ fi
 if [ "$has_rn_config" = true ]; then
   # Resolve plugin root (hooks/ is one level down from plugin root)
   PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  REPO_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
-  CORE_ROOT="$(cd "$PLUGIN_ROOT/../rn-dev-agent-core" && pwd)"
-  SCRIPT_ROOT="$REPO_ROOT/scripts"
+  # Self-contained package: marketplace installs copy ONLY the plugin directory
+  # (no repo siblings), so the bundled runtime and helper scripts ship inside
+  # the package (scripts/build-host-runtimes.ts). Dev checkouts have both
+  # layouts; package-local wins so the hook behaves like an installed plugin.
+  SCRIPT_ROOT="$PLUGIN_ROOT/scripts"
+  CORE_ROOT="$PLUGIN_ROOT/rn-dev-agent-core"
+  if [ ! -f "$SCRIPT_ROOT/ensure-cdp-deps.sh" ]; then
+    SCRIPT_ROOT="$PLUGIN_ROOT/../../scripts"
+  fi
+  if [ ! -d "$CORE_ROOT" ]; then
+    CORE_ROOT="$PLUGIN_ROOT/../rn-dev-agent-core"
+  fi
 
   # Detect plugin upgrade (GH #30, D605). Advice order per GH #419: a manual
   # /mcp reconnect is field-proven to restore a dead MCP server without a full

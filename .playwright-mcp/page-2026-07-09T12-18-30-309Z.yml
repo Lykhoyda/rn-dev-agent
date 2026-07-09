@@ -1,0 +1,113 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: Observe
+      - generic [ref=e7]: rn-dev-agent
+    - generic [ref=e8]: live
+    - generic "com.rndevagent.testapp" [ref=e58]: appcom.rndevagent.testapp
+    - generic [ref=e10]:
+      - generic [ref=e59]:
+        - generic [ref=e60]: 3:23
+        - generic [ref=e61]: session
+      - generic [ref=e11]:
+        - generic [ref=e12]: "8"
+        - generic [ref=e13]: calls
+      - generic [ref=e14]:
+        - generic [ref=e15]: "3"
+        - generic [ref=e16]: errors
+  - generic [ref=e17]:
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - button "interaction 1" [ref=e62] [cursor=pointer]:
+          - text: interaction
+          - generic [ref=e22]: "1"
+        - button "introspection 1" [ref=e63] [cursor=pointer]:
+          - text: introspection
+          - generic [ref=e25]: "1"
+        - button "navigation 0" [ref=e26] [cursor=pointer]:
+          - text: navigation
+          - generic [ref=e28]: "0"
+        - button "lifecycle 5" [ref=e64] [cursor=pointer]:
+          - text: lifecycle
+          - generic [ref=e31]: "5"
+        - button "testing 0" [ref=e32] [cursor=pointer]:
+          - text: testing
+          - generic [ref=e34]: "0"
+        - button "other 1" [ref=e65] [cursor=pointer]:
+          - text: other
+          - generic [ref=e37]: "1"
+        - button "✗ errors" [ref=e38] [cursor=pointer]
+        - textbox "search tool or summary…" [ref=e39]
+      - generic [ref=e41]:
+        - generic [ref=e67] [cursor=pointer]:
+          - generic [ref=e68]: 14:15:06
+          - generic [ref=e69]: life
+          - generic [ref=e70]: cdp_status
+          - generic [ref=e71]: cdp_status ✗
+          - generic [ref=e72]: ✗
+          - generic [ref=e73]: 169ms
+        - generic [ref=e75] [cursor=pointer]:
+          - generic [ref=e76]: 14:15:06
+          - generic [ref=e77]: life
+          - generic [ref=e78]: observe
+          - generic [ref=e79]: observe
+          - generic [ref=e80]: ✓
+          - generic [ref=e81]: 0ms
+        - generic [ref=e83] [cursor=pointer]:
+          - generic [ref=e84]: 14:15:39
+          - generic [ref=e85]: life
+          - generic [ref=e86]: cdp_status
+          - generic [ref=e87]: cdp_status ✗
+          - generic [ref=e88]: ✗
+          - generic [ref=e89]: 23ms
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]: 14:16:47
+          - generic [ref=e93]: intr
+          - generic [ref=e94]: device_snapshot
+          - generic [ref=e95]: device_snapshot
+          - generic [ref=e96]: ✓
+          - generic [ref=e97]: 20014ms
+        - generic [ref=e99] [cursor=pointer]:
+          - generic [ref=e100]: 14:16:55
+          - generic [ref=e101]: othe
+          - generic [ref=e102]: device_find
+          - generic [ref=e103]: device_find http://192.168.178.33:8081 ✗
+          - generic [ref=e104]: ✗
+          - generic [ref=e105]: 1613ms
+        - generic [ref=e107] [cursor=pointer]:
+          - generic [ref=e108]: 14:17:06
+          - generic [ref=e109]: inte
+          - generic [ref=e110]: device_press
+          - generic [ref=e111]: device_press e16
+          - generic [ref=e112]: ✓
+          - generic [ref=e113]: 5510ms
+        - generic [ref=e115] [cursor=pointer]:
+          - generic [ref=e116]: 14:17:32
+          - generic [ref=e117]: life
+          - generic [ref=e118]: cdp_status
+          - generic [ref=e119]: cdp_status
+          - generic [ref=e120]: ✓
+          - generic [ref=e121]: 4404ms
+        - generic [ref=e123] [cursor=pointer]:
+          - generic [ref=e124]: 14:17:40
+          - generic [ref=e125]: life
+          - generic [ref=e126]: observe
+          - generic [ref=e127]: observe
+          - generic [ref=e128]: ✓
+          - generic [ref=e129]: 9ms
+    - generic [ref=e45]:
+      - generic [ref=e46]: Device
+      - generic [ref=e48]:
+        - img "live device mirror"
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - button "route" [ref=e51] [cursor=pointer]
+        - button "store" [ref=e52] [cursor=pointer]
+        - button "tree" [ref=e53] [cursor=pointer]
+        - button "actions" [active] [ref=e54] [cursor=pointer]
+        - button "e2e" [ref=e55] [cursor=pointer]
+      - generic [ref=e135]:
+        - generic [ref=e136]: Actions
+        - generic [ref=e137]:
+          - generic [ref=e138]: No learned actions
+          - generic [ref=e139]: Save a verified flow with cdp_record_test_save_as_action and it appears here.

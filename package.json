@@ -9,9 +9,9 @@
   ],
   "scripts": {
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix && yarn build:codex-runtime",
+    "version-packages": "changeset version && node scripts/sync-plugin-manifest.mjs && bash scripts/sync-versions.sh --fix && yarn build:host-runtimes",
     "build:core": "yarn workspace rn-dev-agent-core build",
-    "build:codex-runtime": "yarn build:core && node scripts/build-codex-runtime.ts",
+    "build:host-runtimes": "yarn build:core && node scripts/build-host-runtimes.ts",
     "build:docs": "yarn workspace rn-dev-agent-docs build",
     "docs:generate": "yarn workspace rn-dev-agent-docs generate",
     "release-core": "yarn workspace rn-dev-agent-core npm publish",

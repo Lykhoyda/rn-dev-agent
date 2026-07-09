@@ -56,7 +56,7 @@
     "cdp": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/supervisor.js"
+        "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"
       ]
     }
   }

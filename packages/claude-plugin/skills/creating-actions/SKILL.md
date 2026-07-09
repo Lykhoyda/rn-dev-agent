@@ -23,7 +23,7 @@ An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<i
 Before authoring anything, check what already exists:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/learned-actions.js" --json --section b \
+node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" --json --section b \
   --workspace-root "$PWD" --memory-cwd "$PWD" --filter <keyword>
 ```
 

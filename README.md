@@ -274,7 +274,7 @@ cd rn-dev-agent
 corepack enable
 corepack yarn install --immutable
 corepack yarn workspace rn-dev-agent-core build
-corepack yarn build:codex-runtime
+corepack yarn build:host-runtimes
 ```
 
 Claude Code local path: `claude --plugin-dir /path/to/rn-dev-agent`.

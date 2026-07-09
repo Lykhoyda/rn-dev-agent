@@ -50,7 +50,7 @@ Example calls:
    `.rn-agent/actions/` directly):
    ```bash
    ACTION_NAME="<first-arg>"
-   RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/learned-actions.js" \
+   RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
      --json --section b \
      --workspace-root "$PWD" --memory-cwd "$PWD" \
      --filter "$ACTION_NAME")

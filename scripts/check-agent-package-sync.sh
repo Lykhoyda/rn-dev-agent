@@ -191,11 +191,23 @@ for path in \
   packages/claude-plugin/.claude-plugin/marketplace.json \
   packages/claude-plugin/hooks/hooks.json \
   packages/claude-plugin/scripts/record_proof.sh \
+  packages/claude-plugin/runner-manifest.json \
+  packages/claude-plugin/rn-dev-agent-core/package.json \
+  packages/claude-plugin/rn-dev-agent-core/dist/index.js \
+  packages/claude-plugin/rn-dev-agent-core/dist/learned-actions.js \
+  packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html \
+  packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js \
+  packages/claude-plugin/rn-dev-agent-core/dist/web-dist/index.html \
+  packages/claude-plugin/scripts/rn-fast-runner/package.json \
+  packages/claude-plugin/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj/project.pbxproj \
+  packages/claude-plugin/scripts/rn-android-runner/package.json \
+  packages/claude-plugin/scripts/rn-android-runner/gradlew \
+  packages/claude-plugin/scripts/rn-android-runner/app/build.gradle.kts \
   packages/codex-plugin/package.json \
   packages/codex-plugin/CLAUDE-MD-TEMPLATE.md \
   packages/codex-plugin/.codex-plugin/plugin.json \
   packages/codex-plugin/.mcp.json \
-  packages/codex-plugin/bin/cdp-supervisor.ts \
+  packages/codex-plugin/bin/cdp-supervisor.js \
   packages/codex-plugin/runner-manifest.json \
   packages/codex-plugin/scripts/record_proof.sh \
   packages/codex-plugin/rn-dev-agent-core/package.json \
@@ -232,6 +244,8 @@ for path in \
   packages/rn-android-runner \
   packages/codex-plugin/scripts/rn-fast-runner \
   packages/codex-plugin/scripts/rn-android-runner \
+  packages/claude-plugin/scripts/rn-fast-runner \
+  packages/claude-plugin/scripts/rn-android-runner \
   packages/shared-agent-knowledge
 do
   expect_real_dir "$path"
@@ -263,9 +277,31 @@ expect_same_file_set "packages/shared-agent-knowledge/agents" "packages/codex-pl
 expect_same_file_set "packages/shared-agent-knowledge/templates" "packages/codex-plugin/templates" "Codex templates"
 expect_synced_native_runner_dir "packages/rn-fast-runner" "packages/codex-plugin/scripts/rn-fast-runner" "Codex iOS runner assets"
 expect_synced_native_runner_dir "packages/rn-android-runner" "packages/codex-plugin/scripts/rn-android-runner" "Codex Android runner assets"
+expect_synced_native_runner_dir "packages/rn-fast-runner" "packages/claude-plugin/scripts/rn-fast-runner" "Claude iOS runner assets"
+expect_synced_native_runner_dir "packages/rn-android-runner" "packages/claude-plugin/scripts/rn-android-runner" "Claude Android runner assets"
 if [ -f "$ROOT/runner-manifest.json" ] && [ -f "$ROOT/packages/codex-plugin/runner-manifest.json" ] && ! cmp -s "$ROOT/runner-manifest.json" "$ROOT/packages/codex-plugin/runner-manifest.json"; then
   fail "Codex runner manifest must match runner-manifest.json"
 fi
+if [ -f "$ROOT/runner-manifest.json" ] && [ -f "$ROOT/packages/claude-plugin/runner-manifest.json" ] && ! cmp -s "$ROOT/runner-manifest.json" "$ROOT/packages/claude-plugin/runner-manifest.json"; then
+  fail "Claude runner manifest must match runner-manifest.json"
+fi
+# The two host runtimes are one esbuild output copied twice
+# (scripts/build-host-runtimes.ts) — byte-identical by construction.
+for runtime_entry in supervisor.js index.js learned-actions.js; do
+  if ! cmp -s "$ROOT/packages/codex-plugin/rn-dev-agent-core/dist/$runtime_entry" "$ROOT/packages/claude-plugin/rn-dev-agent-core/dist/$runtime_entry"; then
+    fail "Claude and Codex bundled runtimes must be byte-identical: dist/$runtime_entry"
+  fi
+done
+# Helper scripts the Claude hooks/skills call at runtime ship in the package
+# (single writer: build-host-runtimes.ts).
+for helper in mcp-bridge-probe.mjs ensure-cdp-deps.sh ensure-maestro-runner.sh \
+  ensure-idb-companion.sh ensure-idb.sh ensure-ffmpeg.sh \
+  ensure-troubleshooting-doc.sh ensure-android-ready.sh \
+  check-physical-devices.sh check-vercel-rules.mjs; do
+  if ! cmp -s "$ROOT/scripts/$helper" "$ROOT/packages/claude-plugin/scripts/$helper"; then
+    fail "Claude package scripts/$helper must match scripts/$helper"
+  fi
+done
 if ! cmp -s "$ROOT/CLAUDE-MD-TEMPLATE.md" "$ROOT/packages/claude-plugin/CLAUDE-MD-TEMPLATE.md"; then
   fail "Claude package CLAUDE-MD-TEMPLATE.md must match the root template"
 fi
@@ -322,14 +358,16 @@ expect_dep "packages/codex-plugin/package.json" "rn-dev-agent-shared-agent-knowl
 expect_eq "$(json '.type' "$ROOT/packages/codex-plugin/package.json")" "module" "Codex plugin package type"
 expect_eq "$(json '.type' "$ROOT/packages/codex-plugin/rn-dev-agent-core/package.json")" "module" "Codex packaged runtime type"
 expect_eq "$(json '.version' "$ROOT/packages/codex-plugin/rn-dev-agent-core/package.json")" "$core_version" "Codex packaged runtime core version"
+expect_eq "$(json '.type' "$ROOT/packages/claude-plugin/rn-dev-agent-core/package.json")" "module" "Claude packaged runtime type"
+expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/rn-dev-agent-core/package.json")" "$core_version" "Claude packaged runtime core version"
 expect_eq "$(json '.name' "$ROOT/apps/docs-site/package.json")" "rn-dev-agent-docs" "docs app package name"
 
 expect_jq "packages/claude-plugin/plugin.json" \
-  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/supervisor.js"' \
-  "Claude plugin must spawn the package-owned core supervisor"
+  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"' \
+  "Claude plugin must spawn the package-local bundled supervisor (installs copy only the package dir)"
 expect_jq "packages/claude-plugin/.claude-plugin/plugin.json" \
-  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/supervisor.js"' \
-  "Claude plugin manifest must spawn the package-owned core supervisor"
+  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"' \
+  "Claude plugin manifest must spawn the package-local bundled supervisor (installs copy only the package dir)"
 expect_jq ".claude-plugin/marketplace.json" \
   '.plugins[] | select(.name == "rn-dev-agent") | .source == "./packages/claude-plugin"' \
   "root Claude marketplace must point at the package-owned Claude plugin"
@@ -340,7 +378,7 @@ expect_jq "packages/codex-plugin/.codex-plugin/plugin.json" \
   '.skills == "./skills/" and .mcpServers == "./.mcp.json"' \
   "Codex plugin must expose package-local shared skills and MCP registration"
 expect_jq "packages/codex-plugin/.mcp.json" \
-  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "-e" and (.mcpServers.cdp.args[1] | contains("cdp-supervisor.ts")) and (.mcpServers.cdp.cwd? | not)' \
+  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "-e" and (.mcpServers.cdp.args[1] | contains("cdp-supervisor.js")) and (.mcpServers.cdp.cwd? | not)' \
   "Codex MCP registration must launch through the cache-safe supervisor wrapper without overriding app cwd"
 codex_bootstrap="$(json '.mcpServers.cdp.args[1] // empty' "$ROOT/packages/codex-plugin/.mcp.json")"
 case "$codex_bootstrap" in
@@ -353,11 +391,11 @@ fi
 if printf '%s\n' "$codex_bootstrap" | grep -q "rn-dev-agent-core"; then
   fail "Codex MCP bootstrap must delegate only to the package launcher, not a global core cache"
 fi
-if grep -Eq 'marketplaceSourceFromConfig|sourcePluginRootFromMarketplace|rn-dev-agent-core.*plugins.*cache|plugins.*cache.*rn-dev-agent-core' "$ROOT/packages/codex-plugin/bin/cdp-supervisor.ts"; then
+if grep -Eq 'marketplaceSourceFromConfig|sourcePluginRootFromMarketplace|rn-dev-agent-core.*plugins.*cache|plugins.*cache.*rn-dev-agent-core' "$ROOT/packages/codex-plugin/bin/cdp-supervisor.js"; then
   fail "Codex supervisor wrapper must not depend on marketplace source or global core caches"
 fi
 expect_jq "packages/shared-agent-knowledge/source-map.json" \
-  '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.manifest == "../codex-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.launcher == "../codex-plugin/bin/cdp-supervisor.ts" and .hostOutputs.codex.runtime == "../codex-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../codex-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../codex-plugin/scripts" and .hostOutputs.codex.skills == "../codex-plugin/skills" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
+  '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.claude.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.claude.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.manifest == "../codex-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.launcher == "../codex-plugin/bin/cdp-supervisor.js" and .hostOutputs.codex.runtime == "../codex-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../codex-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../codex-plugin/scripts" and .hostOutputs.codex.skills == "../codex-plugin/skills" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
   "shared-agent-knowledge source map must point at package-owned sources, host outputs, and docs app"
 
 expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/plugin.json")" "$synth_version" "Claude plugin manifest version"

@@ -18,6 +18,9 @@
       "legacyMarketplace": "../claude-plugin/marketplace.json",
       "package": "../claude-plugin/package.json",
       "hooks": "../claude-plugin/hooks",
+      "runtime": "../claude-plugin/rn-dev-agent-core/dist/supervisor.js",
+      "runnerManifest": "../claude-plugin/runner-manifest.json",
+      "nativeRunnerScripts": "../claude-plugin/scripts",
       "skills": "../claude-plugin/skills",
       "commands": "../claude-plugin/commands",
       "agents": "../claude-plugin/agents",
@@ -26,7 +29,7 @@
     "codex": {
       "manifest": "../codex-plugin/.codex-plugin/plugin.json",
       "mcp": "../codex-plugin/.mcp.json",
-      "launcher": "../codex-plugin/bin/cdp-supervisor.ts",
+      "launcher": "../codex-plugin/bin/cdp-supervisor.js",
       "runtime": "../codex-plugin/rn-dev-agent-core/dist/supervisor.js",
       "runnerManifest": "../codex-plugin/runner-manifest.json",
       "nativeRunnerScripts": "../codex-plugin/scripts",

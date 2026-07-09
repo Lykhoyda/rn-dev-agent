@@ -9,6 +9,12 @@
 # Excluded from the rule (generated or vendored, never hand-written):
 #   packages/rn-dev-agent-core/dist/ — tsc output (git-tracked by design)
 #   packages/codex-plugin/rn-dev-agent-core/dist/ — bundled Codex plugin runtime
+#   packages/claude-plugin/rn-dev-agent-core/dist/ — bundled Claude plugin runtime
+#   packages/claude-plugin/scripts/ — generated copies of repo scripts
+#     (single writer: scripts/build-host-runtimes.ts)
+#   packages/codex-plugin/bin/cdp-supervisor.js — shipped launcher; must be
+#     plain .js so `node <file>` works on every supported Node 22.x (a .ts
+#     extension hard-fails before 22.18 regardless of content)
 #   **/web-dist/               — vite bundle output
 #   .yarn/releases/            — pinned Yarn binary selected by yarnPath
 #   third_party/               — vendored upstream
@@ -31,7 +37,7 @@ if [ ! -f "$BASELINE" ]; then
 fi
 
 current="$(git -C "$ROOT" ls-files '*.js' '*.mjs' '*.cjs' |
-  grep -v -E '^packages/rn-dev-agent-core/dist/|^packages/codex-plugin/rn-dev-agent-core/dist/|/web-dist/|^\.yarn/releases/|^third_party/|(^|/)node_modules/' || true)"
+  grep -v -E '^packages/rn-dev-agent-core/dist/|^packages/(codex|claude)-plugin/rn-dev-agent-core/dist/|^packages/claude-plugin/scripts/|^packages/codex-plugin/bin/cdp-supervisor\.js$|/web-dist/|^\.yarn/releases/|^third_party/|(^|/)node_modules/' || true)"
 
 violations="$(comm -23 <(printf '%s\n' "$current" | sort) <(sort "$BASELINE"))"
 

@@ -31,7 +31,7 @@ if (!supervisor) {
   console.error('rn-dev-agent: could not locate rn-dev-agent-core/dist/supervisor.js');
   console.error(`rn-dev-agent: plugin root ${pluginRoot}`);
   console.error(
-    'rn-dev-agent: run `corepack yarn build:codex-runtime` or set RN_DEV_AGENT_CORE_SUPERVISOR.',
+    'rn-dev-agent: run `corepack yarn build:host-runtimes` or set RN_DEV_AGENT_CORE_SUPERVISOR.',
   );
   process.exit(1);
 }

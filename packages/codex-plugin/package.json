@@ -10,7 +10,7 @@
     "rn-dev-agent-shared-agent-knowledge": "workspace:*"
   },
   "scripts": {
-    "build:runtime": "node ../../scripts/build-codex-runtime.ts",
+    "build:runtime": "node ../../scripts/build-host-runtimes.ts",
     "check": "bash ../../scripts/check-agent-package-sync.sh"
   }
 }

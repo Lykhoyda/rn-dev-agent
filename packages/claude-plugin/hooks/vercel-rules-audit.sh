@@ -60,8 +60,12 @@ fi
 
 # Resolve plugin root (the same way detect-rn-project.sh does).
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "$PLUGIN_ROOT/../.." && pwd)"
-checker="$REPO_ROOT/scripts/check-vercel-rules.mjs"
+# Package-local checker ships with the plugin (build-host-runtimes.ts);
+# repo scripts/ is the dev-checkout fallback.
+checker="$PLUGIN_ROOT/scripts/check-vercel-rules.mjs"
+if [[ ! -f "$checker" ]]; then
+  checker="$PLUGIN_ROOT/../../scripts/check-vercel-rules.mjs"
+fi
 
 if [[ ! -f "$checker" ]]; then
   exit 0  # Sync not run yet — silent skip

@@ -24,7 +24,7 @@ every consumer sees the same inventory.
 ## Run
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/learned-actions.js" \
+node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
   --workspace-root "$PWD" \
   --memory-cwd "$PWD" \
   ${ARGUMENTS:+--filter "$ARGUMENTS"}
@@ -46,7 +46,7 @@ decision-making. **Always use `--json` from a programmatic caller** — the
 human table format is not a stable contract.
 
 ```bash
-RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/../rn-dev-agent-core/dist/learned-actions.js" \
+RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
   --json --section b --filter "task creation" --workspace-root "$PWD" --memory-cwd "$PWD")
 echo "$RESULT" | jq '.sections.flows.items[0].path'
 ```

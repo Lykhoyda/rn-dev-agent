@@ -128,7 +128,7 @@ the agent plugin version. `yarn version-packages` mirrors it into
 `packages/claude-plugin/plugin.json`, `packages/codex-plugin/.codex-plugin/plugin.json`, and
 the Codex `.mcp.json` bootstrap version pin plus
 `packages/claude-plugin/marketplace.json` via `scripts/sync-plugin-manifest.mjs`
-and `scripts/sync-versions.sh`. `yarn build:codex-runtime` bundles the core
+and `scripts/sync-versions.sh`. `yarn build:host-runtimes` bundles the core
 supervisor into `packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js`
 so Codex installs do not depend on sibling workspace state.
 
