@@ -47,3 +47,69 @@ final class SnapshotPredicatesTests: XCTestCase {
     XCTAssertTrue(computeSnapshotHittable(enabled: true, frame: frame, viewport: viewport))
   }
 }
+
+// GH #395: filtering is hittable-independent by signature — these pin the
+// de-facto content/type-based rules that always-false hittable produced.
+final class SnapshotInclusionTests: XCTestCase {
+  private func include(
+    type: XCUIElement.ElementType = .other,
+    hasContent: Bool = false,
+    childCount: Int = 0,
+    isScrollableContainer: Bool = false,
+    isInteractiveType: Bool = false,
+    visible: Bool = true,
+    compact: Bool = false,
+    interactiveOnly: Bool = false
+  ) -> Bool {
+    return shouldIncludeSnapshotNode(
+      type: type,
+      hasContent: hasContent,
+      childCount: childCount,
+      isScrollableContainer: isScrollableContainer,
+      isInteractiveType: isInteractiveType,
+      visible: visible,
+      compact: compact,
+      interactiveOnly: interactiveOnly
+    )
+  }
+
+  func testDefaultModeIncludesEverything() {
+    XCTAssertTrue(include())
+    XCTAssertTrue(include(type: .staticText, hasContent: false))
+  }
+
+  func testCompactExcludesContentlessSingleChildOther() {
+    XCTAssertFalse(include(childCount: 1, compact: true))
+    XCTAssertFalse(include(childCount: 0, compact: true))
+  }
+
+  func testCompactExcludesContentlessOtherEvenWithManyChildren() {
+    XCTAssertFalse(include(childCount: 3, compact: true))
+  }
+
+  func testCompactIncludesContentfulNodes() {
+    XCTAssertTrue(include(hasContent: true, compact: true))
+    XCTAssertTrue(include(type: .staticText, hasContent: true, compact: true))
+  }
+
+  func testCompactExcludesContentlessTypedNodes() {
+    XCTAssertFalse(include(type: .image, compact: true))
+  }
+
+  func testInteractiveOnlyIncludesScrollableContainers() {
+    XCTAssertTrue(include(type: .scrollView, isScrollableContainer: true, interactiveOnly: true))
+  }
+
+  func testInteractiveOnlyIncludesInteractiveTypes() {
+    XCTAssertTrue(include(type: .button, isInteractiveType: true, interactiveOnly: true))
+  }
+
+  func testInteractiveOnlyIncludesContentfulNodes() {
+    XCTAssertTrue(include(type: .staticText, hasContent: true, interactiveOnly: true))
+  }
+
+  func testInteractiveOnlyExcludesContentlessNonInteractive() {
+    XCTAssertFalse(include(type: .image, interactiveOnly: true))
+    XCTAssertFalse(include(interactiveOnly: true))
+  }
+}
