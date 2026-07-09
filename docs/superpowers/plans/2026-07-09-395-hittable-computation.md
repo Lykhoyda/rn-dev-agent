@@ -13,21 +13,22 @@
 ## Global Constraints
 
 - Branch: `fix/395-hittable-computation` (already created; spec committed as `3d53b580`).
+- 2026-07-09 rebase note: the branch was rebased onto the workspace-split main (GH #498). Canonical iOS runner source is `packages/rn-fast-runner/`; the copies under `packages/claude-plugin/scripts/rn-fast-runner/` and `packages/codex-plugin/scripts/rn-fast-runner/` are GENERATED — never hand-edit them; run `corepack yarn build:host-runtimes` after Swift changes (Task 3 Step 6). TS lives in `packages/rn-dev-agent-core/` (workspace `rn-dev-agent-core`, formerly `scripts/cdp-bridge`). All paths in this plan reflect the new layout.
 - Node.js >= 22 LTS for the TS suite.
 - New Swift files under `RnFastRunner/RnFastRunnerUITests/` auto-join the target (Xcode 16 `FileSystemSynchronizedRootGroup`) — do NOT edit `project.pbxproj`.
 - The native iOS test script runs the whole `RnFastRunnerUITests` bundle minus a skip-list; new test classes run automatically (`scripts/test-native-ios.sh`).
 - Semantics statement (copy verbatim into code comment and changeset): `hittable` means **"enabled and its center is on-screen"** (plausibly tappable), not "verified front-most".
 - No new comments beyond the two semantics comments shown in Task 1 (project convention: no unnecessary comments).
 - No wire-shape change: `RUNNER_PROTOCOL_VERSION` stays 1; no new command verbs; `REQUIRED_IOS_COMMANDS` untouched.
-- Rollout is a no-op by construction: plugin releases install to per-version cache dirs (`~/.claude/plugins/cache/rn-dev-agent/rn-dev-agent/<version>/`), so each release cold-builds or downloads its own runner artifact (built from that release's sources by `.github/workflows/runner-artifacts.yml`). Only dev checkouts carry a stale `scripts/rn-fast-runner/build/DerivedData` across source edits — Task 5 deletes it before device verification.
+- Rollout is a no-op by construction: plugin releases install to per-version cache dirs (`~/.claude/plugins/cache/rn-dev-agent/rn-dev-agent/<version>/`), so each release cold-builds or downloads its own runner artifact (built from that release's sources by `.github/workflows/runner-artifacts.yml`). Only dev checkouts carry a stale `packages/rn-fast-runner/build/DerivedData` across source edits — Task 5 deletes it before device verification.
 
 ---
 
 ### Task 1: Pure predicate `computeSnapshotHittable` + unit tests
 
 **Files:**
-- Create: `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`
-- Test: `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`
+- Create: `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`
+- Test: `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`
 
 **Interfaces:**
 - Consumes: nothing (pure function over `Bool`/`CGRect`).
@@ -35,7 +36,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`:
+Create `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`:
 
 ```swift
 import XCTest
@@ -86,12 +87,12 @@ final class SnapshotPredicatesTests: XCTestCase {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm run test:native:ios` (from repo root; requires a booted or available iPhone simulator)
+Run: `corepack yarn test:native:ios` (from repo root; requires a booted or available iPhone simulator)
 Expected: BUILD FAILURE — `cannot find 'computeSnapshotHittable' in scope` (compile error is the failing state for a missing Swift symbol).
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`:
+Create `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`:
 
 ```swift
 import CoreGraphics
@@ -112,14 +113,14 @@ func computeSnapshotHittable(enabled: Bool, frame: CGRect, viewport: CGRect) -> 
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm run test:native:ios`
+Run: `corepack yarn test:native:ios`
 Expected: PASS — all `SnapshotPredicatesTests` cases green (plus the pre-existing suites: `CommandSurfaceTests`, `KeyboardGuardTests`, `QuiescenceBypassTests`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift \
-        scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift
+git add packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift \
+        packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift
 git commit -m "feat(rn-fast-runner): pure computeSnapshotHittable predicate (#395)"
 ```
 
@@ -128,8 +129,8 @@ git commit -m "feat(rn-fast-runner): pure computeSnapshotHittable predicate (#39
 ### Task 2: Pure predicate `shouldIncludeSnapshotNode` + unit tests
 
 **Files:**
-- Modify: `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`
-- Test: `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`
+- Modify: `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift`
+- Test: `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift`
 
 **Interfaces:**
 - Consumes: nothing (pure function).
@@ -209,7 +210,7 @@ final class SnapshotInclusionTests: XCTestCase {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm run test:native:ios`
+Run: `corepack yarn test:native:ios`
 Expected: BUILD FAILURE — `cannot find 'shouldIncludeSnapshotNode' in scope`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -249,14 +250,14 @@ func shouldIncludeSnapshotNode(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm run test:native:ios`
+Run: `corepack yarn test:native:ios`
 Expected: PASS — `SnapshotPredicatesTests` + `SnapshotInclusionTests` green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift \
-        scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift
+git add packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicates.swift \
+        packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/SnapshotPredicatesTests.swift
 git commit -m "feat(rn-fast-runner): hittable-independent shouldIncludeSnapshotNode predicate (#395)"
 ```
 
@@ -265,7 +266,7 @@ git commit -m "feat(rn-fast-runner): hittable-independent shouldIncludeSnapshotN
 ### Task 3: Wire predicates into the snapshot path; delete occlusion machinery
 
 **Files:**
-- Modify: `scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Snapshot.swift`
+- Modify: `packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Snapshot.swift`
 
 **Interfaces:**
 - Consumes: `computeSnapshotHittable(enabled:frame:viewport:)` (Task 1), `shouldIncludeSnapshotNode(type:hasContent:childCount:isScrollableContainer:isInteractiveType:visible:compact:interactiveOnly:)` (Task 2).
@@ -387,20 +388,26 @@ Remove these four private members entirely from `RnFastRunnerTests+Snapshot.swif
 
 Then confirm nothing else references them:
 
-Run: `grep -rn "flattenedSnapshots\|laterSnapshots\|isOccludingType\|computedSnapshotHittable" scripts/rn-fast-runner/`
+Run: `grep -rn "flattenedSnapshots\|laterSnapshots\|isOccludingType\|computedSnapshotHittable" packages/rn-fast-runner/`
 Expected: no matches.
 
 (Do NOT touch the collapsed-tab fallback's `element.isHittable` at ~line 583 — that is the real XCTest API on a live `XCUIElement`, out of scope per spec.)
 
 - [ ] **Step 5: Run the full native suite**
 
-Run: `npm run test:native:ios`
+Run: `corepack yarn test:native:ios`
 Expected: PASS — full bundle compiles (deleting the members breaks the build if any reference survived) and all suites green.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Regenerate host runtime copies**
+
+Run: `corepack yarn build:host-runtimes`
+Expected: the generated runner copies under `packages/claude-plugin/scripts/rn-fast-runner/` and `packages/codex-plugin/scripts/rn-fast-runner/` pick up the three Swift file changes; `git status` shows ONLY those regenerated files (no TS sources on this branch → no dist churn).
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Snapshot.swift
+git add packages/rn-fast-runner/RnFastRunner/RnFastRunnerUITests/RnFastRunnerTests+Snapshot.swift \
+        packages/claude-plugin/scripts/rn-fast-runner packages/codex-plugin/scripts/rn-fast-runner
 git commit -m "fix(rn-fast-runner): honest hittable — drop occlusion heuristic, decouple filtering (#395)"
 ```
 
@@ -418,13 +425,15 @@ git commit -m "fix(rn-fast-runner): honest hittable — drop occlusion heuristic
 
 - [ ] **Step 1: Confirm no TS test pins the old always-false semantics**
 
-Run: `grep -rn "occlu\|laterNodes\|hittable" scripts/cdp-bridge/test --include="*.test.*" -l`
+Run: `grep -rn "occlu\|laterNodes\|hittable" packages/rn-dev-agent-core/test --include="*.test.*" -l`
 Expected: hits only in fixture-driven tests (`gh-59-4-rank-snapshot-nodes.test.js`, `device-batch-salient.test.js`, `settle-hash.test.js`, `flatten-xcui-tree.test.js`, etc.) whose `hittable` values are synthetic TS-level inputs, not derived from the Swift heuristic. Skim each hit: if any test comment or fixture asserts "hittable is always false on device" semantics, update the comment — no logic changes.
+
+Added at the 2026-07-09 rebase: PR #517 introduced a hittable-first screen-rect union (`fast-runner-ref-map.ts` + `test/unit/story-06-screenrect-system-windows.test.ts`) consumed by direction `device_scroll`/`device_swipe` and `scrollintoview`. It was written FOR honest hittable semantics ("a visible element is hittable and contributes its own rect"; all-nodes fallback covers snapshots without hittable data — i.e. today's all-false iOS output). Read both files and confirm compatibility: this fix ACTIVATES the hittable-first branch on iOS, it must not fight it. Note the conclusion in the PR body.
 
 - [ ] **Step 2: Run the full TS suite**
 
-Run: `cd scripts/cdp-bridge && npm test`
-Expected: PASS (2,930+ tests as of PR #475). The build step inside `npm test` must not dirty tracked `dist/` output (`git status --short scripts/cdp-bridge/dist` shows nothing) — there are no TS source changes on this branch.
+Run: `corepack yarn test`
+Expected: PASS (2,930+ tests as of PR #475). The build step inside `npm test` must not dirty tracked `dist/` output (`git status --short packages/rn-dev-agent-core/dist` shows nothing) — there are no TS source changes on this branch.
 
 - [ ] **Step 3: Record Android parity evidence (code-read, no change)**
 
@@ -436,11 +445,11 @@ Create `.changeset/honest-hittable-395.md`:
 
 ```markdown
 ---
-'rn-dev-agent-cdp': patch
+'rn-dev-agent-core': patch
 'rn-dev-agent-plugin': patch
 ---
 
-fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking and `device_batch`'s dead-control annotation. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes are unchanged. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `scripts/rn-fast-runner/build/DerivedData` to rebuild.
+fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking and `device_batch`'s dead-control annotation. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes are unchanged. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
 ```
 
 - [ ] **Step 5: Commit**
@@ -468,8 +477,8 @@ The MCP tools in a live session run the *installed plugin's* runner (`~/.claude/
 ```bash
 UDID=$(xcrun simctl list devices booted -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print([x["udid"] for v in d["devices"].values() for x in v][0])')
 pkill -f RnFastRunnerUITests-Runner || true
-rm -rf scripts/rn-fast-runner/build/DerivedData
-cd scripts/rn-fast-runner/RnFastRunner
+rm -rf packages/rn-fast-runner/build/DerivedData
+cd packages/rn-fast-runner/RnFastRunner
 xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner \
   -destination "id=$UDID" -derivedDataPath ../build/DerivedData
 ```
