@@ -25,15 +25,22 @@ export interface RunnerOpts {
 
 export function buildFixtureArgs(prompt: string, o: RunnerOpts): string[] {
   return [
-    '-p', prompt,
-    '--mcp-config', o.mcpConfigPath,
+    '-p',
+    prompt,
+    '--mcp-config',
+    o.mcpConfigPath,
     '--strict-mcp-config',
-    '--allowedTools', `mcp__${o.serverName}__*`,
-    '--tools', 'ToolSearch',
-    '--output-format', 'stream-json',
+    '--allowedTools',
+    `mcp__${o.serverName}__*`,
+    '--tools',
+    'ToolSearch',
+    '--output-format',
+    'stream-json',
     '--verbose',
-    '--setting-sources', '',
-    '--model', o.model,
+    '--setting-sources',
+    '',
+    '--model',
+    o.model,
   ];
 }
 
@@ -43,7 +50,9 @@ export function absolutizeServerConfig(config: ServerConfig, repoRoot: string): 
   const out = structuredClone(config);
   for (const server of Object.values(out.mcpServers)) {
     if (Array.isArray(server.args)) {
-      server.args = server.args.map((a) => (a.startsWith('-') || isAbsolute(a) ? a : resolve(repoRoot, a)));
+      server.args = server.args.map((a) =>
+        a.startsWith('-') || isAbsolute(a) ? a : resolve(repoRoot, a),
+      );
     }
   }
   return out;
@@ -58,7 +67,10 @@ export type FixtureRun =
 // never be scored as a fixture verdict — it would read as a false regression.
 export function classifyOutcome(outcome: TranscriptOutcome): FixtureRun {
   if (outcome.resultIsError || outcome.subtype !== 'success') {
-    return { kind: 'infra', detail: `terminal result ${outcome.subtype} (is_error=${outcome.resultIsError})` };
+    return {
+      kind: 'infra',
+      detail: `terminal result ${outcome.subtype} (is_error=${outcome.resultIsError})`,
+    };
   }
   return { kind: 'ok', outcome };
 }
@@ -72,7 +84,8 @@ export function runFixture(prompt: string, o: RunnerOpts): FixtureRun {
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') return { kind: 'timeout' };
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
+    return { kind: 'timeout' };
   if (r.error) return { kind: 'infra', detail: String(r.error) };
   try {
     return classifyOutcome(parseTranscript(r.stdout ?? ''));
@@ -143,12 +156,18 @@ export function runJudge(
   const r = spawnSync(
     o.bin,
     [
-      '-p', buildJudgePrompt(criteria, taskPrompt, outcome.finalText, trace),
-      '--tools', '',
-      '--setting-sources', '',
-      '--output-format', 'json',
-      '--json-schema', VERDICT_SCHEMA,
-      '--model', o.model,
+      '-p',
+      buildJudgePrompt(criteria, taskPrompt, outcome.finalText, trace),
+      '--tools',
+      '',
+      '--setting-sources',
+      '',
+      '--output-format',
+      'json',
+      '--json-schema',
+      VERDICT_SCHEMA,
+      '--model',
+      o.model,
     ],
     {
       cwd: o.cwd,
@@ -160,7 +179,9 @@ export function runJudge(
     },
   );
   if (r.error || r.status !== 0) {
-    throw new Error(`judge spawn failed: ${r.error ?? `exit ${r.status}`}; stderr=${(r.stderr ?? '').slice(0, 300)}`);
+    throw new Error(
+      `judge spawn failed: ${r.error ?? `exit ${r.status}`}; stderr=${(r.stderr ?? '').slice(0, 300)}`,
+    );
   }
   const parsed = JSON.parse(r.stdout) as { structured_output?: unknown; result?: unknown };
   const v = (parsed.structured_output ??

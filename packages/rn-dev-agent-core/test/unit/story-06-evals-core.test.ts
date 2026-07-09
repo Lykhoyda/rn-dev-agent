@@ -22,13 +22,70 @@ const line = (o: unknown) => JSON.stringify(o);
 const SAMPLE = [
   'Warning: no stdin data received in 3s, proceeding without it.',
   line({ type: 'system', subtype: 'init', tools: ['ToolSearch'] }),
-  line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'ToolSearch', input: { query: 'select:mcp__rn-dev-agent__device_list' } }] } }),
-  line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [] }] } }),
-  line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__rn-dev-agent__device_list', input: {} }] } }),
-  line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: '{"ok":true}' }] }] } }),
-  line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't3', name: 'mcp__rn-dev-agent__cdp_store_state', input: {} }] } }),
-  line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't3', is_error: true, content: [{ type: 'text', text: 'NOT_CONNECTED' }] }] } }),
-  line({ type: 'result', subtype: 'success', is_error: false, num_turns: 4, total_cost_usd: 0.01, result: 'One device: iPhone 17.' }),
+  line({
+    type: 'assistant',
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          id: 't1',
+          name: 'ToolSearch',
+          input: { query: 'select:mcp__rn-dev-agent__device_list' },
+        },
+      ],
+    },
+  }),
+  line({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [] }] },
+  }),
+  line({
+    type: 'assistant',
+    message: {
+      content: [{ type: 'tool_use', id: 't2', name: 'mcp__rn-dev-agent__device_list', input: {} }],
+    },
+  }),
+  line({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 't2',
+          content: [{ type: 'text', text: '{"ok":true}' }],
+        },
+      ],
+    },
+  }),
+  line({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'tool_use', id: 't3', name: 'mcp__rn-dev-agent__cdp_store_state', input: {} },
+      ],
+    },
+  }),
+  line({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 't3',
+          is_error: true,
+          content: [{ type: 'text', text: 'NOT_CONNECTED' }],
+        },
+      ],
+    },
+  }),
+  line({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    num_turns: 4,
+    total_cost_usd: 0.01,
+    result: 'One device: iPhone 17.',
+  }),
 ].join('\n');
 
 describe('parseTranscript', () => {
@@ -46,14 +103,24 @@ describe('parseTranscript', () => {
   });
 
   it('surfaces a terminal error result (is_error/subtype) instead of masking it', () => {
-    const errLine = line({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 2, total_cost_usd: 0, result: '' });
+    const errLine = line({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      num_turns: 2,
+      total_cost_usd: 0,
+      result: '',
+    });
     const o = parseTranscript(SAMPLE.split('\n').slice(0, -1).concat(errLine).join('\n'));
     assert.equal(o.subtype, 'error_during_execution');
     assert.equal(o.resultIsError, true);
   });
 
   it('throws when there is no terminal result event', () => {
-    assert.throws(() => parseTranscript(SAMPLE.split('\n').slice(0, -1).join('\n')), /no result event/);
+    assert.throws(
+      () => parseTranscript(SAMPLE.split('\n').slice(0, -1).join('\n')),
+      /no result event/,
+    );
   });
 });
 
@@ -153,9 +220,15 @@ evals:
     const { fileURLToPath } = await import('node:url');
     const evalsDir = join(dirname(fileURLToPath(import.meta.url)), '../evals');
     const vars = { EVAL_MODEL: 'm', SNAPSHOT_PAYLOAD: '{}', STALE_REF_ENVELOPE: '{}' };
-    const tc = parseEvalYaml(readFileSync(join(evalsDir, 'tool-correctness.eval.yaml'), 'utf8'), vars);
+    const tc = parseEvalYaml(
+      readFileSync(join(evalsDir, 'tool-correctness.eval.yaml'), 'utf8'),
+      vars,
+    );
     assert.equal(tc.fixtures.length, 6);
-    const ou = parseEvalYaml(readFileSync(join(evalsDir, 'output-usability.eval.yaml'), 'utf8'), vars);
+    const ou = parseEvalYaml(
+      readFileSync(join(evalsDir, 'output-usability.eval.yaml'), 'utf8'),
+      vars,
+    );
     assert.ok(ou.fixtures.length >= 3);
   });
 });
@@ -163,7 +236,10 @@ evals:
 describe('junitXml', () => {
   const results: Record<string, FixtureResult> = {
     'fixture-pass': { verdict: 'pass' },
-    'fixture-fail': { verdict: 'fail', reason: 'llm-judge score 0.4 < 0.7: "hallucinated" <devices>' },
+    'fixture-fail': {
+      verdict: 'fail',
+      reason: 'llm-judge score 0.4 < 0.7: "hallucinated" <devices>',
+    },
   };
 
   it('round-trips through compare-baseline parseJunitXml', () => {
@@ -191,15 +267,22 @@ describe('buildFixtureArgs', () => {
       bin: 'claude',
     };
     assert.deepEqual(buildFixtureArgs('Tap the button.', o), [
-      '-p', 'Tap the button.',
-      '--mcp-config', '/tmp/mcp.json',
+      '-p',
+      'Tap the button.',
+      '--mcp-config',
+      '/tmp/mcp.json',
       '--strict-mcp-config',
-      '--allowedTools', 'mcp__rn-dev-agent__*',
-      '--tools', 'ToolSearch',
-      '--output-format', 'stream-json',
+      '--allowedTools',
+      'mcp__rn-dev-agent__*',
+      '--tools',
+      'ToolSearch',
+      '--output-format',
+      'stream-json',
       '--verbose',
-      '--setting-sources', '',
-      '--model', 'claude-haiku-4-5-20251001',
+      '--setting-sources',
+      '',
+      '--model',
+      'claude-haiku-4-5-20251001',
     ]);
   });
 });
@@ -207,10 +290,21 @@ describe('buildFixtureArgs', () => {
 describe('absolutizeServerConfig', () => {
   it('absolutizes relative path args against the repo root, leaving flags and absolute paths alone', () => {
     const out = absolutizeServerConfig(
-      { mcpServers: { s: { command: 'node', args: ['packages/core/dist/supervisor.js', '--no-lock', '/abs/x.js'] } } },
+      {
+        mcpServers: {
+          s: {
+            command: 'node',
+            args: ['packages/core/dist/supervisor.js', '--no-lock', '/abs/x.js'],
+          },
+        },
+      },
       '/repo',
     );
-    assert.deepEqual(out.mcpServers.s.args, ['/repo/packages/core/dist/supervisor.js', '--no-lock', '/abs/x.js']);
+    assert.deepEqual(out.mcpServers.s.args, [
+      '/repo/packages/core/dist/supervisor.js',
+      '--no-lock',
+      '/abs/x.js',
+    ]);
   });
 });
 
@@ -231,7 +325,9 @@ describe('classifyOutcome', () => {
   });
 
   it('classifies a terminal error result as infra, never a fixture verdict', () => {
-    const r = classifyOutcome(okOutcome({ subtype: 'error_during_execution', resultIsError: true }));
+    const r = classifyOutcome(
+      okOutcome({ subtype: 'error_during_execution', resultIsError: true }),
+    );
     assert.equal(r.kind, 'infra');
     assert.match((r as { detail: string }).detail, /error_during_execution/);
   });
@@ -262,7 +358,9 @@ describe('judge', () => {
 
   it('buildJudgePrompt task section precedes the trace so prompt-given facts are not judged as fabrication', () => {
     const p = buildJudgePrompt('C.', 'The screen is blank.', 'x', []);
-    assert.ok(p.indexOf('## Task the assistant was given') < p.indexOf('## Tools the assistant called'));
+    assert.ok(
+      p.indexOf('## Task the assistant was given') < p.indexOf('## Tools the assistant called'),
+    );
     assert.match(p, /The screen is blank\./);
   });
 

@@ -60,8 +60,25 @@ function preflightCli(): string {
 function preflightAuth(scratch: string): void {
   const r = spawnSync(
     BIN,
-    ['-p', 'Reply with exactly: OK', '--tools', '', '--setting-sources', '', '--output-format', 'json', '--model', JUDGE_MODEL],
-    { cwd: scratch, encoding: 'utf8', timeout: 120_000, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+    [
+      '-p',
+      'Reply with exactly: OK',
+      '--tools',
+      '',
+      '--setting-sources',
+      '',
+      '--output-format',
+      'json',
+      '--model',
+      JUDGE_MODEL,
+    ],
+    {
+      cwd: scratch,
+      encoding: 'utf8',
+      timeout: 120_000,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   );
   let ok = false;
   try {
@@ -83,16 +100,24 @@ function preflightAuth(scratch: string): void {
 // observation FAILING). A booted sim / attached device on the dev machine
 // silently flips those premises — refuse gating runs, allow informational.
 function preflightNoDevice(): boolean {
-  const sim = spawnSync('xcrun', ['simctl', 'list', 'devices', 'booted'], { encoding: 'utf8', timeout: 15_000 });
+  const sim = spawnSync('xcrun', ['simctl', 'list', 'devices', 'booted'], {
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
   const simBooted = !sim.error && sim.status === 0 && sim.stdout.includes('(Booted)');
   const adb = spawnSync('adb', ['devices'], { encoding: 'utf8', timeout: 15_000 });
   const adbAttached =
     !adb.error &&
     adb.status === 0 &&
-    adb.stdout.split('\n').slice(1).some((l) => /^\S+\s+device\b/.test(l.trim()));
+    adb.stdout
+      .split('\n')
+      .slice(1)
+      .some((l) => /^\S+\s+device\b/.test(l.trim()));
   if (!simBooted && !adbAttached) return false;
   if (process.env.EVAL_ALLOW_DEVICE === '1') {
-    console.log('booted device detected + EVAL_ALLOW_DEVICE=1 — INFORMATIONAL run, baseline gate will be SKIPPED.');
+    console.log(
+      'booted device detected + EVAL_ALLOW_DEVICE=1 — INFORMATIONAL run, baseline gate will be SKIPPED.',
+    );
     return true;
   }
   console.error(
@@ -162,10 +187,16 @@ function runOne(f: EvalFixture): FixtureResult {
       }
     }
   }
-  return reasons.length === 0 ? { verdict: 'pass' } : { verdict: 'fail', reason: reasons.join(' | ') };
+  return reasons.length === 0
+    ? { verdict: 'pass' }
+    : { verdict: 'fail', reason: reasons.join(' | ') };
 }
 
-function judgeOrExit(criteria: string, taskPrompt: string, outcome: TranscriptOutcome): JudgeVerdict {
+function judgeOrExit(
+  criteria: string,
+  taskPrompt: string,
+  outcome: TranscriptOutcome,
+): JudgeVerdict {
   const opts = { model: JUDGE_MODEL, bin: BIN, cwd: scratch, timeoutMs: 120_000 };
   try {
     return runJudge(criteria, taskPrompt, outcome, opts);
@@ -173,7 +204,9 @@ function judgeOrExit(criteria: string, taskPrompt: string, outcome: TranscriptOu
     try {
       return runJudge(criteria, taskPrompt, outcome, opts);
     } catch (second) {
-      console.error(`judge infra failure (after retry): ${(second as Error).message}; first: ${(first as Error).message}`);
+      console.error(
+        `judge infra failure (after retry): ${(second as Error).message}; first: ${(first as Error).message}`,
+      );
       process.exit(2);
     }
   }

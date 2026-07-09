@@ -38,7 +38,12 @@ export function parseEvalYaml(rawText: string, vars: Record<string, string>): Ev
         name?: string;
         prompt?: string;
         expected_tool_calls?: { required?: string[] };
-        response_scorers?: Array<{ type?: string; criteria?: string; threshold?: number; pattern?: string }>;
+        response_scorers?: Array<{
+          type?: string;
+          criteria?: string;
+          threshold?: number;
+          pattern?: string;
+        }>;
       }>;
     };
   };
@@ -51,7 +56,11 @@ export function parseEvalYaml(rawText: string, vars: Record<string, string>): Ev
     seen.add(t.name);
     const scorers = (t.response_scorers ?? []).map((s): ScorerSpec => {
       if (s.type === 'llm-judge') {
-        return { type: 'llm-judge', criteria: String(s.criteria ?? ''), threshold: Number(s.threshold ?? 0.7) };
+        return {
+          type: 'llm-judge',
+          criteria: String(s.criteria ?? ''),
+          threshold: Number(s.threshold ?? 0.7),
+        };
       }
       if (s.type === 'regex') return { type: 'regex', pattern: String(s.pattern ?? '') };
       throw new Error(`eval YAML: unsupported scorer type "${s.type}" in "${t.name}"`);
@@ -92,7 +101,13 @@ interface ContentBlock {
 export function parseTranscript(streamJson: string): TranscriptOutcome {
   const calls = new Map<string, ToolCall>();
   let result:
-    | { subtype?: string; is_error?: boolean; num_turns?: number; total_cost_usd?: number; result?: unknown }
+    | {
+        subtype?: string;
+        is_error?: boolean;
+        num_turns?: number;
+        total_cost_usd?: number;
+        result?: unknown;
+      }
     | undefined;
   for (const raw of streamJson.split('\n')) {
     const s = raw.trim();
@@ -105,7 +120,8 @@ export function parseTranscript(streamJson: string): TranscriptOutcome {
     }
     if (e.type === 'assistant' && Array.isArray(e.message?.content)) {
       for (const b of e.message.content) {
-        if (b?.type === 'tool_use' && b.id && b.name) calls.set(b.id, { name: b.name, isError: false });
+        if (b?.type === 'tool_use' && b.id && b.name)
+          calls.set(b.id, { name: b.name, isError: false });
       }
     } else if (e.type === 'user' && Array.isArray(e.message?.content)) {
       for (const b of e.message.content) {
