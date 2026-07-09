@@ -37,12 +37,20 @@ test('raw control bytes in app-controlled strings cannot alias field/node bounda
   assert.notEqual(hashSnapshotNodes(controlBytes), hashSnapshotNodes(shifted));
 });
 
-test('enabled/hittable state flips register as UI change', () => {
+test('enabled state flips register as UI change', () => {
   assert.notEqual(
     hashSnapshotNodes([node({ enabled: true, hittable: true })]),
     hashSnapshotNodes([node({ enabled: false, hittable: true })]),
   );
-  assert.notEqual(
+});
+
+// #519 review: hittable is derived from enabled + rect + viewport, and its
+// center-vs-edge comparison is UNquantized — hashing it would let sub-bucket
+// jitter at the viewport edge defeat the 4px quantization (settle timeouts,
+// phantom "UI changed" suppressing the Story 05 re-tap). enabled and the
+// quantized rect are already hashed, so dropping it loses no real signal.
+test('hittable flips alone do NOT change the hash (excluded from settle identity)', () => {
+  assert.equal(
     hashSnapshotNodes([node({ enabled: true, hittable: true })]),
     hashSnapshotNodes([node({ enabled: true, hittable: false })]),
   );
