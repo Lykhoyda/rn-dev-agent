@@ -34,6 +34,7 @@
     "@changesets/cli": "^2.27.10",
     "esbuild": "^0.28.1",
     "husky": "^9.1.7",
+    "mcp-server-tester": "patch:mcp-server-tester@npm%3A1.4.1#~/.yarn/patches/mcp-server-tester-npm-1.4.1-6564330b13.patch",
     "oxfmt": "0.55.0",
     "oxlint": "^1.70.0"
   },

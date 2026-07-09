@@ -6098,14 +6098,10 @@ __metadata:
     "@modelcontextprotocol/sdk": "npm:^1.29.0"
     "@types/node": "npm:^24.0.0"
     "@types/ws": "npm:^8.5.0"
-    mcp-server-tester: "patch:mcp-server-tester@npm%3A1.4.1#~/.yarn/patches/mcp-server-tester-npm-1.4.1-6564330b13.patch"
     typescript: "npm:^5.4.0"
     ws: "npm:^8.18.0"
     yaml: "npm:^2.8.3"
     zod: "npm:^3.23.0"
-  dependenciesMeta:
-    mcp-server-tester:
-      built: false
   bin:
     rn-dev-agent-core: ./dist/supervisor.js
   languageName: unknown
@@ -6149,6 +6145,7 @@ __metadata:
     "@changesets/cli": "npm:^2.27.10"
     esbuild: "npm:^0.28.1"
     husky: "npm:^9.1.7"
+    mcp-server-tester: "patch:mcp-server-tester@npm%3A1.4.1#~/.yarn/patches/mcp-server-tester-npm-1.4.1-6564330b13.patch"
     oxfmt: "npm:0.55.0"
     oxlint: "npm:^1.70.0"
   dependenciesMeta:
