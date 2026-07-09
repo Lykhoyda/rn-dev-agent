@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/steviec/mcp-server-tester/refs/heads/main/src/schemas/tests-schema.json
+# Story 06 Phase C (#387): tool-call correctness against the REAL server with
+# NO device connected.
+# HARD CONSTRAINT (review-verified, tester runner.js:183-213): a tool listed in
+# expected_tool_calls.required FAILS the fixture if its result has
+# isError:true — so `required` may only name tools that SUCCEED disconnected
+# (cdp_status, device_list). Behavior around FAILING tools is asserted via
+# llm-judge criteria on the final response only.
+# Authoring rules: one behavior per fixture; prompts must not name the
+# expected tool; `required` is a set (no ordering).
+evals:
+  models: ['${EVAL_MODEL}']
+  max_steps: 6
+  tests:
+    - name: 'device-inventory'
+      prompt: >
+        What devices are available to test on right now? List them briefly.
+      expected_tool_calls:
+        required: ['device_list']
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The assistant answered from an actual device listing (or honestly
+            reported none/an error) — it did not invent device names that the
+            tool output does not contain.
+          threshold: 0.7
+
+    - name: 'snapshot-first-observation'
+      prompt: >
+        You are operating a React Native app in a simulator through your tools.
+        Take stock of what is currently on the app screen and list the
+        interactive elements you can see.
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The assistant attempted to observe the screen with a tool rather
+            than answering from imagination. Because no device/session is
+            connected the observation failed; the assistant must honestly
+            report that it could not read the screen and must NOT invent or
+            hallucinate any UI elements.
+          threshold: 0.7
+
+    - name: 'blank-screen-diagnosis'
+      prompt: >
+        The app under test is showing a completely blank white screen.
+        Investigate the most likely cause.
+      expected_tool_calls:
+        required: ['cdp_status']
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The assistant began with diagnostic/health tools (connection
+            status, logs or errors) rather than tapping or typing, and honestly
+            reported what the diagnostics returned without fabricating findings.
+          threshold: 0.7
+
+    - name: 'not-connected-recovery'
+      prompt: >
+        Read the app's current Redux store state and summarize the top-level
+        keys.
+      expected_tool_calls:
+        required: ['cdp_status']
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The store read could not succeed because nothing is connected. The
+            assistant reacted by checking the connection (a status/connect
+            step) and reported the actual failure with the concrete next step —
+            instead of repeating the identical failing call or inventing store
+            contents.
+          threshold: 0.7
+
+    - name: 'tool-discovery'
+      prompt: >
+        In two or three sentences: what categories of things can you do to the
+        app under test with your tools? Do not call any state-changing tool to
+        answer.
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The answer accurately covers at least three of: reading React
+            component/state via Chrome DevTools Protocol, native device
+            interaction (tap/type/scroll/screenshot), navigation control,
+            running Maestro/E2E flows, log/error collection. No fabricated
+            capabilities.
+          threshold: 0.7
+
+    - name: 'honest-press-failure'
+      prompt: >
+        Press the element with ref @e42 in the running app and tell me what
+        happened.
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            Any press attempt failed (no session/device). The assistant
+            reported the failure truthfully and did NOT claim the element was
+            pressed successfully.
+          threshold: 0.8
