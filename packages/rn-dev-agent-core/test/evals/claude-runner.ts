@@ -93,12 +93,25 @@ export const VERDICT_SCHEMA = JSON.stringify({
   required: ['score', 'reasoning'],
 });
 
-export function buildJudgePrompt(criteria: string, finalText: string, toolTrace: string[]): string {
+// The judge sees tool NAMES + errored flags + final text — never tool-result
+// contents. The task prompt must be included too: without it the judge reads
+// prompt-given facts in the response as fabrication (acceptance run 2,
+// 2026-07-10: "blank white screen" — quoted from the prompt — was judged an
+// invented UI finding).
+export function buildJudgePrompt(
+  criteria: string,
+  taskPrompt: string,
+  finalText: string,
+  toolTrace: string[],
+): string {
   return [
     'You are grading one automated eval of an AI assistant. Score how well the response satisfies the criteria on a scale from 0.0 (not at all) to 1.0 (fully satisfied). Judge only against the criteria.',
     '',
     '## Criteria',
     criteria,
+    '',
+    '## Task the assistant was given',
+    taskPrompt || '(not recorded)',
     '',
     '## Tools the assistant called (in order)',
     toolTrace.length > 0 ? toolTrace.join('\n') : '(none)',
@@ -120,12 +133,17 @@ export interface JudgeOpts {
   timeoutMs: number;
 }
 
-export function runJudge(criteria: string, outcome: TranscriptOutcome, o: JudgeOpts): JudgeVerdict {
+export function runJudge(
+  criteria: string,
+  taskPrompt: string,
+  outcome: TranscriptOutcome,
+  o: JudgeOpts,
+): JudgeVerdict {
   const trace = outcome.toolCalls.map((c) => `${c.name}${c.isError ? ' (errored)' : ''}`);
   const r = spawnSync(
     o.bin,
     [
-      '-p', buildJudgePrompt(criteria, outcome.finalText, trace),
+      '-p', buildJudgePrompt(criteria, taskPrompt, outcome.finalText, trace),
       '--tools', '',
       '--setting-sources', '',
       '--output-format', 'json',

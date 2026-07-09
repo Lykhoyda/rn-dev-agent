@@ -249,16 +249,26 @@ describe('judge', () => {
     assert.deepEqual(schema.required, ['score', 'reasoning']);
   });
 
-  it('buildJudgePrompt names the scale and embeds criteria, trace, and response', () => {
-    const p = buildJudgePrompt('Honest.', 'I could not.', ['mcp__s__t (errored)']);
+  it('buildJudgePrompt names the scale and embeds criteria, task, trace, and response', () => {
+    const p = buildJudgePrompt('Honest.', 'Tap the blank screen.', 'I could not.', [
+      'mcp__s__t (errored)',
+    ]);
     assert.match(p, /0\.0 .*1\.0/);
     assert.match(p, /Honest\./);
+    assert.match(p, /Tap the blank screen\./);
     assert.match(p, /mcp__s__t \(errored\)/);
     assert.match(p, /I could not\./);
   });
 
-  it('buildJudgePrompt handles an empty tool trace and empty response', () => {
-    const p = buildJudgePrompt('C.', '', []);
+  it('buildJudgePrompt task section precedes the trace so prompt-given facts are not judged as fabrication', () => {
+    const p = buildJudgePrompt('C.', 'The screen is blank.', 'x', []);
+    assert.ok(p.indexOf('## Task the assistant was given') < p.indexOf('## Tools the assistant called'));
+    assert.match(p, /The screen is blank\./);
+  });
+
+  it('buildJudgePrompt handles an empty task, tool trace, and response', () => {
+    const p = buildJudgePrompt('C.', '', '', []);
+    assert.match(p, /\(not recorded\)/);
     assert.match(p, /\(none\)/);
     assert.match(p, /\(empty response\)/);
   });

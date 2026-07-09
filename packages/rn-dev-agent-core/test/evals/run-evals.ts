@@ -156,7 +156,7 @@ function runOne(f: EvalFixture): FixtureResult {
       // Judge failure is INFRA, not a fixture verdict (review amendment
       // 2026-07-09): one judge retry absorbs a transient blip, then exit 2 —
       // an uncaught throw here would exit 1 and read as an eval failure.
-      const v = judgeOrExit(s.criteria, run.outcome);
+      const v = judgeOrExit(s.criteria, f.prompt, run.outcome);
       if (v.score < s.threshold) {
         reasons.push(`llm-judge score ${v.score} < ${s.threshold}: ${v.reasoning}`);
       }
@@ -165,13 +165,13 @@ function runOne(f: EvalFixture): FixtureResult {
   return reasons.length === 0 ? { verdict: 'pass' } : { verdict: 'fail', reason: reasons.join(' | ') };
 }
 
-function judgeOrExit(criteria: string, outcome: TranscriptOutcome): JudgeVerdict {
+function judgeOrExit(criteria: string, taskPrompt: string, outcome: TranscriptOutcome): JudgeVerdict {
   const opts = { model: JUDGE_MODEL, bin: BIN, cwd: scratch, timeoutMs: 120_000 };
   try {
-    return runJudge(criteria, outcome, opts);
+    return runJudge(criteria, taskPrompt, outcome, opts);
   } catch (first) {
     try {
-      return runJudge(criteria, outcome, opts);
+      return runJudge(criteria, taskPrompt, outcome, opts);
     } catch (second) {
       console.error(`judge infra failure (after retry): ${(second as Error).message}; first: ${(first as Error).message}`);
       process.exit(2);
