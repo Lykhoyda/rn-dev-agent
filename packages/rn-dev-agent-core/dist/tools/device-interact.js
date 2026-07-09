@@ -4,6 +4,7 @@ import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, g
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
+import { resolveBundleId } from '../project-config.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
@@ -893,7 +894,7 @@ export function createDeviceSwipeHandler() {
         if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
             if (canUseFastRunner) {
                 try {
-                    const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId);
+                    const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined);
                     if (resp.ok) {
                         return okResult({
                             x1: args.x1,
@@ -931,7 +932,7 @@ export function createDeviceSwipeHandler() {
             const duration = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
             if (canUseFastRunner) {
                 try {
-                    const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration, getActiveSession()?.appId);
+                    const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration, getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined);
                     if (resp.ok) {
                         return okResult({
                             direction: args.direction,
@@ -985,7 +986,7 @@ export function createDeviceScrollHandler() {
         adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
         if (isFastRunnerAvailable()) {
             try {
-                const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId);
+                const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined);
                 if (resp.ok) {
                     return okResult({
                         direction: args.direction,

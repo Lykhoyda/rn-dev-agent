@@ -234,7 +234,8 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
       (n: any) => n.identifier === 'fixture_count',
     );
     assert.ok(countNode, 'fixture_count missing from the post-press snapshot');
-    assert.match(countNode.label ?? '', /count: 1/, 'counter must increment after press');
+    // Anchored: /count: 1/ unanchored would also match 'count: 10'..'count: 19'.
+    assert.match(countNode.label ?? '', /^count: 1$/, 'counter must increment after press');
 
     // device_scrollintoview does exactly ONE blind swipe when the target is
     // absent from the snapshot (device-interact.ts:1383) — row 80 is several
@@ -280,6 +281,9 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     );
     assert.equal(into.envelope?.ok, true, `scrollintoview failed: ${into.text.slice(0, 500)}`);
 
+    // Known limitation (accepted): this validates ENCODING only, not content —
+    // a capture of the wrong foreground app would still be a valid image. The
+    // surrounding steps pin what is actually on screen (counter label, rows).
     const shot = record('screenshot', await callTool(s, 'device_screenshot', {}));
     const shotPath = shot.envelope?.data?.path;
     if (shotPath) {

@@ -4,31 +4,42 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
+function newExtentUnion() {
+    return { hitRight: 0, hitBottom: 0, allRight: 0, allBottom: 0 };
+}
+function accumulateExtent(u, rect, hittable) {
+    const { x, y, width, height } = rect;
+    if (width <= 0 || height <= 0)
+        return;
+    u.allRight = Math.max(u.allRight, x + width);
+    u.allBottom = Math.max(u.allBottom, y + height);
+    if (hittable === true) {
+        u.hitRight = Math.max(u.hitRight, x + width);
+        u.hitBottom = Math.max(u.hitBottom, y + height);
+    }
+}
+// width > 300 keeps the same sanity floor the old heuristic used (ignore
+// degenerate all-tiny snapshots rather than emit a bogus rect).
+function resolveScreenRect(u) {
+    if (u.hitRight > 300 && u.hitBottom > 0) {
+        return { x: 0, y: 0, width: u.hitRight, height: u.hitBottom };
+    }
+    if (u.allRight > 300 && u.allBottom > 0) {
+        return { x: 0, y: 0, width: u.allRight, height: u.allBottom };
+    }
+    return null;
+}
 export function updateRefMap(nodes) {
     refMap.clear();
     screenRect = null;
-    // Screen rect = the union bounding box of all node rects. A (0,0)-anchored
-    // heuristic is fragile: on some Android snapshots (#387 Phase B device-proven)
-    // NO node spans the full window — the tallest (0,0) node is a ~128px top-chrome
-    // strip, so a "largest (0,0) rect" pick yields a tiny viewport and direction
-    // scrolls compute a ~50px drag in the status bar that never moves the list.
-    // The max extent across all nodes recovers the true viewport on both platforms.
-    let maxRight = 0;
-    let maxBottom = 0;
+    const extent = newExtentUnion();
     for (const node of nodes) {
         if (!node.ref || !node.rect)
             continue;
         refMap.set(node.ref, node.rect);
-        const { x, y, width, height } = node.rect;
-        if (width > 0 && height > 0) {
-            maxRight = Math.max(maxRight, x + width);
-            maxBottom = Math.max(maxBottom, y + height);
-        }
+        accumulateExtent(extent, node.rect, node.hittable);
     }
-    // width > 300 keeps the same sanity floor the old heuristic used (ignore
-    // degenerate all-tiny-node snapshots rather than emit a bogus rect).
-    screenRect =
-        maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
+    screenRect = resolveScreenRect(extent);
     lastUpdated = Date.now();
 }
 export function lookupRef(ref) {
@@ -120,11 +131,10 @@ export function updateRefMapFromFlat(nodes) {
     refMap.clear();
     screenRect = null;
     const hashed = [];
-    // Screen rect = union bounding box of all node rects (same rationale as
-    // updateRefMap — a (0,0)-anchored pick is fragile when no node spans the
-    // full window).
-    let maxRight = 0;
-    let maxBottom = 0;
+    // Screen rect: hittable-first union with an all-nodes fallback — same
+    // rationale as updateRefMap (off-screen mounted rows must not inflate the
+    // viewport; a (0,0)-anchored pick is fragile when no node spans the window).
+    const extent = newExtentUnion();
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
         if (!node.ref || !node.rect)
@@ -138,14 +148,9 @@ export function updateRefMapFromFlat(nodes) {
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
         hashed.push(node);
-        const { x, y, width, height } = node.rect;
-        if (width > 0 && height > 0) {
-            maxRight = Math.max(maxRight, x + width);
-            maxBottom = Math.max(maxBottom, y + height);
-        }
+        accumulateExtent(extent, node.rect, node.hittable);
     }
-    screenRect =
-        maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
+    screenRect = resolveScreenRect(extent);
     // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
     // dereferences node.rect.* unconditionally, and a malformed entry must not
     // throw mid-update. For real runner data the filtered subset equals the full
