@@ -344,19 +344,19 @@ export function consumePendingFastRunnerArtifactNote() {
     pendingFastRunnerArtifactNote = undefined;
     return note;
 }
-// #519 review finding 4: a pre-#395 artifact passes every staleness gate
-// (protocol unchanged, no new verbs, runnerVersion env-passed at launch) while
-// still emitting hittable=false for every node. HONEST_HITTABLE is compiled
-// into the artifact's /health capabilities, so its absence on a HEALTHY probe
-// is the one artifact-truthful staleness signal. Advisory only (warn-once,
-// never degrades liveness): forcing a rebuild here would betray the documented
-// "no silent multi-minute xcodebuild" contract.
+// HONEST_HITTABLE is compiled into the artifact's /health capabilities — its
+// absence on a healthy probe is the only artifact-truthful signal that the
+// binary predates #395 (protocol/commands are unchanged and runnerVersion is
+// env-passed at launch, so every other gate passes). A missing capabilities
+// list means the artifact predates capability enumeration entirely and is
+// stale for the same reason. Advisory only: a forced rebuild here would break
+// the no-silent-multi-minute-xcodebuild contract.
 let staleHittableWarned = false;
 export function _resetStaleHittableWarnForTest() {
     staleHittableWarned = false;
 }
 function noteStaleHittableArtifact(capabilities) {
-    if (staleHittableWarned || capabilities?.includes('HONEST_HITTABLE'))
+    if (staleHittableWarned || (capabilities ?? []).includes('HONEST_HITTABLE'))
         return;
     if (pendingFastRunnerArtifactNote !== undefined)
         return;

@@ -112,7 +112,8 @@ extension RnFastRunnerTests {
         resolveElements: collapsedTabDescendants,
         depth: 1,
         parentIndex: 0,
-        nodeLimit: fastSnapshotLimit
+        nodeLimit: fastSnapshotLimit,
+        viewport: context.viewport
       )
       truncated = truncated || didTruncateFallback
     }
@@ -172,7 +173,8 @@ extension RnFastRunnerTests {
           resolveElements: collapsedTabDescendants,
           depth: visibleDepth + 1,
           parentIndex: index,
-          nodeLimit: fastSnapshotLimit
+          nodeLimit: fastSnapshotLimit,
+          viewport: context.viewport
         )
         truncated = truncated || didTruncateFallback
       }
@@ -257,7 +259,6 @@ extension RnFastRunnerTests {
     return shouldIncludeSnapshotNode(
       type: type,
       hasContent: !label.isEmpty || !identifier.isEmpty || (valueText != nil),
-      childCount: snapshot.children.count,
       isScrollableContainer: isScrollableContainer(snapshot, visible: visible),
       isInteractiveType: interactiveTypes.contains(type),
       visible: visible,
@@ -375,14 +376,16 @@ extension RnFastRunnerTests {
     resolveElements: () -> [XCUIElement],
     depth: Int,
     parentIndex: Int,
-    nodeLimit: Int
+    nodeLimit: Int,
+    viewport: CGRect
   ) -> Bool {
     let fallbackNodes = collapsedTabFallbackNodes(
       for: containerSnapshot,
       resolveElements: resolveElements,
       startingIndex: nodes.count,
       depth: depth,
-      parentIndex: parentIndex
+      parentIndex: parentIndex,
+      viewport: viewport
     )
     if fallbackNodes.isEmpty { return false }
     let remaining = max(0, nodeLimit - nodes.count)
@@ -396,7 +399,8 @@ extension RnFastRunnerTests {
     resolveElements: () -> [XCUIElement],
     startingIndex: Int,
     depth: Int,
-    parentIndex: Int
+    parentIndex: Int,
+    viewport: CGRect
   ) -> [SnapshotNode] {
     if !containerSnapshot.children.isEmpty { return [] }
     guard shouldExpandCollapsedTabContainer(containerSnapshot) else { return [] }
@@ -410,7 +414,8 @@ extension RnFastRunnerTests {
       collapsedTabCandidateNode(
         element: element,
         containerSnapshot: containerSnapshot,
-        containerFrame: containerFrame
+        containerFrame: containerFrame,
+        viewport: viewport
       )
     }
     .sorted { left, right in
@@ -457,7 +462,8 @@ extension RnFastRunnerTests {
   private func collapsedTabCandidateNode(
     element: XCUIElement,
     containerSnapshot: XCUIElementSnapshot,
-    containerFrame: CGRect
+    containerFrame: CGRect,
+    viewport: CGRect
   ) -> SnapshotNode? {
     var node: SnapshotNode?
     let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
@@ -496,7 +502,11 @@ extension RnFastRunnerTests {
         rect: snapshotRect(from: frame),
         enabled: element.isEnabled,
         focused: elementHasFocus(element) ? true : nil,
-        hittable: element.isHittable,
+        hittable: computeSnapshotHittable(
+          enabled: element.isEnabled,
+          frame: frame,
+          viewport: viewport
+        ),
         depth: 0,
         parentIndex: nil,
         hiddenContentAbove: nil,

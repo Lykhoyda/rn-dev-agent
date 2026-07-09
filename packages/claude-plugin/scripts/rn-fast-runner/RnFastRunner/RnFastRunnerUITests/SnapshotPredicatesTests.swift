@@ -54,7 +54,6 @@ final class SnapshotInclusionTests: XCTestCase {
   private func include(
     type: XCUIElement.ElementType = .other,
     hasContent: Bool = false,
-    childCount: Int = 0,
     isScrollableContainer: Bool = false,
     isInteractiveType: Bool = false,
     visible: Bool = true,
@@ -64,7 +63,6 @@ final class SnapshotInclusionTests: XCTestCase {
     return shouldIncludeSnapshotNode(
       type: type,
       hasContent: hasContent,
-      childCount: childCount,
       isScrollableContainer: isScrollableContainer,
       isInteractiveType: isInteractiveType,
       visible: visible,
@@ -78,13 +76,8 @@ final class SnapshotInclusionTests: XCTestCase {
     XCTAssertTrue(include(type: .staticText, hasContent: false))
   }
 
-  func testCompactExcludesContentlessSingleChildOther() {
-    XCTAssertFalse(include(childCount: 1, compact: true))
-    XCTAssertFalse(include(childCount: 0, compact: true))
-  }
-
-  func testCompactExcludesContentlessOtherEvenWithManyChildren() {
-    XCTAssertFalse(include(childCount: 3, compact: true))
+  func testCompactExcludesContentlessOther() {
+    XCTAssertFalse(include(compact: true))
   }
 
   func testCompactIncludesContentfulNodes() {

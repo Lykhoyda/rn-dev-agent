@@ -41010,7 +41010,7 @@ function _resetStaleHittableWarnForTest() {
   staleHittableWarned = false;
 }
 function noteStaleHittableArtifact(capabilities) {
-  if (staleHittableWarned || capabilities?.includes("HONEST_HITTABLE"))
+  if (staleHittableWarned || (capabilities ?? []).includes("HONEST_HITTABLE"))
     return;
   if (pendingFastRunnerArtifactNote !== void 0)
     return;

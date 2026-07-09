@@ -1,10 +1,6 @@
-// #519 review finding 4: a pre-#395 runner artifact passes every staleness
-// gate (protocol unchanged, no new verbs, runnerVersion is env-passed at
-// launch) while still emitting hittable=false for every node. The compiled-in
-// HONEST_HITTABLE capability is the only artifact-truthful signal — a healthy
-// probe that doesn't advertise it queues a one-shot advisory note through the
-// existing pendingFastRunnerArtifactNote channel (surfaced as meta.note by the
-// open/dispatch paths). Advisory only: liveness stays 'alive'.
+// A healthy probe without the compiled-in HONEST_HITTABLE capability means
+// the artifact predates #395 and emits stale hittable — queue a warn-once
+// advisory note; liveness must stay 'alive'.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -68,11 +64,9 @@ test('gh-519: advisory is warn-once per process', async () => {
 });
 
 test('gh-519: an occupied pending-note slot defers the advisory without spending the warn budget', async () => {
-  // Both notes share the same text, so a clobber is not directly observable —
-  // but the guard's side effect is: a probe that finds the slot occupied must
-  // early-return BEFORE marking warned, so the advisory still fires on the
-  // next free-slot probe. An overwrite implementation would have consumed the
-  // warn budget and queue nothing at step 3.
+  // Clobbering is not directly observable (identical note text); the guard's
+  // side effect is: occupied slot → early-return BEFORE marking warned, so an
+  // overwrite implementation would queue nothing at the final probe.
   await probeFastRunnerLivenessDetailed(deps(aliveBody(['SCREEN_STATIC'])));
   _resetStaleHittableWarnForTest();
   await probeFastRunnerLivenessDetailed(deps(aliveBody(['SCREEN_STATIC'])));

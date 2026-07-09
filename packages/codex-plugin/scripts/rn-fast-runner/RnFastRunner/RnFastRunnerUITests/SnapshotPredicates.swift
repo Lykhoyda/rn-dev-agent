@@ -24,16 +24,12 @@ func computeSnapshotHittable(enabled: Bool, frame: CGRect, viewport: CGRect) -> 
 func shouldIncludeSnapshotNode(
   type: XCUIElement.ElementType,
   hasContent: Bool,
-  childCount: Int,
   isScrollableContainer: Bool,
   isInteractiveType: Bool,
   visible: Bool,
   compact: Bool,
   interactiveOnly: Bool
 ) -> Bool {
-  if compact && type == .other && !hasContent && childCount <= 1 {
-    return false
-  }
   if interactiveOnly {
     if isScrollableContainer { return true }
     #if os(macOS)
