@@ -1,0 +1,47 @@
+{
+  "canonicalSources": {
+    "skills": "./skills",
+    "commands": "./commands",
+    "agents": "./agents",
+    "templates": "./templates/rn-agent"
+  },
+  "nativeRunners": {
+    "ios": "../rn-fast-runner",
+    "android": "../rn-android-runner"
+  },
+  "hostOutputs": {
+    "claude": {
+      "manifest": "../claude-plugin/.claude-plugin/plugin.json",
+      "legacyManifest": "../claude-plugin/plugin.json",
+      "rootMarketplace": "../../.claude-plugin/marketplace.json",
+      "packageMarketplace": "../claude-plugin/.claude-plugin/marketplace.json",
+      "legacyMarketplace": "../claude-plugin/marketplace.json",
+      "package": "../claude-plugin/package.json",
+      "hooks": "../claude-plugin/hooks",
+      "runtime": "../claude-plugin/rn-dev-agent-core/dist/supervisor.js",
+      "runnerManifest": "../claude-plugin/runner-manifest.json",
+      "nativeRunnerScripts": "../claude-plugin/scripts",
+      "skills": "../claude-plugin/skills",
+      "commands": "../claude-plugin/commands",
+      "agents": "../claude-plugin/agents",
+      "templates": "../claude-plugin/templates/rn-agent"
+    },
+    "codex": {
+      "manifest": "../codex-plugin/.codex-plugin/plugin.json",
+      "mcp": "../codex-plugin/.mcp.json",
+      "launcher": "../codex-plugin/bin/cdp-supervisor.js",
+      "runtime": "../codex-plugin/rn-dev-agent-core/dist/supervisor.js",
+      "runnerManifest": "../codex-plugin/runner-manifest.json",
+      "nativeRunnerScripts": "../codex-plugin/scripts",
+      "skills": "../codex-plugin/skills",
+      "commands": "../codex-plugin/commands",
+      "agents": "../codex-plugin/agents",
+      "templates": "../codex-plugin/templates/rn-agent"
+    }
+  },
+  "apps": {
+    "docsSite": {
+      "path": "../../apps/docs-site"
+    }
+  }
+}

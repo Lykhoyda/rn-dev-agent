@@ -1,0 +1,25 @@
+---
+title: "device_reset_state"
+description: "One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP"
+---
+
+One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP. Composes device_permission + cdp_mmkv + simctl/adb terminate+launch in one atomic call. Best-effort with per-step status — never silently rolls back. Sequence: permission → storage → terminate → launch → reconnect → helpers (→ optional nav_ready). On iOS, permission state is not queryable post-revoke (simctl limitation) — `ok: true` only means the shell-out exited 0. Returns \{ summary: \{ok, failed, skipped\}, steps: [...], reconnected, helpersInjected \}.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `appId` | `string` | Yes |  |  | App bundle ID, e.g. "com.example.app". |
+| `platform` | `unknown` | No |  |  | Force platform. Auto-detected from booted devices if omitted. |
+| `permissions` | `unknown` | No |  |  |  |
+| `storageKeys` | `unknown` | No |  |  |  |
+| `mmkvInstanceId` | `unknown` | No |  |  | Forwarded to cdp_mmkv. Defaults to mmkv.default. |
+| `relaunch` | `boolean` | No |  |  | Launch the app after terminate. Default true. |
+| `waitForReady` | `unknown` | No |  |  |  |
+| `waitForNavReady` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+device_reset_state(appId: <string>)
+```

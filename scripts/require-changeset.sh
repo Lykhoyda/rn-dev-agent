@@ -14,9 +14,9 @@ set -uo pipefail
 
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BASE_REF="${BASE_REF:-origin/main}"
-# Shippable MCP source. Tests, docs, CI, and the .claude-plugin manifest (which
+# Shippable MCP source. Tests, docs, CI, and the Claude plugin manifest (which
 # IS the changeset output) are intentionally excluded.
-WATCHED='^scripts/cdp-bridge/src/'
+WATCHED='^packages/rn-dev-agent-core/src/'
 
 if [ -n "${CHANGED_FILES+x}" ]; then
   changed="$CHANGED_FILES"
@@ -41,21 +41,21 @@ if [ -z "$changesets" ]; then
 A behavior change without a changeset ships to main unversioned and is
 undeliverable to marketplace installs (GH #189 / v0.44.45 post-mortem).
 
-Fix: run `npx changeset`, describe the change, and commit the generated
+Fix: run `corepack yarn changeset`, describe the change, and commit the generated
 .changeset/*.md file. Docs / test / CI-only PRs do not need one.
 MSG
   exit 1
 fi
 
-# A changeset exists — but cdp-bridge ships to users ONLY via the plugin manifest
+# A changeset exists — but the core MCP server ships to users ONLY via the plugin manifest
 # (plugin.json / marketplace.json), which is versioned by the synthetic
-# `rn-dev-agent-plugin` package. A changeset that bumps only `rn-dev-agent-cdp`
+# `rn-dev-agent-plugin` package. A changeset that bumps only `rn-dev-agent-core`
 # (the internal package) advances the bundled dist but leaves the manifest pinned,
 # so `/plugin update` never delivers the change to installs (#361/#363 delivery
 # gap). Require a `rn-dev-agent-plugin` entry so the manifest bumps and ships.
 #
 # Parse ONLY the frontmatter package keys (the lines strictly between the first
-# and second `---`), not the whole file — otherwise a cdp-only changeset whose
+# and second `---`), not the whole file — otherwise a core-only changeset whose
 # release-note body merely mentions `"rn-dev-agent-plugin"` would falsely pass
 # (Codex PR #364 P1). Same frontmatter extraction as validate-changeset-names.sh.
 plugin_changeset=""
@@ -73,16 +73,16 @@ if [ -z "$plugin_changeset" ]; then
   printf '%s\n' "$src_changed" | sed 's/^/  /' >&2
   cat >&2 <<'MSG'
 
-A `rn-dev-agent-cdp`-only changeset bumps the internal package but NOT the plugin
+A `rn-dev-agent-core`-only changeset bumps the internal package but NOT the plugin
 manifest (plugin.json / marketplace.json) — so the change ships to main but never
 reaches marketplace installs via `/plugin update` (#361/#363 post-mortem: the
-cdp-bridge advanced through 0.48→0.49 while the plugin stayed pinned at 0.55.5).
+core MCP package advanced through 0.48→0.49 while the plugin stayed pinned at 0.55.5).
 
 Fix: add a `rn-dev-agent-plugin` entry to a changeset (typically alongside the
-`rn-dev-agent-cdp` bump), e.g.:
+`rn-dev-agent-core` bump), e.g.:
 
   ---
-  "rn-dev-agent-cdp": patch
+  "rn-dev-agent-core": patch
   "rn-dev-agent-plugin": patch
   ---
 MSG

@@ -1,6 +1,6 @@
 # rn-dev-agent
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turns Claude into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
+A coding-agent plugin for Claude Code and Codex that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features, then **verifies everything live on the simulator** — reading the component tree, store state, and navigation stack through Chrome DevTools Protocol.
 
 **74 MCP tools** · **5 agents** · **17 commands** · **1180+ tests** · **46 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
@@ -8,11 +8,44 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that turn
 
 ## Install
 
+### Claude Code
+
+Published install:
+
 ```bash
 /plugin marketplace add Lykhoyda/rn-dev-agent
 /plugin install rn-dev-agent@Lykhoyda-rn-dev-agent
 /reload-plugins
 ```
+
+Local source path:
+
+```bash
+claude --plugin-dir /path/to/rn-dev-agent
+```
+
+Point Claude Code at the repository root. The root
+`.claude-plugin/marketplace.json` resolves the actual plugin package from
+`packages/claude-plugin/`, which owns the Claude manifest, slash commands,
+agents, skills, hooks, and MCP registration. If a tool asks for the package
+root directly, use `/path/to/rn-dev-agent/packages/claude-plugin`.
+
+### Codex
+
+Local source path: `/path/to/rn-dev-agent/packages/codex-plugin`.
+
+This checkout ships a Codex package in `packages/codex-plugin/` with
+`.codex-plugin/plugin.json`, `.mcp.json`, package-local shared skill adapters,
+and a bundled MCP runtime at `packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js`.
+When installing locally through Codex, select or register that package
+directory, not the repository root and not `packages/claude-plugin/`.
+
+Codex does not load Claude Code hooks. Seeing `No plugin hooks` in the Codex
+plugin detail screen is expected; Codex loads the package-local skills and the
+same `cdp` MCP server from `.mcp.json`.
+
+The core source lives in `packages/rn-dev-agent-core/`; both host packages are
+generated from `packages/shared-agent-knowledge/`.
 
 ## Setup
 
@@ -30,7 +63,7 @@ This checks **10 prerequisites** and fixes what it can automatically:
 
 | Check | Required | Auto-install |
 |-------|----------|-------------|
-| Node.js >= 22 LTS | Yes | No |
+| Node.js >= 22.18 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only — ships in-tree; prebuilt artifact on releases, one-time `xcodebuild build-for-testing` fallback | No |
 | rn-android-runner (Android) | Android targets only — ships in-tree; prebuilt artifact on releases, Gradle build fallback on first use | No |
@@ -46,13 +79,13 @@ If auto-install fails for any dependency, the setup command gives step-by-step m
 
 ## Usage
 
-Tell Claude what to build:
+Tell your agent what to build:
 
 ```
 /rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
 ```
 
-Claude runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/commands/rn-feature-dev/) — from understanding your codebase to verified code with proof screenshots:
+The plugin runs an [8-phase pipeline](https://lykhoyda.github.io/rn-dev-agent/commands/rn-feature-dev/) — from understanding your codebase to verified code with proof screenshots:
 
 | Phase | What happens |
 |-------|-------------|
@@ -204,7 +237,7 @@ Claude Code
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles. Kill Metro, restart it, relaunch the app. `cdp_status` warns when reload count is high. |
 | `device_scroll` times out on Reanimated screens | A `waitForIdle` round-trip can deadlock against Reanimated worklets. Scroll routes through the in-tree runner's HID synthesis instead. Ensure the runner is healthy via the device session (iOS: `rn-fast-runner`, Android: `rn-android-runner`). |
 | Legacy `AgentDeviceRunner` re-appears on iOS sim | Stale `~/.agent-device/daemon.json` respawns the upstream runner alongside our in-tree `rn-fast-runner`. Since #202 the plugin terminates stale `AgentDeviceRunner` processes at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`, so this self-heals. Opt out with `RN_DEVICE_KILL_LEGACY=0`; to clean up manually: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}`. |
-| iOS `device_*` calls fail with "rn-fast-runner did not become ready" | Build artifacts missing. Pre-build once: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData`. After that, the runner spawns lazily on `device_snapshot action=open`. |
+| iOS `device_*` calls fail with "rn-fast-runner did not become ready" | The runner self-build may have timed out or failed. In a source checkout, pre-build once: `cd packages/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData`. After that, the runner spawns lazily on `device_snapshot action=open`. |
 | iOS `device_fill` returns "main thread execution timed out" but text appears in the field | Known XCTest-internal quiescence behavior; the TS client treats this specific error as success on `.type` (`meta.runnerTimeoutShim: true`). The side-effect succeeded — proceed. |
 | Want XCTest's stock idle-waits back / suspect mid-animation snapshots | Since #384 the iOS runner makes XCTest's private quiescence wait a no-op (default ON) so React Native apps with Reanimated/looping animations can't hang queries — the same WebDriverAgent-lineage bypass Maestro uses. Opt out with `RN_QUIESCENCE_BYPASS=0` (read when the runner spawns — an already-running runner keeps its old state and survives session reopen by design, so kill it first: `pkill -f RnFastRunnerUITests`, then reopen the device session and confirm via `cdp_status` → `deviceSession.runnerCapabilities`). Audit: first `device_*` result after boot carries `meta.quiescenceBypass`, and `cdp_status` → `deviceSession.runnerCapabilities` lists `QUIESCENCE_BYPASS` while active. If the runner logs `RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE`, Apple renamed the private selector on your Xcode — everything still works, just without the bypass; please file an issue. |
 | Taps on stale @refs succeed now instead of STALE_REF / seeing `meta.reResolved` or `meta.tapRetried` | Story 05 (#386) self-healing taps: a stale `@ref` is re-bound by identity (testID/label/role, unique match only — ambiguity still returns `STALE_REF`, now with a `candidates` list) and a tap whose settle hash shows no UI change is re-tapped exactly once (`meta.tapRetried`), then reported as `meta.noUiChange: true`. 3 consecutive no-change taps on distinct targets add a wedged-runtime `meta.hint` (see spec 2026-06-14-263). Opt out per call with `retryIfNoChange: false` (device_press/device_longpress) or globally with `RN_SELF_HEAL=0` (disables both re-resolution and re-tap). Change detection costs one extra snapshot probe per tap on the fast settle tiers; non-tap verbs are unaffected. |
@@ -237,11 +270,17 @@ Enable auto-update in the plugin manager (Marketplaces tab), or update manually:
 
 ```bash
 git clone https://github.com/Lykhoyda/rn-dev-agent.git
-cd rn-dev-agent/scripts/cdp-bridge && npm install && npm run build && cd ../..
-cd /path/to/your-rn-app && claude --plugin-dir /path/to/rn-dev-agent
+cd rn-dev-agent
+corepack enable
+corepack yarn install --immutable
+corepack yarn workspace rn-dev-agent-core build
+corepack yarn build:host-runtimes
 ```
 
-Tests: `cd scripts/cdp-bridge && npm test` (1180+ tests, [CI](../../actions))
+Claude Code local path: `claude --plugin-dir /path/to/rn-dev-agent`.
+Codex local path: `/path/to/rn-dev-agent/packages/codex-plugin`.
+
+Tests: `corepack yarn test` (1180+ tests, [CI](../../actions))
 
 ## License
 

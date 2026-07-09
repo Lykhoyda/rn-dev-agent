@@ -28,7 +28,7 @@ CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, 
 > **Implemented 2026-07-05** (#387): `.github/workflows/native-tests.yml` + `scripts/test-native-ios.sh` + root `test:native:*` npm scripts.
 > Triage notes: (1) a red on `QuiescenceBypassTests.testProbeResolvedAtBundleLoad` means the CI Xcode's private quiescence selectors drifted ("degrade loudly" by design, #384) — an Xcode-compat issue, not a plugin bug. (2) Any future subclass of `RnFastRunnerTests` inherits the 24-hour `testCommand` and MUST be added to the skip-list in `scripts/test-native-ios.sh`. (3) NEVER move the skips into `RnFastRunnerUITests.xctestplan` as `skippedTests` — `build-for-testing` bakes them into the `.xctestrun` that the PRODUCTION launch (`test-without-building -only-testing:…/testCommand`) consumes, and skips subtract from the only-set, so the runner would never boot.
 
-- **Android JVM tests** (ubuntu runner, ~1 min): `(cd scripts/rn-android-runner && ./gradlew testDebugUnitTest)` — covers `KeyboardGuardTest.kt` and future pure-Kotlin logic. Gradle cache via `actions/setup-java` + `gradle/actions/setup-gradle`.
+- **Android JVM tests** (ubuntu runner, ~1 min): `(cd packages/rn-android-runner && ./gradlew testDebugUnitTest)` — covers `KeyboardGuardTest.kt` and future pure-Kotlin logic. Gradle cache via `actions/setup-java` + `gradle/actions/setup-gradle`.
 - **iOS unit tests** (macOS runner): `bash scripts/test-native-ios.sh` — `xcodebuild test` on the `RnFastRunner` scheme with a SKIP-list (`-skip-testing:RnFastRunnerUITests/RnFastRunnerTests`, the production server entry that never returns; `-skip-testing:RnFastRunnerUITests/SnapshotForegroundRegressionTest`, needs the test app installed). New test classes in the folder run automatically (Xcode 16 synchronized groups). Budget ~8–12 min; path-filtered on PRs, unconditional on main.
 - Wire both into the required-checks set for merge (consistent with the existing pre-merge CI-green rule).
 
@@ -78,7 +78,7 @@ Nightly job (not per-PR — simulators/emulators are too slow/flaky for the merg
 
 ### Phase C — LLM-behavior evals (nightly, budget-capped)
 
-- Adopt `mcp-server-tester` (Maestro's tool) or an equivalent YAML-driven harness under `scripts/cdp-bridge/test/evals/`:
+- Adopt `mcp-server-tester` (Maestro's tool) or an equivalent YAML-driven harness under `packages/rn-dev-agent-core/test/evals/`:
   - **Tool-call correctness fixtures** (no device): does the model choose `device_find` vs `device_snapshot` appropriately; does it recover from `NOT_CONNECTED` by opening a session; does it act correctly on `STALE_REF` candidates (Story 05's enriched payload).
   - **Output-usability fixtures**: given a real `device_snapshot` payload, can the model produce the right `@ref` for a described element (this is the regression gate for Story 08's compact format and Story 12's consolidation).
 - Runs nightly with an explicit token budget; results trended, not merge-gating (evals are noisy; they gate *releases* of surface-changing stories, not every PR).

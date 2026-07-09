@@ -1,0 +1,14 @@
+# Generated trees — single writer: scripts/build-host-runtimes.ts (host
+# packages) and tsc/vite (core dist). linguist-generated collapses them in
+# GitHub PR diffs and excludes them from language stats; -diff suppresses
+# textual diffs for the large bundles.
+packages/rn-dev-agent-core/dist/** linguist-generated
+packages/codex-plugin/rn-dev-agent-core/** linguist-generated -diff
+packages/claude-plugin/rn-dev-agent-core/** linguist-generated -diff
+packages/codex-plugin/scripts/** linguist-generated
+packages/claude-plugin/scripts/** linguist-generated
+packages/codex-plugin/runner-manifest.json linguist-generated
+packages/claude-plugin/runner-manifest.json linguist-generated
+packages/codex-plugin/CLAUDE-MD-TEMPLATE.md linguist-generated
+packages/claude-plugin/CLAUDE-MD-TEMPLATE.md linguist-generated
+.yarn/releases/** linguist-generated -diff

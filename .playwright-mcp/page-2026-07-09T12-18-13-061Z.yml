@@ -1,0 +1,51 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: Observe
+      - generic [ref=e7]: rn-dev-agent
+    - generic [ref=e8]: connecting
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]: "0"
+        - generic [ref=e13]: calls
+      - generic [ref=e14]:
+        - generic [ref=e15]: "0"
+        - generic [ref=e16]: errors
+  - generic [ref=e17]:
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - button "interaction 0" [ref=e20] [cursor=pointer]:
+          - text: interaction
+          - generic [ref=e22]: "0"
+        - button "introspection 0" [ref=e23] [cursor=pointer]:
+          - text: introspection
+          - generic [ref=e25]: "0"
+        - button "navigation 0" [ref=e26] [cursor=pointer]:
+          - text: navigation
+          - generic [ref=e28]: "0"
+        - button "lifecycle 0" [ref=e29] [cursor=pointer]:
+          - text: lifecycle
+          - generic [ref=e31]: "0"
+        - button "testing 0" [ref=e32] [cursor=pointer]:
+          - text: testing
+          - generic [ref=e34]: "0"
+        - button "other 0" [ref=e35] [cursor=pointer]:
+          - text: other
+          - generic [ref=e37]: "0"
+        - button "✗ errors" [ref=e38] [cursor=pointer]
+        - textbox "search tool or summary…" [ref=e39]
+      - generic [ref=e42]:
+        - generic [ref=e43]: Waiting for agent activity
+        - generic [ref=e44]: Tool calls appear here as the agent works. Ask it to interact with the app.
+    - generic [ref=e45]:
+      - generic [ref=e46]: Device
+      - generic [ref=e48]:
+        - img "live device mirror"
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - button "route" [ref=e51] [cursor=pointer]
+        - button "store" [ref=e52] [cursor=pointer]
+        - button "tree" [ref=e53] [cursor=pointer]
+        - button "actions" [ref=e54] [cursor=pointer]
+        - button "e2e" [ref=e55] [cursor=pointer]
+      - generic [ref=e57]: no navigation state yet · run cdp_navigation_state

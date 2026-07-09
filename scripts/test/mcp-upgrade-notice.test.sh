@@ -29,15 +29,19 @@ trap cleanup EXIT
 # Sandbox: copy the hook + probe into an isolated plugin root with stubbed
 # ensure-* scripts so the test never runs installers or touches the network.
 # ---------------------------------------------------------------------------
-SANDBOX="$tmp/plugin"
-mkdir -p "$SANDBOX/hooks" "$SANDBOX/scripts" "$SANDBOX/.claude-plugin"
-cp "$REPO_ROOT/hooks/detect-rn-project.sh" "$SANDBOX/hooks/"
-cp "$REPO_ROOT/scripts/mcp-bridge-probe.mjs" "$SANDBOX/scripts/" 2>/dev/null \
+SANDBOX_ROOT="$tmp/repo"
+SANDBOX="$SANDBOX_ROOT/packages/claude-plugin"
+CORE_SANDBOX="$SANDBOX_ROOT/packages/rn-dev-agent-core"
+SCRIPT_SANDBOX="$SANDBOX_ROOT/scripts"
+mkdir -p "$SANDBOX/hooks" "$SANDBOX/.claude-plugin" "$CORE_SANDBOX/dist" "$SCRIPT_SANDBOX"
+cp "$REPO_ROOT/packages/claude-plugin/hooks/detect-rn-project.sh" "$SANDBOX/hooks/"
+cp "$REPO_ROOT/scripts/mcp-bridge-probe.mjs" "$SCRIPT_SANDBOX/" 2>/dev/null \
   || { echo "FAIL: scripts/mcp-bridge-probe.mjs missing"; exit 1; }
-echo '{"version":"9.9.9"}' > "$SANDBOX/.claude-plugin/plugin.json"
+echo '{"version":"9.9.9"}' > "$SANDBOX/plugin.json"
+cp "$SANDBOX/plugin.json" "$SANDBOX/.claude-plugin/plugin.json"
 for s in ensure-cdp-deps ensure-maestro-runner ensure-idb-companion \
          ensure-ffmpeg ensure-troubleshooting-doc ensure-android-ready; do
-  printf '#!/bin/bash\nexit 0\n' > "$SANDBOX/scripts/$s.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$SCRIPT_SANDBOX/$s.sh"
 done
 
 # Fake RN project so the hook's main branch runs.
@@ -58,8 +62,12 @@ run_hook() {
 
 # Uses the SANDBOX copy — the same file the sandboxed hook executes.
 run_probe() { # $1=plugin-root $2=upgraded
+  local plugin_root="$1"
   (cd "$PROJ" && TMPDIR="$FAKE_TMP" CLAUDE_USER_CWD="$PROJ" \
-    node "$SANDBOX/scripts/mcp-bridge-probe.mjs" --plugin-root "$1" --upgraded "$2" 2>/dev/null)
+    node "$SCRIPT_SANDBOX/mcp-bridge-probe.mjs" \
+      --plugin-root "$plugin_root" \
+      --core-root "$plugin_root/../rn-dev-agent-core" \
+      --upgraded "$2" 2>/dev/null)
 }
 
 # Lock path computed exactly as the bridge's lockfile.ts computes it.
@@ -149,8 +157,8 @@ echo "$hout" | grep -q "different plugin install" \
 # ---------------------------------------------------------------------------
 # 4. Probe: live bridge from the CURRENT install → healthy.
 # ---------------------------------------------------------------------------
-mkdir -p "$SANDBOX/scripts/cdp-bridge/dist"
-spawn_decoy "$SANDBOX/scripts/cdp-bridge/dist/supervisor.js"
+mkdir -p "$CORE_SANDBOX/dist"
+spawn_decoy "$CORE_SANDBOX/dist/supervisor.js"
 current_pid="$DECOY_PID"
 write_lock "$current_pid"
 pout="$(run_probe "$SANDBOX" 1)"
@@ -167,9 +175,11 @@ pout="$(run_probe "$SANDBOX" 0)"
 
 # Space-containing install path must NOT be reported stale (\S-regex can't
 # span spaces; the exact-containment current-install check must catch it).
-SPACE_ROOT="$tmp/plug in root"
-mkdir -p "$SPACE_ROOT/scripts/cdp-bridge/dist"
-spawn_decoy "$SPACE_ROOT/scripts/cdp-bridge/dist/supervisor.js"
+SPACE_REPO="$tmp/plug in root"
+SPACE_ROOT="$SPACE_REPO/packages/claude-plugin"
+SPACE_CORE="$SPACE_REPO/packages/rn-dev-agent-core"
+mkdir -p "$SPACE_ROOT" "$SPACE_CORE/dist"
+spawn_decoy "$SPACE_CORE/dist/supervisor.js"
 write_lock "$DECOY_PID"
 pout="$(run_probe "$SPACE_ROOT" 1)"
 echo "$pout" | grep -q "different plugin install" \

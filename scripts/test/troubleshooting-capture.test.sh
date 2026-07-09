@@ -2,7 +2,7 @@
 # Capture hook must append a redacted JSONL record to .rn-agent/local/session-buffer.jsonl
 # and must NOT leak raw secrets into it.
 set -uo pipefail
-HOOK="$(cd "$(dirname "$0")/../.." && pwd)/hooks/tool-use-failure.sh"
+HOOK="$(cd "$(dirname "$0")/../.." && pwd)/packages/claude-plugin/hooks/tool-use-failure.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 echo '{"name":"fixture"}' > "$tmp/package.json"   # project evidence so the capture guard fires
 

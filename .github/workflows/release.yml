@@ -3,9 +3,9 @@ name: Release
 # Changesets release automation (Version-PR pattern).
 #
 # On every push to main, this opens/updates a "Version Packages" PR that runs
-# `npm run version-packages` (changeset version -> sync-plugin-manifest -> sync-versions --fix),
+# `corepack yarn version-packages` (changeset version -> sync-plugin-manifest -> sync-versions --fix),
 # accumulating all pending changesets into one version bump. Merging that PR
-# bumps plugin.json + marketplace.json + cdp-bridge, updates CHANGELOGs, and
+# bumps plugin.json + marketplace.json + rn-dev-agent-core, updates CHANGELOGs, and
 # consumes the changesets — making the new version installable from the marketplace.
 #
 # No npm publish: the "package" is the plugin manifest the marketplace reads
@@ -39,13 +39,14 @@ jobs:
         with:
           node-version: 22
 
-      - run: npm ci
+      - run: corepack enable
+      - run: corepack yarn install --immutable
 
       - name: Create or update the Version Packages PR
         id: changesets
         uses: changesets/action@v1
         with:
-          version: npm run version-packages
+          version: corepack yarn version-packages
           commit: "chore(release): version packages"
           title: "chore(release): version packages"
         env:

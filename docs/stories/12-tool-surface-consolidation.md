@@ -8,7 +8,7 @@
 
 ## Problem
 
-The bridge registers **74 tools** (`scripts/cdp-bridge/src/index.ts`, ~2488 lines of registration). Maestro's team went the opposite direction — 15 → 8 — and wrote down why (commit `b54bdfa8`): primitives that are one-line wrappers get deleted; validation folds into execution; docs-retrieval delegates to the host agent. They also *observed agents ignoring tool descriptions and server instructions* (Cursor, Codex — `viewer/ViewerHint.kt:9-12`), which gets worse as the surface grows: every tool is another entry competing in the model's selection, and another block of schema tokens in every session.
+The bridge registers **74 tools** (`packages/rn-dev-agent-core/src/index.ts`, ~2488 lines of registration). Maestro's team went the opposite direction — 15 → 8 — and wrote down why (commit `b54bdfa8`): primitives that are one-line wrappers get deleted; validation folds into execution; docs-retrieval delegates to the host agent. They also *observed agents ignoring tool descriptions and server instructions* (Cursor, Codex — `viewer/ViewerHint.kt:9-12`), which gets worse as the surface grows: every tool is another entry competing in the model's selection, and another block of schema tokens in every session.
 
 Our situation is legitimately different — the CDP white-box layer (state, component tree, network, navigation) has no DSL to collapse into, and a *development* agent needs interactive primitives a *test runner* doesn't. The goal is not 8 tools; it's removing overlap and merge-debt so every remaining tool earns its slot.
 

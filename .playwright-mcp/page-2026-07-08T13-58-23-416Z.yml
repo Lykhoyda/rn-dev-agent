@@ -1,0 +1,51 @@
+- generic [ref=f3e3]:
+  - generic [ref=f3e4]:
+    - generic [ref=f3e5]:
+      - strong [ref=f3e6]: Observe
+      - generic [ref=f3e7]: rn-dev-agent
+    - generic [ref=f3e8]: connecting
+    - generic [ref=f3e10]:
+      - generic [ref=f3e11]:
+        - generic [ref=f3e12]: "0"
+        - generic [ref=f3e13]: calls
+      - generic [ref=f3e14]:
+        - generic [ref=f3e15]: "0"
+        - generic [ref=f3e16]: errors
+  - generic [ref=f3e17]:
+    - generic [ref=f3e18]:
+      - generic [ref=f3e19]:
+        - button "interaction 0" [ref=f3e20] [cursor=pointer]:
+          - text: interaction
+          - generic [ref=f3e22]: "0"
+        - button "introspection 0" [ref=f3e23] [cursor=pointer]:
+          - text: introspection
+          - generic [ref=f3e25]: "0"
+        - button "navigation 0" [ref=f3e26] [cursor=pointer]:
+          - text: navigation
+          - generic [ref=f3e28]: "0"
+        - button "lifecycle 0" [ref=f3e29] [cursor=pointer]:
+          - text: lifecycle
+          - generic [ref=f3e31]: "0"
+        - button "testing 0" [ref=f3e32] [cursor=pointer]:
+          - text: testing
+          - generic [ref=f3e34]: "0"
+        - button "other 0" [ref=f3e35] [cursor=pointer]:
+          - text: other
+          - generic [ref=f3e37]: "0"
+        - button "✗ errors" [ref=f3e38] [cursor=pointer]
+        - textbox "search tool or summary…" [ref=f3e39]
+      - generic [ref=f3e42]:
+        - generic [ref=f3e43]: Waiting for agent activity
+        - generic [ref=f3e44]: Tool calls appear here as the agent works. Ask it to interact with the app.
+    - generic [ref=f3e45]:
+      - generic [ref=f3e46]: Device
+      - generic [ref=f3e48]:
+        - img "live device mirror"
+    - generic [ref=f3e49]:
+      - generic [ref=f3e50]:
+        - button "route" [ref=f3e51] [cursor=pointer]
+        - button "store" [ref=f3e52] [cursor=pointer]
+        - button "tree" [ref=f3e53] [cursor=pointer]
+        - button "actions" [ref=f3e54] [cursor=pointer]
+        - button "e2e" [ref=f3e55] [cursor=pointer]
+      - generic [ref=f3e57]: no navigation state yet — run cdp_navigation_state

@@ -1,0 +1,24 @@
+---
+title: "device_screenshot"
+description: "Capture a screenshot of the active device screen"
+sidebar:
+  order: 20
+---
+
+Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 800px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened. Result may include meta.advisories[] (EPHEMERAL_PATH when saving to /tmp, FULL_RESOLUTION when maxWidth=0) — non-blocking nudges to use docs/proof/&lt;feature&gt;/&lt;NN&gt;-&lt;step&gt;.jpg for deliverables and the default 800px width for everyday captures.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `path` | `unknown` | No |  |  | Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG. |
+| `format` | `unknown` | No |  |  | Image format (default: auto-detect from path extension, or jpeg) |
+| `platform` | `unknown` | No |  |  | Target device platform. Defaults to the currently-connected CDP target platform. |
+| `maxWidth` | `unknown` | No |  | min: 0, integer |  |
+| `quality` | `unknown` | No |  | min: 1, max: 100, integer | JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85. |
+
+## Usage
+
+```
+device_screenshot()
+```

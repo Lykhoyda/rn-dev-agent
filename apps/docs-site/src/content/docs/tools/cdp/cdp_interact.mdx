@@ -1,0 +1,34 @@
+---
+title: "cdp_interact"
+description: "Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly"
+sidebar:
+  order: 14
+---
+
+Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when &gt;1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () =&gt; [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `unknown` | Yes |  |  |  |
+| `testID` | `unknown` | No |  |  |  |
+| `accessibilityLabel` | `unknown` | No |  |  |  |
+| `text` | `unknown` | No |  |  |  |
+| `role` | `unknown` | No |  |  |  |
+| `placeholder` | `unknown` | No |  |  | Discovery ladder (press-only): match a TextInput by its placeholder text. |
+| `exact` | `unknown` | No |  |  |  |
+| `includeHidden` | `unknown` | No |  |  | Discovery ladder: include accessibility-hidden elements (excluded by default). |
+| `scrollX` | `number` | No |  |  | For scroll: horizontal offset in pixels (default 0) |
+| `scrollY` | `number` | No |  |  | For scroll: vertical offset in pixels (default 300) |
+| `animated` | `boolean` | No | `true` |  | For scroll: whether to animate |
+| `name` | `unknown` | No |  |  |  |
+| `value` | `unknown` | No |  |  |  |
+| `shouldValidate` | `unknown` | No |  |  |  |
+| `shouldDirty` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+cdp_interact(action: <unknown>)
+```

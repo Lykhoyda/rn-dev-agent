@@ -8,7 +8,8 @@
 #   RnFastRunnerTests            — the production runner entry (never returns)
 #   SnapshotForegroundRegressionTest — needs com.rndevagent.testapp installed
 set -euo pipefail
-cd "$(dirname "$0")/rn-fast-runner/RnFastRunner"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT/packages/rn-fast-runner/RnFastRunner"
 RESULTS="${RN_IOS_TEST_RESULTS:-../build/native-tests.xcresult}"
 
 if [ -n "${RN_IOS_TEST_DESTINATION:-}" ]; then

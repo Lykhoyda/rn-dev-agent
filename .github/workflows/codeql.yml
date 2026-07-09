@@ -2,8 +2,8 @@ name: CodeQL
 
 # Advanced CodeQL setup. Replaces the repo's previous "default setup" because
 # autobuild can't locate our nested Swift Xcode project at
-# scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj or our nested
-# Android Gradle project at scripts/rn-android-runner/. This workflow runs
+# packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj or our nested
+# Android Gradle project at packages/rn-android-runner/. This workflow runs
 # each language's correct build command and lets CodeQL trace the resulting
 # artifacts.
 #
@@ -54,7 +54,7 @@ jobs:
           # PR: run Swift only when Swift sources, the Xcode project, or this
           # workflow itself changed. BASE_SHA comes via env (injection-safe).
           if git diff --name-only "$BASE_SHA"...HEAD \
-             | grep -qE '^scripts/rn-fast-runner/|^\.github/workflows/codeql\.yml$'; then
+             | grep -qE '^packages/rn-fast-runner/|^\.github/workflows/codeql\.yml$'; then
             echo "swift=true" >> "$GITHUB_OUTPUT"
           else
             echo "swift=false" >> "$GITHUB_OUTPUT"
@@ -113,7 +113,7 @@ jobs:
 
       - name: Build rn-android-runner
         if: ${{ matrix.language == 'java-kotlin' }}
-        working-directory: scripts/rn-android-runner
+        working-directory: packages/rn-android-runner
         run: ./gradlew :app:assembleDebugAndroidTest --no-daemon
 
       # Use the macos-15 runner's preinstalled Xcode (16.x); skip the slow
@@ -122,7 +122,7 @@ jobs:
       # commands traced, not a runnable test bundle.
       - name: Build rn-fast-runner
         if: ${{ matrix.language == 'swift' && needs.changes.outputs.swift == 'true' }}
-        working-directory: scripts/rn-fast-runner/RnFastRunner
+        working-directory: packages/rn-fast-runner/RnFastRunner
         run: |
           set -euo pipefail
           xcodebuild -version

@@ -1,0 +1,24 @@
+---
+title: "device_snapshot"
+description: "Manage device sessions and capture UI snapshots"
+sidebar:
+  order: 21
+---
+
+Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `unknown` | No | `'snapshot'` |  |  |
+| `appId` | `unknown` | No |  |  | App bundle ID — required for action=open (e.g. "com.example.app") |
+| `platform` | `unknown` | No |  |  | Target platform — used with action=open to select device |
+| `sessionName` | `string` | No |  |  | Session name override (default: auto-generated) |
+| `attachOnly` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+device_snapshot()
+```

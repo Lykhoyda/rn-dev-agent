@@ -26,7 +26,7 @@ Every mutating call in `Maestro.kt` is followed by `waitForAppToSettle()` (`back
 - **iOS:** new `/isScreenStatic` route — take two screenshots ~100 ms apart, compare SHA-256, return `{static: bool}` (direct port of `ScreenDiffHandler.swift`). Capability `SCREEN_STATIC`.
 - **Android:** new `/isWindowUpdating` command — `uiDevice.waitForWindowUpdate(appId, 500)` wrapper returning `{updating: bool}`. Capability `WINDOW_UPDATE`. (Android snapshot dumps are fast enough that hierarchy polling is the main tier, matching Maestro's `FAST_HIERARCHY` posture.)
 
-### Bridge: `scripts/cdp-bridge/src/lifecycle/settle.ts`
+### Bridge: `packages/rn-dev-agent-core/src/lifecycle/settle.ts`
 
 ```ts
 type SettleOutcome = { settled: boolean; method: 'window-gate'|'screen-static'|'snapshot-eq'|'timeout'; ms: number; hierarchyChanged?: boolean };

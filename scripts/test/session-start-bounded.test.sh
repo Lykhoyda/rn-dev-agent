@@ -16,7 +16,7 @@ ok() { echo "ok: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 
 # 1. Every SessionStart hook entry declares an explicit timeout.
-if python3 - "$REPO_ROOT/hooks/hooks.json" << 'EOF'
+if python3 - "$REPO_ROOT/packages/claude-plugin/hooks/hooks.json" << 'EOF'
 import json, sys
 h = json.load(open(sys.argv[1]))["hooks"]
 entries = [hh for e in h.get("SessionStart", []) for hh in e["hooks"]]

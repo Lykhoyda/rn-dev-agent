@@ -4,7 +4,7 @@
 // Fetches the three upstream skills (react-best-practices, composition-patterns,
 // react-native-skills) from vercel-labs/agent-skills at a pinned commit SHA,
 // wipes-and-replaces the local third_party/ mirror, and regenerates the
-// routing index at skills/rn-best-practices/rules.index.json plus the
+// routing index at packages/shared-agent-knowledge/skills/rn-best-practices/rules.index.json plus the
 // integrity manifest at third_party/.../UPSTREAM.lock.json.
 //
 // Modes:
@@ -40,7 +40,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
 const VENDOR_ROOT = path.join(REPO_ROOT, 'third_party', 'vercel-labs', 'agent-skills');
-const ADAPTER_ROOT = path.join(REPO_ROOT, 'skills', 'rn-best-practices');
+const ADAPTER_ROOT = path.join(
+  REPO_ROOT,
+  'packages',
+  'shared-agent-knowledge',
+  'skills',
+  'rn-best-practices',
+);
+const HOST_RULES_INDEX_PATHS = [
+  path.join(
+    REPO_ROOT,
+    'packages',
+    'claude-plugin',
+    'skills',
+    'rn-best-practices',
+    'rules.index.json',
+  ),
+  path.join(
+    REPO_ROOT,
+    'packages',
+    'codex-plugin',
+    'skills',
+    'rn-best-practices',
+    'rules.index.json',
+  ),
+];
 
 const UPSTREAM_REPO = 'vercel-labs/agent-skills';
 const UPSTREAM_SKILLS = ['react-best-practices', 'composition-patterns', 'react-native-skills'];
@@ -275,13 +299,46 @@ function buildRulesIndex(lock) {
         fileGlobs: ['**/*.{tsx,jsx}'],
         checkerRule: null,
         checkable: false,
-        upstream_path: `skills/rn-best-practices/references/rn-dev-agent/${file}`,
+        upstream_path: `packages/shared-agent-knowledge/skills/rn-best-practices/references/rn-dev-agent/${file}`,
         applicable_when: fm.impactDescription || '',
       });
     }
   }
 
   return rules;
+}
+
+function copyRulesIndexToHostOutputs(indexPath, opts) {
+  const indexContent = fs.readFileSync(indexPath, 'utf8');
+  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+    fs.mkdirSync(path.dirname(hostIndexPath), { recursive: true });
+    fs.writeFileSync(hostIndexPath, indexContent, 'utf8');
+    if (!opts.quiet) console.log(`  wrote ${path.relative(REPO_ROOT, hostIndexPath)}`);
+  }
+}
+
+function checkHostRulesIndexCopies(indexPath) {
+  if (!fs.existsSync(indexPath)) {
+    console.error(`missing: ${path.relative(REPO_ROOT, indexPath)}`);
+    return 1;
+  }
+  const expected = fs.readFileSync(indexPath, 'utf8');
+  let mismatches = 0;
+  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+    if (!fs.existsSync(hostIndexPath)) {
+      console.error(`missing: ${path.relative(REPO_ROOT, hostIndexPath)}`);
+      mismatches++;
+      continue;
+    }
+    const actual = fs.readFileSync(hostIndexPath, 'utf8');
+    if (actual !== expected) {
+      console.error(
+        `drift: ${path.relative(REPO_ROOT, hostIndexPath)} does not match shared rules.index.json`,
+      );
+      mismatches++;
+    }
+  }
+  return mismatches;
 }
 
 async function runFix(args) {
@@ -362,6 +419,7 @@ async function runFix(args) {
       `  wrote ${path.relative(REPO_ROOT, indexPath)} (${lock.ruleCounts.total} upstream + ${customCount} custom = ${index.length} rules)`,
     );
   }
+  copyRulesIndexToHostOutputs(indexPath, args);
 
   console.log(`✓ sync complete: ${lock.files.length} files, ${index.length} rules`);
 }
@@ -391,6 +449,7 @@ async function runCheck(_args) {
       mismatches++;
     }
   }
+  mismatches += checkHostRulesIndexCopies(path.join(ADAPTER_ROOT, 'rules.index.json'));
   if (mismatches > 0) {
     console.error(
       `✗ ${mismatches} file(s) out of sync — run: node scripts/sync-vercel-skills.mjs --fix --ref ${lock.sha}`,

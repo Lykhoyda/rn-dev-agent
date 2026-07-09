@@ -8,7 +8,7 @@
 
 ## Problem
 
-The first `device_snapshot action=open` on iOS triggers a cold `xcodebuild test` of rn-fast-runner that can take up to 6 minutes (`scripts/cdp-bridge/src/runners/rn-fast-runner-client.ts:164-234`; ready timeout 30 s warm / 360 s cold). Android builds both APKs via `gradlew assembleDebug assembleDebugAndroidTest` + `adb install -r` on first use (`rn-android-runner-client.ts:210-292`). Consequences:
+The first `device_snapshot action=open` on iOS triggers a cold `xcodebuild test` of rn-fast-runner that can take up to 6 minutes (`packages/rn-dev-agent-core/src/runners/rn-fast-runner-client.ts:164-234`; ready timeout 30 s warm / 360 s cold). Android builds both APKs via `gradlew assembleDebug assembleDebugAndroidTest` + `adb install -r` on first use (`rn-android-runner-client.ts:210-292`). Consequences:
 
 - Worst possible first-session experience for a new user (the plugin looks hung).
 - Every environment without Xcode command-line throughput (CI, laptops on battery) pays it again.
@@ -28,7 +28,7 @@ Interesting detail we already half-use: `rn-fast-runner-client.ts` scans Derived
 1. **iOS job (macOS runner):**
    ```bash
    xcodebuild build-for-testing \
-     -project scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
+     -project packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
      -scheme RnFastRunner \
      -destination 'generic/platform=iOS Simulator' \
      -derivedDataPath build/dd \
@@ -37,14 +37,14 @@ Interesting detail we already half-use: `rn-fast-runner-client.ts` scans Derived
    Collect from `build/dd/Build/Products/`: the `Debug-iphonesimulator/` products dir (contains `*-Runner.app`) and the generated `*.xctestrun`. Zip as `rn-fast-runner-<pluginVersion>-sim.zip` preserving relative layout (Maestro proves the layout survives). `ONLY_ACTIVE_ARCH=NO` gives arm64 + x86_64 slices.
 2. **Android job (ubuntu runner):**
    ```bash
-   (cd scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest)
+   (cd packages/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest)
    ```
    Zip `app-debug.apk` + `app-debug-androidTest.apk` as `rn-android-runner-<pluginVersion>.zip`.
 3. **Publish:** attach both zips to the GitHub Release the Version Packages PR creates. Also write `runner-manifest.json` (committed at release time, or attached to the release) with `{version, files: [{name, sha256, bytes}]}`.
 
 ### Client side (resolution order)
 
-New `scripts/cdp-bridge/src/runners/runner-artifacts.ts`, used by `ensureRunnerForCommand` (iOS) and `startAndroidRunner`:
+New `packages/rn-dev-agent-core/src/runners/runner-artifacts.ts`, used by `ensureRunnerForCommand` (iOS) and `startAndroidRunner`:
 
 1. **Cache hit:** `~/Library/Caches/rn-dev-agent/runners/<pluginVersion>/{ios,android}/` exists and every file matches the manifest SHA-256 → use directly (`test-without-building` with the cached xctestrun; `adb install -r` the cached APKs).
 2. **Download:** fetch the release asset for the *exact* plugin version (bounded: 60 s timeout, size cap from manifest, SHA-256 verified before unzip, unzip with path-traversal guard). Progress surfaced via a one-line `meta.note` on the first tool call ("downloading prebuilt runner, ~4 MB").

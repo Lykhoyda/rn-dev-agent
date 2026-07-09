@@ -62,14 +62,14 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 
 | Upstream change touches… | Verify against |
 |---|---|
-| Inspector handshake / origin / CSRF gates | `scripts/cdp-bridge/src/ws-origin.ts` → `metroOrigin()` (must clear BOTH the loopback gate and Expo's `isMatchingOrigin` host-match gate; today `http://127.0.0.1:{port}`) |
-| Inspector target discovery (`/json` endpoint, target fields) | `scripts/cdp-bridge/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, `vm === 'Hermes'`, `description`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion |
-| Hermes CDP domain support | `scripts/cdp-bridge/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
-| Fiber-tree / React internals walk | `scripts/cdp-bridge/src/injected-helpers.ts`, `bridge-detector.ts` |
-| Profiling (heap / CPU) | `scripts/cdp-bridge/src/tools/profiling.ts` |
-| Maestro flow YAML / CLI flags / runner protocol | `scripts/cdp-bridge/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, runner→CLI tiered dispatch), `scripts/cdp-bridge/src/tools/maestro-run.ts` |
-| agent-device verbs / args / protocol (Android) | `scripts/cdp-bridge/src/agent-device-wrapper.ts` (verbs `tap/fill/swipe/scroll/longpress/pinch/snapshot/screenshot/back`; args `--hold-ms`, `interactiveOnly`, `bundleId`), `scripts/cdp-bridge/src/runners/rn-android-runner-client.ts` |
-| Node minimum version | `scripts/cdp-bridge/package.json` → `engines.node` (`>=22`) |
+| Inspector handshake / origin / CSRF gates | `packages/rn-dev-agent-core/src/ws-origin.ts` → `metroOrigin()` (must clear BOTH the loopback gate and Expo's `isMatchingOrigin` host-match gate; today `http://127.0.0.1:{port}`) |
+| Inspector target discovery (`/json` endpoint, target fields) | `packages/rn-dev-agent-core/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, `vm === 'Hermes'`, `description`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion |
+| Hermes CDP domain support | `packages/rn-dev-agent-core/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
+| Fiber-tree / React internals walk | `packages/rn-dev-agent-core/src/injected-helpers.ts`, `bridge-detector.ts` |
+| Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |
+| Maestro flow YAML / CLI flags / runner protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, runner→CLI tiered dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
+| agent-device verbs / args / protocol (Android) | `packages/rn-dev-agent-core/src/agent-device-wrapper.ts` (verbs `tap/fill/swipe/scroll/longpress/pinch/snapshot/screenshot/back`; args `--hold-ms`, `interactiveOnly`, `bundleId`), `packages/rn-dev-agent-core/src/runners/rn-android-runner-client.ts` |
+| Node minimum version | `packages/rn-dev-agent-core/package.json` → `engines.node` (`>=22`) |
 
 ## Step 3 — BREAKING is any of:
 

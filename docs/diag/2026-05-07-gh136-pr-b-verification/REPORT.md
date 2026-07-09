@@ -12,7 +12,7 @@ Claude Code's MCP subprocess was started at session-begin with the **previous** 
 To verify within this constraint, two complementary checks were performed:
 
 1. **Direct logic verification** against the freshly-compiled NEW dist
-   (`scripts/cdp-bridge/dist/tools/dev-client-picker.js`) using a node script
+   (`packages/rn-dev-agent-core/dist/tools/dev-client-picker.js`) using a node script
    that imports `parseFirstServerEntry` and runs it against representative
    real-world picker snapshot text. Independent of the MCP subprocess.
 2. **Environment health check** through OLD MCP — confirms Metro + simulator

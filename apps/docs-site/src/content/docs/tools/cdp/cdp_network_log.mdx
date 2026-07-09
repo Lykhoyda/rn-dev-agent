@@ -1,0 +1,25 @@
+---
+title: "cdp_network_log"
+description: "Get recent network requests"
+sidebar:
+  order: 15
+---
+
+Get recent network requests. Shows method, URL, status, duration. On RN 0.83+ uses CDP Network domain. On older versions uses injected fetch/XHR hooks (auto-detected). Buffers are per-device, keyed by Metro port + target id — switching simulators no longer bleeds stale traffic. Pass `device: "all"` to merge across every device seen this session. Filters AND-combine: `filter` (URL substring), `method` (HTTP verb), `since` (ISO timestamp). When more entries match than `limit` allows, response includes `truncated:true` + `total_matches`.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `limit` | `unknown` | No | `20` | min: 1, max: 100, integer | Max entries to return (default 20, max 100) |
+| `filter` | `string` | No |  |  | Filter by URL substring (e.g. "/api/cart") |
+| `method` | `unknown` | No |  |  |  |
+| `since` | `unknown` | No |  |  |  |
+| `clear` | `boolean` | No | `false` |  | Clear network buffer instead of reading |
+| `device` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+cdp_network_log()
+```

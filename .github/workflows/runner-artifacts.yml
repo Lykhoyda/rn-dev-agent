@@ -15,7 +15,7 @@ name: Runner artifacts
 #   - A partially failed run (one runner built, the other died) is healed the
 #     same way: assets incomplete -> rebuild both, uploads use --clobber.
 # Successful zips attach to Release v<version>; runner-manifest.json (the
-# client's offline SHA-256 trust root — see scripts/cdp-bridge/src/runners/
+# client's offline SHA-256 trust root — see packages/rn-dev-agent-core/src/runners/
 # runner-artifacts.ts) is committed to main. Until this succeeds for a released
 # version, clients resolve to the local build (provenance 'local') — degraded,
 # not broken.
@@ -61,7 +61,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_VERSION: ${{ github.event.inputs.force_version }}
         run: |
-          CUR=$(jq -r '.version' .claude-plugin/plugin.json)
+          CUR=$(jq -r '.version' packages/claude-plugin/plugin.json)
           if [ -n "$FORCE_VERSION" ]; then
             echo "version=$FORCE_VERSION" >> "$GITHUB_OUTPUT"
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -103,7 +103,7 @@ jobs:
       - name: build-for-testing (no code signing, both arches)
         run: |
           xcodebuild build-for-testing \
-            -project scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
+            -project packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj \
             -scheme RnFastRunner \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/dd \
@@ -131,14 +131,14 @@ jobs:
       # Ubuntu runners ship a JDK (JAVA_HOME set) and the Android SDK
       # ($ANDROID_HOME). If a future AGP needs a newer JDK, add actions/setup-java.
       - name: assembleDebug + assembleDebugAndroidTest
-        working-directory: scripts/rn-android-runner
+        working-directory: packages/rn-android-runner
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Zip both APKs (flat)
         env:
           VERSION: ${{ needs.detect.outputs.version }}
         run: |
-          APP=scripts/rn-android-runner/app/build/outputs/apk/debug/app-debug.apk
-          TEST=scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          APP=packages/rn-android-runner/app/build/outputs/apk/debug/app-debug.apk
+          TEST=packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           test -f "$APP" && test -f "$TEST" || { echo "APK(s) missing after gradle build"; exit 1; }
           zip -j "rn-android-runner-$VERSION.zip" "$APP" "$TEST"
       - name: Upload to the release
@@ -174,6 +174,8 @@ jobs:
             --ios "rn-fast-runner-$VERSION-sim.zip" \
             --android "rn-android-runner-$VERSION.zip" \
             --out runner-manifest.json
+          cp runner-manifest.json packages/codex-plugin/runner-manifest.json
+          cp runner-manifest.json packages/claude-plugin/runner-manifest.json
           cat runner-manifest.json
       - name: Attach the manifest to the release
         env:
@@ -186,7 +188,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add runner-manifest.json
+          git add runner-manifest.json packages/codex-plugin/runner-manifest.json packages/claude-plugin/runner-manifest.json
           # [skip ci] keeps CI off a manifest-only commit; even on a scheduled
           # sweep the release is complete by now (detect -> changed=false).
           git commit -m "chore(release): runner-manifest for v$VERSION [skip ci]" \

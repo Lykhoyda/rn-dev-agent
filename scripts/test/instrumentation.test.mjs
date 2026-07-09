@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import {
   instrumentTool,
   setToolObserver,
-} from '../cdp-bridge/dist/observability/instrumentation.js';
+} from '../../packages/rn-dev-agent-core/dist/observability/instrumentation.js';
 
 const seen = [];
 setToolObserver((o) => seen.push(o));

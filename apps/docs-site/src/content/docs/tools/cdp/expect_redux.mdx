@@ -1,0 +1,29 @@
+---
+title: "expect_redux"
+description: "Assert against Redux/Zustand store state at a path"
+---
+
+Assert against Redux/Zustand store state at a path. Returns ok when the assertion matches; failResult with code=ASSERTION_FAILED when it does not. Operators (compose with AND): equals (deep), exists (default if no other op), notExists, length (array/string), contains (array), gt/lt/gte/lte (numbers). Pass timeoutMs to retry until match — useful when the store updates asynchronously after a tap. Differentiated capability over Maestro: Maestro asserts pixels; this asserts internal state.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `path` | `unknown` | Yes |  |  | Dot-path into the store, e.g. "cart.items" or "auth.user.id". Required. |
+| `storeType` | `unknown` | No |  |  |  |
+| `equals` | `unknown` | No |  |  | Deep-equal against this value. |
+| `exists` | `unknown` | No |  |  |  |
+| `notExists` | `boolean` | No |  |  | Inverse of exists. |
+| `length` | `unknown` | No |  | integer | Asserts (Array | string).length === this number. |
+| `contains` | `unknown` | No |  |  | Asserts an array contains this element (deep-equal). |
+| `gt` | `number` | No |  |  | Asserts actual &gt; this number. |
+| `lt` | `number` | No |  |  | Asserts actual &lt; this number. |
+| `gte` | `number` | No |  |  | Asserts actual &gt;= this number. |
+| `lte` | `number` | No |  |  | Asserts actual &lt;= this number. |
+| `timeoutMs` | `unknown` | No |  | min: 0, integer | Polling timeout in ms (default 0 = no retry). Useful for async state updates. |
+
+## Usage
+
+```
+expect_redux(path: <unknown>)
+```

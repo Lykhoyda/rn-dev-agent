@@ -7,5 +7,11 @@
   "access": "restricted",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": []
+  "ignore": [
+    "rn-dev-agent-codex-plugin",
+    "rn-dev-agent-android-runner",
+    "rn-dev-agent-ios-runner",
+    "rn-dev-agent-shared-agent-knowledge",
+    "rn-dev-agent-docs"
+  ]
 }

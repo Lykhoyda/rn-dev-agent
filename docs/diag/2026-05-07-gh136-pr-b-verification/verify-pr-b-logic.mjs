@@ -1,6 +1,6 @@
 // Verify PR-B picker logic against representative real-world snapshots.
 // Imports the freshly-compiled NEW dist (not the OLD one running in MCP).
-import { parseFirstServerEntry } from '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/scripts/cdp-bridge/dist/tools/dev-client-picker.js';
+import { parseFirstServerEntry } from '/Users/anton_personal/GitHub/claude-react-native-dev-plugin/packages/rn-dev-agent-core/dist/tools/dev-client-picker.js';
 
 const cases = [
   {

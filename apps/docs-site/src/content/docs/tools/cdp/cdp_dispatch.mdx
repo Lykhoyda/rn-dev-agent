@@ -1,0 +1,23 @@
+---
+title: "cdp_dispatch"
+description: "Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution"
+sidebar:
+  order: 12
+---
+
+Dispatch a Redux action and optionally read state afterward — all in a single synchronous JS execution. Use for atomic dispatch+verify operations (e.g. dispatch "tasks/softDelete" then read "tasks.pendingDelete"). NOTE: Best used for state verification, not UI interaction testing — React components may not re-render immediately after CDP-dispatched actions. For UI testing, use device_press/device_find to trigger the action through the UI instead.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `string` | Yes |  |  | Redux action type (e.g. "tasks/softDelete", "cart/addItem") |
+| `payload` | `unknown` | No |  |  |  |
+| `payloadJson` | `unknown` | No |  |  |  |
+| `readPath` | `unknown` | No |  |  | Dot-path to read from store after dispatch (e.g. "tasks.pendingDelete") |
+
+## Usage
+
+```
+cdp_dispatch(action: <string>)
+```

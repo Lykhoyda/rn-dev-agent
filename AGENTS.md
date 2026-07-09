@@ -73,6 +73,65 @@ S89 CDP presentation slides creation (rn-dev-agent pitch deck), plus ongoing: fi
 
 Access 2683k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
+## Agent surfaces
+
+This repo now supports two host agents without merging their UI concepts:
+
+- Claude Code surface: `packages/claude-plugin/plugin.json`, package-local
+  `commands/`, `agents/`, `hooks/`, `skills/`, and the `cdp` MCP server entry.
+- Codex surface: `packages/codex-plugin/.codex-plugin/plugin.json`,
+  `packages/codex-plugin/.mcp.json`, `AGENTS.md`, package-local `skills/`,
+  and a bundled `packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js`
+  runtime for the same `cdp` MCP server.
+- Core MCP implementation: `packages/rn-dev-agent-core/` owns the CDP bridge,
+  device tools, learned-actions runtime, and runnable MCP entrypoint.
+- Native runner source projects: `packages/rn-fast-runner/` owns the iOS
+  XCTest runner and `packages/rn-android-runner/` owns the Android UiAutomator
+  runner. Codex packages generated copies under `packages/codex-plugin/scripts/`
+  for installed-plugin runtime delivery.
+- Shared workflow knowledge: `packages/shared-agent-knowledge/` owns canonical
+  skills, commands, agents, and `templates/rn-agent/`; host packages expose
+  real generated/adapted outputs from there.
+- Deliverable apps: `apps/docs-site/` owns the documentation site workspace.
+
+Do not rename the MCP server key `cdp`; command docs, troubleshooting notes,
+and session state assume it is stable.
+
+### Codex operating notes
+
+- Treat `AGENTS.md` as the durable Codex repo guide and `CLAUDE.md` as the
+  local Claude Code guide. Keep shared doctrine in
+  `packages/shared-agent-knowledge/` or docs that both hosts can read.
+- Claude slash commands do not exist as native Codex commands. When a workflow
+  says `/rn-dev-agent:<command>`, read the matching file in
+  `packages/codex-plugin/commands/` and execute the steps inline with
+  available tools.
+- Claude subagents do not map 1:1 to Codex. MCP-bound agents such as
+  `rn-tester` and `rn-debugger` are protocol playbooks; execute them in the
+  parent session so `cdp_*` and `device_*` tools stay available.
+- Before any app/device interaction, run `cdp_status`, inventory reusable
+  actions, and prefer `cdp_run_action`/`maestro_run` over recomposing a known
+  manual `device_*` walk.
+
+### Repository boundaries
+
+The plugin repo ships user-visible code and docs. The sibling workspace repo
+`/Users/anton_personal/GitHub/rn-dev-agent-workspace` holds internal docs,
+decisions, bugs, roadmap, proof artifacts, benchmark reports, and the test app.
+Do not recreate workspace symlinks in this repo; edit workspace docs by their
+real path when a task explicitly requires it.
+
+### Version metadata
+
+`packages/claude-plugin/package.json` is the changesets source of truth for
+the agent plugin version. `yarn version-packages` mirrors it into
+`packages/claude-plugin/plugin.json`, `packages/codex-plugin/.codex-plugin/plugin.json`, and
+the Codex `.mcp.json` bootstrap version pin plus
+`packages/claude-plugin/marketplace.json` via `scripts/sync-plugin-manifest.mjs`
+and `scripts/sync-versions.sh`. `yarn build:host-runtimes` bundles the core
+supervisor into `packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js`
+so Codex installs do not depend on sibling workspace state.
+
 ## Engineering rules
 
 ### TypeScript only (strict — applies to every new file)
@@ -88,7 +147,8 @@ All new code in this repo MUST be TypeScript:
 Enforced by CI: `scripts/check-typescript-only.sh` fails the Lint & format job
 when a `.js`/`.mjs`/`.cjs` file exists outside `scripts/js-migration-baseline.txt`
 (the grandfathered pre-rule inventory — mostly node:test suites) and the
-generated/vendored exclusions (`scripts/cdp-bridge/dist/`, `**/web-dist/`,
+generated/vendored exclusions (`packages/rn-dev-agent-core/dist/`,
+`packages/codex-plugin/rn-dev-agent-core/dist/`, `**/web-dist/`,
 `third_party/`).
 
 Migrating a baseline file to TS: delete the `.js`, add the `.ts` — the check

@@ -1,0 +1,23 @@
+---
+title: "cdp_repair_action"
+description: "Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND"
+---
+
+Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/&lt;actionId&gt;.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `actionId` | `unknown` | Yes |  |  | Action id matching &lt;projectRoot&gt;/.rn-agent/actions/&lt;actionId&gt;.yaml. |
+| `failedSelector` | `unknown` | Yes |  |  |  |
+| `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
+| `threshold` | `unknown` | No |  | min: 0, max: 1 |  |
+| `dryRun` | `unknown` | No |  |  |  |
+| `agentReasoning` | `unknown` | No |  |  |  |
+
+## Usage
+
+```
+cdp_repair_action(actionId: <unknown>, failedSelector: <unknown>)
+```

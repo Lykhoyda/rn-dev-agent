@@ -1,0 +1,16 @@
+{
+  "name": "rn-dev-agent-codex-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Workspace boundary for the Codex rn-dev-agent plugin adapter.",
+  "license": "MIT",
+  "dependencies": {
+    "rn-dev-agent-core": "workspace:*",
+    "rn-dev-agent-shared-agent-knowledge": "workspace:*"
+  },
+  "scripts": {
+    "build:runtime": "node ../../scripts/build-host-runtimes.ts",
+    "check": "bash ../../scripts/check-agent-package-sync.sh"
+  }
+}
