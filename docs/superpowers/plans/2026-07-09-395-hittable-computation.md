@@ -565,7 +565,9 @@ console.log("top-ranked tab candidate:", ranked[0]?.identifier, "hittable=", ran
 ' 
 ```
 
-Expected: `hittable` count is a large majority (bridge mapping preserved the flag); `screenRect` is non-null (the PR #517 hittable-first union now has real input); the top-ranked candidate reports `hittable= true` (the +1000 ranking signal is live again). Adjust export paths if `dist` layout differs — the assertion targets, not the import specifiers, are the contract.
+Expected: `hittable` count is a large majority (bridge mapping preserved the flag); the top-ranked candidate reports `hittable= true` (the +1000 ranking signal is live again). Adjust export paths if `dist` layout differs — the assertion targets, not the import specifiers, are the contract.
+
+Caveat: `getCachedScreenRect()` is populated by the device-wrapper snapshot path (`updateRefMapFromFlat` in `agent-device-wrapper.js`), NOT by a direct `runIOS({command:"snapshot"})` call — driving `runIOS` directly leaves the cache null, so a non-null `screenRect` assertion here would fail for the wrong reason. Either drive the snapshot through the device-wrapper/tool entrypoint that invokes `updateRefMapFromFlat` and then assert `screenRect` is non-null, or keep the direct-runner path above and assert only the flag + ranking (the screenRect/#517 union is already covered by the `story-06-screenrect-system-windows` TS unit tests).
 
 - [ ] **Step 7: Clean up and record evidence**
 
