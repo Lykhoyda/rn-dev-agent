@@ -149,8 +149,9 @@ export function runJudge(criteria: string, outcome: TranscriptOutcome, o: JudgeO
     (typeof parsed.result === 'string' ? JSON.parse(parsed.result) : parsed.result)) as
     | { score?: unknown; reasoning?: unknown }
     | undefined;
-  if (typeof v?.score !== 'number' || v.score < 0 || v.score > 1) {
+  const score = v?.score;
+  if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 1) {
     throw new Error(`judge returned invalid verdict: ${JSON.stringify(v).slice(0, 200)}`);
   }
-  return { score: v.score, reasoning: String(v.reasoning ?? '') };
+  return { score, reasoning: String(v.reasoning ?? '') };
 }

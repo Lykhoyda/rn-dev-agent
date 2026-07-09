@@ -50,8 +50,9 @@ corepack yarn evals
 It needs a **logged-in `claude` CLI** and **no booted simulator/emulator** — a
 preflight refuses when a device is connected (evals must be device-free;
 `EVAL_ALLOW_DEVICE=1` allows an informational, non-gating run). It runs each
-fixture as a `claude -p` call, retries any **file** that had a failure once,
-writes per-YAML `*.junit.xml` + a `summary.md` into `results/` (gitignored),
+fixture as a `claude -p` call, retries any **fixture** that failed once (a
+retried pass wins), writes per-YAML `*.junit.xml` + a `summary.md` into
+`results/` (gitignored),
 then runs the baseline compare. Your local CLI version may drift from the CI
 pin (`@anthropic-ai/claude-code@2.1.205`); **gating runs are canonical in CI**.
 
@@ -110,6 +111,7 @@ run skips the gate and must never become the committed baseline.
 
 - Every request carries the **full ~79-tool schema** (the whole MCP surface),
   so each eval turn is not cheap.
-- A file containing **any** failure is retried **whole**, so a flaky fixture
-  costs roughly **2× that file's tokens**.
+- A failing fixture is retried **individually** (per-fixture, not per-file), so
+  a flaky fixture costs roughly **2× that fixture's tokens**, plus its judge
+  calls.
 - Measured per-run figure: _filled in by the acceptance task._
