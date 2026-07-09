@@ -9,6 +9,14 @@ import {
 } from '../evals/eval-core.ts';
 import { junitXml, type FixtureResult } from '../evals/eval-core.ts';
 import { parseJunitXml } from '../evals/compare-baseline.ts';
+import {
+  buildFixtureArgs,
+  absolutizeServerConfig,
+  buildJudgePrompt,
+  classifyOutcome,
+  VERDICT_SCHEMA,
+  type RunnerOpts,
+} from '../evals/claude-runner.ts';
 
 const line = (o: unknown) => JSON.stringify(o);
 const SAMPLE = [
@@ -169,5 +177,89 @@ describe('junitXml', () => {
     const xml = junitXml('s', { 'a"<&>': { verdict: 'fail', reason: '<failure> & "quotes"' } });
     assert.ok(!xml.includes('name="a"<&>"'));
     assert.deepEqual(parseJunitXml(xml), { 'a"<&>': 'fail' });
+  });
+});
+
+describe('buildFixtureArgs', () => {
+  it('emits the probe-verified isolation flag set', () => {
+    const o: RunnerOpts = {
+      model: 'claude-haiku-4-5-20251001',
+      mcpConfigPath: '/tmp/mcp.json',
+      serverName: 'rn-dev-agent',
+      cwd: '/tmp/x',
+      timeoutMs: 180000,
+      bin: 'claude',
+    };
+    assert.deepEqual(buildFixtureArgs('Tap the button.', o), [
+      '-p', 'Tap the button.',
+      '--mcp-config', '/tmp/mcp.json',
+      '--strict-mcp-config',
+      '--allowedTools', 'mcp__rn-dev-agent__*',
+      '--tools', 'ToolSearch',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--setting-sources', '',
+      '--model', 'claude-haiku-4-5-20251001',
+    ]);
+  });
+});
+
+describe('absolutizeServerConfig', () => {
+  it('absolutizes relative path args against the repo root, leaving flags and absolute paths alone', () => {
+    const out = absolutizeServerConfig(
+      { mcpServers: { s: { command: 'node', args: ['packages/core/dist/supervisor.js', '--no-lock', '/abs/x.js'] } } },
+      '/repo',
+    );
+    assert.deepEqual(out.mcpServers.s.args, ['/repo/packages/core/dist/supervisor.js', '--no-lock', '/abs/x.js']);
+  });
+});
+
+describe('classifyOutcome', () => {
+  const okOutcome = (over: object) => ({
+    toolCalls: [],
+    finalText: 'x',
+    subtype: 'success',
+    resultIsError: false,
+    numTurns: 1,
+    totalCostUsd: 0,
+    ...over,
+  });
+
+  it('passes a successful terminal result through as ok', () => {
+    const r = classifyOutcome(okOutcome({}));
+    assert.equal(r.kind, 'ok');
+  });
+
+  it('classifies a terminal error result as infra, never a fixture verdict', () => {
+    const r = classifyOutcome(okOutcome({ subtype: 'error_during_execution', resultIsError: true }));
+    assert.equal(r.kind, 'infra');
+    assert.match((r as { detail: string }).detail, /error_during_execution/);
+  });
+
+  it('classifies is_error with a nominally-success subtype as infra too', () => {
+    assert.equal(classifyOutcome(okOutcome({ resultIsError: true })).kind, 'infra');
+  });
+});
+
+describe('judge', () => {
+  it('VERDICT_SCHEMA constrains score to [0,1] (probe: unconstrained judge returned 9)', () => {
+    const schema = JSON.parse(VERDICT_SCHEMA);
+    assert.equal(schema.properties.score.minimum, 0);
+    assert.equal(schema.properties.score.maximum, 1);
+    assert.deepEqual(schema.required, ['score', 'reasoning']);
+  });
+
+  it('buildJudgePrompt names the scale and embeds criteria, trace, and response', () => {
+    const p = buildJudgePrompt('Honest.', 'I could not.', ['mcp__s__t (errored)']);
+    assert.match(p, /0\.0 .*1\.0/);
+    assert.match(p, /Honest\./);
+    assert.match(p, /mcp__s__t \(errored\)/);
+    assert.match(p, /I could not\./);
+  });
+
+  it('buildJudgePrompt handles an empty tool trace and empty response', () => {
+    const p = buildJudgePrompt('C.', '', []);
+    assert.match(p, /\(none\)/);
+    assert.match(p, /\(empty response\)/);
   });
 });
