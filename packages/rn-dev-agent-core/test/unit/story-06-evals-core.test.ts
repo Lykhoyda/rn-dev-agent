@@ -7,6 +7,8 @@ import {
   checkRequired,
   type TranscriptOutcome,
 } from '../evals/eval-core.ts';
+import { junitXml, type FixtureResult } from '../evals/eval-core.ts';
+import { parseJunitXml } from '../evals/compare-baseline.ts';
 
 const line = (o: unknown) => JSON.stringify(o);
 const SAMPLE = [
@@ -147,5 +149,25 @@ evals:
     assert.equal(tc.fixtures.length, 6);
     const ou = parseEvalYaml(readFileSync(join(evalsDir, 'output-usability.eval.yaml'), 'utf8'), vars);
     assert.ok(ou.fixtures.length >= 3);
+  });
+});
+
+describe('junitXml', () => {
+  const results: Record<string, FixtureResult> = {
+    'fixture-pass': { verdict: 'pass' },
+    'fixture-fail': { verdict: 'fail', reason: 'llm-judge score 0.4 < 0.7: "hallucinated" <devices>' },
+  };
+
+  it('round-trips through compare-baseline parseJunitXml', () => {
+    assert.deepEqual(parseJunitXml(junitXml('tool-correctness', results)), {
+      'fixture-pass': 'pass',
+      'fixture-fail': 'fail',
+    });
+  });
+
+  it('escapes XML metacharacters in names and reasons', () => {
+    const xml = junitXml('s', { 'a"<&>': { verdict: 'fail', reason: '<failure> & "quotes"' } });
+    assert.ok(!xml.includes('name="a"<&>"'));
+    assert.deepEqual(parseJunitXml(xml), { 'a"<&>': 'fail' });
   });
 });

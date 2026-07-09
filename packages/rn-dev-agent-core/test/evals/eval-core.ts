@@ -156,3 +156,26 @@ export function checkRequired(outcome: TranscriptOutcome, required: string[]): F
   }
   return { pass: reasons.length === 0, reasons };
 }
+
+export interface FixtureResult {
+  verdict: 'pass' | 'fail';
+  reason?: string;
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+export function junitXml(suiteName: string, results: Record<string, FixtureResult>): string {
+  const cases = Object.entries(results).map(([name, r]) =>
+    r.verdict === 'pass'
+      ? `  <testcase name="${escapeXml(name)}"/>`
+      : `  <testcase name="${escapeXml(name)}">\n    <failure message="${escapeXml(r.reason ?? 'failed')}"/>\n  </testcase>`,
+  );
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="${escapeXml(suiteName)}" tests="${Object.keys(results).length}">\n${cases.join('\n')}\n</testsuite>\n`;
+}
