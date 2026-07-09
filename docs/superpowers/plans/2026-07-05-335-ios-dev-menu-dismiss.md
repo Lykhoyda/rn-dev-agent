@@ -509,7 +509,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 1. `cd scripts/cdp-bridge && npm test` — full suite green.
 2. Repo-root lint + format: `npm run lint` / `npm run format:check` (or `oxlint` / `oxfmt` per repo config); fix any flags.
-3. Append findings to `ROADMAP.md`, open or update GitHub Issues for bugs, and record the decision (defer remount primitive; dismiss-over-CDP approach) in `DECISIONS.md`.
+3. Append findings to the workspace `ROADMAP.md`, open or update GitHub Issues for bugs, and record the decision (defer remount primitive; dismiss-over-CDP approach) in workspace `DECISIONS.md`.
 4. Push branch `feat/335-ios-dev-menu-dismiss`, open PR referencing #335.
 5. File a follow-up issue: "remount-without-reload primitive that preserves the JS store" (deferred from #335), link back to #335.
 6. On-device verification checklist for the maintainer (from the spec): `cdp_reload` → menu auto-gone, `cdp_status` stays attached; manual menu open → `cdp_dev_settings action:hideDevMenu` dismisses with store intact.

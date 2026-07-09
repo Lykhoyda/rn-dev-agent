@@ -1,7 +1,7 @@
 # ROADMAP
 
 Plugin-side roadmap. Workspace-side scaffolding roadmap lives in
-`../rn-dev-agent-workspace/docs/ROADMAP.md`.
+the sibling `rn-dev-agent-workspace/docs/ROADMAP.md` repository path.
 
 ## Phase 138: rn-android-runner MVP — in-tree UIAutomator runner for Android (2026-05-16)
 
