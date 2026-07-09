@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-core-claude-runtime",
-  "version": "0.61.1",
+  "version": "0.61.2",
   "private": true,
   "type": "module"
 }
