@@ -73,12 +73,27 @@ test('screen rect: falls back to the all-nodes union when no node is hittable', 
   assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 1080, height: 2160 });
 });
 
-test('screen rect: tiny hittable set falls back to the all-nodes union (sanity floor)', () => {
-  // If the only hittable node is a small control, the hittable union fails the
-  // width>300 floor — the all-nodes union is a safer estimate than a 40px rect.
+test('screen rect: tiny hittable seed grows to the overlapping full-window container', () => {
+  // If the only hittable node is a small control, the overlap-growth pulls in
+  // the non-hittable window node that intersects it — the viewport is the
+  // window, not a 40px rect.
   updateRefMap([
     { ref: 'e0', rect: { x: 10, y: 10, width: 40, height: 40 }, hittable: true },
     { ref: 'e1', rect: { x: 0, y: 0, width: 402, height: 874 }, hittable: false },
   ] as never);
   assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 402, height: 874 });
+});
+
+test('screen rect: partial hittable coverage grows to the window, not the widest control (Codex P2)', () => {
+  // Application/Window hittable:false with only a wide button hittable at the
+  // top: a hittable-only union would collapse the viewport to y=244 and
+  // direction gestures would compute short top-of-screen drags. The window
+  // overlaps the button, so growth recovers the full 852 — while a disjoint
+  // off-screen row (y=2000) stays excluded.
+  updateRefMap([
+    { ref: 'e0', rect: { x: 0, y: 0, width: 390, height: 852 }, hittable: false },
+    { ref: 'e1', rect: { x: 14, y: 200, width: 361, height: 44 }, hittable: true },
+    { ref: 'e2', rect: { x: 0, y: 2000, width: 390, height: 60 }, hittable: false },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 390, height: 852 });
 });

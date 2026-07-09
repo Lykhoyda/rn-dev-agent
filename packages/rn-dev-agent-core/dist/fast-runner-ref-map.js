@@ -4,42 +4,67 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
-function newExtentUnion() {
-    return { hitRight: 0, hitBottom: 0, allRight: 0, allBottom: 0 };
-}
-function accumulateExtent(u, rect, hittable) {
-    const { x, y, width, height } = rect;
-    if (width <= 0 || height <= 0)
-        return;
-    u.allRight = Math.max(u.allRight, x + width);
-    u.allBottom = Math.max(u.allBottom, y + height);
-    if (hittable === true) {
-        u.hitRight = Math.max(u.hitRight, x + width);
-        u.hitBottom = Math.max(u.hitBottom, y + height);
-    }
-}
 // width > 300 keeps the same sanity floor the old heuristic used (ignore
 // degenerate all-tiny snapshots rather than emit a bogus rect).
-function resolveScreenRect(u) {
-    if (u.hitRight > 300 && u.hitBottom > 0) {
-        return { x: 0, y: 0, width: u.hitRight, height: u.hitBottom };
+function extentToRect(right, bottom) {
+    return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
+}
+function resolveScreenRect(entries) {
+    let allRight = 0;
+    let allBottom = 0;
+    let hitRight = 0;
+    let hitBottom = 0;
+    const usable = [];
+    for (const e of entries) {
+        const { x, y, width, height } = e.rect;
+        if (width <= 0 || height <= 0)
+            continue;
+        usable.push(e);
+        allRight = Math.max(allRight, x + width);
+        allBottom = Math.max(allBottom, y + height);
+        if (e.hittable === true) {
+            hitRight = Math.max(hitRight, x + width);
+            hitBottom = Math.max(hitBottom, y + height);
+        }
     }
-    if (u.allRight > 300 && u.allBottom > 0) {
-        return { x: 0, y: 0, width: u.allRight, height: u.allBottom };
+    if (hitRight <= 0 || hitBottom <= 0)
+        return extentToRect(allRight, allBottom);
+    // Grow the hittable seed by overlap until stable (bounded — each pass only
+    // ever extends, and stops as soon as nothing new intersects).
+    let right = hitRight;
+    let bottom = hitBottom;
+    for (let pass = 0; pass < 10; pass++) {
+        let grew = false;
+        for (const e of usable) {
+            const { x, y, width, height } = e.rect;
+            const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
+            if (!intersects)
+                continue;
+            if (x + width > right) {
+                right = x + width;
+                grew = true;
+            }
+            if (y + height > bottom) {
+                bottom = y + height;
+                grew = true;
+            }
+        }
+        if (!grew)
+            break;
     }
-    return null;
+    return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
 }
 export function updateRefMap(nodes) {
     refMap.clear();
     screenRect = null;
-    const extent = newExtentUnion();
+    const entries = [];
     for (const node of nodes) {
         if (!node.ref || !node.rect)
             continue;
         refMap.set(node.ref, node.rect);
-        accumulateExtent(extent, node.rect, node.hittable);
+        entries.push({ rect: node.rect, hittable: node.hittable });
     }
-    screenRect = resolveScreenRect(extent);
+    screenRect = resolveScreenRect(entries);
     lastUpdated = Date.now();
 }
 export function lookupRef(ref) {
@@ -134,7 +159,7 @@ export function updateRefMapFromFlat(nodes) {
     // Screen rect: hittable-first union with an all-nodes fallback — same
     // rationale as updateRefMap (off-screen mounted rows must not inflate the
     // viewport; a (0,0)-anchored pick is fragile when no node spans the window).
-    const extent = newExtentUnion();
+    const entries = [];
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
         if (!node.ref || !node.rect)
@@ -148,9 +173,9 @@ export function updateRefMapFromFlat(nodes) {
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
         hashed.push(node);
-        accumulateExtent(extent, node.rect, node.hittable);
+        entries.push({ rect: node.rect, hittable: node.hittable });
     }
-    screenRect = resolveScreenRect(extent);
+    screenRect = resolveScreenRect(entries);
     // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
     // dereferences node.rect.* unconditionally, and a malformed entry must not
     // throw mid-update. For real runner data the filtered subset equals the full

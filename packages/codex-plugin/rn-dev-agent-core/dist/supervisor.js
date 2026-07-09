@@ -40005,6 +40005,52 @@ var init_settle_hash = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/fast-runner-ref-map.js
+function extentToRect(right, bottom) {
+  return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
+}
+function resolveScreenRect(entries) {
+  let allRight = 0;
+  let allBottom = 0;
+  let hitRight = 0;
+  let hitBottom = 0;
+  const usable = [];
+  for (const e of entries) {
+    const { x, y, width, height } = e.rect;
+    if (width <= 0 || height <= 0)
+      continue;
+    usable.push(e);
+    allRight = Math.max(allRight, x + width);
+    allBottom = Math.max(allBottom, y + height);
+    if (e.hittable === true) {
+      hitRight = Math.max(hitRight, x + width);
+      hitBottom = Math.max(hitBottom, y + height);
+    }
+  }
+  if (hitRight <= 0 || hitBottom <= 0)
+    return extentToRect(allRight, allBottom);
+  let right = hitRight;
+  let bottom = hitBottom;
+  for (let pass = 0; pass < 10; pass++) {
+    let grew = false;
+    for (const e of usable) {
+      const { x, y, width, height } = e.rect;
+      const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
+      if (!intersects)
+        continue;
+      if (x + width > right) {
+        right = x + width;
+        grew = true;
+      }
+      if (y + height > bottom) {
+        bottom = y + height;
+        grew = true;
+      }
+    }
+    if (!grew)
+      break;
+  }
+  return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
+}
 function lookupRef(ref) {
   const clean = ref.startsWith("@") ? ref.slice(1) : ref;
   return refMap.get(clean) ?? null;
@@ -40038,8 +40084,7 @@ function updateRefMapFromFlat(nodes) {
   refMap.clear();
   screenRect = null;
   const hashed = [];
-  let maxRight = 0;
-  let maxBottom = 0;
+  const entries = [];
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (!node.ref || !node.rect)
@@ -40053,13 +40098,9 @@ function updateRefMapFromFlat(nodes) {
       meta.identifier = node.identifier;
     metadataMap.set(key, meta);
     hashed.push(node);
-    const { x, y, width, height } = node.rect;
-    if (width > 0 && height > 0) {
-      maxRight = Math.max(maxRight, x + width);
-      maxBottom = Math.max(maxBottom, y + height);
-    }
+    entries.push({ rect: node.rect, hittable: node.hittable });
   }
-  screenRect = maxRight > 300 && maxBottom > 0 ? { x: 0, y: 0, width: maxRight, height: maxBottom } : null;
+  screenRect = resolveScreenRect(entries);
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
   } catch {
@@ -46678,7 +46719,7 @@ function createDeviceSwipeHandler() {
     if (args.x1 != null && args.y1 != null && args.x2 != null && args.y2 != null) {
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId);
+          const resp = await fastSwipe(args.x1, args.y1, args.x2, args.y2, args.durationMs, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
           if (resp.ok) {
             return okResult({
               x1: args.x1,
@@ -46713,7 +46754,7 @@ function createDeviceSwipeHandler() {
       const duration3 = args.durationMs ?? DEFAULT_SWIPE_DURATION_MS;
       if (canUseFastRunner) {
         try {
-          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3, getActiveSession()?.appId);
+          const resp = await fastSwipe(coords.x1, coords.y1, coords.x2, coords.y2, duration3, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
           if (resp.ok) {
             return okResult({
               direction: args.direction,
@@ -46756,7 +46797,7 @@ function createDeviceScrollHandler() {
     adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     if (isFastRunnerAvailable()) {
       try {
-        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId);
+        const resp = await fastSwipe(x1, y1, x2, y2, DEFAULT_SWIPE_DURATION_MS, getActiveSession()?.appId ?? resolveBundleId("ios") ?? void 0);
         if (resp.ok) {
           return okResult({
             direction: args.direction,
@@ -46939,6 +46980,7 @@ var init_device_interact = __esm({
     init_rn_fast_runner_client();
     init_rn_android_runner_client();
     init_keyboard_guard();
+    init_project_config();
     init_utils();
     init_utils();
     init_maestro_invoke();

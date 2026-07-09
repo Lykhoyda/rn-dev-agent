@@ -62,65 +62,94 @@ let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
 let lastSnapshotHash: string | null = null;
 
-// Screen-rect extents, tracked as two unions:
-//  - hittable-only: the viewport. Both runners keep OFF-SCREEN content-bearing
-//    nodes in the snapshot with their real out-of-viewport coordinates (RN
-//    FlatList windowing mounts rows screens past the fold) but mark them
-//    hittable:false — including them would inflate the rect, push direction
-//    gestures off the physical screen, and false-pass scrollintoview's
-//    isInViewport. A visible element is hittable, so it contributes its own
-//    rect to this union — a truly on-screen target is always inside it.
-//  - all-nodes: fallback for snapshots without usable hittable data (older
-//    runner artifacts, synthetic fixtures) — the pre-hittable behavior.
-// A (0,0)-anchored heuristic is NOT usable at all: on some Android snapshots
-// (#387 Phase B device-proven) no node spans the full window — the tallest
-// (0,0) node is a ~128px top-chrome strip, so direction scrolls computed a
-// ~50px drag in the status bar that never moved the list.
-interface ExtentUnion {
-  hitRight: number;
-  hitBottom: number;
-  allRight: number;
-  allBottom: number;
-}
-
-function newExtentUnion(): ExtentUnion {
-  return { hitRight: 0, hitBottom: 0, allRight: 0, allBottom: 0 };
-}
-
-function accumulateExtent(u: ExtentUnion, rect: ElementRect, hittable: boolean | undefined): void {
-  const { x, y, width, height } = rect;
-  if (width <= 0 || height <= 0) return;
-  u.allRight = Math.max(u.allRight, x + width);
-  u.allBottom = Math.max(u.allBottom, y + height);
-  if (hittable === true) {
-    u.hitRight = Math.max(u.hitRight, x + width);
-    u.hitBottom = Math.max(u.hitBottom, y + height);
-  }
+// Screen-rect derivation: hittable-seeded union GROWN BY OVERLAP.
+//
+// Two device/review-proven failure modes bound the problem from both sides:
+//  - An ALL-nodes union over-covers: both runners keep OFF-SCREEN content in
+//    the snapshot with real out-of-viewport coords (RN FlatList windowing
+//    mounts rows screens past the fold; non-virtualized ScrollView children)
+//    marked hittable:false — including them inflates the rect, pushes
+//    direction gestures off the physical screen, and false-passes
+//    scrollintoview's isInViewport.
+//  - A hittable-ONLY union under-covers: container/window nodes can be
+//    hittable:false while only a small control is hittable, collapsing the
+//    "viewport" to that control's extent (short top-of-screen drags).
+// The rule: seed with the union of hittable nodes (a visible element is
+// hittable, so it contributes its own rect), then repeatedly extend by any
+// node whose rect INTERSECTS the current estimate. On-screen containers
+// overlap the seed and pull the extent to the true window; off-screen rows
+// past the fold are disjoint and stay excluded. (Residual accepted risk: a
+// content-sized container rect overlapping the viewport would re-inflate —
+// both runners report frame-bounded container rects, so this is theoretical.)
+// Snapshots with no usable hittable data fall back to the all-nodes union
+// (pre-hittable behavior). A (0,0)-anchored heuristic is NOT usable at all:
+// on some Android snapshots (#387 Phase B device-proven) no node spans the
+// full window and the tallest (0,0) node is a ~128px top-chrome strip.
+interface ExtentEntry {
+  rect: ElementRect;
+  hittable: boolean | undefined;
 }
 
 // width > 300 keeps the same sanity floor the old heuristic used (ignore
 // degenerate all-tiny snapshots rather than emit a bogus rect).
-function resolveScreenRect(u: ExtentUnion): ElementRect | null {
-  if (u.hitRight > 300 && u.hitBottom > 0) {
-    return { x: 0, y: 0, width: u.hitRight, height: u.hitBottom };
+function extentToRect(right: number, bottom: number): ElementRect | null {
+  return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
+}
+
+function resolveScreenRect(entries: ExtentEntry[]): ElementRect | null {
+  let allRight = 0;
+  let allBottom = 0;
+  let hitRight = 0;
+  let hitBottom = 0;
+  const usable: ExtentEntry[] = [];
+  for (const e of entries) {
+    const { x, y, width, height } = e.rect;
+    if (width <= 0 || height <= 0) continue;
+    usable.push(e);
+    allRight = Math.max(allRight, x + width);
+    allBottom = Math.max(allBottom, y + height);
+    if (e.hittable === true) {
+      hitRight = Math.max(hitRight, x + width);
+      hitBottom = Math.max(hitBottom, y + height);
+    }
   }
-  if (u.allRight > 300 && u.allBottom > 0) {
-    return { x: 0, y: 0, width: u.allRight, height: u.allBottom };
+  if (hitRight <= 0 || hitBottom <= 0) return extentToRect(allRight, allBottom);
+
+  // Grow the hittable seed by overlap until stable (bounded — each pass only
+  // ever extends, and stops as soon as nothing new intersects).
+  let right = hitRight;
+  let bottom = hitBottom;
+  for (let pass = 0; pass < 10; pass++) {
+    let grew = false;
+    for (const e of usable) {
+      const { x, y, width, height } = e.rect;
+      const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
+      if (!intersects) continue;
+      if (x + width > right) {
+        right = x + width;
+        grew = true;
+      }
+      if (y + height > bottom) {
+        bottom = y + height;
+        grew = true;
+      }
+    }
+    if (!grew) break;
   }
-  return null;
+  return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
 }
 
 export function updateRefMap(nodes: SnapshotNode[]): void {
   refMap.clear();
   screenRect = null;
 
-  const extent = newExtentUnion();
+  const entries: ExtentEntry[] = [];
   for (const node of nodes) {
     if (!node.ref || !node.rect) continue;
     refMap.set(node.ref, node.rect);
-    accumulateExtent(extent, node.rect, node.hittable);
+    entries.push({ rect: node.rect, hittable: node.hittable });
   }
-  screenRect = resolveScreenRect(extent);
+  screenRect = resolveScreenRect(entries);
 
   lastUpdated = Date.now();
 }
@@ -225,7 +254,7 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
   // Screen rect: hittable-first union with an all-nodes fallback — same
   // rationale as updateRefMap (off-screen mounted rows must not inflate the
   // viewport; a (0,0)-anchored pick is fragile when no node spans the window).
-  const extent = newExtentUnion();
+  const entries: ExtentEntry[] = [];
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (!node.ref || !node.rect) continue;
@@ -238,9 +267,9 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
     metadataMap.set(key, meta);
     hashed.push(node);
 
-    accumulateExtent(extent, node.rect, node.hittable);
+    entries.push({ rect: node.rect, hittable: node.hittable });
   }
-  screenRect = resolveScreenRect(extent);
+  screenRect = resolveScreenRect(entries);
 
   // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes
   // dereferences node.rect.* unconditionally, and a malformed entry must not
