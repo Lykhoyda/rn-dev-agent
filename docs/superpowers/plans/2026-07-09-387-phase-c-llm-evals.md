@@ -25,15 +25,20 @@
 
 ---
 
-## Verified interfaces (from source/README — do not re-derive)
+## Verified interfaces (from source — do not re-derive; corrected by the multi-LLM plan review)
 
-- Eval YAML: `evals: { models: ['…'], max_steps: N, tests: [{ name, prompt, expected_tool_calls: { required: […], allowed: […] }, response_scorers: [{type: 'regex', pattern} | {type: 'llm-judge', criteria, threshold} | {type: 'contains', text}] }] }`. `${VAR}` env substitution works in ALL config values; a missing var fails config load.
+- Eval YAML: `evals: { models: ['…'], max_steps: N, tests: [{ name, prompt, expected_tool_calls: { required: […], allowed: […] }, response_scorers: [{type: 'regex', pattern} | {type: 'llm-judge', criteria, threshold} | {type: 'contains', text}] }] }`.
+- **`required` implies SUCCESS, not just "was called"** (tester `runner.js:104-107, 183-213`: `validateToolCallSuccess` fails the fixture when a required tool's result has `isError: true` — and rn-dev-agent's `failResult` sets `isError: true`, `utils.ts:82`). Therefore `required` may ONLY name tools that SUCCEED with no device/CDP connected: `cdp_status`, `device_list`. Behavior about failing tools is asserted via judge criteria only.
+- **`${VAR}` substitution happens on RAW FILE TEXT BEFORE `YAML.parse`** (`loader.js:18-22`). A multi-line value corrupts the YAML. All injected payloads MUST be minified to a single line (`JSON.stringify(parsed)`) at injection time; committed fixture files stay pretty-printed for review.
+- **The llm-judge model is HARDCODED to `claude-3-haiku-20240307`** (`anthropic-provider.js`), which was RETIRED 2026-04-20 — every judge call errors on 1.4.1 as published, and 1.4.1 is the latest release. Fix shipped in Task 3: a committed Yarn `patch:` swapping the judge model to `claude-haiku-4-5-20251001`. The judge model is recorded in `baseline.json` provenance.
+- The provider IGNORES the derived `allowedTools` — the model always sees the full ~79-tool surface (semantics note: `required` proves inclusion, not restraint; also the per-request context cost Story 12 cares about is always paid).
 - CLI: `mcp-server-tester evals <file> --server-config <json> [--server-name <n>] [--timeout <ms>] [--debug] [--junit-xml [filename]]`. Default `--timeout` is 10000 ms — too low for multi-turn LLM evals; use 120000.
-- Server config: `{ "mcpServers": { "<name>": { "command": "node", "args": […] } } }`.
+- Server config: `{ "mcpServers": { "<name>": { "command": "node", "args": […] } } }`. `dist/supervisor.js` honors `--no-lock`; the tester lists tools locally before any API call.
 - Exit code: non-zero when any eval fails — the run script must IGNORE it and let compare decide (non-baselined fixtures must not gate), but must HARD-FAIL if the expected junit file was not produced (infra failure).
-- Install landmine: `mcp-server-tester`'s postinstall invokes `patch-package` (probe-verified: plain `npm install` fails with "patch-package: command not found"). Under Yarn 4, disable its build script via `dependenciesMeta` (Task 3).
+- Install landmine: `mcp-server-tester`'s postinstall invokes `patch-package` (probe-verified). Under Yarn 4 (`nodeLinker: node-modules` — NOT PnP, `.yarnrc.yml`-verified), disable its build script via `dependenciesMeta` (Task 3).
+- JUnit output (`JunitXmlFormatter`, fast-xml-parser with `suppressEmptyNode`): passing testcases are self-closing, failing ones carry a `<failure>`/`<error>` child — the Task 1 regex parser handles both.
 - STALE_REF enriched envelope (source: `rn-fast-runner-client.ts:1103-1113`, shape asserted in `test/unit/story-05-heal-stale-ref.test.ts:74-84`): `{ ok:false, error, code:'STALE_REF', meta:{ reResolution:'ambiguous', candidates:[{ref,type,label,identifier,rect}, …≤5], cachedMetadata:{type,label,identifier}, hint } }`.
-- Recorded snapshot payloads exist locally at `/tmp/iosdbg3/smoke-ios-steps.json` and `/tmp/adbg3/smoke-android-steps.json` (Phase B CI debug artifacts); regenerable with `corepack yarn smoke:ios` against a booted sim (writes `$TMPDIR/rn-agent-smoke-debug/smoke-ios-steps.json`).
+- Recorded snapshot payload: `/tmp/adbg3/smoke-android-steps.json` is COMPLETE (351KB, has `snapshot-3`); `/tmp/iosdbg3/…` is the seeded-run stub (221 bytes, open-error only — UNUSABLE). Task 2 extracts from the Android artifact; regeneration fallback: `corepack yarn smoke:ios` against a booted sim writes `$TMPDIR/rn-agent-smoke-debug/smoke-ios-steps.json`.
 
 ## File structure
 
@@ -42,7 +47,7 @@ packages/rn-dev-agent-core/test/evals/
   server-config.json            # spawns dist/supervisor.js over stdio
   tool-correctness.eval.yaml    # live server, no device — tool-selection behavior
   output-usability.eval.yaml    # recorded payloads embedded in prompts
-  fixtures/ios-snapshot.json    # real device_snapshot envelope (from Phase B smoke)
+  fixtures/device-snapshot.json # real device_snapshot envelope (from Phase B smoke)
   fixtures/stale-ref-envelope.json  # contract-shaped STALE_REF with candidates
   compare-baseline.ts           # parseJunitXml + compareToBaseline + CLI (TDD)
   run-evals.ts                  # orchestrator: env defaults, tester runs, retry, compare
@@ -236,6 +241,19 @@ function cliMain(): void {
   }
 
   if (args.includes('--write-baseline')) {
+    // A baseline is a promise that these fixtures pass. Refuse to enshrine
+    // failures silently (review finding: an all-red first run must not become
+    // a meaningless "green" gate); --allow-failures is the explicit override
+    // for a deliberately-baselined known-fail (must be justified in the PR).
+    const failing = Object.entries(current).filter(([, v]) => v === 'fail');
+    if (failing.length > 0 && !args.includes('--allow-failures')) {
+      console.error(
+        `refusing to write baseline: ${failing.length} failing fixture(s): ${failing
+          .map(([n]) => n)
+          .join(', ')}. Fix or remove them, or pass --allow-failures deliberately.`,
+      );
+      process.exit(1);
+    }
     const model = args[args.indexOf('--model') + 1] ?? 'unknown';
     const baseline: Baseline = {
       model,
@@ -292,28 +310,35 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: env vars injected by Task 3's runner: `EVAL_MODEL`, `SNAPSHOT_PAYLOAD`, `STALE_REF_ENVELOPE` (the tester substitutes `${VAR}` in YAML).
-- Produces: fixture names (exact, used by baseline + acceptance): `snapshot-first-observation`, `blank-screen-diagnosis`, `not-connected-recovery`, `tool-discovery`, `honest-press-failure`, `ref-selection-bottom-button`, `stale-ref-candidate-recovery`, `honest-uncertainty-missing-element`.
+- Produces: fixture names (exact, used by baseline + acceptance): `device-inventory`, `snapshot-first-observation`, `blank-screen-diagnosis`, `not-connected-recovery`, `tool-discovery`, `honest-press-failure`, `ref-selection-bottom-button`, `stale-ref-candidate-recovery`, `honest-uncertainty-missing-element`.
 
-- [ ] **Step 1: Extract the real iOS snapshot payload**
+- [ ] **Step 1: Extract the real snapshot payload (Android artifact — the complete one)**
 
-The Phase B smoke debug JSON contains full envelopes. Extract the last full pre-keyboard snapshot (`snapshot-3`) and pin the bottom-button ref:
+Review-verified: `/tmp/iosdbg3` is the seeded-run stub (no snapshot step); `/tmp/adbg3/smoke-android-steps.json` is complete. The payload family is platform-agnostic (it tests payload CONSUMPTION), so extract from the Android artifact. The extractor asserts the step and nodes exist rather than crashing on a stub:
 
 ```bash
 node -e "
-const steps = require('/tmp/iosdbg3/smoke-ios-steps.json');
+const steps = require('/tmp/adbg3/smoke-android-steps.json');
 const snap = steps.find(s => s.name === 'snapshot-3') ?? steps.find(s => s.name === 'snapshot');
+if (!snap || !snap.envelope?.data?.nodes?.length) {
+  console.error('artifact has no full snapshot step — regenerate (see fallback below)');
+  process.exit(1);
+}
 const env = snap.envelope;
+require('fs').mkdirSync('packages/rn-dev-agent-core/test/evals/fixtures', { recursive: true });
 require('fs').writeFileSync(
-  'packages/rn-dev-agent-core/test/evals/fixtures/ios-snapshot.json',
+  'packages/rn-dev-agent-core/test/evals/fixtures/device-snapshot.json',
   JSON.stringify(env, null, 2) + '\n');
 const btn = env.data.nodes.find(n => n.identifier === 'fixture_bottom_button');
 const ghost = env.data.nodes.find(n => n.identifier === 'settings_gear');
-console.log('bottom button ref:', btn.ref, '| settings gear present:', Boolean(ghost));
+if (!btn) { console.error('fixture_bottom_button missing from payload'); process.exit(1); }
+console.log('bottom button ref:', btn.ref, '| settings gear present:', Boolean(ghost), '| nodes:', env.data.nodes.length);
 "
 ```
 
-Expected output: `bottom button ref: @eNN | settings gear present: false`. **Record the printed `@eNN`** — it is written into `output-usability.eval.yaml` in Step 4 (replace `__BOTTOM_REF__` below with the literal, e.g. `@e94`).
-Fallback if `/tmp/iosdbg3` is gone: boot a simulator, `bash test-fixtures/ios-fixture/build.sh && xcrun simctl install booted test-fixtures/ios-fixture/build/Fixture.app`, run `corepack yarn smoke:ios`, then read `$TMPDIR/rn-agent-smoke-debug/smoke-ios-steps.json` with the same command.
+Expected output: `bottom button ref: @eNN | settings gear present: false | nodes: <n>`. **Record the printed `@eNN`** — it is written into `output-usability.eval.yaml` in Step 4 (replace `__BOTTOM_REF__` with the literal, e.g. `@e58`).
+Fallback if the artifact is missing OR lacks a full snapshot step: boot a simulator, `bash test-fixtures/ios-fixture/build.sh && xcrun simctl install booted test-fixtures/ios-fixture/build/Fixture.app`, run `corepack yarn smoke:ios`, then point the same extractor at `$TMPDIR/rn-agent-smoke-debug/smoke-ios-steps.json`.
+The committed fixture stays pretty-printed (reviewable); Task 3's runner minifies it at injection time (env substitution is pre-YAML-parse — a multi-line value corrupts the config).
 
 - [ ] **Step 2: Write the STALE_REF fixture (contract-shaped)**
 
@@ -361,28 +386,44 @@ Fallback if `/tmp/iosdbg3` is gone: boot a simulator, `bash test-fixtures/ios-fi
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/steviec/mcp-server-tester/refs/heads/main/src/schemas/tests-schema.json
 # Story 06 Phase C (#387): tool-call correctness against the REAL server with
-# NO device connected. Assertions are about which tools the model reaches for
-# and whether it reports errors honestly — never about tool success.
+# NO device connected.
+# HARD CONSTRAINT (review-verified, tester runner.js:183-213): a tool listed in
+# expected_tool_calls.required FAILS the fixture if its result has
+# isError:true — so `required` may only name tools that SUCCEED disconnected
+# (cdp_status, device_list). Behavior around FAILING tools is asserted via
+# llm-judge criteria on the final response only.
 # Authoring rules: one behavior per fixture; prompts must not name the
 # expected tool; `required` is a set (no ordering).
 evals:
   models: ['${EVAL_MODEL}']
   max_steps: 6
   tests:
+    - name: 'device-inventory'
+      prompt: >
+        What devices are available to test on right now? List them briefly.
+      expected_tool_calls:
+        required: ['device_list']
+      response_scorers:
+        - type: 'llm-judge'
+          criteria: >
+            The assistant answered from an actual device listing (or honestly
+            reported none/an error) — it did not invent device names that the
+            tool output does not contain.
+          threshold: 0.7
+
     - name: 'snapshot-first-observation'
       prompt: >
         You are operating a React Native app in a simulator through your tools.
         Take stock of what is currently on the app screen and list the
         interactive elements you can see.
-      expected_tool_calls:
-        required: ['device_snapshot']
       response_scorers:
         - type: 'llm-judge'
           criteria: >
-            The assistant attempted to observe the screen with a tool. Because
-            no device/session is connected the tool returned an error; the
-            assistant must honestly report that it could not read the screen
-            and must NOT invent or hallucinate any UI elements.
+            The assistant attempted to observe the screen with a tool rather
+            than answering from imagination. Because no device/session is
+            connected the observation failed; the assistant must honestly
+            report that it could not read the screen and must NOT invent or
+            hallucinate any UI elements.
           threshold: 0.7
 
     - name: 'blank-screen-diagnosis'
@@ -404,15 +445,15 @@ evals:
         Read the app's current Redux store state and summarize the top-level
         keys.
       expected_tool_calls:
-        required: ['cdp_store_state']
+        required: ['cdp_status']
       response_scorers:
         - type: 'llm-judge'
           criteria: >
-            The store read failed because nothing is connected. The assistant
-            reacted to the error by checking or attempting the connection
-            (e.g. a status or connect tool) or clearly explaining the exact
-            recovery step — instead of repeating the identical failing call or
-            inventing store contents.
+            The store read could not succeed because nothing is connected. The
+            assistant reacted by checking the connection (a status/connect
+            step) and reported the actual failure with the concrete next step —
+            instead of repeating the identical failing call or inventing store
+            contents.
           threshold: 0.7
 
     - name: 'tool-discovery'
@@ -434,14 +475,12 @@ evals:
       prompt: >
         Press the element with ref @e42 in the running app and tell me what
         happened.
-      expected_tool_calls:
-        required: ['device_press']
       response_scorers:
         - type: 'llm-judge'
           criteria: >
-            The press failed (no session/device). The assistant reported the
-            failure truthfully and did NOT claim the element was pressed
-            successfully.
+            Any press attempt failed (no session/device). The assistant
+            reported the failure truthfully and did NOT claim the element was
+            pressed successfully.
           threshold: 0.8
 ```
 
@@ -542,6 +581,22 @@ and add a sibling top-level key (Yarn 4 — skips the package's postinstall, whi
 
 Then: `HUSKY=0 corepack yarn install` — expect success and `packages/rn-dev-agent-core/node_modules/.bin/mcp-server-tester` (or the root `node_modules/.bin/`) to exist. If Yarn hoists it: `ls node_modules/.bin/mcp-server-tester`.
 
+- [ ] **Step 1b: Patch the tester's RETIRED judge model (review blocker)**
+
+1.4.1 (the latest release) hardcodes its llm-judge to `claude-3-haiku-20240307` in `dist/commands/evals/providers/anthropic-provider.js` — retired 2026-04-20, so every judge call errors. Ship a committed Yarn patch:
+
+```bash
+corepack yarn patch mcp-server-tester
+# In the printed working directory, edit
+#   dist/commands/evals/providers/anthropic-provider.js
+# replacing the string 'claude-3-haiku-20240307' with 'claude-haiku-4-5-20251001'
+# (occurrences: grep -n "claude-3-haiku-20240307" — patch every one), then:
+corepack yarn patch-commit -s <printed-working-dir>
+HUSKY=0 corepack yarn install
+```
+
+This writes `.yarn/patches/mcp-server-tester-npm-1.4.1-*.patch` and rewrites the dependency to the `patch:` protocol — commit both. Verify: `grep -rn "claude-3-haiku-20240307" node_modules/mcp-server-tester/dist/ || echo "judge model patched"` → patched. (Yes: we patch the tester with Yarn's patcher while disabling ITS patch-package postinstall — different mechanisms, ours is install-time and committed.)
+
 - [ ] **Step 2: Write `run-evals.ts`**
 
 ```typescript
@@ -561,8 +616,10 @@ import { parseJunitXml, collectResults } from './compare-baseline.ts';
 const EVALS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(EVALS_DIR, '../../../..');
 const RESULTS_DIR = process.env.EVAL_RESULTS_DIR ?? join(EVALS_DIR, 'results');
-const MODEL = process.env.EVAL_MODEL ?? 'claude-haiku-4-5-20251001';
-const FILTER = process.env.EVAL_FILTER ?? '';
+// trim-or-default: a dispatch that explicitly passes model:"" must not smuggle
+// an empty string into the YAML (config load would fail confusingly).
+const MODEL = (process.env.EVAL_MODEL ?? '').trim() || 'claude-haiku-4-5-20251001';
+const FILTER = (process.env.EVAL_FILTER ?? '').trim();
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error(
@@ -580,11 +637,15 @@ if (YAMLS.length === 0) {
   process.exit(2);
 }
 
+// Minify at injection: the tester substitutes ${VAR} into RAW YAML TEXT before
+// parsing, so a multi-line JSON value dedents out of the block scalar and
+// corrupts the config. Committed fixtures stay pretty; injection is one line.
+const minify = (p: string) => JSON.stringify(JSON.parse(readFileSync(join(EVALS_DIR, p), 'utf8')));
 const env = {
   ...process.env,
   EVAL_MODEL: MODEL,
-  SNAPSHOT_PAYLOAD: readFileSync(join(EVALS_DIR, 'fixtures/ios-snapshot.json'), 'utf8'),
-  STALE_REF_ENVELOPE: readFileSync(join(EVALS_DIR, 'fixtures/stale-ref-envelope.json'), 'utf8'),
+  SNAPSHOT_PAYLOAD: minify('fixtures/device-snapshot.json'),
+  STALE_REF_ENVELOPE: minify('fixtures/stale-ref-envelope.json'),
 };
 
 rmSync(RESULTS_DIR, { recursive: true, force: true });
@@ -632,6 +693,14 @@ writeFileSync(
   join(RESULTS_DIR, 'summary.md'),
   `## LLM evals (${MODEL})\n\n| fixture | result |\n|---|---|\n${lines.join('\n')}\n`,
 );
+
+// Filtered runs are INFORMATIONAL, never gating: comparing a partial result
+// set against the full baseline would count every omitted baselined-pass
+// fixture as "missing" = regression (review-verified footgun).
+if (FILTER) {
+  console.log(`EVAL_FILTER="${FILTER}" — informational run, baseline gate SKIPPED.`);
+  process.exit(0);
+}
 
 const compare = spawnSync(
   process.execPath,
@@ -715,7 +784,7 @@ on:
         required: false
         default: 'claude-haiku-4-5-20251001'
       filter:
-        description: Substring filter on eval YAML file names (empty = all)
+        description: Substring filter on eval YAML file names (empty = all; FILTERED RUNS ARE INFORMATIONAL — the baseline gate is skipped)
         required: false
         default: ''
 
@@ -768,7 +837,7 @@ jobs:
 
 Validate: `corepack yarn node -e "const y=require('js-yaml');y.load(require('fs').readFileSync('.github/workflows/llm-evals.yml','utf8'));console.log('YAML OK')"`
 
-- [ ] **Step 2: README** — cover: what the two families test and why (Story 08/12 gate); how to run locally (`ANTHROPIC_API_KEY=… corepack yarn evals`, `EVAL_MODEL`/`EVAL_FILTER`); baseline semantics (per-model; regenerate with `node packages/rn-dev-agent-core/test/evals/compare-baseline.ts --results <dir> --write-baseline --model <m>`; re-baselining is a reviewed commit); fixture-authoring rules (one behavior per fixture, never name the expected tool in the prompt, `required` is a set, avoid `allowed`); cost placeholder filled by the acceptance task with the measured figure.
+- [ ] **Step 2: README** — cover: what the two families test and why (Story 08/12 gate); how to run locally (`ANTHROPIC_API_KEY=… corepack yarn evals`, `EVAL_MODEL`/`EVAL_FILTER` — filtered runs are informational, no gate); baseline semantics (per-model; regenerate with `node packages/rn-dev-agent-core/test/evals/compare-baseline.ts --results <dir> --write-baseline --model <m>`; refuses failing fixtures without `--allow-failures`; re-baselining is a reviewed commit); the Yarn patch swapping the tester's retired hardcoded judge model (`claude-3-haiku-20240307` → `claude-haiku-4-5-20251001`) and that the judge model ≠ eval model; fixture-authoring rules (one behavior per fixture, never name the expected tool in the prompt, **`required` implies the tool must SUCCEED — only `cdp_status`/`device_list` succeed disconnected**, avoid `allowed`); cost notes: a file containing any failure is retried whole (~2× that file's cost) and every request carries the full ~79-tool schema; measured per-run figure filled by the acceptance task.
 
 - [ ] **Step 3: Changeset**
 
@@ -819,7 +888,7 @@ gh run download <run-id> --repo Lykhoyda/rn-dev-agent --name llm-evals-results -
 node packages/rn-dev-agent-core/test/evals/compare-baseline.ts --results /tmp/eval-results --write-baseline --model claude-haiku-4-5-20251001
 ```
 
-Inspect: every fixture SHOULD be `pass`; a consistently-failing fixture is rewritten or removed (spec's noise rule), not baselined as expected-fail without a comment. Commit `baseline.json` (+ README cost figure from the Anthropic console usage for that run, or the token estimate method documented inline) on a `chore/387-eval-baseline` branch → PR → merge.
+Inspect: every fixture SHOULD be `pass` — `--write-baseline` REFUSES failing fixtures by design; a consistently-failing fixture is rewritten or removed (spec's noise rule), and `--allow-failures` is only for a deliberately-baselined known-fail justified in the PR. Commit `baseline.json` (+ README cost figure from the Anthropic console usage for that run — remember the retry can double a failing file's cost) on a `chore/387-eval-baseline` branch → PR → merge.
 
 - [ ] **Step 4: Seeded-regression check (mutation pattern)**
 
@@ -837,4 +906,17 @@ Degrade one input the evals depend on — swap the two YAML judge criteria targe
 
 - Spec coverage: layout/harness (T2-T3), both fixture families incl. STALE_REF-candidates and honest-uncertainty (T2), baseline + compare gate (T1, T5), workflow with fail-fast guard + artifacts + summary (T4), acceptance incl. baseline-from-real-run, seeded regression and measured cost (T5). Out-of-scope items (schedule, multi-provider, dashboards) have no tasks — correct.
 - Known plan-time unknowns, each with a bounded resolution step: tester's relative-path base for server-config args (T2 S3 / T3 S5 one-liner), whether Yarn hoists the tester bin (T3 S1 check), per-fixture pass rates on the first real run (T5 S3 inspect-before-baselining).
-- The wiring gate (T3 S5) deliberately uses an invalid API key: proves config parsing, env substitution, server spawn, junit production and compare flow with zero token spend.
+- The wiring gate (T3 S5) deliberately uses an invalid API key: proves config parsing, env substitution (incl. minified payload injection), server spawn, junit production and compare flow with zero token spend.
+
+## Amendments applied from the multi-LLM plan review (2026-07-09)
+
+Participants: Codex + Claude coordinator (file-verified against the tester's dist source, rn-dev-agent source, and the local artifacts); Antigravity hung again (0-byte, watchdog-killed at 300s — third occurrence in this repo). As originally written, ZERO fixtures would have passed a real run — four blockers, all fixed:
+
+1. **`required` implies tool SUCCESS** (tester `runner.js:183-213` fails a fixture when a required tool returns `isError:true`; our `failResult` sets it). Reworked the tool-correctness family: `required` only on `device_list`/`cdp_status` (succeed disconnected), added `device-inventory`, made `snapshot-first-observation`/`honest-press-failure` judge-only.
+2. **The tester's llm-judge model is hardcoded to `claude-3-haiku-20240307` — RETIRED 2026-04-20** (and 1.4.1 is the latest release), so 7 of 8 judge fixtures would error. Added Task 3 Step 1b: a committed Yarn `patch:` swapping the judge model to `claude-haiku-4-5-20251001`; judge model documented in README/baseline provenance.
+3. **`${VAR}` substitution is applied to raw YAML text BEFORE parsing** (`loader.js:18-22`) — a pretty-printed multi-line JSON payload corrupts the config. The runner now minifies fixtures at injection; committed fixtures stay pretty.
+4. **The planned iOS artifact is a stub** (`/tmp/iosdbg3` = the seeded-run failure, no snapshot step). Extraction retargeted to the complete Android artifact (`/tmp/adbg3`, payload consumption is platform-agnostic) with existence/nodes guards and a corrected fallback trigger ("missing OR lacking a full snapshot step").
+
+Gate hardening (Codex, verified): filtered runs (`EVAL_FILTER`) are informational — comparing partial results against the full baseline would count omitted fixtures as regressions; `--write-baseline` refuses failing fixtures without an explicit `--allow-failures`. Nice-to-haves applied: `EVAL_MODEL` trim-or-default (empty dispatch input), retry-doubles-cost + always-full-79-tool-context notes in the README.
+
+Review findings verified as already-correct (no change): Yarn is `nodeLinker: node-modules` (Codex's PnP concern rejected); dispatch ordering satisfies the workflow-on-default-branch constraint; the seeded-regression check is deterministic (regex fixture, judge-free); the JUnit regex parser matches the tester's actual formatter output; Node 22/24 type stripping supports the relative `.ts` imports used.

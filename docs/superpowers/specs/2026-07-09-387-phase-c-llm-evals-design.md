@@ -32,7 +32,10 @@ merges/removals) and have no safety gate without a recorded baseline.
    maintainer (no API-key precedent exists in this repo's CI). The workflow
    fails fast with an actionable message when the secret is absent.
 3. **Approach: adopt `mcp-server-tester`** (story-named, Maestro-proven;
-   version-pinned devDependency). Its `evals` command spawns our real server
+   version-pinned devDependency). *Amendment from the plan review
+   (2026-07-09): 1.4.1 — the latest release — hardcodes its llm-judge to the
+   RETIRED `claude-3-haiku-20240307`, so adoption ships with a committed Yarn
+   `patch:` swapping the judge model to `claude-haiku-4-5-20251001`.* Its `evals` command spawns our real server
    from a config JSON, drives an Anthropic model in an agentic loop against
    the live tool surface, and supports two assertion kinds we need: expected
    tool calls ("Required tool 'X' was not called (actual: Y)") and LLM-judge
