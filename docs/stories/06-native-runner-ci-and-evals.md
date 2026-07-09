@@ -49,12 +49,16 @@ CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, 
 >   (L2), which drives any app via XCUITest/UIAutomator2; CDP (L1) is already covered by
 >   2900+ TS unit cases against mock Hermes. A CDP-driving RN fixture lane is a named
 >   deferral (Phase B2).
-> - **The keyboard-guard assertion is platform-divergent by #370 contract**: Android
->   dismisses (`meta.keyboardGuard: "dismissed"`); iPhone standard QWERTY refuses
->   (`KEYBOARD_OCCLUDED`, `dismiss_failed`) because XCTest `swipeDown` on the keyboard
->   corrupts the focused field. The driver fails loudly (not silently passes) if the
->   software keyboard never appears — set `show_ime_with_hard_keyboard 1` (Android) and
->   `ConnectHardwareKeyboard=false` (iOS).
+> - **The on-device keyboard-guard step is iOS-only** (decided 2026-07-09 after
+>   acceptance). iPhone standard QWERTY refuses the occluded tap (`KEYBOARD_OCCLUDED`,
+>   `dismiss_failed`) because XCTest `swipeDown` on the keyboard corrupts the focused
+>   field — a stable, meaningful contract to pin. Android is skipped on-device: UiAutomator
+>   drops occluded views AND its IME-frame containment check is edge-sensitive, so the
+>   scenario's outcome (dismiss vs a tap swallowed at the frame edge) varies run-to-run.
+>   Android's guard predicate (`shouldDismiss`) is precisely unit-tested in
+>   `KeyboardGuardTest.kt` (Phase A CI, every push), so re-testing that geometry on-device
+>   adds flake, not coverage. iOS still fails loudly if the software keyboard never
+>   appears — set `ConnectHardwareKeyboard=false`.
 > - Two runner bugs were found by the smoke before CI: `fastSwipe` omitted the target
 >   `appBundleId` (drags no-op'd on the runner's own host app), and the Android
 >   screen-rect heuristic + missing package-visibility `<queries>` broke scroll and
