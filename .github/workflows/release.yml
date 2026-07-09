@@ -14,8 +14,10 @@ name: Release
 # PREREQUISITES (must be enabled in repo settings — cannot be set from this file):
 #   - Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests"
 #   - Settings > General > "Allow auto-merge"
-#   - Branch protection on main with >=1 required status check (so `gh pr merge --auto`
-#     has a check to gate on; otherwise auto-merge has nothing to wait for).
+#   - OPTIONAL: branch protection on main with >=1 required status check. With it,
+#     `gh pr merge --auto` gates the Version PR on those checks. Without it, GitHub
+#     refuses to enable auto-merge ("Protected branch rules not configured") and the
+#     merge step falls back to a direct squash-merge of the clean Version PR.
 
 on:
   push:
@@ -53,16 +55,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Prefer auto-merge (it gates on any pending checks). `gh pr merge --auto`
-      # ERRORS only when auto-merge can't be enabled — most commonly because the
-      # PR is already in a clean/mergeable state: the changeset-release/main
-      # branch has no required status checks, so the Version PR is usually
-      # immediately mergeable and there is no gate to attach to. Fall back to a
-      # direct merge ONLY for that specific benign error. Any OTHER auto-merge
-      # failure (e.g. "Allow auto-merge" disabled, missing permission) must fail
-      # the job loudly rather than silently direct-merging — a failing/pending
-      # check never lands here, because --auto succeeds at *enabling* in that
-      # case and simply waits.
-      - name: Merge the Version Packages PR (auto-merge, or direct only if already clean)
+      # ERRORS only when auto-merge can't be enabled — i.e. there is no gate to
+      # attach to. GitHub reports that benign state with two different messages:
+      #   - "Pull request is in clean status" (PR already mergeable, nothing pending)
+      #   - "Protected branch rules not configured for this branch" (main has no
+      #     branch protection, so auto-merge has no required checks to wait for)
+      # Fall back to a direct merge ONLY for those benign errors — the direct
+      # `gh pr merge` still refuses a conflicted/blocked PR, so nothing bad can
+      # land through the fallback. Any OTHER auto-merge failure (e.g. "Allow
+      # auto-merge" disabled, missing permission) must fail the job loudly
+      # rather than silently direct-merging — a failing/pending check never
+      # lands here, because --auto succeeds at *enabling* in that case and
+      # simply waits.
+      - name: Merge the Version Packages PR (auto-merge, or direct only if nothing to gate on)
         if: steps.changesets.outputs.pullRequestNumber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,8 +77,8 @@ jobs:
             echo "$out"
           else
             echo "$out"
-            if printf '%s' "$out" | grep -q "Pull request is in clean status"; then
-              echo "auto-merge not applicable (PR already mergeable) — merging directly"
+            if printf '%s' "$out" | grep -qe "Pull request is in clean status" -e "Protected branch rules not configured for this branch"; then
+              echo "auto-merge not applicable (no gate to wait on) — merging directly"
               gh pr merge --squash "$PR_NUMBER"
             else
               echo "auto-merge failed for an unexpected reason — not falling back" >&2
