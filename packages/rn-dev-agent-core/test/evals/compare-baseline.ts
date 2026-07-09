@@ -65,9 +65,46 @@ export function collectResults(resultsDir: string): Record<string, Verdict> {
   const merged: Record<string, Verdict> = {};
   for (const f of readdirSync(resultsDir)) {
     if (!f.endsWith('.junit.xml')) continue;
-    Object.assign(merged, parseJunitXml(readFileSync(join(resultsDir, f), 'utf8')));
+    const parsed = parseJunitXml(readFileSync(join(resultsDir, f), 'utf8'));
+    for (const [name, verdict] of Object.entries(parsed)) {
+      // A duplicate fixture name across junit files is silent last-write-wins:
+      // one verdict overwrites the other and a masked FAIL turns the gate green.
+      // Refuse instead of merging.
+      if (name in merged) {
+        throw new Error(`duplicate fixture name across junit files: "${name}"`);
+      }
+      merged[name] = verdict;
+    }
   }
   return merged;
+}
+
+export function writeBaseline(
+  current: Record<string, Verdict>,
+  opts: { model: string; allowFailures: boolean; path: string },
+): Baseline {
+  // A baseline is a promise that these fixtures pass. Refuse to enshrine
+  // failures silently (an all-red first run must not become a meaningless
+  // "green" gate); allowFailures is the explicit override for a
+  // deliberately-baselined known-fail (must be justified in the PR).
+  const failing = Object.entries(current)
+    .filter(([, v]) => v === 'fail')
+    .map(([n]) => n);
+  if (failing.length > 0 && !opts.allowFailures) {
+    throw new Error(
+      `refusing to write baseline: ${failing.length} failing fixture(s): ${failing.join(
+        ', ',
+      )}. Fix or remove them, or pass --allow-failures deliberately.`,
+    );
+  }
+  const baseline: Baseline = {
+    model: opts.model,
+    testerVersion: '1.4.1',
+    capturedAt: new Date().toISOString(),
+    fixtures: current,
+  };
+  writeFileSync(opts.path, JSON.stringify(baseline, null, 2) + '\n');
+  return baseline;
 }
 
 const BASELINE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'baseline.json');
@@ -86,27 +123,17 @@ function cliMain(): void {
   }
 
   if (args.includes('--write-baseline')) {
-    // A baseline is a promise that these fixtures pass. Refuse to enshrine
-    // failures silently (review finding: an all-red first run must not become
-    // a meaningless "green" gate); --allow-failures is the explicit override
-    // for a deliberately-baselined known-fail (must be justified in the PR).
-    const failing = Object.entries(current).filter(([, v]) => v === 'fail');
-    if (failing.length > 0 && !args.includes('--allow-failures')) {
-      console.error(
-        `refusing to write baseline: ${failing.length} failing fixture(s): ${failing
-          .map(([n]) => n)
-          .join(', ')}. Fix or remove them, or pass --allow-failures deliberately.`,
-      );
+    const model = args[args.indexOf('--model') + 1] ?? 'unknown';
+    try {
+      writeBaseline(current, {
+        model,
+        allowFailures: args.includes('--allow-failures'),
+        path: BASELINE_PATH,
+      });
+    } catch (e) {
+      console.error((e as Error).message);
       process.exit(1);
     }
-    const model = args[args.indexOf('--model') + 1] ?? 'unknown';
-    const baseline: Baseline = {
-      model,
-      testerVersion: '1.4.1',
-      capturedAt: new Date().toISOString(),
-      fixtures: current,
-    };
-    writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n');
     console.log(`baseline written: ${Object.keys(current).length} fixtures, model=${model}`);
     return;
   }

@@ -5,7 +5,16 @@
 // fixtures never gate.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJunitXml, compareToBaseline } from '../evals/compare-baseline.ts';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  parseJunitXml,
+  compareToBaseline,
+  collectResults,
+  writeBaseline,
+} from '../evals/compare-baseline.ts';
+import type { Baseline, Verdict } from '../evals/compare-baseline.ts';
 
 const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
@@ -59,4 +68,88 @@ test('compareToBaseline: clean run has no regressions', () => {
     newFixtures: [],
     stillFailing: [],
   });
+});
+
+function tempResultsDir(): string {
+  return mkdtempSync(join(tmpdir(), 'evals-compare-'));
+}
+
+const CASE = (name: string, verdict: Verdict) =>
+  verdict === 'fail'
+    ? `<testsuite><testcase name="${name}"><failure message="x"/></testcase></testsuite>`
+    : `<testsuite><testcase name="${name}"/></testsuite>`;
+
+test('collectResults: merges verdicts across multiple junit files', () => {
+  const dir = tempResultsDir();
+  try {
+    writeFileSync(join(dir, 'a.junit.xml'), CASE('alpha', 'pass'));
+    writeFileSync(join(dir, 'b.junit.xml'), CASE('beta', 'fail'));
+    assert.deepEqual(collectResults(dir), { alpha: 'pass', beta: 'fail' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('collectResults: throws on duplicate fixture name across junit files', () => {
+  const dir = tempResultsDir();
+  try {
+    // 'dup' recorded pass in one file, fail in another — silent last-write-wins
+    // would mask the FAIL and turn the gate green. Must throw instead.
+    writeFileSync(join(dir, 'a.junit.xml'), CASE('dup', 'pass'));
+    writeFileSync(join(dir, 'b.junit.xml'), CASE('dup', 'fail'));
+    assert.throws(() => collectResults(dir), /duplicate fixture name across junit files: "dup"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeBaseline: refuses when a fixture failed and allowFailures is absent', () => {
+  const dir = tempResultsDir();
+  try {
+    const path = join(dir, 'baseline.json');
+    assert.throws(
+      () =>
+        writeBaseline({ a: 'pass', b: 'fail' } as Record<string, Verdict>, {
+          model: 'm',
+          allowFailures: false,
+          path,
+        }),
+      /refusing to write baseline.*failing fixture\(s\): b/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeBaseline: writes when allowFailures is passed despite a failing fixture', () => {
+  const dir = tempResultsDir();
+  try {
+    const path = join(dir, 'baseline.json');
+    writeBaseline({ a: 'pass', b: 'fail' } as Record<string, Verdict>, {
+      model: 'my-model',
+      allowFailures: true,
+      path,
+    });
+    const written = JSON.parse(readFileSync(path, 'utf8')) as Baseline;
+    assert.equal(written.model, 'my-model');
+    assert.deepEqual(written.fixtures, { a: 'pass', b: 'fail' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeBaseline: writes normally when all fixtures pass', () => {
+  const dir = tempResultsDir();
+  try {
+    const path = join(dir, 'baseline.json');
+    writeBaseline({ a: 'pass', b: 'pass' } as Record<string, Verdict>, {
+      model: 'm',
+      allowFailures: false,
+      path,
+    });
+    const written = JSON.parse(readFileSync(path, 'utf8')) as Baseline;
+    assert.deepEqual(written.fixtures, { a: 'pass', b: 'pass' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
