@@ -69,3 +69,6 @@ test-fixtures/android-fixture/**/build/
 
 # Playwright MCP session artifacts (screenshots/snapshots from browser automation)
 .playwright-mcp/
+
+# Story 06 Phase C (#387) eval-run results (regenerated per run)
+packages/rn-dev-agent-core/test/evals/results/

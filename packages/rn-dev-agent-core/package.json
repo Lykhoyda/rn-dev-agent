@@ -21,7 +21,13 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.0",
+    "mcp-server-tester": "patch:mcp-server-tester@npm%3A1.4.1#~/.yarn/patches/mcp-server-tester-npm-1.4.1-6564330b13.patch",
     "typescript": "^5.4.0"
+  },
+  "dependenciesMeta": {
+    "mcp-server-tester": {
+      "built": false
+    }
   },
   "engines": {
     "node": ">=22"
