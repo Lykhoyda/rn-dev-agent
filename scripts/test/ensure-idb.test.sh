@@ -64,6 +64,17 @@ OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "idb available"; then ok "hyphen: idb-companion accepted"; else bad "hyphen: expected available, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "hyphen: no spawn" || bad "hyphen: unexpected spawn"
 
+# 1c. B269: client on PATH but BROKEN (crashes on invocation) -> not treated
+#     as present; prints the broken notice and spawns the repair worker.
+STATE="$TMP/state1c"
+STUBS="$(mkstubs "idb_companion brew")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "broken"; then ok "broken-client: prints broken notice"; else bad "broken-client: expected broken notice, got: $OUT"; fi
+if [ -f "$STATE/spawn.log" ] && [ "$(wc -l < "$STATE/spawn.log")" -eq 1 ]; then
+  ok "broken-client: spawns repair worker"
+else bad "broken-client: expected one spawn record"; fi
+
 # 2. Non-macOS -> silent success, no spawn.
 STATE="$TMP/state2"
 STUBS="$(mkstubs "brew")"
@@ -116,6 +127,25 @@ echo "failed $(( $(date +%s) - 90000 ))" > "$STATE/last-attempt"
 STUBS="$(mkstubs "brew")"
 OUT="$(run_script "$STUBS")"
 [ -f "$STATE/spawn.log" ] && ok "backoff: stale marker allows retry" || bad "backoff: stale marker still blocked retry"
+
+# 7b. B269 worker invariant: a client that is still broken after reinstall is
+#     UNINSTALLED (never left on PATH) and the attempt is marked failed.
+STATE="$TMP/state7b"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+printf '#!/bin/sh\necho "$@" >> "%s/pipx.log"\nexit 0\n' "$STATE" > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
+env PATH="$STUBS:/usr/bin:/bin" RN_AGENT_IDB_STATE_DIR="$STATE" RN_AGENT_IDB_UNAME=Darwin \
+  bash "$SCRIPT" --install-worker > "$TMP/worker7b.out" 2>&1
+if grep -q "uninstall fb-idb" "$STATE/pipx.log" 2>/dev/null; then
+  ok "worker: broken client uninstalled (never left on PATH)"
+else bad "worker: expected pipx uninstall fb-idb, got: $(cat "$STATE/pipx.log" 2>/dev/null)"; fi
+if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: broken client marks attempt failed (backoff engages)"
+else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+if grep -qi "crashes on invocation" "$TMP/worker7b.out"; then
+  ok "worker: explains the uninstall in the log"
+else bad "worker: expected crash explanation, got: $(cat "$TMP/worker7b.out")"; fi
 
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;

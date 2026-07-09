@@ -59787,7 +59787,7 @@ import { tmpdir as tmpdir11 } from "node:os";
 import { join as join36 } from "node:path";
 async function detectIdb(execFileFn = execFile26) {
   return new Promise((resolve4) => {
-    execFileFn("which", ["idb"], { timeout: 3e3 }, (err) => resolve4(!err));
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve4(!err));
   });
 }
 function isEnoent(err) {

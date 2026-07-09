@@ -44,6 +44,16 @@ has_companion() {
   command -v idb_companion >/dev/null 2>&1 || command -v idb-companion >/dev/null 2>&1
 }
 
+# B269: PATH presence is not health — fb-idb installed under an incompatible
+# Python (e.g. 3.14) crashes on EVERY invocation (asyncio get_event_loop).
+# Treating such a client as "present" both skips repair AND poisons the
+# mirror's tier selection (B263). `idb --help` initializes the CLI without
+# contacting a companion, so it exits 0 for a healthy client and non-zero
+# for a broken one.
+idb_client_healthy() {
+  command -v idb >/dev/null 2>&1 && idb --help >/dev/null 2>&1
+}
+
 # --install-worker: the detached background job (never reached at SessionStart).
 if [ "${1:-}" = "--install-worker" ]; then
   mkdir -p "$STATE_DIR"
@@ -51,12 +61,24 @@ if [ "${1:-}" = "--install-worker" ]; then
   if ! has_companion; then
     brew tap facebook/fb && { brew trust facebook/fb >/dev/null 2>&1 || true; } && brew install idb-companion || status=failed
   fi
-  if ! command -v idb >/dev/null 2>&1; then
+  if ! idb_client_healthy; then
     if ! command -v pipx >/dev/null 2>&1; then
       brew install pipx && pipx ensurepath || status=failed
     fi
     if command -v pipx >/dev/null 2>&1; then
+      # A present-but-broken client must be replaced, not trusted (B269).
+      if command -v idb >/dev/null 2>&1; then
+        pipx uninstall fb-idb >/dev/null 2>&1 || true
+      fi
       pipx install fb-idb || status=failed
+      if ! idb_client_healthy; then
+        # Never leave a crash-on-invocation client on PATH: it provides
+        # nothing and re-arms the B263 mirror failure. Uninstall and let the
+        # 24h backoff retry (a future fb-idb release may fix compatibility).
+        pipx uninstall fb-idb >/dev/null 2>&1 || true
+        status=failed
+        echo "fb-idb installed but the client crashes on invocation (incompatible Python?) — uninstalled; the mirror stays on the simctl tier"
+      fi
     else
       status=failed
     fi
@@ -67,10 +89,16 @@ if [ "${1:-}" = "--install-worker" ]; then
   exit 0
 fi
 
-# Foreground path — bounded: checks + at most one detached spawn.
-if command -v idb >/dev/null 2>&1 && has_companion; then
+# Foreground path — bounded: checks + at most one detached spawn. The client
+# check is a health probe (one `idb --help` invocation, no daemon contact),
+# not a PATH check — see idb_client_healthy (B269).
+if idb_client_healthy && has_companion; then
   echo "idb available: screen mirroring uses the fast path (idb video-stream)"
   exit 0
+fi
+
+if command -v idb >/dev/null 2>&1 && ! idb_client_healthy; then
+  echo "idb client on PATH is broken (crashes on invocation) — the background worker will replace or remove it (B269)"
 fi
 
 if ! command -v brew >/dev/null 2>&1; then
