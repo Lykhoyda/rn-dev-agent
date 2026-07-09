@@ -114,4 +114,7 @@ run skips the gate and must never become the committed baseline.
 - A failing fixture is retried **individually** (per-fixture, not per-file), so
   a flaky fixture costs roughly **2× that fixture's tokens**, plus its judge
   calls.
-- Measured per-run figure: _filled in by the acceptance task._
+- Measured per-run figure (acceptance, 2026-07-10, Haiku 4.5 under test AND
+  as judge, claude-code 2.1.205): **~60–62 agentic turns, $0.28–0.34
+  API-equivalent per full 9-fixture run** — subscription-covered, so the
+  marginal dollar cost is ~$0. A fixture retry adds roughly 1/9th of that.

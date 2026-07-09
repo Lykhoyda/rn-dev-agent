@@ -1,6 +1,6 @@
 # Story 06 — Native runner tests in CI + LLM-behavior evals
 
-**Status:** Phase A shipped (2026-07-05, #387); Phase B workflow shipped (2026-07-06, #387) — one-week-green + seeded-bug acceptance pending its first scheduled runs (post-merge, not a merge gate); Phase C proposed
+**Status:** Phase A shipped (2026-07-05, #387); Phase B workflow shipped (2026-07-06, #387) — one-week-green + seeded-bug acceptance pending its first scheduled runs (post-merge, not a merge gate); Phase C shipped (PR #521, 2026-07-09) and re-engined + acceptance-complete as Phase C.2 (2026-07-10, subscription-funded headless-Claude runner — see the Phase C.2 note below)
 **Epic:** [Maestro adoption](README.md)
 **Impact:** The highest-risk layer (native gesture/snapshot/keyboard-guard behavior) currently has zero automated execution; this adds three graduated coverage tiers
 **Effort:** M (Phase A is S; Phases B/C are M)
@@ -87,11 +87,21 @@ Nightly job (not per-PR — simulators/emulators are too slow/flaky for the merg
   - **Output-usability fixtures**: given a real `device_snapshot` payload, can the model produce the right `@ref` for a described element (this is the regression gate for Story 08's compact format and Story 12's consolidation).
 - Runs nightly with an explicit token budget; results trended, not merge-gating (evals are noisy; they gate *releases* of surface-changing stories, not every PR).
 
+**As shipped:** cadence relaxed to on-demand `workflow_dispatch` (user decision 2026-07-09); harness shipped in PR #521 on `mcp-server-tester`, then **re-engined as Phase C.2** (spec `2026-07-09-387-phase-c2-subscription-evals-design.md`) onto headless Claude Code (`claude -p`) because the tester was API-key-only and no API budget exists — evals now run on the maintainer's Claude subscription (locally via the logged-in CLI; CI via a `CLAUDE_CODE_OAUTH_TOKEN` secret from `claude setup-token`).
+
+**Phase C.2 acceptance record (2026-07-10, Haiku 4.5 model + judge, claude-code 2.1.205):**
+- Run 1 (7/9): exposed that `required: ['cdp_status']` could never pass — `cdp_status` returns `failResult` (isError) when no Metro exists at all (`status.ts` catch path), falsifying the Phase C header's "succeeds disconnected" assumption. Triage: dropped those two `required` assertions (`blank-screen-diagnosis`, `not-connected-recovery`), behavior asserted via llm-judge only.
+- Run 2 (8/9): exposed judge blindness — the judge saw tool names + errored flags + final text but NOT the fixture prompt, so it scored the prompt-given "blank white screen" as a fabricated UI finding. Fix: `buildJudgePrompt` now includes a "Task the assistant was given" section (commit `304b8206`).
+- Run 3 (9/9): baseline captured from these results and committed (`baseline.json`, 9 pass). Flap profile across runs: `tool-discovery`, `honest-press-failure`, `blank-screen-diagnosis` each flapped ≤1 attempt and were absorbed by the per-fixture retry — noise stays within the designed retry budget.
+- Seeded regression: `device-inventory` required tool swapped to `device_press` on a scratch edit → run exited 1 with `REGRESSION: device-inventory` against the committed baseline, then reverted. The Story 08/12 gate demonstrably goes red.
+- Cost: ~60–62 turns, $0.28–0.34 API-equivalent per full run (subscription-covered, ~$0 marginal).
+- Known judge limitation (recorded for fixture authors): the judge never sees tool-result contents; criteria must be judgeable from tool names + errored flags + the task prompt + the final response.
+
 ## Acceptance criteria
 
 - Phase A: a deliberately broken `KeyboardGuard.shouldDismiss` fails CI on both platforms (verify once by reverting a predicate in a draft PR).
 - Phase B: green nightly runs on both platforms for one week; a seeded runner bug (e.g. off-by-one in tap coordinates on the fixture) is caught by the golden set.
-- Phase C: baseline eval scores recorded; Story 08/12 PRs must show no regression against that baseline.
+- Phase C: baseline eval scores recorded; Story 08/12 PRs must show no regression against that baseline. ✅ 2026-07-10 (C.2): baseline committed from a real 9/9 subscription run; seeded regression proven red (see the Phase C.2 acceptance record).
 - Total added per-PR CI time ≤ 12 min (path-filtered), nightly wall-clock ≤ 45 min.
 
 ## Test plan
