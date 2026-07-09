@@ -4,7 +4,7 @@
 
 **Goal:** Make the iOS runner's per-node `hittable` flag mean "enabled and its center is on-screen" instead of the current occlusion heuristic that marks every node `false` on real RN screens.
 
-**Architecture:** Two new pure, unit-testable predicate functions (`computeSnapshotHittable`, `shouldIncludeSnapshotNode`) land in a new file in the `RnFastRunnerUITests` target; `RnFastRunnerTests+Snapshot.swift` is rewired to call them and the occlusion machinery (`laterSnapshots`, `flattenedSnapshots`, `isOccludingType`, the `flatSnapshots`/`snapshotRanges` context fields) is deleted. Snapshot *filtering* deliberately stops reading `hittable` (its de-facto behavior today, made explicit) so snapshot sizes don't change while the emitted flag gains its new meaning. No TypeScript code changes — TS consumers (`device_find` ranking, `device_batch` dead-control annotation) start receiving meaningful data for free.
+**Architecture:** Two new pure, unit-testable predicate functions (`computeSnapshotHittable`, `shouldIncludeSnapshotNode`) land in a new file in the `RnFastRunnerUITests` target; `RnFastRunnerTests+Snapshot.swift` is rewired to call them and the occlusion machinery (`laterSnapshots`, `flattenedSnapshots`, `isOccludingType`, the `flatSnapshots`/`snapshotRanges` context fields) is deleted. Snapshot *filtering* deliberately stops reading `hittable` (its de-facto behavior today, made explicit) so snapshot sizes must not grow — small decreases are expected, since the rare trailing contentless overlay wrappers the old algorithm computed `hittable=true` for were included via `hasContent || hittable` and are now excluded — while the emitted flag gains its new meaning. No TypeScript code changes — TS consumers (`device_find` ranking, `device_batch` dead-control annotation) start receiving meaningful data for free.
 
 **Tech Stack:** Swift/XCTest (`scripts/rn-fast-runner`), Node 22 + `node --test` (`scripts/cdp-bridge`), xcodebuild against a booted iOS simulator.
 
@@ -18,7 +18,7 @@
 - New Swift files under `RnFastRunner/RnFastRunnerUITests/` auto-join the target (Xcode 16 `FileSystemSynchronizedRootGroup`) — do NOT edit `project.pbxproj`.
 - The native iOS test script runs the whole `RnFastRunnerUITests` bundle minus a skip-list; new test classes run automatically (`scripts/test-native-ios.sh`).
 - Semantics statement (copy verbatim into code comment and changeset): `hittable` means **"enabled and its center is on-screen"** (plausibly tappable), not "verified front-most".
-- No new comments beyond the two semantics comments shown in Task 1 (project convention: no unnecessary comments).
+- Comments are limited to the semantics comments shown in Tasks 1-2 plus the half-open-bounds note in `computeSnapshotHittable` (project convention: no unnecessary comments). The half-open note is warranted — it records a constraint the code can't show: the explicit `[min, max)` check must not be "simplified" back to `CGRect.contains`, whose max-edge behavior is environment-dependent (the exact regression codex-pair flagged during TDD).
 - No wire-shape change: `RUNNER_PROTOCOL_VERSION` stays 1; no new command verbs; `REQUIRED_IOS_COMMANDS` untouched.
 - Rollout is a no-op by construction: plugin releases install to per-version cache dirs (`~/.claude/plugins/cache/rn-dev-agent/rn-dev-agent/<version>/`), so each release cold-builds or downloads its own runner artifact (built from that release's sources by `.github/workflows/runner-artifacts.yml`). Only dev checkouts carry a stale `packages/rn-fast-runner/build/DerivedData` across source edits — Task 5 deletes it before device verification.
 
@@ -111,10 +111,14 @@ import XCTest
 // them is absent from the tree entirely) and same-window full-screen containers
 // carry no opacity signal, so the old later-node occlusion loop only ever
 // matched transparent wrappers and marked every node non-hittable.
+// Viewport bounds are half-open [min, max): a center tap on the max edge lands
+// outside the screen, and the explicit check keeps the policy Xcode-independent.
 func computeSnapshotHittable(enabled: Bool, frame: CGRect, viewport: CGRect) -> Bool {
   guard enabled else { return false }
   if frame.isNull || frame.isEmpty { return false }
-  return viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+  let center = CGPoint(x: frame.midX, y: frame.midY)
+  return center.x >= viewport.minX && center.x < viewport.maxX
+    && center.y >= viewport.minY && center.y < viewport.maxY
 }
 ```
 
@@ -444,7 +448,7 @@ Expected: PASS (2,930+ tests as of PR #475). The build step inside `npm test` mu
 
 - [ ] **Step 3: Record Android parity evidence (code-read, no change)**
 
-The Android snapshot path is already honest: `CommandDispatcher.kt:178` maps `hittable` from UIAutomator's `visible-to-user` attribute (native visibility, no occlusion heuristic), and the find-path `uiObjectToJson` (`CommandDispatcher.kt:314`) maps `isEnabled` — consistent with the new iOS semantics. If an Android emulator is running (`adb devices` lists one), optionally confirm live: open a device session on it and check a snapshot's nodes are not uniformly `hittable: false`. No Kotlin changes either way; the evidence lines go into the PR body.
+Android is explicitly OUT OF SCOPE for this change — its two `hittable` sources are honest but not aligned with each other or with the new iOS semantics: the snapshot path (`CommandDispatcher.kt:~168`) maps UIAutomator's `visible-to-user` (no occlusion heuristic, so it never had the #395 defect), while the find-path `uiObjectToJson` (`CommandDispatcher.kt:~307`) maps `isEnabled`. Neither is "enabled AND center-on-screen". File a follow-up issue for cross-platform `hittable` semantics alignment instead of touching Kotlin here. If an Android emulator is running (`adb devices` lists one), optionally confirm live that snapshot nodes are not uniformly `hittable: false`; the evidence lines and the follow-up issue link go into the PR body.
 
 - [ ] **Step 4: Add the changeset**
 
@@ -456,7 +460,7 @@ Create `.changeset/honest-hittable-395.md`:
 'rn-dev-agent-plugin': patch
 ---
 
-fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking and `device_batch`'s dead-control annotation. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes are unchanged. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
+fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable, half-open viewport bounds). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking and `device_batch`'s dead-control annotation. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes must not grow (small decreases expected: trailing contentless overlay wrappers the old algorithm marked hittable are no longer included). The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
 ```
 
 - [ ] **Step 5: Commit**
@@ -538,13 +542,38 @@ Close the wizard afterwards (tap `wizard-back-btn` center).
 
 From the same two screens, capture the DEFAULT snapshot (`{"command":"snapshot","interactiveOnly":true,...}` — no `raw`) and compare node counts against the pre-fix baselines recorded during investigation: Tasks screen 127 full nodes, wizard 45 nodes. Expected: within a few nodes of baseline (the decoupling may EXCLUDE a handful of trailing contentless overlay wrappers that the old code included via `hasContent || hittable`; counts must not grow).
 
-- [ ] **Step 6: Clean up and record evidence**
+- [ ] **Step 6: Bridge-path verification (multi-LLM review SHOULD-FIX: exercise `updateRefMapFromFlat` + live ranking, not just raw curl)**
+
+The curl checks bypass the TS client mapping. Drive one snapshot through the checkout `dist` so the flat-node mapping, ref-map refresh, and `rankSnapshotNodes` all see live data. Kill the manual runner first so the dist client spawns its own from the same rebuilt DerivedData:
+
+```bash
+pkill -f RnFastRunnerUITests-Runner || true
+cd packages/rn-dev-agent-core && npm run build >/dev/null && cd ../..
+node --input-type=module -e '
+import { startFastRunner, runIOS } from "./packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js";
+import { getCachedScreenRect } from "./packages/rn-dev-agent-core/dist/agent-device-wrapper.js";
+import { rankSnapshotNodes } from "./packages/rn-dev-agent-core/dist/tools/device-interact.js";
+const udid = process.env.UDID;
+await startFastRunner(udid, "com.rndevagent.testapp");
+const res = await runIOS({ command: "snapshot", interactiveOnly: true, bundleId: "com.rndevagent.testapp" });
+const env = JSON.parse(res.content[0].text);
+const nodes = env.data.nodes;
+const hittable = nodes.filter((n) => n.hittable === true).length;
+console.log(`bridge path: ${hittable}/${nodes.length} hittable, screenRect=`, getCachedScreenRect());
+const ranked = rankSnapshotNodes(nodes.filter((n) => (n.label ?? "").includes("tab")));
+console.log("top-ranked tab candidate:", ranked[0]?.identifier, "hittable=", ranked[0]?.hittable);
+' 
+```
+
+Expected: `hittable` count is a large majority (bridge mapping preserved the flag); `screenRect` is non-null (the PR #517 hittable-first union now has real input); the top-ranked candidate reports `hittable= true` (the +1000 ranking signal is live again). Adjust export paths if `dist` layout differs — the assertion targets, not the import specifiers, are the contract.
+
+- [ ] **Step 7: Clean up and record evidence**
 
 ```bash
 pkill -f RnFastRunnerUITests-Runner || true
 ```
 
-Paste the Step 3-5 outputs (before/after hittable ratios, node counts) into the PR body and the GH #395 closure comment. No commit in this task.
+Paste the Step 3-6 outputs (before/after hittable ratios, node counts, bridge-path line) into the PR body and the GH #395 closure comment, plus: the Android scope-out note with the follow-up issue link (Task 4 Step 3), and a release-evidence line confirming `.github/workflows/runner-artifacts.yml` published a runner manifest for the released plugin version (the version-skew gate trusts an env-passed version, so artifact provenance is release-process evidence, not a runtime check). No commit in this task.
 
 ---
 
