@@ -1,0 +1,154 @@
+---
+import '../styles/landing.css';
+import plugin from '../../../../packages/claude-plugin/.claude-plugin/plugin.json';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const site = 'https://lykhoyda.github.io';
+const title = 'rn-dev-agent — Your agent writes the code. This proves it runs.';
+const description =
+  'Claude Code and Codex plugin for React Native. Reads the component tree, store state, and navigation over CDP, taps real UI on iOS and Android, and replays verified flows in seconds.';
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={`${site}${base}/`} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content={`${site}${base}/og-image.png`} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script
+      type="application/ld+json"
+      set:html={JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'SoftwareApplication',
+        name: 'rn-dev-agent',
+        description,
+        applicationCategory: 'DeveloperApplication',
+        operatingSystem: 'macOS, Linux',
+        url: `${site}${base}/`,
+        softwareVersion: plugin.version,
+        author: { '@type': 'Person', name: 'Anton Lykhoyda', url: 'https://github.com/Lykhoyda' },
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      })}
+    />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap">
+        <a class="wordmark" href={`${base}/`}>rn-dev-<span>agent</span></a>
+        <nav class="site-nav">
+          <a href={`${base}/getting-started/`}>Docs</a>
+          <a href={`${base}/tools/`}>Tools</a>
+          <a href={`${base}/benchmarks/`}>Benchmarks</a>
+          <a href="https://github.com/Lykhoyda/rn-dev-agent">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero-section grain">
+        <div class="wrap hero-inner">
+          <p class="eyebrow">v{plugin.version} · Claude Code + Codex · iOS + Android</p>
+          <h1>Your agent writes the code.<br /><em>This proves it runs.</em></h1>
+          <p class="hero-sub">
+            rn-dev-agent turns Claude Code and Codex into a React Native development partner.
+            It reads the component tree, store state, and navigation stack over CDP, taps real
+            UI on iOS and Android, and replays verified flows in seconds.
+          </p>
+          <div class="hero-ctas">
+            <div class="install-cmd">
+              <code id="install-cmd-text">/plugin marketplace add Lykhoyda/rn-dev-agent</code>
+              <button type="button" data-copy aria-label="Copy install command">copy</button>
+            </div>
+            <a class="btn-secondary" href={`${base}/getting-started/`}>Get started →</a>
+          </div>
+
+          <div class="demo">
+            <div class="term" id="hero-term">
+              <div class="term-bar" aria-hidden="true">
+                <i></i><i></i><i></i>
+                <span class="term-title">claude — rn-dev-agent</span>
+              </div>
+              <ol class="term-body">
+                <li class="t-line t-cmd" data-type data-screen="1" data-hold="700">❯ /rn-dev-agent:test-feature "cart badge updates on add"</li>
+                <li class="t-line t-tool" data-hold="500">⚙ cdp_status              <span class="t-ok">✓ connected · Metro :8081</span></li>
+                <li class="t-line t-tool" data-hold="500">⚙ cdp_navigate Products   <span class="t-ok">✓ 96 ms</span></li>
+                <li class="t-line t-tool" data-screen="2" data-hold="700">⚙ device_press @addToCart <span class="t-ok">✓ 142 ms</span></li>
+                <li class="t-line t-tool" data-hold="500">⚙ cdp_component_tree      <span class="t-ok">✓ CartBadge count=3</span></li>
+                <li class="t-line t-tool" data-screen="3" data-hold="700">⚙ cdp_store_state cart    <span class="t-ok">✓ items: 3 · total: $47.00</span></li>
+                <li class="t-line t-tool" data-hold="600">⚙ maestro_run cart-badge  <span class="t-ok">✓ replayed in 4.2 s</span></li>
+                <li class="t-line t-final" data-hold="3500">✓ Verified on iPhone 16 Pro · action saved: add-to-cart</li>
+              </ol>
+            </div>
+            <div class="phone" id="hero-phone" data-screen="3" aria-hidden="true">
+              <div class="phone-screen" data-s="1">
+                <div class="app-bar"><span>Products</span><span class="cart-dot"></span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+              </div>
+              <div class="phone-screen" data-s="2">
+                <div class="app-bar"><span>Products</span><span class="cart-dot" data-count="3"></span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div><span class="app-btn">ADD</span></div>
+              </div>
+              <div class="phone-screen" data-s="3">
+                <div class="app-bar"><span>Cart</span><span class="cart-dot" data-count="3"></span></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div></div>
+                <div class="app-row"><div class="app-thumb"></div><div class="app-lines"><i></i><i></i></div></div>
+                <div class="app-total"><span>Total</span><span>$47.00</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Task 5 sections mount here: stats, problem, #capabilities, showcase, #how-it-works -->
+
+      <section class="cta-band">
+        <div class="wrap">
+          <p class="eyebrow">Free · open source · MIT</p>
+          <h2>Stop taking your agent's word for it.</h2>
+          <div class="hero-ctas">
+            <div class="install-cmd">
+              <code>/plugin marketplace add Lykhoyda/rn-dev-agent</code>
+              <button type="button" data-copy aria-label="Copy install command">copy</button>
+            </div>
+            <a class="btn-secondary" href={`${base}/getting-started/`}>Read the docs →</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap">
+        <span>© {new Date().getFullYear()} Anton Lykhoyda · MIT License</span>
+        <nav class="site-nav">
+          <a href={`${base}/getting-started/`}>Docs</a>
+          <a href={`${base}/changelog/`}>Changelog</a>
+          <a href="https://github.com/Lykhoyda/rn-dev-agent">GitHub</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script>
+      for (const btn of document.querySelectorAll('[data-copy]')) {
+        btn.addEventListener('click', async () => {
+          const code = btn.parentElement?.querySelector('code');
+          if (!code) return;
+          await navigator.clipboard.writeText(code.textContent ?? '');
+          btn.textContent = 'copied';
+          setTimeout(() => (btn.textContent = 'copy'), 1500);
+        });
+      }
+    </script>
+  </body>
+</html>

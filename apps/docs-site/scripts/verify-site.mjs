@@ -86,6 +86,20 @@ const bp = page('best-practices/index.html');
 check('overview links to Vercel agent-skills', bp.includes('github.com/vercel-labs/agent-skills'));
 check('overview names a custom rule', bp.includes('reanimated-in-lists'));
 
+console.log('\nverify-site: landing foundation');
+const landing = page('index.html');
+check('headline present', landing.includes('This proves it runs.'));
+check('install command present', landing.includes('/plugin marketplace add Lykhoyda/rn-dev-agent'));
+check(
+  'eyebrow version comes from plugin.json',
+  landing.includes(
+    `v${JSON.parse(readFileSync(join(DIST, '../../../packages/claude-plugin/.claude-plugin/plugin.json'), 'utf8')).version}`,
+  ),
+);
+check('full transcript is static text', landing.includes('Verified on iPhone 16 Pro'));
+check('links use base path', landing.includes('href="/rn-dev-agent/getting-started/"'));
+check('no Starlight splash remnants', !landing.includes('class="hero"'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
