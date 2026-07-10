@@ -126,6 +126,10 @@ const docsCss = readdirSync(join(DIST, '_astro'))
   .join('');
 check('docs css bundle contains rda theme tokens', docsCss.includes('rda-docs-theme'));
 
+console.log('\nverify-site: llms.txt');
+check('llms.txt generated', exists('llms.txt'));
+check('llms.txt mentions the project', exists('llms.txt') && page('llms.txt').includes('rn-dev-agent'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

@@ -1,11 +1,13 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 export default defineConfig({
   site: 'https://lykhoyda.github.io',
   base: '/rn-dev-agent',
   integrations: [
     starlight({
+      plugins: [starlightLlmsTxt()],
       title: 'rn-dev-agent',
       description:
         'Claude Code and Codex plugin for React Native development — 79 MCP tools, 5 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
