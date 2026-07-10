@@ -46,11 +46,11 @@ jobs:
     outputs:
       pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — same pin as ci.yml
         with:
           node-version: 22
 
@@ -59,7 +59,8 @@ jobs:
 
       - name: Create or update the Version Packages PR
         id: changesets
-        uses: changesets/action@v1
+        # Pinned: upstream `v1` is a mutable BRANCH (not a tag); this SHA = tag v1.9.0.
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d
         with:
           version: corepack yarn version-packages
           commit: "chore(release): version packages"
