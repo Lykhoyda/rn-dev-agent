@@ -167,7 +167,7 @@ check(
   'scene driver present',
   sceneBundle.includes('data-scene-id') && sceneBundle.includes('is-animated'),
 );
-check('scene driver guards reduced motion', sceneBundle.includes('prefers-reduced-motion'));
+check('scene reduced-motion override inlined', gsHtml.includes('prefers-reduced-motion'));
 
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
