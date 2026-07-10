@@ -55,7 +55,7 @@ Three hooks cooperate around one file — capture is deterministic, synthesis us
 
 2. **Synthesize (agent).** When the session ends and the buffer has new records, a gated `Stop` hook asks the agent to merge them into `troubleshooting.md`: write clean gotchas under **Troubleshooting**, record any new repo facts under **Configuration & How-To**, dedupe, and prune to budget. It fires **at most once per session**.
 
-3. **Read (automatic).** At the next `SessionStart`, the hook that detects your RN project injects the file's content (when it has real content beyond the template) so the agent starts informed.
+3. **Read (automatic).** At the next `SessionStart`, the hook that detects your RN project injects the file's content (when it has real content beyond the template) so the agent starts informed. In the Claude Code hook (the only host with this SessionStart injection), the content is wrapped in an explicit `<untrusted-repo-notes>` boundary framed as *data, not instructions* — so in a cloned or otherwise untrusted repo, notes someone else committed can't masquerade as trusted startup directives (embedded boundary tags are stripped to prevent breaking out of the block).
 
 <Aside type="tip" title="It's gitignored on purpose">
 The file lives under `.rn-agent/local/`, which the plugin adds to `.rn-agent/.gitignore`. It's per-developer working memory, not a shared artifact — so it never shows up in your PRs. (Contrast [Actions](/actions/), which *are* committed and shared.)
