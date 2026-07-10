@@ -154,6 +154,21 @@ check(
   (page('dev-client-coverage/index.html').match(/<table/g) ?? []).length === 1,
 );
 
+console.log('\nverify-site: concept scenes — engine + verify loop');
+const gsHtml = page('getting-started/index.html');
+check('verify-loop scene mounted', gsHtml.includes('data-scene-id="verify-loop"'));
+check('scene static-complete', gsHtml.includes('report with evidence'));
+const sceneBundle =
+  readdirSync(join(DIST, '_astro'))
+    .filter((f) => f.endsWith('.js') || f.endsWith('.css'))
+    .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+    .join('') + gsHtml;
+check(
+  'scene driver present',
+  sceneBundle.includes('data-scene-id') && sceneBundle.includes('is-animated'),
+);
+check('scene driver guards reduced motion', sceneBundle.includes('prefers-reduced-motion'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
