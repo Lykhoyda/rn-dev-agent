@@ -169,6 +169,11 @@ check(
 );
 check('scene reduced-motion override inlined', gsHtml.includes('prefers-reduced-motion'));
 
+console.log('\nverify-site: three-layer scene');
+const archHtml2 = page('architecture/index.html');
+check('three-layer scene mounted', archHtml2.includes('data-scene-id="three-layers"'));
+check('busy chip present statically', archHtml2.includes('BUSY_FLOW_ACTIVE'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
