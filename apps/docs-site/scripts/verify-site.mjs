@@ -80,6 +80,12 @@ for (const group of ['Start Here', 'Core Concepts', 'Guides', 'Reference', 'Proj
 }
 check('orphan dev-client-coverage page is in sidebar', gs.includes('dev-client-coverage'));
 
+console.log('\nverify-site: best-practices consolidation');
+check('rule pages removed', !exists('best-practices/rules'));
+const bp = page('best-practices/index.html');
+check('overview links to Vercel agent-skills', bp.includes('github.com/vercel-labs/agent-skills'));
+check('overview names a custom rule', bp.includes('reanimated-in-lists'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

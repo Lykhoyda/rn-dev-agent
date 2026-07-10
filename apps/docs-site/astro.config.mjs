@@ -138,13 +138,7 @@ export default defineConfig({
                 { label: 'Best Practices', slug: 'skills/rn-best-practices' },
               ],
             },
-            {
-              label: 'Best Practices',
-              items: [
-                { label: 'Rule Index', slug: 'best-practices' },
-                { label: 'Rules', collapsed: true, autogenerate: { directory: 'best-practices/rules' } },
-              ],
-            },
+            { label: 'Best Practices', slug: 'best-practices' },
           ],
         },
         {

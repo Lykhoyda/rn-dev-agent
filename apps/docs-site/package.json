@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "generate": "node scripts/generate-tool-docs.mjs && node scripts/generate-bp-docs.mjs",
+    "generate": "node scripts/generate-tool-docs.mjs",
     "dev": "yarn generate && astro dev",
     "build": "yarn generate && astro build",
     "verify": "node scripts/verify-site.mjs",
