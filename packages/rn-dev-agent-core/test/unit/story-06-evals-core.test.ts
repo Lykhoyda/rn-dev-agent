@@ -224,7 +224,7 @@ evals:
       readFileSync(join(evalsDir, 'tool-correctness.eval.yaml'), 'utf8'),
       vars,
     );
-    assert.equal(tc.fixtures.length, 6);
+    assert.equal(tc.fixtures.length, 5);
     const ou = parseEvalYaml(
       readFileSync(join(evalsDir, 'output-usability.eval.yaml'), 'utf8'),
       vars,
