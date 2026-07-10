@@ -39984,8 +39984,7 @@ function normalizeNodeForHash(node) {
     q(node.rect.y),
     q(node.rect.width),
     q(node.rect.height),
-    node.enabled ?? null,
-    node.hittable ?? null
+    node.enabled ?? null
   ]);
 }
 function hashSnapshotNodes(nodes) {
@@ -40008,7 +40007,22 @@ var init_settle_hash = __esm({
 function extentToRect(right, bottom) {
   return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
 }
+function windowCap(entries) {
+  let right = 0;
+  let bottom = 0;
+  for (const e of entries) {
+    if (e.type === void 0 || !WINDOW_TYPES.has(e.type))
+      continue;
+    const { x, y, width, height } = e.rect;
+    if (width <= 0 || height <= 0)
+      continue;
+    right = Math.max(right, x + width);
+    bottom = Math.max(bottom, y + height);
+  }
+  return right > 300 && bottom > 0 ? { right, bottom } : null;
+}
 function resolveScreenRect(entries) {
+  const cap2 = windowCap(entries);
   let allRight = 0;
   let allBottom = 0;
   let hitRight = 0;
@@ -40025,6 +40039,12 @@ function resolveScreenRect(entries) {
       hitRight = Math.max(hitRight, x + width);
       hitBottom = Math.max(hitBottom, y + height);
     }
+  }
+  if (cap2 !== null) {
+    allRight = Math.min(allRight, cap2.right);
+    allBottom = Math.min(allBottom, cap2.bottom);
+    hitRight = Math.min(hitRight, cap2.right);
+    hitBottom = Math.min(hitBottom, cap2.bottom);
   }
   if (hitRight <= 0 || hitBottom <= 0)
     return extentToRect(allRight, allBottom);
@@ -40048,6 +40068,10 @@ function resolveScreenRect(entries) {
     }
     if (!grew)
       break;
+  }
+  if (cap2 !== null) {
+    right = Math.min(right, cap2.right);
+    bottom = Math.min(bottom, cap2.bottom);
   }
   return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
 }
@@ -40098,7 +40122,7 @@ function updateRefMapFromFlat(nodes) {
       meta.identifier = node.identifier;
     metadataMap.set(key, meta);
     hashed.push(node);
-    entries.push({ rect: node.rect, hittable: node.hittable });
+    entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
   }
   screenRect = resolveScreenRect(entries);
   try {
@@ -40162,7 +40186,7 @@ function refreshRef(sig, nodes) {
   }
   return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
 }
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, MAX_REF_MAP_AGE_MS;
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
 var init_fast_runner_ref_map = __esm({
   "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
     "use strict";
@@ -40172,6 +40196,7 @@ var init_fast_runner_ref_map = __esm({
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
     MAX_REF_MAP_AGE_MS = 6e4;
   }
 });
@@ -40728,6 +40753,7 @@ var rn_fast_runner_client_exports = {};
 __export(rn_fast_runner_client_exports, {
   _resetCapabilitiesForTest: () => _resetCapabilitiesForTest,
   _resetQuiescenceAnnouncementForTest: () => _resetQuiescenceAnnouncementForTest,
+  _resetStaleHittableWarnForTest: () => _resetStaleHittableWarnForTest,
   _setFastRunnerStateForTest: () => _setFastRunnerStateForTest,
   _setFetchForTest: () => _setFetchForTest,
   _setHttpTimeoutForTest: () => _setHttpTimeoutForTest,
@@ -40979,6 +41005,17 @@ function consumePendingFastRunnerArtifactNote() {
   const note = pendingFastRunnerArtifactNote;
   pendingFastRunnerArtifactNote = void 0;
   return note;
+}
+function _resetStaleHittableWarnForTest() {
+  staleHittableWarned = false;
+}
+function noteStaleHittableArtifact(capabilities) {
+  if (staleHittableWarned || (capabilities ?? []).includes("HONEST_HITTABLE"))
+    return;
+  if (pendingFastRunnerArtifactNote !== void 0)
+    return;
+  staleHittableWarned = true;
+  pendingFastRunnerArtifactNote = "runner artifact predates honest hittable (#395): snapshot hittable values are stale (always false) \u2014 delete packages/rn-fast-runner/build/DerivedData and reopen the device session to rebuild, or upgrade the plugin.";
 }
 function shouldReuseRunner(state, deviceId) {
   return state !== null && state.deviceId === deviceId;
@@ -41247,6 +41284,7 @@ async function probeFastRunnerLivenessDetailed(deps = {}) {
       };
     }
     lastKnownCapabilities = res.capabilities ?? [];
+    noteStaleHittableArtifact(res.capabilities);
     return {
       liveness: "alive",
       ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
@@ -41421,7 +41459,7 @@ async function runIOS(args) {
   }
   return okResult(resp.data ?? {}, announce ? { meta: announce } : void 0);
 }
-var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS;
+var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -41464,6 +41502,7 @@ var init_rn_fast_runner_client = __esm({
         }
       }
     };
+    staleHittableWarned = false;
     fetchImpl = globalThis.fetch;
     httpTimeoutOverrideMs = null;
     SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
@@ -46091,7 +46130,7 @@ function rankSnapshotNodes(nodes) {
   const withScore = nodes.map((node, originalIndex) => ({
     node,
     originalIndex,
-    score: (node.hittable === true ? 1e3 : 0) + typePriority(node.type)
+    score: typePriority(node.type) * 10 + (node.hittable === true ? 1 : 0)
   }));
   withScore.sort((a, b) => {
     if (b.score !== a.score)

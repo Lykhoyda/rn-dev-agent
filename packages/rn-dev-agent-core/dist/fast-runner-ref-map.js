@@ -4,12 +4,34 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
+// #519 review: honest hittable (#395) guarantees only the CENTER is on-screen,
+// so a straddling card (x=250..550 on a 402pt viewport) is legitimately
+// hittable and would seed the union past the physical screen. iOS snapshots
+// always carry Application/Window nodes whose extent is authoritative — their
+// union caps the estimate. Android emits Java class names (never these types),
+// so the CI-Android no-full-window constraint above is untouched: no cap.
+const WINDOW_TYPES = new Set(['Application', 'Window']);
 // width > 300 keeps the same sanity floor the old heuristic used (ignore
 // degenerate all-tiny snapshots rather than emit a bogus rect).
 function extentToRect(right, bottom) {
     return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
 }
+function windowCap(entries) {
+    let right = 0;
+    let bottom = 0;
+    for (const e of entries) {
+        if (e.type === undefined || !WINDOW_TYPES.has(e.type))
+            continue;
+        const { x, y, width, height } = e.rect;
+        if (width <= 0 || height <= 0)
+            continue;
+        right = Math.max(right, x + width);
+        bottom = Math.max(bottom, y + height);
+    }
+    return right > 300 && bottom > 0 ? { right, bottom } : null;
+}
 function resolveScreenRect(entries) {
+    const cap = windowCap(entries);
     let allRight = 0;
     let allBottom = 0;
     let hitRight = 0;
@@ -26,6 +48,12 @@ function resolveScreenRect(entries) {
             hitRight = Math.max(hitRight, x + width);
             hitBottom = Math.max(hitBottom, y + height);
         }
+    }
+    if (cap !== null) {
+        allRight = Math.min(allRight, cap.right);
+        allBottom = Math.min(allBottom, cap.bottom);
+        hitRight = Math.min(hitRight, cap.right);
+        hitBottom = Math.min(hitBottom, cap.bottom);
     }
     if (hitRight <= 0 || hitBottom <= 0)
         return extentToRect(allRight, allBottom);
@@ -52,6 +80,12 @@ function resolveScreenRect(entries) {
         if (!grew)
             break;
     }
+    // Re-apply the window cap: growth extends by ANY intersecting rect, so a
+    // straddling node re-inflates past the seed clamp without this.
+    if (cap !== null) {
+        right = Math.min(right, cap.right);
+        bottom = Math.min(bottom, cap.bottom);
+    }
     return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
 }
 export function updateRefMap(nodes) {
@@ -62,7 +96,7 @@ export function updateRefMap(nodes) {
         if (!node.ref || !node.rect)
             continue;
         refMap.set(node.ref, node.rect);
-        entries.push({ rect: node.rect, hittable: node.hittable });
+        entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
     }
     screenRect = resolveScreenRect(entries);
     lastUpdated = Date.now();
@@ -173,7 +207,7 @@ export function updateRefMapFromFlat(nodes) {
             meta.identifier = node.identifier;
         metadataMap.set(key, meta);
         hashed.push(node);
-        entries.push({ rect: node.rect, hittable: node.hittable });
+        entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
     }
     screenRect = resolveScreenRect(entries);
     // Hash only the nodes that passed the ref/rect filter: hashSnapshotNodes

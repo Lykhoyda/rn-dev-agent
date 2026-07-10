@@ -16,17 +16,40 @@ const node = (overrides = {}) => ({
   ...overrides,
 });
 
-// ── Hittable beats anything else ──
+// ── Type priority is primary; hittable breaks ties (#519 review) ──
+// Post-#395, iOS hittable means "enabled AND center-on-screen" — an inert
+// on-screen StaticText is legitimately hittable, so a dominant hittable bonus
+// would steer taps to body text over a real control half-scrolled off-screen.
 
-test('hittable: true wins regardless of type', () => {
+test('type priority beats hittable across types', () => {
   const ranked = rankSnapshotNodes([
     node({ ref: 'a', type: 'Cell', hittable: false }),
     node({ ref: 'b', type: 'StaticText', hittable: true }),
   ]);
-  assert.equal(ranked[0].ref, 'b', 'hittable StaticText beats non-hittable Cell');
+  assert.equal(ranked[0].ref, 'a', 'non-hittable Cell beats hittable StaticText');
 });
 
-test('multiple hittable: tie-broken by type priority', () => {
+test('#519 review scenario: half-visible Button beats on-screen label text', () => {
+  const ranked = rankSnapshotNodes([
+    node({ ref: 'label', type: 'StaticText', hittable: true }),
+    node({ ref: 'submit', type: 'Button', hittable: false }),
+  ]);
+  assert.equal(ranked[0].ref, 'submit', 'real control outranks matching inert text');
+});
+
+test('same type: hittable breaks the tie', () => {
+  const ranked = rankSnapshotNodes([
+    node({ ref: 'offscreen', type: 'Button', hittable: false }),
+    node({ ref: 'onscreen', type: 'Button', hittable: true }),
+  ]);
+  assert.deepEqual(
+    ranked.map((n) => n.ref),
+    ['onscreen', 'offscreen'],
+    'on-screen Button first among same-type candidates',
+  );
+});
+
+test('all hittable: ordered by type priority', () => {
   const ranked = rankSnapshotNodes([
     node({ ref: 'a', type: 'StaticText', hittable: true }),
     node({ ref: 'b', type: 'Button', hittable: true }),

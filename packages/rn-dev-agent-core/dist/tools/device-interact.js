@@ -33,11 +33,14 @@ function candidateFromNode(n) {
 // the most likely tap target sits at index 0.
 //
 // Ranking signals (highest weight first):
-//   1. hittable: true beats hittable: false (XCUITest's hittable flag
-//      means "directly tappable" — the most reliable tap-intent signal).
-//   2. Element-type priority for tap intent: Button/Cell/Switch >
+//   1. Element-type priority for tap intent: Button/Cell/Switch >
 //      Other/Link > StaticText/Image > ScrollView. Containers like
 //      ScrollView are usually parents of the real tap target.
+//   2. hittable as the same-type tiebreak only (#519 review): since #395,
+//      iOS hittable means "enabled AND center-on-screen" — NOT "directly
+//      tappable". An inert on-screen StaticText is legitimately hittable,
+//      so a type-dominating hittable bonus would steer taps to body text
+//      over a real control half-scrolled off-screen.
 //   3. Dedupe by visual rect — when two elements share the same bounds
 //      (e.g. a Cell wrapping a StaticText), keep only the higher-scored
 //      one. The user wants ONE candidate per unique screen position.
@@ -67,7 +70,7 @@ export function rankSnapshotNodes(nodes) {
     const withScore = nodes.map((node, originalIndex) => ({
         node,
         originalIndex,
-        score: (node.hittable === true ? 1000 : 0) + typePriority(node.type),
+        score: typePriority(node.type) * 10 + (node.hittable === true ? 1 : 0),
     }));
     withScore.sort((a, b) => {
         if (b.score !== a.score)

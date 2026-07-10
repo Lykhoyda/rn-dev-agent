@@ -344,6 +344,28 @@ export function consumePendingFastRunnerArtifactNote() {
     pendingFastRunnerArtifactNote = undefined;
     return note;
 }
+// HONEST_HITTABLE is compiled into the artifact's /health capabilities — its
+// absence on a healthy probe is the only artifact-truthful signal that the
+// binary predates #395 (protocol/commands are unchanged and runnerVersion is
+// env-passed at launch, so every other gate passes). A missing capabilities
+// list means the artifact predates capability enumeration entirely and is
+// stale for the same reason. Advisory only: a forced rebuild here would break
+// the no-silent-multi-minute-xcodebuild contract.
+let staleHittableWarned = false;
+export function _resetStaleHittableWarnForTest() {
+    staleHittableWarned = false;
+}
+function noteStaleHittableArtifact(capabilities) {
+    if (staleHittableWarned || (capabilities ?? []).includes('HONEST_HITTABLE'))
+        return;
+    if (pendingFastRunnerArtifactNote !== undefined)
+        return;
+    staleHittableWarned = true;
+    pendingFastRunnerArtifactNote =
+        'runner artifact predates honest hittable (#395): snapshot hittable values are stale ' +
+            '(always false) — delete packages/rn-fast-runner/build/DerivedData and reopen the ' +
+            'device session to rebuild, or upgrade the plugin.';
+}
 // --- Lifecycle ---
 /**
  * GH#202: only adopt an existing runner when it is bound to the SAME
@@ -670,6 +692,7 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
             };
         }
         lastKnownCapabilities = res.capabilities ?? [];
+        noteStaleHittableArtifact(res.capabilities);
         return {
             liveness: 'alive',
             ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),

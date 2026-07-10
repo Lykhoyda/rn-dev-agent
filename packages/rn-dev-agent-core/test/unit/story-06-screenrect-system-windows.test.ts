@@ -97,3 +97,43 @@ test('screen rect: partial hittable coverage grows to the window, not the widest
   ] as never);
   assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 390, height: 852 });
 });
+
+test('screen rect: iOS window nodes cap a center-on-screen straddling card (#519 review)', () => {
+  // #395 honest hittable guarantees only the CENTER is on-screen: a carousel
+  // card spanning x=250..550 (center 400) is legitimately hittable on a 402pt
+  // viewport. Without a cap it would seed the union to 550 and push gestures /
+  // scrollintoview checks past the physical screen. iOS snapshots always carry
+  // Application/Window nodes — their extent is authoritative and clamps the
+  // grown union.
+  updateRefMap([
+    {
+      ref: 'e0',
+      type: 'Application',
+      rect: { x: 0, y: 0, width: 402, height: 874 },
+      hittable: true,
+    },
+    { ref: 'e1', type: 'Window', rect: { x: 0, y: 0, width: 402, height: 874 }, hittable: true },
+    { ref: 'e2', type: 'Other', rect: { x: 250, y: 300, width: 300, height: 200 }, hittable: true },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 402, height: 874 });
+});
+
+test('screen rect: no window-typed nodes (Android shape) keeps the uncapped union', () => {
+  // Android emits Java class names, never Application/Window — the CI-Android
+  // no-full-window constraint that shaped #517 stands: no clamp is applied.
+  updateRefMap([
+    {
+      ref: 'e0',
+      type: 'android.widget.FrameLayout',
+      rect: { x: 0, y: 0, width: 1080, height: 2400 },
+      hittable: true,
+    },
+    {
+      ref: 'e1',
+      type: 'android.widget.Button',
+      rect: { x: 900, y: 300, width: 400, height: 200 },
+      hittable: true,
+    },
+  ] as never);
+  assert.deepEqual(getScreenRect(), { x: 0, y: 0, width: 1300, height: 2400 });
+});

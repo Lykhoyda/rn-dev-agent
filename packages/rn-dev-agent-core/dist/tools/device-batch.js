@@ -53,8 +53,10 @@ export function salientizeSnapshotData(data) {
             entry.label = n.label;
         if (identifier)
             entry.identifier = identifier;
+        // hittable=false means disabled OR center-off-screen (#395 semantics), not
+        // "dead" — the right reaction is often scroll-into-view, not skip.
         if (n.hittable === false)
-            entry.hittable = false; // surface dead controls
+            entry.hittable = false;
         nodes.push(entry);
     }
     return { nodes, salient: true, fullNodeCount: d.nodes.length };

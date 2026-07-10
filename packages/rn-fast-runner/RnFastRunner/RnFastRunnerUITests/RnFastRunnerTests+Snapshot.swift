@@ -18,8 +18,6 @@ extension RnFastRunnerTests {
     let queryRoot: XCUIElement
     let rootSnapshot: XCUIElementSnapshot
     let viewport: CGRect
-    let flatSnapshots: [XCUIElementSnapshot]
-    let snapshotRanges: [ObjectIdentifier: (Int, Int)]
     let maxDepth: Int
   }
 
@@ -114,7 +112,8 @@ extension RnFastRunnerTests {
         resolveElements: collapsedTabDescendants,
         depth: 1,
         parentIndex: 0,
-        nodeLimit: fastSnapshotLimit
+        nodeLimit: fastSnapshotLimit,
+        viewport: context.viewport
       )
       truncated = truncated || didTruncateFallback
     }
@@ -138,7 +137,6 @@ extension RnFastRunnerTests {
         identifier: evaluation.identifier,
         valueText: evaluation.valueText,
         options: options,
-        hittable: evaluation.hittable,
         visible: evaluation.visible
       )
 
@@ -175,7 +173,8 @@ extension RnFastRunnerTests {
           resolveElements: collapsedTabDescendants,
           depth: visibleDepth + 1,
           parentIndex: index,
-          nodeLimit: fastSnapshotLimit
+          nodeLimit: fastSnapshotLimit,
+          viewport: context.viewport
         )
         truncated = truncated || didTruncateFallback
       }
@@ -211,7 +210,6 @@ extension RnFastRunnerTests {
         identifier: evaluation.identifier,
         valueText: evaluation.valueText,
         options: options,
-        hittable: evaluation.hittable,
         visible: evaluation.visible
       )
       let currentIndex = include ? nodes.count : parentIndex
@@ -255,49 +253,18 @@ extension RnFastRunnerTests {
     identifier: String,
     valueText: String?,
     options: SnapshotOptions,
-    hittable: Bool,
     visible: Bool
   ) -> Bool {
     let type = snapshot.elementType
-    let hasContent = !label.isEmpty || !identifier.isEmpty || (valueText != nil)
-    if options.compact && type == .other && !hasContent && !hittable {
-      if snapshot.children.count <= 1 { return false }
-    }
-    if options.interactiveOnly {
-      if isScrollableContainer(snapshot, visible: visible) { return true }
-      #if os(macOS)
-        if !visible && type != .application {
-          return false
-        }
-      #endif
-      if interactiveTypes.contains(type) { return true }
-      if hittable && type != .other { return true }
-      if hasContent { return true }
-      return false
-    }
-    if options.compact {
-      return hasContent || hittable
-    }
-    return true
-  }
-
-  private func computedSnapshotHittable(
-    _ snapshot: XCUIElementSnapshot,
-    viewport: CGRect,
-    laterNodes: ArraySlice<XCUIElementSnapshot>
-  ) -> Bool {
-    guard snapshot.isEnabled else { return false }
-    let frame = snapshot.frame
-    if frame.isNull || frame.isEmpty { return false }
-    let center = CGPoint(x: frame.midX, y: frame.midY)
-    if !viewport.contains(center) { return false }
-    for node in laterNodes {
-      if !isOccludingType(node.elementType) { continue }
-      let nodeFrame = node.frame
-      if nodeFrame.isNull || nodeFrame.isEmpty { continue }
-      if nodeFrame.contains(center) { return false }
-    }
-    return true
+    return shouldIncludeSnapshotNode(
+      type: type,
+      hasContent: !label.isEmpty || !identifier.isEmpty || (valueText != nil),
+      isScrollableContainer: isScrollableContainer(snapshot, visible: visible),
+      isInteractiveType: interactiveTypes.contains(type),
+      visible: visible,
+      compact: options.compact,
+      interactiveOnly: options.interactiveOnly
+    )
   }
 
   private func makeSnapshotTraversalContext(
@@ -314,13 +281,10 @@ extension RnFastRunnerTests {
       return nil
     }
 
-    let (flatSnapshots, snapshotRanges) = flattenedSnapshots(rootSnapshot)
     return SnapshotTraversalContext(
       queryRoot: queryRoot,
       rootSnapshot: rootSnapshot,
       viewport: viewport,
-      flatSnapshots: flatSnapshots,
-      snapshotRanges: snapshotRanges,
       maxDepth: options.depth ?? Int.max
     )
   }
@@ -332,16 +296,15 @@ extension RnFastRunnerTests {
     let label = aggregatedLabel(for: snapshot) ?? snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
     let identifier = snapshot.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
     let valueText = snapshotValueText(snapshot)
-    let laterNodes = laterSnapshots(
-      for: snapshot,
-      in: context.flatSnapshots,
-      ranges: context.snapshotRanges
-    )
     return SnapshotEvaluation(
       label: label,
       identifier: identifier,
       valueText: valueText,
-      hittable: computedSnapshotHittable(snapshot, viewport: context.viewport, laterNodes: laterNodes),
+      hittable: computeSnapshotHittable(
+        enabled: snapshot.isEnabled,
+        frame: snapshot.frame,
+        viewport: context.viewport
+      ),
       focused: snapshotHasFocus(snapshot),
       visible: isVisibleInViewport(snapshot.frame, context.viewport)
     )
@@ -369,52 +332,6 @@ extension RnFastRunnerTests {
       hiddenContentAbove: nil,
       hiddenContentBelow: nil
     )
-  }
-
-  private func isOccludingType(_ type: XCUIElement.ElementType) -> Bool {
-    switch type {
-    case .application, .window:
-      return false
-    default:
-      return true
-    }
-  }
-
-  private func flattenedSnapshots(
-    _ root: XCUIElementSnapshot
-  ) -> ([XCUIElementSnapshot], [ObjectIdentifier: (Int, Int)]) {
-    var ordered: [XCUIElementSnapshot] = []
-    var ranges: [ObjectIdentifier: (Int, Int)] = [:]
-
-    @discardableResult
-    func visit(_ snapshot: XCUIElementSnapshot) -> Int {
-      let start = ordered.count
-      ordered.append(snapshot)
-      var end = start
-      for child in snapshot.children {
-        end = max(end, visit(child))
-      }
-      ranges[ObjectIdentifier(snapshot)] = (start, end)
-      return end
-    }
-
-    _ = visit(root)
-    return (ordered, ranges)
-  }
-
-  private func laterSnapshots(
-    for snapshot: XCUIElementSnapshot,
-    in ordered: [XCUIElementSnapshot],
-    ranges: [ObjectIdentifier: (Int, Int)]
-  ) -> ArraySlice<XCUIElementSnapshot> {
-    guard let (_, subtreeEnd) = ranges[ObjectIdentifier(snapshot)] else {
-      return ordered.suffix(from: ordered.count)
-    }
-    let nextIndex = subtreeEnd + 1
-    if nextIndex >= ordered.count {
-      return ordered.suffix(from: ordered.count)
-    }
-    return ordered.suffix(from: nextIndex)
   }
 
   private func snapshotValueText(_ snapshot: XCUIElementSnapshot) -> String? {
@@ -459,14 +376,16 @@ extension RnFastRunnerTests {
     resolveElements: () -> [XCUIElement],
     depth: Int,
     parentIndex: Int,
-    nodeLimit: Int
+    nodeLimit: Int,
+    viewport: CGRect
   ) -> Bool {
     let fallbackNodes = collapsedTabFallbackNodes(
       for: containerSnapshot,
       resolveElements: resolveElements,
       startingIndex: nodes.count,
       depth: depth,
-      parentIndex: parentIndex
+      parentIndex: parentIndex,
+      viewport: viewport
     )
     if fallbackNodes.isEmpty { return false }
     let remaining = max(0, nodeLimit - nodes.count)
@@ -480,7 +399,8 @@ extension RnFastRunnerTests {
     resolveElements: () -> [XCUIElement],
     startingIndex: Int,
     depth: Int,
-    parentIndex: Int
+    parentIndex: Int,
+    viewport: CGRect
   ) -> [SnapshotNode] {
     if !containerSnapshot.children.isEmpty { return [] }
     guard shouldExpandCollapsedTabContainer(containerSnapshot) else { return [] }
@@ -494,7 +414,8 @@ extension RnFastRunnerTests {
       collapsedTabCandidateNode(
         element: element,
         containerSnapshot: containerSnapshot,
-        containerFrame: containerFrame
+        containerFrame: containerFrame,
+        viewport: viewport
       )
     }
     .sorted { left, right in
@@ -541,7 +462,8 @@ extension RnFastRunnerTests {
   private func collapsedTabCandidateNode(
     element: XCUIElement,
     containerSnapshot: XCUIElementSnapshot,
-    containerFrame: CGRect
+    containerFrame: CGRect,
+    viewport: CGRect
   ) -> SnapshotNode? {
     var node: SnapshotNode?
     let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
@@ -580,7 +502,11 @@ extension RnFastRunnerTests {
         rect: snapshotRect(from: frame),
         enabled: element.isEnabled,
         focused: elementHasFocus(element) ? true : nil,
-        hittable: element.isHittable,
+        hittable: computeSnapshotHittable(
+          enabled: element.isEnabled,
+          frame: frame,
+          viewport: viewport
+        ),
         depth: 0,
         parentIndex: nil,
         hiddenContentAbove: nil,
