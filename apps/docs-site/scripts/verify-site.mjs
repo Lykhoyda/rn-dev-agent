@@ -100,6 +100,14 @@ check('full transcript is static text', landing.includes('Verified on iPhone 16 
 check('links use base path', landing.includes('href="/rn-dev-agent/getting-started/"'));
 check('no Starlight splash remnants', !landing.includes('class="hero"'));
 
+console.log('\nverify-site: landing sections');
+const landing2 = page('index.html');
+check('stat strip present', landing2.includes('210×') && landing2.includes('79'));
+check('problem section present', landing2.includes('Coding agents ship blind'));
+check('three-layer grid present', ['Introspect', 'Interact', 'Replay'].every((w) => landing2.includes(w)));
+check('tabbed showcase present', landing2.includes('cdp_component_tree') && landing2.includes('cdp_run_action'));
+check('pipeline strip present', landing2.includes('Verify live'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

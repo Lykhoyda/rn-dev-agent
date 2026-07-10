@@ -111,7 +111,119 @@ const description =
         </div>
       </section>
 
-      <!-- Task 5 sections mount here: stats, problem, #capabilities, showcase, #how-it-works -->
+      <section class="stats" aria-label="Key numbers">
+        <div class="wrap stats-row">
+          <div class="stat"><strong>210×</strong><span>action replay speedup</span></div>
+          <div class="stat"><strong>79</strong><span>MCP tools</span></div>
+          <div class="stat"><strong>35 / 0</strong><span>stories built / crashes</span></div>
+          <div class="stat"><strong>2</strong><span>platforms — iOS + Android</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap problem-grid">
+          <div>
+            <p class="eyebrow">The problem</p>
+            <h2>Coding agents ship blind.</h2>
+            <p class="lead">
+              They write the feature, satisfy the type-checker, and declare victory — without
+              ever seeing the app run. "It should work now" is not verification.
+            </p>
+          </div>
+          <div>
+            <p class="eyebrow">The fix</p>
+            <h2>Close the loop on device.</h2>
+            <p class="lead">
+              After implementing, the agent connects to your running app, navigates to the
+              screen, reads the component tree and store state, exercises the real UI, and
+              only then reports done — with the evidence attached.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt grain" id="capabilities">
+        <div class="wrap">
+          <p class="eyebrow">Three layers, one contract</p>
+          <h2>Introspect. Interact. Replay.</h2>
+          <div class="cap-grid">
+            <article class="cap-card">
+              <h3><span>L1</span> Introspect</h3>
+              <p>Read the running app's truth over Chrome DevTools Protocol — component tree, Redux/Zustand/React Query state, navigation, network, logs.</p>
+              <pre><code>cdp_store_state cart
+→ &#123; items: 3, total: 47.00 &#125;</code></pre>
+            </article>
+            <article class="cap-card">
+              <h3><span>L2</span> Interact</h3>
+              <p>Tap, type, swipe, and scroll through in-tree native runners — XCTest on iOS, UIAutomator2 on Android. Self-building, self-healing.</p>
+              <pre><code>device_press @checkoutBtn
+→ ✓ 142 ms · settled</code></pre>
+            </article>
+            <article class="cap-card">
+              <h3><span>L3</span> Replay</h3>
+              <p>Verified walks are saved as parameterized actions and replayed as prologues — a 14-minute interactive flow reruns in about 4 seconds.</p>
+              <pre><code>cdp_run_action login
+→ ✓ replayed in 3.8 s</code></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap">
+          <p class="eyebrow">See the output</p>
+          <h2>Tools that return evidence, not vibes.</h2>
+          <div class="showcase">
+            <input type="radio" name="tab" id="tab-tree" checked />
+            <input type="radio" name="tab" id="tab-store" />
+            <input type="radio" name="tab" id="tab-press" />
+            <input type="radio" name="tab" id="tab-action" />
+            <div class="tab-labels">
+              <label for="tab-tree">cdp_component_tree</label>
+              <label for="tab-store">cdp_store_state</label>
+              <label for="tab-press">device_press</label>
+              <label for="tab-action">cdp_run_action</label>
+            </div>
+            <div class="term tab-panels">
+              <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i></div>
+              <pre class="tab-panel" data-tab="tree"><code>&#123; "testID": "cartBadge",
+  "type": "Badge",
+  "props": &#123; "count": 3, "visible": true &#125;,
+  "children": [&#123; "type": "Text", "text": "3" &#125;] &#125;</code></pre>
+              <pre class="tab-panel" data-tab="store"><code>&#123; "store": "cart", "kind": "zustand",
+  "state": &#123; "items": 3, "total": 47.0,
+             "lastAdded": "sku_2481" &#125; &#125;</code></pre>
+              <pre class="tab-panel" data-tab="press"><code>&#123; "ok": true, "ref": "@addToCart",
+  "meta": &#123; "timings_ms": &#123; "resolve": 18, "tap": 96, "settle": 28 &#125;,
+           "keyboardGuard": "no_keyboard" &#125; &#125;</code></pre>
+              <pre class="tab-panel" data-tab="action"><code>&#123; "action": "add-to-cart", "status": "passed",
+  "durationMs": 4180, "autoRepair": "not-needed",
+  "runRecord": ".rn-agent/actions/runs/2026-07-10.json" &#125;</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="how-it-works">
+        <div class="wrap">
+          <p class="eyebrow">/rn-feature-dev</p>
+          <h2>From description to verified feature.</h2>
+          <ol class="pipeline">
+            <li>Discover</li>
+            <li>Explore</li>
+            <li>Question</li>
+            <li>Architect</li>
+            <li>Implement</li>
+            <li class="pipeline-hot">Verify live</li>
+            <li>Review</li>
+            <li>E2E proof</li>
+          </ol>
+          <p class="lead">
+            Phase 6 is the difference: the agent drives the simulator, confirms the UI and
+            state, and saves the verified walk as a replayable action for next time.
+          </p>
+        </div>
+      </section>
 
       <section class="cta-band">
         <div class="wrap">
