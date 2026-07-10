@@ -33,10 +33,7 @@ function htmlFiles(dir = DIST) {
 
 // KNOWN pre-existing broken references, skipped by the link check with a reason.
 // Not introduced by this plan; remove an entry once the underlying asset ships.
-// - favicon.svg: Starlight emits `<link rel="icon" href="/rn-dev-agent/favicon.svg">`
-//   in every page head, but the site has never shipped a favicon.svg in public/.
-//   A later branding task should add public/favicon.svg and drop this skip.
-const KNOWN_BROKEN = new Set([`${BASE}/favicon.svg`]);
+const KNOWN_BROKEN = new Set();
 
 function checkInternalLinks() {
   let broken = 0;
@@ -129,6 +126,10 @@ check('docs css bundle contains rda theme tokens', docsCss.includes('rda-docs-th
 console.log('\nverify-site: llms.txt');
 check('llms.txt generated', exists('llms.txt'));
 check('llms.txt mentions the project', exists('llms.txt') && page('llms.txt').includes('rn-dev-agent'));
+
+console.log('\nverify-site: og image');
+check('og-image.png shipped', exists('og-image.png'));
+check('favicon shipped', exists('favicon.svg'));
 
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
