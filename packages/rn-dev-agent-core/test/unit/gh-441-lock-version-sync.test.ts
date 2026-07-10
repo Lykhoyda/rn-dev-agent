@@ -17,12 +17,16 @@ const BRIDGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 interface PackageLock {
   name: string;
   version: string;
-  packages: Record<string, { name?: string; version?: string }>;
+  packages: Record<
+    string,
+    { name?: string; version?: string; dependencies?: Record<string, string> }
+  >;
 }
 
 const pkg = JSON.parse(readFileSync(join(BRIDGE_ROOT, 'package.json'), 'utf8')) as {
   name: string;
   version: string;
+  dependencies?: Record<string, string>;
 };
 const lock = JSON.parse(
   readFileSync(join(BRIDGE_ROOT, 'package-lock.json'), 'utf8'),
@@ -43,4 +47,21 @@ test('gh-441: lock root-package entry version matches package.json', () => {
 
 test('gh-441: lock name matches package.json', () => {
   assert.equal(lock.name, pkg.name);
+});
+
+// Version-field equality proves the lock was regenerated since the last
+// version bump, but NOT since the last dependency edit: hand-changing a range
+// in package.json leaves both version fields matching while the resolution
+// graph users install is still the old one. Compare the ranges themselves.
+// (overrides are not recorded in the lock's root entry, so override drift
+// still requires a deliberate regeneration — see sync-versions.sh.)
+test('gh-441: lock root-package dependency ranges match package.json', () => {
+  assert.deepEqual(
+    lock.packages['']?.dependencies,
+    pkg.dependencies,
+    'package-lock.json dependency ranges drifted from package.json — the lock was not ' +
+      'regenerated after a dependency edit. Regenerate in an isolated dir (npm cannot ' +
+      'resolve inside the yarn workspace): copy package.json to an empty dir, run ' +
+      '`npm install --package-lock-only`, copy package-lock.json back.',
+  );
 });
