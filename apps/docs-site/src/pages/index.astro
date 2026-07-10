@@ -295,14 +295,14 @@ const description =
           while (visible) {
             for (const line of lines) {
               line.classList.remove('is-shown');
-              if (line.dataset.type) line.dataset.full ??= line.textContent ?? '';
+              if ('type' in line.dataset) line.dataset.full ??= line.textContent ?? '';
             }
             phone.dataset.screen = '1';
             await sleep(400);
             for (const line of lines) {
               if (!visible) break;
               if (line.dataset.screen) phone.dataset.screen = line.dataset.screen;
-              if (line.dataset.type) {
+              if ('type' in line.dataset) {
                 line.textContent = line.dataset.full ?? '';
                 await typeLine(line);
               } else {
