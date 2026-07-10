@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-core",
-  "version": "0.61.3",
+  "version": "0.61.4",
   "type": "module",
   "main": "dist/index.js",
   "bin": "./dist/supervisor.js",
