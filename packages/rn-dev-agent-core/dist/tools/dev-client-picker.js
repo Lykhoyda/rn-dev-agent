@@ -116,7 +116,7 @@ const HEADER_PATTERNS = [/development servers/i];
  * Returns the literal text to pass to `device_find <text>` for tapping, or
  * null when the snapshot doesn't look like a dev-client picker at all.
  */
-export function parseFirstServerEntry(snapshot) {
+export function parseFirstServerEntry(snapshot, preferredPort) {
     if (typeof snapshot !== 'string' || snapshot.length === 0)
         return null;
     const lines = snapshot
@@ -133,9 +133,32 @@ export function parseFirstServerEntry(snapshot) {
                 return line;
         }
     }
-    const portMatch = parsePortPatternEntry(snapshot);
-    if (portMatch)
-        return portMatch;
+    // GH #523 sub-3: collect ALL port-pattern entries so we can rank instead of
+    // taking the first. Link-local (169.254.x) hosts are what the app auto-retries
+    // after a network change — they're stale by construction, so a routable entry
+    // (ideally one matching the project's Metro port) outranks them.
+    const entries = [];
+    for (const match of snapshot.matchAll(PORT_PATTERN)) {
+        const host = match[1];
+        const portNum = Number.parseInt(match[2], 10);
+        if (portNum < 80 || portNum > 65535)
+            continue;
+        if (!looksLikeNetworkHost(host))
+            continue;
+        entries.push({
+            entry: `${host}:${portNum}`,
+            port: portNum,
+            linkLocal: host.startsWith('169.254.'),
+        });
+    }
+    if (entries.length > 0) {
+        const pick = (preferredPort !== undefined
+            ? entries.find((e) => !e.linkLocal && e.port === preferredPort)
+            : undefined) ??
+            entries.find((e) => !e.linkLocal) ??
+            entries[0];
+        return pick.entry;
+    }
     const headerIdx = lines.findIndex((line) => HEADER_PATTERNS.some((re) => re.test(line)));
     if (headerIdx === -1)
         return null;
@@ -145,53 +168,90 @@ export function parseFirstServerEntry(snapshot) {
     }
     return null;
 }
-export async function handleDevClientPicker() {
-    if (!hasActiveSessionFn())
-        return null;
-    // Step 1: Detect if the picker is showing
+// GH #523 sub-3: the stale-server error dialog. After a network change the
+// app auto-retries the previous (now unreachable, often link-local) Metro URL
+// and lands on a native "Error loading app" dialog that blocks the picker.
+// Dismissing it drops the user back on the picker, which the normal flow can
+// then clear — so both are handled by the same auto-dismiss.
+const ERROR_DIALOG_INDICATORS = ['Error loading app'];
+const ERROR_DIALOG_DISMISS_LABELS = ['Dismiss', 'OK', 'Close'];
+async function isPickerIndicatorPresent() {
     for (const indicator of PICKER_INDICATORS) {
         try {
             const findResult = await fetchCandidatesFn(indicator);
-            if (findResult.ok && findResult.candidates.length > 0) {
-                // Picker detected — try to tap a server entry
-                return await dismissPicker();
+            if (findResult.ok && findResult.candidates.length > 0)
+                return true;
+        }
+        catch {
+            continue;
+        }
+    }
+    return false;
+}
+async function dismissStaleServerErrorDialog() {
+    for (const indicator of ERROR_DIALOG_INDICATORS) {
+        try {
+            const found = await fetchCandidatesFn(indicator);
+            if (!found.ok || found.candidates.length === 0)
+                continue;
+            for (const label of ERROR_DIALOG_DISMISS_LABELS) {
+                const button = await fetchCandidatesFn(label, true);
+                if (button.ok && button.candidates.length > 0) {
+                    const press = await pressCandidateFn(button.candidates[0], 'click');
+                    if (!press.isError)
+                        return true;
+                }
             }
         }
         catch {
             continue;
         }
     }
+    return false;
+}
+export async function handleDevClientPicker(preferredPort) {
+    if (!hasActiveSessionFn())
+        return null;
+    // Step 1: Detect if the picker is showing
+    if (await isPickerIndicatorPresent()) {
+        return dismissPicker(preferredPort);
+    }
+    // Step 2 (GH #523 sub-3): no picker — check for the stale-server error
+    // dialog that hides it. Clearing the dialog usually reveals the picker.
+    if (await dismissStaleServerErrorDialog()) {
+        if (await isPickerIndicatorPresent()) {
+            const res = await dismissPicker(preferredPort);
+            return { ...res, reason: `Stale-server error dialog dismissed; ${res.reason}` };
+        }
+        return {
+            dismissed: true,
+            reason: 'Stale-server error dialog dismissed (no picker shown afterwards)',
+        };
+    }
     return { dismissed: false, reason: 'Dev Client picker not detected' };
 }
 /**
- * GH #136 sub-3: the single guarded seam every on-demand/auto consumer routes
- * through. iOS is short-circuited with an actionable message — we must NOT call
- * handleDevClientPicker() there because its agent-device `find` path respawns
- * the legacy AgentDeviceRunner (D1219). Returns null ONLY for Android + no
- * device session, so the MCP tool can surface a NO_SESSION error.
+ * GH #136 sub-3 / GH #523 sub-3: the single guarded seam every on-demand/auto
+ * consumer routes through. The historical iOS short-circuit protected against
+ * the legacy agent-device daemon respawning (D1219); every primitive this flow
+ * needs (snapshot -i, press @ref) now routes through rn-fast-runner on iOS, so
+ * both platforms take the real dismiss path. Returns null ONLY when no device
+ * session is open, so the MCP tool can surface a NO_SESSION error.
  */
-export async function clearDevClientPickerIfPresent(platform) {
+export async function clearDevClientPickerIfPresent(platform, preferredPort) {
     // SessionState.platform is typed `string | undefined`, so narrow it to the
     // valid platforms before it can short-circuit the detectPlatform() fallback.
     const sessionPlatform = getActiveSession()?.platform;
     const resolved = platform ??
         (sessionPlatform === 'ios' || sessionPlatform === 'android' ? sessionPlatform : undefined) ??
         (await detectPlatform());
-    if (resolved === 'ios') {
-        return {
-            dismissed: false,
-            skipped: true,
-            platform: 'ios',
-            reason: 'iOS Dev Client picker auto-dismiss is not supported yet — select the Metro server manually on the simulator.',
-        };
-    }
-    if (resolved !== 'android') {
+    if (resolved !== 'ios' && resolved !== 'android') {
         return { dismissed: false, platform: null, reason: 'No iOS/Android device detected.' };
     }
-    const res = await handleDevClientPicker();
+    const res = await handleDevClientPicker(preferredPort);
     if (res === null)
         return null;
-    return { ...res, platform: 'android' };
+    return { ...res, platform: resolved };
 }
 /**
  * GH #136: rewritten to use parseFirstServerEntry against an upfront snapshot.
@@ -199,7 +259,35 @@ export async function clearDevClientPickerIfPresent(platform) {
  * every LAN-IP-only setup we hit in the field. Exporting for unit tests so
  * the dispatch can be exercised through the runAgentDeviceFn test seam.
  */
-export async function dismissPicker() {
+/**
+ * GH #523 sub-3: iOS snapshots come back as a JSON envelope
+ * (`{ok, data:{nodes:[...]}}`), not a plain-text tree. Feeding raw JSON to
+ * the line-based matcher can hit pseudo-entries like `"y":100` (host "y",
+ * port 100 passes the shape checks). Extract node labels/identifiers as
+ * lines when the payload parses; fall back to the raw text for the legacy
+ * plain-text tree.
+ */
+export function snapshotToSearchText(raw) {
+    try {
+        const env = JSON.parse(raw);
+        const nodes = env?.data?.nodes;
+        if (Array.isArray(nodes)) {
+            const lines = [];
+            for (const n of nodes) {
+                for (const field of [n?.label, n?.identifier]) {
+                    if (typeof field === 'string' && field.trim().length > 0)
+                        lines.push(field.trim());
+                }
+            }
+            return lines.join('\n');
+        }
+    }
+    catch {
+        /* not JSON — legacy plain-text tree */
+    }
+    return raw;
+}
+export async function dismissPicker(preferredPort) {
     // GH #136: re-probe the picker before attempting to tap. Single-server
     // pickers auto-advance on a ~3-5s timer; if the auto-advance fired between
     // detect and dispatch, we don't need to act — return success now. This
@@ -212,7 +300,7 @@ export async function dismissPicker() {
     }
     const snapshot = await runAgentDeviceFn(['snapshot', '-i']);
     const snapshotText = snapshot.isError ? '' : (snapshot.content[0]?.text ?? '');
-    const target = parseFirstServerEntry(snapshotText);
+    const target = parseFirstServerEntry(snapshotToSearchText(snapshotText), preferredPort);
     if (target) {
         const findResult = await fetchCandidatesFn(target);
         if (findResult.ok && findResult.candidates.length > 0) {
@@ -257,28 +345,24 @@ export async function waitForBundle() {
 export async function isDevClientPickerShowing() {
     if (!hasActiveSessionFn())
         return false;
-    for (const indicator of PICKER_INDICATORS) {
-        try {
-            const findResult = await fetchCandidatesFn(indicator);
-            if (findResult.ok && findResult.candidates.length > 0)
-                return true;
-        }
-        catch {
-            continue;
-        }
-    }
-    return false;
+    return isPickerIndicatorPresent();
 }
-export function createDismissDevClientPickerHandler() {
+export function createDismissDevClientPickerHandler(getMetroPort) {
     return async (args) => {
         const t0 = Date.now();
-        const outcome = await clearDevClientPickerIfPresent(args.platform);
+        // GH #523 sub-3: prefer the picker row matching the project's Metro port
+        // over stale entries the app remembered from a previous network state.
+        let preferredPort;
+        try {
+            preferredPort = getMetroPort?.() ?? undefined;
+        }
+        catch {
+            preferredPort = undefined;
+        }
+        const outcome = await clearDevClientPickerIfPresent(args.platform, preferredPort);
         const meta = { timings_ms: { total: Date.now() - t0 } };
         if (outcome === null) {
             return failResult('No device session open. Call device_snapshot action="open" first.', 'DEV_CLIENT_PICKER_NO_SESSION', meta);
-        }
-        if (outcome.skipped) {
-            return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
         }
         if (outcome.dismissed) {
             return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });

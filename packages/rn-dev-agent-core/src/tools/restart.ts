@@ -9,6 +9,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { probeAppInstalled, buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import type { SnapshotHint } from '../cdp/app-installed-probe.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
+import { persistLastBundleId, loadPersistedBundleId } from '../cdp/bundle-id-store.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import type { ToolResult } from '../utils.js';
@@ -39,6 +40,10 @@ export interface RestartHandlerDeps {
   snapshotHint?: (appId: string) => SnapshotHint | null;
   /** GH #262: a successful manual hard reset is a working recovery — reset the detached budget. */
   resetDetachedBudget?: () => void;
+  /** GH #523 sub-2: best-effort write of every observed bundleId to .rn-agent/state/. */
+  persistBundleId?: (platform: string, bundleId: string) => void;
+  /** GH #523 sub-2: disk fallback tier — survives bridge worker restarts. */
+  loadPersistedBundleId?: (platform: string) => string | null;
 }
 
 export interface RestartArgs {
@@ -153,6 +158,8 @@ export function createRestartHandler(
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
+  const persistBundleIdFn = deps.persistBundleId ?? persistLastBundleId;
+  const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
 
   async function doRestart(args: RestartArgs): Promise<ToolResult> {
     try {
@@ -172,7 +179,12 @@ export function createRestartHandler(
       ).toLowerCase();
       // The cache write must happen on every restart (incl. soft) so a later
       // hardReset still has a bundleId after autoConnect clears connectedTarget.
-      if (observedBundleId) lastSeenBundleIds.set(targetPlatform, observedBundleId);
+      // Mirrored to .rn-agent/state/ (GH #523 sub-2) so the id survives bridge
+      // worker restarts, which wipe this module-scope Map.
+      if (observedBundleId) {
+        lastSeenBundleIds.set(targetPlatform, observedBundleId);
+        persistBundleIdFn(targetPlatform, observedBundleId);
+      }
 
       const hardResetSteps: string[] = [];
       let bundleId: string | null = null;
@@ -196,6 +208,7 @@ export function createRestartHandler(
           observedBundleId ??
           (sessionMatches ? (session?.appId ?? null) : null) ??
           lastSeenBundleIds.get(targetPlatform) ??
+          loadPersistedBundleIdFn(targetPlatform) ??
           resolveBundleIdStrictFn(targetPlatform);
         // simctl targets the session's simulator when one is open — 'booted' is
         // ambiguous with multiple booted sims. deviceId is persisted/untrusted,
@@ -275,7 +288,7 @@ export function createRestartHandler(
           // to connect. Empirically 2-3s is enough on iPhone 16 Pro sim.
           await sleep(3000);
         } else if (!bundleId) {
-          hardResetSteps.push('skip-simctl:no-bundleId-on-connectedTarget-or-cache');
+          hardResetSteps.push('skip-simctl:no-bundleId-on-connectedTarget-or-cache-or-state');
         } else {
           hardResetSteps.push(`skip-simctl:platform=${targetPlatform}-not-yet-supported`);
         }
@@ -309,6 +322,7 @@ export function createRestartHandler(
             'ios'
           ).toLowerCase();
           lastSeenBundleIds.set(postConnectPlatform, postConnectBundle);
+          persistBundleIdFn(postConnectPlatform, postConnectBundle);
         }
       } catch (err) {
         connectError = err instanceof Error ? err.message : String(err);

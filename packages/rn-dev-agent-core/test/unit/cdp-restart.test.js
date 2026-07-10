@@ -265,6 +265,8 @@ test('cdp_restart hardReset:true skips simctl when bundleId unknown (no connecte
       // a developer's open session or RN-project cwd must not resolve a real id.
       resolveBundleIdStrict: () => null,
       getSession: () => null,
+      // GH #523 sub-2: same hermetic pinning for the persisted-store tier.
+      loadPersistedBundleId: () => null,
     },
   );
 
