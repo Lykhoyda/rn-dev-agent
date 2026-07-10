@@ -73,6 +73,13 @@ checkInternalLinks();
 
 // ── TASK ASSERTIONS (appended by later tasks) ──
 
+console.log('\nverify-site: IA restructure');
+const gs = page('getting-started/index.html');
+for (const group of ['Start Here', 'Core Concepts', 'Guides', 'Reference', 'Project']) {
+  check(`sidebar group "${group}"`, gs.includes(group));
+}
+check('orphan dev-client-coverage page is in sidebar', gs.includes('dev-client-coverage'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
