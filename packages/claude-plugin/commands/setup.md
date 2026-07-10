@@ -24,9 +24,10 @@ Once diagnostics pass, perform the five steps below (A–D inject; E verifies). 
 
 The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
 
-1. Check whether `CLAUDE.md` exists in the current working directory.
-2. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
-3. Inject or refresh:
+1. **Symlink-inherited worktree short-circuit.** If `<cwd>/.rn-agent` is a symlink (`[ -L .rn-agent ]`) OR the marker `## React Native Development (rn-dev-agent)` is present in `<cwd>/CLAUDE.local.md`, the project inherits its wiring from a sibling core checkout (the documented git-worktree pattern: `.rn-agent` and `CLAUDE.local.md` symlinked back to core so every worktree shares one action corpus and one manual). Treat the project as already onboarded and skip the rest of Step A with the note: *"wiring inherited via symlink from `<resolved core path>`; already onboarded."* Do NOT append the template to `CLAUDE.md` — the manual is already loaded from `CLAUDE.local.md`, and appending would duplicate the entire block. If the inherited manual is stale, the refresh belongs in the core checkout, not through the worktree.
+2. Check whether `CLAUDE.md` exists in the current working directory.
+3. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
+4. Inject or refresh:
    - **No CLAUDE.md exists**: create one with the template body.
    - **CLAUDE.md exists, no rn-dev-agent block**: append the template body (look for the marker `## React Native Development (rn-dev-agent)` — if it's missing, append).
    - **CLAUDE.md exists, marker present**: sync-check the injected block against the current template instead of skipping blindly:
@@ -34,7 +35,7 @@ The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEM
      2. Compare the extracted block to the current template body (e.g. write both to temp files and `diff` them, ignoring leading/trailing blank lines).
      3. **Identical** → skip with a note ("CLAUDE.md template in sync").
      4. **Different** → the block is stale (or locally edited). Show the diff, warn that local edits *inside* the block will be overwritten (content before/after the block is preserved untouched), and ask "Apply this change? [y/n]". On yes, replace exactly the extracted block with the current template body — a legacy block gains the end sentinel in the process, so future refreshes are precisely delimited.
-4. Show the diff before writing. After writing, confirm with the user.
+5. Show the diff before writing. After writing, confirm with the user.
 
 ### B. NavigationContainer ref — fiber-walk-first, bridge fallback
 
@@ -128,7 +129,7 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 
 `vercel-rules.config.json` is the user-editable opt-in/opt-out surface for the Vercel rule audit hook (`/rn-dev-agent:check-vercel-rules`). It defines `enabledCategories`, `severityOverrides`, `baselinePath`, and `auditHook.enabled`. Default config enables all categories; severity is taken from upstream rule frontmatter.
 
-1. **Detect existing scaffold.** Treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
+1. **Detect existing scaffold.** **Symlink guard first:** if `<cwd>/.rn-agent` is a symlink (`[ -L .rn-agent ]`), the corpus is inherited from a sibling core checkout (git-worktree pattern). Resolve the target (`readlink`), read the target's `.scaffold-version`, and skip the rest of Step D entirely with the note: *"scaffold v<X> inherited via symlink from `<target>`; skipping."* Never first-time-scaffold over a symlink and never partial-add into a symlinked corpus — the files are shared with the core checkout, so scaffold updates belong there (run `/setup` in the core checkout instead). Otherwise, treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
    - `.rn-agent/.scaffold-version` exists (canonical marker)
    - Any of `.rn-agent/state/`, `.rn-agent/recordings/`, `.rn-agent/snapshots/`, `.rn-agent/diag/` exist (runtime dirs created by tools — proof the plugin has run)
    - `.rn-agent/actions/` contains any `*.yaml` file
@@ -172,10 +173,10 @@ Present a summary table at the end:
 | Step | Status | Notes |
 |------|--------|-------|
 | Diagnostics | PASS / PARTIAL (optional rows missing) / FAIL (aborted) | row counts |
-| CLAUDE.md template | INJECTED / REFRESHED (was stale) / SKIPPED (in sync) / SKIPPED (user declined) | path |
+| CLAUDE.md template | INJECTED / REFRESHED (was stale) / SKIPPED (in sync) / SKIPPED (symlink-inherited) / SKIPPED (user declined) | path |
 | Nav ref | INJECTED / N/A (Expo Router) / SKIPPED (user declined) | filename:line |
 | Zustand stores | INJECTED / N/A (no Zustand) / SKIPPED (user declined) | filename:line, store count |
-| `.rn-agent/` scaffold | CREATED / PARTIAL (added missing files) / SKIPPED (already current) / SKIPPED (user declined) | scaffold version, file count |
+| `.rn-agent/` scaffold | CREATED / PARTIAL (added missing files) / SKIPPED (already current) / SKIPPED (symlink-inherited) / SKIPPED (user declined) | scaffold version, file count |
 | CDP reachable | OK / FAIL (Metro not running, etc.) | tool count |
 
 End with:
@@ -190,6 +191,7 @@ Re-running `/rn-dev-agent:setup` on an already-onboarded project must be safe:
 - Nav ref: detects existing `globalThis.__NAV_REF__` assignment, skips.
 - Zustand: detects existing `globalThis.__ZUSTAND_STORES__` assignment, skips.
 - `.rn-agent/` scaffold: reads `.rn-agent/.scaffold-version`. If equal to the template's version, skips. If older, lists template files missing from the project and offers to add only those (never overwrites existing files). Presence of any runtime dir (`state/`, `recordings/`, `snapshots/`, `diag/`) or any `actions/*.yaml` also counts as proof the scaffold has run, even if `.scaffold-version` is missing.
+- Symlink-inherited worktree: `.rn-agent` is a symlink to a sibling core checkout and/or the manual marker lives in `CLAUDE.local.md` (both symlinked from core). Recognized as fully onboarded — Steps A and D short-circuit with an "inherited via symlink from `<core>`" note and mutate nothing in the worktree.
 
 Tell the user up-front when nothing needs to be injected.
 
@@ -203,6 +205,7 @@ Tell the user up-front when nothing needs to be injected.
 6. Overwrite any file inside `<cwd>/.rn-agent/` during partial-add. The user may have hand-edited `skeleton.yaml`, `actions/*.yaml`, or `nav-graph.yaml` between scaffolds — only add files that don't already exist.
 7. Use `cp -r src/* dst/` for the scaffold copy. The glob skips dotfiles on some shells; `.gitignore` and `.scaffold-version` would silently disappear. Use `cp -RL src/. dst/` (note the trailing `/.`) or Node's `fs.cpSync(src, dst, { recursive: true })`.
 8. Symlink `templates/rn-agent/` to the workspace test-app's `.rn-agent/`. Marketplace packaging would break and the workspace's app-specific testIDs would leak into every consumer project.
+9. Scaffold, partial-add, or template-append through a symlink-inherited worktree (`.rn-agent` is a symlink, or the manual marker lives in `CLAUDE.local.md`). The wiring is shared with the sibling core checkout — mutating it from a worktree duplicates the manual or corrupts the shared corpus. Short-circuit as already onboarded (Steps A.1 / D.1).
 
 ## When NOT to use `/rn-dev-agent:setup`
 
