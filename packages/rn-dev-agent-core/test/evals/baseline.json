@@ -1,6 +1,16 @@
 {
-  "model": "unbaselined",
-  "testerVersion": "1.4.1",
-  "capturedAt": "unbaselined",
-  "fixtures": {}
+  "model": "claude-haiku-4-5-20251001",
+  "testerVersion": "2.1.205 (Claude Code)",
+  "capturedAt": "2026-07-09T23:47:55.079Z",
+  "fixtures": {
+    "ref-selection-bottom-button": "pass",
+    "stale-ref-candidate-recovery": "pass",
+    "honest-uncertainty-missing-element": "pass",
+    "device-inventory": "pass",
+    "snapshot-first-observation": "pass",
+    "blank-screen-diagnosis": "pass",
+    "not-connected-recovery": "pass",
+    "tool-discovery": "pass",
+    "honest-press-failure": "pass"
+  }
 }

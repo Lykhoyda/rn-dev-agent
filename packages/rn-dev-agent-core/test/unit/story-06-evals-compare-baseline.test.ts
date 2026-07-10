@@ -153,3 +153,36 @@ test('writeBaseline: writes normally when all fixtures pass', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('writeBaseline: records runnerVersion as testerVersion when provided', () => {
+  const dir = tempResultsDir();
+  try {
+    const path = join(dir, 'baseline.json');
+    writeBaseline({ a: 'pass' } as Record<string, Verdict>, {
+      model: 'm',
+      allowFailures: false,
+      path,
+      runnerVersion: 'claude-code/2.1.205',
+    });
+    const written = JSON.parse(readFileSync(path, 'utf8')) as Baseline;
+    assert.equal(written.testerVersion, 'claude-code/2.1.205');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeBaseline: testerVersion defaults to "unknown" without runnerVersion', () => {
+  const dir = tempResultsDir();
+  try {
+    const path = join(dir, 'baseline.json');
+    writeBaseline({ a: 'pass' } as Record<string, Verdict>, {
+      model: 'm',
+      allowFailures: false,
+      path,
+    });
+    const written = JSON.parse(readFileSync(path, 'utf8')) as Baseline;
+    assert.equal(written.testerVersion, 'unknown');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

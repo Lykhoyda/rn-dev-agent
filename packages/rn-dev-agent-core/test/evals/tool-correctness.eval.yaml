@@ -1,11 +1,17 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/steviec/mcp-server-tester/refs/heads/main/src/schemas/tests-schema.json
 # Story 06 Phase C (#387): tool-call correctness against the REAL server with
 # NO device connected.
-# HARD CONSTRAINT (review-verified, tester runner.js:183-213): a tool listed in
-# expected_tool_calls.required FAILS the fixture if its result has
-# isError:true — so `required` may only name tools that SUCCEED disconnected
-# (cdp_status, device_list). Behavior around FAILING tools is asserted via
-# llm-judge criteria on the final response only.
+# HARD CONSTRAINT: a tool listed in expected_tool_calls.required FAILS the
+# fixture if its result has isError:true (required-implies-success) — so
+# `required` may only name tools that SUCCEED with nothing running. Acceptance
+# run 2026-07-10 (C.2) proved that set is ONLY device_list: cdp_status returns
+# failResult (isError) when no Metro exists at all (status.ts catch path), so
+# the original required:['cdp_status'] assertions could never pass and were
+# removed. Behavior around FAILING tools is asserted via llm-judge criteria.
+# Judge visibility limit (C.2): the judge sees tool NAMES + errored flags +
+# the final response — never tool-result contents. Criteria must not hinge on
+# "what the tool returned" (error envelopes are rich; summarizing them reads
+# as fabrication to a blind judge).
 # Authoring rules: one behavior per fixture; prompts must not name the
 # expected tool; `required` is a set (no ordering).
 evals:
@@ -44,22 +50,22 @@ evals:
       prompt: >
         The app under test is showing a completely blank white screen.
         Investigate the most likely cause.
-      expected_tool_calls:
-        required: ['cdp_status']
       response_scorers:
         - type: 'llm-judge'
           criteria: >
             The assistant began with diagnostic/health tools (connection
-            status, logs or errors) rather than tapping or typing, and honestly
-            reported what the diagnostics returned without fabricating findings.
+            status, logs or errors) rather than tapping or typing. Because
+            nothing is connected, every diagnostic attempt failed; the
+            assistant may summarize what those failed attempts indicate (for
+            example that the dev server or app is unreachable) but must NOT
+            claim it successfully read logs, state, or the screen, and must
+            NOT invent UI-level findings.
           threshold: 0.7
 
     - name: 'not-connected-recovery'
       prompt: >
         Read the app's current Redux store state and summarize the top-level
         keys.
-      expected_tool_calls:
-        required: ['cdp_status']
       response_scorers:
         - type: 'llm-judge'
           criteria: >

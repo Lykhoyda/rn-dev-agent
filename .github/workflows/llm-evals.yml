@@ -1,17 +1,18 @@
 name: LLM evals
 
-# Story 06 Phase C (#387): LLM-behavior evals for the MCP tool surface via
-# mcp-server-tester. ON-DEMAND ONLY (user decision 2026-07-09) — dispatched
-# before Story 08/12 merges and for baseline (re)capture. Requires the
-# ANTHROPIC_API_KEY repo secret; a missing secret is a RED run with an
-# actionable message, never a silent skip (a gate run that didn't run must
-# not look green). Est. $1-3 per run on the default Haiku model.
+# Story 06 Phase C.2 (#387): LLM-behavior evals on headless Claude Code —
+# SUBSCRIPTION-funded via a CLAUDE_CODE_OAUTH_TOKEN secret (mint with
+# `claude setup-token`), no pay-per-token API key anywhere. ON-DEMAND ONLY
+# (user decision 2026-07-09) — dispatched before Story 08/12 merges and for
+# baseline (re)capture. A missing secret is a RED run with an actionable
+# message, never a silent skip (a gate run that didn't run must not look
+# green). Marginal cost ~$0 (draws on the subscription's rate limits).
 
 on:
   workflow_dispatch:
     inputs:
       model:
-        description: Anthropic model id for the evals
+        description: Model id for the evals (claude CLI --model)
         required: false
         default: 'claude-haiku-4-5-20251001'
       filter:
@@ -26,14 +27,18 @@ jobs:
   evals:
     name: LLM-behavior evals
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Review amendment 2026-07-09: 30 min could not cover the worst case
+    # (9 fixtures × 2 attempts × fixture+judge budgets); CI also caps the
+    # per-fixture budget below. A run that still hits 60 min is pathological
+    # (mass timeouts) and SHOULD fail the job.
+    timeout-minutes: 60
     steps:
-      - name: Guard — require the ANTHROPIC_API_KEY secret
+      - name: Guard — require the CLAUDE_CODE_OAUTH_TOKEN secret
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::error::ANTHROPIC_API_KEY repo secret is not set. Add it under Settings > Secrets and variables > Actions, then re-dispatch." >&2
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN repo secret is not set. Mint one with 'claude setup-token' (requires a Claude subscription) and add it under Settings > Secrets and variables > Actions, then re-dispatch." >&2
             exit 1
           fi
       - name: Checkout
@@ -42,6 +47,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install Claude Code CLI (pinned — stream-json schema stability)
+        run: npm install -g @anthropic-ai/claude-code@2.1.205
       - name: Install workspace deps
         env:
           HUSKY: '0'
@@ -50,9 +57,10 @@ jobs:
           corepack yarn install --immutable
       - name: Run evals + compare against baseline
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           EVAL_MODEL: ${{ inputs.model }}
           EVAL_FILTER: ${{ inputs.filter }}
+          EVAL_FIXTURE_TIMEOUT_MS: '120000'
         run: corepack yarn evals
       - name: Job summary
         if: always()
