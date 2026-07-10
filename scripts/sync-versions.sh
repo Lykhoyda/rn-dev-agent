@@ -87,6 +87,41 @@ else
   echo "versions in sync: $synth_version"
 fi
 
+# GH #441 guard — packages/rn-dev-agent-core/package-lock.json is a SHIPPED
+# artifact (ensure-cdp-deps.sh copies it to user machines for
+# `npm install --production`). Its version fields must track the core
+# package.json or the lock has gone stale relative to a release bump. This
+# syncs only the version fields (deterministic, offline); dependency-graph
+# refreshes stay deliberate PRs (regenerate in an isolated dir — npm cannot
+# resolve inside the yarn workspace: `cp package.json /tmp/x && cd /tmp/x &&
+# npm install --package-lock-only`, then copy the lock back).
+CORE_PKG_JSON="$REPO_ROOT/packages/rn-dev-agent-core/package.json"
+CORE_LOCK_JSON="$REPO_ROOT/packages/rn-dev-agent-core/package-lock.json"
+if [ ! -f "$CORE_LOCK_JSON" ]; then
+  echo "ERROR: $CORE_LOCK_JSON is missing — it is a shipped artifact (ensure-cdp-deps.sh)."
+  echo "Regenerate it (see comment above) or update this guard if removal is deliberate."
+  exit 1
+fi
+core_version=$(node -e "console.log(require(process.argv[1]).version)" "$CORE_PKG_JSON")
+lock_version=$(node -e "const l=require(process.argv[1]); console.log(l.version + ' ' + (l.packages[''] && l.packages[''].version))" "$CORE_LOCK_JSON")
+if [ "$lock_version" != "$core_version $core_version" ]; then
+  if [ "${1:-}" = "--fix" ]; then
+    node -e "
+      const fs = require('fs');
+      const [lockPath, version] = process.argv.slice(1);
+      const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      lock.version = version;
+      if (lock.packages['']) lock.packages[''].version = version;
+      fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+    " "$CORE_LOCK_JSON" "$core_version"
+    echo "synced rn-dev-agent-core package-lock.json version fields -> $core_version"
+  else
+    echo "ERROR: rn-dev-agent-core package-lock.json version fields ($lock_version) != package.json ($core_version)"
+    echo "Run: ./scripts/sync-versions.sh --fix"
+    exit 1
+  fi
+fi
+
 # B110 guard — detect hardcoded `version: '...'` literals in TypeScript source.
 # The MCP server version must come from package.json at runtime, never a literal.
 # Exemption: domain/engine-pin.ts holds the maestro-runner PIN (GH #397) — a
