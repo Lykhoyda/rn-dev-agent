@@ -1,7 +1,7 @@
 {
   "model": "claude-haiku-4-5-20251001",
-  "testerVersion": "2.1.205 (Claude Code)",
-  "capturedAt": "2026-07-09T23:47:55.079Z",
+  "testerVersion": "2.1.206 (Claude Code)",
+  "capturedAt": "2026-07-10T09:25:43.348Z",
   "fixtures": {
     "ref-selection-bottom-button": "pass",
     "stale-ref-candidate-recovery": "pass",
@@ -10,7 +10,6 @@
     "snapshot-first-observation": "pass",
     "blank-screen-diagnosis": "pass",
     "not-connected-recovery": "pass",
-    "tool-discovery": "pass",
     "honest-press-failure": "pass"
   }
 }

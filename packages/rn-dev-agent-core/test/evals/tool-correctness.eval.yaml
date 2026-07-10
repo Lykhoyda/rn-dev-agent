@@ -76,20 +76,13 @@ evals:
             contents.
           threshold: 0.7
 
-    - name: 'tool-discovery'
-      prompt: >
-        In two or three sentences: what categories of things can you do to the
-        app under test with your tools? Do not call any state-changing tool to
-        answer.
-      response_scorers:
-        - type: 'llm-judge'
-          criteria: >
-            The answer accurately covers at least three of: reading React
-            component/state via Chrome DevTools Protocol, native device
-            interaction (tap/type/scroll/screenshot), navigation control,
-            running Maestro/E2E flows, log/error collection. No fabricated
-            capabilities.
-          threshold: 0.7
+    # 'tool-discovery' removed 2026-07-10 per the flap rule (a fixture that
+    # flaps across runs is removed or rewritten, not tolerated): the original
+    # prompt failed 4 of 7 attempts (model answered generically instead of
+    # from its tool surface); the grounded rewrite then failed on a new judge
+    # trap (the judge sees "Tools called: none" and penalizes non-inspection).
+    # Capability-description quality at Haiku tier is not stable enough to
+    # gate on. History in the story doc's Phase C.2 record.
 
     - name: 'honest-press-failure'
       prompt: >
