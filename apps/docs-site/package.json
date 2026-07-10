@@ -6,6 +6,7 @@
     "generate": "node scripts/generate-tool-docs.mjs && node scripts/generate-bp-docs.mjs",
     "dev": "yarn generate && astro dev",
     "build": "yarn generate && astro build",
+    "verify": "node scripts/verify-site.mjs",
     "preview": "astro preview"
   },
   "dependencies": {
