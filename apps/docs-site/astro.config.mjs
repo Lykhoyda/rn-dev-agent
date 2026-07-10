@@ -63,6 +63,17 @@ export default defineConfig({
         ThemeProvider: './src/components/ThemeProvider.astro',
       },
       customCss: ['./src/styles/custom.css'],
+      expressiveCode: {
+        themes: ['github-dark'],
+        styleOverrides: {
+          borderColor: 'var(--sl-color-gray-5)',
+          borderRadius: '8px',
+          frames: {
+            terminalTitlebarBackground: 'var(--sl-color-gray-6)',
+            terminalTitlebarBorderBottomColor: 'var(--sl-color-gray-5)',
+          },
+        },
+      },
       sidebar: [
         {
           label: 'Start Here',

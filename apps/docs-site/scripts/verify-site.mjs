@@ -119,6 +119,13 @@ check('driver respects reduced motion', bundle.includes('prefers-reduced-motion'
 check('driver uses IntersectionObserver', bundle.includes('IntersectionObserver'));
 check('caret is aria-hidden', bundle.includes('t-caret') && bundle.includes('aria-hidden'));
 
+console.log('\nverify-site: docs theme');
+const docsCss = readdirSync(join(DIST, '_astro'))
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+  .join('');
+check('docs css bundle contains rda theme tokens', docsCss.includes('rda-docs-theme'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
