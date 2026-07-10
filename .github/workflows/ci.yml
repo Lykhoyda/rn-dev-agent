@@ -70,6 +70,10 @@ jobs:
       - name: Dist-freshness guard unit test
         run: bash scripts/test/check-dist-fresh.test.sh
 
+      # GH#377: convert-gif must mkdir an explicit gifPath's parent before ffmpeg.
+      - name: record_proof convert-gif output-dir guard
+        run: bash scripts/test/record-proof-convert-gif.test.sh
+
       # GH#498: workspace package split contract for core/shared/host adapters.
       - name: Agent package split guard
         run: bash scripts/check-agent-package-sync.sh

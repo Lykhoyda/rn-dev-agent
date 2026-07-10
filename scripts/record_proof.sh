@@ -284,6 +284,11 @@ cmd_convert_gif() {
     exit 0
   fi
 
+  if ! mkdir -p "$(dirname "$output")" 2>/dev/null; then
+    echo "Error: Could not create output directory: $(dirname "$output")" >&2
+    exit 1
+  fi
+
   ffmpeg -i "$input" -vf "fps=10,scale=360:-1:flags=lanczos" -y "$output" 2>/dev/null
 
   local size
