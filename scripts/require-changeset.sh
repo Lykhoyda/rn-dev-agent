@@ -14,9 +14,12 @@ set -uo pipefail
 
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BASE_REF="${BASE_REF:-origin/main}"
-# Shippable MCP source. Tests, docs, CI, and the Claude plugin manifest (which
-# IS the changeset output) are intentionally excluded.
-WATCHED='^packages/rn-dev-agent-core/src/'
+# Shippable surface: core MCP source PLUS the hand-authored plugin surface
+# (commands/hooks/agents/skills) that marketplace installs run directly (GH #439
+# — those dirs could previously merge unversioned, the #189/#361 gap). Tests,
+# docs, CI, the plugin manifests/CHANGELOGs (which ARE the changeset output),
+# and the rn-dev-agent-core/scripts build-output mirrors stay excluded.
+WATCHED='^packages/rn-dev-agent-core/src/|^packages/(claude-plugin|codex-plugin|shared-agent-knowledge)/(commands|hooks|agents|skills)/'
 
 if [ -n "${CHANGED_FILES+x}" ]; then
   changed="$CHANGED_FILES"

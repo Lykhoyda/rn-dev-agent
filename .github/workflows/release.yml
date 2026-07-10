@@ -99,13 +99,14 @@ jobs:
       - name: TypeScript build + dist freshness gate
         run: bash scripts/check-dist-fresh.sh
 
+      # GH#439: same single-entrypoint rule as ci.yml — globs live in
+      # package.json only (plain `yarn test`, no coverage: this job gates the
+      # release merge, coverage visibility belongs to the PR run).
       - name: Unit tests
-        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'
-        working-directory: packages/rn-dev-agent-core
+        run: corepack yarn test
 
       - name: Integration tests
-        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'
-        working-directory: packages/rn-dev-agent-core
+        run: corepack yarn test:integration
 
       - name: Version sync check
         run: bash scripts/sync-versions.sh

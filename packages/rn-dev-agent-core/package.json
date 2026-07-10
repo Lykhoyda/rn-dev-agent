@@ -9,8 +9,9 @@
     "build:web": "cd src/observability/web && npm install && npm run build",
     "dev": "tsc --watch",
     "test": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
-    "test:integration": "yarn build && node --test 'test/integration/*.test.js' 'test/integration/*.test.ts'",
-    "test:all": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts' 'test/integration/*.test.js' 'test/integration/*.test.ts'"
+    "test:coverage": "yarn build && node --test --experimental-test-coverage --test-coverage-exclude='test/**' 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
+    "test:integration": "yarn build && node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'",
+    "test:all": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts' 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
