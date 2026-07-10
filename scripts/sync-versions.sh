@@ -87,6 +87,35 @@ else
   echo "versions in sync: $synth_version"
 fi
 
+# GH#441 — the core package-lock.json ships to users (ensure-cdp-deps.sh copies
+# it next to package.json for `npm install --production`), so its version fields
+# must track the core package.json that changesets bumps. Only the two version
+# fields are rewritten here: a version bump does not change dependency
+# resolutions. Dependency-RANGE drift is deliberately not fixable by this
+# script — the gh441 unit tripwire catches it and demands a real regeneration.
+CORE_PKG_JSON="$REPO_ROOT/packages/rn-dev-agent-core/package.json"
+CORE_LOCK_JSON="$REPO_ROOT/packages/rn-dev-agent-core/package-lock.json"
+if [ -f "$CORE_LOCK_JSON" ]; then
+  core_version=$(node -e "console.log(require('$CORE_PKG_JSON').version)")
+  lock_version=$(node -e "const l=require('$CORE_LOCK_JSON');console.log(l.version + ' ' + (l.packages?.['']?.version ?? ''))")
+  if [ "$lock_version" != "$core_version $core_version" ]; then
+    if [ "${1:-}" = "--fix" ]; then
+      node -e "
+        const fs = require('fs');
+        const lock = JSON.parse(fs.readFileSync('$CORE_LOCK_JSON', 'utf8'));
+        lock.version = '$core_version';
+        if (lock.packages && lock.packages['']) lock.packages[''].version = '$core_version';
+        fs.writeFileSync('$CORE_LOCK_JSON', JSON.stringify(lock, null, 2) + '\n');
+      "
+      echo "synced rn-dev-agent-core package-lock.json version fields -> $core_version"
+    else
+      echo "ERROR: version mismatch — rn-dev-agent-core package-lock.json=$lock_version package.json=$core_version"
+      echo "Run: ./scripts/sync-versions.sh --fix"
+      exit 1
+    fi
+  fi
+fi
+
 # B110 guard — detect hardcoded `version: '...'` literals in TypeScript source.
 # The MCP server version must come from package.json at runtime, never a literal.
 # Exemption: domain/engine-pin.ts holds the maestro-runner PIN (GH #397) — a
