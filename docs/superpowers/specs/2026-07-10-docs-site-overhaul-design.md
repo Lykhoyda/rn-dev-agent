@@ -46,8 +46,9 @@ Dark-only. No framework JS; total scripted budget ≈ 60 lines of vanilla JS.
 
 1. **Minimal header** — wordmark; links: Docs · Tools · Benchmarks · GitHub.
 2. **Hero**
-   - Eyebrow badge: current version + one release highlight
-     (e.g. "v0.66 · self-building device runners").
+   - Eyebrow badge: current plugin version (read from
+     `packages/claude-plugin/.claude-plugin/plugin.json` at build time) +
+     "Claude Code + Codex · iOS + Android".
    - Headline: **"Your agent writes the code. This proves it runs."**
    - Subline (mechanism): reads the component tree, store state, and navigation
      stack over CDP; taps real UI on iOS and Android; replays verified flows in
