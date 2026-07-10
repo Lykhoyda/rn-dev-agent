@@ -166,6 +166,7 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
                         val desc = parser.getAttributeValue(null, "content-desc").orEmpty()
                         val className = parser.getAttributeValue(null, "class").orEmpty()
                         val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
+                        val enabled = parser.getAttributeValue(null, "enabled") != "false"
                         val identifier = normalizeIdentifier(resourceId).ifBlank { desc }
 
                         nodes.put(
@@ -175,8 +176,8 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
                                 .put("label", text.ifBlank { desc })
                                 .put("identifier", identifier)
                                 .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
-                                .put("hittable", visible)
-                                .put("enabled", parser.getAttributeValue(null, "enabled") != "false")
+                                .put("hittable", HittableSemantics.fromSnapshotNode(enabled, visible))
+                                .put("enabled", enabled)
                         )
                         index += 1
                     }
@@ -311,7 +312,7 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
             .put("label", obj.text ?: obj.contentDescription ?: "")
             .put("identifier", obj.resourceName?.let { normalizeIdentifier(it) } ?: "")
             .put("rect", JSONObject().put("x", b.left).put("y", b.top).put("width", b.width()).put("height", b.height()))
-            .put("hittable", obj.isEnabled)
+            .put("hittable", HittableSemantics.fromFoundObject(obj.isEnabled, b.width(), b.height()))
     }
 
     private fun parseBounds(raw: String?): Rect? {
