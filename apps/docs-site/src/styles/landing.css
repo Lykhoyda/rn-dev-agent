@@ -554,3 +554,22 @@ body {
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .problem-grid, .cap-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Terminal animation states (only when the JS driver arms) ── */
+.term.is-animated .t-line { opacity: 0; transform: translateY(4px); }
+
+.term.is-animated .t-line.is-shown {
+  opacity: 1;
+  transform: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.term.is-animated .t-caret { opacity: 1; animation: rda-blink 1s step-end infinite; }
+
+@keyframes rda-blink { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .term.is-animated .t-line { opacity: 1; transform: none; }
+  .term.is-animated .t-caret { animation: none; opacity: 0; }
+  .phone-screen { transition: none; }
+}

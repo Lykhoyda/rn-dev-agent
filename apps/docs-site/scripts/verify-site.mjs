@@ -108,6 +108,17 @@ check('three-layer grid present', ['Introspect', 'Interact', 'Replay'].every((w)
 check('tabbed showcase present', landing2.includes('cdp_component_tree') && landing2.includes('cdp_run_action'));
 check('pipeline strip present', landing2.includes('Verify live'));
 
+console.log('\nverify-site: terminal animation');
+// Astro 6 inlines small processed <script>s into index.html rather than always
+// externalizing to _astro/*.js, so scan both the built bundles AND the landing HTML.
+const bundle = readdirSync(join(DIST, '_astro'))
+  .filter((f) => f.endsWith('.js') || f.endsWith('.css'))
+  .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+  .join('') + page('index.html');
+check('driver respects reduced motion', bundle.includes('prefers-reduced-motion'));
+check('driver uses IntersectionObserver', bundle.includes('IntersectionObserver'));
+check('caret is aria-hidden', bundle.includes('t-caret') && bundle.includes('aria-hidden'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

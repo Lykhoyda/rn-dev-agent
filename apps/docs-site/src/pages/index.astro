@@ -262,5 +262,69 @@ const description =
         });
       }
     </script>
+
+    <script>
+      const term = document.getElementById('hero-term');
+      const phone = document.getElementById('hero-phone');
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      if (term && phone && !reduced && 'IntersectionObserver' in window) {
+        const lines = [...term.querySelectorAll<HTMLElement>('.t-line')];
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        let running = false;
+        let visible = false;
+
+        async function typeLine(line: HTMLElement) {
+          const full = line.textContent ?? '';
+          line.textContent = '';
+          const caret = document.createElement('span');
+          caret.className = 't-caret';
+          caret.setAttribute('aria-hidden', 'true');
+          line.append(caret);
+          line.classList.add('is-shown');
+          for (const ch of full) {
+            caret.before(ch);
+            await sleep(18);
+          }
+          caret.remove();
+        }
+
+        async function play() {
+          if (running) return;
+          running = true;
+          while (visible) {
+            for (const line of lines) {
+              line.classList.remove('is-shown');
+              if (line.dataset.type) line.dataset.full ??= line.textContent ?? '';
+            }
+            phone.dataset.screen = '1';
+            await sleep(400);
+            for (const line of lines) {
+              if (!visible) break;
+              if (line.dataset.screen) phone.dataset.screen = line.dataset.screen;
+              if (line.dataset.type) {
+                line.textContent = line.dataset.full ?? '';
+                await typeLine(line);
+              } else {
+                line.classList.add('is-shown');
+              }
+              await sleep(Number(line.dataset.hold ?? 450));
+            }
+          }
+          running = false;
+          for (const line of lines) line.classList.add('is-shown');
+          phone.dataset.screen = '3';
+        }
+
+        term.classList.add('is-animated');
+        new IntersectionObserver(
+          ([entry]) => {
+            visible = entry.isIntersecting;
+            if (visible) play();
+          },
+          { threshold: 0.35 },
+        ).observe(term);
+      }
+    </script>
   </body>
 </html>
