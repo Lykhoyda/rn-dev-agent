@@ -81,6 +81,35 @@ CHANGED_FILES=$'packages/rn-dev-agent-core/test/unit/x.test.js\napps/docs-site/f
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "non-src change without changeset passes" 0 $?
 
+# 3b–3d. GH #439: commands/hooks/agents/skills are shipped plugin surface — a PR
+# touching them merges into user installs exactly like core src, so it MUST
+# carry a plugin changeset (the #189/#361 delivery-gap class for these surfaces).
+CHANGED_FILES=$'packages/claude-plugin/commands/setup.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "claude-plugin command change without changeset fails" 1 $?
+
+CHANGED_FILES=$'packages/codex-plugin/skills/rn-testing/SKILL.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "codex-plugin skill change without changeset fails" 1 $?
+
+CHANGED_FILES=$'packages/shared-agent-knowledge/agents/rn-tester.md\npackages/claude-plugin/hooks/session_start.sh' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "shared-knowledge agent + hook change without changeset fails" 1 $?
+
+# 3e. plugin-surface change WITH a rn-dev-agent-plugin changeset -> passes
+printf -- '---\n"rn-dev-agent-plugin": patch\n---\nship surface\n' > "$tmp/.changeset/calm-owls.md"
+CHANGED_FILES=$'packages/claude-plugin/commands/setup.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "plugin-surface change with plugin changeset passes" 0 $?
+rm -f "$tmp/.changeset/calm-owls.md"
+
+# 3f. release-PR paths (manifests, CHANGELOG, runner-manifest, core mirrors)
+# stay EXCLUDED — the Version Packages bot PR must not be asked for a changeset,
+# and the rn-dev-agent-core/scripts mirrors are build outputs of watched src.
+CHANGED_FILES=$'packages/claude-plugin/package.json\npackages/claude-plugin/plugin.json\npackages/claude-plugin/marketplace.json\npackages/claude-plugin/CHANGELOG.md\npackages/claude-plugin/runner-manifest.json\npackages/claude-plugin/rn-dev-agent-core/dist/index.js\npackages/claude-plugin/scripts/rn-fast-runner/README.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "manifest/CHANGELOG/mirror-only change without changeset passes" 0 $?
+
 # 4. empty diff -> passes
 CHANGED_FILES="" REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "empty diff passes" 0 $?

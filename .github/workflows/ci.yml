@@ -36,13 +36,16 @@ jobs:
       - name: TypeScript build + dist freshness gate
         run: bash scripts/check-dist-fresh.sh
 
-      - name: Unit tests
-        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'
-        working-directory: packages/rn-dev-agent-core
+      # GH#439: CI must invoke the same package.json scripts as local runs so
+      # the test-file globs live in exactly one place — #340 shipped because an
+      # inline CI glob silently skipped 22 nested unit-test files while
+      # `yarn test` ran them. The unit run also emits Node's built-in coverage
+      # report (report-only, no thresholds) so untested areas stay visible.
+      - name: Unit tests (with coverage report)
+        run: corepack yarn test:coverage
 
       - name: Integration tests
-        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'
-        working-directory: packages/rn-dev-agent-core
+        run: corepack yarn test:integration
 
       # Runs at repo root (no working-directory) — guards the changeset CI gate.
       - name: Changeset-guard unit test

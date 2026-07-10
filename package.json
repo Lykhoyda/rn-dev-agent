@@ -17,6 +17,7 @@
     "release-core": "yarn workspace rn-dev-agent-core npm publish",
     "release-cdp-bridge": "yarn release-core",
     "test": "yarn workspace rn-dev-agent-core test",
+    "test:coverage": "yarn workspace rn-dev-agent-core test:coverage",
     "test:integration": "yarn workspace rn-dev-agent-core test:integration",
     "test:native:android": "yarn workspace rn-dev-agent-android-runner test",
     "test:native:ios": "yarn workspace rn-dev-agent-ios-runner test",
