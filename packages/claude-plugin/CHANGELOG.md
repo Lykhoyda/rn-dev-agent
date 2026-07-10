@@ -1,5 +1,12 @@
 # rn-dev-agent-plugin
 
+## 0.66.8
+
+### Patch Changes
+
+- Updated dependencies [f5beabb]
+  - rn-dev-agent-core@0.61.4
+
 ## 0.66.7
 
 ### Patch Changes
