@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-core-codex-runtime",
-  "version": "0.61.6",
+  "version": "0.61.7",
   "private": true,
   "type": "module"
 }

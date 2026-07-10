@@ -1,5 +1,12 @@
 # rn-dev-agent-plugin
 
+## 0.66.12
+
+### Patch Changes
+
+- Updated dependencies [41924c4]
+  - rn-dev-agent-core@0.61.7
+
 ## 0.66.11
 
 ### Patch Changes
