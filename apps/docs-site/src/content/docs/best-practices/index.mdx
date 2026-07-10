@@ -1,9 +1,16 @@
 ---
 title: Best Practices
-description: 46 rules for building performant React Native apps — crash prevention, lists, animation, state.
+description: How the built-in React Native best-practice rules are checked during architecture design and code review.
 ---
 
-The plugin includes 46 best-practice rules integrated from [Vercel's React Native skills](https://github.com/vercel-labs/agent-skills) plus custom additions. Rules are checked during Phase 4 (Architecture) and Phase 6 (Code Review).
+The plugin ships a library of React Native best-practice rules that are
+checked automatically during **Phase 4 (Architecture)** and **Phase 6
+(Code Review)** of [`/rn-feature-dev`](/rn-dev-agent/commands/rn-feature-dev/).
+Most rules are integrated from
+[Vercel's agent-skills](https://github.com/vercel-labs/agent-skills)
+(composition patterns, list performance, animations, state management) —
+see that repository for the full rule text. The rules live inside the
+plugin package and need no setup.
 
 ## Impact levels
 
@@ -14,30 +21,21 @@ The plugin includes 46 best-practice rules integrated from [Vercel's React Nativ
 | **MEDIUM** | Noticeable improvement | Checked when relevant patterns present |
 | **LOW** | Minor optimization | Checked on 3+ occurrences |
 
-## Rule categories
+## Custom rules
 
-### Rendering & Crash Prevention
-Rules that prevent crashes, infinite loops, and rendering bugs. These are CRITICAL priority.
+Four rules were written for this plugin (not part of the Vercel set),
+covering failure modes discovered while verifying features on device:
 
-### List Performance
-Rules for optimizing FlatList, FlashList, and SectionList. Covers item memoization, callback refs, image handling, and expensive item extraction.
+| Rule | Covers |
+|------|--------|
+| `navigation-transparent-modal` | Transparent modal screens that break navigation introspection |
+| `query-cache-reactive` | React Query cache reads that silently go stale |
+| `reanimated-in-lists` | Reanimated shared values inside virtualized list items |
+| `theme-memoization-lists` | Theme-object identity churn re-rendering whole lists |
 
-### Animation
-Rules for keeping animations on the UI thread using Reanimated shared values, derived values, and GPU-friendly properties.
+## How rules are applied
 
-### State Management
-Rules for efficient state updates, lazy initialization, and avoiding inline component definitions.
-
-### Code Quality
-Rules for imports, module-level initialization, compound component patterns, and design system organization.
-
-### Async Patterns
-Rules for parallel execution, cheap-condition-first checks, and avoiding unnecessary async work.
-
-## Browse all rules
-
-All 46 rules are available in the sidebar under **Rules**. Each rule page includes:
-- Impact level and description
-- Incorrect code example (what to avoid)
-- Correct code example (what to do instead)
-- Explanation of why it matters
+During architecture design the agent filters rules by trigger keywords and
+file globs, then checks the CRITICAL and HIGH rules against the proposed
+design. During code review the same filter runs against the diff. Findings
+cite the rule id so you can look up the reasoning.

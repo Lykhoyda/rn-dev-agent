@@ -5,6 +5,127 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.66.14
+
+#### Patch Changes
+
+- 5bde12a: Fix #377: `record_proof.sh convert-gif` now creates the output's parent directory before invoking ffmpeg, so `device_record action=stop gif=true gifPath=<fresh-dir>/clip.gif` with an explicit path into a not-yet-existing directory succeeds instead of failing the ffmpeg write with ENOENT. If the parent cannot be created (e.g. a path component is a regular file), the command fails with an honest error naming the directory instead of a silent ffmpeg exit. Mirrors the `mkdir -p` already done by `cmd_start`/`cmd_stop`; regression-guarded by a PATH-stubbed ffmpeg test in CI.
+
+### 0.66.13
+
+#### Patch Changes
+
+- bd28f76: Fix #476: `/setup` now recognizes symlink-inherited git worktrees. Step A short-circuits template injection only when the manual marker is actually present in `CLAUDE.local.md` (a bare `.rn-agent` symlink from the SessionStart hook instead triggers an offer to complete the wiring), a missing/stale inherited scaffold halts setup before Steps B/C can inject unresolvable `dev-bridge` imports, and Step D skips scaffold/partial-add for symlinked corpora while still running the per-worktree tsconfig include touch-up. The idempotency contract and anti-patterns document the inherited state explicitly.
+
+### 0.66.12
+
+#### Patch Changes
+
+- Updated dependencies [41924c4]
+  - rn-dev-agent-core@0.61.7
+
+### 0.66.11
+
+#### Patch Changes
+
+- 74da26f: Fix #523: break the expensive iOS recovery chain. (1) `cdp_reload` that ends with zero targets now auto-chains `simctl terminate + launch` and reconnects instead of returning RECONNECT_TIMEOUT (`recovered_via: terminate_launch` in meta). (2) The last-connected bundleId is persisted per platform in `.rn-agent/state/last-bundle-ids.json`, so `cdp_restart hardReset:true` can relaunch even after a bridge worker restart wiped the in-memory cache. (3) `cdp_dismiss_dev_client_picker` now works on iOS (snapshot/press route through rn-fast-runner — the legacy-daemon guard was obsolete), also clears the stale-server "Error loading app" dialog, prefers the picker row matching the project's Metro port, and deprioritizes stale link-local (169.254.x) entries; `device_deeplink` auto-dismisses the picker on iOS too.
+- Updated dependencies [74da26f]
+  - rn-dev-agent-core@0.61.6
+
+### 0.66.10
+
+#### Patch Changes
+
+- 8d778ee: hardening(hooks): wrap the SessionStart `troubleshooting.md` injection in an explicit untrusted-data boundary (#434). The repo-local troubleshooting memory is repo-controlled content; in a cloned/untrusted repo it was previously presented to the agent as trusted startup guidance — a prompt-injection surface flagged during the #419 review. The hook now frames the block as "data, not instructions", wraps it in `<untrusted-repo-notes>` tags, and strips any embedded tag-like token naming the boundary (any case/decoration) so the doc cannot fake an early close and smuggle text outside the block. No behavior change for trusted repos beyond the added framing.
+
+### 0.66.9
+
+#### Patch Changes
+
+- 15def1d: fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable, half-open viewport bounds). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking, `device_batch`'s dead-control annotation, and starving the hittable-first screen-rect union (PR #517) into its all-nodes fallback. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes must not grow (small decreases expected: trailing contentless overlay wrappers the old algorithm marked hittable are no longer included). Intentional behavior change: a contentless, non-interactive-typed control rendered LAST in the tree (e.g. an identifier-less icon-only Image) was previously included by position-dependent luck (no later siblings → old hittable=true → included via the hittable escape hatch) and is now consistently excluded — give such controls a testID. Consumer-side calibration for the honest flag: `device_find` ranking now uses type priority first with hittable as a same-type tiebreak, the settle hash no longer includes hittable (it is derived from enabled + rect, both hashed, and its unquantized edge bit defeated the 4px jitter absorption), the screen-rect union is capped by Application/Window extents on iOS (center-on-screen elements can legitimately straddle the edge), and a healthy runner artifact missing the new compiled-in `HONEST_HITTABLE` capability queues a one-shot `meta.note` advisory that its hittable values are stale. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
+- Updated dependencies [15def1d]
+  - rn-dev-agent-core@0.61.5
+
+### 0.66.8
+
+#### Patch Changes
+
+- Updated dependencies [f5beabb]
+  - rn-dev-agent-core@0.61.4
+
+### 0.66.7
+
+#### Patch Changes
+
+- c375aa4: Story 06 Phase C: on-demand LLM-behavior evals for the MCP tool surface via mcp-server-tester — tool-call-correctness fixtures against the real server (no device) and output-usability fixtures over real recorded payloads, with a committed per-model baseline whose compare script is the regression gate for Story 08 (compact snapshot format) and Story 12 (tool consolidation). Dispatch-only workflow (llm-evals.yml) requiring the ANTHROPIC_API_KEY repo secret.
+
+### 0.66.6
+
+#### Patch Changes
+
+- 1f07b3f: Post-merge review fixes for the Phase B device-smoke surface (two independent reviewers, findings cross-validated): (1) the screen rect used by direction device_scroll/device_swipe and scrollintoview's viewport check is now a hittable-first union — off-screen mounted content (RN FlatList windowing keeps rows past the fold in the tree with real coords, marked hittable:false) can no longer inflate the viewport and push gestures off the physical screen; all-nodes union remains as fallback for snapshots without hittable data. (2) The three direct fastSwipe call sites fall back to resolveBundleId('ios') when a legacy session lacks appId, closing the reopened host-app-drag gap. (3) The nightly integrity lane captures zip listings before grepping (grep -q + pipefail could SIGPIPE-false-fail a successful match). (4) The smoke's counter assertion is anchored (/^count: 1$/) and the screenshot check documents its encoding-only scope.
+- Updated dependencies [1f07b3f]
+  - rn-dev-agent-core@0.61.3
+
+### 0.66.5
+
+#### Patch Changes
+
+- 3b05042: Nightly device-smoke: retry the fixture launch (two ~30s attempts) instead of a single 20s deadline. A reused-but-cold CI simulator/emulator can take longer than one short window to foreground the fixture app; the old single 20s deadline occasionally tripped ("fixture did not start within 20s"). The re-launch is idempotent.
+
+### 0.66.4
+
+#### Patch Changes
+
+- 16f21f7: Make the nightly device-smoke keyboard-guard step iOS-only. iOS reliably tests the #370 verify-or-refuse contract (XCUITest reports the occluded button; the guard refuses with `KEYBOARD_OCCLUDED`/`dismiss_failed`). Android is skipped on-device because UiAutomator drops occluded views and its IME-frame containment check is edge-sensitive — the outcome (dismiss vs a tap swallowed at the frame edge) varies run-to-run. Android's `shouldDismiss` predicate stays precisely unit-tested in `KeyboardGuardTest.kt` (Phase A CI), so the on-device Android step added flake, not coverage.
+
+### 0.66.3
+
+#### Patch Changes
+
+- abf974f: B269 (remaining half): treat idb client health, not PATH presence, as the source of truth. fb-idb installed under an incompatible Python (e.g. 3.14) crashes on every invocation; previously it counted as "present" everywhere, so the auto-installer never repaired it and the observe mirror selected the doomed idb tier and died ("idb video-stream keeps exiting", B263) instead of using the working simctl fallback.
+
+  - `detectIdb()` (mirror tier selection) now probes a real `idb --help` invocation — ENOENT, a crash, or a hang all resolve to the simctl tier.
+  - `ensure-idb.sh`'s foreground check health-probes the client and flags a present-but-broken one; the background worker replaces it (uninstall → reinstall → re-probe) and, if the reinstalled client still crashes, **uninstalls it and marks the attempt failed** — a crash-on-invocation client is never left on PATH, and the 24h backoff retries when a fixed fb-idb release ships.
+  - `/doctor`'s idb row now scores the client by the health probe instead of PATH presence.
+
+- Updated dependencies [abf974f]
+  - rn-dev-agent-core@0.61.2
+
+### 0.66.2
+
+#### Patch Changes
+
+- e4cdf48: Fix idb-companion installation on current Homebrew: brew now refuses formulas from untrusted taps, so `brew tap facebook/fb && brew install idb-companion` fails with "Refusing to load formula … from untrusted tap" — the plugin's auto-installers (`ensure-idb.sh`, `ensure-idb-companion.sh`) silently failed every session while pipx still installed the (Python-3.14-broken) client, leaving the worst combination: broken client on PATH, no companion (B269). The install commands now run `brew trust facebook/fb` first (tolerant no-op on older Homebrew without the `trust` subcommand), and all ~10 user-facing hint surfaces (doctor, rn-setup skill, mirror hints in `sources.ts`, SessionStart warning, physical-device probe) show the trusted three-step command.
+- Updated dependencies [e4cdf48]
+  - rn-dev-agent-core@0.61.1
+
+### 0.66.1
+
+#### Patch Changes
+
+- 2f7ceda: Fix the documented install command: the marketplace registers under the manifest name `rn-dev-agent`, so the correct command is `/plugin install rn-dev-agent@rn-dev-agent` — every doc previously said `rn-dev-agent@Lykhoyda-rn-dev-agent`, which fails with "Marketplace not found" (caught live on the first post-split install). Also corrects the stale `~/.claude/plugins/cache/Lykhoyda-rn-dev-agent` paths in troubleshooting docs.
+
+  Also adds the missing Codex install path: the repo now ships a Codex marketplace manifest (`.agents/plugins/marketplace.json`) resolving `packages/codex-plugin`, so `codex plugin marketplace add Lykhoyda/rn-dev-agent` + `codex plugin add rn-dev-agent@rn-dev-agent` works (validated live: marketplace add, plugin add, and an MCP handshake through the installed launcher). Install instructions documented in the README, docs-site getting-started, and the Codex package README; the package-sync guard asserts the manifest.
+
+### 0.66.0
+
+#### Minor Changes
+
+- 272c113: Add Codex plugin metadata and Yarn workspace package boundaries alongside the existing Claude Code plugin surface so rn-dev-agent can be used from both agents.
+- 272c113: Make the Claude plugin package self-contained so marketplace installs work after the workspace split (fixes the release-blocking finding on PR #500). Claude Code copies ONLY the plugin source directory into `~/.claude/plugins/cache/…` — `${CLAUDE_PLUGIN_ROOT}/../…` references resolve to nothing in an installed plugin (docs-confirmed; the pre-split plugin worked only because the runtime lived inside the plugin root).
+
+  - The package now ships a bundled runtime at `rn-dev-agent-core/dist/{supervisor,index,learned-actions}.js` (same esbuild output as the Codex package, byte-identical by construction), the observe web bundle, native runner sources under `scripts/rn-fast-runner` + `scripts/rn-android-runner`, `runner-manifest.json`, and the helper scripts the SessionStart hook and skills invoke (`ensure-*`, `mcp-bridge-probe.mjs`, `check-physical-devices.sh`, `check-vercel-rules.mjs`).
+  - `plugin.json` MCP entry now spawns `${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`; all agent/command/skill snippets and hooks resolve package-local paths (dev-checkout fallbacks preserved). `ensure-cdp-deps.sh` exits fast on the dependency-free bundled runtime.
+  - `scripts/build-codex-runtime.ts` → `scripts/build-host-runtimes.ts`: the single writer for every derived host-package artifact (both runtimes, runner copies, manifests, templates, helper scripts); `check-dist-fresh.sh` regenerates and porcelain-checks all of it, and `check-agent-package-sync.sh` asserts the Claude artifacts including byte-identity of the two host runtime bundles. The `runner-artifacts` release workflow now commits the Claude manifest copy too.
+  - The Codex launcher ships as plain `bin/cdp-supervisor.js` (was `.ts`) so `node <launcher>` cannot hard-fail on Node 22.x below 22.18 at the file-extension gate.
+  - New `.gitattributes` marks all generated trees `linguist-generated` (bundles additionally `-diff`) to collapse PR review noise; runner build output inside the package copies is now gitignored.
+
+#### Patch Changes
+
+- Updated dependencies [272c113]
+  - rn-dev-agent-core@0.61.0
+
 ### 0.65.10
 
 #### Patch Changes
@@ -811,6 +932,58 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.61.7
+
+#### Patch Changes
+
+- 41924c4: Refresh the committed package-lock.json and major-cap the security-floor `overrides` (GH #441). Marketplace installs stopped consuming this lock when the dependency-free bundled host runtime shipped (`ensure-cdp-deps.sh` early-exits), but the lock remains a committed artifact: CI's packaged-artifact smoke installs against it, and any future npm resolve inherits the overrides. The stale v0.38-era resolution is refreshed with in-range updates (ws 8.21, yaml 2.9, hono 4.12.29, @hono/node-server 1.19.14, fast-uri 3.1.3), and the open-ended `>=` override floors are capped at each dependent's declared major — `>=1.19.13` alone resolved @hono/node-server 2.x against the MCP SDK's `^1.19.9` on a fresh regen. Re-staleness tripwires: a gh-441 unit test plus a sync-versions.sh check (CI) and `--fix` (release version bumps) keeping the lock's version fields tracking package.json.
+
+### 0.61.6
+
+#### Patch Changes
+
+- 74da26f: Fix #523: break the expensive iOS recovery chain. (1) `cdp_reload` that ends with zero targets now auto-chains `simctl terminate + launch` and reconnects instead of returning RECONNECT_TIMEOUT (`recovered_via: terminate_launch` in meta). (2) The last-connected bundleId is persisted per platform in `.rn-agent/state/last-bundle-ids.json`, so `cdp_restart hardReset:true` can relaunch even after a bridge worker restart wiped the in-memory cache. (3) `cdp_dismiss_dev_client_picker` now works on iOS (snapshot/press route through rn-fast-runner — the legacy-daemon guard was obsolete), also clears the stale-server "Error loading app" dialog, prefers the picker row matching the project's Metro port, and deprioritizes stale link-local (169.254.x) entries; `device_deeplink` auto-dismisses the picker on iOS too.
+
+### 0.61.5
+
+#### Patch Changes
+
+- 15def1d: fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable, half-open viewport bounds). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking, `device_batch`'s dead-control annotation, and starving the hittable-first screen-rect union (PR #517) into its all-nodes fallback. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes must not grow (small decreases expected: trailing contentless overlay wrappers the old algorithm marked hittable are no longer included). Intentional behavior change: a contentless, non-interactive-typed control rendered LAST in the tree (e.g. an identifier-less icon-only Image) was previously included by position-dependent luck (no later siblings → old hittable=true → included via the hittable escape hatch) and is now consistently excluded — give such controls a testID. Consumer-side calibration for the honest flag: `device_find` ranking now uses type priority first with hittable as a same-type tiebreak, the settle hash no longer includes hittable (it is derived from enabled + rect, both hashed, and its unquantized edge bit defeated the 4px jitter absorption), the screen-rect union is capped by Application/Window extents on iOS (center-on-screen elements can legitimately straddle the edge), and a healthy runner artifact missing the new compiled-in `HONEST_HITTABLE` capability queues a one-shot `meta.note` advisory that its hittable values are stale. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
+
+### 0.61.4
+
+#### Patch Changes
+
+- f5beabb: Story 06 Phase C.2 (#387): the LLM-behavior evals now run on headless Claude Code (`claude -p`) funded by a Claude subscription — locally via the logged-in CLI, in CI via a `CLAUDE_CODE_OAUTH_TOKEN` secret. The `mcp-server-tester` dependency (and its judge-model patch) is retired; fixtures, baseline semantics, and the compare-baseline gate are unchanged.
+
+### 0.61.3
+
+#### Patch Changes
+
+- 1f07b3f: Post-merge review fixes for the Phase B device-smoke surface (two independent reviewers, findings cross-validated): (1) the screen rect used by direction device_scroll/device_swipe and scrollintoview's viewport check is now a hittable-first union — off-screen mounted content (RN FlatList windowing keeps rows past the fold in the tree with real coords, marked hittable:false) can no longer inflate the viewport and push gestures off the physical screen; all-nodes union remains as fallback for snapshots without hittable data. (2) The three direct fastSwipe call sites fall back to resolveBundleId('ios') when a legacy session lacks appId, closing the reopened host-app-drag gap. (3) The nightly integrity lane captures zip listings before grepping (grep -q + pipefail could SIGPIPE-false-fail a successful match). (4) The smoke's counter assertion is anchored (/^count: 1$/) and the screenshot check documents its encoding-only scope.
+
+### 0.61.2
+
+#### Patch Changes
+
+- abf974f: B269 (remaining half): treat idb client health, not PATH presence, as the source of truth. fb-idb installed under an incompatible Python (e.g. 3.14) crashes on every invocation; previously it counted as "present" everywhere, so the auto-installer never repaired it and the observe mirror selected the doomed idb tier and died ("idb video-stream keeps exiting", B263) instead of using the working simctl fallback.
+
+  - `detectIdb()` (mirror tier selection) now probes a real `idb --help` invocation — ENOENT, a crash, or a hang all resolve to the simctl tier.
+  - `ensure-idb.sh`'s foreground check health-probes the client and flags a present-but-broken one; the background worker replaces it (uninstall → reinstall → re-probe) and, if the reinstalled client still crashes, **uninstalls it and marks the attempt failed** — a crash-on-invocation client is never left on PATH, and the 24h backoff retries when a fixed fb-idb release ships.
+  - `/doctor`'s idb row now scores the client by the health probe instead of PATH presence.
+
+### 0.61.1
+
+#### Patch Changes
+
+- e4cdf48: Fix idb-companion installation on current Homebrew: brew now refuses formulas from untrusted taps, so `brew tap facebook/fb && brew install idb-companion` fails with "Refusing to load formula … from untrusted tap" — the plugin's auto-installers (`ensure-idb.sh`, `ensure-idb-companion.sh`) silently failed every session while pipx still installed the (Python-3.14-broken) client, leaving the worst combination: broken client on PATH, no companion (B269). The install commands now run `brew trust facebook/fb` first (tolerant no-op on older Homebrew without the `trust` subcommand), and all ~10 user-facing hint surfaces (doctor, rn-setup skill, mirror hints in `sources.ts`, SessionStart warning, physical-device probe) show the trusted three-step command.
+
+### 0.61.0
+
+#### Minor Changes
+
+- 272c113: Add Codex plugin metadata and Yarn workspace package boundaries alongside the existing Claude Code plugin surface so rn-dev-agent can be used from both agents.
 
 ### 0.60.2
 

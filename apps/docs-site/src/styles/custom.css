@@ -4,6 +4,10 @@
 
 /* ─── Palette ─── */
 :root {
+  --rda-docs-theme: 1; /* marker consumed by verify-site */
+  --rda-accent-soft: #0d2d3a;
+  --rda-glow: 0 0 0 1px var(--sl-color-accent-low), 0 8px 32px rgba(56, 189, 248, 0.06);
+
   --sl-font: 'DM Sans', system-ui, sans-serif;
   --sl-font-system-mono: 'JetBrains Mono', ui-monospace, monospace;
 
@@ -216,4 +220,21 @@ nav.sidebar summary {
   .right-sidebar {
     display: none;
   }
+}
+
+.sl-markdown-content h2 code,
+.sl-markdown-content h3 code {
+  font-size: 0.85em;
+}
+
+.card:hover {
+  box-shadow: var(--rda-glow);
+}
+
+nav.sidebar details > summary:hover {
+  color: var(--sl-color-white);
+}
+
+nav.sidebar .top-level > li > details > summary {
+  margin-top: 0.5rem;
 }
