@@ -145,6 +145,15 @@ console.log('\nverify-site: og image');
 check('og-image.png shipped', exists('og-image.png'));
 check('favicon shipped', exists('favicon.svg'));
 
+console.log('\nverify-site: gfm tables (B166)');
+const archHtml = page('architecture/index.html');
+check('architecture tables render', (archHtml.match(/<table/g) ?? []).length >= 5);
+check('tools overview table renders', page('tools/index.html').includes('<table'));
+check(
+  'md pages unaffected',
+  (page('dev-client-coverage/index.html').match(/<table/g) ?? []).length === 1,
+);
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
