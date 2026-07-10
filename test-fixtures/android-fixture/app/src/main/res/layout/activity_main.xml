@@ -24,6 +24,19 @@
         android:layout_height="wrap_content"
         android:text="count: 0" />
 
+    <!-- GH #520: deliberately disabled — a visible node that must report
+         hittable=false under the honest enabled∧visible semantics (the
+         pre-#520 snapshot path reported it true). Gives device checks and
+         the nightly smoke a discriminating negative on an otherwise
+         all-enabled screen. -->
+    <Button
+        android:id="@+id/fixture_disabled_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textAllCaps="false"
+        android:enabled="false"
+        android:text="Disabled" />
+
     <EditText
         android:id="@+id/fixture_input"
         android:layout_width="match_parent"
