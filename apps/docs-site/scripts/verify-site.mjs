@@ -43,7 +43,11 @@ function checkInternalLinks() {
       if (url !== BASE && !url.startsWith(`${BASE}/`)) continue;
       if (KNOWN_BROKEN.has(url)) continue;
       const rel = url === BASE ? '' : url.slice(BASE.length + 1);
-      if (/\.(css|js|png|svg|txt|xml|ico|json|webmanifest|woff2?|ttf|webp|avif|jpe?g|gif|mp4)$/.test(rel)) {
+      if (
+        /\.(css|js|png|svg|txt|xml|ico|json|webmanifest|woff2?|ttf|webp|avif|jpe?g|gif|mp4)$/.test(
+          rel,
+        )
+      ) {
         if (!exists(rel)) {
           broken += 1;
           console.error(`  broken asset ${url} in ${file.slice(DIST.length)}`);
@@ -101,17 +105,24 @@ console.log('\nverify-site: landing sections');
 const landing2 = page('index.html');
 check('stat strip present', landing2.includes('210×') && landing2.includes('79'));
 check('problem section present', landing2.includes('Coding agents ship blind'));
-check('three-layer grid present', ['Introspect', 'Interact', 'Replay'].every((w) => landing2.includes(w)));
-check('tabbed showcase present', landing2.includes('cdp_component_tree') && landing2.includes('cdp_run_action'));
+check(
+  'three-layer grid present',
+  ['Introspect', 'Interact', 'Replay'].every((w) => landing2.includes(w)),
+);
+check(
+  'tabbed showcase present',
+  landing2.includes('cdp_component_tree') && landing2.includes('cdp_run_action'),
+);
 check('pipeline strip present', landing2.includes('Verify live'));
 
 console.log('\nverify-site: terminal animation');
 // Astro 6 inlines small processed <script>s into index.html rather than always
 // externalizing to _astro/*.js, so scan both the built bundles AND the landing HTML.
-const bundle = readdirSync(join(DIST, '_astro'))
-  .filter((f) => f.endsWith('.js') || f.endsWith('.css'))
-  .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
-  .join('') + page('index.html');
+const bundle =
+  readdirSync(join(DIST, '_astro'))
+    .filter((f) => f.endsWith('.js') || f.endsWith('.css'))
+    .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+    .join('') + page('index.html');
 check('driver respects reduced motion', bundle.includes('prefers-reduced-motion'));
 check('driver uses IntersectionObserver', bundle.includes('IntersectionObserver'));
 check('caret is aria-hidden', bundle.includes('t-caret') && bundle.includes('aria-hidden'));
@@ -125,7 +136,10 @@ check('docs css bundle contains rda theme tokens', docsCss.includes('rda-docs-th
 
 console.log('\nverify-site: llms.txt');
 check('llms.txt generated', exists('llms.txt'));
-check('llms.txt mentions the project', exists('llms.txt') && page('llms.txt').includes('rn-dev-agent'));
+check(
+  'llms.txt mentions the project',
+  exists('llms.txt') && page('llms.txt').includes('rn-dev-agent'),
+);
 
 console.log('\nverify-site: og image');
 check('og-image.png shipped', exists('og-image.png'));

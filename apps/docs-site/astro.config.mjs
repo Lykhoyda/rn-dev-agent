@@ -124,8 +124,16 @@ export default defineConfig({
               items: [
                 { label: 'Overview', slug: 'tools' },
                 { label: 'CDP Tools', collapsed: true, autogenerate: { directory: 'tools/cdp' } },
-                { label: 'Device Tools', collapsed: true, autogenerate: { directory: 'tools/device' } },
-                { label: 'Testing Tools', collapsed: true, autogenerate: { directory: 'tools/testing' } },
+                {
+                  label: 'Device Tools',
+                  collapsed: true,
+                  autogenerate: { directory: 'tools/device' },
+                },
+                {
+                  label: 'Testing Tools',
+                  collapsed: true,
+                  autogenerate: { directory: 'tools/testing' },
+                },
               ],
             },
             {
