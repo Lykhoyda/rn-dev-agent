@@ -11,13 +11,21 @@ name: Release
 # No npm publish: the "package" is the plugin manifest the marketplace reads
 # from the repo, so only the version half of changesets/action is used.
 #
+# GH #292: the Version PR is created with GITHUB_TOKEN, and GitHub never
+# triggers other workflows (ci.yml) for GITHUB_TOKEN-generated events, so the
+# PR itself can have NO checks. Pre-merge validation therefore lives HERE:
+#   version  -> creates/updates the Version PR
+#   validate -> checks out changeset-release/main and runs the core CI gates
+#   merge    -> runs only after validate succeeds, and direct-merges only the
+#               exact SHA validate saw (--match-head-commit)
+#
 # PREREQUISITES (must be enabled in repo settings — cannot be set from this file):
 #   - Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests"
 #   - Settings > General > "Allow auto-merge"
 #   - OPTIONAL: branch protection on main with >=1 required status check. With it,
 #     `gh pr merge --auto` gates the Version PR on those checks. Without it, GitHub
 #     refuses to enable auto-merge ("Protected branch rules not configured") and the
-#     merge step falls back to a direct squash-merge of the clean Version PR.
+#     merge step falls back to a direct squash-merge of the validated Version PR.
 
 on:
   push:
@@ -25,13 +33,18 @@ on:
 
 concurrency: release-${{ github.ref }}
 
+# Minimal default; jobs that write declare their own (CodeQL alerts #27 #28 rule).
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  release:
+  version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +67,56 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # GH #292: real pre-merge validation of the release commit. Mirrors ci.yml's
+  # gates that a version bump can plausibly break: dist freshness (host-runtime
+  # package.json embeds the core version), the core test suites, and the
+  # version-sync invariant across plugin.json / marketplace.json / lockfile.
+  validate:
+    needs: version
+    if: needs.version.outputs.pr-number
+    runs-on: ubuntu-latest
+    outputs:
+      head-sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
+        with:
+          ref: changeset-release/main
+
+      - name: Record the validated head SHA
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — same pin as ci.yml
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+
+      - name: TypeScript build + dist freshness gate
+        run: bash scripts/check-dist-fresh.sh
+
+      - name: Unit tests
+        run: node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'
+        working-directory: packages/rn-dev-agent-core
+
+      - name: Integration tests
+        run: node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'
+        working-directory: packages/rn-dev-agent-core
+
+      - name: Version sync check
+        run: bash scripts/sync-versions.sh
+
+  merge:
+    needs: [version, validate]
+    if: needs.version.outputs.pr-number
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
       # Prefer auto-merge (it gates on any pending checks). `gh pr merge --auto`
       # ERRORS only when auto-merge can't be enabled — i.e. there is no gate to
       # attach to. GitHub reports that benign state with two different messages:
@@ -61,25 +124,33 @@ jobs:
       #   - "Protected branch rules not configured for this branch" (main has no
       #     branch protection, so auto-merge has no required checks to wait for)
       # Fall back to a direct merge ONLY for those benign errors — the direct
-      # `gh pr merge` still refuses a conflicted/blocked PR, so nothing bad can
-      # land through the fallback. Any OTHER auto-merge failure (e.g. "Allow
-      # auto-merge" disabled, missing permission) must fail the job loudly
-      # rather than silently direct-merging — a failing/pending check never
-      # lands here, because --auto succeeds at *enabling* in that case and
-      # simply waits.
+      # `gh pr merge` still refuses a conflicted/blocked PR, and (GH #292)
+      # --match-head-commit refuses to land anything but the exact SHA the
+      # validate job tested, so nothing unvalidated can land through the
+      # fallback. Any OTHER auto-merge failure (e.g. "Allow auto-merge"
+      # disabled, missing permission) must fail the job loudly rather than
+      # silently direct-merging — a failing/pending check never lands here,
+      # because --auto succeeds at *enabling* in that case and simply waits.
+      # (--match-head-commit is applied to the direct merge only: the --auto
+      # path is used exactly when branch protection supplies its own gate.)
       - name: Merge the Version Packages PR (auto-merge, or direct only if nothing to gate on)
-        if: steps.changesets.outputs.pullRequestNumber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.changesets.outputs.pullRequestNumber }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.version.outputs.pr-number }}
+          VALIDATED_SHA: ${{ needs.validate.outputs.head-sha }}
         run: |
+          if [ -z "$VALIDATED_SHA" ]; then
+            echo "validate job produced no head SHA — refusing to merge" >&2
+            exit 1
+          fi
           if out=$(gh pr merge --squash --auto "$PR_NUMBER" 2>&1); then
             echo "$out"
           else
             echo "$out"
             if printf '%s' "$out" | grep -qe "Pull request is in clean status" -e "Protected branch rules not configured for this branch"; then
-              echo "auto-merge not applicable (no gate to wait on) — merging directly"
-              gh pr merge --squash "$PR_NUMBER"
+              echo "auto-merge not applicable (no gate to wait on) — merging the validated SHA directly"
+              gh pr merge --squash --match-head-commit "$VALIDATED_SHA" "$PR_NUMBER"
             else
               echo "auto-merge failed for an unexpected reason — not falling back" >&2
               exit 1
