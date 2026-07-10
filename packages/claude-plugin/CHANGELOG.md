@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.66.9
+
+### Patch Changes
+
+- 15def1d: fix(rn-fast-runner): honest `hittable` in iOS snapshots (#395). `hittable` now means "enabled and its center is on-screen" (plausibly tappable, half-open viewport bounds). The old occlusion heuristic counted trailing transparent full-screen containers (gesture-handler roots, portal hosts) as occluders and marked every node `hittable=false` on real RN screens — poisoning `device_find` candidate ranking, `device_batch`'s dead-control annotation, and starving the hittable-first screen-rect union (PR #517) into its all-nodes fallback. Real modal occlusion was never representable anyway: RN modals get their own UIWindow, so occluded content is absent from the XCUI tree entirely. Snapshot filtering (compact/interactiveOnly) is now explicitly hittable-independent, so snapshot sizes must not grow (small decreases expected: trailing contentless overlay wrappers the old algorithm marked hittable are no longer included). Intentional behavior change: a contentless, non-interactive-typed control rendered LAST in the tree (e.g. an identifier-less icon-only Image) was previously included by position-dependent luck (no later siblings → old hittable=true → included via the hittable escape hatch) and is now consistently excluded — give such controls a testID. Consumer-side calibration for the honest flag: `device_find` ranking now uses type priority first with hittable as a same-type tiebreak, the settle hash no longer includes hittable (it is derived from enabled + rect, both hashed, and its unquantized edge bit defeated the 4px jitter absorption), the screen-rect union is capped by Application/Window extents on iOS (center-on-screen elements can legitimately straddle the edge), and a healthy runner artifact missing the new compiled-in `HONEST_HITTABLE` capability queues a one-shot `meta.note` advisory that its hittable values are stale. The refusal half of the original #395 report ("no longer hittable" errors on modal screens) was a stale-ref message fixed by #396. No wire-shape change; new plugin releases pick this up via their per-version runner artifact. Dev checkouts: delete `packages/rn-fast-runner/build/DerivedData` to rebuild.
+- Updated dependencies [15def1d]
+  - rn-dev-agent-core@0.61.5
+
 ## 0.66.8
 
 ### Patch Changes
