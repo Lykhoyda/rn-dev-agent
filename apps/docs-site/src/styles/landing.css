@@ -232,6 +232,7 @@ body {
 
 .term-body {
   list-style: none;
+  text-align: left;
   padding: 1rem 1.1rem 1.2rem;
   font-family: var(--rda-mono);
   font-size: 0.78rem;
