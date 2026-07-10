@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent-plugin",
-  "version": "0.66.14",
+  "version": "0.66.15",
   "private": true,
   "description": "Claude Code rn-dev-agent plugin package and changesets version source for host manifests.",
   "license": "MIT",
