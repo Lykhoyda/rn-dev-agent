@@ -1542,14 +1542,14 @@ trackedTool(
 
 trackedTool(
   'cdp_dismiss_dev_client_picker',
-  'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the configured Metro server entry so CDP/the bundle can proceed. Android only today (requires an open device session — call device_snapshot action="open" first). iOS returns an actionable manual-select message (cross-platform support tracked as a follow-up). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.',
+  'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the Metro server entry (preferring the row matching the project\'s Metro port, deprioritizing stale link-local addresses) so CDP/the bundle can proceed. Also clears the native stale-server "Error loading app" dialog that can hide the picker after a network change. iOS + Android (requires an open device session — call device_snapshot action="open" first). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.',
   {
     platform: z
       .enum(['ios', 'android'])
       .optional()
       .describe('Force platform. Otherwise resolved from the active session or the booted device.'),
   },
-  createDismissDevClientPickerHandler(),
+  createDismissDevClientPickerHandler(() => getClient().metroPort),
 );
 
 trackedTool(

@@ -154,10 +154,11 @@ export function createDeviceDeeplinkHandler() {
         // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
         // success-state suffix). Stateless heuristic; no overhead on short URLs.
         const annotated = annotateDeepLinkDepth(result, { url: args.url });
-        // GH #136 sub-3: the picker can appear after a deep link. Best-effort
-        // dismiss on Android (no-op when no session is open); never fail the deeplink.
-        if (platform === 'android' && !annotated.isError) {
-            const outcome = await clearDevClientPickerIfPresent('android').catch(() => null);
+        // GH #136 sub-3 / GH #523 sub-3: the picker can appear after a deep link.
+        // Best-effort dismiss on both platforms now that iOS routes through
+        // rn-fast-runner (no-op when no session is open); never fail the deeplink.
+        if (!annotated.isError) {
+            const outcome = await clearDevClientPickerIfPresent(platform).catch(() => null);
             return annotatePicker(annotated, outcome);
         }
         return annotated;

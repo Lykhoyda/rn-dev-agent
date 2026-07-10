@@ -15,7 +15,11 @@ import {
   _resetPressCandidateForTest,
 } from '../../dist/tools/dev-client-picker.js';
 
-test('helper: iOS is guarded — skips without calling runAgentDevice', async () => {
+// GH #523 sub-3: the iOS short-circuit is gone — iOS takes the same dismiss
+// path as Android (rn-fast-runner backs snapshot/press there now, so the
+// D1219 legacy-daemon concern no longer applies).
+test('helper: iOS with no session returns null (parity with Android)', async () => {
+  _setHasSessionForTest(false);
   const calls = [];
   _setRunAgentDeviceForTest(async (args) => {
     calls.push(args);
@@ -23,13 +27,11 @@ test('helper: iOS is guarded — skips without calling runAgentDevice', async ()
   });
   try {
     const out = await clearDevClientPickerIfPresent('ios');
-    assert.equal(calls.length, 0, 'runAgentDevice must never be called on iOS');
-    assert.equal(out.skipped, true);
-    assert.equal(out.dismissed, false);
-    assert.equal(out.platform, 'ios');
-    assert.match(out.reason, /manually/i);
+    assert.equal(out, null);
+    assert.equal(calls.length, 0, 'no snapshot without a session');
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetHasSessionForTest();
   }
 });
 
@@ -83,7 +85,11 @@ test('handler: no session → DEV_CLIENT_PICKER_NO_SESSION', async () => {
   }
 });
 
-test('handler: iOS → warn, dismissed:false, never calls runAgentDevice', async () => {
+// GH #523 sub-3: iOS is a first-class platform for the tool — with a session
+// open and nothing on screen it reports a clean not-detected result.
+test('handler: iOS with nothing on screen → ok, dismissed:false, no snapshot', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
   const calls = [];
   _setRunAgentDeviceForTest(async (args) => {
     calls.push(args);
@@ -95,10 +101,12 @@ test('handler: iOS → warn, dismissed:false, never calls runAgentDevice', async
     const p = parse(r);
     assert.equal(p.data.dismissed, false);
     assert.equal(p.data.platform, 'ios');
-    assert.match(p.meta.warning, /manually/i);
-    assert.equal(calls.length, 0);
+    assert.match(p.data.reason, /not detected/i);
+    assert.equal(calls.length, 0, 'no snapshot when no picker/dialog is present');
   } finally {
     _resetRunAgentDeviceForTest();
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
   }
 });
 

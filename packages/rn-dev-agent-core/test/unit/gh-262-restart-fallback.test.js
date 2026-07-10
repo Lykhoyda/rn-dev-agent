@@ -46,7 +46,9 @@ function harness(deps) {
       current = c;
     },
     () => newClient,
-    { getSession: () => null, ...deps },
+    // GH #523 sub-2: pin the persisted-store tier off by default so these
+    // cases keep asserting the pre-store resolution chain hermetically.
+    { getSession: () => null, loadPersistedBundleId: () => null, ...deps },
   );
 }
 
@@ -194,7 +196,9 @@ test('hardReset: strict resolver also unresolvable → existing skip-simctl step
     resolveBundleIdStrict: () => null,
   });
   const data = expectOk(await handler({ hardReset: true }));
-  assert.ok(data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'));
+  assert.ok(
+    data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache-or-state'),
+  );
 });
 
 test('hardReset: launch fails + probe FALSE → typed APP_NOT_INSTALLED failure (advice as error, steps in meta)', async () => {
@@ -290,6 +294,8 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
       stopFastRunner: () => {},
       sleep: async () => {},
       resolveBundleIdStrict: () => null,
+      loadPersistedBundleId: () => null,
+      persistBundleId: () => {},
     },
   );
   expectOk(await handler({})); // android-flavored soft restart populates the cache
@@ -303,7 +309,9 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
   // iOS lookup below would then evict/overwrite it — see note in report).
   const androidData = expectOk(await handler({ hardReset: true, platform: 'android' }));
   assert.ok(
-    !androidData.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'),
+    !androidData.hardResetSteps.includes(
+      'skip-simctl:no-bundleId-on-connectedTarget-or-cache-or-state',
+    ),
     `android cache entry should have been found — got: ${JSON.stringify(androidData.hardResetSteps)}`,
   );
   assert.ok(
@@ -316,7 +324,9 @@ test('hardReset: android-cached bundleId is NOT used for an iOS target (platform
     !simctl.some((c) => c.includes('com.android.pkg')),
     `android package must never reach iOS simctl — got: ${JSON.stringify(simctl)}`,
   );
-  assert.ok(data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache'));
+  assert.ok(
+    data.hardResetSteps.includes('skip-simctl:no-bundleId-on-connectedTarget-or-cache-or-state'),
+  );
 });
 
 test('codex-pair Fix 1: explicit invalid bundleId arg fails fast, simctl never called', async () => {
