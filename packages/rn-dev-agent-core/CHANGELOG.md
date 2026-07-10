@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.61.8
+
+### Patch Changes
+
+- 6be3bca: fix(rn-android-runner): align Android `hittable` semantics with iOS (#520). Both Android sources now route through a single shared predicate implementing the #395 definition — "enabled AND visibly on-screen": the snapshot path (window-hierarchy XML) was reporting bare `visible-to-user` (a DISABLED but visible control counted as hittable), and the find path (`UiObject2`) was reporting bare `isEnabled` (an enabled element with an empty visible region counted as hittable). Divergent semantics meant platform-dependent `device_find` ranking (+1000 hittable boost) and `device_batch` dead-control annotation for identical screens. The new `HittableSemantics` object lives in the main sourceset so the JVM CI lane pins it deterministically; a TS grep-sync test pins the dispatcher wiring (gh-397/gh-418 style). The Android runner's `/health` now advertises `HONEST_HITTABLE` like iOS. Device-verified on a Pixel 9 Pro emulator: snapshot distribution non-uniform (62/63 hittable; the fixture's new deliberately-disabled button reports `hittable=false`, which the old path reported `true`), and `findText` discriminates enabled ("Increment" → true) vs disabled ("Disabled" → false). No wire-shape change (capability list is additive, no protocol bump); existing runner artifacts pick the semantics up on their next rebuild/upgrade.
+
 ## 0.61.7
 
 ### Patch Changes
