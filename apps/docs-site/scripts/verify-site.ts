@@ -195,6 +195,21 @@ const rhythmCss = readdirSync(join(DIST, '_astro'))
   .join('');
 check('rhythm rules shipped', rhythmCss.includes('rda-lead'));
 
+console.log('\nverify-site: benchmarks redesign + stat swap');
+const benchHtml = page('benchmarks/index.html');
+check(
+  'benchmarks jargon removed',
+  !benchHtml.includes('Ralph Loop') && !benchHtml.includes('Polar Star'),
+);
+check('stale dispatch tiers removed', !benchHtml.includes('agent-device daemon'));
+check(
+  'benchmarks leads with verified-feature timing',
+  benchHtml.includes('Description → verified feature'),
+);
+const landingStat = page('index.html');
+check('stories stat replaced', !landingStat.includes('stories built / crashes'));
+check('time-to-verified stat present', landingStat.includes('3–25 min'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
