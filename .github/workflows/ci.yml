@@ -41,6 +41,14 @@ jobs:
       # inline CI glob silently skipped 22 nested unit-test files while
       # `yarn test` ran them. The unit run also emits Node's built-in coverage
       # report (report-only, no thresholds) so untested areas stay visible.
+      # GH#437 (audit P0-B): wire-contract drift must fail a NAMED gate, not
+      # hide in the unit blob — tri-file command-enum/protocol sync (#418/#383)
+      # plus golden contract tests over payloads captured from live runners.
+      # Runs BEFORE the broad unit step so a contract regression fails here,
+      # under the gate's name (the unit globs also include these files).
+      - name: Runner wire-contract gate
+        run: corepack yarn workspace rn-dev-agent-core test:contract
+
       - name: Unit tests (with coverage report)
         run: corepack yarn test:coverage
 
