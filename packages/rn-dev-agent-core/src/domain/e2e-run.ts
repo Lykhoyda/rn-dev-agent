@@ -3,35 +3,23 @@ import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from '
 import { parseMaestroFailure } from './maestro-error-parser.js';
 import { assertValidActionId } from './path-safety.js';
 
-export type E2eVerdict = 'green' | 'red' | 'setup_error' | 'empty';
-export type E2eResultClassification = 'pass' | 'regression' | 'infra' | 'skipped';
+import type {
+  E2eFlowResult,
+  E2eResultClassification,
+  E2eRunIndexEntry,
+  E2eRunRecord,
+  E2eVerdict,
+} from '../observability/wire-types.js';
 
-export interface E2eFlowResult {
-  testId: string;
-  intent: string;
-  passed: boolean;
-  durationMs: number;
-  classification: E2eResultClassification;
-  failureKind?: string;
-  infraAnnotation?: string | null;
-  errorExcerpt?: string | null;
-}
-
-export interface E2eRunRecord {
-  runId: string;
-  startedAt: string;
-  finishedAt: string;
-  durationMs: number;
-  gitSha: string | null;
-  gitDirty: boolean;
-  platform: string;
-  deviceId: string | null;
-  metroReloaded: boolean;
-  totals: { total: number; passed: number; failed: number; skipped: number };
-  verdict: E2eVerdict;
-  results: E2eFlowResult[];
-  previousGreenRunId: string | null;
-}
+// GH #438: these wire shapes live in observability/wire-types.ts so the
+// observe SPA shares them instead of hand-copying.
+export type {
+  E2eFlowResult,
+  E2eResultClassification,
+  E2eRunIndexEntry,
+  E2eRunRecord,
+  E2eVerdict,
+} from '../observability/wire-types.js';
 
 export function classifyFlowResult(input: {
   testId: string;
@@ -110,13 +98,6 @@ export function diffNewlyFailing(
         (previousGreen === null || wasPassing.has(r.testId)),
     )
     .map((r) => r.testId);
-}
-
-export interface E2eRunIndexEntry {
-  runId: string;
-  finishedAt: string;
-  verdict: E2eVerdict;
-  totals: { total: number; passed: number; failed: number; skipped: number };
 }
 
 const INDEX_MAX = 100;

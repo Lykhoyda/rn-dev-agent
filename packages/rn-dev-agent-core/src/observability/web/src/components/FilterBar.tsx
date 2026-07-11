@@ -22,10 +22,11 @@ export function FilterBar({
   onErrorsOnly,
 }: FilterBarProps): JSX.Element {
   return (
-    <div className="filterbar">
+    <div className="filterbar" data-testid="filterbar">
       {FAMILIES.map((f) => (
         <button
           key={f}
+          data-testid={`filter-family-${f}`}
           className={active.has(f) ? 'fchip' : 'fchip off'}
           onClick={() => onToggleFamily(f)}
           title={`toggle ${f} events`}
@@ -36,6 +37,7 @@ export function FilterBar({
         </button>
       ))}
       <button
+        data-testid="filter-errors"
         className={errorsOnly ? 'fchip errors on' : 'fchip errors'}
         onClick={() => onErrorsOnly(!errorsOnly)}
         title="only failed calls"
@@ -43,6 +45,7 @@ export function FilterBar({
         ✗ errors
       </button>
       <input
+        data-testid="filter-search"
         className="search"
         placeholder="search tool or summary…"
         value={search}

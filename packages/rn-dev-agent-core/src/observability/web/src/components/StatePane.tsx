@@ -55,10 +55,15 @@ export function StatePane({
   }, [e2eDoneCount]);
 
   return (
-    <div className="pane right">
+    <div className="pane right" data-testid="state-pane">
       <div className="tabs">
         {(['route', 'store', 'tree', 'actions', 'e2e'] as const).map((t) => (
-          <button key={t} className={tab === t ? 'tab on' : 'tab'} onClick={() => setTab(t)}>
+          <button
+            key={t}
+            data-testid={`state-tab-${t}`}
+            className={tab === t ? 'tab on' : 'tab'}
+            onClick={() => setTab(t)}
+          >
             {t}
           </button>
         ))}

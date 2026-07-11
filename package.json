@@ -19,6 +19,7 @@
     "test": "yarn workspace rn-dev-agent-core test",
     "test:coverage": "yarn workspace rn-dev-agent-core test:coverage",
     "test:integration": "yarn workspace rn-dev-agent-core test:integration",
+    "test:e2e-web": "yarn workspace rn-dev-agent-core test:e2e-web",
     "test:native:android": "yarn workspace rn-dev-agent-android-runner test",
     "test:native:ios": "yarn workspace rn-dev-agent-ios-runner test",
     "smoke:ios": "SMOKE_PLATFORM=ios node packages/rn-dev-agent-core/test/smoke/device-smoke.ts",

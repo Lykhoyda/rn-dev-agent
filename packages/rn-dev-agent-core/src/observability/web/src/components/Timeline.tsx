@@ -39,11 +39,12 @@ export function Timeline({ events, totalCount, selected, onSelect }: TimelinePro
   const newCount = following ? 0 : Math.max(0, events.length - countAtPauseRef.current);
 
   return (
-    <div className="timeline-wrap">
+    <div className="timeline-wrap" data-testid="timeline">
       <div className="timeline" ref={ref} onScroll={onScroll}>
         {events.map((e) => (
           <div key={e.seq}>
             <div
+              data-testid="timeline-row"
               className={`row ${selected === e.seq ? 'sel' : ''} ${e.ok ? '' : 'err'}`}
               onClick={() => onSelect(selected === e.seq ? null : e.seq)}
             >
@@ -62,7 +63,7 @@ export function Timeline({ events, totalCount, selected, onSelect }: TimelinePro
               )}
             </div>
             {selected === e.seq && (
-              <div className="detail">
+              <div className="detail" data-testid="timeline-detail">
                 <div className="dlabel">args</div>
                 <pre>{pretty(e.args)}</pre>
                 {e.error && (
