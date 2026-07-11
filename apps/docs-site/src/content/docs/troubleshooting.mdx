@@ -1,39 +1,55 @@
 ---
 title: Troubleshooting
-description: Common issues and solutions for rn-dev-agent.
+description: Symptom → fix quick reference, error-code catalog, and per-area fixes for rn-dev-agent.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+Find your symptom in the quick reference, or jump to the
+[error-code catalog](#error-codes) if a tool returned a code in
+SCREAMING_SNAKE_CASE.
 
-## Connection issues
+## Quick reference
 
-<Aside type="tip" title="Metro not found">
+| Symptom | Go to |
+|---|---|
+| CDP won't connect / 1006 | [Connection](#connection) |
+| DevTools keeps disconnecting | [Connection](#connection) |
+| `cdp_store_state` empty or errors | [Store state](#store-state) |
+| Plugin/skills not detected | [Plugin install](#plugin-install) |
+| Install/update fails (ENOTEMPTY, ENAMETOOLONG) | [Plugin install](#plugin-install) |
+| Taps/flows fail on the device | [Device & flows](#device--flows) |
+| A tool returned `RN_…`/`BUSY_…`/`RUNNER_…` | [Error codes](#error-codes) |
+| Action replay fails | [Actions & setup](#actions--setup) |
+
+## Connection
+
+### Metro not found
+
 Start Metro first: `npx expo start` or `npx react-native start`. The plugin auto-detects ports 8081, 8082, 19000, and 19006.
-</Aside>
 
-<Aside type="tip" title="No Hermes target">
+### No Hermes target
+
 Open the app on the simulator and ensure Hermes is enabled. Check your `app.json` or `metro.config.js` for Hermes configuration.
-</Aside>
 
-<Aside type="tip" title="CDP connection rejected (1006)">
+### CDP connection rejected (1006)
+
 Close React Native DevTools, Flipper, or Chrome DevTools — only one debugger can connect at a time. The 1006 close code means session conflict.
-</Aside>
 
-<Aside type="tip" title='DevTools shows "Disconnected due to opening a second DevTools window"'>
+### DevTools shows "Disconnected due to opening a second DevTools window"
+
 The bridge auto-reconnects by default and evicts the visual React Native DevTools from the single debugger seat. Set `RN_CDP_AUTOCONNECT=0` (or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`) to let DevTools hold the seat — the bridge then connects only when a CDP tool runs. Full guide: [React Native DevTools coexistence](/rn-dev-agent/guides/devtools-coexistence/).
-</Aside>
 
-<Aside type="tip" title="CDP connection lost after reload">
+### CDP connection lost after reload
+
 This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it fails, call `cdp_status` to re-establish the connection.
-</Aside>
 
-<Aside type="tip" title="MCP server died when Metro was restarted">
+### MCP server died when Metro was restarted
+
 Fixed since #264: the bridge entry point is a stdio supervisor that holds no network sockets, so port-based kills (`lsof -ti tcp:8081 | xargs kill -9`) only take the worker process — the supervisor respawns it automatically and the session keeps its tools (`cdp_status` → `bridge.workerRestarts`). If tools error with "worker is crash-looping", check the bridge log (`LOG_LEVEL=info` writes one) and restart the Claude Code session. `RN_BRIDGE_SUPERVISOR=0` opts back into the legacy single-process bridge.
-</Aside>
 
-## Store state issues
+## Store state
 
-<Aside type="tip" title="cdp_store_state error for Zustand">
+### cdp_store_state error for Zustand
+
 Run `/rn-dev-agent:setup` — it scaffolds the dev-bridge and proposes a `getBridge()?.registerStores({ ... })` line in your app entry. The bridge call replaces the older `globalThis.__ZUSTAND_STORES__` pattern.
 
 Manual fallback if you want to wire it yourself:
@@ -48,30 +64,30 @@ getBridge()?.registerStores({
 ```
 
 Redux is auto-detected — no setup needed.
-</Aside>
 
-<Aside type="tip" title="cdp_store_state returns empty for React Query">
+### cdp_store_state returns empty for React Query
+
 Use `storeType: 'react-query'` explicitly. React Query state is read from the QueryClient, which requires the provider to be mounted.
-</Aside>
 
-## Plugin issues
+## Plugin install
 
-<Aside type="tip" title="Plugin not detected">
+### Plugin not detected
+
 In Claude Code, run `/plugin install rn-dev-agent@rn-dev-agent` then
 `/reload-plugins`. For local development, Claude Code uses
 `claude --plugin-dir /path/to/rn-dev-agent`; Codex uses the plugin package path
 `/path/to/rn-dev-agent/packages/codex-plugin`.
-</Aside>
 
-<Aside type="tip" title="/plugin command not found">
+### /plugin command not found
+
 Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code`
-</Aside>
 
-<Aside type="tip" title="Plugin skills not appearing">
+### Plugin skills not appearing
+
 Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache`
-</Aside>
 
-<Aside type="tip" title="Plugin update fails with ENOTEMPTY">
+### Plugin update fails with ENOTEMPTY
+
 Clear the stale cache first:
 
 ```bash
@@ -79,9 +95,9 @@ rm -rf ~/.claude/plugins/cache/rn-dev-agent
 ```
 
 Then retry the update.
-</Aside>
 
-<Aside type="tip" title="ENAMETOOLONG on install/update">
+### ENAMETOOLONG on install/update
+
 Clear stale cache:
 
 ```bash
@@ -89,40 +105,100 @@ rm -rf ~/.claude/plugins/cache/rn-dev-agent ~/.claude/plugins/data/rn-dev-agent-
 ```
 
 Then re-add marketplace and install.
-</Aside>
 
-## Device issues
+## Device & flows
 
-<Aside type="tip" title="maestro-runner not in PATH">
+### maestro-runner not in PATH
+
 Add to your shell profile: `export PATH="$HOME/.maestro-runner/bin:$PATH"`
-</Aside>
 
-<Aside type="tip" title="Empty error log but app crashed">
+### Empty error log but app crashed
+
 The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or check Xcode console (iOS) for native crash logs.
-</Aside>
 
-<Aside type="tip" title="Android emulator not detected">
+### Android emulator not detected
+
 Ensure the emulator is booted and `adb devices` shows it. The plugin auto-selects the first available device. Set `ANDROID_SERIAL` to target a specific emulator.
-</Aside>
 
-<Aside type="tip" title="Maestro gRPC error on Android">
+### Maestro gRPC error on Android
+
 Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
-</Aside>
 
-## Actions and setup
+## Error codes
 
-<Aside type="tip" title="Action replay fails with SELECTOR_NOT_FOUND">
+Codes returned by `device_*`/flow tools, what they mean, and the fix.
+
+### RN_FAST_RUNNER_DOWN / RN_ANDROID_RUNNER_DOWN
+
+The in-tree device runner couldn't start. Check that the simulator/emulator
+is booted and (Android) the SDK is available. iOS self-builds on first use —
+a cold build takes several minutes; if it times out, pre-build once with
+`xcodebuild build-for-testing` (see Getting Started) and re-open the device
+session.
+
+### BUSY_FOREIGN_FLOW
+
+A foreign Maestro/XCUITest session (e.g. a standalone maestro-mcp) is
+driving the same simulator. Wait for it to finish (the guard clears within
+~5 s), use CDP reads and `device_screenshot` meanwhile, or disable the
+guard with `RN_IOS_FOREIGN_GUARD=0`.
+
+### BUSY_FLOW_ACTIVE
+
+Your own Maestro flow holds the device (L3 is exclusive). Reads
+(`cdp_component_tree`, `cdp_store_state`) still work mid-flow; taps are
+refused on purpose until the flow ends.
+
+### RUNNER_PROTOCOL_MISMATCH
+
+The bridge and the native runner disagree on the wire protocol and the
+automatic reinstall didn't clear it. iOS: delete
+`scripts/rn-fast-runner/build/DerivedData` and re-open the device session
+(cold rebuild). Android: rebuild the runner APKs
+(`./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`).
+
+### RUNNER_COMMANDS_STALE / UNSUPPORTED_COMMAND
+
+The runner build predates a newer command verb. Re-open the device session
+(`device_snapshot action=open`) — the stale artifact is rebuilt
+automatically (one multi-minute build on iOS). If a cold build still
+reports missing commands, update the plugin checkout.
+
+### KEYBOARD_OCCLUDED
+
+A tap target sits under the software keyboard and the safe dismiss control
+isn't available (iPhone standard QWERTY). Dismiss the keyboard first (e.g.
+`cdp_evaluate` → `Keyboard.dismiss()`) or fill via `device_fill`, which is
+JS-first and needs no keyboard. Opt the guard off with
+`RN_KEYBOARD_GUARD=0`.
+
+### DEVICE_BUSY
+
+Another project's session holds this simulator (UDID-scoped ownership
+lock). Close the other session, or wait — the lock self-heals when its
+holder exits (PID-liveness + 90 s heartbeat staleness).
+
+### STALE_REF
+
+An `@ref` from an old snapshot no longer resolves uniquely. Re-run
+`device_snapshot` and use a fresh ref; unique testID/label matches are
+re-bound automatically, so persistent `STALE_REF` with a `candidates` list
+means the match is ambiguous — disambiguate by testID.
+
+## Actions & setup
+
+### Action replay fails with SELECTOR_NOT_FOUND
+
 The plugin attempts to self-repair small UI drift: it looks at the live UI, finds the renamed `testID` via fuzzy match, patches the action YAML, and retries.
 
 Self-repair refuses if the file has been hand-edited (mtime check), or after 3 repairs in 24h. If repair is refused or fails, the plugin asks before forcing. If the underlying flow has changed structurally (extra step, removed screen), re-record with `/rn-dev-agent:test-feature`.
 
 See the [Actions guide](/rn-dev-agent/actions/) for full details.
-</Aside>
 
-<Aside type="tip" title="`/setup` skipped a step">
+### `/setup` skipped a step
+
 Re-run `/rn-dev-agent:setup`. It's idempotent — already-injected blocks are detected and skipped, so only the missing pieces get applied.
-</Aside>
 
-<Aside type="tip" title=".rn-agent/state/ showing up in git status">
+### .rn-agent/state/ showing up in git status
+
 That directory holds runtime state (run history, repair history) — not config. Check that `.rn-agent/.gitignore` exists and contains `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`. The `/setup` scaffold ships this file; if it's missing, regenerate via `/setup` (idempotent — only the missing pieces are added).
-</Aside>

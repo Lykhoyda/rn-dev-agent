@@ -5942,6 +5942,7 @@ __metadata:
   dependencies:
     "@astrojs/starlight": "npm:^0.38.3"
     astro: "npm:^6.0.1"
+    remark-gfm: "npm:^4.0.1"
     sharp: "npm:^0.34.2"
     starlight-llms-txt: "npm:0.10.0"
   languageName: unknown

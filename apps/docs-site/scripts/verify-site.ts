@@ -145,6 +145,85 @@ console.log('\nverify-site: og image');
 check('og-image.png shipped', exists('og-image.png'));
 check('favicon shipped', exists('favicon.svg'));
 
+console.log('\nverify-site: gfm tables (B166)');
+const archHtml = page('architecture/index.html');
+check('architecture tables render', (archHtml.match(/<table/g) ?? []).length >= 5);
+check('tools overview table renders', page('tools/index.html').includes('<table'));
+check(
+  'md pages unaffected',
+  (page('dev-client-coverage/index.html').match(/<table/g) ?? []).length === 1,
+);
+
+console.log('\nverify-site: concept scenes — engine + verify loop');
+const gsHtml = page('getting-started/index.html');
+check('verify-loop scene mounted', gsHtml.includes('data-scene-id="verify-loop"'));
+check('scene static-complete', gsHtml.includes('report with evidence'));
+const sceneBundle =
+  readdirSync(join(DIST, '_astro'))
+    .filter((f) => f.endsWith('.js') || f.endsWith('.css'))
+    .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+    .join('') + gsHtml;
+check(
+  'scene driver present',
+  sceneBundle.includes('data-scene-id') && sceneBundle.includes('is-animated'),
+);
+check('scene reduced-motion override inlined', gsHtml.includes('prefers-reduced-motion'));
+
+console.log('\nverify-site: three-layer scene');
+const archHtml2 = page('architecture/index.html');
+check('three-layer scene mounted', archHtml2.includes('data-scene-id="three-layers"'));
+check('busy chip present statically', archHtml2.includes('BUSY_FLOW_ACTIVE'));
+
+console.log('\nverify-site: actions lifecycle scene');
+const actionsHtml = page('actions/index.html');
+check('actions scene mounted', actionsHtml.includes('data-scene-id="actions-lifecycle"'));
+check(
+  'payoff numerals present statically',
+  actionsHtml.includes('al-payoff') && actionsHtml.includes('14 min'),
+);
+
+console.log('\nverify-site: page-title kicker');
+check('kicker on architecture', page('architecture/index.html').includes('page-kicker'));
+check('kicker shows sidebar group', page('architecture/index.html').includes('Core Concepts'));
+check('kicker on reference page', page('tools/index.html').includes('page-kicker'));
+
+console.log('\nverify-site: rhythm + steps');
+check('getting-started uses Steps', page('getting-started/index.html').includes('sl-steps'));
+const rhythmCss = readdirSync(join(DIST, '_astro'))
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+  .join('');
+check('rhythm rules shipped', rhythmCss.includes('rda-lead'));
+
+console.log('\nverify-site: benchmarks redesign + stat swap');
+const benchHtml = page('benchmarks/index.html');
+check(
+  'benchmarks jargon removed',
+  !benchHtml.includes('Ralph Loop') && !benchHtml.includes('Polar Star'),
+);
+check('stale dispatch tiers removed', !benchHtml.includes('agent-device daemon'));
+check(
+  'benchmarks leads with verified-feature timing',
+  benchHtml.includes('Description → verified feature'),
+);
+const landingStat = page('index.html');
+check('stories stat replaced', !landingStat.includes('stories built / crashes'));
+check('time-to-verified stat present', landingStat.includes('3–25 min'));
+
+console.log('\nverify-site: troubleshooting catalog');
+const tsHtml = page('troubleshooting/index.html');
+check(
+  'quick-reference table present',
+  tsHtml.includes('Quick reference') && tsHtml.includes('<table'),
+);
+check(
+  'error codes documented',
+  ['RN_FAST_RUNNER_DOWN', 'BUSY_FOREIGN_FLOW', 'RUNNER_PROTOCOL_MISMATCH'].every((c) =>
+    tsHtml.includes(c),
+  ),
+);
+check('aside wall replaced', (tsHtml.match(/starlight-aside/g) ?? []).length <= 2);
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

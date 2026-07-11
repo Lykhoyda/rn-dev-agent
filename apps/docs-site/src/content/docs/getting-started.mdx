@@ -3,6 +3,9 @@ title: Getting Started
 description: Install and configure rn-dev-agent for your React Native project.
 ---
 
+import VerifyLoopScene from '../../components/concepts/VerifyLoopScene.astro';
+import { Steps } from '@astrojs/starlight/components';
+
 ## Requirements
 
 | Requirement | Notes |
@@ -20,16 +23,27 @@ description: Install and configure rn-dev-agent for your React Native project.
 
 From inside Claude Code:
 
-```bash
-# 1. Add the marketplace
-/plugin marketplace add Lykhoyda/rn-dev-agent
+<Steps>
 
-# 2. Install the plugin
-/plugin install rn-dev-agent@rn-dev-agent
+1. Add the marketplace:
 
-# 3. Reload plugins to activate
-/reload-plugins
-```
+   ```bash
+   /plugin marketplace add Lykhoyda/rn-dev-agent
+   ```
+
+2. Install the plugin:
+
+   ```bash
+   /plugin install rn-dev-agent@rn-dev-agent
+   ```
+
+3. Reload plugins to activate:
+
+   ```bash
+   /reload-plugins
+   ```
+
+</Steps>
 
 For local source development, point Claude Code at the repository root:
 
@@ -89,6 +103,10 @@ Manual update:
 /plugin update rn-dev-agent@rn-dev-agent
 /reload-plugins
 ```
+
+## What happens after install
+
+<VerifyLoopScene />
 
 ## Setup for your app
 

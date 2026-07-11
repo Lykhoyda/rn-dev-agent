@@ -1,8 +1,10 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import remarkGfm from 'remark-gfm';
 
 export default defineConfig({
+  markdown: { remarkPlugins: [remarkGfm] },
   site: 'https://lykhoyda.github.io',
   base: '/rn-dev-agent',
   integrations: [
@@ -63,6 +65,7 @@ export default defineConfig({
       components: {
         ThemeSelect: './src/components/ThemeSelect.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
+        PageTitle: './src/components/PageTitle.astro',
       },
       customCss: ['./src/styles/custom.css'],
       expressiveCode: {
