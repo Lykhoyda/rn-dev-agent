@@ -54301,8 +54301,10 @@ var ACCEPT_LABELS_ANDROID = [
   "Yes"
 ];
 var DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now"];
+var realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 var fetchSnapshotNodesFn = fetchSnapshotNodes;
 var pressCandidateFn2 = pressCandidate;
+var sleepFn = realSleep2;
 var iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
 async function tapSystemDialogViaRunner(labels) {
   if (!iosSessionActiveFn())
@@ -54342,7 +54344,7 @@ async function acceptDeeplinkOpenConfirmation() {
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first)
     return first;
-  await new Promise((r) => setTimeout(r, OPEN_CONFIRMATION_RETRY_DELAY_MS));
+  await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 var PER_LABEL_TIMEOUT_MS = 4e3;

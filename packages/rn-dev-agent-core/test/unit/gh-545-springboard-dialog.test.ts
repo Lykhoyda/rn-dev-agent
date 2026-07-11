@@ -14,6 +14,8 @@ import {
   _resetPressCandidateForTest,
   _setIosSessionActiveForTest,
   _resetIosSessionActiveForTest,
+  _setSleepForTest,
+  _resetSleepForTest,
 } from '../../dist/tools/device-system-dialog.js';
 import { annotatePicker } from '../../dist/tools/device-deeplink.js';
 
@@ -38,6 +40,7 @@ function resetSeams() {
   _resetFetchSnapshotNodesForTest();
   _resetPressCandidateForTest();
   _resetIosSessionActiveForTest();
+  _resetSleepForTest();
 }
 
 test('runner path: no iOS session returns null (Maestro fallback applies)', async () => {
@@ -151,7 +154,7 @@ test('runner path: a failed press falls through to the next matching label', asy
   }
 });
 
-test('deeplink confirmation: retries once when the dialog has not appeared yet', async () => {
+test('deeplink confirmation: retries once (sleeping the animation window) when the dialog has not appeared yet', async () => {
   _setIosSessionActiveForTest(true);
   let calls = 0;
   _setFetchSnapshotNodesForTest(async () => {
@@ -159,36 +162,46 @@ test('deeplink confirmation: retries once when the dialog has not appeared yet',
     return calls === 1 ? APP_SNAPSHOT : ALERT_SNAPSHOT;
   });
   _setPressCandidateForTest(async () => ({ content: [{ type: 'text', text: '{}' }] }));
+  const sleeps: number[] = [];
+  _setSleepForTest(async (ms) => {
+    sleeps.push(ms);
+  });
   try {
     const out = await acceptDeeplinkOpenConfirmation();
     assert.equal(out.tapped, true);
     assert.equal(out.matchedLabel, 'Open');
     assert.equal(calls, 2, 'one retry after the animation window');
+    assert.deepEqual(sleeps, [750], 'the retry waits the animation window exactly once');
   } finally {
     resetSeams();
   }
 });
 
-test('deeplink confirmation: no iOS session bails before the retry timer (no snapshot, no delay)', async () => {
+test('deeplink confirmation: no iOS session bails before the retry sleep is ever scheduled', async () => {
   _setIosSessionActiveForTest(false);
   let calls = 0;
   _setFetchSnapshotNodesForTest(async () => {
     calls += 1;
     return ALERT_SNAPSHOT;
   });
+  let slept = false;
+  _setSleepForTest(async () => {
+    slept = true;
+  });
   try {
     const out = await acceptDeeplinkOpenConfirmation();
     assert.equal(out, null);
-    // calls === 0 proves the early guard returned before BOTH the first probe
-    // and the retry sleep — no wall-clock assertion needed (and none that would
-    // be deterministic under CI load).
-    assert.equal(calls, 0, 'no snapshot — and therefore no retry sleep — without a session');
+    assert.equal(calls, 0, 'no snapshot without a session');
+    // The sleep seam directly proves the no-delay property: the guard returns
+    // before the retry sleep is ever scheduled (calls===0 alone would still
+    // pass an impl that slept first, then bailed).
+    assert.equal(slept, false, 'the retry sleep must not run on a session-less deeplink');
   } finally {
     resetSeams();
   }
 });
 
-test('deeplink confirmation: first-probe outcome is returned without a retry', async () => {
+test('deeplink confirmation: first-probe outcome is returned without a retry (no sleep)', async () => {
   _setIosSessionActiveForTest(true);
   let calls = 0;
   _setFetchSnapshotNodesForTest(async () => {
@@ -196,10 +209,15 @@ test('deeplink confirmation: first-probe outcome is returned without a retry', a
     return ALERT_SNAPSHOT;
   });
   _setPressCandidateForTest(async () => ({ content: [{ type: 'text', text: '{}' }] }));
+  let slept = false;
+  _setSleepForTest(async () => {
+    slept = true;
+  });
   try {
     const out = await acceptDeeplinkOpenConfirmation();
     assert.equal(out.tapped, true);
     assert.equal(calls, 1, 'no retry when the first probe resolves');
+    assert.equal(slept, false, 'no sleep when the first probe already tapped');
   } finally {
     resetSeams();
   }

@@ -37,14 +37,22 @@ const DISMISS_LABELS_ANDROID = ['Deny', 'DENY', 'Cancel', 'CANCEL', 'No', 'Not n
 // GH #545 test seams — same pattern as dev-client-picker.ts: production code
 // calls through these indirections so unit tests can swap mocks without
 // touching the fast-runner or a live session.
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fetchSnapshotNodesFn = fetchSnapshotNodes;
 let pressCandidateFn = pressCandidate;
+let sleepFn = realSleep;
 let iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === 'ios';
 export function _setFetchSnapshotNodesForTest(fn) {
     fetchSnapshotNodesFn = fn;
 }
 export function _resetFetchSnapshotNodesForTest() {
     fetchSnapshotNodesFn = fetchSnapshotNodes;
+}
+export function _setSleepForTest(fn) {
+    sleepFn = fn;
+}
+export function _resetSleepForTest() {
+    sleepFn = realSleep;
 }
 export function _setPressCandidateForTest(fn) {
     pressCandidateFn = fn;
@@ -122,7 +130,7 @@ export async function acceptDeeplinkOpenConfirmation() {
     const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
     if (first)
         return first;
-    await new Promise((r) => setTimeout(r, OPEN_CONFIRMATION_RETRY_DELAY_MS));
+    await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
     return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 // Per-label timeout when sequentially probing dialog buttons. Intentionally short —

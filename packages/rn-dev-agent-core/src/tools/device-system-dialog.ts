@@ -52,8 +52,11 @@ export interface SystemDialogArgs {
 // GH #545 test seams — same pattern as dev-client-picker.ts: production code
 // calls through these indirections so unit tests can swap mocks without
 // touching the fast-runner or a live session.
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 let fetchSnapshotNodesFn: typeof fetchSnapshotNodes = fetchSnapshotNodes;
 let pressCandidateFn: typeof pressCandidate = pressCandidate;
+let sleepFn: (ms: number) => Promise<void> = realSleep;
 let iosSessionActiveFn: () => boolean = () =>
   hasActiveSession() && getActiveSession()?.platform === 'ios';
 
@@ -62,6 +65,12 @@ export function _setFetchSnapshotNodesForTest(fn: typeof fetchSnapshotNodes): vo
 }
 export function _resetFetchSnapshotNodesForTest(): void {
   fetchSnapshotNodesFn = fetchSnapshotNodes;
+}
+export function _setSleepForTest(fn: (ms: number) => Promise<void>): void {
+  sleepFn = fn;
+}
+export function _resetSleepForTest(): void {
+  sleepFn = realSleep;
 }
 export function _setPressCandidateForTest(fn: typeof pressCandidate): void {
   pressCandidateFn = fn;
@@ -143,7 +152,7 @@ export async function acceptDeeplinkOpenConfirmation(): Promise<RunnerDialogOutc
   if (!iosSessionActiveFn()) return null;
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first) return first;
-  await new Promise((r) => setTimeout(r, OPEN_CONFIRMATION_RETRY_DELAY_MS));
+  await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 

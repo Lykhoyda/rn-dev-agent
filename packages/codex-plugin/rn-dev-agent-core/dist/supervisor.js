@@ -55991,7 +55991,7 @@ async function acceptDeeplinkOpenConfirmation() {
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first)
     return first;
-  await new Promise((r) => setTimeout(r, OPEN_CONFIRMATION_RETRY_DELAY_MS));
+  await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
   return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
 async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
@@ -56067,7 +56067,7 @@ function createDeviceAcceptSystemDialogHandler() {
 function createDeviceDismissSystemDialogHandler() {
   return async (args) => handleSystemDialog(args, DISMISS_LABELS_IOS, DISMISS_LABELS_ANDROID, "sys-dismiss");
 }
-var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, fetchSnapshotNodesFn, pressCandidateFn2, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, PER_LABEL_TIMEOUT_MS;
+var APOSTROPHE_ASCII, APOSTROPHE_CURLY, ACCEPT_LABELS_IOS, DISMISS_LABELS_IOS_BASE, DISMISS_LABELS_IOS, ACCEPT_LABELS_ANDROID, DISMISS_LABELS_ANDROID, realSleep2, fetchSnapshotNodesFn, pressCandidateFn2, sleepFn, iosSessionActiveFn, OPEN_CONFIRMATION_LABELS, OPEN_CONFIRMATION_RETRY_DELAY_MS, PER_LABEL_TIMEOUT_MS;
 var init_device_system_dialog = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-system-dialog.js"() {
     "use strict";
@@ -56105,8 +56105,10 @@ var init_device_system_dialog = __esm({
       "Yes"
     ];
     DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now"];
+    realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
     fetchSnapshotNodesFn = fetchSnapshotNodes;
     pressCandidateFn2 = pressCandidate;
+    sleepFn = realSleep2;
     iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
     OPEN_CONFIRMATION_LABELS = ["Open"];
     OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
