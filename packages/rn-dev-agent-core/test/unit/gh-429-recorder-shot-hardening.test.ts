@@ -95,6 +95,32 @@ test('#429 registry is bounded — oldest registration is evicted', () => {
   assert.equal(r.getScreenshot(1), undefined, 'evicted registration must not be readable');
 });
 
+test('#429 wiring: message-only envelope whose path differs from the requested path is granted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gh429-'));
+  const runnerChose = join(dir, 'runner-chose.png');
+  writeFileSync(runnerChose, PNG);
+  const requested = join(dir, 'requested.png'); // never written by the stub
+  _setRunAgentDeviceForTest(async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ ok: true, data: { message: runnerChose } }) }],
+  }));
+  try {
+    const res = await captureAndResizeScreenshot({ path: requested, maxWidth: 0 });
+    assert.ok(!res.isError, 'stubbed capture must succeed');
+    recorder.record({
+      tool: 'device_screenshot',
+      params: {},
+      status: 'PASS',
+      latencyMs: 1,
+      result: JSON.parse(res.content[0].text),
+    });
+    const events = recorder.snapshot();
+    const seq = events[events.length - 1].seq;
+    assert.ok(recorder.getScreenshot(seq), 'message-only runner path must be served');
+  } finally {
+    _resetRunAgentDeviceForTest();
+  }
+});
+
 test('#429 wiring: captureAndResizeScreenshot registers its output with the singleton recorder', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gh429-'));
   const p = join(dir, 'wired.png');

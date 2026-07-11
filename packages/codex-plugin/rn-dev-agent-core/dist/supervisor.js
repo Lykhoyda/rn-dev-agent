@@ -50908,7 +50908,7 @@ var init_events = __esm({
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync3, constants, fstatSync, openSync as openSync3, readSync } from "node:fs";
 import { isAbsolute as isAbsolute2 } from "node:path";
-function screenshotPath(result) {
+function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
   return typeof p === "string" && isAbsolute2(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
@@ -51068,7 +51068,7 @@ var init_recorder = __esm({
       captureScreenshot(ev, o) {
         if (ev.tool !== "device_screenshot" || !ev.ok)
           return;
-        const p = screenshotPath(o.result);
+        const p = extractScreenshotPath(o.result);
         if (!p || !this.trustedShotPaths.delete(p))
           return;
         const buf = readShotBounded(p);
@@ -51289,8 +51289,6 @@ async function captureAndResizeScreenshot(args) {
   if (result.isError)
     return result;
   const actualPath = resolveScreenshotPath(result, requestedPath);
-  recorder.registerCapturedScreenshot(requestedPath);
-  recorder.registerCapturedScreenshot(actualPath);
   const resizeOpts = {};
   if (args.maxWidth !== void 0)
     resizeOpts.maxWidth = args.maxWidth;
@@ -51298,7 +51296,13 @@ async function captureAndResizeScreenshot(args) {
     resizeOpts.quality = args.quality;
   const resize = await resizeWithSips(actualPath, resizeOpts);
   const resized = wrapResultWithResize(result, resize);
-  return wrapResultWithAdvisories(resized, advisories);
+  const finalResult = wrapResultWithAdvisories(resized, advisories);
+  recorder.registerCapturedScreenshot(requestedPath);
+  recorder.registerCapturedScreenshot(actualPath);
+  const observedPath = extractScreenshotPath(finalResult);
+  if (observedPath)
+    recorder.registerCapturedScreenshot(observedPath);
+  return finalResult;
 }
 function createDeviceScreenshotHandler(getClient2) {
   return async (args) => {

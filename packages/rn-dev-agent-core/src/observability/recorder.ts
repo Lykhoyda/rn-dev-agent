@@ -19,7 +19,11 @@ export interface ScreenshotBytes {
 // GH #422: absolute paths only — a runner-internal relative path (e.g. iOS
 // "tmp/…") would resolve against the bridge cwd, silently blanking the panel
 // or reading an unrelated file that shares the name.
-function screenshotPath(result: unknown): string | null {
+// GH #429: exported so the capture pipeline can grant exactly the path this
+// extractor will later pull out of the observation — envelope wrapping can
+// rewrite data.path, and legacy envelopes carry the file in data.message,
+// so grants derived any other way can miss the consumed path.
+export function extractScreenshotPath(result: unknown): string | null {
   const data = (unwrapResult(result)?.data ?? (result as { data?: unknown })?.data) as
     | { message?: string; path?: string }
     | undefined;
@@ -187,7 +191,7 @@ export class Recorder {
   }
   protected captureScreenshot(ev: AgentEvent, o: ToolObservation): void {
     if (ev.tool !== 'device_screenshot' || !ev.ok) return;
-    const p = screenshotPath(o.result);
+    const p = extractScreenshotPath(o.result);
     // GH #429: consume-on-attempt — a grant is spent even when the read
     // fails, so a vanished file can't leave a live grant behind for a
     // later forged observation naming the same path.

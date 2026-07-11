@@ -13,7 +13,7 @@ import { arbiter } from '../lifecycle/device-arbiter.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
-import { recorder } from '../observability/recorder.js';
+import { extractScreenshotPath, recorder } from '../observability/recorder.js';
 
 // ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
 type RunAgentDeviceFn = typeof runNative;
@@ -450,18 +450,23 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   if (result.isError) return result;
 
   const actualPath = resolveScreenshotPath(result, requestedPath);
-  // GH #429: grant the observe recorder a one-shot read of what THIS capture
-  // wrote. Both paths are granted because legacy runner envelopes surface the
-  // file via data.message, which resolveScreenshotPath can't see (it falls
-  // back to requestedPath) while the recorder-side extractor still reads it.
-  recorder.registerCapturedScreenshot(requestedPath);
-  recorder.registerCapturedScreenshot(actualPath);
   const resizeOpts: ResizeOpts = {};
   if (args.maxWidth !== undefined) resizeOpts.maxWidth = args.maxWidth;
   if (args.quality !== undefined) resizeOpts.quality = args.quality;
   const resize = await resizeWithSips(actualPath, resizeOpts);
   const resized = wrapResultWithResize(result, resize);
-  return wrapResultWithAdvisories(resized, advisories);
+  const finalResult = wrapResultWithAdvisories(resized, advisories);
+  // GH #429: grant the observe recorder a one-shot read of what THIS capture
+  // wrote. The recorder's own extractor is run on the FINAL envelope so the
+  // grant set structurally covers whatever path the observation will name
+  // (resize can rewrite data.path; legacy runner envelopes carry the file in
+  // data.message only). requested/actual are granted too — they are the files
+  // actually written when the envelope omits or post-dates them.
+  recorder.registerCapturedScreenshot(requestedPath);
+  recorder.registerCapturedScreenshot(actualPath);
+  const observedPath = extractScreenshotPath(finalResult);
+  if (observedPath) recorder.registerCapturedScreenshot(observedPath);
+  return finalResult;
 }
 
 /**
