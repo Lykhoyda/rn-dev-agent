@@ -50,6 +50,7 @@ export async function startFixture(): Promise<Fixture> {
     latencyMs: 4100,
     error: { message: 'flow failed at step 3' },
   });
+  recorder.registerCapturedScreenshot(shotPath); // GH #429: reads require a capture grant
   recorder.record({
     tool: 'device_screenshot',
     params: {},
