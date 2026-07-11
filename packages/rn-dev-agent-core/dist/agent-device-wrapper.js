@@ -870,6 +870,18 @@ export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
         y !== undefined;
     return { eligible, targetKey: `${builtCommand}@${x},${y}` };
 }
+// Story 14 (#407): detect whether a raw runner ToolResult carries the
+// transport-recovery marker (runIOS/runAndroid attach it on the firstResult
+// when an ambiguous send was confirmed via the runner's outcome journal).
+function hasTransportRecovery(result) {
+    try {
+        const env = JSON.parse(result.content[0].text);
+        return env.meta?.transportRecovery !== undefined;
+    }
+    catch {
+        return false;
+    }
+}
 function flagNoUiChange(result, targetKey) {
     const distinct = recordNoUiChange(targetKey);
     return attachMeta(result, {
@@ -891,6 +903,13 @@ export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, poli
         if (first.outcome?.hierarchyChanged === true)
             recordUiChange();
         return first.result;
+    }
+    // Story 14 (#407): a transport-recovered send already consumed the ambiguity
+    // budget — the runner journal confirmed the mutating gesture executed. The
+    // heal layer must not re-fire it, or it would double-dispatch the very tap
+    // that transport recovery just resolved. Report noUiChange honestly, no retry.
+    if (hasTransportRecovery(firstResult)) {
+        return flagNoUiChange(first.result, policy.targetKey);
     }
     const second = await dispatch();
     if (second.isError) {
