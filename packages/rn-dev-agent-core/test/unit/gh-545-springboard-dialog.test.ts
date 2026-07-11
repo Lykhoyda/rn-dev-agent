@@ -177,11 +177,12 @@ test('deeplink confirmation: no iOS session bails before the retry timer (no sna
     return ALERT_SNAPSHOT;
   });
   try {
-    const start = Date.now();
     const out = await acceptDeeplinkOpenConfirmation();
     assert.equal(out, null);
-    assert.equal(calls, 0, 'no snapshot without a session');
-    assert.ok(Date.now() - start < 200, 'must not wait the 750ms retry window');
+    // calls === 0 proves the early guard returned before BOTH the first probe
+    // and the retry sleep — no wall-clock assertion needed (and none that would
+    // be deterministic under CI load).
+    assert.equal(calls, 0, 'no snapshot — and therefore no retry sleep — without a session');
   } finally {
     resetSeams();
   }

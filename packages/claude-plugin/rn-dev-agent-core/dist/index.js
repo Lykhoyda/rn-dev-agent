@@ -54347,13 +54347,14 @@ async function acceptDeeplinkOpenConfirmation() {
 }
 var PER_LABEL_TIMEOUT_MS = 4e3;
 async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
-  const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, totalTimeoutMs);
   const deadline = Date.now() + totalTimeoutMs;
   const attempts3 = [];
   for (const label of labels) {
-    if (Date.now() >= deadline) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
       return warnResult({ tapped: false, platform, triedLabels: labels, attempts: attempts3 }, `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`, { code: "DIALOG_NOT_FOUND" });
     }
+    const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, remainingMs);
     const yaml2 = `- tapOn:
     text: "${yamlEscape(label)}"`;
     const result = await runMaestroInline(yaml2, { platform, timeoutMs: perLabelMs, slug });

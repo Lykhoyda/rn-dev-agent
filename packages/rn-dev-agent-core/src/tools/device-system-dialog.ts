@@ -161,18 +161,22 @@ async function tapSystemDialog(
   // Maestro's exit code actually reflects whether the tap happened. First success wins.
   // This is slower than an all-optional flow (up to N * per_label_timeout) but correct:
   // the all-optional pattern silently returns passed=true when nothing was tapped.
-  const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, totalTimeoutMs);
   const deadline = Date.now() + totalTimeoutMs;
   const attempts: Array<{ label: string; error?: string; output?: string }> = [];
 
   for (const label of labels) {
-    if (Date.now() >= deadline) {
+    // Clamp each probe to the time actually left, not a fixed slice of the
+    // original total — otherwise the deadline only gates *starting* a probe and
+    // the default 8-label list could run ~8×4s past a 15s `timeoutMs`.
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
       return warnResult(
         { tapped: false, platform, triedLabels: labels, attempts },
         `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`,
         { code: 'DIALOG_NOT_FOUND' },
       );
     }
+    const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, remainingMs);
     const yaml = `- tapOn:\n    text: "${yamlEscape(label)}"`;
     const result = await runMaestroInline(yaml, { platform, timeoutMs: perLabelMs, slug });
     if (result.passed) {
