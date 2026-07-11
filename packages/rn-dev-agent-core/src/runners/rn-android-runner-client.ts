@@ -34,6 +34,12 @@ import {
 } from './protocol.js';
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
+import {
+  decideRecovery,
+  generateCommandId,
+  isAmbiguousTransportFailure,
+  parseStatusProbeReply,
+} from './transport-recovery.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -871,19 +877,28 @@ export async function stopAndroidRunner(deviceId?: string): Promise<void> {
   }
 }
 
-async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
-  const state = runnerState;
-  if (!state) throw new Error('rn-android-runner not started');
-  // Bound every command so a wedged UIAutomator instrument can't hang the tool
-  // indefinitely. type/snapshot/screenshot run long; everything else is fast.
-  const slow =
-    body.command === 'type' || body.command === 'snapshot' || body.command === 'screenshot';
-  const timeoutMs = slow ? 35_000 : 10_000;
+// type/snapshot/screenshot run long; everything else is fast. Hoisted out of the
+// old inline postCommand so the recovery wrapper reuses the exact same budget for
+// both the original send and the resend (mirrors the iOS commandTimeoutMs helper).
+function commandTimeoutMs(command: unknown): number {
+  return command === 'type' || command === 'snapshot' || command === 'screenshot' ? 35_000 : 10_000;
+}
+
+// One /command round-trip with no recovery. Bounds the request so a wedged
+// UIAutomator instrument can't hang the tool indefinitely. The AbortError→
+// RUNNER_TIMEOUT map, the non-JSON-body error (AMBIGUOUS — a reply arrived but
+// was garbled, so the command may have executed), and the /command v-stamp check
+// all live here so postCommandWithRecovery's catch wraps them.
+async function sendCommandOnce(
+  hostPort: number,
+  body: { command?: unknown; commandId?: string },
+  timeoutMs: number,
+): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let resp: Response;
   try {
-    resp = await fetchImpl(`http://127.0.0.1:${state.hostPort}/command`, {
+    resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -914,6 +929,74 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
     );
   }
   return parsed;
+}
+
+export interface TransportRecovery {
+  commandId: string;
+  outcome: 'recovered' | 'recovered-error' | 'resent';
+}
+
+const STATUS_PROBE_TIMEOUT_MS = 2000;
+
+async function probeCommandStatus(
+  hostPort: number,
+  commandId: string,
+): Promise<ReturnType<typeof parseStatusProbeReply>> {
+  try {
+    const resp = await sendCommandOnce(
+      hostPort,
+      { command: 'status', commandId },
+      STATUS_PROBE_TIMEOUT_MS,
+    );
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+
+// Story 14 (#407): a response lost after send is ambiguous — "never executed"
+// vs "executed, response lost". One short status probe against the runner's
+// outcome journal resolves it; mutating verbs are NEVER resent, and an
+// unresolvable probe falls through to the existing invalidation path (the error
+// rethrows and runAndroid's catch maps it to RN_ANDROID_RUNNER_DOWN). Recovery
+// info travels in the return value so callers that don't surface meta (the
+// settle probes) discard it with the response.
+async function postCommandWithRecovery(body: {
+  command?: unknown;
+}): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+  const state = runnerState;
+  if (!state) throw new Error('rn-android-runner not started');
+  const commandId = generateCommandId();
+  const timeoutMs = commandTimeoutMs(body.command);
+  try {
+    return { resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message)) throw err;
+    const decision = decideRecovery(
+      await probeCommandStatus(state.hostPort, commandId),
+      body.command,
+    );
+    if (decision.action === 'return-recovered') {
+      return {
+        resp: decision.response as RunnerResponse,
+        recovery: { commandId, outcome: decision.outcome },
+      };
+    }
+    if (decision.action === 'resend-once') {
+      const resent = await sendCommandOnce(
+        state.hostPort,
+        { ...body, commandId: generateCommandId() },
+        timeoutMs,
+      );
+      return { resp: resent, recovery: { commandId, outcome: 'resent' } };
+    }
+    throw err;
+  }
+}
+
+async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
+  return (await postCommandWithRecovery(body)).resp;
 }
 
 export function getAndroidRunnerHostPort(): number | null {
@@ -1009,11 +1092,12 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
 
   let resp: RunnerResponse;
+  let recovery: TransportRecovery | undefined;
   try {
     await startAndroidRunner(args.deviceId, args.bundleId);
-    resp = await postCommand(
+    ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-    );
+    ));
   } catch (err) {
     const m = errMessage(err);
     // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
@@ -1035,6 +1119,11 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     }
     throw err;
   }
+  // Story 14 (#407): recovery happened INSIDE postCommandWithRecovery (before the
+  // catch above), so an unrecovered ambiguous failure still maps to
+  // RN_ANDROID_RUNNER_DOWN — only a resolved recovery reaches here, folded into
+  // every result the tool builds.
+  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   if (!resp.ok) {
     const message = resp.error?.message ?? 'Android runner returned !ok with no error';
     const code = resp.error?.code;
@@ -1055,12 +1144,12 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     ) {
       return okResult(
         { typed: true, text: args.text },
-        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } },
+        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } },
       );
     }
-    return code
-      ? failResult(message, code as Parameters<typeof failResult>[1])
-      : failResult(message);
+    const failExtras = recovery ? { transportRecovery: recovery } : undefined;
+    if (code) return failResult(message, code as Parameters<typeof failResult>[1], failExtras);
+    return failExtras ? failResult(message, failExtras) : failResult(message);
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
@@ -1071,7 +1160,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
       // GH #409: same capture-quality contract as the iOS client — empty
       // captures report degraded and never clobber last-known-good refs.
       const snapshotVerdict = buildSnapshotVerdict('rn-android-runner', flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { snapshotVerdict } });
+      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
     }
   }
 
@@ -1081,13 +1170,20 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
       return failResult(
         'Android runner screenshot response did not include pngBase64',
         'SCREENSHOT_FAILED',
+        recovery ? { transportRecovery: recovery } : undefined,
       );
     const outPath = args.outPath ?? join(tmpdir(), `rn-android-screenshot-${Date.now()}.png`);
     writeFileSync(outPath, Buffer.from(data.pngBase64, 'base64'));
-    return okResult({ path: outPath });
+    return okResult(
+      { path: outPath },
+      Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : undefined,
+    );
   }
 
-  return okResult(resp.data ?? {});
+  return okResult(
+    resp.data ?? {},
+    Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : undefined,
+  );
 }
 
 function errMessage(err: unknown): string {
