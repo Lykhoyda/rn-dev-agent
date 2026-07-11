@@ -10,6 +10,7 @@
     "dev": "tsc --watch",
     "test": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
     "test:coverage": "yarn build && node --test --experimental-test-coverage --test-coverage-exclude='test/**' 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
+    "test:contract": "yarn build && node --test test/unit/gh-383-protocol-sync.test.js test/unit/gh-418-command-surface-sync.test.js test/unit/gh-437-golden-contract.test.ts",
     "test:integration": "yarn build && node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'",
     "test:all": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts' 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'"
   },
