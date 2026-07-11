@@ -123,11 +123,41 @@ actually does before the first command.
   without horizontal overflow; PageTitle kicker renders on a grouped page
   and is absent on an ungrouped one.
 
+## 4b. Amendment (2026-07-11, user-directed): Benchmarks + Troubleshooting redesign, landing stat swap
+
+User feedback after the overhaul shipped: "Benchmark and troubleshooting
+pages look bad — completely change them" and the landing's
+"35 / 0 stories built / crashes" stat "sounds unrelated for the users".
+Approved direction:
+
+- **Benchmarks → user-facing performance evidence.** Lead with
+  description → verified feature in 3–25 min with zero manual
+  intervention; big-numeral stat treatment consistent with the landing;
+  replay economics (14 min → 4 s); device-interaction latency table kept;
+  verified-libraries list kept in user framing; one honest methodology
+  note (measured on the public test app across 35 completed features).
+  ALL internal codenames removed ("Ralph Loop", "Polar Star", "stories"),
+  and the stale 3-tier dispatch table deleted (the agent-device tiers no
+  longer exist — factual error).
+- **Troubleshooting → error-code catalog.** A scannable symptom → fix
+  quick-reference table up top with anchor links, then linkable `###`
+  sections per issue (replacing the wall of identical Asides), including
+  error-code entries (`RN_FAST_RUNNER_DOWN`, `BUSY_FOREIGN_FLOW`,
+  `BUSY_FLOW_ACTIVE`, `RUNNER_PROTOCOL_MISMATCH`,
+  `RUNNER_COMMANDS_STALE`, `KEYBOARD_OCCLUDED`, `DEVICE_BUSY`) sourced
+  from the repo's documented behaviors. Existing fix content is preserved,
+  reformatted.
+- **Landing stat swap:** `35 / 0 · stories built / crashes` →
+  `3–25 min · description → verified feature`.
+
+This amendment overrides the "no content rewrites" non-goal for exactly
+these two pages and the one landing stat.
+
 ## 5. Non-goals
 
 - No scroll-scrubbed animation, no animation libraries, no new deps.
-- No content rewrites beyond the three embed points and the B166 table
-  repair.
+- No content rewrites beyond the three embed points, the B166 table
+  repair, and the §4b amendment's two pages + one landing stat.
 - No changes to generated reference pages or their generator.
 - No landing-page changes.
 

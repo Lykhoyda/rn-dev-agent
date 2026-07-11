@@ -1002,6 +1002,8 @@ Expected: verify PASS before committing.
 
 ### Task 7: Full verification pass (controller-inline browser gauntlet)
 
+**Runs LAST — after Tasks 8 and 9** (added by the 2026-07-11 spec amendment §4b).
+
 **Files:** none new. Same pattern as the overhaul's Task 10.
 
 - [ ] **Step 1: Clean build + full harness**
@@ -1029,6 +1031,316 @@ Expected: every block PASS.
 git add apps/docs-site
 git commit -S -m "fix(docs-site): verification-pass fixes"
 ```
+
+---
+
+### Task 8: Benchmarks redesign + landing stat swap (spec §4b)
+
+**Files:**
+- Modify: `apps/docs-site/src/content/docs/benchmarks.mdx` (full rewrite)
+- Modify: `apps/docs-site/src/pages/index.astro` (one stat cell)
+- Modify: `apps/docs-site/scripts/verify-site.ts` (assertions)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks. The landing stat-strip markup contract: each stat is `<div class="stat"><strong>…</strong><span>…</span></div>`.
+
+- [ ] **Step 1: Add failing assertions**
+
+Append to `verify-site.ts`:
+
+```ts
+console.log('\nverify-site: benchmarks redesign + stat swap');
+const benchHtml = page('benchmarks/index.html');
+check('benchmarks jargon removed', !benchHtml.includes('Ralph Loop') && !benchHtml.includes('Polar Star'));
+check('stale dispatch tiers removed', !benchHtml.includes('agent-device daemon'));
+check('benchmarks leads with verified-feature timing', benchHtml.includes('Description → verified feature'));
+const landingStat = page('index.html');
+check('stories stat replaced', !landingStat.includes('stories built / crashes'));
+check('time-to-verified stat present', landingStat.includes('3–25 min'));
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+```bash
+corepack yarn workspace rn-dev-agent-docs build && corepack yarn workspace rn-dev-agent-docs verify
+```
+
+Expected: FAIL on all five.
+
+- [ ] **Step 3: Rewrite `benchmarks.mdx`**
+
+Replace the entire file with:
+
+```mdx
+---
+title: Benchmarks
+description: Measured performance — from feature description to on-device verification, replay economics, and interaction latency.
+---
+
+Every number on this page comes from building real features on the public
+test app (Expo Dev Client) with `/rn-feature-dev` — 35 completed features
+across form wizards, charts, lists, notifications, and animations. No
+synthetic micro-benchmarks.
+
+## Description → verified feature
+
+The end-to-end measurement that matters: from a one-line feature
+description to code that has been implemented **and verified live on the
+simulator** — component tree, store state, and interactions checked.
+
+| Feature complexity | Examples | Time to verified |
+|---|---|---|
+| Simple | search field, toggle, store slice | 3–5 min |
+| Medium | forms, charts, lists | 5–10 min |
+| Complex | 3-step wizard, onboarding flow | 11–25 min |
+
+Zero crashes and zero manual interventions across all 35 measured builds —
+no human unblocking, no restarts.
+
+### Where the time goes
+
+| Pipeline phase | Typical share |
+|---|---|
+| Discovery, exploration, questions | ~3 min |
+| Architecture | ~1 min |
+| Implementation | ~5 min |
+| Live on-device verification | ~5 min |
+| Code review + fixes | ~4 min |
+| Summary + E2E proof | ~2 min |
+
+## Replay economics
+
+Flows the agent has verified once are saved as
+[actions](/rn-dev-agent/actions/) and replayed instead of rediscovered:
+
+| | Interactive walk | Replayed action |
+|---|---|---|
+| 3-step wizard flow | ~14 min | ~4 s |
+
+That is a ~210× speedup on every later session that needs the same flow
+(login, navigation, multi-step setup). Across the measured features,
+average session time dropped from ~12 min to ~4 min once the
+corresponding actions existed.
+
+## Device interaction latency
+
+iOS interaction goes through an in-tree XCTest HTTP runner:
+
+| Operation | Latency |
+|---|---|
+| Tap | ~216 ms |
+| Accessibility-tree snapshot | ~5 ms |
+| Screenshot | ~74 ms |
+| Per-step overhead | ~1.4 s (vs ~3.1 s CLI baseline) |
+
+The ~210 ms tap floor is XCTest's own event-synthesis limit.
+
+## Libraries verified end-to-end
+
+Features using these libraries were built and verified through the full
+pipeline: react-hook-form, zod, @tanstack/react-query,
+@gorhom/bottom-sheet, @shopify/flash-list, zustand, react-native-svg,
+expo-notifications, react-native-reanimated,
+react-native-gesture-handler, expo-haptics.
+
+## Methodology
+
+Timings are wall-clock, recorded on an Apple-silicon MacBook Pro with a
+booted iOS simulator and Metro running, using the repository's public
+test app. Complexity buckets reflect the feature's UI and state surface,
+not lines of code. Latency numbers are medians over repeated runs.
+```
+
+- [ ] **Step 4: Swap the landing stat**
+
+In `apps/docs-site/src/pages/index.astro`, replace:
+
+```astro
+<div class="stat"><strong>35 / 0</strong><span>stories built / crashes</span></div>
+```
+
+with:
+
+```astro
+<div class="stat"><strong>3–25 min</strong><span>description → verified feature</span></div>
+```
+
+(No other stat cells change.)
+
+- [ ] **Step 5: Build + verify, format, commit**
+
+```bash
+corepack yarn workspace rn-dev-agent-docs build && corepack yarn workspace rn-dev-agent-docs verify
+npx oxfmt apps/docs-site/scripts/verify-site.ts
+git add apps/docs-site
+git commit -S -m "feat(docs-site): user-facing Benchmarks rewrite + time-to-verified landing stat
+
+Removes internal codenames and the stale agent-device dispatch tiers;
+replaces the 'stories built / crashes' stat with description→verified
+timing (spec amendment 4b)."
+```
+
+Expected: verify PASS before committing.
+
+---
+
+### Task 9: Troubleshooting error-code catalog (spec §4b)
+
+**Files:**
+- Modify: `apps/docs-site/src/content/docs/troubleshooting.mdx` (full restructure)
+- Modify: `apps/docs-site/scripts/verify-site.ts` (assertions)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+
+- [ ] **Step 1: Add failing assertions**
+
+Append to `verify-site.ts`:
+
+```ts
+console.log('\nverify-site: troubleshooting catalog');
+const tsHtml = page('troubleshooting/index.html');
+check('quick-reference table present', tsHtml.includes('Quick reference') && tsHtml.includes('<table'));
+check('error codes documented', ['RN_FAST_RUNNER_DOWN', 'BUSY_FOREIGN_FLOW', 'RUNNER_PROTOCOL_MISMATCH'].every((c) => tsHtml.includes(c)));
+check('aside wall replaced', (tsHtml.match(/starlight-aside/g) ?? []).length <= 2);
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+```bash
+corepack yarn workspace rn-dev-agent-docs build && corepack yarn workspace rn-dev-agent-docs verify
+```
+
+Expected: FAIL on all three (the current page is ~20 Asides, no quick table, no error codes).
+
+- [ ] **Step 3: Restructure the page**
+
+Rewrite `troubleshooting.mdx` with this exact structure. **Content rule:** every existing Aside's body text is PRESERVED (verbatim, minus the Aside wrapper) under a `###` heading matching its old title — the format changes, the fixes don't. The worked example below shows the conversion; apply it to all ~20 entries.
+
+Frontmatter + lead:
+
+```mdx
+---
+title: Troubleshooting
+description: Symptom → fix quick reference, error-code catalog, and per-area fixes for rn-dev-agent.
+---
+
+Find your symptom in the quick reference, or jump to the
+[error-code catalog](#error-codes) if a tool returned a code in
+SCREAMING_SNAKE_CASE.
+
+## Quick reference
+
+| Symptom | Go to |
+|---|---|
+| CDP won't connect / 1006 | [Connection](#connection) |
+| DevTools keeps disconnecting | [Connection](#connection) |
+| `cdp_store_state` empty or errors | [Store state](#store-state) |
+| Plugin/skills not detected | [Plugin install](#plugin-install) |
+| Install/update fails (ENOTEMPTY, ENAMETOOLONG) | [Plugin install](#plugin-install) |
+| Taps/flows fail on the device | [Device & flows](#device--flows) |
+| A tool returned `RN_…`/`BUSY_…`/`RUNNER_…` | [Error codes](#error-codes) |
+| Action replay fails | [Actions & setup](#actions--setup) |
+```
+
+Then five `##` sections — `## Connection`, `## Store state`, `## Plugin install`, `## Device & flows`, `## Actions & setup` — each containing the existing entries converted per this worked example (old → new):
+
+Old:
+
+```mdx
+<Aside type="tip" title="Metro not found">
+Start Metro first: `npx expo start` or `npx react-native start`. The plugin auto-detects ports 8081, 8082, 19000, and 19006.
+</Aside>
+```
+
+New:
+
+```mdx
+### Metro not found
+
+Start Metro first: `npx expo start` or `npx react-native start`. The plugin auto-detects ports 8081, 8082, 19000, and 19006.
+```
+
+Mapping of old sections → new: "Connection issues" → `## Connection`; "Store state issues" → `## Store state`; "Plugin issues" → `## Plugin install`; "Device issues" → `## Device & flows`; "Actions and setup" → `## Actions & setup`. Drop the now-unused `Aside` import ONLY if zero Asides remain; keeping ≤2 Asides for genuinely exceptional callouts is allowed (the assertion permits 2).
+
+Then add the new `## Error codes` section between `## Device & flows` and `## Actions & setup`:
+
+```mdx
+## Error codes
+
+Codes returned by `device_*`/flow tools, what they mean, and the fix.
+
+### RN_FAST_RUNNER_DOWN / RN_ANDROID_RUNNER_DOWN
+
+The in-tree device runner couldn't start. Check that the simulator/emulator
+is booted and (Android) the SDK is available. iOS self-builds on first use —
+a cold build takes several minutes; if it times out, pre-build once with
+`xcodebuild build-for-testing` (see Getting Started) and re-open the device
+session.
+
+### BUSY_FOREIGN_FLOW
+
+A foreign Maestro/XCUITest session (e.g. a standalone maestro-mcp) is
+driving the same simulator. Wait for it to finish (the guard clears within
+~5 s), use CDP reads and `device_screenshot` meanwhile, or disable the
+guard with `RN_IOS_FOREIGN_GUARD=0`.
+
+### BUSY_FLOW_ACTIVE
+
+Your own Maestro flow holds the device (L3 is exclusive). Reads
+(`cdp_component_tree`, `cdp_store_state`) still work mid-flow; taps are
+refused on purpose until the flow ends.
+
+### RUNNER_PROTOCOL_MISMATCH
+
+The bridge and the native runner disagree on the wire protocol and the
+automatic reinstall didn't clear it. iOS: delete
+`scripts/rn-fast-runner/build/DerivedData` and re-open the device session
+(cold rebuild). Android: rebuild the runner APKs
+(`./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`).
+
+### RUNNER_COMMANDS_STALE / UNSUPPORTED_COMMAND
+
+The runner build predates a newer command verb. Re-open the device session
+(`device_snapshot action=open`) — the stale artifact is rebuilt
+automatically (one multi-minute build on iOS). If a cold build still
+reports missing commands, update the plugin checkout.
+
+### KEYBOARD_OCCLUDED
+
+A tap target sits under the software keyboard and the safe dismiss control
+isn't available (iPhone standard QWERTY). Dismiss the keyboard first (e.g.
+`cdp_evaluate` → `Keyboard.dismiss()`) or fill via `device_fill`, which is
+JS-first and needs no keyboard. Opt the guard off with
+`RN_KEYBOARD_GUARD=0`.
+
+### DEVICE_BUSY
+
+Another project's session holds this simulator (UDID-scoped ownership
+lock). Close the other session, or wait — the lock self-heals when its
+holder exits (PID-liveness + 90 s heartbeat staleness).
+
+### STALE_REF
+
+An `@ref` from an old snapshot no longer resolves uniquely. Re-run
+`device_snapshot` and use a fresh ref; unique testID/label matches are
+re-bound automatically, so persistent `STALE_REF` with a `candidates` list
+means the match is ambiguous — disambiguate by testID.
+```
+
+- [ ] **Step 4: Build + verify, format, commit**
+
+```bash
+corepack yarn workspace rn-dev-agent-docs build && corepack yarn workspace rn-dev-agent-docs verify
+npx oxfmt apps/docs-site/scripts/verify-site.ts
+git add apps/docs-site
+git commit -S -m "feat(docs-site): troubleshooting as symptom/error-code catalog
+
+Quick-reference table + linkable sections replace the Aside wall; adds
+the error-code reference (spec amendment 4b). Fix content preserved."
+```
+
+Expected: verify PASS before committing. (The harness's link check ignores `#anchor` fragments — manually confirm each quick-reference anchor resolves by checking the built HTML contains matching heading ids, e.g. `id="connection"`, `id="error-codes"`.)
 
 ---
 
