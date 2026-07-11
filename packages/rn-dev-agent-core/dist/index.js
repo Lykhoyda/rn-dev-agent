@@ -929,7 +929,7 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. 
         .boolean()
         .optional()
         .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
-}, createDevicePressHandler());
+}, createDevicePressHandler(getClient));
 trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
@@ -1003,7 +1003,7 @@ trackedTool('device_longpress', 'Long press on an element or coordinates. Use fo
         .boolean()
         .optional()
         .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
-}, createDeviceLongPressHandler());
+}, createDeviceLongPressHandler(getClient));
 trackedTool('device_scroll', 'Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.', {
     direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
     amount: z

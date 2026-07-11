@@ -1292,7 +1292,7 @@ trackedTool(
         'Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
       ),
   },
-  createDevicePressHandler(),
+  createDevicePressHandler(getClient),
 );
 
 trackedTool(
@@ -1404,7 +1404,7 @@ trackedTool(
         'Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
       ),
   },
-  createDeviceLongPressHandler(),
+  createDeviceLongPressHandler(getClient),
 );
 
 trackedTool(
