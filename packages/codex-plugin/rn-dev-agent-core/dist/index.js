@@ -19653,7 +19653,8 @@ var init_protocol = __esm({
       "snapshot",
       "screenshot",
       "back",
-      "keyboardDismiss"
+      "keyboardDismiss",
+      "status"
     ];
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
@@ -19664,7 +19665,8 @@ var init_protocol = __esm({
       "snapshot",
       "screenshot",
       "back",
-      "dismissKeyboard"
+      "dismissKeyboard",
+      "status"
     ];
   }
 });
@@ -19917,6 +19919,90 @@ var init_runner_artifacts = __esm({
     ANDROID_TEST_APK_NAME = "app-debug-androidTest.apk";
     DOWNLOAD_TIMEOUT_MS = 6e4;
     DOWNLOAD_SIZE_SLACK_BYTES = 65536;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/transport-recovery.js
+import { randomUUID } from "node:crypto";
+function isMutatingCommand(command) {
+  return MUTATING_COMMANDS.has(String(command));
+}
+function generateCommandId() {
+  return `c-${randomUUID()}`;
+}
+function isAmbiguousTransportFailure(message) {
+  if (message.startsWith("RUNNER_PROTOCOL_MISMATCH"))
+    return false;
+  if (/not started/i.test(message))
+    return false;
+  return true;
+}
+function parseStatusProbeReply(resp, expectedCommandId) {
+  if (!resp || typeof resp !== "object")
+    return null;
+  const r = resp;
+  if (r.ok !== true || !r.data || typeof r.data !== "object")
+    return null;
+  const data = r.data;
+  if (data.commandId !== expectedCommandId)
+    return null;
+  if (typeof data.state !== "string" || !PROBE_STATES.has(data.state))
+    return null;
+  const reply = { state: data.state };
+  if (data.result !== void 0 && data.result !== null && typeof data.result === "object" && typeof data.result.ok === "boolean") {
+    reply.result = data.result;
+  }
+  return reply;
+}
+function decideRecovery(probe, command) {
+  if (!probe || probe.state === "unknown")
+    return { action: "rethrow" };
+  if (probe.result !== void 0) {
+    return {
+      action: "return-recovered",
+      response: probe.result,
+      outcome: probe.state === "failed" ? "recovered-error" : "recovered"
+    };
+  }
+  if (probe.state === "completed" && !isMutatingCommand(command)) {
+    return { action: "resend-once" };
+  }
+  return { action: "rethrow" };
+}
+var MUTATING_COMMANDS, PROBE_STATES;
+var init_transport_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/runners/transport-recovery.js"() {
+    "use strict";
+    MUTATING_COMMANDS = /* @__PURE__ */ new Set([
+      "tap",
+      "mouseClick",
+      "tapSeries",
+      "longPress",
+      "drag",
+      "dragSeries",
+      "remotePress",
+      "type",
+      "fill",
+      "press",
+      "swipe",
+      "scroll",
+      "back",
+      "backInApp",
+      "backSystem",
+      "home",
+      "pressHome",
+      "rotate",
+      "appSwitcher",
+      "keyboardDismiss",
+      "dismissKeyboard",
+      "keyboard",
+      "alert",
+      "pinch",
+      "activate",
+      "terminate",
+      "shutdown"
+    ]);
+    PROBE_STATES = /* @__PURE__ */ new Set(["completed", "failed", "unknown"]);
   }
 });
 
@@ -20505,16 +20591,11 @@ function commandTimeoutMs(command) {
     return httpTimeoutOverrideMs;
   return SLOW_RUNNER_COMMANDS.has(command) ? 35e3 : HTTP_TIMEOUT_MS;
 }
-async function postCommand(body) {
-  const state = runnerState;
-  if (!state) {
-    throw new Error("rn-fast-runner not started \u2014 run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).");
-  }
+async function sendCommandOnce(port, body, timeoutMs) {
   const controller = new AbortController();
-  const timeoutMs = commandTimeoutMs(body.command);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -20533,6 +20614,44 @@ async function postCommand(body) {
   } finally {
     clearTimeout(timer);
   }
+}
+async function probeCommandStatus(port, commandId) {
+  try {
+    const resp = await sendCommandOnce(port, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS);
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+async function postCommandWithRecovery(body) {
+  const state = runnerState;
+  if (!state) {
+    throw new Error("rn-fast-runner not started \u2014 run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).");
+  }
+  const commandId = generateCommandId();
+  const timeoutMs = commandTimeoutMs(body.command);
+  try {
+    return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message))
+      throw err;
+    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+    if (decision.action === "return-recovered") {
+      return {
+        resp: decision.response,
+        recovery: { commandId, outcome: decision.outcome }
+      };
+    }
+    if (decision.action === "resend-once") {
+      const resent = await sendCommandOnce(state.port, { ...body, commandId: generateCommandId() }, timeoutMs);
+      return { resp: resent, recovery: { commandId, outcome: "resent" } };
+    }
+    throw err;
+  }
+}
+async function postCommand(body) {
+  return (await postCommandWithRecovery(body)).resp;
 }
 function mapRunnerNodesToFlat(nodes) {
   const out = [];
@@ -20599,8 +20718,9 @@ async function runIOS(args) {
   if (args.scope !== void 0)
     body.scope = args.scope;
   let resp;
+  let recovery;
   try {
-    resp = await postCommand(withKeyboardGuard(body, args.command, process.env));
+    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
@@ -20608,17 +20728,26 @@ async function runIOS(args) {
     }
     throw err;
   }
+  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? "runner returned !ok with no error";
     const code = resp.error?.code;
     if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
-      return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...announce } });
+      return okResult({ typed: true, text: args.text }, {
+        meta: {
+          sideEffectSucceeded: true,
+          runnerTimeoutShim: true,
+          ...announce,
+          ...recoveryMeta
+        }
+      });
     }
+    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
     if (code) {
-      return failResult(message, code);
+      return failResult(message, code, failExtras);
     }
-    return failResult(message);
+    return failExtras ? failResult(message, failExtras) : failResult(message);
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
@@ -20626,13 +20755,15 @@ async function runIOS(args) {
       const flat = mapRunnerNodesToFlat(data.nodes);
       const outcome = updateRefMapFromFlat(flat);
       const snapshotVerdict = buildSnapshotVerdict("rn-fast-runner", flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict } });
+      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
     }
-    return okResult(resp.data, announce ? { meta: announce } : void 0);
+    const fallbackMeta = { ...announce, ...recoveryMeta };
+    return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : void 0);
   }
-  return okResult(resp.data ?? {}, announce ? { meta: announce } : void 0);
+  const finalMeta = { ...announce, ...recoveryMeta };
+  return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS;
+var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -20645,6 +20776,7 @@ var init_rn_fast_runner_client = __esm({
     init_quiescence();
     init_runner_artifacts();
     init_runtime_paths();
+    init_transport_recovery();
     DEFAULT_PORT = 22088;
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
@@ -20679,6 +20811,7 @@ var init_rn_fast_runner_client = __esm({
     fetchImpl = globalThis.fetch;
     httpTimeoutOverrideMs = null;
     SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
+    STATUS_PROBE_TIMEOUT_MS = 2e3;
   }
 });
 
@@ -21570,17 +21703,15 @@ async function stopAndroidRunner(deviceId) {
     }
   }
 }
-async function postCommand2(body) {
-  const state = runnerState2;
-  if (!state)
-    throw new Error("rn-android-runner not started");
-  const slow = body.command === "type" || body.command === "snapshot" || body.command === "screenshot";
-  const timeoutMs = slow ? 35e3 : 1e4;
+function commandTimeoutMs2(command) {
+  return command === "type" || command === "snapshot" || command === "screenshot" ? 35e3 : 1e4;
+}
+async function sendCommandOnce2(hostPort, body, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let resp;
   try {
-    resp = await fetchImpl2(`http://127.0.0.1:${state.hostPort}/command`, {
+    resp = await fetchImpl2(`http://127.0.0.1:${hostPort}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -21604,6 +21735,43 @@ async function postCommand2(body) {
     throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
   }
   return parsed;
+}
+async function probeCommandStatus2(hostPort, commandId) {
+  try {
+    const resp = await sendCommandOnce2(hostPort, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS2);
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+async function postCommandWithRecovery2(body) {
+  const state = runnerState2;
+  if (!state)
+    throw new Error("rn-android-runner not started");
+  const commandId = generateCommandId();
+  const timeoutMs = commandTimeoutMs2(body.command);
+  try {
+    return { resp: await sendCommandOnce2(state.hostPort, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message))
+      throw err;
+    const decision = decideRecovery(await probeCommandStatus2(state.hostPort, commandId), body.command);
+    if (decision.action === "return-recovered") {
+      return {
+        resp: decision.response,
+        recovery: { commandId, outcome: decision.outcome }
+      };
+    }
+    if (decision.action === "resend-once") {
+      const resent = await sendCommandOnce2(state.hostPort, { ...body, commandId: generateCommandId() }, timeoutMs);
+      return { resp: resent, recovery: { commandId, outcome: "resent" } };
+    }
+    throw err;
+  }
+}
+async function postCommand2(body) {
+  return (await postCommandWithRecovery2(body)).resp;
 }
 function getAndroidRunnerHostPort() {
   return runnerState2?.hostPort ?? null;
@@ -21699,9 +21867,10 @@ async function runAndroid(args) {
   if (args.interactiveOnly !== void 0)
     body.interactiveOnly = args.interactiveOnly;
   let resp;
+  let recovery;
   try {
     await startAndroidRunner(args.deviceId, args.bundleId);
-    resp = await postCommand2(withKeyboardGuard(body, args.command, process.env));
+    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
   } catch (err) {
     const m = errMessage(err);
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
@@ -21716,13 +21885,17 @@ async function runAndroid(args) {
     }
     throw err;
   }
+  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   if (!resp.ok) {
     const message = resp.error?.message ?? "Android runner returned !ok with no error";
     const code = resp.error?.code;
     if (args.command === "type" && typeof message === "string" && (message.includes("Could not detect idle state") || message.includes("window-content-idle") || message.includes("Idle timeout exceeded"))) {
-      return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true } });
+      return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
     }
-    return code ? failResult(message, code) : failResult(message);
+    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
+    if (code)
+      return failResult(message, code, failExtras);
+    return failExtras ? failResult(message, failExtras) : failResult(message);
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
@@ -21730,18 +21903,18 @@ async function runAndroid(args) {
       const flat = mapRunnerNodesToFlat2(data.nodes);
       const outcome = updateRefMapFromFlat(flat);
       const snapshotVerdict = buildSnapshotVerdict("rn-android-runner", flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { snapshotVerdict } });
+      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
     }
   }
   if (args.command === "screenshot") {
     const data = resp.data;
     if (!data?.pngBase64)
-      return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED");
+      return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
     const outPath = args.outPath ?? join12(tmpdir3(), `rn-android-screenshot-${Date.now()}.png`);
     writeFileSync6(outPath, Buffer.from(data.pngBase64, "base64"));
-    return okResult({ path: outPath });
+    return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
-  return okResult(resp.data ?? {});
+  return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
 }
 function errMessage(err) {
   return err instanceof Error ? err.message : String(err);
@@ -21749,7 +21922,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT2, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS;
+var execFileAsync2, DEFAULT_PORT2, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -21761,6 +21934,7 @@ var init_rn_android_runner_client = __esm({
     init_protocol();
     init_runner_artifacts();
     init_runtime_paths();
+    init_transport_recovery();
     execFileAsync2 = promisify3(execFile3);
     DEFAULT_PORT2 = 22089;
     READY_TIMEOUT_MS2 = 3e4;
@@ -21786,6 +21960,7 @@ var init_rn_android_runner_client = __esm({
       }
     };
     RUNNER_APK_PATHS = [APK_APP, APK_TEST];
+    STATUS_PROBE_TIMEOUT_MS2 = 2e3;
   }
 });
 

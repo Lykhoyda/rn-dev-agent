@@ -76,6 +76,7 @@ final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
     // the test-app before reading the accessibility tree.
     let command = Command(
       command: .snapshot,
+      commandId: nil,
       appBundleId: Self.testAppBundleId,
       text: nil,
       delayMs: nil,

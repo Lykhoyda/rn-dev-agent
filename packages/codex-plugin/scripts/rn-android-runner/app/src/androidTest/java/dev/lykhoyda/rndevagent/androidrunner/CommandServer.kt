@@ -10,6 +10,7 @@ import org.json.JSONObject
 
 object RunnerRuntime {
     lateinit var dispatcher: CommandDispatcher
+    val journal: CommandJournal = CommandJournal()
 }
 
 class CommandServer(port: Int, private val pluginVersion: String? = null) : NanoHTTPD(port) {
@@ -33,34 +34,52 @@ class CommandServer(port: Int, private val pluginVersion: String? = null) : Nano
             )
         }
 
+        // Story 14 (#407): hoist the parsed request above the try so every catch
+        // can journal the outcome — the "executed-and-failed, response lost" case
+        // only recovers if failures journal too. A body that fails to parse stays
+        // null and simply skips journaling.
+        var command: JSONObject? = null
         return try {
             val files = HashMap<String, String>()
             session.parseBody(files)
             val raw = files["postData"] ?: "{}"
-            val command = JSONObject(raw)
-            json(Response.Status.OK, RunnerRuntime.dispatcher.dispatch(command))
+            val parsed = JSONObject(raw)
+            command = parsed
+            val body = RunnerRuntime.dispatcher.dispatch(parsed)
+            record(parsed, body)
+            json(Response.Status.OK, body)
         } catch (e: NoFocusedInputException) {
-            json(
-                Response.Status.OK,
-                JSONObject()
-                    .put("ok", false)
-                    .put("error", JSONObject().put("code", "NO_FOCUSED_INPUT").put("message", e.message ?: "no focused input"))
-            )
+            errorResponse(command, "NO_FOCUSED_INPUT", e.message ?: "no focused input", Response.Status.OK)
         } catch (e: SnapshotParseException) {
-            json(
-                Response.Status.OK,
-                JSONObject()
-                    .put("ok", false)
-                    .put("error", JSONObject().put("code", "SNAPSHOT_PARSE_FAILED").put("message", e.message ?: "snapshot parse failed"))
-            )
+            errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
         } catch (t: Throwable) {
-            json(
-                Response.Status.INTERNAL_ERROR,
-                JSONObject()
-                    .put("ok", false)
-                    .put("error", JSONObject().put("code", "RUNNER_ERROR").put("message", t.message ?: t.javaClass.name))
-            )
+            errorResponse(command, "RUNNER_ERROR", t.message ?: t.javaClass.name, Response.Status.INTERNAL_ERROR)
         }
+    }
+
+    // Story 14 (#407): every /command outcome — success and failure — is journaled
+    // before the response leaves, so a client that lost the reply can probe `status`.
+    private fun errorResponse(
+        command: JSONObject?,
+        code: String,
+        message: String,
+        status: Response.Status,
+    ): Response {
+        val body = JSONObject()
+            .put("ok", false)
+            .put("error", JSONObject().put("code", code).put("message", message))
+        record(command, body)
+        return json(status, body)
+    }
+
+    private fun record(command: JSONObject?, body: JSONObject) {
+        val cmd = command ?: return
+        RunnerRuntime.journal.record(
+            cmd.optString("commandId").ifBlank { null },
+            cmd.optString("command").ifBlank { null },
+            body.optBoolean("ok", false),
+            body.toString(),
+        )
     }
 
     private fun json(status: Response.Status, body: JSONObject): Response {

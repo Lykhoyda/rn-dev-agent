@@ -10,21 +10,27 @@ import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.Configurator
 import fi.iki.elonen.NanoHTTPD
+import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.net.HttpURLConnection
+import java.net.URL
 
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class RnAndroidRunnerInstrumentedTest {
     private lateinit var server: CommandServer
+    private var port: Int = 0
 
     @Before
     fun startServer() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val args = InstrumentationRegistry.getArguments()
         val port = args.getString("RN_ANDROID_RUNNER_PORT")?.toIntOrNull() ?: 22089
+        this.port = port
         val pluginVersion = args.getString("RN_PLUGIN_VERSION")
 
         // Mirrors the iOS `withTemporaryScrollIdleTimeoutIfSupported` shim.
@@ -40,7 +46,7 @@ class RnAndroidRunnerInstrumentedTest {
         Configurator.getInstance().setActionAcknowledgmentTimeout(500)
         Configurator.getInstance().setScrollAcknowledgmentTimeout(500)
 
-        RunnerRuntime.dispatcher = CommandDispatcher(instrumentation)
+        RunnerRuntime.dispatcher = CommandDispatcher(instrumentation, RunnerRuntime.journal)
         server = CommandServer(port, pluginVersion)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
 
@@ -57,6 +63,43 @@ class RnAndroidRunnerInstrumentedTest {
                 Thread.currentThread().interrupt()
                 return
             }
+        }
+    }
+
+    // Story 14 (#407): the server MUST journal error outcomes too, so a client
+    // that lost the reply can probe `status`. Drive a `type` with no focused
+    // input (raises NoFocusedInputException) over the real HTTP path, then read
+    // its outcome back through `status`.
+    @Test
+    fun errorOutcomeIsJournaledAndReadableViaStatus() {
+        val id = "journal-err-${System.nanoTime()}"
+        val typeResponse = postCommand(
+            JSONObject().put("command", "type").put("commandId", id).put("text", "hello")
+        )
+        assertEquals(false, typeResponse.optBoolean("ok", true))
+
+        val statusResponse = postCommand(
+            JSONObject().put("command", "status").put("commandId", id)
+        )
+        val data = statusResponse.getJSONObject("data")
+        assertEquals("failed", data.getString("state"))
+        assertEquals(
+            "NO_FOCUSED_INPUT",
+            data.getJSONObject("result").getJSONObject("error").getString("code"),
+        )
+    }
+
+    private fun postCommand(command: JSONObject): JSONObject {
+        val connection = URL("http://127.0.0.1:$port/command").openConnection() as HttpURLConnection
+        return try {
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(command.toString().toByteArray(Charsets.UTF_8)) }
+            val stream = if (connection.responseCode < 400) connection.inputStream else connection.errorStream
+            JSONObject(stream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } finally {
+            connection.disconnect()
         }
     }
 
