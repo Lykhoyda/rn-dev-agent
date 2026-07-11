@@ -54265,6 +54265,164 @@ function annotateDeepLinkDepth(result, ctx) {
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
 init_maestro_validator();
 init_dev_client_picker();
+
+// packages/rn-dev-agent-core/dist/tools/device-system-dialog.js
+init_utils();
+init_maestro_invoke();
+init_platform_utils();
+init_device_interact();
+init_agent_device_wrapper();
+var APOSTROPHE_ASCII = "'";
+var APOSTROPHE_CURLY = "\u2019";
+var ACCEPT_LABELS_IOS = [
+  "Allow",
+  "Allow Once",
+  "Allow While Using App",
+  "OK",
+  "Open",
+  "Continue",
+  "Yes",
+  "Accept"
+];
+var DISMISS_LABELS_IOS_BASE = ["Cancel", "No", "Deny", "Not Now", "Reject"];
+var DISMISS_LABELS_IOS = [
+  ...DISMISS_LABELS_IOS_BASE,
+  `Don${APOSTROPHE_ASCII}t Allow`,
+  `Don${APOSTROPHE_CURLY}t Allow`
+];
+var ACCEPT_LABELS_ANDROID = [
+  "Allow",
+  "ALLOW",
+  "While using the app",
+  "Only this time",
+  "OK",
+  "Open",
+  "Continue",
+  "Yes"
+];
+var DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now"];
+var realSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+var fetchSnapshotNodesFn = fetchSnapshotNodes;
+var pressCandidateFn2 = pressCandidate;
+var sleepFn = realSleep2;
+var iosSessionActiveFn = () => hasActiveSession() && getActiveSession()?.platform === "ios";
+async function tapSystemDialogViaRunner(labels) {
+  if (!iosSessionActiveFn())
+    return null;
+  let snap;
+  try {
+    snap = await fetchSnapshotNodesFn(false);
+  } catch {
+    return null;
+  }
+  if (!snap.ok)
+    return null;
+  const root = snap.nodes[0];
+  if (!root || root.type !== "Alert")
+    return null;
+  const buttons = snap.nodes.slice(1);
+  for (const label of labels) {
+    const match = buttons.find((n) => n.label === label || n.identifier === label);
+    if (!match)
+      continue;
+    const press = await pressCandidateFn2({ ref: match.ref, label: match.label }, "click");
+    if (press.isError)
+      continue;
+    return { tapped: true, matchedLabel: label, dialogTitle: root.label };
+  }
+  return {
+    tapped: false,
+    dialogTitle: root.label,
+    availableButtons: buttons.map((n) => n.label ?? n.identifier ?? "").filter((l) => l.length > 0)
+  };
+}
+var OPEN_CONFIRMATION_LABELS = ["Open"];
+var OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
+async function acceptDeeplinkOpenConfirmation() {
+  if (!iosSessionActiveFn())
+    return null;
+  const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
+  if (first)
+    return first;
+  await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
+  return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
+}
+var PER_LABEL_TIMEOUT_MS = 4e3;
+async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
+  const deadline = Date.now() + totalTimeoutMs;
+  const attempts3 = [];
+  for (const label of labels) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return warnResult({ tapped: false, platform, triedLabels: labels, attempts: attempts3 }, `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`, { code: "DIALOG_NOT_FOUND" });
+    }
+    const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, remainingMs);
+    const yaml2 = `- tapOn:
+    text: "${yamlEscape(label)}"`;
+    const result = await runMaestroInline(yaml2, { platform, timeoutMs: perLabelMs, slug });
+    if (result.passed) {
+      return okResult({ tapped: true, platform, matchedLabel: label, triedLabels: labels });
+    }
+    attempts3.push({
+      label,
+      error: result.error,
+      output: result.output ? result.output.slice(0, 200) : void 0
+    });
+  }
+  const iosHint = platform === "ios" ? ' If the dialog is visible on screen, it is likely SpringBoard-owned and invisible to Maestro \u2014 open a device session (device_snapshot action="open") and retry so the native runner path can reach it. Last resort for a stuck dialog: xcrun simctl spawn <udid> launchctl kickstart -k system/com.apple.SpringBoard (app install survives; relaunch the app afterwards).' : "";
+  return warnResult({ tapped: false, platform, triedLabels: labels, attempts: attempts3 }, `No matching system dialog button found. The dialog may not be visible yet, or the button label differs from known variants. Call device_screenshot to verify the dialog is up, or pass a specific label.${iosHint}`, { code: "DIALOG_NOT_FOUND" });
+}
+function pickLabels(userLabel, defaults) {
+  if (!userLabel)
+    return defaults;
+  const seen = /* @__PURE__ */ new Set();
+  return [userLabel, ...defaults].filter((l) => {
+    if (seen.has(l))
+      return false;
+    seen.add(l);
+    return true;
+  });
+}
+async function handleSystemDialog(args, iosDefaults, androidDefaults, slug) {
+  const platform = args.platform ?? await detectPlatform();
+  if (!platform) {
+    return failResult("No device detected. Pass platform or boot a device first.", {
+      code: "NO_DEVICE"
+    });
+  }
+  const defaults = platform === "ios" ? iosDefaults : androidDefaults;
+  const labels = pickLabels(args.label, defaults);
+  if (platform === "ios") {
+    const runner = await tapSystemDialogViaRunner(labels);
+    if (runner?.tapped) {
+      return okResult({
+        tapped: true,
+        platform,
+        matchedLabel: runner.matchedLabel,
+        dialogTitle: runner.dialogTitle,
+        via: "rn-fast-runner"
+      });
+    }
+    if (runner) {
+      return warnResult({
+        tapped: false,
+        platform,
+        dialogTitle: runner.dialogTitle,
+        availableButtons: runner.availableButtons,
+        triedLabels: labels
+      }, `A system dialog${runner.dialogTitle ? ` ("${runner.dialogTitle}")` : ""} is on screen but none of the probed labels matched its buttons. Retry with label set to one of availableButtons.`, { code: "DIALOG_BUTTON_NOT_FOUND" });
+    }
+  }
+  return tapSystemDialog(labels, platform, args.timeoutMs ?? 15e3, slug);
+}
+function createDeviceAcceptSystemDialogHandler() {
+  return async (args) => handleSystemDialog(args, ACCEPT_LABELS_IOS, ACCEPT_LABELS_ANDROID, "sys-accept");
+}
+function createDeviceDismissSystemDialogHandler() {
+  return async (args) => handleSystemDialog(args, DISMISS_LABELS_IOS, DISMISS_LABELS_ANDROID, "sys-dismiss");
+}
+
+// packages/rn-dev-agent-core/dist/tools/device-deeplink.js
 var execFile22 = promisify23(execFileCb18);
 var EXEC_TIMEOUT_MS = 1e4;
 async function openIosDeeplink(url) {
@@ -54331,7 +54489,7 @@ async function openAndroidDeeplink(url, packageName) {
     });
   }
 }
-function annotatePicker(result, outcome) {
+function annotatePicker(result, outcome, openConfirmation) {
   if (result.isError)
     return result;
   let envelope;
@@ -54341,7 +54499,11 @@ function annotatePicker(result, outcome) {
     return result;
   }
   const existingMeta = envelope.meta && typeof envelope.meta === "object" ? envelope.meta : {};
-  envelope.meta = outcome === null ? { ...existingMeta, pickerChecked: false } : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+  const meta = outcome === null ? { ...existingMeta, pickerChecked: false } : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+  if (openConfirmation) {
+    meta.openDialogTapped = openConfirmation.tapped;
+  }
+  envelope.meta = meta;
   result.content[0].text = JSON.stringify(envelope);
   return result;
 }
@@ -54366,8 +54528,9 @@ function createDeviceDeeplinkHandler() {
     const result = platform === "ios" ? await openIosDeeplink(args.url) : await openAndroidDeeplink(args.url, args.packageName);
     const annotated = annotateDeepLinkDepth(result, { url: args.url });
     if (!annotated.isError) {
+      const openConfirmation = platform === "ios" ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
       const outcome = await clearDevClientPickerIfPresent(platform).catch(() => null);
-      return annotatePicker(annotated, outcome);
+      return annotatePicker(annotated, outcome, openConfirmation);
     }
     return annotated;
   };
@@ -54665,100 +54828,6 @@ function createDeviceRecordHandler() {
     if (args.action === "status")
       return runStatus();
     return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
-  };
-}
-
-// packages/rn-dev-agent-core/dist/tools/device-system-dialog.js
-init_utils();
-init_maestro_invoke();
-init_platform_utils();
-var APOSTROPHE_ASCII = "'";
-var APOSTROPHE_CURLY = "\u2019";
-var ACCEPT_LABELS_IOS = [
-  "Allow",
-  "Allow Once",
-  "Allow While Using App",
-  "OK",
-  "Open",
-  "Continue",
-  "Yes",
-  "Accept"
-];
-var DISMISS_LABELS_IOS_BASE = ["Cancel", "No", "Deny", "Not Now", "Reject"];
-var DISMISS_LABELS_IOS = [
-  ...DISMISS_LABELS_IOS_BASE,
-  `Don${APOSTROPHE_ASCII}t Allow`,
-  `Don${APOSTROPHE_CURLY}t Allow`
-];
-var ACCEPT_LABELS_ANDROID = [
-  "Allow",
-  "ALLOW",
-  "While using the app",
-  "Only this time",
-  "OK",
-  "Open",
-  "Continue",
-  "Yes"
-];
-var DISMISS_LABELS_ANDROID = ["Deny", "DENY", "Cancel", "CANCEL", "No", "Not now"];
-var PER_LABEL_TIMEOUT_MS = 4e3;
-async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
-  const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, totalTimeoutMs);
-  const deadline = Date.now() + totalTimeoutMs;
-  const attempts3 = [];
-  for (const label of labels) {
-    if (Date.now() >= deadline) {
-      return warnResult({ tapped: false, platform, triedLabels: labels, attempts: attempts3 }, `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`, { code: "DIALOG_NOT_FOUND" });
-    }
-    const yaml2 = `- tapOn:
-    text: "${yamlEscape(label)}"`;
-    const result = await runMaestroInline(yaml2, { platform, timeoutMs: perLabelMs, slug });
-    if (result.passed) {
-      return okResult({ tapped: true, platform, matchedLabel: label, triedLabels: labels });
-    }
-    attempts3.push({
-      label,
-      error: result.error,
-      output: result.output ? result.output.slice(0, 200) : void 0
-    });
-  }
-  return warnResult({ tapped: false, platform, triedLabels: labels, attempts: attempts3 }, "No matching system dialog button found. The dialog may not be visible yet, or the button label differs from known variants. Call device_screenshot to verify the dialog is up, or pass a specific label.", { code: "DIALOG_NOT_FOUND" });
-}
-function pickLabels(userLabel, defaults) {
-  if (!userLabel)
-    return defaults;
-  const seen = /* @__PURE__ */ new Set();
-  return [userLabel, ...defaults].filter((l) => {
-    if (seen.has(l))
-      return false;
-    seen.add(l);
-    return true;
-  });
-}
-function createDeviceAcceptSystemDialogHandler() {
-  return async (args) => {
-    const platform = args.platform ?? await detectPlatform();
-    if (!platform) {
-      return failResult("No device detected. Pass platform or boot a device first.", {
-        code: "NO_DEVICE"
-      });
-    }
-    const defaults = platform === "ios" ? ACCEPT_LABELS_IOS : ACCEPT_LABELS_ANDROID;
-    const labels = pickLabels(args.label, defaults);
-    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15e3, "sys-accept");
-  };
-}
-function createDeviceDismissSystemDialogHandler() {
-  return async (args) => {
-    const platform = args.platform ?? await detectPlatform();
-    if (!platform) {
-      return failResult("No device detected. Pass platform or boot a device first.", {
-        code: "NO_DEVICE"
-      });
-    }
-    const defaults = platform === "ios" ? DISMISS_LABELS_IOS : DISMISS_LABELS_ANDROID;
-    const labels = pickLabels(args.label, defaults);
-    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15e3, "sys-dismiss");
   };
 }
 
@@ -60269,12 +60338,12 @@ trackedTool("device_deeplink", "Open a deep link or universal URL on the booted 
 trackedTool("cdp_dismiss_dev_client_picker", 'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the Metro server entry (preferring the row matching the project\'s Metro port, deprioritizing stale link-local addresses) so CDP/the bundle can proceed. Also clears the native stale-server "Error loading app" dialog that can hide the picker after a network change. iOS + Android (requires an open device session \u2014 call device_snapshot action="open" first). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.', {
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Otherwise resolved from the active session or the booted device.")
 }, createDismissDevClientPickerHandler(() => getClient().metroPort));
-trackedTool("device_accept_system_dialog", 'Tap an OS-level system dialog button (outside the app accessibility tree) \u2014 e.g. "Open in App?", "Allow notifications", biometric prompts. Runs via Maestro so the tap reaches SpringBoard (iOS) or SystemUI (Android). Tries common accept labels by default (Allow, OK, Open, Continue, Yes). Call immediately after a permission trigger or deep link is expected to surface a system prompt. Session-less.', {
+trackedTool("device_accept_system_dialog", 'Tap an OS-level system dialog button (outside the app accessibility tree) \u2014 e.g. "Open in App?", "Allow notifications", biometric prompts. On iOS with an open device session, the tap routes through the native rn-fast-runner, which sees SpringBoard-owned dialogs Maestro cannot; otherwise falls back to a Maestro label probe (SystemUI on Android, in-app alerts on iOS). Tries common accept labels by default (Allow, OK, Open, Continue, Yes). Call immediately after a permission trigger or deep link is expected to surface a system prompt.', {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
   timeoutMs: external_exports.number().int().min(1e3).max(6e4).optional().describe("Maestro invocation timeout (default 15000ms).")
 }, createDeviceAcceptSystemDialogHandler());
-trackedTool("device_dismiss_system_dialog", 'Tap an OS-level system dialog dismiss button \u2014 e.g. "Cancel", "Don\u2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog but for the negative action. Handles both ASCII and typographic apostrophes in "Don\u2019t Allow". Session-less.', {
+trackedTool("device_dismiss_system_dialog", 'Tap an OS-level system dialog dismiss button \u2014 e.g. "Cancel", "Don\u2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog (native rn-fast-runner path on iOS with a session, Maestro fallback) but for the negative action. Handles both ASCII and typographic apostrophes in "Don\u2019t Allow".', {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Cancel, Don\u2019t Allow, Deny, No, Not Now)."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
   timeoutMs: external_exports.number().int().min(1e3).max(6e4).optional().describe("Maestro invocation timeout (default 15000ms).")

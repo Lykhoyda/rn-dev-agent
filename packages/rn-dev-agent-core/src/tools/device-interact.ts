@@ -43,7 +43,7 @@ const execFile = promisify(execFileCb);
 const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
 const ANDROID_FILL_MAX_SAFE_LEN = 30;
 
-interface SnapshotNode {
+export interface SnapshotNode {
   ref: string;
   label?: string;
   identifier?: string;
@@ -158,7 +158,7 @@ export type SnapshotFetchResult =
   | { ok: false; reason: 'fetch-failed' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
-async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
   // GH #321 (live-sim speedup): serve device_find from the snapshot we already
   // captured when it's still a faithful picture of the screen (clean + fresh),
   // skipping a redundant runner round-trip. isSnapshotCacheValid() is false the

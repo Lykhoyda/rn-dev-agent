@@ -103,7 +103,7 @@ function parseSnapshotEnvelope(result) {
         return null;
     }
 }
-async function fetchSnapshotNodes(allowCache = false) {
+export async function fetchSnapshotNodes(allowCache = false) {
     // GH #321 (live-sim speedup): serve device_find from the snapshot we already
     // captured when it's still a faithful picture of the screen (clean + fresh),
     // skipping a redundant runner round-trip. isSnapshotCacheValid() is false the

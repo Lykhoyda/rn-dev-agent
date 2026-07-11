@@ -7,6 +7,10 @@ import { getAdbSerial } from '../agent-device-wrapper.js';
 import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { clearDevClientPickerIfPresent, type PickerOutcome } from './dev-client-picker.js';
+import {
+  acceptDeeplinkOpenConfirmation,
+  type RunnerDialogOutcome,
+} from './device-system-dialog.js';
 
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
@@ -113,7 +117,11 @@ async function openAndroidDeeplink(url: string, packageName?: string): Promise<T
  * outcome. `null` outcome means no session was open, so the picker was not
  * checked. Never mutates an error result.
  */
-export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null): ToolResult {
+export function annotatePicker(
+  result: ToolResult,
+  outcome: PickerOutcome | null,
+  openConfirmation?: RunnerDialogOutcome | null,
+): ToolResult {
   if (result.isError) return result;
   let envelope: Record<string, unknown>;
   try {
@@ -125,10 +133,16 @@ export function annotatePicker(result: ToolResult, outcome: PickerOutcome | null
     envelope.meta && typeof envelope.meta === 'object'
       ? (envelope.meta as Record<string, unknown>)
       : {};
-  envelope.meta =
+  const meta: Record<string, unknown> =
     outcome === null
       ? { ...existingMeta, pickerChecked: false }
       : { ...existingMeta, pickerChecked: true, pickerDismissed: outcome.dismissed };
+  // GH #545: surface whether a SpringBoard "Open in <app>?" confirmation was
+  // auto-accepted. Absent when no confirmation dialog appeared (the common case).
+  if (openConfirmation) {
+    meta.openDialogTapped = openConfirmation.tapped;
+  }
+  envelope.meta = meta;
   result.content[0].text = JSON.stringify(envelope);
   return result;
 }
@@ -181,8 +195,14 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
     // Best-effort dismiss on both platforms now that iOS routes through
     // rn-fast-runner (no-op when no session is open); never fail the deeplink.
     if (!annotated.isError) {
+      // GH #545: on iOS, simctl openurl can park the deeplink behind a
+      // SpringBoard "Open in <app>?" confirmation that Maestro/idb cannot
+      // reach. Accept it via the fast-runner before the picker check;
+      // best-effort — a failure never fails the deeplink.
+      const openConfirmation =
+        platform === 'ios' ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
       const outcome = await clearDevClientPickerIfPresent(platform).catch(() => null);
-      return annotatePicker(annotated, outcome);
+      return annotatePicker(annotated, outcome, openConfirmation);
     }
     return annotated;
   };
