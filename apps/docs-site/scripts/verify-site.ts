@@ -210,6 +210,20 @@ const landingStat = page('index.html');
 check('stories stat replaced', !landingStat.includes('stories built / crashes'));
 check('time-to-verified stat present', landingStat.includes('3–25 min'));
 
+console.log('\nverify-site: troubleshooting catalog');
+const tsHtml = page('troubleshooting/index.html');
+check(
+  'quick-reference table present',
+  tsHtml.includes('Quick reference') && tsHtml.includes('<table'),
+);
+check(
+  'error codes documented',
+  ['RN_FAST_RUNNER_DOWN', 'BUSY_FOREIGN_FLOW', 'RUNNER_PROTOCOL_MISMATCH'].every((c) =>
+    tsHtml.includes(c),
+  ),
+);
+check('aside wall replaced', (tsHtml.match(/starlight-aside/g) ?? []).length <= 2);
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
