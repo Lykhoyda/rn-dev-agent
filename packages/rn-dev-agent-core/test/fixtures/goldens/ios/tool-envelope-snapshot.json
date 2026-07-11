@@ -1,6 +1,6 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T15:56:58.903Z",
+    "capturedAt": "2026-07-11T18:21:07.694Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=ios node test/contract/capture-goldens.ts)",
     "platform": "ios",
@@ -8,7 +8,7 @@
     "os": "iOS-26-5",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.0",
+    "runnerVersion": "0.67.1",
     "protocolVersion": 1,
     "runnerPort": 22088,
     "note": "bridge device_snapshot envelope (post-mapping FlatNode layer)"
@@ -21,10 +21,10 @@
           "ref": "@e0",
           "type": "Application",
           "rect": {
-            "width": 402,
+            "y": 0,
             "height": 874,
-            "x": 0,
-            "y": 0
+            "width": 402,
+            "x": 0
           },
           "label": "Fixture",
           "enabled": true,
@@ -34,10 +34,10 @@
           "ref": "@e1",
           "type": "Other",
           "rect": {
-            "width": 402,
+            "y": 0,
             "height": 874,
-            "x": 0,
-            "y": 0
+            "width": 402,
+            "x": 0
           },
           "label": "Increment",
           "enabled": true,
@@ -47,10 +47,10 @@
           "ref": "@e2",
           "type": "Button",
           "rect": {
-            "width": 76.66666666666666,
+            "y": 78,
             "height": 20.33333333333333,
-            "x": 162.66666666666666,
-            "y": 78
+            "width": 76.66666666666666,
+            "x": 162.66666666666666
           },
           "label": "Increment",
           "identifier": "fixture_button",
@@ -61,10 +61,10 @@
           "ref": "@e3",
           "type": "StaticText",
           "rect": {
-            "width": 62.66666666666666,
+            "y": 106.33333333333339,
             "height": 20.33333333333333,
-            "x": 169.66666666666666,
-            "y": 106.33333333333339
+            "width": 62.66666666666666,
+            "x": 169.66666666666666
           },
           "label": "count: 0",
           "identifier": "fixture_count",
@@ -75,10 +75,10 @@
           "ref": "@e4",
           "type": "TextField",
           "rect": {
-            "width": 370,
+            "y": 134.66666666666666,
             "height": 34,
-            "x": 16,
-            "y": 134.66666666666666
+            "width": 370,
+            "x": 16
           },
           "identifier": "fixture_input",
           "enabled": true,
@@ -88,10 +88,10 @@
           "ref": "@e5",
           "type": "CollectionView",
           "rect": {
-            "width": 402,
+            "y": 176.66666666666666,
             "height": 577,
-            "x": 0,
-            "y": 176.66666666666666
+            "width": 402,
+            "x": 0
           },
           "label": "Vertical scroll bar, 10 pages",
           "identifier": "fixture_list",
@@ -102,10 +102,10 @@
           "ref": "@e6",
           "type": "Cell",
           "rect": {
-            "width": 370,
+            "y": 211.66666666666666,
             "height": 51.99999999999997,
-            "x": 16,
-            "y": 211.66666666666666
+            "width": 370,
+            "x": 16
           },
           "label": "row 1",
           "enabled": true,
@@ -115,10 +115,10 @@
           "ref": "@e7",
           "type": "Other",
           "rect": {
-            "width": 370,
+            "y": 211.66666666666666,
             "height": 51.99999999999997,
-            "x": 16,
-            "y": 211.66666666666666
+            "width": 370,
+            "x": 16
           },
           "label": "row 1",
           "enabled": true,
@@ -128,10 +128,10 @@
           "ref": "@e8",
           "type": "StaticText",
           "rect": {
-            "width": 370,
+            "y": 211.66666666666666,
             "height": 51.99999999999997,
-            "x": 16,
-            "y": 211.66666666666666
+            "width": 370,
+            "x": 16
           },
           "label": "row 1",
           "identifier": "fixture_row_1",
@@ -142,10 +142,10 @@
           "ref": "@e9",
           "type": "Cell",
           "rect": {
-            "width": 370,
+            "y": 263.66666666666663,
             "height": 52,
-            "x": 16,
-            "y": 263.66666666666663
+            "width": 370,
+            "x": 16
           },
           "label": "row 2",
           "enabled": true,
@@ -155,10 +155,10 @@
           "ref": "@e10",
           "type": "Other",
           "rect": {
-            "width": 370,
-            "height": 52,
             "x": 16,
-            "y": 263.66666666666663
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 2",
           "enabled": true,
@@ -168,10 +168,10 @@
           "ref": "@e11",
           "type": "StaticText",
           "rect": {
-            "width": 370,
-            "height": 52,
             "x": 16,
-            "y": 263.66666666666663
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 2",
           "identifier": "fixture_row_2",
@@ -182,10 +182,10 @@
           "ref": "@e12",
           "type": "Cell",
           "rect": {
-            "width": 370,
-            "height": 52,
             "x": 16,
-            "y": 315.66666666666663
+            "y": 315.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 3",
           "enabled": true,
@@ -195,10 +195,10 @@
           "ref": "@e13",
           "type": "Other",
           "rect": {
-            "width": 370,
-            "height": 52,
             "x": 16,
-            "y": 315.66666666666663
+            "y": 315.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 3",
           "enabled": true,
@@ -208,10 +208,10 @@
           "ref": "@e14",
           "type": "StaticText",
           "rect": {
-            "width": 370,
-            "height": 52,
             "x": 16,
-            "y": 315.66666666666663
+            "y": 315.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 3",
           "identifier": "fixture_row_3",
@@ -222,10 +222,10 @@
           "ref": "@e15",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 367.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 367.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 4",
           "enabled": true,
@@ -235,10 +235,10 @@
           "ref": "@e16",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 367.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 367.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 4",
           "enabled": true,
@@ -248,10 +248,10 @@
           "ref": "@e17",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 367.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 367.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 4",
           "identifier": "fixture_row_4",
@@ -262,10 +262,10 @@
           "ref": "@e18",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 419.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 5",
           "enabled": true,
@@ -275,10 +275,10 @@
           "ref": "@e19",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 419.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 5",
           "enabled": true,
@@ -288,10 +288,10 @@
           "ref": "@e20",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 419.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 5",
           "identifier": "fixture_row_5",
@@ -302,10 +302,10 @@
           "ref": "@e21",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 471.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 471.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 6",
           "enabled": true,
@@ -315,10 +315,10 @@
           "ref": "@e22",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 471.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 471.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 6",
           "enabled": true,
@@ -328,10 +328,10 @@
           "ref": "@e23",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 471.66666666666663,
             "x": 16,
-            "width": 370
+            "y": 471.66666666666663,
+            "width": 370,
+            "height": 52
           },
           "label": "row 6",
           "identifier": "fixture_row_6",
@@ -342,10 +342,10 @@
           "ref": "@e24",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 523.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 523.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 7",
           "enabled": true,
@@ -355,10 +355,10 @@
           "ref": "@e25",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 523.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 523.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 7",
           "enabled": true,
@@ -368,10 +368,10 @@
           "ref": "@e26",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 523.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 523.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 7",
           "identifier": "fixture_row_7",
@@ -382,10 +382,10 @@
           "ref": "@e27",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 575.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 8",
           "enabled": true,
@@ -395,10 +395,10 @@
           "ref": "@e28",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 575.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 8",
           "enabled": true,
@@ -408,10 +408,10 @@
           "ref": "@e29",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 575.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 8",
           "identifier": "fixture_row_8",
@@ -422,10 +422,10 @@
           "ref": "@e30",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 627.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 9",
           "enabled": true,
@@ -435,10 +435,10 @@
           "ref": "@e31",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 627.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 9",
           "enabled": true,
@@ -448,10 +448,10 @@
           "ref": "@e32",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 627.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 9",
           "identifier": "fixture_row_9",
@@ -462,10 +462,10 @@
           "ref": "@e33",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 679.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 10",
           "enabled": true,
@@ -475,10 +475,10 @@
           "ref": "@e34",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 679.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 10",
           "enabled": true,
@@ -488,10 +488,10 @@
           "ref": "@e35",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 679.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 10",
           "identifier": "fixture_row_10",
@@ -502,10 +502,10 @@
           "ref": "@e36",
           "type": "Cell",
           "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 731.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 11",
           "enabled": true,
@@ -515,10 +515,10 @@
           "ref": "@e37",
           "type": "Other",
           "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 731.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 11",
           "enabled": true,
@@ -528,10 +528,10 @@
           "ref": "@e38",
           "type": "StaticText",
           "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
             "x": 16,
-            "width": 370
+            "y": 731.6666666666666,
+            "width": 370,
+            "height": 52
           },
           "label": "row 11",
           "identifier": "fixture_row_11",
@@ -542,10 +542,10 @@
           "ref": "@e39",
           "type": "Other",
           "rect": {
-            "height": 577,
-            "y": 176.66666666666666,
             "x": 369,
-            "width": 30
+            "y": 176.66666666666666,
+            "width": 30,
+            "height": 577
           },
           "label": "Vertical scroll bar, 10 pages",
           "enabled": true,
@@ -555,10 +555,10 @@
           "ref": "@e40",
           "type": "TextField",
           "rect": {
-            "height": 34,
-            "y": 761.6666666666666,
             "x": 16,
-            "width": 334.3333333333333
+            "y": 761.6666666666666,
+            "width": 334.3333333333333,
+            "height": 34
           },
           "identifier": "fixture_bottom_input",
           "enabled": true,
@@ -568,10 +568,10 @@
           "ref": "@e41",
           "type": "Button",
           "rect": {
-            "height": 20.33333333333337,
-            "y": 768.6666666666666,
             "x": 358.3333333333333,
-            "width": 27.666666666666686
+            "y": 768.6666666666666,
+            "width": 27.666666666666686,
+            "height": 20.33333333333337
           },
           "label": "Tap",
           "identifier": "fixture_bottom_button",
@@ -582,10 +582,10 @@
           "ref": "@e42",
           "type": "StaticText",
           "rect": {
-            "height": 20.33333333333337,
-            "y": 803.6666666666666,
             "x": 145.16666666666669,
-            "width": 111.66666666666669
+            "y": 803.6666666666666,
+            "width": 111.66666666666669,
+            "height": 20.33333333333337
           },
           "label": "bottom taps: 0",
           "identifier": "fixture_bottom_count",

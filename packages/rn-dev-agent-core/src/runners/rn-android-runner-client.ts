@@ -102,6 +102,7 @@ export interface RunAndroidArgs {
     | 'dismissKeyboard'
     | 'screenshot'
     | 'back'
+    | 'status'
     | 'isWindowUpdating';
   bundleId?: string;
   deviceId?: string;

@@ -21,6 +21,7 @@ export const REQUIRED_IOS_COMMANDS = [
     'screenshot',
     'back',
     'keyboardDismiss',
+    'status',
 ];
 export const REQUIRED_ANDROID_COMMANDS = [
     'tap',
@@ -32,6 +33,7 @@ export const REQUIRED_ANDROID_COMMANDS = [
     'screenshot',
     'back',
     'dismissKeyboard',
+    'status',
 ];
 export function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
     if (health.protocolVersion === undefined)

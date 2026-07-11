@@ -1,6 +1,6 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T15:57:13.704Z",
+    "capturedAt": "2026-07-11T18:21:08.285Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=android node test/contract/capture-goldens.ts)",
     "platform": "android",
@@ -8,9 +8,9 @@
     "os": "Android 17",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.0",
+    "runnerVersion": "0.67.1",
     "protocolVersion": 1,
-    "runnerPort": 22089
+    "runnerPort": 56849
   },
   "payload": {
     "ok": true,
@@ -173,7 +173,7 @@
         {
           "index": 11,
           "type": "android.widget.TextView",
-          "label": "5:57",
+          "label": "8:21",
           "identifier": "clock",
           "rect": {
             "x": 48,
@@ -274,9 +274,9 @@
           "label": "",
           "identifier": "status_bar_end_side_content",
           "rect": {
-            "x": 963,
+            "x": 952,
             "y": 0,
-            "width": 245,
+            "width": 256,
             "height": 156
           },
           "hittable": true,
@@ -288,9 +288,9 @@
           "label": "",
           "identifier": "system_icons",
           "rect": {
-            "x": 963,
+            "x": 952,
             "y": 45,
-            "width": 245,
+            "width": 256,
             "height": 66
           },
           "hittable": true,
@@ -302,7 +302,7 @@
           "label": "",
           "identifier": "statusIcons",
           "rect": {
-            "x": 972,
+            "x": 961,
             "y": 45,
             "width": 144,
             "height": 66
@@ -313,10 +313,10 @@
         {
           "index": 21,
           "type": "android.widget.FrameLayout",
-          "label": "T-Mobile, three bars.",
+          "label": "T-Mobile, one bar.",
           "identifier": "mobile_combo",
           "rect": {
-            "x": 972,
+            "x": 961,
             "y": 45,
             "width": 69,
             "height": 66
@@ -330,7 +330,7 @@
           "label": "",
           "identifier": "mobile_group",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 45,
             "width": 51,
             "height": 66
@@ -344,7 +344,7 @@
           "label": "",
           "identifier": "",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 60,
             "width": 51,
             "height": 36
@@ -358,7 +358,7 @@
           "label": "",
           "identifier": "mobile_signal",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 60,
             "width": 51,
             "height": 36
@@ -372,7 +372,7 @@
           "label": "",
           "identifier": "wifi_combo",
           "rect": {
-            "x": 1041,
+            "x": 1030,
             "y": 45,
             "width": 66,
             "height": 66
@@ -386,7 +386,7 @@
           "label": "",
           "identifier": "wifi_group",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 45,
             "width": 48,
             "height": 66
@@ -400,7 +400,7 @@
           "label": "",
           "identifier": "wifi_combo",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 60,
             "width": 48,
             "height": 36
@@ -414,7 +414,7 @@
           "label": "Wifi signal full.",
           "identifier": "wifi_signal",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 60,
             "width": 48,
             "height": 36
@@ -428,9 +428,9 @@
           "label": "",
           "identifier": "",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "hittable": true,
@@ -442,9 +442,9 @@
           "label": "",
           "identifier": "",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "hittable": true,
@@ -456,9 +456,9 @@
           "label": "",
           "identifier": "battery",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "hittable": true,
@@ -467,10 +467,10 @@
         {
           "index": 32,
           "type": "android.view.View",
-          "label": "Battery 100 percent.",
-          "identifier": "Battery 100 percent.",
+          "label": "Battery charging, 100 percent.",
+          "identifier": "Battery charging, 100 percent.",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
             "width": 72,
             "height": 39

@@ -992,6 +992,7 @@ export interface RunIOSArgs {
     | 'pressHome'
     | 'appState'
     | 'activate'
+    | 'status'
     | 'terminate';
   bundleId?: string;
   x?: number;
