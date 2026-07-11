@@ -69,6 +69,7 @@ test('GET /api/screenshot/:seq serves bytes from the recorder buffer only', asyn
   const rec = new Recorder(10);
   const p = join(mkdtempSync(join(tmpdir(), 'obs-')), 's.jpg');
   writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  rec.registerCapturedScreenshot(p); // GH #429: reads require a capture grant
   rec.record({
     tool: 'device_screenshot',
     params: {},

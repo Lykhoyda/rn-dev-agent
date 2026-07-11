@@ -13,6 +13,7 @@ import { arbiter } from '../lifecycle/device-arbiter.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
+import { recorder } from '../observability/recorder.js';
 
 // ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
 type RunAgentDeviceFn = typeof runNative;
@@ -449,6 +450,12 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   if (result.isError) return result;
 
   const actualPath = resolveScreenshotPath(result, requestedPath);
+  // GH #429: grant the observe recorder a one-shot read of what THIS capture
+  // wrote. Both paths are granted because legacy runner envelopes surface the
+  // file via data.message, which resolveScreenshotPath can't see (it falls
+  // back to requestedPath) while the recorder-side extractor still reads it.
+  recorder.registerCapturedScreenshot(requestedPath);
+  recorder.registerCapturedScreenshot(actualPath);
   const resizeOpts: ResizeOpts = {};
   if (args.maxWidth !== undefined) resizeOpts.maxWidth = args.maxWidth;
   if (args.quality !== undefined) resizeOpts.quality = args.quality;

@@ -43,6 +43,7 @@ test('captureScreenshot reads bytes at record time and serves by seq', () => {
   const png = join(dir, 'shot.jpg');
   writeFileSync(png, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
   const r = new Recorder(5);
+  r.registerCapturedScreenshot(png); // GH #429: reads require a capture grant
   r.record({
     tool: 'device_screenshot',
     params: {},
@@ -71,6 +72,7 @@ test('captureScreenshot bytes survive deletion of the source file (captured at r
   const png = join(dir, 'shot.png');
   writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const r = new Recorder(5);
+  r.registerCapturedScreenshot(png); // GH #429
   r.record({
     tool: 'device_screenshot',
     params: {},
@@ -88,6 +90,7 @@ test('captureScreenshot skips an oversized file (>4MB)', () => {
   const big = join(dir, 'big.jpg');
   writeFileSync(big, Buffer.alloc(4_000_001, 0xff));
   const r = new Recorder(5);
+  r.registerCapturedScreenshot(big); // GH #429
   r.record({
     tool: 'device_screenshot',
     params: {},
@@ -103,6 +106,7 @@ test('captureScreenshot FIFO-evicts beyond shotCap', () => {
   const png = join(dir, 's.jpg');
   writeFileSync(png, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
   for (let i = 0; i < 10; i++) {
+    r.registerCapturedScreenshot(png); // GH #429: grants are single-use
     r.record({
       tool: 'device_screenshot',
       params: {},
@@ -132,6 +136,7 @@ test('captureScreenshot reads bytes from the REAL MCP envelope (content[0].text)
   const jpg = join(dir, 'real-envelope.jpg');
   writeFileSync(jpg, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
   const r = new Recorder(5);
+  r.registerCapturedScreenshot(jpg); // GH #429
   r.record({
     tool: 'device_screenshot',
     params: {},
