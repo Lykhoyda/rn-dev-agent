@@ -174,6 +174,14 @@ const archHtml2 = page('architecture/index.html');
 check('three-layer scene mounted', archHtml2.includes('data-scene-id="three-layers"'));
 check('busy chip present statically', archHtml2.includes('BUSY_FLOW_ACTIVE'));
 
+console.log('\nverify-site: actions lifecycle scene');
+const actionsHtml = page('actions/index.html');
+check('actions scene mounted', actionsHtml.includes('data-scene-id="actions-lifecycle"'));
+check(
+  'payoff numerals present statically',
+  actionsHtml.includes('al-payoff') && actionsHtml.includes('14 min'),
+);
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);

@@ -4,6 +4,7 @@ description: Saved, replayable flows through your app — what they are, why the
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import ActionsLifecycleScene from '../../../components/concepts/ActionsLifecycleScene.astro';
 
 An **action** is a saved, parameterised flow through your app — login, navigating to a screen, completing a multi-step form. The plugin records them automatically when `/test-feature` verification passes; you replay them in seconds via `/run-action`, and the agent uses them as **prologues** when it needs to reach a known state before doing new work.
 
@@ -15,6 +16,8 @@ An **action** is a saved, parameterised flow through your app — login, navigat
 | **Run one** | List with `/rn-dev-agent:list-learned-actions`; replay with `/rn-dev-agent:run-action <name>`. The agent also picks an action automatically when it needs to reach a known state. |
 | **Self-repair** | If a `testID` changes, the plugin patches the action against the live UI and retries. Small UI drift is absorbed; broken product logic is not. |
 | **Why** | Known flows replay in seconds instead of being rediscovered interactively. Repeated setup work like login becomes one fast step. |
+
+<ActionsLifecycleScene />
 
 ## Why we have actions — the LLM/pragmatic hybrid
 
