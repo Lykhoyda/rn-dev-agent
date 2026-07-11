@@ -65,6 +65,7 @@ export default defineConfig({
       components: {
         ThemeSelect: './src/components/ThemeSelect.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
+        PageTitle: './src/components/PageTitle.astro',
       },
       customCss: ['./src/styles/custom.css'],
       expressiveCode: {

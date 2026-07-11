@@ -182,6 +182,11 @@ check(
   actionsHtml.includes('al-payoff') && actionsHtml.includes('14 min'),
 );
 
+console.log('\nverify-site: page-title kicker');
+check('kicker on architecture', page('architecture/index.html').includes('page-kicker'));
+check('kicker shows sidebar group', page('architecture/index.html').includes('Core Concepts'));
+check('kicker on reference page', page('tools/index.html').includes('page-kicker'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
