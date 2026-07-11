@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 33;
+export const HELPERS_VERSION = 34;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -18,11 +18,29 @@ export const INJECTED_HELPERS = `
   var MAX_RENDERER_IDS = 20;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
+  // Reset by every root-iteration pass; only valid when read synchronously
+  // after the pass that produced the tree (many helpers share the iterators).
+  var lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
+
+  function computeUnscannedRendererIds() {
+    try {
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
+      var out = [];
+      hook.renderers.forEach(function(_v, id) {
+        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
+      });
+      return out;
+    } catch (_) { return []; }
+  }
+
   function findActiveRenderer() {
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var emptyStreak = 0;
     for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
+      lastRootScan.probedUpTo = i;
       try {
         var roots = hook.getFiberRoots(i);
         if (roots && roots.size > 0) {
@@ -32,6 +50,7 @@ export const INJECTED_HELPERS = `
         if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
       } catch (_) {
         emptyStreak++;
+        lastRootScan.rendererErrors++;
       }
     }
     return null;
@@ -45,18 +64,17 @@ export const INJECTED_HELPERS = `
   //
   // Per-renderer try/catch protects against one renderer's getFiberRoots
   // throwing during teardown/HMR/worklet init (Gemini A3, 2026-04-23,
-  // conf 80) — a single bad renderer must not poison the union.
-  //
-  // Task 4 will add an extra-roots step here that consults
-  // globalThis.__RN_AGENT_EXTRA_ROOTS__ AFTER the native renderer loop
-  // so user-registered portals stay lower priority than React's own
-  // registry. Not in this commit — refactor isolated from new behavior
-  // for cleaner bisects.
+  // conf 80) — a single bad renderer must not poison the union. The
+  // extra-roots step (globalThis.__RN_AGENT_EXTRA_ROOTS__) runs AFTER the
+  // native renderer loop so user-registered portals stay lower priority
+  // than React's own registry.
   function iterateAllRoots(cb) {
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var emptyStreak = 0;
       for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+        lastRootScan.probedUpTo = ri;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -75,6 +93,7 @@ export const INJECTED_HELPERS = `
           }
         } catch (_) {
           emptyStreak++;
+          lastRootScan.rendererErrors++;
         }
       }
     }
@@ -100,7 +119,10 @@ export const INJECTED_HELPERS = `
           }
         }
       }
-    } catch (_) { /* swallow — resolver bug must not break iteration */ }
+    } catch (_) {
+      // swallow — resolver bug must not break iteration
+      lastRootScan.rendererErrors++;
+    }
     return null;
   }
 
@@ -211,9 +233,39 @@ export const INJECTED_HELPERS = `
     var maxDepth = opts.maxDepth || 4;
     var filter = opts.filter || opts.testID || opts.type || null;
 
+    // Story 16 (#409): quality verdict computed once at capture, from the same
+    // pass that produced the tree — downstream tools render it, never re-derive.
+    var walkQuality = { droppedSubtrees: 0, collapsedChildLists: 0 };
+    function buildVerdict(path, o) {
+      o = o || {};
+      var reasons = [];
+      if (o.noRenderer) reasons.push('no-renderer');
+      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
+      var unscanned = computeUnscannedRendererIds();
+      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
+      if (o.outputTruncated) reasons.push('output-truncated');
+      var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
+      return {
+        state: state,
+        path: path,
+        reasons: reasons,
+        rootsSeeded: o.rootsSeeded || 0,
+        scannedNodes: o.scannedNodes || 0,
+        effectiveDepth: maxDepth,
+        droppedSubtrees: walkQuality.droppedSubtrees,
+        collapsedChildLists: walkQuality.collapsedChildLists,
+        rendererErrors: lastRootScan.rendererErrors,
+        unscannedRendererIds: unscanned
+      };
+    }
+
     var renderer = findActiveRenderer();
     if (!renderer) {
-      return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots — app may still be loading' });
+      return JSON.stringify({
+        error: 'React DevTools hook not available or no fiber roots — app may still be loading',
+        verdict: buildVerdict('none', { noRenderer: true })
+      });
     }
 
     var visited = new WeakSet();
@@ -254,7 +306,15 @@ export const INJECTED_HELPERS = `
     }
 
     function walkSubtree(fiber, depth, limit, vis) {
-      if (!fiber || depth > limit || vis.has(fiber)) return null;
+      if (!fiber) return null;
+      if (depth > limit) {
+        // Depth-cap drop: expected under the requested cap, but must be
+        // counted — a sparse-because-shallow tree previously looked identical
+        // to a legitimately small one.
+        walkQuality.droppedSubtrees++;
+        return null;
+      }
+      if (vis.has(fiber)) return null;
       vis.add(fiber);
       totalNodes++;
 
@@ -334,6 +394,7 @@ export const INJECTED_HELPERS = `
       }
 
       if (children.length > 0) {
+        if (children.length > 20) walkQuality.collapsedChildLists++;
         result.children = children.length > 20
           ? children.slice(0, 10).concat([{ _truncated: (children.length - 10) + ' more' }])
           : children;
@@ -435,6 +496,11 @@ export const INJECTED_HELPERS = `
         iOut.truncated = true;
         iOut.hint = 'More interactive elements exist beyond the cap — scope with filter or device_scrollintoview.';
       }
+      iOut.verdict = buildVerdict('interactive', {
+        rootsSeeded: iRoots.length,
+        scannedNodes: iScanned,
+        scanBudgetExhausted: iQueue.length > 0
+      });
       return safeStringify(iOut, 999999);
     }
 
@@ -492,8 +558,21 @@ export const INJECTED_HELPERS = `
       // Codex review (conf 80): field renamed from renderersScanned to
       // rootsSeeded to match actual semantic (roots pushed into the BFS
       // queue, not renderers walked 1..5).
+      // A no-match verdict distinguishes "scanned everything, truly absent"
+      // from "budget ran out mid-scan" — the sparse-vs-empty ambiguity #409
+      // exists to kill.
+      var filterBudgetHit = queue.length > 0;
       if (matchFibers.length === 0) {
-        return JSON.stringify({ tree: null, totalNodes: scanned, rootsSeeded: allRoots.length });
+        return JSON.stringify({
+          tree: null,
+          totalNodes: scanned,
+          rootsSeeded: allRoots.length,
+          verdict: buildVerdict('filter', {
+            rootsSeeded: allRoots.length,
+            scannedNodes: scanned,
+            scanBudgetExhausted: filterBudgetHit
+          })
+        });
       }
 
       var matches = [];
@@ -503,10 +582,16 @@ export const INJECTED_HELPERS = `
         if (subtree) matches.push(subtree);
       }
       totalNodes = scanned;
+      var filterVerdictOpts = {
+        rootsSeeded: allRoots.length,
+        scannedNodes: scanned,
+        scanBudgetExhausted: filterBudgetHit
+      };
       var tree = matches.length === 1 ? matches[0] : { matches: matches };
-      var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRoots.length }, 999999);
+      var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRoots.length, verdict: buildVerdict('filter', filterVerdictOpts) }, 999999);
       if (output.length > 50000) {
-        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, rootsSeeded: allRoots.length, truncated: true });
+        filterVerdictOpts.outputTruncated = true;
+        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, rootsSeeded: allRoots.length, truncated: true, verdict: buildVerdict('filter', filterVerdictOpts) });
       }
       return output;
     }
@@ -523,10 +608,13 @@ export const INJECTED_HELPERS = `
       var sub = walkSubtree(allRootsU[ri].fiber, 0, maxDepth, visited);
       if (sub) trees.push(sub);
     }
+    var fullVerdictOpts = { rootsSeeded: allRootsU.length, scannedNodes: totalNodes };
     var tree = trees.length === 1 ? trees[0] : (trees.length === 0 ? null : { _wrapper: true, children: trees });
-    var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRootsU.length }, 999999);
+    var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRootsU.length, verdict: buildVerdict('full', fullVerdictOpts) }, 999999);
     if (output.length > 50000) {
-      return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
+      fullVerdictOpts.failed = true;
+      fullVerdictOpts.outputTruncated = true;
+      return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.', verdict: buildVerdict('full', fullVerdictOpts) });
     }
     return output;
   }
@@ -2860,8 +2948,10 @@ export const REACT_READY_PROBE_JS = `(function() {
   // so the readiness gate can't miss a late-registered renderer (Bridgeless +
   // Reanimated register secondary renderers above id 5).
   for (var i = 1; i <= 20; i++) {
-    var r = h.getFiberRoots(i);
-    if (r && r.size > 0) return true;
+    try {
+      var r = h.getFiberRoots(i);
+      if (r && r.size > 0) return true;
+    } catch (_) { /* one throwing renderer must not abort the readiness scan */ }
   }
   return false;
 })()`;

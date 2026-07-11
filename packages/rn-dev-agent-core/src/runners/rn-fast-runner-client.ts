@@ -13,7 +13,12 @@ import {
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import type { FastRunnerState } from '../types.js';
-import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
+import {
+  updateRefMapFromFlat,
+  buildSnapshotVerdict,
+  getCachedMetadata,
+  type FlatNode,
+} from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import {
@@ -1201,8 +1206,12 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     const data = resp.data as { nodes?: RunnerSnapshotNode[]; tree?: unknown };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      updateRefMapFromFlat(flat);
-      return okResult({ nodes: flat }, announce ? { meta: announce } : undefined);
+      const outcome = updateRefMapFromFlat(flat);
+      // GH #409: verdict rendered from the same call that decided whether the
+      // ref map was overwritten — an empty capture is reported as degraded and
+      // leaves the last-known-good refs bound.
+      const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
+      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict } });
     }
     // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
     return okResult(resp.data, announce ? { meta: announce } : undefined);

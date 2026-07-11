@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
-import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
+import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
@@ -902,8 +902,12 @@ export async function runIOS(args) {
         const data = resp.data;
         if (Array.isArray(data.nodes)) {
             const flat = mapRunnerNodesToFlat(data.nodes);
-            updateRefMapFromFlat(flat);
-            return okResult({ nodes: flat }, announce ? { meta: announce } : undefined);
+            const outcome = updateRefMapFromFlat(flat);
+            // GH #409: verdict rendered from the same call that decided whether the
+            // ref map was overwritten — an empty capture is reported as degraded and
+            // leaves the last-known-good refs bound.
+            const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
+            return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict } });
         }
         // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
         return okResult(resp.data, announce ? { meta: announce } : undefined);

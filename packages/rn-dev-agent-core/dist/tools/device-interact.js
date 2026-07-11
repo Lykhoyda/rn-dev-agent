@@ -120,6 +120,11 @@ export async function fetchSnapshotNodes(allowCache = false) {
     const initialNodes = parseSnapshotEnvelope(first);
     if (initialNodes === null)
         return { ok: false, reason: 'fetch-failed' };
+    // GH #409: a zero-node capture cannot support any "element absent" verdict —
+    // it is indistinguishable from a degraded walk. Interactive consumers fail
+    // closed instead of concluding "nothing on screen".
+    if (initialNodes.length === 0)
+        return { ok: false, reason: 'empty-capture' };
     if (!isAgentDeviceRunnerSentinel(initialNodes)) {
         const platform = getActiveSession()?.platform;
         if (platform)
@@ -144,10 +149,19 @@ export async function fetchSnapshotNodes(allowCache = false) {
     const recoveredNodes = parseSnapshotEnvelope(recovery.result);
     if (recoveredNodes === null)
         return { ok: false, reason: 'fetch-failed' };
+    if (recoveredNodes.length === 0)
+        return { ok: false, reason: 'empty-capture' };
     const platform = getActiveSession()?.platform;
     if (platform)
         cacheSnapshot(platform, recoveredNodes);
     return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+}
+// GH #409: refusal for a zero-node capture — asserting NOT_FOUND on it would
+// present a degraded capture as a legitimately empty screen.
+function emptyCaptureFailResult(query) {
+    return failResult(`Snapshot returned zero nodes — cannot distinguish an empty screen from a degraded capture` +
+        (query !== undefined ? `; not asserting "${query}" is absent` : '') +
+        `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: 'SNAPSHOT_DEGRADED', ...(query !== undefined ? { query } : {}) });
 }
 export async function fetchFindCandidates(query, exact = false, allowCache = false) {
     const snap = await fetchSnapshotNodes(allowCache);
@@ -210,6 +224,9 @@ export function createDeviceFindHandler() {
                 if (find.reason === 'runner-leak-unrecovered') {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
                 }
+                if (find.reason === 'empty-capture') {
+                    return emptyCaptureFailResult(args.text);
+                }
                 // Snapshot failed and caller has strict requirements — do NOT fall through
                 // to the fuzzy agent-device path because it cannot honor exact/index. Fail
                 // cleanly so the caller knows exact/index semantics aren't reachable.
@@ -254,6 +271,9 @@ export function createDeviceFindHandler() {
             if (!find.ok) {
                 if (find.reason === 'runner-leak-unrecovered') {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
+                }
+                if (find.reason === 'empty-capture') {
+                    return emptyCaptureFailResult(args.text);
                 }
                 return failResult(`Snapshot unavailable — cannot resolve "${args.text}"`, {
                     code: 'SNAPSHOT_UNAVAILABLE',
@@ -1144,6 +1164,9 @@ export function createDeviceFocusNextHandler() {
         if (!snap.ok) {
             if (snap.reason === 'runner-leak-unrecovered') {
                 return runnerLeakFailResult(undefined, snap.recoveryReason);
+            }
+            if (snap.reason === 'empty-capture') {
+                return emptyCaptureFailResult();
             }
             return failResult('Snapshot unavailable — cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.', { code: 'SNAPSHOT_UNAVAILABLE' });
         }

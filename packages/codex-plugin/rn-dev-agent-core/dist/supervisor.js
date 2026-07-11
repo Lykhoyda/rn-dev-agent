@@ -27416,7 +27416,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 33;
+    HELPERS_VERSION = 34;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -27432,11 +27432,29 @@ var init_injected_helpers = __esm({
   var MAX_RENDERER_IDS = 20;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
+  // Reset by every root-iteration pass; only valid when read synchronously
+  // after the pass that produced the tree (many helpers share the iterators).
+  var lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
+
+  function computeUnscannedRendererIds() {
+    try {
+      var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (!hook || !hook.renderers || typeof hook.renderers.forEach !== 'function') return [];
+      var out = [];
+      hook.renderers.forEach(function(_v, id) {
+        if (typeof id === 'number' && id > lastRootScan.probedUpTo) out.push(id);
+      });
+      return out;
+    } catch (_) { return []; }
+  }
+
   function findActiveRenderer() {
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var emptyStreak = 0;
     for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
+      lastRootScan.probedUpTo = i;
       try {
         var roots = hook.getFiberRoots(i);
         if (roots && roots.size > 0) {
@@ -27446,6 +27464,7 @@ var init_injected_helpers = __esm({
         if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
       } catch (_) {
         emptyStreak++;
+        lastRootScan.rendererErrors++;
       }
     }
     return null;
@@ -27459,18 +27478,17 @@ var init_injected_helpers = __esm({
   //
   // Per-renderer try/catch protects against one renderer's getFiberRoots
   // throwing during teardown/HMR/worklet init (Gemini A3, 2026-04-23,
-  // conf 80) \u2014 a single bad renderer must not poison the union.
-  //
-  // Task 4 will add an extra-roots step here that consults
-  // globalThis.__RN_AGENT_EXTRA_ROOTS__ AFTER the native renderer loop
-  // so user-registered portals stay lower priority than React's own
-  // registry. Not in this commit \u2014 refactor isolated from new behavior
-  // for cleaner bisects.
+  // conf 80) \u2014 a single bad renderer must not poison the union. The
+  // extra-roots step (globalThis.__RN_AGENT_EXTRA_ROOTS__) runs AFTER the
+  // native renderer loop so user-registered portals stay lower priority
+  // than React's own registry.
   function iterateAllRoots(cb) {
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var emptyStreak = 0;
       for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
+        lastRootScan.probedUpTo = ri;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -27489,6 +27507,7 @@ var init_injected_helpers = __esm({
           }
         } catch (_) {
           emptyStreak++;
+          lastRootScan.rendererErrors++;
         }
       }
     }
@@ -27514,7 +27533,10 @@ var init_injected_helpers = __esm({
           }
         }
       }
-    } catch (_) { /* swallow \u2014 resolver bug must not break iteration */ }
+    } catch (_) {
+      // swallow \u2014 resolver bug must not break iteration
+      lastRootScan.rendererErrors++;
+    }
     return null;
   }
 
@@ -27625,9 +27647,39 @@ var init_injected_helpers = __esm({
     var maxDepth = opts.maxDepth || 4;
     var filter = opts.filter || opts.testID || opts.type || null;
 
+    // Story 16 (#409): quality verdict computed once at capture, from the same
+    // pass that produced the tree \u2014 downstream tools render it, never re-derive.
+    var walkQuality = { droppedSubtrees: 0, collapsedChildLists: 0 };
+    function buildVerdict(path, o) {
+      o = o || {};
+      var reasons = [];
+      if (o.noRenderer) reasons.push('no-renderer');
+      if (lastRootScan.rendererErrors > 0) reasons.push('renderer-error');
+      var unscanned = computeUnscannedRendererIds();
+      if (unscanned.length > 0) reasons.push('renderers-unscanned');
+      if (o.scanBudgetExhausted) reasons.push('scan-budget-exhausted');
+      if (o.outputTruncated) reasons.push('output-truncated');
+      var state = (o.noRenderer || o.failed) ? 'failed' : (reasons.length > 0 ? 'degraded' : 'ok');
+      return {
+        state: state,
+        path: path,
+        reasons: reasons,
+        rootsSeeded: o.rootsSeeded || 0,
+        scannedNodes: o.scannedNodes || 0,
+        effectiveDepth: maxDepth,
+        droppedSubtrees: walkQuality.droppedSubtrees,
+        collapsedChildLists: walkQuality.collapsedChildLists,
+        rendererErrors: lastRootScan.rendererErrors,
+        unscannedRendererIds: unscanned
+      };
+    }
+
     var renderer = findActiveRenderer();
     if (!renderer) {
-      return JSON.stringify({ error: 'React DevTools hook not available or no fiber roots \u2014 app may still be loading' });
+      return JSON.stringify({
+        error: 'React DevTools hook not available or no fiber roots \u2014 app may still be loading',
+        verdict: buildVerdict('none', { noRenderer: true })
+      });
     }
 
     var visited = new WeakSet();
@@ -27668,7 +27720,15 @@ var init_injected_helpers = __esm({
     }
 
     function walkSubtree(fiber, depth, limit, vis) {
-      if (!fiber || depth > limit || vis.has(fiber)) return null;
+      if (!fiber) return null;
+      if (depth > limit) {
+        // Depth-cap drop: expected under the requested cap, but must be
+        // counted \u2014 a sparse-because-shallow tree previously looked identical
+        // to a legitimately small one.
+        walkQuality.droppedSubtrees++;
+        return null;
+      }
+      if (vis.has(fiber)) return null;
       vis.add(fiber);
       totalNodes++;
 
@@ -27748,6 +27808,7 @@ var init_injected_helpers = __esm({
       }
 
       if (children.length > 0) {
+        if (children.length > 20) walkQuality.collapsedChildLists++;
         result.children = children.length > 20
           ? children.slice(0, 10).concat([{ _truncated: (children.length - 10) + ' more' }])
           : children;
@@ -27849,6 +27910,11 @@ var init_injected_helpers = __esm({
         iOut.truncated = true;
         iOut.hint = 'More interactive elements exist beyond the cap \u2014 scope with filter or device_scrollintoview.';
       }
+      iOut.verdict = buildVerdict('interactive', {
+        rootsSeeded: iRoots.length,
+        scannedNodes: iScanned,
+        scanBudgetExhausted: iQueue.length > 0
+      });
       return safeStringify(iOut, 999999);
     }
 
@@ -27906,8 +27972,21 @@ var init_injected_helpers = __esm({
       // Codex review (conf 80): field renamed from renderersScanned to
       // rootsSeeded to match actual semantic (roots pushed into the BFS
       // queue, not renderers walked 1..5).
+      // A no-match verdict distinguishes "scanned everything, truly absent"
+      // from "budget ran out mid-scan" \u2014 the sparse-vs-empty ambiguity #409
+      // exists to kill.
+      var filterBudgetHit = queue.length > 0;
       if (matchFibers.length === 0) {
-        return JSON.stringify({ tree: null, totalNodes: scanned, rootsSeeded: allRoots.length });
+        return JSON.stringify({
+          tree: null,
+          totalNodes: scanned,
+          rootsSeeded: allRoots.length,
+          verdict: buildVerdict('filter', {
+            rootsSeeded: allRoots.length,
+            scannedNodes: scanned,
+            scanBudgetExhausted: filterBudgetHit
+          })
+        });
       }
 
       var matches = [];
@@ -27917,10 +27996,16 @@ var init_injected_helpers = __esm({
         if (subtree) matches.push(subtree);
       }
       totalNodes = scanned;
+      var filterVerdictOpts = {
+        rootsSeeded: allRoots.length,
+        scannedNodes: scanned,
+        scanBudgetExhausted: filterBudgetHit
+      };
       var tree = matches.length === 1 ? matches[0] : { matches: matches };
-      var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRoots.length }, 999999);
+      var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRoots.length, verdict: buildVerdict('filter', filterVerdictOpts) }, 999999);
       if (output.length > 50000) {
-        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, rootsSeeded: allRoots.length, truncated: true });
+        filterVerdictOpts.outputTruncated = true;
+        return safeStringify({ tree: matches[0] || null, totalNodes: totalNodes, rootsSeeded: allRoots.length, truncated: true, verdict: buildVerdict('filter', filterVerdictOpts) });
       }
       return output;
     }
@@ -27937,10 +28022,13 @@ var init_injected_helpers = __esm({
       var sub = walkSubtree(allRootsU[ri].fiber, 0, maxDepth, visited);
       if (sub) trees.push(sub);
     }
+    var fullVerdictOpts = { rootsSeeded: allRootsU.length, scannedNodes: totalNodes };
     var tree = trees.length === 1 ? trees[0] : (trees.length === 0 ? null : { _wrapper: true, children: trees });
-    var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRootsU.length }, 999999);
+    var output = safeStringify({ tree: tree, totalNodes: totalNodes, rootsSeeded: allRootsU.length, verdict: buildVerdict('full', fullVerdictOpts) }, 999999);
     if (output.length > 50000) {
-      return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.' });
+      fullVerdictOpts.failed = true;
+      fullVerdictOpts.outputTruncated = true;
+      return safeStringify({ error: 'Tree too large (' + output.length + ' chars). Use a filter parameter to scope the query.', verdict: buildVerdict('full', fullVerdictOpts) });
     }
     return output;
   }
@@ -30264,8 +30352,10 @@ var init_injected_helpers = __esm({
   // so the readiness gate can't miss a late-registered renderer (Bridgeless +
   // Reanimated register secondary renderers above id 5).
   for (var i = 1; i <= 20; i++) {
-    var r = h.getFiberRoots(i);
-    if (r && r.size > 0) return true;
+    try {
+      var r = h.getFiberRoots(i);
+      if (r && r.size > 0) return true;
+    } catch (_) { /* one throwing renderer must not abort the readiness scan */ }
   }
   return false;
 })()`;
@@ -40104,7 +40194,27 @@ function clearRefMap() {
   lastUpdated = 0;
   lastSnapshotHash = null;
 }
+function buildSnapshotVerdict(source, nodeCount, outcome) {
+  const reasons = [];
+  if (nodeCount === 0)
+    reasons.push("empty-capture");
+  return {
+    state: reasons.length > 0 ? "degraded" : "ok",
+    source,
+    nodeCount,
+    refMapUpdated: outcome.applied,
+    reasons
+  };
+}
 function updateRefMapFromFlat(nodes) {
+  let validCount = 0;
+  for (const node of nodes) {
+    if (node.ref && node.rect)
+      validCount++;
+  }
+  if (validCount === 0 && refMap.size > 0) {
+    return { applied: false, reason: "empty-capture" };
+  }
   refMap.clear();
   screenRect = null;
   const hashed = [];
@@ -40131,6 +40241,7 @@ function updateRefMapFromFlat(nodes) {
     lastSnapshotHash = null;
   }
   lastUpdated = Date.now();
+  return { applied: true };
 }
 function getCachedMetadata(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
@@ -41452,8 +41563,9 @@ async function runIOS(args) {
     const data = resp.data;
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      updateRefMapFromFlat(flat);
-      return okResult({ nodes: flat }, announce ? { meta: announce } : void 0);
+      const outcome = updateRefMapFromFlat(flat);
+      const snapshotVerdict = buildSnapshotVerdict("rn-fast-runner", flat.length, outcome);
+      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict } });
     }
     return okResult(resp.data, announce ? { meta: announce } : void 0);
   }
@@ -42555,8 +42667,9 @@ async function runAndroid(args) {
     const data = resp.data;
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat2(data.nodes);
-      updateRefMapFromFlat(flat);
-      return okResult({ nodes: flat });
+      const outcome = updateRefMapFromFlat(flat);
+      const snapshotVerdict = buildSnapshotVerdict("rn-android-runner", flat.length, outcome);
+      return okResult({ nodes: flat }, { meta: { snapshotVerdict } });
     }
   }
   if (args.command === "screenshot") {
@@ -46175,6 +46288,8 @@ async function fetchSnapshotNodes(allowCache = false) {
   const initialNodes = parseSnapshotEnvelope(first);
   if (initialNodes === null)
     return { ok: false, reason: "fetch-failed" };
+  if (initialNodes.length === 0)
+    return { ok: false, reason: "empty-capture" };
   if (!isAgentDeviceRunnerSentinel(initialNodes)) {
     const platform2 = getActiveSession()?.platform;
     if (platform2)
@@ -46199,10 +46314,15 @@ async function fetchSnapshotNodes(allowCache = false) {
   const recoveredNodes = parseSnapshotEnvelope(recovery.result);
   if (recoveredNodes === null)
     return { ok: false, reason: "fetch-failed" };
+  if (recoveredNodes.length === 0)
+    return { ok: false, reason: "empty-capture" };
   const platform = getActiveSession()?.platform;
   if (platform)
     cacheSnapshot(platform, recoveredNodes);
   return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+}
+function emptyCaptureFailResult(query) {
+  return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
 }
 async function fetchFindCandidates(query, exact = false, allowCache = false) {
   const snap = await fetchSnapshotNodes(allowCache);
@@ -46254,6 +46374,9 @@ function createDeviceFindHandler() {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
         }
+        if (find.reason === "empty-capture") {
+          return emptyCaptureFailResult(args.text);
+        }
         return failResult(`Snapshot unavailable \u2014 cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
       }
       const { candidates, recoveredTier } = find;
@@ -46286,6 +46409,9 @@ function createDeviceFindHandler() {
       if (!find.ok) {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
+        }
+        if (find.reason === "empty-capture") {
+          return emptyCaptureFailResult(args.text);
         }
         return failResult(`Snapshot unavailable \u2014 cannot resolve "${args.text}"`, {
           code: "SNAPSHOT_UNAVAILABLE",
@@ -46948,6 +47074,9 @@ function createDeviceFocusNextHandler() {
     if (!snap.ok) {
       if (snap.reason === "runner-leak-unrecovered") {
         return runnerLeakFailResult(void 0, snap.recoveryReason);
+      }
+      if (snap.reason === "empty-capture") {
+        return emptyCaptureFailResult();
       }
       return failResult("Snapshot unavailable \u2014 cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
     }
@@ -49252,15 +49381,19 @@ function createComponentTreeHandler(getClient2) {
     } catch {
       return failResult("Failed to parse component tree response");
     }
+    const verdict = parsed.verdict;
+    const meta = verdict ? { treeVerdict: verdict } : void 0;
     if (parsed.error) {
-      return failResult(`Component tree error: ${parsed.error}`);
+      return failResult(`Component tree error: ${parsed.error}`, meta);
     }
     if (parsed.warning === "APP_HAS_REDBOX") {
       return warnResult({
         message: parsed.message ?? "App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload."
-      }, "APP_HAS_REDBOX");
+      }, "APP_HAS_REDBOX", meta);
     }
-    return okResult(parsed);
+    if (verdict)
+      delete parsed.verdict;
+    return okResult(parsed, meta ? { meta } : void 0);
   });
 }
 var init_component_tree = __esm({

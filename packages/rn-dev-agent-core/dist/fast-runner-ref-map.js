@@ -179,7 +179,32 @@ export function flattenXCUITree(tree) {
     walk(tree);
     return { nodes, refMap: localRefMap };
 }
+export function buildSnapshotVerdict(source, nodeCount, outcome) {
+    const reasons = [];
+    if (nodeCount === 0)
+        reasons.push('empty-capture');
+    return {
+        state: reasons.length > 0 ? 'degraded' : 'ok',
+        source,
+        nodeCount,
+        refMapUpdated: outcome.applied,
+        reasons,
+    };
+}
 export function updateRefMapFromFlat(nodes) {
+    // GH #409: a zero-node capture is indistinguishable from a degraded walk
+    // (AX failure, wedged runner, mid-transition screen). It must never wipe the
+    // last-known-good map — refs stay bound to the last verified capture, and a
+    // genuinely emptied screen surfaces as STALE_REF on the next tap instead of
+    // silently serving nothing.
+    let validCount = 0;
+    for (const node of nodes) {
+        if (node.ref && node.rect)
+            validCount++;
+    }
+    if (validCount === 0 && refMap.size > 0) {
+        return { applied: false, reason: 'empty-capture' };
+    }
     // refMap IS cleared (coordinates must never be served across generations —
     // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
     // positional, so ids absent from this snapshot cannot collide with current
@@ -222,6 +247,7 @@ export function updateRefMapFromFlat(nodes) {
         lastSnapshotHash = null;
     }
     lastUpdated = Date.now();
+    return { applied: true };
 }
 export function getCachedMetadata(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;

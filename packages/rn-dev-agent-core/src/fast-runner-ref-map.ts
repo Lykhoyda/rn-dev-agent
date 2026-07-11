@@ -274,7 +274,52 @@ export function flattenXCUITree(tree: XCUITreeNode): {
   return { nodes, refMap: localRefMap };
 }
 
-export function updateRefMapFromFlat(nodes: FlatNode[]): void {
+export interface RefMapUpdateOutcome {
+  applied: boolean;
+  reason?: 'empty-capture';
+}
+
+// GH #409 (Story 16): a snapshot quality verdict for the runner capture path,
+// computed once where the ref-map decision is made so meta.snapshotVerdict and
+// the actual overwrite behavior can never disagree.
+export interface SnapshotQualityVerdict {
+  state: 'ok' | 'degraded';
+  source: string;
+  nodeCount: number;
+  refMapUpdated: boolean;
+  reasons: string[];
+}
+
+export function buildSnapshotVerdict(
+  source: string,
+  nodeCount: number,
+  outcome: RefMapUpdateOutcome,
+): SnapshotQualityVerdict {
+  const reasons: string[] = [];
+  if (nodeCount === 0) reasons.push('empty-capture');
+  return {
+    state: reasons.length > 0 ? 'degraded' : 'ok',
+    source,
+    nodeCount,
+    refMapUpdated: outcome.applied,
+    reasons,
+  };
+}
+
+export function updateRefMapFromFlat(nodes: FlatNode[]): RefMapUpdateOutcome {
+  // GH #409: a zero-node capture is indistinguishable from a degraded walk
+  // (AX failure, wedged runner, mid-transition screen). It must never wipe the
+  // last-known-good map — refs stay bound to the last verified capture, and a
+  // genuinely emptied screen surfaces as STALE_REF on the next tap instead of
+  // silently serving nothing.
+  let validCount = 0;
+  for (const node of nodes) {
+    if (node.ref && node.rect) validCount++;
+  }
+  if (validCount === 0 && refMap.size > 0) {
+    return { applied: false, reason: 'empty-capture' };
+  }
+
   // refMap IS cleared (coordinates must never be served across generations —
   // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
   // positional, so ids absent from this snapshot cannot collide with current
@@ -317,6 +362,7 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): void {
     lastSnapshotHash = null;
   }
   lastUpdated = Date.now();
+  return { applied: true };
 }
 
 export function getCachedMetadata(ref: string): RefMetadata | null {
