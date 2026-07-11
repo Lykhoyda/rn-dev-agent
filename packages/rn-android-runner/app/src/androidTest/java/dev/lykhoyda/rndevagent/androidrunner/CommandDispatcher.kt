@@ -10,6 +10,7 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Base64
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.StaleObjectException
@@ -29,6 +30,11 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class NoFocusedInputException(message: String) : IllegalStateException(message)
+
+// Story 10 (#391): the focused field ignored ACTION_SET_TEXT (and any
+// applicable keyevent fallback) — distinct from "no focused field" so the
+// bridge descends its fill ladder instead of re-tapping a healthy focus.
+class SetTextRejectedException(message: String) : IllegalStateException(message)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 
@@ -249,9 +255,68 @@ class CommandDispatcher(
             ?: throw NoFocusedInputException(
                 "No focused text input on screen. The TS device_fill handler should re-tap the target ref before calling type."
             )
-        focused.text = text
 
-        return JSONObject().put("typed", true).put("text", text)
+        // Story 10 (#391): ACTION_SET_TEXT primary — atomic, full-Unicode
+        // (emoji survive), fires the change events RN's onChangeText listens
+        // to. Read back to classify the outcome; per-char keyevents (Maestro's
+        // 75 ms pacing) only when the set was flat-out ignored and every
+        // character has a keyevent representation.
+        val before = try {
+            focused.text
+        } catch (e: StaleObjectException) {
+            null
+        }
+        focused.text = text
+        var outcome = TextInputRecipe.classifySetText(text, before, readFocusedText())
+        var method = "setText"
+
+        if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
+            if (!TextInputRecipe.isKeyEventTypable(text)) {
+                throw SetTextRejectedException(
+                    "Focused field ignored ACTION_SET_TEXT and the text has no keyevent representation (non-ASCII)."
+                )
+            }
+            // The rejected set left the prior value in place — clear it with
+            // move-to-end + deletes so the keyevent pass can't append.
+            val staleLen = before?.length ?: 0
+            if (staleLen > 0) {
+                device.pressKeyCode(KeyEvent.KEYCODE_MOVE_END, 0)
+                repeat(staleLen) { device.pressKeyCode(KeyEvent.KEYCODE_DEL, 0) }
+            }
+            for (ch in text) {
+                val stroke = TextInputRecipe.keyStrokeFor(ch) ?: continue
+                device.pressKeyCode(
+                    stroke.keyCode,
+                    if (stroke.shift) KeyEvent.META_SHIFT_ON else 0,
+                )
+                SystemClock.sleep(TextInputRecipe.KEYEVENT_PACING_MS)
+            }
+            method = "keyevents"
+            outcome = TextInputRecipe.classifySetText(text, before, readFocusedText())
+            if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
+                throw SetTextRejectedException(
+                    "Focused field ignored both ACTION_SET_TEXT and the keyevent fallback."
+                )
+            }
+        }
+
+        return JSONObject()
+            .put("typed", true)
+            .put("text", text)
+            .put("method", method)
+            .put("setTextOutcome", outcome.name.lowercase())
+    }
+
+    // Story 10 (#391): the set can re-render the field (RN controlled
+    // components), staleing the original UiObject2 — re-find the focused node
+    // for the read-back after a short idle window.
+    private fun readFocusedText(): String? {
+        device.waitForIdle(500)
+        return try {
+            device.findObject(By.focused(true))?.text
+        } catch (e: StaleObjectException) {
+            null
+        }
     }
 
     private fun drag(cmd: JSONObject): JSONObject {

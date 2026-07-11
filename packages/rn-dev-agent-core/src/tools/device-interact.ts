@@ -44,9 +44,6 @@ import {
 
 const execFile = promisify(execFileCb);
 
-const ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
-const ANDROID_FILL_MAX_SAFE_LEN = 30;
-
 export interface SnapshotNode {
   ref: string;
   label?: string;
@@ -608,6 +605,11 @@ interface FillArgs {
   settleTimeoutMs?: number;
 }
 
+// Story 10 (#391): this helper (and the chunked `adb shell input text` path it
+// serves) survives ONLY in device_fill's last-resort tier — see
+// docs/stories/10-text-input-reliability.md. The transport cannot represent
+// emoji/IME-composed text; the runner's ACTION_SET_TEXT is the primary.
+//
 // Splits a chunk into segments where no segment, after space→%s encoding,
 // will contain a user-literal %s. Android's `input text` interprets %s as
 // space — the ONLY special sequence it recognizes (empirically verified:
@@ -696,6 +698,53 @@ function isNoFocusedInputError(result: ToolResult): boolean {
   if (!result.isError) return false;
   const text = result.content?.[0]?.text ?? '';
   return NO_FOCUSED_INPUT_RE.test(text);
+}
+
+// Story 10 (#391): the Android runner's focused field ignored ACTION_SET_TEXT
+// (and any applicable keyevent fallback). Focus itself is healthy, so the
+// pressable-resolution / re-tap tiers would be wasted work — descend straight
+// to the platform last resorts.
+function isSetTextRejectedError(result: ToolResult): boolean {
+  if (!result.isError) return false;
+  const text = result.content?.[0]?.text ?? '';
+  try {
+    const envelope = JSON.parse(text) as { code?: string };
+    return envelope.code === 'SET_TEXT_REJECTED';
+  } catch {
+    return false;
+  }
+}
+
+export type FillPrimaryDescent = 'return-primary' | 'refocus-ladder' | 'reject-ladder';
+
+// Story 10 (#391): pure descent decision for the primary native fill outcome —
+// the ladder's arbiter, kept extractable so ordering stays unit-tested.
+export function classifyFillPrimaryError(primary: ToolResult): FillPrimaryDescent {
+  if (!primary.isError) return 'return-primary';
+  if (isSetTextRejectedError(primary)) return 'reject-ladder';
+  if (isNoFocusedInputError(primary)) return 'refocus-ladder';
+  return 'return-primary';
+}
+
+// Story 10 (#391): typing telemetry the iOS runner attaches to its `type`
+// response (two-burst recipe + keyboard-presence wait). Surfaced as
+// meta.typing when device_fill re-wraps the runner envelope.
+export function extractTypingMeta(
+  result: ToolResult,
+): { burst?: boolean; keyboardWaitMs?: number } | null {
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      data?: { typingBurst?: boolean; keyboardWaitMs?: number };
+    };
+    const data = envelope.data;
+    if (!data || (data.typingBurst === undefined && data.keyboardWaitMs === undefined)) return null;
+    return {
+      ...(data.typingBurst !== undefined ? { burst: data.typingBurst } : {}),
+      ...(data.keyboardWaitMs !== undefined ? { keyboardWaitMs: data.keyboardWaitMs } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -838,18 +887,14 @@ export function createDeviceFillHandler(
   return withSession(async (args) => {
     const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
     const androidSession = isAndroidSession();
-    const needsAndroidWorkaround =
-      androidSession &&
-      (args.text.length > ANDROID_FILL_MAX_SAFE_LEN || ANDROID_UNSAFE_CHARS.test(args.text));
 
-    // Android workaround path: press + chunked adb input. Short-circuits — no fallback
-    // chain needed because the Android path is already a fallback for agent-device fill.
-    if (needsAndroidWorkaround) {
-      const pressResult = await runNative(['press', ref]);
-      if (pressResult.isError) return pressResult;
-      await sleep(300);
-      return androidClipboardFill(args.text);
-    }
+    // Story 10 (#391): the historical Android unsafe-char/length short-circuit
+    // to chunked adb is gone. It predated the in-tree runner ("the Android path
+    // is already a fallback for agent-device fill") — but agent-device was
+    // eradicated, `fill` always reaches rn-android-runner, and its
+    // ACTION_SET_TEXT primary is atomic and full-Unicode. Routing emoji/long
+    // text to `adb input text` first was routing it to the ONE tier that
+    // cannot represent it. Chunked adb survives only as Fallback 2 below.
 
     // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
     // resolveCachedIdentifier gates on BOTH ref-map freshness AND current-generation
@@ -925,6 +970,8 @@ export function createDeviceFillHandler(
         // #385: the verified-native path re-wraps the result — carry the
         // primary fill's settle telemetry forward instead of dropping it.
         const primarySettle = extractSettleMeta(primary);
+        // Story 10 (#391): same for the runner's typing telemetry.
+        const primaryTyping = extractTypingMeta(primary);
         let settleAnchor = await readValueBefore(client, jsTestId);
         let stabilityPrior: string | null = null;
         for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
@@ -944,6 +991,7 @@ export function createDeviceFillHandler(
                   textEntryPath: attempt === 0 ? 'native' : 'native-retype',
                   verify: jsVerifyMeta(outcome),
                   retypes: attempt,
+                  ...(primaryTyping ? { typing: primaryTyping } : {}),
                   ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
                   timings_ms: {
                     nativeType: Date.now() - tNative,
@@ -1001,75 +1049,86 @@ export function createDeviceFillHandler(
       return primary;
     }
 
-    // G4: Fallback chain for "no focused text input to clear" and similar focus errors.
-    if (!isNoFocusedInputError(primary)) {
+    // G4 + Story 10 (#391): descend only for focus errors (refocus ladder) or
+    // a runner-rejected set (reject ladder — skips the refocus tiers below,
+    // since focus was healthy). Everything else surfaces as-is.
+    const descent = classifyFillPrimaryError(primary);
+    if (descent === 'return-primary') {
       return primary;
     }
 
-    // B122: Pressable→TextInput resolution. Common RN design-system pattern is
-    // an outer Pressable (testID `${name}-pressable`) that imperatively focuses
-    // an inner TextInput (testID `${name}`). The Pressable absorbs the tap and
-    // the focus dispatches asynchronously, so by the time we probe, focus
-    // hasn't propagated. Resolve to the inner ref and tap THAT directly — much
-    // more reliable than waiting + retapping the wrapper.
-    const snap = await fetchSnapshotNodes();
-    if (snap.ok) {
-      const resolvedRef = findInputForPressable(snap.nodes, ref);
-      if (resolvedRef && resolvedRef !== ref) {
-        // #385: same pin-once guard as the primary path — the inner tap's settle
-        // re-snapshots and renumbers the positional map, so the fill must not
-        // re-resolve resolvedRef afterwards (fetchSnapshotNodes above just
-        // refreshed the map, so the pin resolves against the current screen).
-        const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
-        const innerPinArgs = innerPin
-          ? ['--at-x', String(innerPin.x), '--at-y', String(innerPin.y)]
-          : [];
-        const innerTap = innerPin
-          ? await runNative(['press', String(innerPin.x), String(innerPin.y)], settleOpts(args))
-          : await runNative(['press', resolvedRef], settleOpts(args));
-        if (!innerTap.isError) {
-          const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
-          if (delay > 0) await sleep(delay);
-          const resolved = await runNative(
-            ['fill', resolvedRef, args.text, ...innerPinArgs],
-            settleOpts(args),
-          );
-          if (!resolved.isError) {
-            try {
-              const envelope = JSON.parse(resolved.content[0].text) as {
-                ok: true;
-                data: unknown;
-                meta?: Record<string, unknown>;
-              };
-              return okResult(envelope.data, {
-                meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
-              });
-            } catch {
-              return resolved;
+    if (descent === 'refocus-ladder') {
+      // B122: Pressable→TextInput resolution. Common RN design-system pattern is
+      // an outer Pressable (testID `${name}-pressable`) that imperatively focuses
+      // an inner TextInput (testID `${name}`). The Pressable absorbs the tap and
+      // the focus dispatches asynchronously, so by the time we probe, focus
+      // hasn't propagated. Resolve to the inner ref and tap THAT directly — much
+      // more reliable than waiting + retapping the wrapper.
+      const snap = await fetchSnapshotNodes();
+      if (snap.ok) {
+        const resolvedRef = findInputForPressable(snap.nodes, ref);
+        if (resolvedRef && resolvedRef !== ref) {
+          // #385: same pin-once guard as the primary path — the inner tap's settle
+          // re-snapshots and renumbers the positional map, so the fill must not
+          // re-resolve resolvedRef afterwards (fetchSnapshotNodes above just
+          // refreshed the map, so the pin resolves against the current screen).
+          const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
+          const innerPinArgs = innerPin
+            ? ['--at-x', String(innerPin.x), '--at-y', String(innerPin.y)]
+            : [];
+          const innerTap = innerPin
+            ? await runNative(['press', String(innerPin.x), String(innerPin.y)], settleOpts(args))
+            : await runNative(['press', resolvedRef], settleOpts(args));
+          if (!innerTap.isError) {
+            const delay = focusDelayAfterPreTap(
+              innerTap.content?.[0]?.text,
+              args.waitForKeyboardMs,
+            );
+            if (delay > 0) await sleep(delay);
+            const resolved = await runNative(
+              ['fill', resolvedRef, args.text, ...innerPinArgs],
+              settleOpts(args),
+            );
+            if (!resolved.isError) {
+              try {
+                const envelope = JSON.parse(resolved.content[0].text) as {
+                  ok: true;
+                  data: unknown;
+                  meta?: Record<string, unknown>;
+                };
+                return okResult(envelope.data, {
+                  meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
+                });
+              } catch {
+                return resolved;
+              }
             }
+          }
+        }
+      }
+
+      // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
+      // to propagate focus from a wrapping Pressable to the inner TextInput.
+      const retryTap = await runNative(['press', ref]);
+      if (!retryTap.isError) {
+        await sleep(300);
+        const retry = await runNative(['fill', ref, args.text]);
+        if (!retry.isError) {
+          // Re-wrap the okResult to attach the fallback marker.
+          try {
+            const envelope = JSON.parse(retry.content[0].text) as { ok: true; data: unknown };
+            return okResult(envelope.data, { meta: { fallbackUsed: 'retap' } });
+          } catch {
+            return retry;
           }
         }
       }
     }
 
-    // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
-    // to propagate focus from a wrapping Pressable to the inner TextInput.
-    const retryTap = await runNative(['press', ref]);
-    if (!retryTap.isError) {
-      await sleep(300);
-      const retry = await runNative(['fill', ref, args.text]);
-      if (!retry.isError) {
-        // Re-wrap the okResult to attach the fallback marker.
-        try {
-          const envelope = JSON.parse(retry.content[0].text) as { ok: true; data: unknown };
-          return okResult(envelope.data, { meta: { fallbackUsed: 'retap' } });
-        } catch {
-          return retry;
-        }
-      }
-    }
-
-    // Fallback 2: platform-specific last resort.
+    // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
+    // is the deliberate LAST native tier — its `input text` transport cannot
+    // represent emoji/IME-composed text, so it only runs after the runner's
+    // setText/keyevent tiers (and any refocus re-taps) have failed.
     if (androidSession) {
       const adbResult = await androidClipboardFill(args.text);
       if (!adbResult.isError) {
