@@ -424,11 +424,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants);
+          this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -445,10 +445,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
+        this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -509,8 +509,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
+      optimizeNames(names, constants2) {
+        this.code = optimizeExpr(this.code, names, constants2);
         return this;
       }
       get names() {
@@ -539,12 +539,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants))
+          if (n.optimizeNames(names, constants2))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -597,12 +597,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        if (!(super.optimizeNames(names, constants2) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants);
+        this.condition = optimizeExpr(this.condition, names, constants2);
         return this;
       }
       get names() {
@@ -625,10 +625,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
+        this.iteration = optimizeExpr(this.iteration, names, constants2);
         return this;
       }
       get names() {
@@ -664,10 +664,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
+        this.iterable = optimizeExpr(this.iterable, names, constants2);
         return this;
       }
       get names() {
@@ -709,11 +709,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a, _b;
-        super.optimizeNames(names, constants);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
+        super.optimizeNames(names, constants2);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
         return this;
       }
       get names() {
@@ -1014,7 +1014,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants) {
+    function optimizeExpr(expr, names, constants2) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1029,14 +1029,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants[n.str];
+        const c = constants2[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -26750,7 +26750,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { readFileSync as readFileSync30 } from "node:fs";
+import { readFileSync as readFileSync29 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -49029,7 +49029,7 @@ import { mkdirSync as mkdirSync11 } from "node:fs";
 import { execFile as execFile16 } from "node:child_process";
 import { promisify as promisify17 } from "node:util";
 import { dirname as dirname9, join as join24 } from "node:path";
-import { homedir as homedir8 } from "node:os";
+import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
 import { execFile as execFileCb13 } from "node:child_process";
@@ -49172,6 +49172,415 @@ function pathHasTraversal(p) {
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
 init_rn_android_runner_client();
+
+// packages/rn-dev-agent-core/dist/observability/recorder.js
+import { closeSync as closeSync2, constants, fstatSync, openSync as openSync2, readSync } from "node:fs";
+import { isAbsolute as isAbsolute2 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/util/redact.js
+import { homedir as homedir8 } from "node:os";
+var HOME = homedir8();
+var HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+var SECRET_PATTERNS = [
+  /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
+  /Bearer\s+[A-Za-z0-9_\-./+=]{20,}/g,
+  /ghp_[A-Za-z0-9_]{36}/g,
+  /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
+  /\bAIza[0-9A-Za-z\-_]{35}\b/g,
+  // Any private-key label variant: PRIVATE KEY, RSA PRIVATE KEY,
+  // OPENSSH PRIVATE KEY, EC/DSA/ENCRYPTED PRIVATE KEY, ... The old single-word
+  // `(?:RSA |OPENSSH |PRIVATE )?KEY` form never matched multi-word labels like
+  // "RSA PRIVATE KEY" — the most common ssh-keygen header — so keys leaked.
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g
+];
+var KEYED_SECRET_RE = /((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?)([^"'\s,;}]{6,})/gi;
+var PII_PATTERNS = [
+  /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
+  // Require separators so bare digit runs (timestamps, latencies, ids) are not
+  // mistaken for phone/SSN numbers (previously `[-.]?`/`[-]?` made them
+  // optional, redacting any 9-10 digit number).
+  /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
+  /\b\d{3}-\d{2}-\d{4}\b/g
+];
+var AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+var MAX_STRING_LENGTH = 2e3;
+function redactString(value) {
+  let result = value.replace(HOME_RE, "~");
+  KEYED_SECRET_RE.lastIndex = 0;
+  result = result.replace(KEYED_SECRET_RE, "$1[REDACTED_SECRET]");
+  for (const pattern of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, "[REDACTED_SECRET]");
+  }
+  for (const pattern of PII_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, "[PII_REDACTED]");
+  }
+  if (result.length > MAX_STRING_LENGTH) {
+    result = result.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${result.length}]`;
+  }
+  return result;
+}
+function redactValue(value, path) {
+  if (value === null || value === void 0)
+    return value;
+  if (typeof value === "string")
+    return redactString(value);
+  if (Array.isArray(value)) {
+    return value.map((item, i) => redactValue(item, `${path}[${i}]`));
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    const result = {};
+    for (const [key, val] of Object.entries(obj)) {
+      const fullPath = path ? `${path}.${key}` : key;
+      if (AUTH_PATHS.test(key)) {
+        result[key] = Array.isArray(val) ? "[REDACTED:array]" : `[REDACTED:${typeof val}]`;
+      } else {
+        result[key] = redactValue(val, fullPath);
+      }
+    }
+    return result;
+  }
+  return value;
+}
+function redact(data) {
+  return redactValue(data, "");
+}
+
+// packages/rn-dev-agent-core/dist/observability/events.js
+var CLIP_LIMIT = 16e3;
+var INTERACTION = /* @__PURE__ */ new Set([
+  "device_press",
+  "device_fill",
+  "device_swipe",
+  "device_scroll",
+  "device_longpress",
+  "device_pinch",
+  "device_back",
+  "device_batch",
+  "device_scrollintoview",
+  "cdp_interact",
+  "device_focus_next",
+  "device_pick_date",
+  "device_pick_value",
+  "device_deeplink"
+]);
+var NAVIGATION = /* @__PURE__ */ new Set(["cdp_navigation_state", "cdp_nav_graph", "cdp_navigate"]);
+var INTROSPECTION = /* @__PURE__ */ new Set([
+  "cdp_component_tree",
+  "cdp_component_state",
+  "cdp_store_state",
+  "device_snapshot",
+  "device_screenshot",
+  "cdp_network_log",
+  "cdp_network_body",
+  "cdp_console_log",
+  "cdp_error_log",
+  "cdp_native_errors",
+  "cdp_diagnostic_renderers",
+  "cdp_object_inspect",
+  "cdp_heap_usage",
+  "collect_logs"
+]);
+var LIFECYCLE = /* @__PURE__ */ new Set([
+  "cdp_status",
+  "cdp_connect",
+  "cdp_disconnect",
+  "cdp_targets",
+  "cdp_reload",
+  "cdp_restart",
+  "cdp_dev_settings",
+  "cdp_open_devtools",
+  "device_list",
+  "observe"
+]);
+var TESTING = /* @__PURE__ */ new Set([
+  "maestro_run",
+  "maestro_generate",
+  "maestro_test_all",
+  "cdp_run_action",
+  "cdp_repair_action",
+  "proof_step",
+  "cross_platform_verify",
+  "cdp_auto_login",
+  "expect_redux",
+  "expect_route",
+  "expect_visible_by_testid",
+  "expect_text"
+]);
+function classifyFamily(tool) {
+  if (INTERACTION.has(tool))
+    return "interaction";
+  if (NAVIGATION.has(tool))
+    return "navigation";
+  if (INTROSPECTION.has(tool))
+    return "introspection";
+  if (LIFECYCLE.has(tool))
+    return "lifecycle";
+  if (TESTING.has(tool))
+    return "testing";
+  return "other";
+}
+function clipThenRedact(args, payload) {
+  let redactedArgs;
+  try {
+    redactedArgs = redact(args ?? {});
+  } catch {
+    redactedArgs = { redacted: true };
+  }
+  if (payload === null || payload === void 0) {
+    return { args: redactedArgs };
+  }
+  try {
+    let json;
+    try {
+      json = JSON.stringify(payload);
+    } catch {
+      return { args: redactedArgs, payload: { redacted: true } };
+    }
+    let clipped = payload;
+    let truncated = false;
+    if (typeof json === "string" && json.length > CLIP_LIMIT) {
+      clipped = { _clipped: json.slice(0, CLIP_LIMIT) };
+      truncated = true;
+    }
+    const redactedPayload = redact({ v: clipped }).v;
+    return truncated ? { args: redactedArgs, payload: redactedPayload, truncated: true } : { args: redactedArgs, payload: redactedPayload };
+  } catch {
+    return { args: redactedArgs, payload: { redacted: true } };
+  }
+}
+function unwrapResult(result) {
+  if (!result || typeof result !== "object")
+    return void 0;
+  const env = result;
+  const text = env.content?.[0]?.text;
+  if (typeof text !== "string")
+    return void 0;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function summarize(tool, _family, args, ok) {
+  const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? "";
+  const head = target ? `${tool} ${String(target).slice(0, 60)}` : tool;
+  return ok ? head : `${head} \u2717`;
+}
+function mapObservation(seq, o) {
+  const family = classifyFamily(o.tool);
+  const ok = o.status === "PASS";
+  const unwrapped = unwrapResult(o.result);
+  const payloadSource = ok ? unwrapped ? unwrapped.data : o.result : void 0;
+  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
+  const summary = summarize(o.tool, family, args, ok);
+  const event = {
+    seq,
+    ts: Date.now(),
+    tool: o.tool,
+    family,
+    args,
+    ok,
+    durationMs: o.latencyMs,
+    summary
+  };
+  if (payload !== void 0)
+    event.payload = payload;
+  if (truncated)
+    event.truncated = true;
+  if (!ok && o.error) {
+    const raw = String(o.error).slice(0, 500);
+    let message;
+    try {
+      message = String(redact({ m: raw }).m);
+    } catch {
+      message = "[REDACTED:error]";
+    }
+    event.error = { message };
+  }
+  if (o.ghost?.attempted)
+    event.ghost = o.ghost;
+  return event;
+}
+
+// packages/rn-dev-agent-core/dist/observability/recorder.js
+var DEFAULT_CAP = 500;
+var MAX_SHOT_BYTES = 4e6;
+var SHOT_REGISTRY_CAP = 64;
+function extractScreenshotPath(result) {
+  const data = unwrapResult(result)?.data ?? result?.data;
+  const p = data?.path ?? data?.message;
+  return typeof p === "string" && isAbsolute2(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+}
+function readShotBounded(p) {
+  let fd;
+  try {
+    fd = openSync2(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_SHOT_BYTES)
+      return null;
+    const size = Number(st.size);
+    const buf = Buffer.alloc(size + 1);
+    const n = readSync(fd, buf, 0, size + 1, 0);
+    if (n > size)
+      return null;
+    return buf.subarray(0, n);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== void 0) {
+      try {
+        closeSync2(fd);
+      } catch {
+      }
+    }
+  }
+}
+var Recorder = class {
+  buf;
+  seq = 0;
+  subs = /* @__PURE__ */ new Set();
+  shots = /* @__PURE__ */ new Map();
+  // GH #429: single-use trust grants from the capture pipeline (insertion-
+  // ordered, FIFO-evicted). Observations name paths, but only paths this
+  // process just captured may be read back — otherwise any tool result that
+  // mentions "/…/x.png" becomes an arbitrary local file read served over the
+  // observe server.
+  trustedShotPaths = /* @__PURE__ */ new Set();
+  shotCap;
+  liveShotData;
+  liveSeqVal = 0;
+  constructor(capacity = DEFAULT_CAP) {
+    this.buf = new RingBuffer(capacity);
+    this.shotCap = Math.max(8, Math.floor(capacity / 10));
+  }
+  record(o) {
+    try {
+      if (!o || typeof o !== "object" || typeof o.tool !== "string")
+        return;
+      const ev = mapObservation(++this.seq, o);
+      this.buf.push(ev);
+      this.captureScreenshot(ev, o);
+      for (const fn of this.subs) {
+        try {
+          fn(ev);
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  snapshot() {
+    return this.buf.getLast(this.buf.size);
+  }
+  attach(fn) {
+    const snapshot = this.buf.getLast(this.buf.size);
+    this.subs.add(fn);
+    return {
+      snapshot,
+      detach: () => {
+        this.subs.delete(fn);
+      }
+    };
+  }
+  getScreenshot(seq) {
+    return this.shots.get(seq);
+  }
+  /**
+   * GH #429: grant a one-shot read for a file the capture pipeline just
+   * wrote. `captureScreenshot` consumes the grant on first use, so a later
+   * observation replaying the same path is refused. User-chosen destinations
+   * (docs/proof/…, ~/Desktop/…) keep working because the grant is issued for
+   * whatever path the pipeline actually captured to.
+   */
+  registerCapturedScreenshot(p) {
+    if (typeof p !== "string" || !isAbsolute2(p))
+      return;
+    this.trustedShotPaths.delete(p);
+    this.trustedShotPaths.add(p);
+    while (this.trustedShotPaths.size > SHOT_REGISTRY_CAP) {
+      const oldest = this.trustedShotPaths.values().next().value;
+      if (oldest === void 0)
+        break;
+      this.trustedShotPaths.delete(oldest);
+    }
+  }
+  hasSubscribers() {
+    return this.subs.size > 0;
+  }
+  getLiveScreenshot() {
+    return this.liveShotData;
+  }
+  pushLive(frame) {
+    const ev = { type: "live" };
+    let changed = false;
+    if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
+      this.liveShotData = frame.shot;
+      ev.shotSeq = ++this.liveSeqVal;
+      changed = true;
+    }
+    if (typeof frame.route === "string" && frame.route.length > 0) {
+      ev.route = frame.route;
+      changed = true;
+    }
+    if (!changed)
+      return;
+    for (const fn of this.subs) {
+      try {
+        fn(ev);
+      } catch {
+      }
+    }
+  }
+  push(ev) {
+    for (const fn of this.subs) {
+      try {
+        fn(ev);
+      } catch {
+      }
+    }
+  }
+  clear() {
+    this.buf.clear();
+    for (const fn of this.subs) {
+      try {
+        fn({ type: "cleared" });
+      } catch {
+      }
+    }
+    this.subs.clear();
+    this.shots.clear();
+    this.trustedShotPaths.clear();
+    this.seq = 0;
+    this.liveShotData = void 0;
+    this.liveSeqVal = 0;
+  }
+  captureScreenshot(ev, o) {
+    if (ev.tool !== "device_screenshot" || !ev.ok)
+      return;
+    const p = extractScreenshotPath(o.result);
+    if (!p || !this.trustedShotPaths.delete(p))
+      return;
+    const buf = readShotBounded(p);
+    if (!buf)
+      return;
+    const contentType = p.endsWith(".png") ? "image/png" : "image/jpeg";
+    this.shots.set(ev.seq, { buf, contentType });
+    while (this.shots.size > this.shotCap) {
+      const oldest = this.shots.keys().next().value;
+      if (oldest === void 0)
+        break;
+      this.shots.delete(oldest);
+    }
+  }
+};
+var recorder = new Recorder();
+
+// packages/rn-dev-agent-core/dist/tools/device-list.js
 var runAgentDeviceFn2 = runNative;
 var execFileAsync3 = promisify17(execFile16);
 var defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
@@ -49218,7 +49627,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join24(homedir8(), args.path.slice(2));
+      return join24(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -49390,7 +49799,13 @@ async function captureAndResizeScreenshot(args) {
     resizeOpts.quality = args.quality;
   const resize = await resizeWithSips(actualPath, resizeOpts);
   const resized = wrapResultWithResize(result, resize);
-  return wrapResultWithAdvisories(resized, advisories);
+  const finalResult = wrapResultWithAdvisories(resized, advisories);
+  recorder.registerCapturedScreenshot(requestedPath);
+  recorder.registerCapturedScreenshot(actualPath);
+  const observedPath = extractScreenshotPath(finalResult);
+  if (observedPath)
+    recorder.registerCapturedScreenshot(observedPath);
+  return finalResult;
 }
 function createDeviceScreenshotHandler(getClient2) {
   return async (args) => {
@@ -56094,7 +56509,7 @@ import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync23, readFileSync as readFileSync19, writeFileSync as writeFileSync13, readdirSync as readdirSync7 } from "node:fs";
 import { join as join29 } from "node:path";
-import { homedir as homedir9 } from "node:os";
+import { homedir as homedir10 } from "node:os";
 var execFile24 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
   "login",
@@ -56245,7 +56660,7 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync13(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join29(homedir9(), ".maestro-runner", "bin", "maestro-runner");
+  const runnerPath = join29(homedir10(), ".maestro-runner", "bin", "maestro-runner");
   if (!existsSync23(runnerPath)) {
     return {
       loggedIn: false,
@@ -56711,7 +57126,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash5 } from "node:crypto";
 import { execFileSync as execFileSync7 } from "node:child_process";
-import { closeSync as closeSync2, existsSync as existsSync24, mkdirSync as mkdirSync13, openSync as openSync2, readFileSync as readFileSync20, statSync as statSync8, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync24, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync20, statSync as statSync8, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir8, userInfo as userInfo2 } from "node:os";
 import { join as join30, resolve as resolve3 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -56931,11 +57346,11 @@ var Lockfile = class {
     if (!existsSync24(dir)) {
       mkdirSync13(dir, { recursive: true });
     }
-    const fd = openSync2(this.lockPath, "wx");
+    const fd = openSync3(this.lockPath, "wx");
     try {
       writeSync2(fd, JSON.stringify(body, null, 2));
     } finally {
-      closeSync2(fd);
+      closeSync3(fd);
     }
   }
 };
@@ -57620,365 +58035,6 @@ function instrumentTool(toolName, handler) {
   };
 }
 
-// packages/rn-dev-agent-core/dist/observability/recorder.js
-import { readFileSync as readFileSync23, statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute2 } from "node:path";
-
-// packages/rn-dev-agent-core/dist/util/redact.js
-import { homedir as homedir10 } from "node:os";
-var HOME = homedir10();
-var HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
-var SECRET_PATTERNS = [
-  /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
-  /Bearer\s+[A-Za-z0-9_\-./+=]{20,}/g,
-  /ghp_[A-Za-z0-9_]{36}/g,
-  /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
-  /\bAIza[0-9A-Za-z\-_]{35}\b/g,
-  // Any private-key label variant: PRIVATE KEY, RSA PRIVATE KEY,
-  // OPENSSH PRIVATE KEY, EC/DSA/ENCRYPTED PRIVATE KEY, ... The old single-word
-  // `(?:RSA |OPENSSH |PRIVATE )?KEY` form never matched multi-word labels like
-  // "RSA PRIVATE KEY" — the most common ssh-keygen header — so keys leaked.
-  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/g
-];
-var KEYED_SECRET_RE = /((?:token|secret|password|passwd|pwd|api[_-]?key|apikey|authorization|auth|access[_-]?token|refresh[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?)([^"'\s,;}]{6,})/gi;
-var PII_PATTERNS = [
-  /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-  // Require separators so bare digit runs (timestamps, latencies, ids) are not
-  // mistaken for phone/SSN numbers (previously `[-.]?`/`[-]?` made them
-  // optional, redacting any 9-10 digit number).
-  /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
-  /\b\d{3}-\d{2}-\d{4}\b/g
-];
-var AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
-var MAX_STRING_LENGTH = 2e3;
-function redactString(value) {
-  let result = value.replace(HOME_RE, "~");
-  KEYED_SECRET_RE.lastIndex = 0;
-  result = result.replace(KEYED_SECRET_RE, "$1[REDACTED_SECRET]");
-  for (const pattern of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, "[REDACTED_SECRET]");
-  }
-  for (const pattern of PII_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, "[PII_REDACTED]");
-  }
-  if (result.length > MAX_STRING_LENGTH) {
-    result = result.slice(0, MAX_STRING_LENGTH) + `[TRUNCATED:${result.length}]`;
-  }
-  return result;
-}
-function redactValue(value, path) {
-  if (value === null || value === void 0)
-    return value;
-  if (typeof value === "string")
-    return redactString(value);
-  if (Array.isArray(value)) {
-    return value.map((item, i) => redactValue(item, `${path}[${i}]`));
-  }
-  if (typeof value === "object") {
-    const obj = value;
-    const result = {};
-    for (const [key, val] of Object.entries(obj)) {
-      const fullPath = path ? `${path}.${key}` : key;
-      if (AUTH_PATHS.test(key)) {
-        result[key] = Array.isArray(val) ? "[REDACTED:array]" : `[REDACTED:${typeof val}]`;
-      } else {
-        result[key] = redactValue(val, fullPath);
-      }
-    }
-    return result;
-  }
-  return value;
-}
-function redact(data) {
-  return redactValue(data, "");
-}
-
-// packages/rn-dev-agent-core/dist/observability/events.js
-var CLIP_LIMIT = 16e3;
-var INTERACTION = /* @__PURE__ */ new Set([
-  "device_press",
-  "device_fill",
-  "device_swipe",
-  "device_scroll",
-  "device_longpress",
-  "device_pinch",
-  "device_back",
-  "device_batch",
-  "device_scrollintoview",
-  "cdp_interact",
-  "device_focus_next",
-  "device_pick_date",
-  "device_pick_value",
-  "device_deeplink"
-]);
-var NAVIGATION = /* @__PURE__ */ new Set(["cdp_navigation_state", "cdp_nav_graph", "cdp_navigate"]);
-var INTROSPECTION = /* @__PURE__ */ new Set([
-  "cdp_component_tree",
-  "cdp_component_state",
-  "cdp_store_state",
-  "device_snapshot",
-  "device_screenshot",
-  "cdp_network_log",
-  "cdp_network_body",
-  "cdp_console_log",
-  "cdp_error_log",
-  "cdp_native_errors",
-  "cdp_diagnostic_renderers",
-  "cdp_object_inspect",
-  "cdp_heap_usage",
-  "collect_logs"
-]);
-var LIFECYCLE = /* @__PURE__ */ new Set([
-  "cdp_status",
-  "cdp_connect",
-  "cdp_disconnect",
-  "cdp_targets",
-  "cdp_reload",
-  "cdp_restart",
-  "cdp_dev_settings",
-  "cdp_open_devtools",
-  "device_list",
-  "observe"
-]);
-var TESTING = /* @__PURE__ */ new Set([
-  "maestro_run",
-  "maestro_generate",
-  "maestro_test_all",
-  "cdp_run_action",
-  "cdp_repair_action",
-  "proof_step",
-  "cross_platform_verify",
-  "cdp_auto_login",
-  "expect_redux",
-  "expect_route",
-  "expect_visible_by_testid",
-  "expect_text"
-]);
-function classifyFamily(tool) {
-  if (INTERACTION.has(tool))
-    return "interaction";
-  if (NAVIGATION.has(tool))
-    return "navigation";
-  if (INTROSPECTION.has(tool))
-    return "introspection";
-  if (LIFECYCLE.has(tool))
-    return "lifecycle";
-  if (TESTING.has(tool))
-    return "testing";
-  return "other";
-}
-function clipThenRedact(args, payload) {
-  let redactedArgs;
-  try {
-    redactedArgs = redact(args ?? {});
-  } catch {
-    redactedArgs = { redacted: true };
-  }
-  if (payload === null || payload === void 0) {
-    return { args: redactedArgs };
-  }
-  try {
-    let json;
-    try {
-      json = JSON.stringify(payload);
-    } catch {
-      return { args: redactedArgs, payload: { redacted: true } };
-    }
-    let clipped = payload;
-    let truncated = false;
-    if (typeof json === "string" && json.length > CLIP_LIMIT) {
-      clipped = { _clipped: json.slice(0, CLIP_LIMIT) };
-      truncated = true;
-    }
-    const redactedPayload = redact({ v: clipped }).v;
-    return truncated ? { args: redactedArgs, payload: redactedPayload, truncated: true } : { args: redactedArgs, payload: redactedPayload };
-  } catch {
-    return { args: redactedArgs, payload: { redacted: true } };
-  }
-}
-function unwrapResult(result) {
-  if (!result || typeof result !== "object")
-    return void 0;
-  const env = result;
-  const text = env.content?.[0]?.text;
-  if (typeof text !== "string")
-    return void 0;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return void 0;
-  }
-}
-function summarize(tool, _family, args, ok) {
-  const target = args.testID ?? args.ref ?? args.text ?? args.screen ?? args.path ?? "";
-  const head = target ? `${tool} ${String(target).slice(0, 60)}` : tool;
-  return ok ? head : `${head} \u2717`;
-}
-function mapObservation(seq, o) {
-  const family = classifyFamily(o.tool);
-  const ok = o.status === "PASS";
-  const unwrapped = unwrapResult(o.result);
-  const payloadSource = ok ? unwrapped ? unwrapped.data : o.result : void 0;
-  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
-  const summary = summarize(o.tool, family, args, ok);
-  const event = {
-    seq,
-    ts: Date.now(),
-    tool: o.tool,
-    family,
-    args,
-    ok,
-    durationMs: o.latencyMs,
-    summary
-  };
-  if (payload !== void 0)
-    event.payload = payload;
-  if (truncated)
-    event.truncated = true;
-  if (!ok && o.error) {
-    const raw = String(o.error).slice(0, 500);
-    let message;
-    try {
-      message = String(redact({ m: raw }).m);
-    } catch {
-      message = "[REDACTED:error]";
-    }
-    event.error = { message };
-  }
-  if (o.ghost?.attempted)
-    event.ghost = o.ghost;
-  return event;
-}
-
-// packages/rn-dev-agent-core/dist/observability/recorder.js
-var DEFAULT_CAP = 500;
-var MAX_SHOT_BYTES = 4e6;
-function screenshotPath(result) {
-  const data = unwrapResult(result)?.data ?? result?.data;
-  const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute2(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
-}
-var Recorder = class {
-  buf;
-  seq = 0;
-  subs = /* @__PURE__ */ new Set();
-  shots = /* @__PURE__ */ new Map();
-  shotCap;
-  liveShotData;
-  liveSeqVal = 0;
-  constructor(capacity = DEFAULT_CAP) {
-    this.buf = new RingBuffer(capacity);
-    this.shotCap = Math.max(8, Math.floor(capacity / 10));
-  }
-  record(o) {
-    try {
-      if (!o || typeof o !== "object" || typeof o.tool !== "string")
-        return;
-      const ev = mapObservation(++this.seq, o);
-      this.buf.push(ev);
-      this.captureScreenshot(ev, o);
-      for (const fn of this.subs) {
-        try {
-          fn(ev);
-        } catch {
-        }
-      }
-    } catch {
-    }
-  }
-  snapshot() {
-    return this.buf.getLast(this.buf.size);
-  }
-  attach(fn) {
-    const snapshot = this.buf.getLast(this.buf.size);
-    this.subs.add(fn);
-    return {
-      snapshot,
-      detach: () => {
-        this.subs.delete(fn);
-      }
-    };
-  }
-  getScreenshot(seq) {
-    return this.shots.get(seq);
-  }
-  hasSubscribers() {
-    return this.subs.size > 0;
-  }
-  getLiveScreenshot() {
-    return this.liveShotData;
-  }
-  pushLive(frame) {
-    const ev = { type: "live" };
-    let changed = false;
-    if (frame.shot && frame.shot.buf.length <= MAX_SHOT_BYTES) {
-      this.liveShotData = frame.shot;
-      ev.shotSeq = ++this.liveSeqVal;
-      changed = true;
-    }
-    if (typeof frame.route === "string" && frame.route.length > 0) {
-      ev.route = frame.route;
-      changed = true;
-    }
-    if (!changed)
-      return;
-    for (const fn of this.subs) {
-      try {
-        fn(ev);
-      } catch {
-      }
-    }
-  }
-  push(ev) {
-    for (const fn of this.subs) {
-      try {
-        fn(ev);
-      } catch {
-      }
-    }
-  }
-  clear() {
-    this.buf.clear();
-    for (const fn of this.subs) {
-      try {
-        fn({ type: "cleared" });
-      } catch {
-      }
-    }
-    this.subs.clear();
-    this.shots.clear();
-    this.seq = 0;
-    this.liveShotData = void 0;
-    this.liveSeqVal = 0;
-  }
-  captureScreenshot(ev, o) {
-    if (ev.tool !== "device_screenshot" || !ev.ok)
-      return;
-    const p = screenshotPath(o.result);
-    if (!p)
-      return;
-    try {
-      if (statSync9(p).size > MAX_SHOT_BYTES)
-        return;
-      const buf = readFileSync23(p);
-      const contentType = p.endsWith(".png") ? "image/png" : "image/jpeg";
-      this.shots.set(ev.seq, { buf, contentType });
-      while (this.shots.size > this.shotCap) {
-        const oldest = this.shots.keys().next().value;
-        if (oldest === void 0)
-          break;
-        this.shots.delete(oldest);
-      }
-    } catch {
-    }
-  }
-};
-var recorder = new Recorder();
-
 // packages/rn-dev-agent-core/dist/observability/live-device.js
 import { join as join34 } from "node:path";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -58137,7 +58193,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync24 } from "node:fs";
+import { readFileSync as readFileSync23 } from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname13, join as join35 } from "node:path";
 
@@ -58344,7 +58400,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync24(join35(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync23(join35(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -59239,11 +59295,11 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync27 } from "node:fs";
+import { readFileSync as readFileSync26 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname14, join as join38 } from "node:path";
-import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync17, renameSync as renameSync5, readFileSync as readFileSync25, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
+import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync17, renameSync as renameSync5, readFileSync as readFileSync24, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
 import { createHash as createHash6 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -59302,7 +59358,7 @@ function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync27(filePath))
     return null;
-  return parseLockedTest(readFileSync25(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -59345,12 +59401,12 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync25 } from "node:fs";
 import { join as join39 } from "node:path";
 function loadE2eConfig(projectRoot) {
   const filePath = join39(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync26(filePath, "utf8");
+    const raw = readFileSync25(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -59417,7 +59473,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync27(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync26(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -59476,7 +59532,7 @@ function createLockE2eTestHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
 import { join as join40 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync28, existsSync as existsSync28 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync27, existsSync as existsSync28 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -59544,7 +59600,7 @@ function loadIndex(projectRoot) {
   if (!existsSync28(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync28(file, "utf8"));
+    const parsed = JSON.parse(readFileSync27(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -59569,7 +59625,7 @@ function loadRunRecord(projectRoot, runId) {
   if (!existsSync28(file))
     return null;
   try {
-    return JSON.parse(readFileSync28(file, "utf8"));
+    return JSON.parse(readFileSync27(file, "utf8"));
   } catch {
     return null;
   }
@@ -59585,7 +59641,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join41 } from "node:path";
-import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync29, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
+import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync28, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -59611,7 +59667,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync29(file))
     return null;
   try {
-    return JSON.parse(readFileSync29(file, "utf8"));
+    return JSON.parse(readFileSync28(file, "utf8"));
   } catch {
     return null;
   }
@@ -59952,7 +60008,7 @@ async function listActions(projectRoot) {
 
 // packages/rn-dev-agent-core/dist/index.js
 var pkgPath = join43(dirname15(fileURLToPath3(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync30(pkgPath, "utf8")).version;
+var pkgVersion = JSON.parse(readFileSync29(pkgPath, "utf8")).version;
 var lockfile = null;
 var noLock = process.argv.includes("--no-lock");
 if (!noLock) {
@@ -60090,7 +60146,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync30(path);
+      const buf = readFileSync29(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {
