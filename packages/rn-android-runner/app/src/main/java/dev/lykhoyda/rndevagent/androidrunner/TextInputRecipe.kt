@@ -10,7 +10,7 @@ package dev.lykhoyda.rndevagent.androidrunner
 object TextInputRecipe {
     const val KEYEVENT_PACING_MS = 75L
 
-    enum class SetTextOutcome { ACCEPTED, TRANSFORMED, REJECTED }
+    enum class SetTextOutcome { ACCEPTED, TRANSFORMED, REJECTED, UNVERIFIED }
 
     // Read-back classification after a set attempt:
     //   ACCEPTED    — field now holds exactly the requested text.
@@ -19,10 +19,14 @@ object TextInputRecipe {
     //                 reshaped it. Retyping would not converge.
     //   REJECTED    — field did not change at all: the set was ignored
     //                 (e.g. a controlled component re-rendering from state).
+    //   UNVERIFIED  — no read-back available (focused node gone after a
+    //                 re-render): the set may well have landed, so neither a
+    //                 success proof nor a rejection — callers must not retype
+    //                 (double-apply risk) nor claim a verified outcome.
     fun classifySetText(requested: String, before: String?, after: String?): SetTextOutcome {
-        val readBack = after.orEmpty()
-        if (readBack == requested) return SetTextOutcome.ACCEPTED
-        if (readBack != before.orEmpty()) return SetTextOutcome.TRANSFORMED
+        if (after == null) return SetTextOutcome.UNVERIFIED
+        if (after == requested) return SetTextOutcome.ACCEPTED
+        if (after != before.orEmpty()) return SetTextOutcome.TRANSFORMED
         return SetTextOutcome.REJECTED
     }
 

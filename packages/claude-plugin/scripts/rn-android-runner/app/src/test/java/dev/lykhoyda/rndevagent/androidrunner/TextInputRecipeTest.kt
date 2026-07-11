@@ -61,10 +61,29 @@ class TextInputRecipeTest {
     }
 
     @Test
-    fun setTextNullReadBackOnEmptyFieldIsRejected() {
+    fun setTextNullReadBackIsUnverifiedNotRejected() {
+        // Codex P2 (#564): no read-back (focused node gone after a re-render)
+        // proves nothing either way — it must not trigger the keyevent retype
+        // (double-apply risk) nor claim a transform.
         assertEquals(
-            SetTextOutcome.REJECTED,
+            SetTextOutcome.UNVERIFIED,
             TextInputRecipe.classifySetText("hello", before = null, after = null),
+        )
+    }
+
+    @Test
+    fun setTextNullReadBackAfterPriorTextIsUnverifiedNotTransformed() {
+        assertEquals(
+            SetTextOutcome.UNVERIFIED,
+            TextInputRecipe.classifySetText("hello", before = "prior", after = null),
+        )
+    }
+
+    @Test
+    fun setTextEmptyRequestWithNullReadBackIsUnverified() {
+        assertEquals(
+            SetTextOutcome.UNVERIFIED,
+            TextInputRecipe.classifySetText("", before = "old", after = null),
         )
     }
 

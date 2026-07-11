@@ -647,6 +647,14 @@ export function buildAdbInputTextArgv(chunk: string): string[] {
 
 const ANDROID_INPUT_CHUNK_SIZE = 10;
 
+// Story 10 (#391, codex P2): `adb shell input text` only round-trips printable
+// ASCII — non-ASCII can be silently mangled while adb still exits 0, turning a
+// corrupted fill into a reported success. The adb tier is gated on this.
+export function isAdbInputTextSafe(text: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /^[\x20-\x7E]*$/.test(text);
+}
+
 async function androidClipboardFill(text: string): Promise<ToolResult> {
   try {
     const serial = getAdbSerial();
@@ -1128,8 +1136,10 @@ export function createDeviceFillHandler(
     // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
     // is the deliberate LAST native tier — its `input text` transport cannot
     // represent emoji/IME-composed text, so it only runs after the runner's
-    // setText/keyevent tiers (and any refocus re-taps) have failed.
-    if (androidSession) {
+    // setText/keyevent tiers (and any refocus re-taps) have failed, and only
+    // for text it can actually represent (codex P2: adb can exit 0 after
+    // mangling non-ASCII, which would mask the honest Maestro tier below).
+    if (androidSession && isAdbInputTextSafe(args.text)) {
       const adbResult = await androidClipboardFill(args.text);
       if (!adbResult.isError) {
         try {

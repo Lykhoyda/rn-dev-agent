@@ -46861,6 +46861,9 @@ function buildAdbInputTextArgv(chunk) {
   const escaped = chunk.replace(/ /g, "%s").replace(/'/g, "'\\''");
   return ["shell", "input", "text", `'${escaped}'`];
 }
+function isAdbInputTextSafe(text) {
+  return /^[\x20-\x7E]*$/.test(text);
+}
 async function androidClipboardFill(text) {
   try {
     const serial = getAdbSerial();
@@ -47153,7 +47156,7 @@ function createDeviceFillHandler(getClient2) {
         }
       }
     }
-    if (androidSession) {
+    if (androidSession && isAdbInputTextSafe(args.text)) {
       const adbResult = await androidClipboardFill(args.text);
       if (!adbResult.isError) {
         try {

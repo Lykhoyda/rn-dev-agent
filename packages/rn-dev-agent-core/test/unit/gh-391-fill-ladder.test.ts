@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
   await import('../../dist/agent-device-wrapper.js');
-const { createDeviceFillHandler, classifyFillPrimaryError, extractTypingMeta } =
+const { createDeviceFillHandler, classifyFillPrimaryError, extractTypingMeta, isAdbInputTextSafe } =
   await import('../../dist/tools/device-interact.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
@@ -115,4 +115,13 @@ test('#391: extractTypingMeta surfaces typingBurst + keyboardWaitMs from the run
 test('#391: extractTypingMeta returns null when the envelope has no typing telemetry', () => {
   assert.equal(extractTypingMeta(okResult({ typed: true })), null);
   assert.equal(extractTypingMeta(failResult('nope')), null);
+});
+
+test('#391: isAdbInputTextSafe gates the adb tier to printable ASCII', () => {
+  assert.equal(isAdbInputTextSafe('user+tag@example.com #42 (a-z)!'), true);
+  assert.equal(isAdbInputTextSafe(''), true);
+  assert.equal(isAdbInputTextSafe('héllo'), false);
+  assert.equal(isAdbInputTextSafe('👋🏽'), false);
+  assert.equal(isAdbInputTextSafe('世界'), false);
+  assert.equal(isAdbInputTextSafe('tab\tand\nnewline'), false);
 });

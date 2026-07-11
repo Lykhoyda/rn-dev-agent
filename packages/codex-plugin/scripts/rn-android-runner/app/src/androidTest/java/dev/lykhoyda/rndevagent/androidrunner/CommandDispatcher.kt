@@ -271,7 +271,10 @@ class CommandDispatcher(
         var method = "setText"
 
         if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
-            if (!TextInputRecipe.isKeyEventTypable(text)) {
+            // Codex P2 (#564): an empty request is a CLEAR — it has no keyevent
+            // representation, but the stale-length delete pass below is exactly
+            // how to honor it, so it must not throw here.
+            if (text.isNotEmpty() && !TextInputRecipe.isKeyEventTypable(text)) {
                 throw SetTextRejectedException(
                     "Focused field ignored ACTION_SET_TEXT and the text has no keyevent representation (non-ASCII)."
                 )
@@ -299,6 +302,10 @@ class CommandDispatcher(
                 )
             }
         }
+        // Codex P2 (#564): UNVERIFIED (no read-back — focused node gone after a
+        // re-render) is NOT retype-fodder: the set may have landed, so a keyevent
+        // pass could double-apply. Report honestly and let the bridge's own
+        // verification layers arbitrate.
 
         return JSONObject()
             .put("typed", true)
