@@ -54337,6 +54337,8 @@ async function tapSystemDialogViaRunner(labels) {
 var OPEN_CONFIRMATION_LABELS = ["Open"];
 var OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
 async function acceptDeeplinkOpenConfirmation() {
+  if (!iosSessionActiveFn())
+    return null;
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first)
     return first;

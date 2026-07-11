@@ -55986,6 +55986,8 @@ async function tapSystemDialogViaRunner(labels) {
   };
 }
 async function acceptDeeplinkOpenConfirmation() {
+  if (!iosSessionActiveFn())
+    return null;
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first)
     return first;

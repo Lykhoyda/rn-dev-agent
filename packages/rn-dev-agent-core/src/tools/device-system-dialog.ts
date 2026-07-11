@@ -137,6 +137,10 @@ const OPEN_CONFIRMATION_LABELS = ['Open'];
 const OPEN_CONFIRMATION_RETRY_DELAY_MS = 750;
 
 export async function acceptDeeplinkOpenConfirmation(): Promise<RunnerDialogOutcome | null> {
+  // Without an open iOS session the runner cannot reach a SpringBoard dialog
+  // at all — bail before the retry timer so a session-less deeplink (the common
+  // CLI path) never eats a dead 750ms wait for a probe that must return null.
+  if (!iosSessionActiveFn()) return null;
   const first = await tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
   if (first) return first;
   await new Promise((r) => setTimeout(r, OPEN_CONFIRMATION_RETRY_DELAY_MS));

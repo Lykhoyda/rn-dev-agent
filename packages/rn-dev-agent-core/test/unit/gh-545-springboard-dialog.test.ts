@@ -169,6 +169,24 @@ test('deeplink confirmation: retries once when the dialog has not appeared yet',
   }
 });
 
+test('deeplink confirmation: no iOS session bails before the retry timer (no snapshot, no delay)', async () => {
+  _setIosSessionActiveForTest(false);
+  let calls = 0;
+  _setFetchSnapshotNodesForTest(async () => {
+    calls += 1;
+    return ALERT_SNAPSHOT;
+  });
+  try {
+    const start = Date.now();
+    const out = await acceptDeeplinkOpenConfirmation();
+    assert.equal(out, null);
+    assert.equal(calls, 0, 'no snapshot without a session');
+    assert.ok(Date.now() - start < 200, 'must not wait the 750ms retry window');
+  } finally {
+    resetSeams();
+  }
+});
+
 test('deeplink confirmation: first-probe outcome is returned without a retry', async () => {
   _setIosSessionActiveForTest(true);
   let calls = 0;
