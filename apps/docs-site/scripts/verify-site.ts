@@ -187,6 +187,14 @@ check('kicker on architecture', page('architecture/index.html').includes('page-k
 check('kicker shows sidebar group', page('architecture/index.html').includes('Core Concepts'));
 check('kicker on reference page', page('tools/index.html').includes('page-kicker'));
 
+console.log('\nverify-site: rhythm + steps');
+check('getting-started uses Steps', page('getting-started/index.html').includes('sl-steps'));
+const rhythmCss = readdirSync(join(DIST, '_astro'))
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => readFileSync(join(DIST, '_astro', f), 'utf8'))
+  .join('');
+check('rhythm rules shipped', rhythmCss.includes('rda-lead'));
+
 if (failed > 0) {
   console.error(`\nverify-site: ${failed} assertion(s) failed`);
   process.exit(1);
