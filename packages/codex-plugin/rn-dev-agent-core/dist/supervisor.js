@@ -43618,6 +43618,14 @@ function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
   const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
   return { eligible, targetKey: `${builtCommand}@${x},${y}` };
 }
+function hasTransportRecovery(result) {
+  try {
+    const env = JSON.parse(result.content[0].text);
+    return env.meta?.transportRecovery !== void 0;
+  } catch {
+    return false;
+  }
+}
 function flagNoUiChange(result, targetKey) {
   const distinct = recordNoUiChange(targetKey);
   return attachMeta(result, {
@@ -43634,6 +43642,9 @@ async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, dep
     if (first.outcome?.hierarchyChanged === true)
       recordUiChange();
     return first.result;
+  }
+  if (hasTransportRecovery(firstResult)) {
+    return flagNoUiChange(first.result, policy.targetKey);
   }
   const second = await dispatch();
   if (second.isError) {
