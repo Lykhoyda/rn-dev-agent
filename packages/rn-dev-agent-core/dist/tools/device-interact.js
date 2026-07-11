@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
-import { surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
+import { surfaceKeyboardGuard, healKeyboardOccludedTap, } from '../runners/keyboard-guard.js';
 import { resolveBundleId } from '../project-config.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
@@ -362,7 +362,33 @@ function interactOpts(args) {
         ...(args.retryIfNoChange !== undefined ? { retryIfNoChange: args.retryIfNoChange } : {}),
     };
 }
-export function createDevicePressHandler() {
+// #379: build the KEYBOARD_OCCLUDED auto-heal deps. JS-first per D1250 —
+// dismiss via the injected helper (deterministic, no gestures), refresh the
+// snapshot because targets relayout when the keyboard lifts (measured live:
+// wizard-next-btn moved y=790→571), then retry the raw tap exactly once.
+// Opportunistic: no CDP → null deps → the refusal surfaces unchanged.
+function keyboardHealDeps(getClient, retryTap) {
+    const client = cdpClientOrNull(getClient);
+    if (!client)
+        return null;
+    return {
+        dismissViaJs: async () => {
+            const r = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+            if (typeof r.value !== 'string')
+                return false;
+            try {
+                const parsed = JSON.parse(r.value);
+                return parsed?.dismissed === true;
+            }
+            catch {
+                return false;
+            }
+        },
+        refreshSnapshot: () => runNative(['snapshot']),
+        retryTap,
+    };
+}
+export function createDevicePressHandler(getClient) {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
         const cliArgs = ['press', ref];
@@ -372,27 +398,38 @@ export function createDevicePressHandler() {
             cliArgs.push('--count', String(args.count));
         if (args.holdMs && args.holdMs > 0)
             cliArgs.push('--hold-ms', String(args.holdMs));
-        const result = surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+        const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+        let result = await tap();
+        if (result.isError) {
+            result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+        }
         if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
             await new Promise((r) => setTimeout(r, args.waitForFocusMs));
         }
         return result;
     });
 }
-export function createDeviceLongPressHandler() {
+export function createDeviceLongPressHandler(getClient) {
     return withSession(async (args) => {
+        let cliArgs;
         if (args.ref) {
             const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-            const cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
-            return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+            cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
         }
-        if (args.x != null && args.y != null) {
-            const cliArgs = ['longpress', String(args.x), String(args.y)];
+        else if (args.x != null && args.y != null) {
+            cliArgs = ['longpress', String(args.x), String(args.y)];
             if (args.durationMs)
                 cliArgs.push(String(args.durationMs));
-            return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
         }
-        return failResult('Provide either ref or x+y coordinates');
+        else {
+            return failResult('Provide either ref or x+y coordinates');
+        }
+        const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+        const result = await tap();
+        if (result.isError) {
+            return healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+        }
+        return result;
     });
 }
 // Splits a chunk into segments where no segment, after space→%s encoding,

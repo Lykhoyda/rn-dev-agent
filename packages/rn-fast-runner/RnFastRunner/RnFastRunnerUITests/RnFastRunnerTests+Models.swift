@@ -113,6 +113,7 @@ struct DataPayload: Codable {
   let dismissed: Bool?
   let orientation: String?
   let keyboardGuard: String?
+  let keyboardGuardMs: Double?
   let `static`: Bool?
 
   init(
@@ -136,6 +137,7 @@ struct DataPayload: Codable {
     dismissed: Bool? = nil,
     orientation: String? = nil,
     keyboardGuard: String? = nil,
+    keyboardGuardMs: Double? = nil,
     `static`: Bool? = nil
   ) {
     self.message = message
@@ -158,6 +160,7 @@ struct DataPayload: Codable {
     self.dismissed = dismissed
     self.orientation = orientation
     self.keyboardGuard = keyboardGuard
+    self.keyboardGuardMs = keyboardGuardMs
     self.`static` = `static`
   }
 }

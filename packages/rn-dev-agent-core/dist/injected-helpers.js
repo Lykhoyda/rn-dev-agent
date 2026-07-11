@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 34;
+export const HELPERS_VERSION = 35;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -2722,9 +2722,62 @@ export const INJECTED_HELPERS = `
     return false;
   }
 
+  // #379: JS-first keyboard dismissal for the KEYBOARD_OCCLUDED auto-heal.
+  // Deterministic (no gestures, no QuickPath corruption): prefer the RN
+  // Keyboard module; fall back to blurring the focused TextInput host
+  // instance (RN attaches isFocused()/blur() to it), which resigns first
+  // responder / hides the IME on both platforms.
+  function dismissKeyboard() {
+    try {
+      var method = null;
+      try {
+        var RN = require('react-native');
+        if (RN && RN.Keyboard && typeof RN.Keyboard.dismiss === 'function') {
+          RN.Keyboard.dismiss();
+          method = 'keyboard-module';
+        }
+      } catch (e) { /* require-by-name unavailable (bridgeless/Metro) */ }
+      if (!method) {
+        var blurred = 0;
+        var scanned = 0;
+        forEachRootFiber(function (rootFiber) {
+          var stack = [rootFiber];
+          while (stack.length) {
+            if (++scanned > 20000) return true; // bounded walk, stop all roots
+            var f = stack.pop();
+            if (!f) continue;
+            var sn = f.stateNode;
+            if (sn && typeof sn.isFocused === 'function' && typeof sn.blur === 'function') {
+              try {
+                if (sn.isFocused()) {
+                  sn.blur();
+                  blurred++;
+                }
+              } catch (e) {}
+            }
+            if (f.child) stack.push(f.child);
+            if (f.sibling) stack.push(f.sibling);
+          }
+          return null;
+        });
+        if (blurred > 0) method = 'blur-focused-input';
+      }
+      if (!method) {
+        return JSON.stringify({
+          dismissed: false,
+          reason: 'no focused input found and Keyboard module unavailable'
+        });
+      }
+      return JSON.stringify({ dismissed: true, method: method });
+    } catch (e) {
+      return JSON.stringify({ dismissed: false, error: (e && e.message) || String(e) });
+    }
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
+    dismissKeyboard: dismissKeyboard,
     getTree: getTree,
     getNavState: getNavState,
     getNavGraph: getNavGraph,

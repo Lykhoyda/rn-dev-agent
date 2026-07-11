@@ -19431,12 +19431,85 @@ function surfaceKeyboardGuard(result) {
   } catch {
     return result;
   }
+  if (envelope === null || typeof envelope !== "object")
+    return result;
   const data = envelope.data;
   const keyboardGuard = data?.keyboardGuard;
   if (typeof keyboardGuard !== "string")
     return result;
   const meta = envelope.meta ?? {};
   envelope.meta = { ...meta, keyboardGuard };
+  const keyboardGuardMs = data?.keyboardGuardMs;
+  if (typeof keyboardGuardMs === "number") {
+    const timings = meta.timings_ms ?? {};
+    envelope.meta = {
+      ...envelope.meta,
+      timings_ms: { ...timings, keyboardGuard: keyboardGuardMs }
+    };
+  }
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify(envelope) }]
+  };
+}
+function isKeyboardOccludedRefusal(result) {
+  if (!result.isError)
+    return false;
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string")
+    return false;
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (envelope === null || typeof envelope !== "object")
+    return false;
+  const { code, error: error2 } = envelope;
+  if (code === "KEYBOARD_OCCLUDED")
+    return true;
+  return typeof error2 === "string" && error2.startsWith("KEYBOARD_OCCLUDED");
+}
+async function healKeyboardOccludedTap(first, deps) {
+  if (!deps || !isKeyboardOccludedRefusal(first))
+    return first;
+  const t0 = Date.now();
+  let dismissed = false;
+  try {
+    dismissed = await deps.dismissViaJs();
+  } catch {
+    return first;
+  }
+  if (!dismissed)
+    return first;
+  try {
+    await deps.refreshSnapshot();
+  } catch {
+  }
+  const retried = await deps.retryTap();
+  return tagKeyboardAutoHeal(retried, Date.now() - t0);
+}
+function tagKeyboardAutoHeal(result, healMs) {
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string")
+    return result;
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return result;
+  }
+  if (envelope === null || typeof envelope !== "object")
+    return result;
+  const meta = envelope.meta ?? {};
+  envelope.meta = {
+    ...meta,
+    // A retry that refused again keeps its own guard status; only a served
+    // tap is stamped as JS-dismissed.
+    ...result.isError ? {} : { keyboardGuard: "js_dismissed" },
+    keyboardAutoHeal: { dismissed: true, healMs }
+  };
   return {
     ...result,
     content: [{ type: "text", text: JSON.stringify(envelope) }]
@@ -25713,7 +25786,27 @@ function interactOpts(args) {
     ...args.retryIfNoChange !== void 0 ? { retryIfNoChange: args.retryIfNoChange } : {}
   };
 }
-function createDevicePressHandler() {
+function keyboardHealDeps(getClient2, retryTap) {
+  const client2 = cdpClientOrNull(getClient2);
+  if (!client2)
+    return null;
+  return {
+    dismissViaJs: async () => {
+      const r = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
+      if (typeof r.value !== "string")
+        return false;
+      try {
+        const parsed = JSON.parse(r.value);
+        return parsed?.dismissed === true;
+      } catch {
+        return false;
+      }
+    },
+    refreshSnapshot: () => runNative(["snapshot"]),
+    retryTap
+  };
+}
+function createDevicePressHandler(getClient2) {
   return withSession(async (args) => {
     const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
     const cliArgs = ["press", ref];
@@ -25723,27 +25816,36 @@ function createDevicePressHandler() {
       cliArgs.push("--count", String(args.count));
     if (args.holdMs && args.holdMs > 0)
       cliArgs.push("--hold-ms", String(args.holdMs));
-    const result = surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    let result = await tap();
+    if (result.isError) {
+      result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
+    }
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
       await new Promise((r) => setTimeout(r, args.waitForFocusMs));
     }
     return result;
   });
 }
-function createDeviceLongPressHandler() {
+function createDeviceLongPressHandler(getClient2) {
   return withSession(async (args) => {
+    let cliArgs;
     if (args.ref) {
       const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
-      const cliArgs = ["press", ref, "--hold-ms", String(args.durationMs ?? 1e3)];
-      return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
-    }
-    if (args.x != null && args.y != null) {
-      const cliArgs = ["longpress", String(args.x), String(args.y)];
+      cliArgs = ["press", ref, "--hold-ms", String(args.durationMs ?? 1e3)];
+    } else if (args.x != null && args.y != null) {
+      cliArgs = ["longpress", String(args.x), String(args.y)];
       if (args.durationMs)
         cliArgs.push(String(args.durationMs));
-      return surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    } else {
+      return failResult("Provide either ref or x+y coordinates");
     }
-    return failResult("Provide either ref or x+y coordinates");
+    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const result = await tap();
+    if (result.isError) {
+      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient2, tap));
+    }
+    return result;
   });
 }
 function splitChunkAroundPercentS(chunk) {
@@ -42244,7 +42346,7 @@ async function detectBridge(client2) {
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 34;
+var HELPERS_VERSION = 35;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -44964,9 +45066,62 @@ var INJECTED_HELPERS = `
     return false;
   }
 
+  // #379: JS-first keyboard dismissal for the KEYBOARD_OCCLUDED auto-heal.
+  // Deterministic (no gestures, no QuickPath corruption): prefer the RN
+  // Keyboard module; fall back to blurring the focused TextInput host
+  // instance (RN attaches isFocused()/blur() to it), which resigns first
+  // responder / hides the IME on both platforms.
+  function dismissKeyboard() {
+    try {
+      var method = null;
+      try {
+        var RN = require('react-native');
+        if (RN && RN.Keyboard && typeof RN.Keyboard.dismiss === 'function') {
+          RN.Keyboard.dismiss();
+          method = 'keyboard-module';
+        }
+      } catch (e) { /* require-by-name unavailable (bridgeless/Metro) */ }
+      if (!method) {
+        var blurred = 0;
+        var scanned = 0;
+        forEachRootFiber(function (rootFiber) {
+          var stack = [rootFiber];
+          while (stack.length) {
+            if (++scanned > 20000) return true; // bounded walk, stop all roots
+            var f = stack.pop();
+            if (!f) continue;
+            var sn = f.stateNode;
+            if (sn && typeof sn.isFocused === 'function' && typeof sn.blur === 'function') {
+              try {
+                if (sn.isFocused()) {
+                  sn.blur();
+                  blurred++;
+                }
+              } catch (e) {}
+            }
+            if (f.child) stack.push(f.child);
+            if (f.sibling) stack.push(f.sibling);
+          }
+          return null;
+        });
+        if (blurred > 0) method = 'blur-focused-input';
+      }
+      if (!method) {
+        return JSON.stringify({
+          dismissed: false,
+          reason: 'no focused input found and Keyboard module unavailable'
+        });
+      }
+      return JSON.stringify({ dismissed: true, method: method });
+    } catch (e) {
+      return JSON.stringify({ dismissed: false, error: (e && e.message) || String(e) });
+    }
+  }
+
   // Public API
   globalThis.__RN_AGENT = {
     __v: __HELPERS_VERSION__,
+    dismissKeyboard: dismissKeyboard,
     getTree: getTree,
     getNavState: getNavState,
     getNavGraph: getNavGraph,
@@ -60647,7 +60802,7 @@ trackedTool("device_press", "Tap a UI element by its @ref from device_snapshot. 
   waitForFocusMs: external_exports.number().int().min(0).max(5e3).optional().describe("Sleep this many ms after tap to let keyboard focus settle \u2014 useful in sequential press+fill flows where focus would otherwise not propagate."),
   settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
   retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
-}, createDevicePressHandler());
+}, createDevicePressHandler(getClient));
 trackedTool("device_fill", 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable\u2192TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) \u2192 coordinate re-tap + retry \u2192 Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
   ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
   text: external_exports.string().describe("Text to type into the field"),
@@ -60673,7 +60828,7 @@ trackedTool("device_longpress", "Long press on an element or coordinates. Use fo
   y: external_exports.number().optional().describe("Y coordinate"),
   durationMs: external_exports.number().int().min(100).max(1e4).optional().describe("Hold duration in ms (default 1000)"),
   retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
-}, createDeviceLongPressHandler());
+}, createDeviceLongPressHandler(getClient));
 trackedTool("device_scroll", "Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.", {
   direction: external_exports.enum(["up", "down", "left", "right"]).describe("Scroll direction"),
   amount: external_exports.number().min(0).max(1).optional().describe("Scroll amount 0-1 (default ~0.5). 1 = full screen height/width.")

@@ -211,8 +211,11 @@ class CommandDispatcher(
     private fun tap(cmd: JSONObject): JSONObject {
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
+        val kbStart = SystemClock.uptimeMillis()
         val kb = applyKeyboardGuard(cmd, x, y)
-        return JSONObject().put("x", x).put("y", y).put("tapped", device.click(x, y)).put("keyboardGuard", kb)
+        val kbMs = SystemClock.uptimeMillis() - kbStart
+        return JSONObject().put("x", x).put("y", y).put("tapped", device.click(x, y))
+            .put("keyboardGuard", kb).put("keyboardGuardMs", kbMs)
     }
 
     private fun imeBoundsInScreen(): Rect? {
@@ -265,9 +268,12 @@ class CommandDispatcher(
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
         val durationMs = cmd.optInt("durationMs", 600)
+        val kbStart = SystemClock.uptimeMillis()
         val kb = applyKeyboardGuard(cmd, x, y)
+        val kbMs = SystemClock.uptimeMillis() - kbStart
         val ok = device.swipe(x, y, x, y, durationToSteps(durationMs))
-        return JSONObject().put("x", x).put("y", y).put("durationMs", durationMs).put("pressed", ok).put("keyboardGuard", kb)
+        return JSONObject().put("x", x).put("y", y).put("durationMs", durationMs).put("pressed", ok)
+            .put("keyboardGuard", kb).put("keyboardGuardMs", kbMs)
     }
 
     private fun pinch(cmd: JSONObject): JSONObject {

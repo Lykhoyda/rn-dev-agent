@@ -211,11 +211,13 @@ extension RnFastRunnerTests {
       }
       if let x = command.x, let y = command.y {
         let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+        let keyboardGuardStartMs = currentUptimeMs()
         let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+        let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
         if keyboardGuardStatus == "dismiss_failed" {
           return Response(
             ok: false,
-            error: ErrorPayload(message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+            error: ErrorPayload(code: "KEYBOARD_OCCLUDED", message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
           )
         }
         var outcome = RunnerInteractionOutcome.performed
@@ -237,7 +239,8 @@ extension RnFastRunnerTests {
             y: touchFrame.y,
             referenceWidth: touchFrame.referenceWidth,
             referenceHeight: touchFrame.referenceHeight,
-            keyboardGuard: keyboardGuardStatus
+            keyboardGuard: keyboardGuardStatus,
+            keyboardGuardMs: keyboardGuardMs
           )
         )
       }
@@ -340,11 +343,13 @@ extension RnFastRunnerTests {
       }
       let duration = (command.durationMs ?? 800) / 1000.0
       let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
+      let keyboardGuardStartMs = currentUptimeMs()
       let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+      let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
       if keyboardGuardStatus == "dismiss_failed" {
         return Response(
           ok: false,
-          error: ErrorPayload(message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+          error: ErrorPayload(code: "KEYBOARD_OCCLUDED", message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
         )
       }
       var outcome = RunnerInteractionOutcome.performed
@@ -366,7 +371,8 @@ extension RnFastRunnerTests {
           y: touchFrame.y,
           referenceWidth: touchFrame.referenceWidth,
           referenceHeight: touchFrame.referenceHeight,
-          keyboardGuard: keyboardGuardStatus
+          keyboardGuard: keyboardGuardStatus,
+          keyboardGuardMs: keyboardGuardMs
         )
       )
     case .drag:

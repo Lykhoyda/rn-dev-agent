@@ -288,6 +288,10 @@ export type ToolErrorCode =
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
   | 'STALE_REF'
+  // GH #370/#379: iOS keyboard guard verify-or-refuse arm — the tap point is
+  // under a keyboard with no dismiss control. The TS layer auto-heals via the
+  // injected Keyboard.dismiss() when CDP is connected (#379).
+  | 'KEYBOARD_OCCLUDED'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
   | 'CROSS_PLATFORM_MISMATCH'
