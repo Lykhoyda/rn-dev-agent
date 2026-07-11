@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { okResult, failResult } from '../utils.js';
-import { updateRefMapFromFlat, getCachedMetadata } from '../fast-runner-ref-map.js';
+import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
@@ -833,8 +833,11 @@ export async function runAndroid(args) {
         const data = resp.data;
         if (Array.isArray(data.nodes)) {
             const flat = mapRunnerNodesToFlat(data.nodes);
-            updateRefMapFromFlat(flat);
-            return okResult({ nodes: flat });
+            const outcome = updateRefMapFromFlat(flat);
+            // GH #409: same capture-quality contract as the iOS client — empty
+            // captures report degraded and never clobber last-known-good refs.
+            const snapshotVerdict = buildSnapshotVerdict('rn-android-runner', flat.length, outcome);
+            return okResult({ nodes: flat }, { meta: { snapshotVerdict } });
         }
     }
     if (args.command === 'screenshot') {

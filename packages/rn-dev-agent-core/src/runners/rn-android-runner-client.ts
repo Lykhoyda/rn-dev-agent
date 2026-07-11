@@ -9,7 +9,12 @@ import { writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
-import { updateRefMapFromFlat, getCachedMetadata, type FlatNode } from '../fast-runner-ref-map.js';
+import {
+  updateRefMapFromFlat,
+  buildSnapshotVerdict,
+  getCachedMetadata,
+  type FlatNode,
+} from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
@@ -1061,8 +1066,11 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     const data = resp.data as { nodes?: RunnerSnapshotNode[] };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      updateRefMapFromFlat(flat);
-      return okResult({ nodes: flat });
+      const outcome = updateRefMapFromFlat(flat);
+      // GH #409: same capture-quality contract as the iOS client — empty
+      // captures report degraded and never clobber last-known-good refs.
+      const snapshotVerdict = buildSnapshotVerdict('rn-android-runner', flat.length, outcome);
+      return okResult({ nodes: flat }, { meta: { snapshotVerdict } });
     }
   }
 

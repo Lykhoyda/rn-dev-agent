@@ -28,8 +28,13 @@ export function createComponentTreeHandler(getClient: () => CDPClient) {
         return failResult('Failed to parse component tree response');
       }
 
+      // GH #409: the capture-time quality verdict renders once, as
+      // meta.treeVerdict — absent for stale injected helpers (< v34).
+      const verdict = parsed.verdict as Record<string, unknown> | undefined;
+      const meta = verdict ? { treeVerdict: verdict } : undefined;
+
       if (parsed.error) {
-        return failResult(`Component tree error: ${parsed.error}`);
+        return failResult(`Component tree error: ${parsed.error}`, meta);
       }
 
       if (parsed.warning === 'APP_HAS_REDBOX') {
@@ -40,10 +45,12 @@ export function createComponentTreeHandler(getClient: () => CDPClient) {
               'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
           },
           'APP_HAS_REDBOX',
+          meta,
         );
       }
 
-      return okResult(parsed);
+      if (verdict) delete parsed.verdict;
+      return okResult(parsed, meta ? { meta } : undefined);
     },
   );
 }
