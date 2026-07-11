@@ -58346,7 +58346,8 @@ var ObservabilityServer = class {
     try {
       let html = readFileSync24(join35(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
-        html = html.replace("</head>", `<script>window.__E2E_CSRF__='${this.e2e.token}'</script></head>`);
+        const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
+        html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
@@ -58354,6 +58355,26 @@ var ObservabilityServer = class {
       res.writeHead(503);
       res.end("SPA bundle not built \u2014 run npm run build:web");
     }
+  }
+  // Bounded body read that can never become an unhandled rejection —
+  // handle() fire-and-forgets the async routes, so a rejecting await here
+  // would crash the process on an oversized/aborted request (GH #438 review).
+  readBody(req) {
+    return new Promise((resolve4) => {
+      let body = "";
+      let bytes = 0;
+      req.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 65536) {
+          req.destroy();
+          resolve4(null);
+          return;
+        }
+        body += chunk.toString();
+      });
+      req.on("end", () => resolve4(body));
+      req.on("error", () => resolve4(null));
+    });
   }
   json(res, status, obj) {
     const body = JSON.stringify(obj);
@@ -58374,21 +58395,11 @@ var ObservabilityServer = class {
       this.json(res, check2.status, { error: check2.reason });
       return;
     }
-    let body = "";
-    await new Promise((resolve4, reject) => {
-      let bytes = 0;
-      req.on("data", (chunk) => {
-        bytes += chunk.length;
-        if (bytes > 65536) {
-          req.destroy();
-          reject(new Error("body too large"));
-          return;
-        }
-        body += chunk.toString();
-      });
-      req.on("end", resolve4);
-      req.on("error", reject);
-    });
+    const body = await this.readBody(req);
+    if (body === null) {
+      this.json(res, 413, { error: "body too large" });
+      return;
+    }
     let parsed = {};
     try {
       parsed = JSON.parse(body);
@@ -58457,21 +58468,11 @@ var ObservabilityServer = class {
       this.json(res, check2.status, { error: check2.reason });
       return;
     }
-    let body = "";
-    await new Promise((resolve4, reject) => {
-      let bytes = 0;
-      req.on("data", (chunk) => {
-        bytes += chunk.length;
-        if (bytes > 65536) {
-          req.destroy();
-          reject(new Error("body too large"));
-          return;
-        }
-        body += chunk.toString();
-      });
-      req.on("end", resolve4);
-      req.on("error", reject);
-    });
+    const body = await this.readBody(req);
+    if (body === null) {
+      this.json(res, 413, { error: "body too large" });
+      return;
+    }
     let parsed = {};
     try {
       parsed = JSON.parse(body);

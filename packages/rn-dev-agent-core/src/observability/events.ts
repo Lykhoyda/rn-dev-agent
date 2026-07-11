@@ -1,29 +1,11 @@
 import { redact } from '../util/redact.js';
+import type { AgentEvent, AgentEventFamily } from './wire-types.js';
+
+// GH #438: AgentEvent/AgentEventFamily live in wire-types.ts (pure types, no
+// Node imports) so the browser SPA shares them instead of hand-copying.
+export type { AgentEvent, AgentEventFamily } from './wire-types.js';
 
 const CLIP_LIMIT = 16000;
-
-export type AgentEventFamily =
-  | 'interaction'
-  | 'introspection'
-  | 'navigation'
-  | 'lifecycle'
-  | 'testing'
-  | 'other';
-
-export interface AgentEvent {
-  seq: number;
-  ts: number;
-  tool: string;
-  family: AgentEventFamily;
-  args: Record<string, unknown>;
-  ok: boolean;
-  durationMs?: number;
-  error?: { message: string; code?: string };
-  ghost?: { attempted: boolean; outcome: string };
-  summary: string;
-  payload?: unknown;
-  truncated?: boolean;
-}
 
 const INTERACTION = new Set([
   'device_press',

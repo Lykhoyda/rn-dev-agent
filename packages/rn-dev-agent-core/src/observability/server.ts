@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import type { Recorder } from './recorder.js';
 import type { MirrorManager } from './mirror/manager.js';
 import { isPostAllowed } from './e2e-csrf.js';
+import type { ActionRunResult } from './wire-types.js';
 
 const HOST = '127.0.0.1';
 
@@ -14,10 +15,7 @@ export interface E2eServerDeps {
   listRuns: () => Promise<unknown[]>;
   loadRun: (id: string) => Promise<unknown | null>;
   listActions: () => Promise<unknown[]>;
-  runAction: (
-    actionId: string,
-    params?: Record<string, string>,
-  ) => Promise<{ ok: boolean; output?: string; error?: string; missingParams?: string[] }>;
+  runAction: (actionId: string, params?: Record<string, string>) => Promise<ActionRunResult>;
 }
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -209,10 +207,10 @@ export class ObservabilityServer {
       // dist/observability/web-dist/index.html (vite outDir).
       let html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
       if (this.e2e) {
-        html = html.replace(
-          '</head>',
-          `<script>window.__E2E_CSRF__='${this.e2e.token}'</script></head>`,
-        );
+        // JSON.stringify + \u003c escaping: a token containing quotes or
+        // </script> must never break out of the inline tag (GH #438 review).
+        const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, '\\u003c');
+        html = html.replace('</head>', `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
@@ -220,6 +218,27 @@ export class ObservabilityServer {
       res.writeHead(503);
       res.end('SPA bundle not built — run npm run build:web');
     }
+  }
+
+  // Bounded body read that can never become an unhandled rejection —
+  // handle() fire-and-forgets the async routes, so a rejecting await here
+  // would crash the process on an oversized/aborted request (GH #438 review).
+  private readBody(req: IncomingMessage): Promise<string | null> {
+    return new Promise((resolve) => {
+      let body = '';
+      let bytes = 0;
+      req.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 65536) {
+          req.destroy();
+          resolve(null);
+          return;
+        }
+        body += chunk.toString();
+      });
+      req.on('end', () => resolve(body));
+      req.on('error', () => resolve(null));
+    });
   }
 
   private json(res: ServerResponse, status: number, obj: unknown): void {
@@ -245,21 +264,11 @@ export class ObservabilityServer {
       this.json(res, check.status, { error: check.reason });
       return;
     }
-    let body = '';
-    await new Promise<void>((resolve, reject) => {
-      let bytes = 0;
-      req.on('data', (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > 65536) {
-          req.destroy();
-          reject(new Error('body too large'));
-          return;
-        }
-        body += chunk.toString();
-      });
-      req.on('end', resolve);
-      req.on('error', reject);
-    });
+    const body = await this.readBody(req);
+    if (body === null) {
+      this.json(res, 413, { error: 'body too large' });
+      return;
+    }
     let parsed: { pattern?: string } = {};
     try {
       parsed = JSON.parse(body) as { pattern?: string };
@@ -335,21 +344,11 @@ export class ObservabilityServer {
       this.json(res, check.status, { error: check.reason });
       return;
     }
-    let body = '';
-    await new Promise<void>((resolve, reject) => {
-      let bytes = 0;
-      req.on('data', (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > 65536) {
-          req.destroy();
-          reject(new Error('body too large'));
-          return;
-        }
-        body += chunk.toString();
-      });
-      req.on('end', resolve);
-      req.on('error', reject);
-    });
+    const body = await this.readBody(req);
+    if (body === null) {
+      this.json(res, 413, { error: 'body too large' });
+      return;
+    }
     let parsed: { actionId?: string; params?: Record<string, string> } = {};
     try {
       parsed = JSON.parse(body) as { actionId?: string; params?: Record<string, string> };

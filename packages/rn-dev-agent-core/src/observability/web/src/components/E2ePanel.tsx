@@ -78,7 +78,12 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
     <div className="reg-container">
       <div className="reg-panel">
         <div className="reg-header">
-          <button className="reg-run-btn" disabled={running} onClick={() => void runSuite()}>
+          <button
+            className="reg-run-btn"
+            data-testid="e2e-run"
+            disabled={running}
+            onClick={() => void runSuite()}
+          >
             {running ? 'Running…' : 'Run E2E Suite'}
           </button>
           {e2eProgress && (
@@ -88,6 +93,7 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
           )}
           {verdict && (
             <span
+              data-testid="e2e-verdict"
               className={`reg-verdict ${verdict === 'green' ? 'pass' : verdict === 'empty' ? 'none' : 'fail'}`}
             >
               {verdict === 'green' ? 'PASS' : verdict === 'empty' ? 'NO TESTS' : 'FAIL'}
@@ -163,8 +169,8 @@ interface HistoryItemProps {
 
 function HistoryItem({ entry: h, open, detail, onToggle }: HistoryItemProps): JSX.Element {
   return (
-    <div className="hist-item">
-      <button className="hist-toggle" onClick={onToggle}>
+    <div className="hist-item" data-testid="e2e-history-item">
+      <button className="hist-toggle" data-testid="e2e-history-toggle" onClick={onToggle}>
         <span className="hist-caret">{open ? '▾' : '▸'}</span>
         <span className="reg-testid hist-id" title={h.runId}>
           {h.runId}
@@ -184,7 +190,7 @@ function HistoryItem({ entry: h, open, detail, onToggle }: HistoryItemProps): JS
         </span>
       </button>
       {open && (
-        <div className="hist-body">
+        <div className="hist-body" data-testid="e2e-history-body">
           {detail === 'loading' || detail === undefined ? (
             <div className="empty">loading run…</div>
           ) : detail === 'error' ? (

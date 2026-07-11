@@ -90,7 +90,7 @@ function ActionItem({
 }: ActionItemProps): JSX.Element {
   const res = st?.result;
   return (
-    <div className="action-item">
+    <div className="action-item" data-testid="action-item">
       <div className="action-top">
         <span className="reg-testid action-id" title={a.id}>
           {a.id}
@@ -101,7 +101,12 @@ function ActionItem({
             M
           </span>
         )}
-        <button className="actions-run-btn" disabled={st?.running} onClick={onRun}>
+        <button
+          className="actions-run-btn"
+          data-testid="action-run"
+          disabled={st?.running}
+          onClick={onRun}
+        >
           {st?.running ? '…' : 'Run'}
         </button>
       </div>
@@ -113,6 +118,7 @@ function ActionItem({
           {(a.params ?? []).map((p) => (
             <input
               key={p}
+              data-testid={`action-param-${p}`}
               className={missing.includes(p) ? 'param-input missing' : 'param-input'}
               placeholder={p}
               value={values[p] ?? ''}
@@ -122,7 +128,7 @@ function ActionItem({
         </div>
       )}
       {res && (
-        <div className="action-result">
+        <div className="action-result" data-testid="action-result">
           <span
             className={res.ok ? 'actions-result-ok' : 'actions-result-fail'}
             onClick={onToggleOutput}
@@ -137,7 +143,9 @@ function ActionItem({
         </div>
       )}
       {outputOpen && res && (res.output || res.error) && (
-        <pre className="action-output">{res.output ?? res.error}</pre>
+        <pre className="action-output" data-testid="action-output">
+          {res.output ?? res.error}
+        </pre>
       )}
     </div>
   );

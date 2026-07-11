@@ -1,43 +1,24 @@
-export type Family =
-  | 'interaction'
-  | 'introspection'
-  | 'navigation'
-  | 'lifecycle'
-  | 'testing'
-  | 'other';
+// GH #438: wire shapes are single-sourced from the server's wire-types module
+// (pure types, zero Node imports — safe to reference from the browser build).
+// Drift between server and UI is now a compile error caught by `npm run
+// typecheck`, not a silent `as`-cast mismatch.
+import type { ActionRunResult, E2eFlowResult } from '../../wire-types';
 
-export interface AgentEvent {
-  seq: number;
-  ts: number;
-  tool: string;
-  family: Family;
-  args: Record<string, unknown>;
-  ok: boolean;
-  durationMs?: number;
-  error?: { message: string; code?: string };
-  ghost?: { attempted: boolean; outcome: string };
-  summary: string;
-  payload?: unknown;
-  truncated?: boolean;
-}
+export type {
+  AgentEventFamily as Family,
+  AgentEvent,
+  E2eVerdict,
+  E2eResultClassification,
+  E2eFlowResult,
+  E2eRunRecord as E2eRunDetail,
+  E2eRunIndexEntry,
+  ActionSummary,
+  ActionRunResult,
+} from '../../wire-types';
+
+// ── UI-only shapes (no server twin) ──────────────────────────────────
 
 export type Conn = 'connecting' | 'open' | 'error';
-
-export interface ActionSummary {
-  id: string;
-  intent: string;
-  status: string;
-  params?: string[];
-  mutates?: boolean;
-  appId?: string;
-}
-
-export interface ActionRunResult {
-  ok: boolean;
-  output?: string;
-  error?: string;
-  missingParams?: string[];
-}
 
 export interface ActionRunState {
   running: boolean;
@@ -50,15 +31,7 @@ export interface E2eProgress {
   lastTestId: string;
 }
 
-export interface E2eFlowResult {
-  testId: string;
-  intent?: string;
-  passed: boolean;
-  durationMs?: number;
-  classification: string;
-  errorExcerpt?: string | null;
-}
-
+/** Client-side parse of POST /api/e2e/run — the run-e2e-suite tool envelope. */
 export interface E2eRunResult {
   ok?: boolean;
   data?: {
@@ -68,25 +41,6 @@ export interface E2eRunResult {
     results?: E2eFlowResult[];
     newlyFailing?: string[];
   };
-}
-
-export interface E2eRunIndexEntry {
-  runId: string;
-  finishedAt: string;
-  verdict: string;
-  totals: { total: number; passed: number; failed: number; skipped: number };
-}
-
-/** Shape of GET /api/e2e/runs/:id — the bridge's E2eRunRecord. */
-export interface E2eRunDetail {
-  runId: string;
-  startedAt: string;
-  finishedAt: string;
-  durationMs: number;
-  platform: string;
-  verdict: string;
-  totals: { total: number; passed: number; failed: number; skipped: number };
-  results: E2eFlowResult[];
 }
 
 export interface MirrorState {

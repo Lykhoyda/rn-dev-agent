@@ -1,0 +1,4 @@
+
+# GH #438: Playwright e2e-web artifacts
+test-results/
+playwright-report/

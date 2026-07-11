@@ -21,12 +21,12 @@ export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
   const errors = events.reduce((n, e) => (e.ok ? n : n + 1), 0);
 
   return (
-    <div className="header">
+    <div className="header" data-testid="header">
       <div className="brand">
         <strong>Observe</strong>
         <span>rn-dev-agent</span>
       </div>
-      <span className="conn-pill">
+      <span className="conn-pill" data-testid="header-conn">
         <span className={`dot ${conn}`} />
         {conn === 'open' ? 'live' : conn}
       </span>
@@ -37,7 +37,7 @@ export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
         </span>
       )}
       {route && (
-        <span className="chip route" title={route}>
+        <span className="chip route" title={route} data-testid="header-route">
           <b>route</b>
           {route}
         </span>
@@ -49,11 +49,11 @@ export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
             <span className="k">session</span>
           </span>
         )}
-        <span className="stat">
+        <span className="stat" data-testid="header-calls">
           <span className="v">{events.length}</span>
           <span className="k">calls</span>
         </span>
-        <span className="stat">
+        <span className="stat" data-testid="header-errors">
           <span className={errors > 0 ? 'v bad' : 'v'}>{errors}</span>
           <span className="k">errors</span>
         </span>

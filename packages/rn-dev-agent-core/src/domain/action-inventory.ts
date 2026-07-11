@@ -2,14 +2,11 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAction } from './action-store.js';
 
-export interface ActionSummary {
-  id: string;
-  intent: string;
-  status: string;
-  params?: string[];
-  mutates?: boolean;
-  appId?: string;
-}
+import type { ActionSummary } from '../observability/wire-types.js';
+
+// GH #438: ActionSummary lives in observability/wire-types.ts (shared with
+// the observe SPA).
+export type { ActionSummary } from '../observability/wire-types.js';
 
 export async function listActions(projectRoot: string): Promise<ActionSummary[]> {
   const actionsDir = join(projectRoot, '.rn-agent', 'actions');

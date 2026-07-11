@@ -106,7 +106,7 @@ export function DevicePane({
   const footerHint = mirror?.status === 'streaming' ? undefined : mirror?.hint;
 
   return (
-    <div className="pane center">
+    <div className="pane center" data-testid="device-pane">
       <div className="pane-head">
         Device
         {route && <span className="route-chip">{route}</span>}
@@ -116,6 +116,7 @@ export function DevicePane({
         {useMirror ? (
           <div className="device-frame">
             <img
+              data-testid="device-mirror"
               src={`/api/device/mirror?t=${nonce}`}
               alt="live device mirror"
               onError={onMirrorError}
@@ -123,7 +124,7 @@ export function DevicePane({
           </div>
         ) : fallbackSrc ? (
           <div className="device-frame">
-            <img src={fallbackSrc} alt="device screenshot" />
+            <img src={fallbackSrc} alt="device screenshot" data-testid="device-screenshot" />
           </div>
         ) : (
           <div className="empty empty-guide">
