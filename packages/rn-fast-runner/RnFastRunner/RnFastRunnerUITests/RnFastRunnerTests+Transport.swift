@@ -138,9 +138,13 @@ extension RnFastRunnerTests {
       )
     }
 
-    struct CommandTypeProbe: Decodable { let command: String }
-    if let probe = try? JSONDecoder().decode(CommandTypeProbe.self, from: data),
-       CommandType(rawValue: probe.command) == nil {
+    struct CommandProbe: Decodable {
+      let command: String
+      let commandId: String?
+    }
+    let probe = try? JSONDecoder().decode(CommandProbe.self, from: data)
+
+    if let probe, CommandType(rawValue: probe.command) == nil {
       // GH #418: a verb this artifact doesn't know is a typed refusal, not a
       // dataCorrupted decode error (B235). Mirrors the Android runner's shape.
       return (
@@ -155,19 +159,51 @@ extension RnFastRunnerTests {
       )
     }
 
+    // Story 14 (#407): outcome probe — answered from the journal, no execute().
+    if probe?.command == CommandType.status.rawValue {
+      return (statusResponse(commandId: probe?.commandId), false)
+    }
+
     do {
       let command = try JSONDecoder().decode(Command.self, from: data)
       let response = try execute(command: command)
-      return (jsonResponse(status: 200, response: response), command.command == .shutdown)
+      let body = encodeBody(response)
+      commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: response.ok, body: body)
+      return (httpResponse(status: 200, body: String(decoding: body, as: UTF8.self)), command.command == .shutdown)
     } catch {
-      return (
-        jsonResponse(status: 500, response: Response(ok: false, error: ErrorPayload(message: "\(error)"))),
-        false
-      )
+      let response = Response(ok: false, error: ErrorPayload(message: "\(error)"))
+      let body = encodeBody(response)
+      commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: false, body: body)
+      return (httpResponse(status: 500, body: String(decoding: body, as: UTF8.self)), false)
     }
   }
 
   // MARK: - Response Encoding
+
+  private func encodeBody(_ response: Response) -> Data {
+    (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
+  }
+
+  // The recorded body is spliced back verbatim as data.result — Codable models
+  // cannot express "arbitrary recorded JSON", so this one response is built via
+  // JSONSerialization.
+  private func statusResponse(commandId: String?) -> Data {
+    guard let id = commandId, !id.isEmpty else {
+      return jsonResponse(status: 200, response: Response(
+        ok: false,
+        error: ErrorPayload(code: "INVALID_ARGUMENT", message: "status requires a non-blank 'commandId'")
+      ))
+    }
+    let entry = commandJournal.lookup(commandId: id)
+    var data: [String: Any] = ["commandId": id, "state": entry?.state ?? "unknown"]
+    if let body = entry?.body,
+       let parsed = try? JSONSerialization.jsonObject(with: body) {
+      data["result"] = parsed
+    }
+    let payload: [String: Any] = ["ok": true, "v": RunnerProtocol.version, "data": data]
+    let encoded = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
+    return httpResponse(status: 200, body: String(decoding: encoded, as: UTF8.self))
+  }
 
   private func jsonResponse(status: Int, response: Response) -> Data {
     let encoder = JSONEncoder()

@@ -218,6 +218,7 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
     'screenshot',
     'back',
     'keyboardDismiss',
+    'status',
   ];
   setIosFetch(async (url, init) => {
     if (String(url).includes('/health')) {

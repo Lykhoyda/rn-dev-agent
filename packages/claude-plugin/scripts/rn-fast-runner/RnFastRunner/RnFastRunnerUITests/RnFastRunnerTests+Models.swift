@@ -26,11 +26,13 @@ enum CommandType: String, Codable, CaseIterable {
   case pinch
   case isScreenStatic
   case uptime
+  case status
   case shutdown
 }
 
 struct Command: Codable {
   let command: CommandType
+  let commandId: String?
   let appBundleId: String?
   let text: String?
   let delayMs: Int?

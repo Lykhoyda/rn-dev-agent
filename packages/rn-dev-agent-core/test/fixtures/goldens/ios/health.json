@@ -1,6 +1,6 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T15:56:58.558Z",
+    "capturedAt": "2026-07-11T18:21:07.216Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=ios node test/contract/capture-goldens.ts)",
     "platform": "ios",
@@ -8,19 +8,18 @@
     "os": "iOS-26-5",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.0",
+    "runnerVersion": "0.67.1",
     "protocolVersion": 1,
     "runnerPort": 22088
   },
   "payload": {
-    "v": 1,
-    "protocolVersion": 1,
     "capabilities": [
       "QUIESCENCE_BYPASS",
       "SCREEN_STATIC",
       "HONEST_HITTABLE"
     ],
-    "ok": true,
+    "protocolVersion": 1,
+    "runnerVersion": "0.67.1",
     "commands": [
       "tap",
       "mouseClick",
@@ -47,8 +46,10 @@
       "pinch",
       "isScreenStatic",
       "uptime",
+      "status",
       "shutdown"
     ],
-    "runnerVersion": "0.67.0"
+    "ok": true,
+    "v": 1
   }
 }

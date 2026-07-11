@@ -181,6 +181,11 @@ extension RnFastRunnerTests {
         ok: true,
         data: DataPayload(currentUptimeMs: currentUptimeMs())
       )
+    case .status:
+      return Response(
+        ok: false,
+        error: ErrorPayload(code: "INVALID_ARGUMENT", message: "status is handled at the transport layer")
+      )
     case .tap:
       if let text = command.text {
         if let element = findElement(app: activeApp, text: text) {

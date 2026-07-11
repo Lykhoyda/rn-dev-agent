@@ -171,6 +171,42 @@ test('wedged hint after noUiChange on 3 distinct targets', async () => {
   assert.match(env.meta.hint, /wedged/);
 });
 
+test('transport-recovered send, hierarchy unchanged → no retap, noUiChange only (Story 14 #407)', async () => {
+  let dispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }, { meta: { transportRecovery: { via: 'status', commandId: 'c1' } } }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged]),
+  );
+  assert.equal(dispatches, 0); // transport already consumed the ambiguity budget
+  const env = parse(result);
+  assert.equal(env.ok, true);
+  assert.equal(env.meta.noUiChange, true);
+  assert.equal(env.meta.tapRetried, undefined);
+});
+
+test('control: no transportRecovery marker, hierarchy unchanged → exactly one retap', async () => {
+  let dispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged, unchanged]),
+  );
+  assert.equal(dispatches, 1); // existing behavior intact without the marker
+  const env = parse(result);
+  assert.equal(env.meta.tapRetried, true);
+});
+
 test('retap dispatch error → first success kept, flagged noUiChange (advisory contract)', async () => {
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),

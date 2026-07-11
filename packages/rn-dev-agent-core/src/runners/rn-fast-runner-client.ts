@@ -40,6 +40,12 @@ import type { QuiescenceStatus } from './quiescence.js';
 import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
+import {
+  decideRecovery,
+  generateCommandId,
+  isAmbiguousTransportFailure,
+  parseStatusProbeReply,
+} from './transport-recovery.js';
 
 const DEFAULT_PORT = 22088;
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
@@ -992,6 +998,7 @@ export interface RunIOSArgs {
     | 'pressHome'
     | 'appState'
     | 'activate'
+    | 'status'
     | 'terminate';
   bundleId?: string;
   x?: number;
@@ -1061,18 +1068,15 @@ function commandTimeoutMs(command: unknown): number {
   return SLOW_RUNNER_COMMANDS.has(command as string) ? 35_000 : HTTP_TIMEOUT_MS;
 }
 
-async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
-  const state = runnerState;
-  if (!state) {
-    throw new Error(
-      'rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).',
-    );
-  }
+async function sendCommandOnce(
+  port: number,
+  body: { command?: unknown; commandId?: string },
+  timeoutMs: number,
+): Promise<RunnerResponse> {
   const controller = new AbortController();
-  const timeoutMs = commandTimeoutMs(body.command);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const resp = await fetchImpl(`http://127.0.0.1:${state.port}/command`, {
+    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -1098,6 +1102,74 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
   } finally {
     clearTimeout(timer);
   }
+}
+
+export interface TransportRecovery {
+  commandId: string;
+  outcome: 'recovered' | 'recovered-error' | 'resent';
+}
+
+const STATUS_PROBE_TIMEOUT_MS = 2000;
+
+async function probeCommandStatus(
+  port: number,
+  commandId: string,
+): Promise<ReturnType<typeof parseStatusProbeReply>> {
+  try {
+    const resp = await sendCommandOnce(
+      port,
+      { command: 'status', commandId },
+      STATUS_PROBE_TIMEOUT_MS,
+    );
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+
+// Story 14 (#407): a response lost after send is ambiguous — "never executed"
+// vs "executed, response lost". One short status probe against the runner's
+// outcome journal resolves it; mutating verbs are NEVER resent, and an
+// unresolvable probe falls through to the existing invalidation path.
+// Recovery info travels in the return value so callers that don't surface
+// meta (fastSwipe, settle probes) discard it with the response.
+async function postCommandWithRecovery(body: {
+  command?: unknown;
+}): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+  const state = runnerState;
+  if (!state) {
+    throw new Error(
+      'rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).',
+    );
+  }
+  const commandId = generateCommandId();
+  const timeoutMs = commandTimeoutMs(body.command);
+  try {
+    return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message)) throw err;
+    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+    if (decision.action === 'return-recovered') {
+      return {
+        resp: decision.response as RunnerResponse,
+        recovery: { commandId, outcome: decision.outcome },
+      };
+    }
+    if (decision.action === 'resend-once') {
+      const resent = await sendCommandOnce(
+        state.port,
+        { ...body, commandId: generateCommandId() },
+        timeoutMs,
+      );
+      return { resp: resent, recovery: { commandId, outcome: 'resent' } };
+    }
+    throw err;
+  }
+}
+
+async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
+  return (await postCommandWithRecovery(body)).resp;
 }
 
 /**
@@ -1160,10 +1232,11 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.scope !== undefined) body.scope = args.scope;
 
   let resp: RunnerResponse;
+  let recovery: TransportRecovery | undefined;
   try {
-    resp = await postCommand(
+    ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-    );
+    ));
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
@@ -1171,6 +1244,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     }
     throw err;
   }
+  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
@@ -1191,13 +1265,21 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     ) {
       return okResult(
         { typed: true, text: args.text },
-        { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...announce } },
+        {
+          meta: {
+            sideEffectSucceeded: true,
+            runnerTimeoutShim: true,
+            ...announce,
+            ...recoveryMeta,
+          },
+        },
       );
     }
+    const failExtras = recovery ? { transportRecovery: recovery } : undefined;
     if (code) {
-      return failResult(message, code as Parameters<typeof failResult>[1]);
+      return failResult(message, code as Parameters<typeof failResult>[1], failExtras);
     }
-    return failResult(message);
+    return failExtras ? failResult(message, failExtras) : failResult(message);
   }
 
   // Snapshot post-processing: feed the ref map so future press/fill calls
@@ -1211,11 +1293,16 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       // ref map was overwritten — an empty capture is reported as degraded and
       // leaves the last-known-good refs bound.
       const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict } });
+      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
     }
     // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
-    return okResult(resp.data, announce ? { meta: announce } : undefined);
+    const fallbackMeta = { ...announce, ...recoveryMeta };
+    return okResult(
+      resp.data,
+      Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : undefined,
+    );
   }
 
-  return okResult(resp.data ?? {}, announce ? { meta: announce } : undefined);
+  const finalMeta = { ...announce, ...recoveryMeta };
+  return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : undefined);
 }

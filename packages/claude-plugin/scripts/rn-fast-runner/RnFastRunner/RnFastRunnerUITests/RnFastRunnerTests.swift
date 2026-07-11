@@ -30,6 +30,7 @@ class RnFastRunnerTests: XCTestCase {
 
   static let springboardBundleId = "com.apple.springboard"
   var listener: NWListener?
+  let commandJournal = CommandJournal()
   var doneExpectation: XCTestExpectation?
   let app = XCUIApplication()
   lazy var springboard = XCUIApplication(bundleIdentifier: Self.springboardBundleId)

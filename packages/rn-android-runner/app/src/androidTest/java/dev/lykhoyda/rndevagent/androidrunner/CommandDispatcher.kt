@@ -32,7 +32,10 @@ class NoFocusedInputException(message: String) : IllegalStateException(message)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 
-class CommandDispatcher(private val instrumentation: Instrumentation) {
+class CommandDispatcher(
+    private val instrumentation: Instrumentation,
+    private val journal: CommandJournal = CommandJournal(),
+) {
     private val device: UiDevice = UiDevice.getInstance(instrumentation)
 
     companion object {
@@ -42,7 +45,7 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
         val SUPPORTED_COMMANDS = listOf(
             "snapshot", "tap", "press", "type", "fill", "drag", "swipe", "scroll",
             "screenshot", "back", "dismissKeyboard", "keyboard", "longPress",
-            "pinch", "findText", "isWindowUpdating",
+            "pinch", "findText", "isWindowUpdating", "status",
         )
 
         // GH #378: cold-start-only relaunch wait. The windows-based fast-path below
@@ -100,6 +103,17 @@ class CommandDispatcher(private val instrumentation: Instrumentation) {
                     return error("INVALID_ARGUMENT", "findText requires a non-blank 'text' argument")
                 }
                 findText(cmd)
+            }
+            // Story 14 (#407): read-only outcome probe — answers from the journal,
+            // never touches the device.
+            "status" -> {
+                val id = cmd.optString("commandId")
+                if (id.isBlank()) return error("INVALID_ARGUMENT", "status requires a non-blank 'commandId'")
+                val entry = journal.lookup(id)
+                JSONObject()
+                    .put("commandId", id)
+                    .put("state", entry?.state ?: "unknown")
+                    .apply { entry?.body?.let { put("result", JSONObject(it)) } }
             }
             // Note: TS-side `device_find` is a snapshot-based orchestrator (mirrors iOS).
             // The runner exposes `findText` only as an opt-in fast-path for existence checks.

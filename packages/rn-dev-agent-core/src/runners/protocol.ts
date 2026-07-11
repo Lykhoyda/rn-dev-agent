@@ -36,6 +36,7 @@ export const REQUIRED_IOS_COMMANDS = [
   'screenshot',
   'back',
   'keyboardDismiss',
+  'status',
 ] as const satisfies readonly RunIOSArgs['command'][];
 
 export const REQUIRED_ANDROID_COMMANDS = [
@@ -48,6 +49,7 @@ export const REQUIRED_ANDROID_COMMANDS = [
   'screenshot',
   'back',
   'dismissKeyboard',
+  'status',
 ] as const satisfies readonly RunAndroidArgs['command'][];
 
 export function classifyRunnerCompatibility(

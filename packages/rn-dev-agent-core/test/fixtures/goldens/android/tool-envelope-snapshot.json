@@ -1,6 +1,6 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T15:57:13.806Z",
+    "capturedAt": "2026-07-11T18:21:08.390Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=android node test/contract/capture-goldens.ts)",
     "platform": "android",
@@ -8,9 +8,9 @@
     "os": "Android 17",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.0",
+    "runnerVersion": "0.67.1",
     "protocolVersion": 1,
-    "runnerPort": 22089,
+    "runnerPort": 56849,
     "note": "bridge device_snapshot envelope (post-mapping FlatNode layer)"
   },
   "payload": {
@@ -180,7 +180,7 @@
             "width": 130,
             "height": 66
           },
-          "label": "5:57",
+          "label": "8:21",
           "identifier": "clock",
           "enabled": true,
           "hittable": true
@@ -273,9 +273,9 @@
           "ref": "@e18",
           "type": "android.widget.LinearLayout",
           "rect": {
-            "x": 963,
+            "x": 952,
             "y": 0,
-            "width": 245,
+            "width": 256,
             "height": 156
           },
           "label": "",
@@ -287,9 +287,9 @@
           "ref": "@e19",
           "type": "android.widget.LinearLayout",
           "rect": {
-            "x": 963,
+            "x": 952,
             "y": 45,
-            "width": 245,
+            "width": 256,
             "height": 66
           },
           "label": "",
@@ -301,7 +301,7 @@
           "ref": "@e20",
           "type": "android.widget.LinearLayout",
           "rect": {
-            "x": 972,
+            "x": 961,
             "y": 45,
             "width": 144,
             "height": 66
@@ -315,12 +315,12 @@
           "ref": "@e21",
           "type": "android.widget.FrameLayout",
           "rect": {
-            "x": 972,
+            "x": 961,
             "y": 45,
             "width": 69,
             "height": 66
           },
-          "label": "T-Mobile, three bars.",
+          "label": "T-Mobile, one bar.",
           "identifier": "mobile_combo",
           "enabled": true,
           "hittable": true
@@ -329,7 +329,7 @@
           "ref": "@e22",
           "type": "android.widget.LinearLayout",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 45,
             "width": 51,
             "height": 66
@@ -343,7 +343,7 @@
           "ref": "@e23",
           "type": "android.widget.FrameLayout",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 60,
             "width": 51,
             "height": 36
@@ -357,7 +357,7 @@
           "ref": "@e24",
           "type": "android.widget.ImageView",
           "rect": {
-            "x": 981,
+            "x": 970,
             "y": 60,
             "width": 51,
             "height": 36
@@ -371,7 +371,7 @@
           "ref": "@e25",
           "type": "android.widget.FrameLayout",
           "rect": {
-            "x": 1041,
+            "x": 1030,
             "y": 45,
             "width": 66,
             "height": 66
@@ -385,7 +385,7 @@
           "ref": "@e26",
           "type": "android.widget.LinearLayout",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 45,
             "width": 48,
             "height": 66
@@ -399,7 +399,7 @@
           "ref": "@e27",
           "type": "android.widget.FrameLayout",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 60,
             "width": 48,
             "height": 36
@@ -413,7 +413,7 @@
           "ref": "@e28",
           "type": "android.widget.ImageView",
           "rect": {
-            "x": 1050,
+            "x": 1039,
             "y": 60,
             "width": 48,
             "height": 36
@@ -427,9 +427,9 @@
           "ref": "@e29",
           "type": "androidx.compose.ui.platform.ComposeView",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "label": "",
@@ -441,9 +441,9 @@
           "ref": "@e30",
           "type": "android.view.View",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "label": "",
@@ -455,9 +455,9 @@
           "ref": "@e31",
           "type": "android.view.View",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
-            "width": 80,
+            "width": 91,
             "height": 39
           },
           "label": "",
@@ -469,13 +469,13 @@
           "ref": "@e32",
           "type": "android.view.View",
           "rect": {
-            "x": 1116,
+            "x": 1105,
             "y": 58,
             "width": 72,
             "height": 39
           },
-          "label": "Battery 100 percent.",
-          "identifier": "Battery 100 percent.",
+          "label": "Battery charging, 100 percent.",
+          "identifier": "Battery charging, 100 percent.",
           "enabled": true,
           "hittable": true
         },
