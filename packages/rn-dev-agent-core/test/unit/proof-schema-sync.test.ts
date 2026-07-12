@@ -166,6 +166,26 @@ test('external JSON Schema accepts only the final accepted receipt', () => {
   assert.equal(validate(rejectedReceipt), false);
 });
 
+test('accepted receipts reject failed assertions in Zod and JSON Schema', () => {
+  const validate = loadValidator();
+  const failedAssertionReceipt = {
+    ...acceptedReceipt,
+    assertions: [
+      { ...acceptedReceipt.assertions[0], ok: false },
+      ...acceptedReceipt.assertions.slice(1),
+    ],
+  };
+
+  assert.deepEqual(
+    {
+      zod: finalProofReceiptSchema.safeParse(failedAssertionReceipt).success,
+      jsonSchema: validate(failedAssertionReceipt),
+    },
+    { zod: false, jsonSchema: false },
+    JSON.stringify(validate.errors),
+  );
+});
+
 test('mechanical acceptance enforces clean evidence while rejection requires stable reasons', () => {
   assert.equal(
     mechanicalProofReceiptSchema.safeParse({

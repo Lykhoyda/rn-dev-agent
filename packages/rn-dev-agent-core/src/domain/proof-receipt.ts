@@ -160,6 +160,10 @@ export const proofAssertionSchema = z
   })
   .strict();
 
+export const acceptedProofAssertionSchema = proofAssertionSchema
+  .extend({ ok: z.literal(true) })
+  .strict();
+
 export const proofEventTraceSchema = z
   .object({
     allowedTools: z.array(z.string().min(1)).min(1),
@@ -226,7 +230,7 @@ const acceptedEvidenceShape = {
   rehearsal: proofRehearsalSchema.extend({ clean: z.literal(true) }).strict(),
   video: proofVideoSchema,
   screenshots: z.array(proofScreenshotSchema).min(3),
-  assertions: z.array(proofAssertionSchema).min(3),
+  assertions: z.array(acceptedProofAssertionSchema).min(3),
   eventTrace: proofEventTraceSchema,
   frameMatches: z.array(proofFrameMatchSchema).min(3),
   contactSheet: proofContactSheetSchema,
@@ -288,6 +292,7 @@ export type ProofRehearsal = z.infer<typeof proofRehearsalSchema>;
 export type ProofVideo = z.infer<typeof proofVideoSchema>;
 export type ProofScreenshot = z.infer<typeof proofScreenshotSchema>;
 export type ProofAssertion = z.infer<typeof proofAssertionSchema>;
+export type AcceptedProofAssertion = z.infer<typeof acceptedProofAssertionSchema>;
 export type ProofEventTrace = z.infer<typeof proofEventTraceSchema>;
 export type ProofFrameMatch = z.infer<typeof proofFrameMatchSchema>;
 export type ProofContactSheet = z.infer<typeof proofContactSheetSchema>;
