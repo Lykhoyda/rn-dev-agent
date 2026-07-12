@@ -20,6 +20,8 @@ Coding agents are good at writing React Native code and bad at knowing whether i
 - **Curated best practices.** 118 indexed rules (48 React Native + 70 React/web, integrated from [Vercel's agent skills](https://github.com/vercel-labs/agent-skills)) applied during architecture and review — crash prevention, list performance, animations, state management.
 - **Watch it work.** [`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/) serves a local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels — plus Actions and E2E tabs to replay saved flows straight from the browser.
 
+![The observe UI live: inspecting a failed flow, checking store state, replaying a saved action, and running the locked E2E suite — all from the browser](apps/docs-site/public/observe/observe-demo.gif)
+
 ## Quick start
 
 ### 1. Install

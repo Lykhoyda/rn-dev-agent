@@ -7,6 +7,14 @@ import { Aside } from '@astrojs/starlight/components';
 
 The observability UI is a local web page that shows **what the agent is doing while it does it**: every MCP tool call on a live timeline, a mirrored view of the simulator/emulator screen, and the app's current route, store state, and component tree. It also gives you a browser surface for your [actions](../../actions/) library — list, parameterise, and replay saved actions without touching the terminal.
 
+![The observe UI: live tool-call timeline on the left, device mirror in the middle, and app-state tabs on the right](/rn-dev-agent/observe/observe-ui.png)
+
+Here it is in motion — inspecting a failed flow, checking store state, replaying an action, and running the locked E2E suite, all from the browser:
+
+<video autoplay loop muted playsinline controls style="border-radius: 8px; border: 1px solid var(--sl-color-gray-5);">
+  <source src="/rn-dev-agent/observe/observe-demo.mp4" type="video/mp4" />
+</video>
+
 ## Usage
 
 ```
@@ -37,6 +45,8 @@ The page is a three-pane layout:
 | **State** (right) | Five tabs: **Route** (latest navigation state), **Store** (latest Zustand/Redux snapshot), **Tree** (latest component tree), **Actions**, and **E2E**. The first three update whenever the agent reads that state — you're seeing exactly what the agent saw. |
 
 ## Using observe with actions
+
+![The Actions tab: learned actions with status badges, parameter inputs, and Run buttons](/rn-dev-agent/observe/observe-actions.png)
 
 The **Actions** tab is a browser front-end to the same learned-actions library that `/rn-dev-agent:run-action` uses:
 

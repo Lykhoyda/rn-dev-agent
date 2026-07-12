@@ -59,9 +59,6 @@ export default defineConfig({
           }),
         },
       ],
-      editLink: {
-        baseUrl: 'https://github.com/Lykhoyda/rn-dev-agent/edit/main/apps/docs-site/',
-      },
       components: {
         ThemeSelect: './src/components/ThemeSelect.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
@@ -105,7 +102,7 @@ export default defineConfig({
           items: [
             {
               label: 'Commands',
-              collapsed: true,
+              collapsed: false,
               items: [
                 { label: 'Overview', slug: 'commands' },
                 { label: 'rn-feature-dev', slug: 'commands/rn-feature-dev' },

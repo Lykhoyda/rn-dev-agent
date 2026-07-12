@@ -128,37 +128,61 @@ nav.sidebar summary {
   color: var(--sl-color-gray-2);
 }
 
-/* ─── Tables: tighter, cleaner ─── */
+/* ─── Tables: card-style, zebra rows ─── */
 .sl-markdown-content table {
+  display: table;
+  width: 100%;
   font-size: 0.89rem;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.06),
+    0 4px 12px -6px rgb(0 0 0 / 0.1);
 }
 
-.sl-markdown-content th {
+.sl-markdown-content thead th {
   background: var(--sl-color-gray-6);
-  font-weight: 600;
-  font-size: 0.78rem;
+  font-weight: 650;
+  font-size: 0.76rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--sl-color-gray-2);
+  border-bottom: 2px solid var(--sl-color-gray-5);
 }
 
 .sl-markdown-content td,
 .sl-markdown-content th {
-  padding: 0.55em 0.85em;
-  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding: 0.62em 0.95em;
+  border-bottom: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 55%, transparent);
+  vertical-align: top;
 }
 
-.sl-markdown-content tr:last-child td {
+.sl-markdown-content tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 45%, transparent);
+}
+
+.sl-markdown-content tbody tr:last-child td {
   border-bottom: none;
 }
 
-.sl-markdown-content tr:hover td {
-  background: var(--sl-color-gray-6);
+.sl-markdown-content tbody tr:hover td {
+  background: color-mix(in srgb, var(--sl-color-accent-low) 38%, transparent);
+}
+
+.sl-markdown-content td:first-child code,
+.sl-markdown-content td:first-child a {
+  white-space: nowrap;
+}
+
+/* Keep wide tables scrollable on narrow viewports without breaking the card */
+@media (max-width: 640px) {
+  .sl-markdown-content table {
+    display: block;
+    overflow-x: auto;
+  }
 }
 
 /* ─── Hero page (splash) ─── */
