@@ -1,5 +1,11 @@
 # rn-dev-agent-plugin
 
+## 0.69.1
+
+### Patch Changes
+
+- 61c258c: Agents & skills consistency audit: new `capturing-proof` skill extracted from the `/proof-capture` command so proof/demo/PR-video intent triggers without the slash command (the command and rn-feature-dev Phase 8 now delegate to it); `creating-actions` gains a replay/repair troubleshooting step (Step 7) and triggers on replay-failure intent. Fixes shipped alongside: purged the last stale `agent-device` references (rn-tester, send-feedback), reconciled raw `xcrun simctl`/`adb` instructions in rn-tester/rn-debugger against their own `device_screenshot`/`collect_logs` red flags, removed manual `sleep` advice that contradicted the settle engine (#385), unified flow/action output paths (`.maestro/` for CI flows, `.rn-agent/actions/` for saved actions), restored the mandatory Step 0 artifact scan in `/build-and-test` Phase B, corrected `cdp_run_action`/recorder tool names in `/test-feature`, registered the missing `lock-e2e` command in the plugin manifest, hardened `/send-feedback` issue creation (`--body-file`, no shell interpolation of user text), and refreshed the `using-rn-dev-agent` router (79 tools / 15 commands / 9 skills, new decision-tree branches for doctor, lock-e2e, observe, check-vercel-rules, send-feedback, and capturing-proof).
+
 ## 0.69.0
 
 ### Minor Changes
