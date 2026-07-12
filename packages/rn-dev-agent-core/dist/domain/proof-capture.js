@@ -83,10 +83,17 @@ function observedScreenshotPath(event) {
 function observedAssertionPassed(event) {
     if (event.status !== 'PASS')
         return false;
+    const tool = event.tool
+        .trim()
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .toLowerCase()
+        .replaceAll('-', '_');
     const data = resultEnvelopeData(event.result);
     if (!data || typeof data !== 'object')
-        return true;
+        return !tool.endsWith('proof_step');
     const record = data;
+    if (tool.endsWith('proof_step') && record.verified !== true)
+        return false;
     if (record.verified === false || record.ok === false)
         return false;
     return !Array.isArray(record.errors) || record.errors.length === 0;

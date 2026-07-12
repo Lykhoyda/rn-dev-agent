@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { validateTrace, } from '../domain/proof-capture.js';
-import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofAssertionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
+import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
 const beginRehearsalSchema = z
@@ -27,20 +27,7 @@ const beginRehearsalSchema = z
 })
     .strict();
 const sessionActionSchema = (action) => z.object({ action: z.literal(action) }).strict();
-const stepEvidenceSchema = z
-    .object({
-    stepId: z.string().min(1),
-    screenshotPath: absolutePathSchema,
-    timestampMs: z.number().nonnegative(),
-    assertion: proofAssertionSchema,
-})
-    .strict();
-const validateSchema = z
-    .object({
-    action: z.literal('validate'),
-    evidence: z.array(stepEvidenceSchema),
-})
-    .strict();
+const validateSchema = sessionActionSchema('validate');
 const finalizeSchema = z
     .object({
     action: z.literal('finalize'),
@@ -105,9 +92,12 @@ function validCaptureContext(args, expectedRoot) {
         resolve(expectedRoot) !== expectedRoot) {
         return false;
     }
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
+        return false;
+    const proofRoot = join(expectedRoot, 'docs', 'proof', args.runId);
     const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
     const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
-    if (destinations.some((path) => !isNormalizedDescendant(expectedRoot, path) || hasExistingSymlink(expectedRoot, path)) ||
+    if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) ||
         new Set(destinations).size !== destinations.length) {
         return false;
     }
@@ -116,6 +106,16 @@ function validCaptureContext(args, expectedRoot) {
         extname(args.videoPath).toLowerCase() === '.mp4' &&
         ['.jpg', '.jpeg'].includes(extname(args.contactSheetPath).toLowerCase()) &&
         screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())));
+}
+function proofRootExists(args) {
+    const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
+    try {
+        lstatSync(proofRoot);
+        return true;
+    }
+    catch (error) {
+        return error.code !== 'ENOENT';
+    }
 }
 export function resolveProofWorktreeRoot(detectedProjectRoot) {
     if (!detectedProjectRoot ||
@@ -133,6 +133,54 @@ export function resolveProofWorktreeRoot(detectedProjectRoot) {
     catch {
         return null;
     }
+}
+export function parseProofGitChangedPaths(porcelain) {
+    const records = porcelain.split('\0');
+    const paths = [];
+    for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        if (!record || record.length < 4)
+            continue;
+        const status = record.slice(0, 2);
+        paths.push(record.slice(3).replaceAll('\\', '/'));
+        if (/[RC]/.test(status)) {
+            const source = records[index + 1];
+            if (source)
+                paths.push(source.replaceAll('\\', '/'));
+            index += 1;
+        }
+    }
+    return [...new Set(paths)];
+}
+export function resolveProofIdentity(input) {
+    const { session, target, nativeDevice } = input;
+    if (!session?.deviceId ||
+        !session.appId ||
+        (session.platform !== 'ios' && session.platform !== 'android') ||
+        !target ||
+        target.platform !== session.platform ||
+        target.description !== session.appId ||
+        !target.deviceName ||
+        !nativeDevice ||
+        nativeDevice.id !== session.deviceId ||
+        nativeDevice.name !== target.deviceName ||
+        nativeDevice.osVersion.length === 0) {
+        return null;
+    }
+    return {
+        device: {
+            id: session.deviceId,
+            platform: session.platform,
+            model: nativeDevice.name,
+            osVersion: nativeDevice.osVersion,
+        },
+        runtime: {
+            bundleId: session.appId,
+            metroPort: input.metroPort,
+            metroReady: input.metroReady,
+            pluginVersion: input.pluginVersion,
+        },
+    };
 }
 function normalizeTool(tool) {
     const bare = tool.startsWith('mcp__') ? (tool.split('__').at(-1) ?? tool) : tool;
@@ -180,11 +228,22 @@ function traceFor(storyboard, events) {
     const allowedExtras = storyboard.allowedTools.filter((tool) => !required.map(normalizeTool).includes(normalizeTool(tool)));
     return validateTrace([...required, ...allowedExtras], events);
 }
-function defaultContract() {
-    const moduleDir = dirname(fileURLToPath(import.meta.url));
-    const path = resolve(moduleDir, '../../schemas/proof-receipt.schema.json');
-    const bytes = readFileSync(path, 'utf8');
-    return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
+export function readProofContractAt(moduleUrl = import.meta.url) {
+    const moduleDir = dirname(fileURLToPath(moduleUrl));
+    const candidates = [
+        resolve(moduleDir, '../../schemas/proof-receipt.schema.json'),
+        resolve(moduleDir, '../schemas/proof-receipt.schema.json'),
+    ];
+    for (const path of candidates) {
+        try {
+            const bytes = readFileSync(path, 'utf8');
+            return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
+        }
+        catch {
+            // Try the split-module and bundled runtime layouts before failing.
+        }
+    }
+    throw new Error('PROOF_CONTRACT_MISSING');
 }
 export function writeProofReceiptAtomic(path, receipt) {
     const directory = dirname(path);
@@ -228,22 +287,59 @@ export function createProofCaptureHandler(deps) {
         return proofFailure(active.invalidationReasons, active.stage);
     };
     const artifactPaths = (active) => [
+        active.context.receiptPath,
         active.context.videoPath,
         active.context.contactSheetPath,
         ...active.context.storyboard.steps.map((step) => step.screenshotPath),
     ];
     const removeArtifacts = async (active) => {
         if (!contextIsCurrent(active))
-            return false;
-        await Promise.all(artifactPaths(active).map(async (path) => {
+            return ['PROOF_PATH_DRIFT'];
+        const reasons = [];
+        for (const path of artifactPaths(active)) {
+            if (!contextIsCurrent(active)) {
+                reasons.push('PROOF_PATH_DRIFT');
+                break;
+            }
             try {
                 await deps.removeArtifact(path);
             }
             catch {
-                // Rejection remains authoritative even when cleanup needs a later retry.
+                reasons.push('ARTIFACT_CLEANUP_FAILED');
             }
-        }));
-        return true;
+            if (!contextIsCurrent(active)) {
+                reasons.push('PROOF_PATH_DRIFT');
+                break;
+            }
+        }
+        return [...new Set(reasons)];
+    };
+    const shutdownRecorder = async (active) => {
+        if (!active.mayOwnRecorder)
+            return { confirmed: true, reasons: [], stopData: null };
+        const reasons = [];
+        let stopData = null;
+        try {
+            stopData = toolData(await deps.record({ action: 'stop' }));
+            if (!stopData)
+                reasons.push('RECORDING_STOP_FAILED');
+        }
+        catch {
+            reasons.push('RECORDING_STOP_FAILED');
+        }
+        let confirmed = false;
+        try {
+            const status = toolData(await deps.record({ action: 'status' }));
+            confirmed = Array.isArray(status?.active) && status.active.length === 0;
+        }
+        catch {
+            confirmed = false;
+        }
+        if (!confirmed)
+            reasons.push('RECORDING_SHUTDOWN_FAILED');
+        if (confirmed)
+            active.mayOwnRecorder = false;
+        return { confirmed, reasons: [...new Set(reasons)], stopData };
     };
     const beginFreshRehearsal = (active, reasons) => {
         active.stage = 'rehearsing';
@@ -256,24 +352,120 @@ export function createProofCaptureHandler(deps) {
         active.recordingStartedAt = null;
         active.recordingEvents = [];
         active.recordingObservations = [];
+        active.evidenceDraft = null;
+        active.armedObservationCount = null;
+        active.freshStartAssertion = null;
+        active.mayOwnRecorder = false;
         active.baseline = null;
         active.mechanicalReceipt = null;
         deps.monitor.begin();
     };
-    const rejectCapture = async (active, reasons, stopRecording) => {
+    const rejectCapture = async (active, reasons) => {
         deps.monitor.stop();
-        if (stopRecording) {
-            try {
-                await deps.record({ action: 'stop' });
-            }
-            catch {
-                // The original stable reason remains primary.
-            }
+        const shutdown = await shutdownRecorder(active);
+        const pathCurrent = contextIsCurrent(active);
+        const removalReasons = pathCurrent ? await removeArtifacts(active) : ['PROOF_PATH_DRIFT'];
+        const allReasons = [...new Set([...reasons, ...shutdown.reasons, ...removalReasons])];
+        if (!shutdown.confirmed || removalReasons.length > 0) {
+            active.stage = 'rejected';
+            active.invalidationReasons = allReasons;
+            return proofFailure(allReasons, active.stage);
         }
-        if (!(await removeArtifacts(active)))
-            return rejectPathDrift(active);
-        beginFreshRehearsal(active, reasons);
-        return proofFailure(reasons, active.stage);
+        beginFreshRehearsal(active, allReasons);
+        return proofFailure(allReasons, active.stage);
+    };
+    const readGit = (active) => {
+        try {
+            const value = deps.getGitInfo(active.context.projectRoot);
+            if (!Array.isArray(value.changedPaths))
+                return { ok: false, reasons: ['GIT_READ_FAILED'] };
+            return { ok: true, value };
+        }
+        catch {
+            return { ok: false, reasons: ['GIT_READ_FAILED'] };
+        }
+    };
+    const gitReasons = (active, git) => {
+        const owned = new Set(artifactPaths(active).map((path) => relative(active.context.projectRoot, path).replaceAll(sep, '/')));
+        const changed = git.changedPaths.map((path) => path.replaceAll('\\', '/'));
+        const invalidChangedPath = changed.some((path) => isAbsolute(path) || path === '..' || path.startsWith('../'));
+        const unrelated = changed.filter((path) => !owned.has(path));
+        return [
+            ...(invalidChangedPath || unrelated.length > 0 || (git.dirty && changed.length === 0)
+                ? ['GIT_DIRTY']
+                : []),
+            ...(git.sha !== active.context.storyboard.sourceTreeSha ||
+                git.sha !== active.context.pullRequest.headSha
+                ? ['SOURCE_SHA_MISMATCH']
+                : []),
+        ];
+    };
+    const readReadiness = async () => {
+        let raw;
+        try {
+            raw = await deps.readiness();
+        }
+        catch {
+            return { ok: false, reasons: ['READINESS_FAILED'] };
+        }
+        const parsed = readinessSchema.safeParse(raw);
+        return parsed.success
+            ? { ok: true, value: parsed.data }
+            : { ok: false, reasons: ['READINESS_INVALID'] };
+    };
+    const readinessReasons = (readiness, baseline) => [
+        ...(!readiness.cdpAttached ? ['CDP_DETACHED'] : []),
+        ...(!readiness.helpersAttached ? ['HELPERS_DETACHED'] : []),
+        ...(!readiness.metroReady || !readiness.runtime.metroReady ? ['METRO_NOT_READY'] : []),
+        ...(readiness.metroBuildPending ? ['METRO_BUILD_PENDING'] : []),
+        ...(readiness.metroBuildFailed ? ['METRO_BUILD_FAILED'] : []),
+        ...(baseline
+            ? readiness.errorCount !== baseline.errorCount ||
+                readiness.errorSha256 !== baseline.errorSha256 ||
+                readiness.errorCount !== 0
+                ? ['ERROR_BASELINE_CHANGED']
+                : []
+            : readiness.errorCount !== 0
+                ? ['ERROR_BASELINE_DIRTY']
+                : []),
+        ...(baseline && JSON.stringify(readiness.device) !== JSON.stringify(baseline.device)
+            ? ['DEVICE_IDENTITY_CHANGED']
+            : []),
+        ...(baseline && JSON.stringify(readiness.runtime) !== JSON.stringify(baseline.runtime)
+            ? ['RUNTIME_IDENTITY_CHANGED']
+            : []),
+    ];
+    const deriveEvidence = (active) => {
+        if (!active.recordingStartedAt)
+            return { evidence: null, reasons: ['INVALID_PROOF_STAGE'] };
+        const bound = sequenceObservations(active.context.storyboard, active.recordingObservations);
+        if (!bound)
+            return { evidence: null, reasons: ['STORYBOARD_ORDER_VIOLATION'] };
+        const reasons = [];
+        const evidence = active.context.storyboard.steps.map((step, index) => {
+            const observed = bound[index].assertion;
+            if (!observed.ok || !observed.assertionPassed) {
+                reasons.push('ASSERTION_FAILED');
+                if (index === active.context.storyboard.steps.length - 1) {
+                    reasons.push('FINAL_ASSERTION_FAILED');
+                }
+            }
+            if (observed.screenshotPath !== step.screenshotPath) {
+                reasons.push('SCREENSHOT_PATH_MISMATCH');
+            }
+            return {
+                stepId: step.id,
+                screenshotPath: observed.screenshotPath ?? '',
+                timestampMs: observed.ts - active.recordingStartedAt.getTime(),
+                assertion: {
+                    stepId: step.id,
+                    tool: step.assertionTool,
+                    ok: true,
+                    resultHash: observed.resultHash,
+                },
+            };
+        });
+        return { evidence, reasons: [...new Set(reasons)] };
     };
     return async (unparsedArgs) => {
         const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
@@ -285,7 +477,7 @@ export function createProofCaptureHandler(deps) {
         const args = parsed.data;
         if (args.action === 'contract') {
             try {
-                const contract = (deps.readContract ?? defaultContract)();
+                const contract = (deps.readContract ?? readProofContractAt)();
                 if (hashBytes(contract.bytes) !== contract.sha256) {
                     return proofFailure(['CONTRACT_DIGEST_MISMATCH'], session?.stage ?? 'idle');
                 }
@@ -306,27 +498,15 @@ export function createProofCaptureHandler(deps) {
             if (!session)
                 return okResult({ stage: 'idle', discarded: false });
             deps.monitor.stop();
-            if (!contextIsCurrent(session)) {
-                if (session.stage === 'recording') {
-                    try {
-                        await deps.record({ action: 'stop' });
-                    }
-                    catch {
-                        // Path drift remains primary after best-effort recorder shutdown.
-                    }
-                }
-                return rejectPathDrift(session);
+            const shutdown = await shutdownRecorder(session);
+            const pathCurrent = contextIsCurrent(session);
+            const removalReasons = pathCurrent ? await removeArtifacts(session) : ['PROOF_PATH_DRIFT'];
+            const cleanupReasons = [...new Set([...shutdown.reasons, ...removalReasons])];
+            if (!shutdown.confirmed || cleanupReasons.length > 0) {
+                session.stage = 'rejected';
+                session.invalidationReasons = cleanupReasons;
+                return proofFailure(cleanupReasons, session.stage);
             }
-            if (session.stage === 'recording') {
-                try {
-                    await deps.record({ action: 'stop' });
-                }
-                catch {
-                    // Artifact removal still proceeds.
-                }
-            }
-            if (!(await removeArtifacts(session)))
-                return rejectPathDrift(session);
             session = null;
             return okResult({ stage: 'idle', discarded: true });
         }
@@ -346,6 +526,9 @@ export function createProofCaptureHandler(deps) {
                 args.storyboard.actionId !== args.proofAction.id) {
                 return proofFailure(['INVALID_PROOF_CONTEXT'], 'idle');
             }
+            if (proofRootExists(args)) {
+                return proofFailure(['PROOF_ROOT_NOT_FRESH'], 'idle');
+            }
             const startedAt = deps.now();
             session = {
                 context: args,
@@ -359,6 +542,10 @@ export function createProofCaptureHandler(deps) {
                 recordingStartedAt: null,
                 recordingEvents: [],
                 recordingObservations: [],
+                evidenceDraft: null,
+                armedObservationCount: null,
+                freshStartAssertion: null,
+                mayOwnRecorder: false,
                 baseline: null,
                 mechanicalReceipt: null,
             };
@@ -377,11 +564,25 @@ export function createProofCaptureHandler(deps) {
             const durationMs = finishedAt.getTime() - active.rehearsalStartedAt.getTime();
             const trace = traceFor(active.context.storyboard, active.rehearsalEvents);
             const sequence = sequenceObservations(active.context.storyboard, active.rehearsalObservations);
-            if (durationMs < 0 || !trace.ok || !sequence) {
+            const assertionReasons = sequence
+                ? active.context.storyboard.steps.flatMap((step, index) => {
+                    const assertion = sequence[index].assertion;
+                    return [
+                        ...(!assertion.ok || !assertion.assertionPassed
+                            ? ['REHEARSAL_ASSERTION_FAILED']
+                            : []),
+                        ...(assertion.screenshotPath !== step.screenshotPath
+                            ? ['SCREENSHOT_PATH_MISMATCH']
+                            : []),
+                    ];
+                })
+                : [];
+            if (durationMs < 0 || !trace.ok || !sequence || assertionReasons.length > 0) {
                 const reasons = [
                     ...(durationMs < 0 ? ['REHEARSAL_CLOCK_INVALID'] : []),
                     ...trace.reasons,
                     ...(sequence ? [] : ['STORYBOARD_ORDER_VIOLATION']),
+                    ...assertionReasons,
                 ];
                 beginFreshRehearsal(active, reasons);
                 return proofFailure(reasons, active.stage);
@@ -390,55 +591,84 @@ export function createProofCaptureHandler(deps) {
             active.rehearsalDurationMs = durationMs;
             active.stage = 'rehearsed';
             active.invalidationReasons = [];
+            active.armedObservationCount = null;
+            active.freshStartAssertion = null;
+            deps.monitor.begin();
             return okResult({ stage: active.stage, durationMs });
         }
         if (args.action === 'arm') {
             if (active.stage !== 'rehearsed')
                 return proofFailure(['INVALID_PROOF_STAGE'], active.stage);
-            const git = deps.getGitInfo(active.context.projectRoot);
-            let readiness;
-            try {
-                readiness = readinessSchema.parse(await deps.readiness());
-            }
-            catch {
-                return proofFailure(['READINESS_INVALID'], active.stage);
-            }
-            const startAssertion = sequenceObservations(active.context.storyboard, active.rehearsalObservations)?.[0]?.assertion;
+            const setupObservations = deps.monitor.observations();
+            const firstStep = active.context.storyboard.steps[0];
+            const assertions = setupObservations.filter((observation) => normalizeTool(observation.tool) === normalizeTool(firstStep.assertionTool));
+            const startAssertion = assertions.at(-1) ?? null;
+            const git = readGit(active);
+            const ready = await readReadiness();
             const armReasons = [
-                ...(git.dirty ? ['GIT_DIRTY'] : []),
-                ...(git.sha !== active.context.storyboard.sourceTreeSha ||
-                    git.sha !== active.context.pullRequest.headSha
-                    ? ['SOURCE_SHA_MISMATCH']
-                    : []),
-                ...(!readiness.cdpAttached ? ['CDP_DETACHED'] : []),
-                ...(!readiness.helpersAttached ? ['HELPERS_DETACHED'] : []),
-                ...(!readiness.metroReady || !readiness.runtime.metroReady ? ['METRO_NOT_READY'] : []),
-                ...(readiness.metroBuildPending ? ['METRO_BUILD_PENDING'] : []),
-                ...(readiness.metroBuildFailed ? ['METRO_BUILD_FAILED'] : []),
-                ...(readiness.errorCount !== 0 ? ['ERROR_BASELINE_DIRTY'] : []),
-                ...(!startAssertion?.ok || !startAssertion.assertionPassed
+                ...(!startAssertion ? ['START_ASSERTION_MISSING'] : []),
+                ...(startAssertion &&
+                    (!startAssertion.ok ||
+                        !startAssertion.assertionPassed ||
+                        startAssertion.screenshotPath !== firstStep.screenshotPath)
                     ? ['START_ASSERTION_FAILED']
                     : []),
+                ...(startAssertion && setupObservations.at(-1) !== startAssertion
+                    ? ['START_STATE_DRIFT']
+                    : []),
+                ...(git.ok ? gitReasons(active, git.value) : git.reasons),
+                ...(ready.ok ? readinessReasons(ready.value, null) : ready.reasons),
             ];
             if (armReasons.length > 0) {
                 active.invalidationReasons = [...new Set(armReasons)];
                 return proofFailure(armReasons, active.stage);
             }
-            active.baseline = readiness;
+            if (!ready.ok)
+                return proofFailure(ready.reasons, active.stage);
+            active.baseline = ready.value;
+            active.armedObservationCount = setupObservations.length;
+            active.freshStartAssertion = startAssertion;
             active.stage = 'armed';
             active.invalidationReasons = [];
             return okResult({
                 stage: active.stage,
-                device: readiness.device,
-                runtime: readiness.runtime,
+                device: ready.value.device,
+                runtime: ready.value.runtime,
             });
         }
         if (args.action === 'start_recording') {
-            if (active.stage !== 'armed' || !active.baseline) {
+            if (active.stage !== 'armed' ||
+                !active.baseline ||
+                active.armedObservationCount === null ||
+                !active.freshStartAssertion) {
                 return proofFailure(['INVALID_PROOF_STAGE'], active.stage);
             }
             if (!contextIsCurrent(active))
                 return rejectPathDrift(active);
+            const stillAtStart = () => {
+                const observations = deps.monitor.observations();
+                return (observations.length === active.armedObservationCount &&
+                    observations.at(-1)?.resultHash === active.freshStartAssertion?.resultHash &&
+                    observations.at(-1)?.ts === active.freshStartAssertion?.ts);
+            };
+            if (!stillAtStart())
+                return proofFailure(['START_STATE_DRIFT'], active.stage);
+            const git = readGit(active);
+            const ready = await readReadiness();
+            const startReasons = [
+                ...(git.ok ? gitReasons(active, git.value) : git.reasons),
+                ...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons),
+            ];
+            if (startReasons.length > 0)
+                return proofFailure(startReasons, active.stage);
+            const cleanupReasons = await removeArtifacts(active);
+            if (cleanupReasons.length > 0) {
+                active.stage = 'rejected';
+                active.invalidationReasons = cleanupReasons;
+                return proofFailure(cleanupReasons, active.stage);
+            }
+            if (!stillAtStart())
+                return proofFailure(['START_STATE_DRIFT'], active.stage);
             let statusResult;
             try {
                 statusResult = await deps.record({ action: 'status' });
@@ -453,7 +683,10 @@ export function createProofCaptureHandler(deps) {
             if (recordings.length > 0) {
                 return proofFailure(['RECORDING_ALREADY_ACTIVE'], active.stage);
             }
+            if (!stillAtStart())
+                return proofFailure(['START_STATE_DRIFT'], active.stage);
             let startResult;
+            active.mayOwnRecorder = true;
             try {
                 startResult = await deps.record({
                     action: 'start',
@@ -463,17 +696,17 @@ export function createProofCaptureHandler(deps) {
                 });
             }
             catch {
-                return rejectCapture(active, ['RECORDING_START_FAILED'], true);
+                return rejectCapture(active, ['RECORDING_START_FAILED']);
             }
             const started = toolData(startResult);
             if (!started)
-                return rejectCapture(active, ['RECORDING_START_FAILED'], true);
+                return rejectCapture(active, ['RECORDING_START_FAILED']);
             const reasons = [
                 ...(started.deviceId !== active.baseline.device.id ? ['RECORDING_DEVICE_MISMATCH'] : []),
                 ...(started.output !== active.context.videoPath ? ['RECORDING_PATH_MISMATCH'] : []),
             ];
             if (reasons.length > 0)
-                return rejectCapture(active, reasons, true);
+                return rejectCapture(active, reasons);
             active.recordingStartedAt = deps.now();
             active.stage = 'recording';
             active.invalidationReasons = [];
@@ -486,30 +719,34 @@ export function createProofCaptureHandler(deps) {
             active.recordingEvents = deps.monitor.stop();
             active.recordingObservations = deps.monitor.observations();
             const pathDrifted = !contextIsCurrent(active);
-            let stopResult;
-            try {
-                stopResult = await deps.record({ action: 'stop' });
+            const shutdown = await shutdownRecorder(active);
+            if (pathDrifted) {
+                active.stage = 'rejected';
+                active.invalidationReasons = [...new Set(['PROOF_PATH_DRIFT', ...shutdown.reasons])];
+                return proofFailure(active.invalidationReasons, active.stage);
             }
-            catch {
-                if (pathDrifted)
-                    return rejectPathDrift(active);
-                return rejectCapture(active, ['RECORDING_STOP_FAILED'], false);
+            if (!shutdown.confirmed || shutdown.reasons.length > 0) {
+                return rejectCapture(active, shutdown.reasons);
             }
-            if (pathDrifted)
-                return rejectPathDrift(active);
-            const stopped = toolData(stopResult);
-            const saved = stopped?.saved;
+            const saved = shutdown.stopData?.saved;
             if (!Array.isArray(saved))
-                return rejectCapture(active, ['RECORDING_STOP_FAILED'], false);
+                return rejectCapture(active, ['RECORDING_STOP_FAILED']);
             if (saved.length !== 1)
-                return rejectCapture(active, ['RECORDING_AMBIGUOUS'], false);
+                return rejectCapture(active, ['RECORDING_AMBIGUOUS']);
             const savedPath = saved[0].path;
             if (savedPath !== active.context.videoPath) {
-                return rejectCapture(active, ['RECORDING_PATH_MISMATCH'], false);
+                return rejectCapture(active, ['RECORDING_PATH_MISMATCH']);
             }
+            const derived = deriveEvidence(active);
+            active.evidenceDraft = derived.evidence;
             active.stage = 'validating';
             active.invalidationReasons = [];
-            return okResult({ stage: active.stage, videoPath: savedPath });
+            return okResult({
+                stage: active.stage,
+                videoPath: savedPath,
+                evidenceDraft: derived.evidence,
+                evidenceReasons: derived.reasons,
+            });
         }
         if (args.action === 'validate') {
             if (active.stage !== 'validating' ||
@@ -521,53 +758,14 @@ export function createProofCaptureHandler(deps) {
             }
             if (!contextIsCurrent(active))
                 return rejectPathDrift(active);
-            const evidence = args.evidence;
+            const derived = deriveEvidence(active);
+            const evidence = derived.evidence ?? [];
             const steps = active.context.storyboard.steps;
-            const ids = evidence.map((item) => item.stepId);
-            const expectedIds = steps.map((step) => step.id);
-            const evidenceReasons = [];
-            if (evidence.length !== steps.length)
-                evidenceReasons.push('STEP_EVIDENCE_MISSING');
-            if (new Set(ids).size !== ids.length)
-                evidenceReasons.push('STEP_EVIDENCE_DUPLICATE');
-            if (JSON.stringify(ids) !== JSON.stringify(expectedIds))
-                evidenceReasons.push('STEP_EVIDENCE_ORDER');
+            const evidenceReasons = [...derived.reasons];
             const trace = traceFor(active.context.storyboard, active.recordingEvents);
             evidenceReasons.push(...trace.reasons);
-            const bound = sequenceObservations(active.context.storyboard, active.recordingObservations);
-            if (!bound)
-                evidenceReasons.push('STORYBOARD_ORDER_VIOLATION');
-            if (bound && evidence.length === steps.length) {
-                for (const [index, step] of steps.entries()) {
-                    const item = evidence[index];
-                    const observed = bound[index].assertion;
-                    const observedTimestamp = observed.ts - active.recordingStartedAt.getTime();
-                    if (item.screenshotPath !== step.screenshotPath ||
-                        observed.screenshotPath !== step.screenshotPath) {
-                        evidenceReasons.push('SCREENSHOT_PATH_MISMATCH');
-                        if (observed.screenshotPath !== null &&
-                            steps.some((candidate) => candidate.id !== step.id && candidate.screenshotPath === observed.screenshotPath)) {
-                            evidenceReasons.push('STORYBOARD_ORDER_VIOLATION');
-                        }
-                    }
-                    if (item.assertion.stepId !== step.id || item.assertion.tool !== step.assertionTool) {
-                        evidenceReasons.push('ASSERTION_TOOL_MISMATCH');
-                    }
-                    if (!item.assertion.ok || !observed.ok || !observed.assertionPassed) {
-                        evidenceReasons.push('ASSERTION_FAILED');
-                        if (index === steps.length - 1)
-                            evidenceReasons.push('FINAL_ASSERTION_FAILED');
-                    }
-                    if (item.assertion.resultHash !== observed.resultHash) {
-                        evidenceReasons.push('ASSERTION_RESULT_HASH_MISMATCH');
-                        if (index === steps.length - 1)
-                            evidenceReasons.push('FINAL_ASSERTION_FAILED');
-                    }
-                    if (item.timestampMs !== observedTimestamp) {
-                        evidenceReasons.push('SCREENSHOT_TIMESTAMP_MISMATCH');
-                    }
-                }
-            }
+            if (!derived.evidence)
+                evidenceReasons.push('STEP_EVIDENCE_MISSING');
             const mediaInput = {
                 videoPath: active.context.videoPath,
                 rehearsalDurationMs: active.rehearsalDurationMs,
@@ -578,7 +776,13 @@ export function createProofCaptureHandler(deps) {
                 })),
                 contactSheetPath: active.context.contactSheetPath,
             };
-            const media = await deps.validateMedia(deps.mediaProcess, mediaInput);
+            let media;
+            try {
+                media = await deps.validateMedia(deps.mediaProcess, mediaInput);
+            }
+            catch {
+                return rejectCapture(active, ['MEDIA_VALIDATION_FAILED']);
+            }
             if (!contextIsCurrent(active))
                 return rejectPathDrift(active);
             if (!media.ok)
@@ -604,89 +808,62 @@ export function createProofCaptureHandler(deps) {
                     evidenceReasons.push('MEDIA_EVIDENCE_MISMATCH');
                 }
             }
-            const git = deps.getGitInfo(active.context.projectRoot);
-            let after = null;
-            try {
-                after = readinessSchema.parse(await deps.readiness());
-            }
-            catch {
-                evidenceReasons.push('READINESS_INVALID');
-            }
-            if (git.dirty)
-                evidenceReasons.push('GIT_DIRTY');
-            if (git.sha !== active.context.storyboard.sourceTreeSha ||
-                git.sha !== active.context.pullRequest.headSha) {
-                evidenceReasons.push('SOURCE_SHA_MISMATCH');
-            }
-            if (after) {
-                if (!after.cdpAttached)
-                    evidenceReasons.push('CDP_DETACHED');
-                if (!after.helpersAttached)
-                    evidenceReasons.push('HELPERS_DETACHED');
-                if (!after.metroReady || !after.runtime.metroReady)
-                    evidenceReasons.push('METRO_NOT_READY');
-                if (after.metroBuildPending)
-                    evidenceReasons.push('METRO_BUILD_PENDING');
-                if (after.metroBuildFailed)
-                    evidenceReasons.push('METRO_BUILD_FAILED');
-                if (after.errorCount !== active.baseline.errorCount ||
-                    after.errorSha256 !== active.baseline.errorSha256 ||
-                    after.errorCount !== 0) {
-                    evidenceReasons.push('ERROR_BASELINE_CHANGED');
-                }
-                if (JSON.stringify(after.device) !== JSON.stringify(active.baseline.device)) {
-                    evidenceReasons.push('DEVICE_IDENTITY_CHANGED');
-                }
-                if (JSON.stringify(after.runtime) !== JSON.stringify(active.baseline.runtime)) {
-                    evidenceReasons.push('RUNTIME_IDENTITY_CHANGED');
-                }
-            }
-            if (evidenceReasons.length > 0 || !media.ok || !after || !bound) {
-                return rejectCapture(active, evidenceReasons, false);
+            const git = readGit(active);
+            const ready = await readReadiness();
+            evidenceReasons.push(...(git.ok ? gitReasons(active, git.value) : git.reasons));
+            evidenceReasons.push(...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons));
+            if (evidenceReasons.length > 0 || !media.ok || !ready.ok || !git.ok) {
+                return rejectCapture(active, evidenceReasons);
             }
             const storyboardBytes = JSON.stringify(active.context.storyboard);
-            const receipt = mechanicallyAcceptedProofReceiptSchema.parse({
-                schemaVersion: 1,
-                runId: active.context.runId,
-                issue: active.context.issue,
-                pullRequest: active.context.pullRequest,
-                proofClass: active.context.proofClass,
-                acceptanceMappings: active.context.acceptanceMappings,
-                git: {
-                    sourceTreeSha: active.context.storyboard.sourceTreeSha,
-                    proofHeadSha: git.sha,
-                    dirty: false,
-                },
-                device: after.device,
-                runtime: after.runtime,
-                fixture: active.context.fixture,
-                action: active.context.proofAction,
-                storyboard: { id: active.context.storyboard.id, sha256: hashBytes(storyboardBytes) },
-                rehearsal: {
-                    startedAt: active.rehearsalStartedAt.toISOString(),
-                    finishedAt: active.rehearsalFinishedAt.toISOString(),
-                    durationMs: active.rehearsalDurationMs,
-                    clean: true,
-                },
-                video: media.video,
-                screenshots: media.screenshots,
-                assertions: evidence.map((item) => item.assertion),
-                eventTrace: {
-                    allowedTools: active.context.storyboard.allowedTools,
-                    observed: active.recordingEvents,
-                },
-                frameMatches: media.frameMatches,
-                contactSheet: media.contactSheet,
-                errorBaseline: {
-                    beforeSha256: active.baseline.errorSha256,
-                    afterSha256: after.errorSha256,
-                    beforeCount: active.baseline.errorCount,
-                    afterCount: after.errorCount,
-                    clean: true,
-                },
-                invalidationReasons: [],
-                verdict: 'mechanically_accepted',
-            });
+            let receipt;
+            try {
+                receipt = mechanicallyAcceptedProofReceiptSchema.parse({
+                    schemaVersion: 1,
+                    runId: active.context.runId,
+                    issue: active.context.issue,
+                    pullRequest: active.context.pullRequest,
+                    proofClass: active.context.proofClass,
+                    acceptanceMappings: active.context.acceptanceMappings,
+                    git: {
+                        sourceTreeSha: active.context.storyboard.sourceTreeSha,
+                        proofHeadSha: git.value.sha,
+                        dirty: false,
+                    },
+                    device: ready.value.device,
+                    runtime: ready.value.runtime,
+                    fixture: active.context.fixture,
+                    action: active.context.proofAction,
+                    storyboard: { id: active.context.storyboard.id, sha256: hashBytes(storyboardBytes) },
+                    rehearsal: {
+                        startedAt: active.rehearsalStartedAt.toISOString(),
+                        finishedAt: active.rehearsalFinishedAt.toISOString(),
+                        durationMs: active.rehearsalDurationMs,
+                        clean: true,
+                    },
+                    video: media.video,
+                    screenshots: media.screenshots,
+                    assertions: evidence.map((item) => item.assertion),
+                    eventTrace: {
+                        allowedTools: active.context.storyboard.allowedTools,
+                        observed: active.recordingEvents,
+                    },
+                    frameMatches: media.frameMatches,
+                    contactSheet: media.contactSheet,
+                    errorBaseline: {
+                        beforeSha256: active.baseline.errorSha256,
+                        afterSha256: ready.value.errorSha256,
+                        beforeCount: active.baseline.errorCount,
+                        afterCount: ready.value.errorCount,
+                        clean: true,
+                    },
+                    invalidationReasons: [],
+                    verdict: 'mechanically_accepted',
+                });
+            }
+            catch {
+                return rejectCapture(active, ['RECEIPT_CONSTRUCTION_FAILED']);
+            }
             active.mechanicalReceipt = receipt;
             active.stage = 'mechanically_accepted';
             active.invalidationReasons = [];
@@ -711,11 +888,17 @@ export function createProofCaptureHandler(deps) {
                 return proofFailure(['REVIEWER_NOT_INDEPENDENT'], active.stage);
             }
             const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
-            const finalReceipt = finalProofReceiptSchema.parse({
-                ...acceptedEvidence,
-                evidenceReview: review,
-                verdict: 'accepted',
-            });
+            let finalReceipt;
+            try {
+                finalReceipt = finalProofReceiptSchema.parse({
+                    ...acceptedEvidence,
+                    evidenceReview: review,
+                    verdict: 'accepted',
+                });
+            }
+            catch {
+                return proofFailure(['RECEIPT_CONSTRUCTION_FAILED'], active.stage);
+            }
             if (!contextIsCurrent(active))
                 return rejectPathDrift(active);
             try {

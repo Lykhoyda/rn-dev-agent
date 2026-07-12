@@ -48,7 +48,7 @@ import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
-import { createProofCaptureHandler, proofCaptureInputSchema, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
+import { createProofCaptureHandler, parseProofGitChangedPaths, proofCaptureInputSchema, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
 import { validateMedia } from './tools/proof-media.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
@@ -1140,15 +1140,56 @@ const getProofGitInfo = (root) => {
             cwd: root,
             encoding: 'utf8',
         }).trim();
-        const status = execFileSync('git', ['status', '--porcelain'], {
+        const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
             cwd: root,
             encoding: 'utf8',
-        }).trim();
-        return { sha: sha || null, dirty: status.length > 0 };
+        });
+        const changedPaths = parseProofGitChangedPaths(status);
+        return { sha: sha || null, dirty: changedPaths.length > 0, changedPaths };
     }
     catch {
-        return { sha: null, dirty: true };
+        return { sha: null, dirty: true, changedPaths: [] };
     }
+};
+const resolveNativeProofDevice = async () => {
+    const session = getActiveSession();
+    if (!session?.deviceId)
+        return null;
+    if (session.platform === 'ios') {
+        try {
+            const { stdout } = await execFileP('xcrun', ['simctl', 'list', '-j', 'devices', 'booted']);
+            const payload = JSON.parse(String(stdout));
+            for (const [runtime, devices] of Object.entries(payload.devices ?? {})) {
+                const device = devices.find((candidate) => candidate.udid === session.deviceId &&
+                    candidate.state === 'Booted' &&
+                    typeof candidate.name === 'string');
+                if (device?.name) {
+                    const version = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll('-', '.');
+                    if (version)
+                        return { id: session.deviceId, name: device.name, osVersion: version };
+                }
+            }
+        }
+        catch {
+            return null;
+        }
+    }
+    if (session.platform === 'android') {
+        try {
+            const [{ stdout: model }, { stdout: version }] = await Promise.all([
+                execFileP('adb', ['-s', session.deviceId, 'shell', 'getprop', 'ro.product.model']),
+                execFileP('adb', ['-s', session.deviceId, 'shell', 'getprop', 'ro.build.version.release']),
+            ]);
+            const name = String(model).trim();
+            const osVersion = String(version).trim();
+            if (name && osVersion)
+                return { id: session.deviceId, name, osVersion };
+        }
+        catch {
+            return null;
+        }
+    }
+    return null;
 };
 const proofReadiness = async () => {
     const current = getClient();
@@ -1156,12 +1197,8 @@ const proofReadiness = async () => {
     const session = getActiveSession();
     const metroEvents = current.metroEventsClient;
     let errors = [{ unavailable: true }];
-    let appInfo = {};
     if (current.isConnected && current.helpersInjected) {
-        const [errorResult, appResult] = await Promise.all([
-            current.evaluate(current.helperExpr('getErrors()')),
-            current.evaluate(current.helperExpr('getAppInfo()')),
-        ]);
+        const errorResult = await current.evaluate(current.helperExpr('getErrors()'));
         try {
             const parsed = typeof errorResult.value === 'string' ? JSON.parse(errorResult.value) : null;
             if (Array.isArray(parsed))
@@ -1170,17 +1207,7 @@ const proofReadiness = async () => {
         catch {
             // Unreadable errors keep the baseline dirty.
         }
-        try {
-            const parsed = typeof appResult.value === 'string' ? JSON.parse(appResult.value) : null;
-            if (parsed && typeof parsed === 'object')
-                appInfo = parsed;
-        }
-        catch {
-            // Device identity falls back to the attached target.
-        }
     }
-    const platformValue = target?.platform ?? session?.platform;
-    const platform = platformValue === 'android' ? 'android' : 'ios';
     const metroBuildPending = metroEvents?.lastBuild?.status === 'started';
     const metroBuildFailed = metroEvents?.lastBuild?.status === 'failed' || (metroEvents?.buildErrors ?? 0) > 0;
     const metroReady = current.isConnected &&
@@ -1188,6 +1215,16 @@ const proofReadiness = async () => {
         !metroBuildPending &&
         !metroBuildFailed;
     const errorBytes = JSON.stringify(errors);
+    const identity = resolveProofIdentity({
+        session,
+        target,
+        nativeDevice: await resolveNativeProofDevice(),
+        metroPort: current.metroPort,
+        pluginVersion: pkgVersion,
+        metroReady,
+    });
+    if (!identity)
+        throw new Error('PROOF_DEVICE_IDENTITY_UNRESOLVED');
     return {
         cdpAttached: current.isConnected,
         helpersAttached: current.helpersInjected,
@@ -1196,18 +1233,8 @@ const proofReadiness = async () => {
         metroBuildFailed,
         errorCount: errors.length,
         errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
-        device: {
-            id: session?.deviceId ?? target?.id ?? 'unattached-device',
-            platform,
-            model: target?.title ?? 'unknown-device',
-            osVersion: String(appInfo.version ?? appInfo.osVersion ?? 'unknown'),
-        },
-        runtime: {
-            bundleId: session?.appId ?? target?.description ?? 'unknown-bundle',
-            metroPort: current.metroPort,
-            metroReady,
-            pluginVersion: pkgVersion,
-        },
+        device: identity.device,
+        runtime: identity.runtime,
     };
 };
 const proofCaptureHandler = createProofCaptureHandler({
