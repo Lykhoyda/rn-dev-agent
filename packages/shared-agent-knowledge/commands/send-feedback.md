@@ -2,7 +2,7 @@
 command: send-feedback
 description: Send feedback or report a bug for the rn-dev-agent plugin. Collects sanitized environment context and creates a GitHub issue. No sensitive data (paths, secrets, PII) is transmitted.
 argument-hint: [description or context from conversation]
-allowed-tools: Bash, Read, Grep, mcp__*cdp__cdp_status, mcp__*cdp__cdp_error_log, AskUserQuestion
+allowed-tools: Bash, Read, Write, Grep, mcp__*cdp__cdp_status, mcp__*cdp__cdp_error_log, AskUserQuestion
 ---
 
 # Send Feedback — Sanitized Bug Report / Feature Request
@@ -45,7 +45,9 @@ This collects (all redacted):
 - Plugin version, cdp-bridge version, tool count
 - OS, Node.js, npm versions
 - Simulator/emulator status, Metro status
-- agent-device and maestro-runner versions
+- maestro-runner version, plus whether a legacy `agent-device` install is still
+  present (healthy = "not installed" — the in-tree rn-fast-runner/rn-android-runner
+  are the device backends; a leftover agent-device can interfere)
 - Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
 
 Also call `cdp_status` to get current CDP connection state (if available).
@@ -69,7 +71,7 @@ Present the data in a clear format:
 - OS: Darwin 25.3.0, Node: v22.x
 - iOS Simulators: 1 booted
 - Metro: running on 8081
-- agent-device: 0.5.0
+- legacy agent-device: not installed
 - maestro-runner: 1.2.0
 
 **Recent tool activity (last 5):**
@@ -88,14 +90,29 @@ Wait for confirmation. If the user wants to remove something, remove it.
 
 ## Step 4: Create the GitHub issue
 
-Use `gh` CLI to create the issue:
+Write the issue body to a temp file FIRST (never inline user text into the
+shell command — quotes/backticks in a description would break or inject into
+the command), then create the issue with `--body-file`:
+
+1. Use the Write tool to save the composed body (template below) to
+   `/tmp/rn-dev-agent-feedback.md`.
+2. Compose the `--title` value YOURSELF as a fresh summary — never paste the
+   user's raw text into it. Use only letters, digits, spaces, hyphens, and one
+   leading `<type>:` colon (no quotes, backticks, `$`, or other shell
+   metacharacters — `$(…)` executes even inside double quotes).
+3. Run:
 
 ```bash
 gh issue create \
   --repo Lykhoyda/rn-dev-agent \
   --title "<type>: <short description>" \
   --label "<bug|enhancement|question>" \
-  --body "$(cat <<'BODY'
+  --body-file /tmp/rn-dev-agent-feedback.md
+```
+
+Body template:
+
+```markdown
 ## Description
 
 <user's description>
@@ -111,7 +128,7 @@ gh issue create \
 | Metro | <status> |
 | iOS Simulators | <count> |
 | Android Emulators | <count> |
-| agent-device | <version> |
+| legacy agent-device | <"not installed" expected> |
 | maestro-runner | <version> |
 
 ## Recent Tool Activity
@@ -144,8 +161,6 @@ gh issue create \
 
 ---
 *Submitted via `/rn-dev-agent:send-feedback` — data sanitized automatically*
-BODY
-)"
 ```
 
 ## Step 5: Confirm submission
@@ -154,8 +169,8 @@ Report the issue URL to the user.
 
 If `gh` is not installed or not authenticated:
 1. Tell the user to install: `brew install gh && gh auth login`
-2. As fallback, write the issue body to `/tmp/rn-dev-agent-feedback.md` so
-   the user can paste it manually into GitHub.
+2. The body file at `/tmp/rn-dev-agent-feedback.md` (written in Step 4) remains
+   available so the user can paste it manually into GitHub.
 
 ## Privacy Guarantees
 

@@ -138,12 +138,13 @@ details on exit code handling (2=ambiguous profiles, 3=no eas-cli, 4=no eas.json
 
 ### Step 1: Take a Screenshot
 Immediately capture the current screen state before anything changes:
-```bash
-# iOS
-xcrun simctl io booted screenshot --type=jpeg /tmp/debug-start.jpg
-# Android
-adb exec-out screencap -p > /tmp/debug-start.png
 ```
+device_screenshot(platform="<ios|android>", path="/tmp/debug-start.png")
+```
+Pass the platform from Step 0 explicitly — this runs before CDP connects, so
+there may be nothing to disambiguate a booted simulator + emulator pair. It
+serves pixels even when a flow owns the device (falls back to `simctl`/`adb`
+internally when the runner can't).
 
 ### Step 2: Data Gathering
 First, connect and get environment health:
@@ -165,13 +166,16 @@ Then, once connected, gather evidence in parallel:
 | Unhandled promise | cdp_error_log | MCP |
 | Uncaught error overlay (RedBox) | cdp_component_tree (APP_HAS_REDBOX) | MCP |
 | console.error() | cdp_console_log(level="error") | MCP |
-| Native crash (iOS) | xcrun simctl spawn booted log show --last 5m | bash |
-| Native crash (Android) | adb logcat -d -b crash | bash |
+| Native crash (iOS) | collect_logs(sources=["native_ios"]) | MCP |
+| Native crash (Android) | collect_logs(sources=["native_android"]) | MCP |
 | Metro bundle error | curl localhost:8081/status | bash |
 | Network failure | cdp_network_log (status=0 or missing) | MCP |
 
 **Key rule**: If CDP shows no errors but the app is broken, the problem
-is native. Always check native logs as a fallback:
+is native. Check native logs via `collect_logs(sources=["native_ios"])` /
+`collect_logs(sources=["native_android"])` — it is the supported path and
+collects sources in parallel. Raw commands are a fallback ONLY when the
+MCP bridge itself is down:
 ```bash
 # Android (pidof without -s for broader compatibility)
 APP_PID=$(adb shell pidof <bundle-id> 2>/dev/null | awk '{print $1}') || \
@@ -194,8 +198,8 @@ xcrun simctl spawn booted log show --last 5m \
 3. Identify the line causing the error
 
 **If blank/white screen with no RedBox:**
-1. `cdp_component_tree` -- are there fiber roots? If not, app is still loading or crashed natively
-2. Check native logs (Step 3 bash commands)
+1. `cdp_component_tree(depth=1)` -- are there fiber roots? (Sanctioned exception to the always-filter rule: on a blank screen there may be no route name to filter by, and `depth=1` returns only root-level nodes — a presence probe, not a dump.) If no roots, app is still loading or crashed natively
+2. Check native logs (Step 3 — `collect_logs`, or the bash fallback if the bridge is down)
 3. Check Metro: `curl http://localhost:8081/status`
 
 **If wrong data displayed:**

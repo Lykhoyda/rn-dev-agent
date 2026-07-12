@@ -341,15 +341,15 @@ cost (a `device_snapshot` is a full XCUITest accessibility round-trip, measured 
 
 For EACH step in the flow:
 
-1. **Act**: Use agent-device for native interaction (preferred), or Maestro for
-   complex multi-step flows.
+1. **Act**: Use the `device_*` tools (in-tree rn-fast-runner / rn-android-runner)
+   for native interaction (preferred), or Maestro for complex multi-step flows.
 
    For a KNOWN multi-step sequence, prefer a single `device_batch` over N separate
    tool calls — it executes all steps in ONE round-trip. Use `finalSnapshot:'none'`
    when you'll verify via `expect_*`/`cdp_store_state` (skips a ~1,450 ms trailing
    snapshot), or the default `'salient'` for a compact actionable-elements payload.
 
-   **agent-device (preferred — no YAML, native touch):**
+   **`device_*` tools (preferred — no YAML, native touch):**
    ```
    device_find(text="Add to Cart", action="click")
    device_snapshot  → verify UI changed, get @refs
@@ -375,17 +375,15 @@ For EACH step in the flow:
    (`+`, `@`, `#`), use `device_fill` which auto-chunks input on Android to
    prevent ANR crashes (GH #7).
 
-2. **Wait for settle**: `device_snapshot` or Maestro `assertVisible` handles this.
-   If no assertion target, add `sleep 0.5` before CDP queries.
+2. **Wait for settle**: mutating `device_*` verbs already wait for the UI to
+   stabilize (settle engine, see `meta.settle`) — never add manual `sleep`s.
+   Maestro `assertVisible` handles settling inside flows.
 
-3. **Verify UI**: Take screenshot, then query the specific component:
-   ```bash
-   # iOS
-   xcrun simctl io booted screenshot --type=jpeg /tmp/rn-screenshot.jpg
-   # Android
-   adb exec-out screencap -p > /tmp/rn-screenshot.png
+3. **Verify UI**: Take a screenshot with `device_screenshot` (it falls back to
+   `simctl`/`adb` internally when the runner can't serve pixels), then query the
+   specific component:
    ```
-   ```
+   device_screenshot
    cdp_component_tree(filter="CartBadge", depth=2)
    ```
    Check that props/state match expectations.
@@ -407,13 +405,13 @@ Test at minimum:
 
 ### Step 6: Generate Persistent Test
 After all steps pass, write a complete Maestro YAML flow file at
-`flows/<feature-name>.yaml` that can run in CI.
+`.maestro/<feature-name>.yaml` that can run in CI.
 
 ### Step 7: Report
 Summarize:
 - Steps that passed (with evidence)
 - Steps that failed (with screenshot + state dump)
-- Maestro test file generated at: flows/<name>.yaml
+- Maestro test file generated at: .maestro/<name>.yaml
 
 ## Circuit Breaker — Retry Budget (GH #5)
 
@@ -463,8 +461,10 @@ When you hit the budget:
    before querying CDP state. The React render cycle needs time.
 
 3. **Native errors are invisible to CDP**: If cdp_error_log is empty
-   but the app crashed, check native logs. Replace placeholders with
-   actual bundle ID and binary name from Step 1:
+   but the app crashed, check native logs — prefer `collect_logs`
+   (source: "native"), which gathers them in one call. Raw fallback if
+   the bridge is down (replace placeholders with actual bundle ID and
+   binary name from Step 1):
     - Android: `APP_PID=$(adb shell pidof <bundle-id> 2>/dev/null | awk '{print $1}') || APP_PID=$(adb shell ps | grep <bundle-id> | awk '{print $2}'); if [ -n "$APP_PID" ]; then adb logcat -d -s ReactNative:E ReactNativeJS:E --pid="$APP_PID"; else adb logcat -d -b crash; fi`
     - iOS: `xcrun simctl spawn booted log show --last 5m --predicate 'processImagePath ENDSWITH "/<binary-name>" AND logType == error'`
 
@@ -519,9 +519,9 @@ errors exist.
    `cdp_evaluate(expression="globalThis.__NAV_REF__?.navigate('<screen>', <params>)")`.
    Confirm with `cdp_navigation_state`. Skip if already on the correct screen.
 
-1. **Screenshot**: Capture current screen state
-   - iOS: `xcrun simctl io booted screenshot --type=jpeg /tmp/verify-[feature].jpg`
-   - Android: `adb exec-out screencap -p > /tmp/verify-[feature].png`
+1. **Screenshot**: Capture current screen state with
+   `device_screenshot(path="/tmp/verify-[feature].png")` — it serves pixels even
+   mid-flow (falls back to `simctl`/`adb` internally when the runner can't).
 
 2. **Health check**: `cdp_status`
    - Pass: Metro connected, no RedBox, errorCount == 0, isPaused == false

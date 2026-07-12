@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code and Codex. **76 MCP tools**, **5 agents**, **14 commands**, **8 skills**.
+The React Native development plugin for Claude Code and Codex. **79 MCP tools**, **5 agents**, **15 commands**, **9 skills**.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -38,8 +38,11 @@ load the matching skill or command Markdown and run the underlying steps
 directly. For action inventory, the slash command wraps:
 
 ```bash
-node <plugin-root>/../rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
+node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
 ```
+
+(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
+Codex — the bundled runtime lives INSIDE the installed package.)
 
 For action replay, prefer the MCP tool `cdp_run_action` after the same
 pre-flight checks documented in `commands/run-action.md`.
@@ -89,11 +92,32 @@ What is the user asking for?
 │
 ├── Plugin tools not working / environment broken
 │   └─► /rn-dev-agent:setup
-│       (9-point environment check with auto-retry + manual fallback)
+│       (13-check environment diagnostic with auto-retry + manual fallback,
+│        then CLAUDE.md/nav-ref/store-exposure injection)
 │
-├── Need PROOF for a PR
-│   └─► /rn-dev-agent:proof-capture <feature-slug>
-│       (Video + screenshots + generated PR body)
+├── DIAGNOSE the environment (read-only, no changes)
+│   └─► /rn-dev-agent:doctor
+│       (Same 13-check diagnostic as setup Phase 1 — reports, never modifies)
+│
+├── Need PROOF for a PR ("record a demo", "capture proof", "PR video")
+│   └─► Load the capturing-proof skill (or run /rn-dev-agent:proof-capture <feature-slug>)
+│       (Rehearsal-gated video + screenshots + generated PR body)
+│
+├── FREEZE a verified action into a locked regression test
+│   └─► /rn-dev-agent:lock-e2e <action-name>
+│       (Strict no-repair run via cdp_lock_e2e_test, freezes to .rn-agent/e2e/;
+│        the frozen suite runs via cdp_run_e2e_suite)
+│
+├── Watch tool activity live in a browser ("observability UI")
+│   └─► /rn-dev-agent:observe
+│       (Shows the observe web UI URL; stop/restart the server)
+│
+├── Audit project rules sync (Vercel rules)
+│   └─► /rn-dev-agent:check-vercel-rules
+│
+├── REPORT a plugin bug / send feedback
+│   └─► /rn-dev-agent:send-feedback
+│       (Sanitized environment context → GitHub issue, user-confirmed)
 │
 ├── Understand an existing feature (read, don't write)
 │   └─► Spawn rn-code-explorer via Task tool (read-only, safe to spawn)
@@ -129,7 +153,7 @@ These apply to every RN task:
 4. **Do cross-platform checks** unless the user explicitly scoped to one platform
 5. **Filter `cdp_component_tree` queries** — never dump the full tree (10K+ tokens wasted)
 6. **Stop at the first red flag** from the agent's red flags list
-7. **Run `/rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a Maestro flow already covers the request, replay it via `maestro_run` first — manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
+7. **Run `/rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a saved action already covers the request, replay it via `cdp_run_action` (or `/rn-dev-agent:run-action`) first — that path runs the mutates/appId/param pre-flights and auto-repair; reserve raw `maestro_run` for non-action YAML flows. Manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
 
 ### Ask First
 - Adding new dependencies to the user's project
@@ -159,7 +183,8 @@ These apply to every RN task:
 | `creating-actions` | Process + reference | Authoring a new reusable action (save / replay a flow) |
 | `rn-debugging` | Reference + process | Diagnosing crashes, errors, blank screens |
 | `rn-device-control` | Reference | Simulator / emulator commands, screenshots |
-| `rn-best-practices` | Reference | 46 RN rules for architecture + review |
+| `capturing-proof` | Process | Recording proof artifacts (video + screenshots + PR body) for a verified feature |
+| `rn-best-practices` | Reference | 118 review rules (48 RN-applicable) for architecture + review |
 
 ---
 
@@ -181,7 +206,9 @@ read them as reference, execute the steps INLINE in the parent session.
 ### Spawnable agents (read-only — safe to use via Task tool)
 
 These use only `Glob, Grep, LS, Read` — no MCP tools. They can be spawned
-in parallel via the Task tool for concurrent codebase analysis.
+in parallel via the Task tool for concurrent codebase analysis. (Task-tool
+spawning is a Claude surface; on Codex, read the agent markdown and execute
+the playbook inline instead — see the Host Surface Map above.)
 
 | Agent | Model | Purpose | How to invoke |
 |-------|-------|---------|-----------|
