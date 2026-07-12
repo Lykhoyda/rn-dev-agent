@@ -133,6 +133,12 @@ You can hand-edit actions, but consider that self-repair refuses to touch hand-e
 
 `-e KEY=VALUE` fills `${KEY}` placeholders inside the action. `--platform ios|android` targets a specific device when multiple are booted. `--dry-run` prints the resolved replay command without executing it.
 
+## Running actions from the observe UI
+
+The [observability web UI](../commands/observe/) (`/rn-dev-agent:observe` — it autostarts with the session) has an **Actions** tab that fronts the same library: every saved action is listed with its status badge and mutates flag, `${KEY}` placeholders become input fields, and a **Run** button replays it through the same `cdp_run_action` engine — self-repair and run records included.
+
+The replay shows up live on the device mirror as the taps play out. That makes the observe UI the quickest regression spot-check — "does `user-login` still pass after my refactor?" is one browser click, no agent turn or terminal round-trip. Locked e2e suites get the same treatment in the neighbouring **E2E** tab, including per-flow progress and run history.
+
 ## Self-repair, in plain words
 
 When a `testID` gets renamed in your app and the action references the old name, replay fails with `SELECTOR_NOT_FOUND`. The plugin doesn't give up: it looks at the live UI, finds the most likely new `testID` via fuzzy matching, patches the YAML, and retries. The repair gets logged to the action's sidecar file so you can see what changed.
@@ -169,5 +175,6 @@ attempt (`RunRecord.blindProbe` records the routing; disable with `RN_BLIND_PROB
 - [`/rn-dev-agent:test-feature`](../commands/test-feature/) — the command that records actions
 - [`/rn-dev-agent:list-learned-actions`](../commands/list-learned-actions/) — list saved actions
 - [`/rn-dev-agent:run-action`](../commands/run-action/) — replay an action by name
+- [`/rn-dev-agent:observe`](../commands/observe/) — watch replays live and run actions from the browser
 - [`/rn-dev-agent:setup`](../commands/setup/) — scaffolds `.rn-agent/` and the dev-bridge
 - [Architecture](../architecture/) — where actions sit in the three-layer model
