@@ -27,7 +27,8 @@
     "./skills/rn-debugging",
     "./skills/rn-best-practices",
     "./skills/rn-setup",
-    "./skills/creating-actions"
+    "./skills/creating-actions",
+    "./skills/capturing-proof"
   ],
   "agents": [
     "./agents/rn-tester.md",
@@ -50,7 +51,8 @@
     "./commands/list-learned-actions.md",
     "./commands/run-action.md",
     "./commands/check-vercel-rules.md",
-    "./commands/observe.md"
+    "./commands/observe.md",
+    "./commands/lock-e2e.md"
   ],
   "mcpServers": {
     "cdp": {

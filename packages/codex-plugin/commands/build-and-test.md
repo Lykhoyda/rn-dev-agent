@@ -35,18 +35,20 @@ Phase A — Build pre-flight (run in this session):
    user to start it).
 5. **Confirm CDP** — call `cdp_status` again, must return `ok:true`.
 
-Phase B — Run the rn-tester 7-step protocol (load `rn-testing` skill):
+Phase B — Run the rn-tester protocol (load `rn-testing` skill):
 
-Follow the same protocol as `/rn-dev-agent:test-feature` — environment check,
-understand the feature, plan, navigate, execute+verify, edge cases, generate
-persistent test.
+Follow the same protocol as `/rn-dev-agent:test-feature`, INCLUDING its
+mandatory Step 0 — scan saved actions (`/rn-dev-agent:list-learned-actions`)
+and replay a matching flow BEFORE composing any `device_*` primitives — then
+environment check, understand the feature, plan, navigate, execute+verify,
+edge cases, generate persistent test.
 
 ## Verification (mandatory before declaring complete)
 
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` after Phase A
 - [ ] Every test assertion has concrete Evidence
 - [ ] At least one `device_screenshot` saved
-- [ ] `flows/<feature-name>.yaml` written
+- [ ] `<test-app>/.rn-agent/actions/<feature>.yaml` written (auto-emitted on pass)
 - [ ] `cdp_error_log` shows 0 new errors at end
 
 ## Examples

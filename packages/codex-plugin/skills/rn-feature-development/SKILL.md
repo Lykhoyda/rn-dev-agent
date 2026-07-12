@@ -420,11 +420,11 @@ a PASS.
 numbered screenshots, `PROOF.md`, `PR-BODY.md`, and the rehearsed flow
 persisted as a replayable action.
 
-**Protocol — single source of truth**: execute the `/rn-dev-agent:proof-capture`
-protocol inline. In Codex, read `packages/codex-plugin/commands/proof-capture.md`
-from this repository checkout, or `commands/proof-capture.md` from the installed
-Codex plugin root, and run its protocol steps with `<feature-slug>`. The
-pipeline adds these deltas:
+**Protocol — single source of truth**: load the **capturing-proof** skill and
+run its Protocol steps with `<feature-slug>`. In Codex, read
+`skills/capturing-proof/SKILL.md` from the installed Codex plugin root, or
+`packages/codex-plugin/skills/capturing-proof/SKILL.md` from this repository
+checkout. The pipeline adds these deltas:
 
 1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
    execute it mechanically. Do NOT improvise, skip, or simplify steps; the
@@ -448,24 +448,11 @@ pipeline adds these deltas:
    the actual result differed from the architect's expected state, or
    "None — all steps matched the architect's E2E Proof Flow."
 
-**Hard gates (from the protocol — enforced here too):**
-
-- **Rehearsal BEFORE recording.** Discovery happens OFF camera; recording
-  captures a verified replay, never exploration. Max 3 rehearsal fix-loops,
-  then escalate with the failing step/assertion plus `cdp_navigation_state`
-  and `cdp_store_state` snapshots.
-- **Maestro-inexpressible carve-out**: only when a step genuinely cannot be
-  expressed in Maestro (custom gestures, native-module side-effects,
-  Reanimated captures via `cdp_set_shared_value`, JS introspection mid-flow)
-  may the rehearsed `device_*`/`cdp_*` sequence be the on-camera artifact —
-  and the missing Maestro primitive MUST be named in PROOF.md "Deviations".
-- **A flow failure ON camera = stop, rebase to clean state, re-rehearse.**
-  It means drift between rehearsal and recording (timing, residue from a
-  `mutates: true` flow) — never "fix it on camera."
-- **Validate artifacts before presenting** (video exists and > 10KB, final
-  screenshot shows the expected end state, `cdp_error_log` clean, every
-  numbered screenshot non-zero). Report invalid proof — never present it as
-  complete.
+**Hard gates**: enforced by the capturing-proof skill (§ "Hard Gates") —
+rehearsal before recording (max 3 fix-loops), the Maestro-inexpressibility
+carve-out named in PROOF.md "Deviations", stop-rebase-re-rehearse on any
+on-camera failure, and artifact validation before presenting. Do not restate
+or relax them here; the skill is the owner.
 
 **Gate**: PROOF.md exists with screenshots for ALL steps of the architect's
 flow, all state assertions match, PR-BODY.md is generated, and the action
