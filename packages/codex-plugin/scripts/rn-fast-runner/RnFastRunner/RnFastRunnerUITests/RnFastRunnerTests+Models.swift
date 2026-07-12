@@ -115,6 +115,10 @@ struct DataPayload: Codable {
   let keyboardGuard: String?
   let keyboardGuardMs: Double?
   let `static`: Bool?
+  // Story 10 (#391): typing telemetry — whether the two-burst recipe ran and
+  // how long the keyboard-presence wait blocked before the first keystroke.
+  let typingBurst: Bool?
+  let keyboardWaitMs: Int?
 
   init(
     message: String? = nil,
@@ -138,7 +142,9 @@ struct DataPayload: Codable {
     orientation: String? = nil,
     keyboardGuard: String? = nil,
     keyboardGuardMs: Double? = nil,
-    `static`: Bool? = nil
+    `static`: Bool? = nil,
+    typingBurst: Bool? = nil,
+    keyboardWaitMs: Int? = nil
   ) {
     self.message = message
     self.text = text
@@ -162,6 +168,8 @@ struct DataPayload: Codable {
     self.keyboardGuard = keyboardGuard
     self.keyboardGuardMs = keyboardGuardMs
     self.`static` = `static`
+    self.typingBurst = typingBurst
+    self.keyboardWaitMs = keyboardWaitMs
   }
 }
 

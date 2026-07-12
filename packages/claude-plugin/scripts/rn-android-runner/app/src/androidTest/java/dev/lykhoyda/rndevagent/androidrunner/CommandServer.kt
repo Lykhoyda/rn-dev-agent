@@ -50,6 +50,8 @@ class CommandServer(port: Int, private val pluginVersion: String? = null) : Nano
             json(Response.Status.OK, body)
         } catch (e: NoFocusedInputException) {
             errorResponse(command, "NO_FOCUSED_INPUT", e.message ?: "no focused input", Response.Status.OK)
+        } catch (e: SetTextRejectedException) {
+            errorResponse(command, "SET_TEXT_REJECTED", e.message ?: "set text rejected", Response.Status.OK)
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
         } catch (t: Throwable) {

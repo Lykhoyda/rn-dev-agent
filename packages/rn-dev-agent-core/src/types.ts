@@ -265,6 +265,10 @@ export type ToolErrorCode =
   | 'STORE_TRUNCATED' // expect_redux when store payload exceeded safeStringify cap
   // Phase 134.2: appId / packageName validation at adb shell boundary.
   | 'INVALID_APPID' // device_permission
+  // Story 10 (#391): the focused Android field ignored ACTION_SET_TEXT (and
+  // any applicable keyevent fallback) — device_fill descends to its adb /
+  // maestro tiers instead of re-tapping a healthy focus.
+  | 'SET_TEXT_REJECTED'
   // GH #418: command-surface gate.
   | 'UNSUPPORTED_COMMAND' // runner rejected a verb its artifact predates (typed by the runner)
   | 'RUNNER_COMMANDS_STALE' // liveness gate: artifact lacks required commands; re-open to rebuild

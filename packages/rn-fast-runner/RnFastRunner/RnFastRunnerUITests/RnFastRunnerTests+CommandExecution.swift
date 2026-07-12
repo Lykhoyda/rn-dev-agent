@@ -481,6 +481,20 @@ extension RnFastRunnerTests {
           activeApp.typeText(value)
         }
       }
+      // Story 10 (#391): never type into a keyboard that isn't up — iOS drops
+      // keystrokes sent during keyboard appearance. Best-effort: a simulator
+      // with a hardware keyboard attached may never present the software
+      // keyboard, so a timeout proceeds instead of failing. The keyboard-guard
+      // (#370) dismisses keyboards that occlude taps; this wait REQUIRES one —
+      // the two intents stay separate.
+      var keyboardWait: (appeared: Bool, waitedMs: Int) = (false, 0)
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        keyboardWait = TypingRecipe.waitForKeyboard(
+          now: { ProcessInfo.processInfo.systemUptime },
+          sleep: { Thread.sleep(forTimeInterval: $0) },
+          keyboardVisible: { activeApp.keyboards.count > 0 }
+        )
+      }
       if command.clearFirst == true {
         guard let focused = resolvedTarget else {
           let message =
@@ -493,8 +507,11 @@ extension RnFastRunnerTests {
           clearTextInput(focused)
         }
       }
+      var usedBurst = false
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
         if delaySeconds > 0 && text.count > 1 {
+          // Explicit per-char pacing (--delay-ms, the corrective-retype
+          // contract) wins over the two-burst recipe.
           let chunks = Array(text)
           for (index, character) in chunks.enumerated() {
             typeIntoTarget(String(character))
@@ -502,11 +519,25 @@ extension RnFastRunnerTests {
               Thread.sleep(forTimeInterval: delaySeconds)
             }
           }
+        } else if let bursts = TypingRecipe.bursts(for: text) {
+          // Story 10 (#391): two-burst send — first character alone, sit out
+          // the post-appearance drop window, then stream the remainder.
+          typeIntoTarget(bursts.first)
+          Thread.sleep(forTimeInterval: TypingRecipe.interBurstDelay)
+          typeIntoTarget(bursts.remainder)
+          usedBurst = true
         } else {
           typeIntoTarget(text)
         }
       }
-      return Response(ok: true, data: DataPayload(message: "typed"))
+      return Response(
+        ok: true,
+        data: DataPayload(
+          message: "typed",
+          typingBurst: usedBurst,
+          keyboardWaitMs: keyboardWait.waitedMs
+        )
+      )
     case .interactionFrame:
       let frame = resolvedTouchReferenceFrame(app: activeApp, appFrame: activeApp.frame)
       return Response(

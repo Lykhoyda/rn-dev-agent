@@ -46861,6 +46861,9 @@ function buildAdbInputTextArgv(chunk) {
   const escaped = chunk.replace(/ /g, "%s").replace(/'/g, "'\\''");
   return ["shell", "input", "text", `'${escaped}'`];
 }
+function isAdbInputTextSafe(text) {
+  return /^[\x20-\x7E]*$/.test(text);
+}
 async function androidClipboardFill(text) {
   try {
     const serial = getAdbSerial();
@@ -46904,6 +46907,40 @@ function isNoFocusedInputError(result) {
     return false;
   const text = result.content?.[0]?.text ?? "";
   return NO_FOCUSED_INPUT_RE.test(text);
+}
+function isSetTextRejectedError(result) {
+  if (!result.isError)
+    return false;
+  const text = result.content?.[0]?.text ?? "";
+  try {
+    const envelope = JSON.parse(text);
+    return envelope.code === "SET_TEXT_REJECTED";
+  } catch {
+    return false;
+  }
+}
+function classifyFillPrimaryError(primary) {
+  if (!primary.isError)
+    return "return-primary";
+  if (isSetTextRejectedError(primary))
+    return "reject-ladder";
+  if (isNoFocusedInputError(primary))
+    return "refocus-ladder";
+  return "return-primary";
+}
+function extractTypingMeta(result) {
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const data = envelope.data;
+    if (!data || data.typingBurst === void 0 && data.keyboardWaitMs === void 0)
+      return null;
+    return {
+      ...data.typingBurst !== void 0 ? { burst: data.typingBurst } : {},
+      ...data.keyboardWaitMs !== void 0 ? { keyboardWaitMs: data.keyboardWaitMs } : {}
+    };
+  } catch {
+    return null;
+  }
 }
 function sleep3(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -46983,14 +47020,7 @@ function createDeviceFillHandler(getClient2) {
   return withSession(async (args) => {
     const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
     const androidSession = isAndroidSession();
-    const needsAndroidWorkaround = androidSession && (args.text.length > ANDROID_FILL_MAX_SAFE_LEN || ANDROID_UNSAFE_CHARS.test(args.text));
-    if (needsAndroidWorkaround) {
-      const pressResult = await runNative(["press", ref]);
-      if (pressResult.isError)
-        return pressResult;
-      await sleep3(300);
-      return androidClipboardFill(args.text);
-    }
+    const maestroTargetRef = () => resolveCachedIdentifier(ref) ?? ref;
     const client2 = cdpClientOrNull(getClient2);
     const cachedIdentifier = resolveCachedIdentifier(ref);
     const jsTestId = client2 ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
@@ -47028,6 +47058,7 @@ function createDeviceFillHandler(getClient2) {
       if (client2 && jsTestId && !androidSession) {
         const tNative = Date.now();
         const primarySettle = extractSettleMeta(primary);
+        const primaryTyping = extractTypingMeta(primary);
         let settleAnchor = await readValueBefore(client2, jsTestId);
         let stabilityPrior = null;
         for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
@@ -47039,6 +47070,7 @@ function createDeviceFillHandler(getClient2) {
                 textEntryPath: attempt === 0 ? "native" : "native-retype",
                 verify: jsVerifyMeta(outcome),
                 retypes: attempt,
+                ...primaryTyping ? { typing: primaryTyping } : {},
                 ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
                 timings_ms: {
                   nativeType: Date.now() - tNative,
@@ -47061,7 +47093,7 @@ function createDeviceFillHandler(getClient2) {
             String(decision.delayMs)
           ], { settle: { enabled: false } });
         }
-        const maestro = await maestroFillFallback(ref, args.text, "ios", true);
+        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, "ios", true);
         if (!maestro.isError) {
           const { outcome } = await nativeSettle(client2, jsTestId, args.text, null, null);
           if (outcome !== "corrupted") {
@@ -47081,48 +47113,60 @@ function createDeviceFillHandler(getClient2) {
       }
       return primary;
     }
-    if (!isNoFocusedInputError(primary)) {
+    const descent = classifyFillPrimaryError(primary);
+    if (descent === "return-primary") {
       return primary;
     }
-    const snap = await fetchSnapshotNodes();
-    if (snap.ok) {
-      const resolvedRef = findInputForPressable(snap.nodes, ref);
-      if (resolvedRef && resolvedRef !== ref) {
-        const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
-        const innerPinArgs = innerPin ? ["--at-x", String(innerPin.x), "--at-y", String(innerPin.y)] : [];
-        const innerTap = innerPin ? await runNative(["press", String(innerPin.x), String(innerPin.y)], settleOpts(args)) : await runNative(["press", resolvedRef], settleOpts(args));
-        if (!innerTap.isError) {
-          const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
-          if (delay > 0)
-            await sleep3(delay);
-          const resolved = await runNative(["fill", resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
-          if (!resolved.isError) {
-            try {
-              const envelope = JSON.parse(resolved.content[0].text);
-              return okResult(envelope.data, {
-                meta: { ...envelope.meta, fallbackUsed: "pressable-resolution", resolvedRef }
-              });
-            } catch {
-              return resolved;
+    if (descent === "refocus-ladder") {
+      const snap = await fetchSnapshotNodes();
+      if (snap.ok) {
+        const resolvedRef = findInputForPressable(snap.nodes, ref);
+        if (resolvedRef && resolvedRef !== ref) {
+          const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
+          const innerPinArgs = innerPin ? ["--at-x", String(innerPin.x), "--at-y", String(innerPin.y)] : [];
+          const innerTap = innerPin ? await runNative(["press", String(innerPin.x), String(innerPin.y)], settleOpts(args)) : await runNative(["press", resolvedRef], settleOpts(args));
+          if (!innerTap.isError) {
+            const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
+            if (delay > 0)
+              await sleep3(delay);
+            const resolved = await runNative(["fill", resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
+            if (!resolved.isError) {
+              try {
+                const envelope = JSON.parse(resolved.content[0].text);
+                return okResult(envelope.data, {
+                  meta: { ...envelope.meta, fallbackUsed: "pressable-resolution", resolvedRef }
+                });
+              } catch {
+                return resolved;
+              }
+            }
+            if (classifyFillPrimaryError(resolved) === "reject-ladder") {
+              return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, "android", true);
             }
           }
         }
       }
-    }
-    const retryTap = await runNative(["press", ref]);
-    if (!retryTap.isError) {
-      await sleep3(300);
-      const retry = await runNative(["fill", ref, args.text]);
-      if (!retry.isError) {
-        try {
-          const envelope = JSON.parse(retry.content[0].text);
-          return okResult(envelope.data, { meta: { fallbackUsed: "retap" } });
-        } catch {
-          return retry;
+      const retryTap = await runNative(["press", ref]);
+      if (!retryTap.isError) {
+        await sleep3(300);
+        const retry = await runNative(["fill", ref, args.text]);
+        if (!retry.isError) {
+          try {
+            const envelope = JSON.parse(retry.content[0].text);
+            return okResult(envelope.data, { meta: { fallbackUsed: "retap" } });
+          } catch {
+            return retry;
+          }
+        }
+        if (classifyFillPrimaryError(retry) === "reject-ladder") {
+          return maestroFillFallback(maestroTargetRef(), args.text, "android", true);
         }
       }
     }
-    if (androidSession) {
+    if (descent === "reject-ladder") {
+      return maestroFillFallback(maestroTargetRef(), args.text, "android", true);
+    }
+    if (androidSession && isAdbInputTextSafe(args.text)) {
       const adbResult = await androidClipboardFill(args.text);
       if (!adbResult.isError) {
         try {
@@ -47134,7 +47178,7 @@ function createDeviceFillHandler(getClient2) {
       }
     }
     const platform = androidSession ? "android" : "ios";
-    return maestroFillFallback(ref, args.text, platform);
+    return maestroFillFallback(maestroTargetRef(), args.text, platform);
   });
 }
 function computeSwipeFromDirection(direction, screen) {
@@ -47481,7 +47525,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var execFile12, ANDROID_UNSAFE_CHARS, ANDROID_FILL_MAX_SAFE_LEN, TYPE_PRIORITY_FOR_TAP, TEXT_INPUT_TYPES, PRESSABLE_SUFFIX, ANDROID_INPUT_CHUNK_SIZE, FOCUS_DELAY_MS, NO_FOCUSED_INPUT_RE, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var execFile12, TYPE_PRIORITY_FOR_TAP, TEXT_INPUT_TYPES, PRESSABLE_SUFFIX, ANDROID_INPUT_CHUNK_SIZE, FOCUS_DELAY_MS, NO_FOCUSED_INPUT_RE, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -47498,8 +47542,6 @@ var init_device_interact = __esm({
     init_fast_runner_ref_map();
     init_fill_verify();
     execFile12 = promisify12(execFileCb9);
-    ANDROID_UNSAFE_CHARS = /[+@#$%^&*(){}|\\<>~`[\]?*]/;
-    ANDROID_FILL_MAX_SAFE_LEN = 30;
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
       Cell: 95,

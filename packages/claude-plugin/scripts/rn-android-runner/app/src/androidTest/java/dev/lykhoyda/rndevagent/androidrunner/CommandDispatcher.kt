@@ -10,6 +10,7 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Base64
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.StaleObjectException
@@ -29,6 +30,11 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class NoFocusedInputException(message: String) : IllegalStateException(message)
+
+// Story 10 (#391): the focused field ignored ACTION_SET_TEXT (and any
+// applicable keyevent fallback) — distinct from "no focused field" so the
+// bridge descends its fill ladder instead of re-tapping a healthy focus.
+class SetTextRejectedException(message: String) : IllegalStateException(message)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 
@@ -249,9 +255,96 @@ class CommandDispatcher(
             ?: throw NoFocusedInputException(
                 "No focused text input on screen. The TS device_fill handler should re-tap the target ref before calling type."
             )
-        focused.text = text
 
-        return JSONObject().put("typed", true).put("text", text)
+        // Story 10 (#391): ACTION_SET_TEXT primary — atomic, full-Unicode
+        // (emoji survive), fires the change events RN's onChangeText listens
+        // to. Read back to classify the outcome; per-char keyevents (Maestro's
+        // 75 ms pacing) only when the set was flat-out ignored and every
+        // character has a keyevent representation.
+        val before = try {
+            focused.text
+        } catch (e: StaleObjectException) {
+            null
+        }
+        focused.text = text
+        var outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
+        var method = "setText"
+
+        if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
+            // Codex P2 (#564): an empty request is a CLEAR — it has no keyevent
+            // representation, but the stale-length delete pass below is exactly
+            // how to honor it, so it must not throw here. Non-empty text must
+            // map to keyevents AND fit the paced-typing budget (round-3: past
+            // ~200 chars the 75 ms pacing would blow the client's 35 s budget).
+            if (!TextInputRecipe.keyEventFallbackViable(text)) {
+                throw SetTextRejectedException(
+                    "Focused field ignored ACTION_SET_TEXT and the text has no viable keyevent fallback (non-ASCII or exceeds the paced-typing budget)."
+                )
+            }
+            // Codex P2 round-2 (#564): keyevents land in whatever is focused
+            // NOW — if focus moved (OTP auto-advance), typing would hit the
+            // wrong field. Refuse; the Maestro tier re-taps the target ref.
+            val stillFocused = try {
+                focused.isFocused
+            } catch (e: StaleObjectException) {
+                false
+            }
+            if (!stillFocused) {
+                throw SetTextRejectedException(
+                    "Focus moved away from the target after ACTION_SET_TEXT — refusing the keyevent fallback (it would type into the newly focused field)."
+                )
+            }
+            // The rejected set left the prior value in place — clear it with
+            // move-to-end + deletes so the keyevent pass can't append.
+            val staleLen = before?.length ?: 0
+            if (staleLen > 0) {
+                device.pressKeyCode(KeyEvent.KEYCODE_MOVE_END, 0)
+                repeat(staleLen) { device.pressKeyCode(KeyEvent.KEYCODE_DEL, 0) }
+            }
+            for (ch in text) {
+                val stroke = TextInputRecipe.keyStrokeFor(ch) ?: continue
+                device.pressKeyCode(
+                    stroke.keyCode,
+                    if (stroke.shift) KeyEvent.META_SHIFT_ON else 0,
+                )
+                SystemClock.sleep(TextInputRecipe.KEYEVENT_PACING_MS)
+            }
+            method = "keyevents"
+            outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
+            // Codex P2 round-2 (#564): the keyevent tier is judged strictly —
+            // a TRANSFORMED read-back on a field that started non-empty can be
+            // an under-deleted `old + text` remnant, not a formatter, so only
+            // exact matches (or empty-start transforms) count as landed.
+            if (!TextInputRecipe.keyEventOutcomeUsable(outcome, beforeWasEmpty = before.isNullOrEmpty())) {
+                throw SetTextRejectedException(
+                    "Focused field ignored both ACTION_SET_TEXT and the keyevent fallback."
+                )
+            }
+        }
+        // Codex P2 (#564): UNVERIFIED (no read-back — the target node went
+        // stale after a re-render) is NOT retype-fodder: the set may have
+        // landed, so a keyevent pass could double-apply. Report honestly and
+        // let the bridge's own verification layers arbitrate.
+
+        return JSONObject()
+            .put("typed", true)
+            .put("text", text)
+            .put("method", method)
+            .put("setTextOutcome", outcome.name.lowercase())
+    }
+
+    // Story 10 (#391): read back from the ORIGINAL target node, never from
+    // By.focused — ACTION_SET_TEXT can move focus as a side effect (OTP
+    // auto-advance), and reading "whatever is focused now" would misread a
+    // successful write as a rejection from the next empty field (codex P2
+    // round-2). A node staled by a re-render yields null → UNVERIFIED.
+    private fun readTargetText(target: UiObject2): String? {
+        device.waitForIdle(500)
+        return try {
+            target.text
+        } catch (e: StaleObjectException) {
+            null
+        }
     }
 
     private fun drag(cmd: JSONObject): JSONObject {
