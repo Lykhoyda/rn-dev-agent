@@ -1,0 +1,7 @@
+{
+  "allowedTools": ["cdp_run_action", "proof_step"],
+  "observed": [
+    { "tool": "proof_step", "ok": true, "ts": 1, "durationMs": 100 },
+    { "tool": "cdp_run_action", "ok": true, "ts": 2, "durationMs": 1000 }
+  ]
+}
