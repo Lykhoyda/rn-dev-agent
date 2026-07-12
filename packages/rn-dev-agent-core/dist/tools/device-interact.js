@@ -680,6 +680,11 @@ export function createDeviceFillHandler(getClient) {
     return withSession(async (args) => {
         const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
         const androidSession = isAndroidSession();
+        // Codex P2 round-3 (#564): @eN snapshot refs are runner-ephemeral, not app
+        // testIDs — Maestro's `tapOn: id:` can only match the element's REAL
+        // identifier. Resolve it whenever the ref map still knows it; otherwise
+        // pass the ref through unchanged (pre-existing behavior for bare refs).
+        const maestroTargetRef = () => resolveCachedIdentifier(ref) ?? ref;
         // Story 10 (#391): the historical Android unsafe-char/length short-circuit
         // to chunked adb is gone. It predated the in-tree runner ("the Android path
         // is already a fallback for agent-device fill") — but agent-device was
@@ -796,7 +801,7 @@ export function createDeviceFillHandler(getClient) {
                         String(decision.delayMs),
                     ], { settle: { enabled: false } });
                 }
-                const maestro = await maestroFillFallback(ref, args.text, 'ios', true);
+                const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true);
                 if (!maestro.isError) {
                     const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
                     if (outcome !== 'corrupted') {
@@ -861,6 +866,14 @@ export function createDeviceFillHandler(getClient) {
                                 return resolved;
                             }
                         }
+                        // Codex P2 round-3 (#564): this refocus retry can be the FIRST fill
+                        // that reaches a focused field — if IT comes back SET_TEXT_REJECTED,
+                        // hand over to the reject ladder (clear-first Maestro), never the
+                        // append-prone adb tier below. Target the INNER input this branch
+                        // just filled, not the outer Pressable wrapper.
+                        if (classifyFillPrimaryError(resolved) === 'reject-ladder') {
+                            return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, 'android', true);
+                        }
                     }
                 }
             }
@@ -880,6 +893,12 @@ export function createDeviceFillHandler(getClient) {
                         return retry;
                     }
                 }
+                // Codex P2 round-3 (#564): same reclassification as the resolved-ref
+                // fill above — a rejected retry means focus is fine but the field
+                // ignores sets; descend to the clear-first Maestro tier.
+                if (classifyFillPrimaryError(retry) === 'reject-ladder') {
+                    return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
+                }
             }
         }
         // Codex P2 round-2 (#564): the reject ladder never touches adb. The runner
@@ -889,7 +908,7 @@ export function createDeviceFillHandler(getClient) {
         // old value it would append and report success. Go straight to Maestro
         // with clearFirst so eraseText removes the stale value before inputText.
         if (descent === 'reject-ladder') {
-            return maestroFillFallback(ref, args.text, 'android', true);
+            return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
         }
         // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
         // is the deliberate LAST native tier — its `input text` transport cannot
@@ -911,7 +930,7 @@ export function createDeviceFillHandler(getClient) {
         }
         // Fallback 3: Maestro inputText (iOS, or Android if adb fallback also failed).
         const platform = androidSession ? 'android' : 'ios';
-        return maestroFillFallback(ref, args.text, platform);
+        return maestroFillFallback(maestroTargetRef(), args.text, platform);
     });
 }
 // Default screen dimensions for common devices — used when screen rect cache is empty.

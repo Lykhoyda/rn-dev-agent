@@ -26028,6 +26028,7 @@ function createDeviceFillHandler(getClient2) {
   return withSession(async (args) => {
     const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
     const androidSession = isAndroidSession();
+    const maestroTargetRef = () => resolveCachedIdentifier(ref) ?? ref;
     const client2 = cdpClientOrNull(getClient2);
     const cachedIdentifier = resolveCachedIdentifier(ref);
     const jsTestId = client2 ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
@@ -26100,7 +26101,7 @@ function createDeviceFillHandler(getClient2) {
             String(decision.delayMs)
           ], { settle: { enabled: false } });
         }
-        const maestro = await maestroFillFallback(ref, args.text, "ios", true);
+        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, "ios", true);
         if (!maestro.isError) {
           const { outcome } = await nativeSettle(client2, jsTestId, args.text, null, null);
           if (outcome !== "corrupted") {
@@ -26147,6 +26148,9 @@ function createDeviceFillHandler(getClient2) {
                 return resolved;
               }
             }
+            if (classifyFillPrimaryError(resolved) === "reject-ladder") {
+              return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, "android", true);
+            }
           }
         }
       }
@@ -26162,10 +26166,13 @@ function createDeviceFillHandler(getClient2) {
             return retry;
           }
         }
+        if (classifyFillPrimaryError(retry) === "reject-ladder") {
+          return maestroFillFallback(maestroTargetRef(), args.text, "android", true);
+        }
       }
     }
     if (descent === "reject-ladder") {
-      return maestroFillFallback(ref, args.text, "android", true);
+      return maestroFillFallback(maestroTargetRef(), args.text, "android", true);
     }
     if (androidSession && isAdbInputTextSafe(args.text)) {
       const adbResult = await androidClipboardFill(args.text);
@@ -26179,7 +26186,7 @@ function createDeviceFillHandler(getClient2) {
       }
     }
     const platform = androidSession ? "android" : "ios";
-    return maestroFillFallback(ref, args.text, platform);
+    return maestroFillFallback(maestroTargetRef(), args.text, platform);
   });
 }
 function computeSwipeFromDirection(direction, screen) {

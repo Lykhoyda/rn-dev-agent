@@ -273,10 +273,12 @@ class CommandDispatcher(
         if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
             // Codex P2 (#564): an empty request is a CLEAR — it has no keyevent
             // representation, but the stale-length delete pass below is exactly
-            // how to honor it, so it must not throw here.
-            if (text.isNotEmpty() && !TextInputRecipe.isKeyEventTypable(text)) {
+            // how to honor it, so it must not throw here. Non-empty text must
+            // map to keyevents AND fit the paced-typing budget (round-3: past
+            // ~200 chars the 75 ms pacing would blow the client's 35 s budget).
+            if (!TextInputRecipe.keyEventFallbackViable(text)) {
                 throw SetTextRejectedException(
-                    "Focused field ignored ACTION_SET_TEXT and the text has no keyevent representation (non-ASCII)."
+                    "Focused field ignored ACTION_SET_TEXT and the text has no viable keyevent fallback (non-ASCII or exceeds the paced-typing budget)."
                 )
             }
             // Codex P2 round-2 (#564): keyevents land in whatever is focused

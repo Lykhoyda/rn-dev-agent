@@ -120,4 +120,16 @@ object TextInputRecipe {
     // representation — the fallback tier only applies when every character maps.
     fun isKeyEventTypable(text: String): Boolean =
         text.isNotEmpty() && text.all { keyStrokeFor(it) != null }
+
+    // Codex P2 round-3 (#564): the bridge aborts `type` commands after 35 s,
+    // and this tier paces at 75 ms/char — past ~200 characters the runner
+    // would time out mid-fallback instead of returning SET_TEXT_REJECTED for
+    // the Maestro tier to handle.
+    const val KEYEVENT_FALLBACK_MAX_CHARS = 200
+
+    // Viability of the whole keyevent fallback tier: empty text clears via
+    // the delete pass; non-empty text must both map to keyevents and fit the
+    // paced-typing time budget.
+    fun keyEventFallbackViable(text: String): Boolean =
+        text.isEmpty() || (isKeyEventTypable(text) && text.length <= KEYEVENT_FALLBACK_MAX_CHARS)
 }

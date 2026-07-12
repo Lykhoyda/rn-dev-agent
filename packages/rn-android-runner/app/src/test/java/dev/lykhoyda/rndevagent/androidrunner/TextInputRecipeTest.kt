@@ -88,6 +88,27 @@ class TextInputRecipeTest {
     }
 
     @Test
+    fun keyEventFallbackViableForEmptyAndShortAscii() {
+        assertTrue(TextInputRecipe.keyEventFallbackViable(""))
+        assertTrue(TextInputRecipe.keyEventFallbackViable("hello world 42!"))
+        assertTrue(TextInputRecipe.keyEventFallbackViable("a".repeat(TextInputRecipe.KEYEVENT_FALLBACK_MAX_CHARS)))
+    }
+
+    @Test
+    fun keyEventFallbackNotViablePastPacedTypingBudget() {
+        // Codex P2 round-3 (#564): 75 ms/char past ~200 chars would blow the
+        // bridge's 35 s type budget mid-fallback.
+        assertFalse(
+            TextInputRecipe.keyEventFallbackViable("a".repeat(TextInputRecipe.KEYEVENT_FALLBACK_MAX_CHARS + 1)),
+        )
+    }
+
+    @Test
+    fun keyEventFallbackNotViableForNonAscii() {
+        assertFalse(TextInputRecipe.keyEventFallbackViable("héllo 👋🏽 世界"))
+    }
+
+    @Test
     fun keyEventTransformedOnEmptyFieldIsUsable() {
         assertTrue(
             TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.TRANSFORMED, beforeWasEmpty = true),
