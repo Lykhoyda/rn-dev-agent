@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "rn-dev-agent Proof Fixture",
+    "slug": "rn-dev-agent-proof-fixture",
+    "scheme": "rndevagentproof",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "ios": {
+      "bundleIdentifier": "dev.lykhoyda.rndevagent.proof"
+    },
+    "android": {
+      "package": "dev.lykhoyda.rndevagent.proof"
+    }
+  }
+}
