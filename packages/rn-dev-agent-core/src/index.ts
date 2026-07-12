@@ -110,8 +110,9 @@ import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
-import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
+import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
+import { StrictProofMonitor } from './domain/proof-capture.js';
 import {
   maybeCaptureLiveFrame,
   isStateMutating,
@@ -277,7 +278,9 @@ const server = new McpServer({
   version: pkgVersion,
 });
 
-setToolObserver((o) => recorder.record(o));
+export const strictProofMonitor = new StrictProofMonitor();
+addToolObserver((o) => recorder.record(o));
+addToolObserver((o) => strictProofMonitor.record(o));
 
 // GH#186 Phase 6: the foreign-flow gate needs the active iOS session's udid
 // (registered here — a direct import inside the gate would cycle modules).

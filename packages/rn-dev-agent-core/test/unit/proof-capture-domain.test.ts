@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   durationBounds,
+  StrictProofMonitor,
   transitionProofStage,
   validateTrace,
 } from '../../dist/domain/proof-capture.js';
@@ -125,4 +127,81 @@ test('recording rejects a missing declared operation', () => {
   );
 
   assert.deepEqual(result.reasons, ['STORYBOARD_OPERATION_MISSING']);
+});
+
+test('strict proof monitor normalizes events and hashes only redacted arguments', (t) => {
+  t.mock.method(Date, 'now', () => 1_700_000_000_000);
+  const monitor = new StrictProofMonitor();
+  monitor.begin();
+
+  monitor.record({
+    tool: 'proof_step',
+    params: {
+      password: 'raw-password-value',
+      email: 'person@example.com',
+      label: 'profile',
+    },
+    status: 'PASS',
+    latencyMs: 42,
+  });
+
+  const argsHash = createHash('sha256')
+    .update(
+      JSON.stringify({
+        password: '[REDACTED:string]',
+        email: '[PII_REDACTED]',
+        label: 'profile',
+      }),
+    )
+    .digest('hex');
+  assert.deepEqual(monitor.snapshot(), [
+    {
+      tool: 'proof_step',
+      ok: true,
+      ts: 1_700_000_000_000,
+      durationMs: 42,
+      argsHash,
+    },
+  ]);
+});
+
+test('strict proof monitor records only its active window and excludes proof capture', () => {
+  const monitor = new StrictProofMonitor();
+  const event = {
+    tool: 'device_screenshot',
+    params: {},
+    status: 'FAIL' as const,
+    latencyMs: 12,
+  };
+
+  monitor.record(event);
+  monitor.begin();
+  monitor.record({ ...event, tool: 'proof_capture' });
+  monitor.record(event);
+  const stopped = monitor.stop();
+  monitor.record({ ...event, tool: 'device_press' });
+
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0]?.tool, 'device_screenshot');
+  assert.equal(stopped[0]?.ok, false);
+  assert.deepEqual(monitor.snapshot(), stopped);
+});
+
+test('strict proof monitor snapshots are detached and begin resets prior events', () => {
+  const monitor = new StrictProofMonitor();
+  monitor.begin();
+  monitor.record({
+    tool: 'proof_step',
+    params: {},
+    status: 'PASS',
+    latencyMs: 1,
+  });
+
+  const first = monitor.snapshot();
+  const second = monitor.snapshot();
+  assert.notStrictEqual(first, second);
+  assert.notStrictEqual(first[0], second[0]);
+
+  monitor.begin();
+  assert.deepEqual(monitor.snapshot(), []);
 });

@@ -10,18 +10,27 @@ export interface ToolObserverInput {
   ghost?: { attempted: boolean; outcome: string };
 }
 
-let toolObserver: ((o: ToolObserverInput) => void) | null = null;
+const toolObservers = new Set<(o: ToolObserverInput) => void>();
 
 export function setToolObserver(fn: ((o: ToolObserverInput) => void) | null): void {
-  toolObserver = fn;
+  toolObservers.clear();
+  if (fn) toolObservers.add(fn);
+}
+
+export function addToolObserver(fn: (o: ToolObserverInput) => void): () => void {
+  toolObservers.add(fn);
+  return () => {
+    toolObservers.delete(fn);
+  };
 }
 
 function notifyObserver(o: ToolObserverInput): void {
-  if (!toolObserver) return;
-  try {
-    toolObserver(o);
-  } catch {
-    /* observability is non-load-bearing */
+  for (const observer of toolObservers) {
+    try {
+      observer(o);
+    } catch {
+      /* observability is non-load-bearing */
+    }
   }
 }
 

@@ -1,15 +1,23 @@
-let toolObserver = null;
+const toolObservers = new Set();
 export function setToolObserver(fn) {
-    toolObserver = fn;
+    toolObservers.clear();
+    if (fn)
+        toolObservers.add(fn);
+}
+export function addToolObserver(fn) {
+    toolObservers.add(fn);
+    return () => {
+        toolObservers.delete(fn);
+    };
 }
 function notifyObserver(o) {
-    if (!toolObserver)
-        return;
-    try {
-        toolObserver(o);
-    }
-    catch {
-        /* observability is non-load-bearing */
+    for (const observer of toolObservers) {
+        try {
+            observer(o);
+        }
+        catch {
+            /* observability is non-load-bearing */
+        }
     }
 }
 function classifyResult(result) {

@@ -1,4 +1,39 @@
+import { createHash } from 'node:crypto';
+import type { ToolObserverInput } from '../observability/instrumentation.js';
+import { redact } from '../util/redact.js';
 import type { ProofEvent, ProofStage } from './proof-receipt.js';
+
+export class StrictProofMonitor {
+  private events: ProofEvent[] = [];
+  private active = false;
+
+  begin(): void {
+    this.events = [];
+    this.active = true;
+  }
+
+  record(event: ToolObserverInput): void {
+    if (!this.active || event.tool === 'proof_capture') return;
+    this.events.push({
+      tool: event.tool,
+      ok: event.status === 'PASS',
+      ts: Date.now(),
+      durationMs: event.latencyMs,
+      argsHash: createHash('sha256')
+        .update(JSON.stringify(redact(event.params)))
+        .digest('hex'),
+    });
+  }
+
+  snapshot(): readonly ProofEvent[] {
+    return structuredClone(this.events);
+  }
+
+  stop(): readonly ProofEvent[] {
+    this.active = false;
+    return this.snapshot();
+  }
+}
 
 export type ProofTransitionAction =
   | 'begin_rehearsal'

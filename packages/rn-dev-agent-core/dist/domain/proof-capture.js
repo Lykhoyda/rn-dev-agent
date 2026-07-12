@@ -1,3 +1,33 @@
+import { createHash } from 'node:crypto';
+import { redact } from '../util/redact.js';
+export class StrictProofMonitor {
+    events = [];
+    active = false;
+    begin() {
+        this.events = [];
+        this.active = true;
+    }
+    record(event) {
+        if (!this.active || event.tool === 'proof_capture')
+            return;
+        this.events.push({
+            tool: event.tool,
+            ok: event.status === 'PASS',
+            ts: Date.now(),
+            durationMs: event.latencyMs,
+            argsHash: createHash('sha256')
+                .update(JSON.stringify(redact(event.params)))
+                .digest('hex'),
+        });
+    }
+    snapshot() {
+        return structuredClone(this.events);
+    }
+    stop() {
+        this.active = false;
+        return this.snapshot();
+    }
+}
 const transitions = {
     idle: { begin_rehearsal: 'rehearsing' },
     rehearsing: { finish_rehearsal: 'rehearsed', reject: 'rejected' },
