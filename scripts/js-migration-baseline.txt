@@ -6,6 +6,7 @@ packages/rn-dev-agent-core/bench-issue-27.mjs
 packages/rn-dev-agent-core/bench/wait-for-network.bench.mjs
 packages/rn-dev-agent-core/measure-tool-descriptions.mjs
 packages/rn-dev-agent-core/probe-b97.mjs
+packages/rn-dev-agent-core/scripts/export-proof-schema.mjs
 packages/rn-dev-agent-core/test/fixtures/crashing-worker.mjs
 packages/rn-dev-agent-core/test/fixtures/fake-worker.mjs
 packages/rn-dev-agent-core/test/fixtures/partial-then-echo-worker.mjs
