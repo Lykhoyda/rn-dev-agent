@@ -1,6 +1,7 @@
 import './env-setup.js';
-import { readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -64,6 +65,14 @@ import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
+import {
+  createProofCaptureHandler,
+  proofCaptureInputSchema,
+  resolveProofWorktreeRoot,
+  writeProofReceiptAtomic,
+  type ProofReadiness,
+} from './tools/proof-capture.js';
+import { validateMedia } from './tools/proof-media.js';
 import {
   createDeviceAcceptSystemDialogHandler,
   createDeviceDismissSystemDialogHandler,
@@ -404,7 +413,15 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
     }
     return result;
   };
-  server.tool(name, desc, schema, wrapped as typeof handler);
+  if (schema instanceof z.ZodType) {
+    server.registerTool(
+      name,
+      { description: desc, inputSchema: schema },
+      wrapped as typeof handler,
+    );
+  } else {
+    server.tool(name, desc, schema, wrapped as typeof handler);
+  }
 }
 
 trackedTool(
@@ -1607,6 +1624,109 @@ trackedTool(
       .describe('Maestro invocation timeout (default 15000ms).'),
   },
   createDeviceDismissSystemDialogHandler(),
+);
+
+const getProofGitInfo = (root: string): { sha: string | null; dirty: boolean } => {
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+    }).trim();
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd: root,
+      encoding: 'utf8',
+    }).trim();
+    return { sha: sha || null, dirty: status.length > 0 };
+  } catch {
+    return { sha: null, dirty: true };
+  }
+};
+
+const proofReadiness = async (): Promise<ProofReadiness> => {
+  const current = getClient();
+  const target = current.connectedTarget;
+  const session = getActiveSession();
+  const metroEvents = current.metroEventsClient;
+  let errors: unknown[] = [{ unavailable: true }];
+  let appInfo: Record<string, unknown> = {};
+  if (current.isConnected && current.helpersInjected) {
+    const [errorResult, appResult] = await Promise.all([
+      current.evaluate(current.helperExpr('getErrors()')),
+      current.evaluate(current.helperExpr('getAppInfo()')),
+    ]);
+    try {
+      const parsed = typeof errorResult.value === 'string' ? JSON.parse(errorResult.value) : null;
+      if (Array.isArray(parsed)) errors = parsed;
+    } catch {
+      // Unreadable errors keep the baseline dirty.
+    }
+    try {
+      const parsed = typeof appResult.value === 'string' ? JSON.parse(appResult.value) : null;
+      if (parsed && typeof parsed === 'object') appInfo = parsed as Record<string, unknown>;
+    } catch {
+      // Device identity falls back to the attached target.
+    }
+  }
+  const platformValue = target?.platform ?? session?.platform;
+  const platform = platformValue === 'android' ? 'android' : 'ios';
+  const metroBuildPending = metroEvents?.lastBuild?.status === 'started';
+  const metroBuildFailed =
+    metroEvents?.lastBuild?.status === 'failed' || (metroEvents?.buildErrors ?? 0) > 0;
+  const metroReady =
+    current.isConnected &&
+    (await probeMetro(current.metroPort)) &&
+    !metroBuildPending &&
+    !metroBuildFailed;
+  const errorBytes = JSON.stringify(errors);
+  return {
+    cdpAttached: current.isConnected,
+    helpersAttached: current.helpersInjected,
+    metroReady,
+    metroBuildPending,
+    metroBuildFailed,
+    errorCount: errors.length,
+    errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
+    device: {
+      id: session?.deviceId ?? target?.id ?? 'unattached-device',
+      platform,
+      model: target?.title ?? 'unknown-device',
+      osVersion: String(appInfo.version ?? appInfo.osVersion ?? 'unknown'),
+    },
+    runtime: {
+      bundleId: session?.appId ?? target?.description ?? 'unknown-bundle',
+      metroPort: current.metroPort,
+      metroReady,
+      pluginVersion: pkgVersion,
+    },
+  };
+};
+
+const proofCaptureHandler = createProofCaptureHandler({
+  monitor: strictProofMonitor,
+  projectRoot: () =>
+    resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
+  getGitInfo: getProofGitInfo,
+  readiness: proofReadiness,
+  record: createDeviceRecordHandler(),
+  mediaProcess: {
+    run: async (command, args) => {
+      const { stdout, stderr } = await execFileP(command, args, {
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      return { stdout: String(stdout), stderr: String(stderr) };
+    },
+  },
+  validateMedia,
+  now: () => new Date(),
+  writeReceipt: writeProofReceiptAtomic,
+  removeArtifact: (path) => rmSync(path, { force: true }),
+});
+
+trackedTool(
+  'proof_capture',
+  'Strict, stateful proof capture. Rehearses the exact storyboard, owns one device recording, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
+  proofCaptureInputSchema,
+  proofCaptureHandler,
 );
 
 trackedTool(

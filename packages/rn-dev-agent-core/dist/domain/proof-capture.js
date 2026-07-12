@@ -1,23 +1,38 @@
 import { createHash } from 'node:crypto';
 import { redact } from '../util/redact.js';
 export class StrictProofMonitor {
+    now;
     events = [];
+    observedResults = [];
     active = false;
+    constructor(now = Date.now) {
+        this.now = now;
+    }
     begin() {
         this.events = [];
+        this.observedResults = [];
         this.active = true;
     }
     record(event) {
         if (!this.active || event.tool === 'proof_capture')
             return;
+        const ts = this.now();
         this.events.push({
             tool: event.tool,
             ok: event.status === 'PASS',
-            ts: Date.now(),
+            ts,
             durationMs: event.latencyMs,
             argsHash: createHash('sha256')
                 .update(JSON.stringify(redact(event.params)))
                 .digest('hex'),
+        });
+        this.observedResults.push({
+            tool: event.tool,
+            ok: event.status === 'PASS',
+            ts,
+            resultHash: hashObservedValue(event.result),
+            screenshotPath: observedScreenshotPath(event),
+            assertionPassed: observedAssertionPassed(event),
         });
     }
     snapshot() {
@@ -27,6 +42,54 @@ export class StrictProofMonitor {
         this.active = false;
         return this.snapshot();
     }
+    observations() {
+        return structuredClone(this.observedResults);
+    }
+}
+function hashObservedValue(value) {
+    const bytes = JSON.stringify(value) ?? String(value);
+    return createHash('sha256').update(bytes).digest('hex');
+}
+function resultEnvelopeData(result) {
+    if (!result || typeof result !== 'object')
+        return null;
+    const content = result.content;
+    if (!Array.isArray(content))
+        return result;
+    const text = content[0]?.text;
+    if (typeof text !== 'string')
+        return result;
+    try {
+        const envelope = JSON.parse(text);
+        return envelope.data ?? envelope;
+    }
+    catch {
+        return result;
+    }
+}
+function stringField(value, fields) {
+    if (!value || typeof value !== 'object')
+        return null;
+    for (const field of fields) {
+        const candidate = value[field];
+        if (typeof candidate === 'string' && candidate.length > 0)
+            return candidate;
+    }
+    return null;
+}
+function observedScreenshotPath(event) {
+    return stringField(resultEnvelopeData(event.result), ['screenshotPath', 'path', 'output']);
+}
+function observedAssertionPassed(event) {
+    if (event.status !== 'PASS')
+        return false;
+    const data = resultEnvelopeData(event.result);
+    if (!data || typeof data !== 'object')
+        return true;
+    const record = data;
+    if (record.verified === false || record.ok === false)
+        return false;
+    return !Array.isArray(record.errors) || record.errors.length === 0;
 }
 const transitions = {
     idle: { begin_rehearsal: 'rehearsing' },

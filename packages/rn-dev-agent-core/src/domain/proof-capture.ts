@@ -5,23 +5,36 @@ import type { ProofEvent, ProofStage } from './proof-receipt.js';
 
 export class StrictProofMonitor {
   private events: ProofEvent[] = [];
+  private observedResults: ProofObservation[] = [];
   private active = false;
+
+  constructor(private readonly now: () => number = Date.now) {}
 
   begin(): void {
     this.events = [];
+    this.observedResults = [];
     this.active = true;
   }
 
   record(event: ToolObserverInput): void {
     if (!this.active || event.tool === 'proof_capture') return;
+    const ts = this.now();
     this.events.push({
       tool: event.tool,
       ok: event.status === 'PASS',
-      ts: Date.now(),
+      ts,
       durationMs: event.latencyMs,
       argsHash: createHash('sha256')
         .update(JSON.stringify(redact(event.params)))
         .digest('hex'),
+    });
+    this.observedResults.push({
+      tool: event.tool,
+      ok: event.status === 'PASS',
+      ts,
+      resultHash: hashObservedValue(event.result),
+      screenshotPath: observedScreenshotPath(event),
+      assertionPassed: observedAssertionPassed(event),
     });
   }
 
@@ -33,6 +46,60 @@ export class StrictProofMonitor {
     this.active = false;
     return this.snapshot();
   }
+
+  observations(): readonly ProofObservation[] {
+    return structuredClone(this.observedResults);
+  }
+}
+
+export interface ProofObservation {
+  tool: string;
+  ok: boolean;
+  ts: number;
+  resultHash: string;
+  screenshotPath: string | null;
+  assertionPassed: boolean;
+}
+
+function hashObservedValue(value: unknown): string {
+  const bytes = JSON.stringify(value) ?? String(value);
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function resultEnvelopeData(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return null;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) return result;
+  const text = (content[0] as { text?: unknown } | undefined)?.text;
+  if (typeof text !== 'string') return result;
+  try {
+    const envelope = JSON.parse(text) as { data?: unknown };
+    return envelope.data ?? envelope;
+  } catch {
+    return result;
+  }
+}
+
+function stringField(value: unknown, fields: readonly string[]): string | null {
+  if (!value || typeof value !== 'object') return null;
+  for (const field of fields) {
+    const candidate = (value as Record<string, unknown>)[field];
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return null;
+}
+
+function observedScreenshotPath(event: ToolObserverInput): string | null {
+  return stringField(resultEnvelopeData(event.result), ['screenshotPath', 'path', 'output']);
+}
+
+function observedAssertionPassed(event: ToolObserverInput): boolean {
+  if (event.status !== 'PASS') return false;
+  const data = resultEnvelopeData(event.result);
+  if (!data || typeof data !== 'object') return true;
+  const record = data as Record<string, unknown>;
+  if (record.verified === false || record.ok === false) return false;
+  return !Array.isArray(record.errors) || record.errors.length === 0;
 }
 
 export type ProofTransitionAction =

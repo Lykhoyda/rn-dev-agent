@@ -205,3 +205,38 @@ test('strict proof monitor snapshots are detached and begin resets prior events'
   monitor.begin();
   assert.deepEqual(monitor.snapshot(), []);
 });
+
+test('strict proof monitor binds assertion results and screenshot paths to observed calls', () => {
+  const clock = { value: 1_700_000_000_000 };
+  const monitor = new StrictProofMonitor(() => clock.value);
+  const result = {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify({
+          ok: true,
+          data: { screenshotPath: '/tmp/state-one.png', verified: true },
+        }),
+      },
+    ],
+  };
+  monitor.begin();
+  monitor.record({
+    tool: 'proof_step',
+    params: { screenshotPath: '/tmp/state-one.png' },
+    status: 'PASS',
+    latencyMs: 20,
+    result,
+  });
+
+  assert.deepEqual(monitor.observations(), [
+    {
+      tool: 'proof_step',
+      ok: true,
+      ts: clock.value,
+      resultHash: createHash('sha256').update(JSON.stringify(result)).digest('hex'),
+      screenshotPath: '/tmp/state-one.png',
+      assertionPassed: true,
+    },
+  ]);
+});
