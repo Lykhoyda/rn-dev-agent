@@ -88,6 +88,29 @@ class TextInputRecipeTest {
     }
 
     @Test
+    fun keyEventTransformedOnEmptyFieldIsUsable() {
+        assertTrue(
+            TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.TRANSFORMED, beforeWasEmpty = true),
+        )
+    }
+
+    @Test
+    fun keyEventTransformedOnNonEmptyFieldIsNotUsable() {
+        // Codex P2 round-2 (#564): could be an under-deleted `old + text`
+        // remnant — must descend to Maestro, not pass as a formatter reshape.
+        assertFalse(
+            TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.TRANSFORMED, beforeWasEmpty = false),
+        )
+    }
+
+    @Test
+    fun keyEventAcceptedAndUnverifiedAreUsableRejectedIsNot() {
+        assertTrue(TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.ACCEPTED, beforeWasEmpty = false))
+        assertTrue(TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.UNVERIFIED, beforeWasEmpty = false))
+        assertFalse(TextInputRecipe.keyEventOutcomeUsable(SetTextOutcome.REJECTED, beforeWasEmpty = true))
+    }
+
+    @Test
     fun lowercaseLettersMapWithoutShift() {
         val stroke = TextInputRecipe.keyStrokeFor('a')
         assertEquals(29, stroke?.keyCode)

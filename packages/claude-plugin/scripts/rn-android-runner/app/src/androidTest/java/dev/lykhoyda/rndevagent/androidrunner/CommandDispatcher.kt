@@ -267,7 +267,7 @@ class CommandDispatcher(
             null
         }
         focused.text = text
-        var outcome = TextInputRecipe.classifySetText(text, before, readFocusedText())
+        var outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
         var method = "setText"
 
         if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
@@ -277,6 +277,19 @@ class CommandDispatcher(
             if (text.isNotEmpty() && !TextInputRecipe.isKeyEventTypable(text)) {
                 throw SetTextRejectedException(
                     "Focused field ignored ACTION_SET_TEXT and the text has no keyevent representation (non-ASCII)."
+                )
+            }
+            // Codex P2 round-2 (#564): keyevents land in whatever is focused
+            // NOW — if focus moved (OTP auto-advance), typing would hit the
+            // wrong field. Refuse; the Maestro tier re-taps the target ref.
+            val stillFocused = try {
+                focused.isFocused
+            } catch (e: StaleObjectException) {
+                false
+            }
+            if (!stillFocused) {
+                throw SetTextRejectedException(
+                    "Focus moved away from the target after ACTION_SET_TEXT — refusing the keyevent fallback (it would type into the newly focused field)."
                 )
             }
             // The rejected set left the prior value in place — clear it with
@@ -295,17 +308,21 @@ class CommandDispatcher(
                 SystemClock.sleep(TextInputRecipe.KEYEVENT_PACING_MS)
             }
             method = "keyevents"
-            outcome = TextInputRecipe.classifySetText(text, before, readFocusedText())
-            if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
+            outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
+            // Codex P2 round-2 (#564): the keyevent tier is judged strictly —
+            // a TRANSFORMED read-back on a field that started non-empty can be
+            // an under-deleted `old + text` remnant, not a formatter, so only
+            // exact matches (or empty-start transforms) count as landed.
+            if (!TextInputRecipe.keyEventOutcomeUsable(outcome, beforeWasEmpty = before.isNullOrEmpty())) {
                 throw SetTextRejectedException(
                     "Focused field ignored both ACTION_SET_TEXT and the keyevent fallback."
                 )
             }
         }
-        // Codex P2 (#564): UNVERIFIED (no read-back — focused node gone after a
-        // re-render) is NOT retype-fodder: the set may have landed, so a keyevent
-        // pass could double-apply. Report honestly and let the bridge's own
-        // verification layers arbitrate.
+        // Codex P2 (#564): UNVERIFIED (no read-back — the target node went
+        // stale after a re-render) is NOT retype-fodder: the set may have
+        // landed, so a keyevent pass could double-apply. Report honestly and
+        // let the bridge's own verification layers arbitrate.
 
         return JSONObject()
             .put("typed", true)
@@ -314,13 +331,15 @@ class CommandDispatcher(
             .put("setTextOutcome", outcome.name.lowercase())
     }
 
-    // Story 10 (#391): the set can re-render the field (RN controlled
-    // components), staleing the original UiObject2 — re-find the focused node
-    // for the read-back after a short idle window.
-    private fun readFocusedText(): String? {
+    // Story 10 (#391): read back from the ORIGINAL target node, never from
+    // By.focused — ACTION_SET_TEXT can move focus as a side effect (OTP
+    // auto-advance), and reading "whatever is focused now" would misread a
+    // successful write as a rejection from the next empty field (codex P2
+    // round-2). A node staled by a re-render yields null → UNVERIFIED.
+    private fun readTargetText(target: UiObject2): String? {
         device.waitForIdle(500)
         return try {
-            device.findObject(By.focused(true))?.text
+            target.text
         } catch (e: StaleObjectException) {
             null
         }

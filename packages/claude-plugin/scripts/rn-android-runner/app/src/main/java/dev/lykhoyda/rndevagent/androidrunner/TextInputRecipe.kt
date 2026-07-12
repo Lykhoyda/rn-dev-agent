@@ -30,6 +30,20 @@ object TextInputRecipe {
         return SetTextOutcome.REJECTED
     }
 
+    // Codex P2 round-2 (#564): acceptance rule for the keyevent fallback tier.
+    // Unlike the setText primary, a TRANSFORMED read-back here is only
+    // trustworthy when the field started empty — on a non-empty field the
+    // "transform" can be an under-deleted `old + text` remnant, which must
+    // descend to the Maestro tier (eraseText + inputText) instead of passing
+    // as a formatter reshape. UNVERIFIED stays usable: no read-back proof
+    // either way, and retyping risks double-apply.
+    fun keyEventOutcomeUsable(outcome: SetTextOutcome, beforeWasEmpty: Boolean): Boolean =
+        when (outcome) {
+            SetTextOutcome.ACCEPTED, SetTextOutcome.UNVERIFIED -> true
+            SetTextOutcome.TRANSFORMED -> beforeWasEmpty
+            SetTextOutcome.REJECTED -> false
+        }
+
     data class KeyStroke(val keyCode: Int, val shift: Boolean)
 
     // android.view.KeyEvent constants, inlined as plain Ints so this object

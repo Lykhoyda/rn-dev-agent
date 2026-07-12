@@ -1133,6 +1133,16 @@ export function createDeviceFillHandler(
       }
     }
 
+    // Codex P2 round-2 (#564): the reject ladder never touches adb. The runner
+    // already proved setText AND keyevents don't land — `adb shell input text`
+    // is the same keyevent injection, minus pacing and focus control, and it
+    // inserts at the cursor (AOSP Input.java), so on a field still holding its
+    // old value it would append and report success. Go straight to Maestro
+    // with clearFirst so eraseText removes the stale value before inputText.
+    if (descent === 'reject-ladder') {
+      return maestroFillFallback(ref, args.text, 'android', true);
+    }
+
     // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
     // is the deliberate LAST native tier — its `input text` transport cannot
     // represent emoji/IME-composed text, so it only runs after the runner's

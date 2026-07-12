@@ -26164,6 +26164,9 @@ function createDeviceFillHandler(getClient2) {
         }
       }
     }
+    if (descent === "reject-ladder") {
+      return maestroFillFallback(ref, args.text, "android", true);
+    }
     if (androidSession && isAdbInputTextSafe(args.text)) {
       const adbResult = await androidClipboardFill(args.text);
       if (!adbResult.isError) {
