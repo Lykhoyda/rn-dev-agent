@@ -1,5 +1,16 @@
 # rn-dev-agent-plugin
 
+## 0.70.0
+
+### Minor Changes
+
+- 4e9bf7e: Add strict storyboard-gated video and screenshot proof receipts for unattended feature delivery.
+
+### Patch Changes
+
+- Updated dependencies [4e9bf7e]
+  - rn-dev-agent-core@0.65.0
+
 ## 0.69.1
 
 ### Patch Changes
