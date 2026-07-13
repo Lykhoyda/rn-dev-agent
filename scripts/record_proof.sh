@@ -73,6 +73,7 @@ cmd_start() {
 
   # Record to temp file in native format; stop will convert to MP4
   local raw_file="${RAW_PREFIX}-${platform}-$$.mov"
+  local recorder_log="${PID_PREFIX}-${platform}.log"
 
   if [[ "$platform" == "ios" ]]; then
     if ! xcrun simctl list devices booted 2>/dev/null | grep -q "Booted"; then
@@ -80,7 +81,7 @@ cmd_start() {
       exit 1
     fi
     local ios_target="${target_id:-booted}"
-    xcrun simctl io "$ios_target" recordVideo --force "$raw_file" &
+    xcrun simctl io "$ios_target" recordVideo --force "$raw_file" > "$recorder_log" 2>&1 &
     local rec_pid=$!
   else
     raw_file="${RAW_PREFIX}-${platform}-$$.mp4"
@@ -90,9 +91,9 @@ cmd_start() {
     fi
     local device_path="/sdcard/rn-dev-agent-proof-$$.mp4"
     if [[ -n "$target_id" ]]; then
-      adb -s "$target_id" shell screenrecord "$device_path" &
+      adb -s "$target_id" shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
     else
-      adb shell screenrecord "$device_path" &
+      adb shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
     fi
     local rec_pid=$!
   fi
@@ -100,7 +101,8 @@ cmd_start() {
   sleep 0.5
   if ! is_alive "$rec_pid"; then
     echo "Error: Recording process died immediately" >&2
-    rm -f "$pf" "$(path_file "$platform")" "${PID_PREFIX}-${platform}.device-path"
+    [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
+    rm -f "$pf" "$(path_file "$platform")" "${PID_PREFIX}-${platform}.device-path" "$recorder_log"
     exit 1
   fi
 
@@ -230,7 +232,7 @@ cmd_stop() {
       rm -f "$raw_file"
     fi
 
-    rm -f "$pf" "$pathf" "$raw_pathf"
+    rm -f "$pf" "$pathf" "$raw_pathf" "${PID_PREFIX}-${platform}.log"
 
     if [[ -n "$output_path" && -f "$output_path" ]]; then
       local size
