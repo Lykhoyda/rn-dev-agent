@@ -283,7 +283,7 @@ function validCaptureContext(args: BeginRehearsalArgs, expectedRoot: string | nu
         hashProofArgs({
           verifyTestID: step.verifyTestID,
           screenshotPath: step.screenshotPath,
-          waitMs: 0,
+          waitMs: step.assertionWaitMs,
         }),
     )
   );

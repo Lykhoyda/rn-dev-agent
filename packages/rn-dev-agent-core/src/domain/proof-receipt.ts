@@ -28,6 +28,7 @@ export const storyboardStepSchema = z
     assertionArgsSha256: sha256Schema,
     verifyTestID: z.string().min(1),
     screenshotPath: z.string().min(1),
+    assertionWaitMs: z.number().int().min(0).max(10_000),
     expectedDwellMs: z.number().int().nonnegative(),
     maximumDwellMs: z.number().int().positive(),
   })

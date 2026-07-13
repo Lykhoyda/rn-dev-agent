@@ -81,10 +81,15 @@ function trustedActionIdentity(
 }
 
 function assertionArgs(
-  step: { id: string; screenshotPath: string; verifyTestID: string },
+  step: {
+    id: string;
+    screenshotPath: string;
+    verifyTestID: string;
+    assertionWaitMs: number;
+  },
   verifyTestID = step.verifyTestID,
 ): Record<string, unknown> {
-  return { verifyTestID, screenshotPath: step.screenshotPath, waitMs: 0 };
+  return { verifyTestID, screenshotPath: step.screenshotPath, waitMs: step.assertionWaitMs };
 }
 
 function envelope(result: ToolResult): Record<string, unknown> {
@@ -178,6 +183,7 @@ function beginArgs(
           }),
           verifyTestID: 'task-list',
           screenshotPath: join(proofRoot, 'start-state.png'),
+          assertionWaitMs: 0,
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
@@ -190,10 +196,11 @@ function beginArgs(
           assertionArgsSha256: argsHash({
             verifyTestID: 'task-title-input',
             screenshotPath: join(proofRoot, 'open-form.png'),
-            waitMs: 0,
+            waitMs: 800,
           }),
           verifyTestID: 'task-title-input',
           screenshotPath: join(proofRoot, 'open-form.png'),
+          assertionWaitMs: 800,
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
@@ -206,10 +213,11 @@ function beginArgs(
           assertionArgsSha256: argsHash({
             verifyTestID: 'submit-task',
             screenshotPath: join(proofRoot, 'fill-form.png'),
-            waitMs: 0,
+            waitMs: 300,
           }),
           verifyTestID: 'submit-task',
           screenshotPath: join(proofRoot, 'fill-form.png'),
+          assertionWaitMs: 300,
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
@@ -222,10 +230,11 @@ function beginArgs(
           assertionArgsSha256: argsHash({
             verifyTestID: 'task-proof-task',
             screenshotPath: join(proofRoot, 'submit-form.png'),
-            waitMs: 0,
+            waitMs: 800,
           }),
           verifyTestID: 'task-proof-task',
           screenshotPath: join(proofRoot, 'submit-form.png'),
+          assertionWaitMs: 800,
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
@@ -678,6 +687,17 @@ test('begin accepts normalized distinct descendants of the injected project root
     (envelope(await harness.handler({ action: 'status' })).data as { stage: string }).stage,
     'rehearsing',
   );
+});
+
+test('begin binds each declared assertion wait to its canonical argument hash', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  args.storyboard.steps[1]!.assertionWaitMs = 801;
+
+  const result = await harness.handler(args);
+
+  assert.ok(reasons(result).includes('INVALID_PROOF_CONTEXT'), result.content[0]!.text);
+  assert.deepEqual(harness.recordCalls, []);
 });
 
 test('begin refuses an existing symlink parent below the project root', async (t) => {

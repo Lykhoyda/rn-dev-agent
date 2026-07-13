@@ -139,7 +139,7 @@ function validCaptureContext(args, expectedRoot) {
             hashProofArgs({
                 verifyTestID: step.verifyTestID,
                 screenshotPath: step.screenshotPath,
-                waitMs: 0,
+                waitMs: step.assertionWaitMs,
             })));
 }
 function proofRootExists(args) {

@@ -55949,6 +55949,7 @@ var storyboardStepSchema = external_exports.object({
   assertionArgsSha256: sha256Schema,
   verifyTestID: external_exports.string().min(1),
   screenshotPath: external_exports.string().min(1),
+  assertionWaitMs: external_exports.number().int().min(0).max(1e4),
   expectedDwellMs: external_exports.number().int().nonnegative(),
   maximumDwellMs: external_exports.number().int().positive()
 }).strict();
@@ -56231,7 +56232,7 @@ function validCaptureContext(args, expectedRoot) {
   return basename5(args.receiptPath) === "proof-receipt.json" && extname(args.videoPath).toLowerCase() === ".mp4" && [".jpg", ".jpeg"].includes(extname(args.contactSheetPath).toLowerCase()) && screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())) && args.storyboard.steps.every((step) => step.assertionArgsSha256 === hashProofArgs({
     verifyTestID: step.verifyTestID,
     screenshotPath: step.screenshotPath,
-    waitMs: 0
+    waitMs: step.assertionWaitMs
   }));
 }
 function proofRootExists(args) {
