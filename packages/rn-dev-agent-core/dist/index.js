@@ -1085,7 +1085,7 @@ trackedTool('device_reset_state', 'One-shot preflight: revoke/reset permissions,
         .optional()
         .describe('After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.'),
 }, createDeviceResetStateHandler(getClient));
-trackedTool('device_deeplink', 'Open a deep link or universal URL on the booted simulator/emulator. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
+trackedTool('device_deeplink', 'Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
     url: z
         .string()
         .describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
@@ -1093,6 +1093,12 @@ trackedTool('device_deeplink', 'Open a deep link or universal URL on the booted 
         .enum(['ios', 'android'])
         .optional()
         .describe('Force platform. Auto-detected from the active session or booted devices if omitted.'),
+    deviceId: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Exact iOS simulator UDID or Android adb serial to receive the deep link.'),
     packageName: z
         .string()
         .optional()

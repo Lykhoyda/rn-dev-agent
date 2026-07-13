@@ -57015,15 +57015,19 @@ var init_device_system_dialog = __esm({
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
 import { execFile as execFileCb18 } from "node:child_process";
 import { promisify as promisify23 } from "node:util";
-async function openIosDeeplink(url) {
+function iosDeeplinkCommandArgs(url, deviceId) {
+  return ["simctl", "openurl", deviceId ?? "booted", url];
+}
+async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile22("xcrun", ["simctl", "openurl", "booted", url], {
+    const { stdout, stderr } = await execFile22("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
       opened: true,
       platform: "ios",
       url,
+      deviceId,
       output: (stdout || stderr).trim() || void 0
     });
   } catch (err) {
@@ -57038,8 +57042,8 @@ async function openIosDeeplink(url) {
 function posixSingleQuote2(s) {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
-async function openAndroidDeeplink(url, packageName) {
-  const serial = getAdbSerial();
+function androidDeeplinkCommandArgs(url, packageName, deviceId) {
+  const serial = deviceId ? ["-s", deviceId] : getAdbSerial();
   const quotedUrl = posixSingleQuote2(url);
   const args = [
     ...serial,
@@ -57053,6 +57057,10 @@ async function openAndroidDeeplink(url, packageName) {
   ];
   if (packageName)
     args.push("-n", packageName);
+  return args;
+}
+async function openAndroidDeeplink(url, packageName, deviceId) {
+  const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
     const { stdout, stderr } = await execFile22("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
@@ -57068,6 +57076,7 @@ async function openAndroidDeeplink(url, packageName) {
       platform: "android",
       url,
       packageName,
+      deviceId,
       output: output || void 0
     });
   } catch (err) {
@@ -57108,6 +57117,11 @@ function createDeviceDeeplinkHandler() {
     if (args.url.length > 4096) {
       return failResult("url too long (max 4096 chars)", { code: "INVALID_ARGS" });
     }
+    if (args.deviceId !== void 0 && (args.deviceId.length === 0 || args.deviceId.length > 256 || /\s/.test(args.deviceId))) {
+      return failResult("deviceId must be 1-256 non-whitespace characters", {
+        code: "INVALID_ARGS"
+      });
+    }
     if (args.packageName !== void 0 && !isValidBundleId(args.packageName)) {
       return failResult(`Invalid packageName "${String(args.packageName).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, { code: "INVALID_PACKAGE_NAME" });
     }
@@ -57115,7 +57129,7 @@ function createDeviceDeeplinkHandler() {
     if (!platform) {
       return failResult("No iOS simulator or Android device detected. Pass platform explicitly or boot a device.", { code: "NO_DEVICE" });
     }
-    const result = platform === "ios" ? await openIosDeeplink(args.url) : await openAndroidDeeplink(args.url, args.packageName);
+    const result = platform === "ios" ? await openIosDeeplink(args.url, args.deviceId) : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
     const annotated = annotateDeepLinkDepth(result, { url: args.url });
     if (!annotated.isError) {
       const openConfirmation = platform === "ios" ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
@@ -64380,9 +64394,10 @@ var init_index = __esm({
       waitForReady: external_exports.boolean().optional().describe("After relaunch, wait for CDP reconnect + helpers injection. Default true. Set false to return immediately and let the caller poll."),
       waitForNavReady: external_exports.boolean().optional().describe("After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.")
     }, createDeviceResetStateHandler(getClient));
-    trackedTool("device_deeplink", "Open a deep link or universal URL on the booted simulator/emulator. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less \u2014 no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.", {
+    trackedTool("device_deeplink", "Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less \u2014 no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.", {
       url: external_exports.string().describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
+      deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS simulator UDID or Android adb serial to receive the deep link."),
       packageName: external_exports.string().optional().describe('(Android only) Explicit package/activity, e.g. "com.example/.MainActivity". Usually not needed \u2014 intent resolution picks the right app.')
     }, createDeviceDeeplinkHandler());
     trackedTool("cdp_dismiss_dev_client_picker", 'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the Metro server entry (preferring the row matching the project\'s Metro port, deprioritizing stale link-local addresses) so CDP/the bundle can proceed. Also clears the native stale-server "Error loading app" dialog that can hide the picker after a network change. iOS + Android (requires an open device session \u2014 call device_snapshot action="open" first). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.', {

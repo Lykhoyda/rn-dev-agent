@@ -9,15 +9,19 @@ import { clearDevClientPickerIfPresent } from './dev-client-picker.js';
 import { acceptDeeplinkOpenConfirmation, } from './device-system-dialog.js';
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
-async function openIosDeeplink(url) {
+export function iosDeeplinkCommandArgs(url, deviceId) {
+    return ['simctl', 'openurl', deviceId ?? 'booted', url];
+}
+async function openIosDeeplink(url, deviceId) {
     try {
-        const { stdout, stderr } = await execFile('xcrun', ['simctl', 'openurl', 'booted', url], {
+        const { stdout, stderr } = await execFile('xcrun', iosDeeplinkCommandArgs(url, deviceId), {
             timeout: EXEC_TIMEOUT_MS,
         });
         return okResult({
             opened: true,
             platform: 'ios',
             url,
+            deviceId,
             output: (stdout || stderr).trim() || undefined,
         });
     }
@@ -47,8 +51,8 @@ async function openIosDeeplink(url) {
 function posixSingleQuote(s) {
     return `'${s.replace(/'/g, "'\\''")}'`;
 }
-async function openAndroidDeeplink(url, packageName) {
-    const serial = getAdbSerial();
+export function androidDeeplinkCommandArgs(url, packageName, deviceId) {
+    const serial = deviceId ? ['-s', deviceId] : getAdbSerial();
     const quotedUrl = posixSingleQuote(url);
     const args = [
         ...serial,
@@ -62,6 +66,10 @@ async function openAndroidDeeplink(url, packageName) {
     ];
     if (packageName)
         args.push('-n', packageName);
+    return args;
+}
+async function openAndroidDeeplink(url, packageName, deviceId) {
+    const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
     try {
         const { stdout, stderr } = await execFile('adb', args, { timeout: EXEC_TIMEOUT_MS });
         const output = (stdout || stderr).trim();
@@ -84,6 +92,7 @@ async function openAndroidDeeplink(url, packageName) {
             platform: 'android',
             url,
             packageName,
+            deviceId,
             output: output || undefined,
         });
     }
@@ -143,6 +152,12 @@ export function createDeviceDeeplinkHandler() {
         if (args.url.length > 4096) {
             return failResult('url too long (max 4096 chars)', { code: 'INVALID_ARGS' });
         }
+        if (args.deviceId !== undefined &&
+            (args.deviceId.length === 0 || args.deviceId.length > 256 || /\s/.test(args.deviceId))) {
+            return failResult('deviceId must be 1-256 non-whitespace characters', {
+                code: 'INVALID_ARGS',
+            });
+        }
         // Phase 134.2 (deepsec HIGH): `packageName` reaches `adb shell am start
         // -n <packageName>`, where the remote Android shell re-interprets argv.
         // Validate against the strict bundle-ID regex. packageName remains
@@ -155,8 +170,8 @@ export function createDeviceDeeplinkHandler() {
             return failResult('No iOS simulator or Android device detected. Pass platform explicitly or boot a device.', { code: 'NO_DEVICE' });
         }
         const result = platform === 'ios'
-            ? await openIosDeeplink(args.url)
-            : await openAndroidDeeplink(args.url, args.packageName);
+            ? await openIosDeeplink(args.url, args.deviceId)
+            : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
         // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
         // success-state suffix). Stateless heuristic; no overhead on short URLs.
         const annotated = annotateDeepLinkDepth(result, { url: args.url });
