@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "runId": "strict-factory-proof",
+  "issue": {
+    "repository": "Lykhoyda/rn-dev-agent",
+    "number": 301
+  },
+  "pullRequest": {
+    "number": 572,
+    "headSha": "230163a2b36424850e485bb48c370f695e64edca"
+  },
+  "proofClass": "feature",
+  "acceptanceMappings": [
+    {
+      "criterion": "The recorded replay shows only the exact canonical feature flow",
+      "storyboardStepIds": [
+        "start",
+        "form",
+        "filled-form",
+        "result"
+      ]
+    }
+  ],
+  "git": {
+    "sourceTreeSha": "230163a2b36424850e485bb48c370f695e64edca",
+    "proofHeadSha": "230163a2b36424850e485bb48c370f695e64edca",
+    "dirty": false
+  },
+  "device": {
+    "id": "7A6033C8-9291-4B0B-80B9-46024EEDF7D7",
+    "platform": "ios",
+    "model": "iPhone 17 Pro",
+    "osVersion": "26.2"
+  },
+  "runtime": {
+    "bundleId": "dev.lykhoyda.rndevagent.proof",
+    "metroPort": 8082,
+    "metroReady": true,
+    "pluginVersion": "0.64.0"
+  },
+  "fixture": {
+    "name": "rn-dev-agent-proof-fixture",
+    "version": "1.0.0"
+  },
+  "action": {
+    "id": "canonical-proof",
+    "version": "1",
+    "sha256": "bf881d61ca5477d044a57c8349e57611f0b72e82cba81acbc79306680a2e034f"
+  },
+  "storyboard": {
+    "id": "strict-factory-proof",
+    "sha256": "9f93dd331c46febd8364b0de5a91c2fe829558bc9c367123c8268396b760214c"
+  },
+  "rehearsal": {
+    "startedAt": "2026-07-13T14:10:42.702Z",
+    "finishedAt": "2026-07-13T14:10:58.802Z",
+    "durationMs": 16100,
+    "clean": true
+  },
+  "video": {
+    "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/proof.mp4",
+    "sha256": "baf1478115573250c44feb883cc7196956d2a1a630df22c098e5bd69e7d69828",
+    "durationMs": 15800,
+    "sizeBytes": 827584,
+    "codec": "hevc",
+    "width": 1206,
+    "height": 2622
+  },
+  "screenshots": [
+    {
+      "stepId": "start",
+      "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/screenshots/01-start.png",
+      "timestampMs": 12318,
+      "sha256": "8fd905506372e065b25fc590be9853a0dc090f620710c05449277301c9cb770e"
+    },
+    {
+      "stepId": "form",
+      "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/screenshots/02-form.png",
+      "timestampMs": 13772,
+      "sha256": "87ef4e1960f4b888fe90a99c5bbd9bba1c5a40d049093977ef391e74e04e626b"
+    },
+    {
+      "stepId": "filled-form",
+      "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/screenshots/03-filled.png",
+      "timestampMs": 14318,
+      "sha256": "41ad0212325c5a1c9fc4321df378d2a83d4a5f32a9a998696440bcfb18434d9d"
+    },
+    {
+      "stepId": "result",
+      "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/screenshots/04-result.png",
+      "timestampMs": 15402,
+      "sha256": "3871d842d3715849d84852bfd8639bede5940604660c8f20c3688cdbfccbaa78"
+    }
+  ],
+  "assertions": [
+    {
+      "stepId": "start",
+      "tool": "proof_step",
+      "ok": true,
+      "resultHash": "3d6fd0c5b2b31ddb4f80bb4a2218e1fa8cb0274c4b5d1ad04add6b2d9ecfebfe"
+    },
+    {
+      "stepId": "form",
+      "tool": "proof_step",
+      "ok": true,
+      "resultHash": "b2916a5db188576dbb46959b38732efebd0e10ba589b64f5eab03b0d932d9258"
+    },
+    {
+      "stepId": "filled-form",
+      "tool": "proof_step",
+      "ok": true,
+      "resultHash": "aeb5a40d42f3898e5e178d0b653456d4662a97d14603ff9c0024e1164b7cceaa"
+    },
+    {
+      "stepId": "result",
+      "tool": "proof_step",
+      "ok": true,
+      "resultHash": "a3e16d3cf389ea4a9097f25fe5728a6d2fd3931b3eb41cefb883da9d33b18fe7"
+    }
+  ],
+  "eventTrace": {
+    "allowedTools": [
+      "device_batch",
+      "proof_step",
+      "cdp_interact",
+      "proof_step",
+      "cdp_interact",
+      "proof_step",
+      "cdp_interact",
+      "proof_step"
+    ],
+    "observed": [
+      {
+        "tool": "device_batch",
+        "ok": true,
+        "ts": 1783951878258,
+        "durationMs": 12002,
+        "argsHash": "2f84107f4e472c084fe0f84a17765ec25978f21c10934d7a1209cfa0fd505506"
+      },
+      {
+        "tool": "proof_step",
+        "ok": true,
+        "ts": 1783951878573,
+        "durationMs": 314,
+        "argsHash": "bbf7f5ee1d182e9d901b099e9ee180e741c3c3fe5ba118d4854c03dfb1b03c88"
+      },
+      {
+        "tool": "cdp_interact",
+        "ok": true,
+        "ts": 1783951878588,
+        "durationMs": 14,
+        "argsHash": "9a182256de70119d4a1058efe43e25d56c88ca864b58eb50b4eb74a448ac1f58"
+      },
+      {
+        "tool": "proof_step",
+        "ok": true,
+        "ts": 1783951880027,
+        "durationMs": 1437,
+        "argsHash": "6b435dce8f6dea4343cc711976e039a8728e2ccdd5ceed6caffea7086631734d"
+      },
+      {
+        "tool": "cdp_interact",
+        "ok": true,
+        "ts": 1783951880030,
+        "durationMs": 3,
+        "argsHash": "9ae9d2580e1175ab868f594bdf434db15ba08c5d5b8e4f6b436668305972d91f"
+      },
+      {
+        "tool": "proof_step",
+        "ok": true,
+        "ts": 1783951880573,
+        "durationMs": 543,
+        "argsHash": "555bf072f048b04bba9b7294e01b0d52347063739531a1f23f4d7092a760b9d6"
+      },
+      {
+        "tool": "cdp_interact",
+        "ok": true,
+        "ts": 1783951880579,
+        "durationMs": 5,
+        "argsHash": "9f4d1b1c21303146f7febbc45e4d14c465bd47ca8cbe27189151f3dddf3ecc65"
+      },
+      {
+        "tool": "proof_step",
+        "ok": true,
+        "ts": 1783951881657,
+        "durationMs": 1078,
+        "argsHash": "097fafb16824aa3dd78464c1b0412fedde0054f65ac697811643810b852f54f4"
+      }
+    ]
+  },
+  "frameMatches": [
+    {
+      "stepId": "start",
+      "screenshotSha256": "8fd905506372e065b25fc590be9853a0dc090f620710c05449277301c9cb770e",
+      "videoTimestampMs": 0,
+      "score": 0.994027
+    },
+    {
+      "stepId": "form",
+      "screenshotSha256": "87ef4e1960f4b888fe90a99c5bbd9bba1c5a40d049093977ef391e74e04e626b",
+      "videoTimestampMs": 13772,
+      "score": 0.996901
+    },
+    {
+      "stepId": "filled-form",
+      "screenshotSha256": "41ad0212325c5a1c9fc4321df378d2a83d4a5f32a9a998696440bcfb18434d9d",
+      "videoTimestampMs": 14318,
+      "score": 0.995435
+    },
+    {
+      "stepId": "result",
+      "screenshotSha256": "3871d842d3715849d84852bfd8639bede5940604660c8f20c3688cdbfccbaa78",
+      "videoTimestampMs": 15402,
+      "score": 0.998299
+    }
+  ],
+  "contactSheet": {
+    "path": "/Users/antonlykhoyda/Github/rn-dev-agent/.worktrees/factory-strict-proof/docs/proof/strict-factory-proof/proof-contact-sheet.jpg",
+    "sha256": "10d739adf9e2ac9ee8b68099d3ee3d5cf4714523f292fa71e00702afb096848b"
+  },
+  "errorBaseline": {
+    "beforeSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "afterSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "beforeCount": 0,
+    "afterCount": 0,
+    "clean": true
+  },
+  "invalidationReasons": [],
+  "evidenceReview": {
+    "provider": "factory-vision-reviewer",
+    "writerProvider": "factory-writer",
+    "independent": true,
+    "exactFeature": true,
+    "irrelevantScreens": false,
+    "debuggingFriction": false,
+    "personalData": false,
+    "resultHash": "5d0a943fb8f5cf2656a125dd42c87145c822c9e437cb3d33b50a1f88fc9f8ab9"
+  },
+  "verdict": "accepted"
+}
