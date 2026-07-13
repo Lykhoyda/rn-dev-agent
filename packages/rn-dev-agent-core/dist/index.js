@@ -1,5 +1,6 @@
 import './env-setup.js';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +48,9 @@ import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
+import { createProofCaptureHandler, proofRootHasTrackedEntries, proofCaptureInputSchema, readProofActionIdentity, readProofGitInfo, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
+import { validateMedia } from './tools/proof-media.js';
+import { proofRuntimeAuthorityMarker } from './domain/proof-capture.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
@@ -71,8 +75,9 @@ import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
-import { instrumentTool, setToolObserver } from './observability/instrumentation.js';
+import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
+import { StrictProofMonitor } from './domain/proof-capture.js';
 import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
 import { invalidateLastSnapshotHash } from './fast-runner-ref-map.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
@@ -212,7 +217,9 @@ const server = new McpServer({
     name: 'rn-dev-agent-cdp-bridge',
     version: pkgVersion,
 });
-setToolObserver((o) => recorder.record(o));
+export const strictProofMonitor = new StrictProofMonitor();
+addToolObserver((o) => recorder.record(o));
+addToolObserver((o) => strictProofMonitor.record(o));
 // GH#186 Phase 6: the foreign-flow gate needs the active iOS session's udid
 // (registered here — a direct import inside the gate would cycle modules).
 setForeignGateUdidProvider(() => {
@@ -327,7 +334,12 @@ function trackedTool(name, desc, schema, handler) {
         }
         return result;
     };
-    server.tool(name, desc, schema, wrapped);
+    if (schema instanceof z.ZodType) {
+        server.registerTool(name, { description: desc, inputSchema: schema }, wrapped);
+    }
+    else {
+        server.tool(name, desc, schema, wrapped);
+    }
 }
 trackedTool('cdp_status', 'Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.', {
     metroPort: z
@@ -858,7 +870,7 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
         .optional()
         .describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
     action: z
         .enum(['open', 'close', 'snapshot'])
         .default('snapshot')
@@ -871,6 +883,10 @@ trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots.
         .enum(['ios', 'android'])
         .optional()
         .describe('Target platform — used with action=open to select device'),
+    deviceId: z
+        .string()
+        .optional()
+        .describe('Exact iOS simulator UDID or Android adb serial to use for action=open'),
     sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
     attachOnly: z
         .boolean()
@@ -1070,7 +1086,7 @@ trackedTool('device_reset_state', 'One-shot preflight: revoke/reset permissions,
         .optional()
         .describe('After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.'),
 }, createDeviceResetStateHandler(getClient));
-trackedTool('device_deeplink', 'Open a deep link or universal URL on the booted simulator/emulator. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
+trackedTool('device_deeplink', 'Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
     url: z
         .string()
         .describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
@@ -1078,6 +1094,12 @@ trackedTool('device_deeplink', 'Open a deep link or universal URL on the booted 
         .enum(['ios', 'android'])
         .optional()
         .describe('Force platform. Auto-detected from the active session or booted devices if omitted.'),
+    deviceId: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Exact iOS simulator UDID or Android adb serial to receive the deep link.'),
     packageName: z
         .string()
         .optional()
@@ -1123,6 +1145,123 @@ trackedTool('device_dismiss_system_dialog', 'Tap an OS-level system dialog dismi
         .optional()
         .describe('Maestro invocation timeout (default 15000ms).'),
 }, createDeviceDismissSystemDialogHandler());
+const resolveNativeProofDevice = async () => {
+    const session = getActiveSession();
+    if (!session?.deviceId)
+        return null;
+    if (session.platform === 'ios') {
+        try {
+            const { stdout } = await execFileP('xcrun', ['simctl', 'list', '-j', 'devices', 'booted']);
+            const payload = JSON.parse(String(stdout));
+            for (const [runtime, devices] of Object.entries(payload.devices ?? {})) {
+                const device = devices.find((candidate) => candidate.udid === session.deviceId &&
+                    candidate.state === 'Booted' &&
+                    typeof candidate.name === 'string');
+                if (device?.name) {
+                    const version = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll('-', '.');
+                    if (version)
+                        return { id: session.deviceId, name: device.name, osVersion: version };
+                }
+            }
+        }
+        catch {
+            return null;
+        }
+    }
+    if (session.platform === 'android') {
+        try {
+            const [{ stdout: model }, { stdout: version }] = await Promise.all([
+                execFileP('adb', ['-s', session.deviceId, 'shell', 'getprop', 'ro.product.model']),
+                execFileP('adb', ['-s', session.deviceId, 'shell', 'getprop', 'ro.build.version.release']),
+            ]);
+            const name = String(model).trim();
+            const osVersion = String(version).trim();
+            if (name && osVersion)
+                return { id: session.deviceId, name, osVersion };
+        }
+        catch {
+            return null;
+        }
+    }
+    return null;
+};
+const proofReadiness = async () => {
+    const current = getClient();
+    const target = current.connectedTarget;
+    const session = getActiveSession();
+    const metroEvents = current.metroEventsClient;
+    let errors = [{ unavailable: true }];
+    if (current.isConnected && current.helpersInjected) {
+        const errorResult = await current.evaluate(current.helperExpr('getErrors()'));
+        try {
+            const parsed = typeof errorResult.value === 'string' ? JSON.parse(errorResult.value) : null;
+            if (Array.isArray(parsed))
+                errors = parsed;
+        }
+        catch {
+            // Unreadable errors keep the baseline dirty.
+        }
+    }
+    const metroBuildPending = metroEvents?.lastBuild?.status === 'started';
+    const metroBuildFailed = metroEvents?.lastBuild?.status === 'failed' || (metroEvents?.buildErrors ?? 0) > 0;
+    const metroReady = current.isConnected &&
+        (await probeMetro(current.metroPort)) &&
+        !metroBuildPending &&
+        !metroBuildFailed;
+    const errorBytes = JSON.stringify(errors);
+    const identity = resolveProofIdentity({
+        session,
+        target,
+        nativeDevice: await resolveNativeProofDevice(),
+        metroPort: current.metroPort,
+        pluginVersion: pkgVersion,
+        metroReady,
+    });
+    if (!identity)
+        throw new Error('PROOF_DEVICE_IDENTITY_UNRESOLVED');
+    return {
+        cdpAttached: current.isConnected,
+        helpersAttached: current.helpersInjected,
+        metroReady,
+        metroBuildPending,
+        metroBuildFailed,
+        metroEventsConnected: metroEvents?.isConnected === true,
+        metroEventMarker: proofRuntimeAuthorityMarker({
+            metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
+            targetId: target?.id ?? null,
+            connectedAt: current.connectedAt,
+        }),
+        errorCount: errors.length,
+        errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
+        device: identity.device,
+        runtime: identity.runtime,
+    };
+};
+const proofCaptureHandler = createProofCaptureHandler({
+    monitor: strictProofMonitor,
+    projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
+    readActionIdentity: (actionId) => {
+        const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+        return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
+    },
+    getGitInfo: readProofGitInfo,
+    proofRootTracked: proofRootHasTrackedEntries,
+    readiness: proofReadiness,
+    record: createDeviceRecordHandler(),
+    mediaProcess: {
+        run: async (command, args) => {
+            const { stdout, stderr } = await execFileP(command, args, {
+                maxBuffer: 16 * 1024 * 1024,
+            });
+            return { stdout: String(stdout), stderr: String(stderr) };
+        },
+    },
+    validateMedia,
+    now: () => new Date(),
+    writeReceipt: writeProofReceiptAtomic,
+    removeArtifact: (path) => rmSync(path, { force: true }),
+});
+trackedTool('proof_capture', 'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.', proofCaptureInputSchema, proofCaptureHandler);
 trackedTool('device_record', 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device — pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.', {
     action: z
         .enum(['start', 'stop', 'status'])
@@ -1621,7 +1760,7 @@ trackedTool('cdp_repair_action', 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
-trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.', {
+trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.', {
     actionId: z
         .string()
         .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
@@ -1646,6 +1785,10 @@ trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end aut
         .boolean()
         .optional()
         .describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
+    proofReplay: z
+        .boolean()
+        .optional()
+        .describe('Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state.'),
     params: z
         .record(z.string(), z.string())
         .optional()

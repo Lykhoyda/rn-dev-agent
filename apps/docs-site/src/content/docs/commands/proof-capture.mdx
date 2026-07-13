@@ -1,16 +1,17 @@
 ---
 title: "proof-capture"
-description: "Capture PR-ready proof artifacts — video, screenshots, and generated PR body."
+description: "Capture fail-closed proof receipts or interactive PR-ready video and screenshots."
 sidebar:
   order: 5
 ---
 
-Record video, capture numbered screenshots, and generate a PR-ready proof package for a feature. Validates that the recording shows the expected feature before presenting results.
+Use strict mode to produce a machine-validated proof receipt, or omit `--strict` for the existing interactive video, screenshots, and PR-body workflow.
 
 ## Usage
 
 ```
 /rn-dev-agent:proof-capture <feature-slug> [description of flow to execute]
+/rn-dev-agent:proof-capture --strict <feature-slug> [description of flow to execute]
 ```
 
 ## Examples
@@ -18,9 +19,36 @@ Record video, capture numbered screenshots, and generate a PR-ready proof packag
 ```
 /rn-dev-agent:proof-capture profile-edit navigate to profile, edit name, save, verify update
 /rn-dev-agent:proof-capture dark-mode toggle dark mode on settings, check all screens
+/rn-dev-agent:proof-capture --strict profile-edit navigate to profile, edit name, save, verify update
 ```
 
-## What Gets Produced
+## Strict Mode
+
+Strict mode is fail-closed and produces `proof-receipt.json` only after mechanical validation and independent evidence review.
+
+```text
+rehearsing -> rehearsed -> armed -> recording -> validating -> mechanically_accepted -> accepted
+```
+
+Every transition uses the stateful `proof_capture` tool. It pins a clean Git
+head, one learned-action identity, the device/runtime, an error-free Metro
+baseline, and a typed storyboard. The recording must execute the declared tools
+and `proof_step` assertions in order without repair, reload, restart, reset,
+Dev Client dismissal, failed tools, or undeclared debugging activity.
+
+At least three result-bound screenshots are required; they cannot replace the video.
+The duration window adds a 10-second API and device timing grace and is capped at two minutes.
+Video start, stop, path, device, media, or validation failure rejects the capture
+and returns its exact stable invalidation reason. Strict mode does not ask
+whether to re-record and does not emit GitHub upload instructions; it discards
+the rejected artifacts and starts again from rehearsal.
+
+An accepted strict result contains only the receipt path, screenshot paths,
+local video path and hash, contact-sheet path, action/storyboard hashes, or the
+exact invalidation reason on failure. Timing is derived from receipt fields,
+not estimated manually.
+
+## Interactive Artifacts
 
 | Artifact | Path | Description |
 |----------|------|-------------|
@@ -31,7 +59,7 @@ Record video, capture numbered screenshots, and generate a PR-ready proof packag
 | PROOF.md | `docs/proof/<slug>/PROOF.md` | Flow table with step/screenshot/action/verification |
 | PR-BODY.md | `docs/proof/<slug>/PR-BODY.md` | Ready-to-paste PR description |
 
-## Steps
+## Interactive Steps
 
 1. **Parse arguments** — extract feature slug and flow description
 2. **Environment check** — confirm app is running, dismiss Dev Client picker if present

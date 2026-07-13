@@ -76,5 +76,6 @@
   "maestro_run",
   "maestro_test_all",
   "observe",
+  "proof_capture",
   "proof_step"
 ]

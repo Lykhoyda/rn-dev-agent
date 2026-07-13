@@ -107,7 +107,6 @@ async function buildStatusResult(client) {
             eventsConnected: metroEvents?.isConnected ?? false,
             lastBuild: metroEvents?.lastBuild ?? null,
             buildErrors: metroEvents?.buildErrors ?? 0,
-            eventsReason: metroEvents?.incompatibleReason ?? null,
             candidates,
             projectRoot,
             servingCwd,

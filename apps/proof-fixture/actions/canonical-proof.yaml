@@ -1,0 +1,26 @@
+appId: dev.lykhoyda.rndevagent.proof
+---
+# id: canonical-proof
+# intent: Prove the exact three-state fixture flow without exploration.
+# tags: [proof, canonical, factory]
+# mutates: true
+# status: experimental
+# appId: dev.lykhoyda.rndevagent.proof
+# author: human
+# expectedRouteSequence: [ProofHome, ProofForm, ProofResult]
+- launchApp:
+    appId: dev.lykhoyda.rndevagent.proof
+- assertVisible:
+    id: proof-start
+- tapOn:
+    id: proof-open-form
+- assertVisible:
+    id: proof-form
+- tapOn:
+    id: proof-name-input
+- inputText: Factory proof
+- tapOn:
+    id: proof-submit
+- assertVisible:
+    id: proof-result
+- assertVisible: Feature accepted

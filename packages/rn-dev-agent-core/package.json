@@ -8,6 +8,8 @@
     "build": "tsc",
     "build:web": "cd src/observability/web && npm install && npm run build",
     "dev": "tsc --watch",
+    "schema:proof": "yarn build && node scripts/export-proof-schema.mjs",
+    "schema:proof:check": "yarn build && node scripts/export-proof-schema.mjs --check",
     "test": "yarn build && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
     "test:coverage": "yarn build && node --test --experimental-test-coverage --test-coverage-exclude='test/**' 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts'",
     "test:contract": "yarn build && node --test test/unit/gh-383-protocol-sync.test.js test/unit/gh-418-command-surface-sync.test.js test/unit/gh-437-golden-contract.test.ts",
@@ -25,7 +27,9 @@
     "@playwright/test": "^1.61.1",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.0",
-    "typescript": "^5.4.0"
+    "ajv": "8.17.1",
+    "typescript": "^5.4.0",
+    "zod-to-json-schema": "3.25.2"
   },
   "engines": {
     "node": ">=22"

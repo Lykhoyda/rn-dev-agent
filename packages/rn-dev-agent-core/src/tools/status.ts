@@ -129,7 +129,6 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       eventsConnected: metroEvents?.isConnected ?? false,
       lastBuild: metroEvents?.lastBuild ?? null,
       buildErrors: metroEvents?.buildErrors ?? 0,
-      eventsReason: metroEvents?.incompatibleReason ?? null,
       candidates,
       projectRoot,
       servingCwd,

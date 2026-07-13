@@ -165,6 +165,10 @@ export function createRunActionHandler(deps = {}) {
             return failResult(`Invalid actionId "${String(args.actionId).slice(0, 80)}" — must match /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ (no "..") and be <= 64 chars`, 'BAD_FILENAME');
         }
         const projectRoot = args.projectRoot ?? process.cwd();
+        const proofReplay = args.proofReplay === true;
+        if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
+            return failResult('cdp_run_action proofReplay requires autoRepair=false and forceReload=false', { proofReplay: true });
+        }
         const loaded = loadAction(projectRoot, args.actionId);
         if (!loaded) {
             return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, 'NO_PROJECT_ROOT', {
@@ -175,7 +179,7 @@ export function createRunActionHandler(deps = {}) {
         // human edit to the YAML as the new baseline so downstream auto-repair
         // doesn't abort with STALE_TARGET. Opt out with forceReload: false to
         // get the strict Phase 129 "respect external edits" behavior back.
-        const forceReload = args.forceReload !== false;
+        const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const autoRepairEnabled = args.autoRepair !== false;
         const trigger = args.trigger ?? 'agent';
@@ -184,7 +188,9 @@ export function createRunActionHandler(deps = {}) {
         // GH #397: deviceId threading. Handler-scoped (not inside the try) because
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
-        const persistRunWithDevice = (record) => persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
+        const persistRunWithDevice = (record) => proofReplay
+            ? Promise.resolve()
+            : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
         // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
         // body so a thrown exception (maestroRun timeout, repairAction
         // throwing through withSession, etc.) is caught and surfaces as a
@@ -314,6 +320,7 @@ export function createRunActionHandler(deps = {}) {
                 return okResult({
                     passed: true,
                     actionId: args.actionId,
+                    ...(proofReplay ? { proofReplay: true } : {}),
                     autoRepair,
                     durationMs: Date.now() - t0,
                     flowFile: action.filePath,

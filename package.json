@@ -16,6 +16,7 @@
     "docs:generate": "yarn workspace rn-dev-agent-docs generate",
     "release-core": "yarn workspace rn-dev-agent-core npm publish",
     "release-cdp-bridge": "yarn release-core",
+    "proof:fixture": "yarn workspace rn-dev-agent-proof-fixture start",
     "test": "yarn workspace rn-dev-agent-core test",
     "test:coverage": "yarn workspace rn-dev-agent-core test:coverage",
     "test:integration": "yarn workspace rn-dev-agent-core test:integration",

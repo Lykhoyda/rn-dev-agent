@@ -146,6 +146,11 @@ for (const [runtimeRoot, runtimeName] of [
   );
   copyCleanDir(observeWebDistSource, join(runtimeRoot, 'dist', 'observability', 'web-dist'));
   copyCleanDir(observeWebDistSource, join(runtimeRoot, 'dist', 'web-dist'));
+  mkdirSync(join(runtimeRoot, 'schemas'), { recursive: true });
+  copyFileSync(
+    join(coreRoot, 'schemas', 'proof-receipt.schema.json'),
+    join(runtimeRoot, 'schemas', 'proof-receipt.schema.json'),
+  );
 }
 
 for (const hostRoot of [codexPluginRoot, claudePluginRoot]) {
