@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.65.0
+
+### Minor Changes
+
+- 4e9bf7e: Add strict storyboard-gated video and screenshot proof receipts for unattended feature delivery.
+
 ## 0.64.0
 
 ### Minor Changes
