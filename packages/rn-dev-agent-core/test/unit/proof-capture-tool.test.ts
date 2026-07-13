@@ -51,7 +51,10 @@ const stable = (value: unknown): unknown => {
 const argsHash = (value: Record<string, unknown>): string =>
   HASH(JSON.stringify(stable(redact(value))));
 const git = (root: string, args: string[]): string =>
-  execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  execFileSync('git', args[0] === 'commit' ? ['-c', 'commit.gpgSign=false', ...args] : args, {
+    cwd: root,
+    encoding: 'utf8',
+  });
 
 function actionRunArgs(): Record<string, unknown> {
   return {
