@@ -139,8 +139,8 @@ require_text \
   "strict workflow documents adaptive minimum duration"
 require_text \
   "$COMMAND_STRICT" \
-  'maximum = min(ceil(rehearsalDurationMs * 1.35 + 3000), 60000)' \
-  "strict workflow documents adaptive maximum and 60-second ceiling"
+  'maximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)' \
+  "strict workflow documents API timing grace and two-minute ceiling"
 require_text \
   "$COMMAND_STRICT" \
   'autoRepair=false, forceReload=false, proofReplay=true' \
@@ -167,7 +167,7 @@ require_text \
   "docs describe accepted strict receipt"
 require_text \
   "$DOCS_STRICT" \
-  'The duration window adapts to rehearsal time and is capped at 60 seconds.' \
+  'The duration window adds a 10-second API and device timing grace and is capped at two minutes.' \
   "docs describe adaptive duration ceiling"
 require_text \
   "$DOCS_STRICT" \

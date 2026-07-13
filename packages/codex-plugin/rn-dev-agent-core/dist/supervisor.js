@@ -57526,7 +57526,7 @@ function forbiddenReason(tool) {
 function durationBounds(expectedMs) {
   return {
     minimumMs: Math.floor(expectedMs * 0.8),
-    maximumMs: Math.min(Math.ceil(expectedMs * 1.35 + 3e3), 6e4)
+    maximumMs: Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_MAXIMUM_MS)
   };
 }
 function validateTrace(allowedTools, observed) {
@@ -57571,7 +57571,7 @@ function validateTrace(allowedTools, observed) {
   }
   return { ok: reasons.length === 0, reasons };
 }
-var StrictProofMonitor, readOnlyTools;
+var StrictProofMonitor, readOnlyTools, PROOF_DURATION_VARIANCE_FACTOR, PROOF_DURATION_GRACE_MS, PROOF_DURATION_MAXIMUM_MS;
 var init_proof_capture = __esm({
   "packages/rn-dev-agent-core/dist/domain/proof-capture.js"() {
     "use strict";
@@ -57647,6 +57647,9 @@ var init_proof_capture = __esm({
       "expect_visible_by_testid",
       "expect_text"
     ]);
+    PROOF_DURATION_VARIANCE_FACTOR = 1.5;
+    PROOF_DURATION_GRACE_MS = 1e4;
+    PROOF_DURATION_MAXIMUM_MS = 12e4;
   }
 });
 
@@ -60513,9 +60516,19 @@ var init_auto_login = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-step.js
+function screenshotPathFromResult(result) {
+  const text = result.content[0]?.text ?? "";
+  try {
+    const envelope = JSON.parse(text);
+    if (typeof envelope.data?.path === "string")
+      return envelope.data.path;
+  } catch {
+  }
+  return text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i)?.[0] ?? text.trim();
+}
 function createProofStepHandler(getClient2, deps = {}) {
   const hasSession = deps.hasSession ?? hasActiveSession;
-  const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
+  const captureScreenshot = deps.captureScreenshot ?? createDeviceScreenshotHandler(getClient2);
   const fetchCandidates = deps.fetchCandidates ?? ((text) => fetchFindCandidates(text, false));
   return withConnection(getClient2, async (args, client2) => {
     const result = {
@@ -60597,9 +60610,10 @@ function createProofStepHandler(getClient2, deps = {}) {
       if (ssResult.isError) {
         errors.push("Screenshot failed");
       } else {
-        const text = ssResult.content[0]?.text ?? "";
-        const pathMatch = text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i);
-        result.screenshotPath = pathMatch ? pathMatch[0] : text.trim();
+        result.screenshotPath = screenshotPathFromResult(ssResult);
+        if (args.screenshotPath && result.screenshotPath !== args.screenshotPath) {
+          errors.push(`Screenshot did not use declared screenshot path "${args.screenshotPath}" (received "${result.screenshotPath}")`);
+        }
       }
     } else {
       errors.push("No device session \u2014 screenshot skipped");

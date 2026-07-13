@@ -2,7 +2,7 @@ import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, warnResult, withConnection } from '../utils.js';
 import { hasActiveSession } from '../agent-device-wrapper.js';
-import { captureAndResizeScreenshot } from './device-list.js';
+import { createDeviceScreenshotHandler } from './device-list.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
 import { fetchFindCandidates } from './device-interact.js';
@@ -38,9 +38,20 @@ export interface ProofStepDeps {
   fetchCandidates?: (text: string) => Promise<FindCandidatesResult>;
 }
 
+function screenshotPathFromResult(result: ToolResult): string {
+  const text = result.content[0]?.text ?? '';
+  try {
+    const envelope = JSON.parse(text) as { data?: { path?: unknown } };
+    if (typeof envelope.data?.path === 'string') return envelope.data.path;
+  } catch {
+    // Plain-text screenshot responses remain supported.
+  }
+  return text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i)?.[0] ?? text.trim();
+}
+
 export function createProofStepHandler(getClient: () => CDPClient, deps: ProofStepDeps = {}) {
   const hasSession = deps.hasSession ?? hasActiveSession;
-  const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
+  const captureScreenshot = deps.captureScreenshot ?? createDeviceScreenshotHandler(getClient);
   const fetchCandidates =
     deps.fetchCandidates ?? ((text: string) => fetchFindCandidates(text, false));
   return withConnection(getClient, async (args: ProofStepArgs, client) => {
@@ -133,17 +144,18 @@ export function createProofStepHandler(getClient: () => CDPClient, deps: ProofSt
       }
     }
 
-    // Step 4: Screenshot — B121: route through resize wrapper so per-phase
-    // proof captures pay the B120 budget (default maxWidth=800) instead of
-    // emitting native-resolution images that bloat proof bundles.
+    // Keep proof captures resized and bound to the active platform.
     if (hasSession()) {
       const ssResult = await captureScreenshot({ path: args.screenshotPath });
       if (ssResult.isError) {
         errors.push('Screenshot failed');
       } else {
-        const text = ssResult.content[0]?.text ?? '';
-        const pathMatch = text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i);
-        result.screenshotPath = pathMatch ? pathMatch[0] : text.trim();
+        result.screenshotPath = screenshotPathFromResult(ssResult);
+        if (args.screenshotPath && result.screenshotPath !== args.screenshotPath) {
+          errors.push(
+            `Screenshot did not use declared screenshot path "${args.screenshotPath}" (received "${result.screenshotPath}")`,
+          );
+        }
       }
     } else {
       errors.push('No device session — screenshot skipped');

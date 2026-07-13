@@ -9,9 +9,10 @@ import {
   validateTrace,
 } from '../../dist/domain/proof-capture.js';
 
-test('duration bounds reserve the approved adaptive window', () => {
-  assert.deepEqual(durationBounds(20_000), { minimumMs: 16_000, maximumMs: 30_000 });
-  assert.deepEqual(durationBounds(50_000), { minimumMs: 40_000, maximumMs: 60_000 });
+test('duration bounds allow API variance up to the two minute ceiling', () => {
+  assert.deepEqual(durationBounds(20_000), { minimumMs: 16_000, maximumMs: 40_000 });
+  assert.deepEqual(durationBounds(50_000), { minimumMs: 40_000, maximumMs: 85_000 });
+  assert.deepEqual(durationBounds(90_000), { minimumMs: 72_000, maximumMs: 120_000 });
 });
 
 test('proof state follows rehearsal through accepted final review', () => {

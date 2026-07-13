@@ -55871,10 +55871,13 @@ function forbiddenReason(tool) {
   }
   return null;
 }
+var PROOF_DURATION_VARIANCE_FACTOR = 1.5;
+var PROOF_DURATION_GRACE_MS = 1e4;
+var PROOF_DURATION_MAXIMUM_MS = 12e4;
 function durationBounds(expectedMs) {
   return {
     minimumMs: Math.floor(expectedMs * 0.8),
-    maximumMs: Math.min(Math.ceil(expectedMs * 1.35 + 3e3), 6e4)
+    maximumMs: Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_MAXIMUM_MS)
   };
 }
 function validateTrace(allowedTools, observed) {
@@ -58726,9 +58729,19 @@ async function handleAutoLogin(client2, opts = {}) {
 init_utils();
 init_agent_device_wrapper();
 init_device_interact();
+function screenshotPathFromResult(result) {
+  const text = result.content[0]?.text ?? "";
+  try {
+    const envelope = JSON.parse(text);
+    if (typeof envelope.data?.path === "string")
+      return envelope.data.path;
+  } catch {
+  }
+  return text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i)?.[0] ?? text.trim();
+}
 function createProofStepHandler(getClient2, deps = {}) {
   const hasSession = deps.hasSession ?? hasActiveSession;
-  const captureScreenshot = deps.captureScreenshot ?? captureAndResizeScreenshot;
+  const captureScreenshot = deps.captureScreenshot ?? createDeviceScreenshotHandler(getClient2);
   const fetchCandidates = deps.fetchCandidates ?? ((text) => fetchFindCandidates(text, false));
   return withConnection(getClient2, async (args, client2) => {
     const result = {
@@ -58810,9 +58823,10 @@ function createProofStepHandler(getClient2, deps = {}) {
       if (ssResult.isError) {
         errors.push("Screenshot failed");
       } else {
-        const text = ssResult.content[0]?.text ?? "";
-        const pathMatch = text.match(/\/[^\s"]+\.(jpg|jpeg|png)/i);
-        result.screenshotPath = pathMatch ? pathMatch[0] : text.trim();
+        result.screenshotPath = screenshotPathFromResult(ssResult);
+        if (args.screenshotPath && result.screenshotPath !== args.screenshotPath) {
+          errors.push(`Screenshot did not use declared screenshot path "${args.screenshotPath}" (received "${result.screenshotPath}")`);
+        }
       }
     } else {
       errors.push("No device session \u2014 screenshot skipped");

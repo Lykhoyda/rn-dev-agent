@@ -234,10 +234,17 @@ export function transitionProofStage(stage: ProofStage, action: ProofTransitionA
   return next;
 }
 
+const PROOF_DURATION_VARIANCE_FACTOR = 1.5;
+const PROOF_DURATION_GRACE_MS = 10_000;
+const PROOF_DURATION_MAXIMUM_MS = 120_000;
+
 export function durationBounds(expectedMs: number): { minimumMs: number; maximumMs: number } {
   return {
     minimumMs: Math.floor(expectedMs * 0.8),
-    maximumMs: Math.min(Math.ceil(expectedMs * 1.35 + 3000), 60_000),
+    maximumMs: Math.min(
+      Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS),
+      PROOF_DURATION_MAXIMUM_MS,
+    ),
   };
 }
 

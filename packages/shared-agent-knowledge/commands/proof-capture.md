@@ -67,10 +67,10 @@ time or label ranges manually:
 
 ```text
 minimum = floor(rehearsalDurationMs * 0.8)
-maximum = min(ceil(rehearsalDurationMs * 1.35 + 3000), 60000)
+maximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)
 ```
 
-The duration window is adaptive and has an absolute 60-second maximum.
+The duration window includes a 10-second API and device timing grace and has an absolute two-minute maximum.
 
 ### 2. Execute every strict transition
 

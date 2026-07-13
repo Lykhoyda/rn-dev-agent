@@ -37,7 +37,7 @@ and `proof_step` assertions in order without repair, reload, restart, reset,
 Dev Client dismissal, failed tools, or undeclared debugging activity.
 
 At least three result-bound screenshots are required; they cannot replace the video.
-The duration window adapts to rehearsal time and is capped at 60 seconds.
+The duration window adds a 10-second API and device timing grace and is capped at two minutes.
 Video start, stop, path, device, media, or validation failure rejects the capture
 and returns its exact stable invalidation reason. Strict mode does not ask
 whether to re-record and does not emit GitHub upload instructions; it discards

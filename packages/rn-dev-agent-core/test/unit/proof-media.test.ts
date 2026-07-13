@@ -230,18 +230,28 @@ test('validateMedia rejects video below 80 percent of rehearsal duration', async
 test('validateMedia rejects video above the adaptive maximum', async (t) => {
   const fixture = await createFixture(t);
   const result = await validateMedia(
-    new FakeMediaProcess({ durationSeconds: 30.001 }),
+    new FakeMediaProcess({ durationSeconds: 40.001 }),
     inputFor(fixture),
   );
 
   assertFailure(result, 'VIDEO_TOO_LONG');
 });
 
-test('validateMedia enforces the absolute 60 second ceiling', async (t) => {
+test('validateMedia accepts a replay a few seconds beyond the old adaptive maximum', async (t) => {
   const fixture = await createFixture(t);
-  const result = await validateMedia(new FakeMediaProcess({ durationSeconds: 60.001 }), {
+  const result = await validateMedia(
+    new FakeMediaProcess({ durationSeconds: 32 }),
+    inputFor(fixture),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test('validateMedia enforces the absolute two minute ceiling', async (t) => {
+  const fixture = await createFixture(t);
+  const result = await validateMedia(new FakeMediaProcess({ durationSeconds: 120.001 }), {
     ...inputFor(fixture),
-    rehearsalDurationMs: 50_000,
+    rehearsalDurationMs: 90_000,
   });
 
   assertFailure(result, 'VIDEO_TOO_LONG');
