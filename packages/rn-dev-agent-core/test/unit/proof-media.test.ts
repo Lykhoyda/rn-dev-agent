@@ -221,6 +221,34 @@ test('matchScreenshotAt clamps its final sample inside the decoded video duratio
   assert.deepEqual(sampleTimes, ['13.055', '13.555', '13.599']);
 });
 
+test('matchScreenshotAt skips an undecodable VFR tail when an earlier sample matches', async (t) => {
+  const fixture = await createFixture(t);
+  const scratchDir = join(fixture.root, 'vfr-tail-match');
+  await mkdir(scratchDir);
+  const process = new FakeMediaProcess({
+    fail: ({ args }) => {
+      const seekIndex = args.indexOf('-ss');
+      return seekIndex >= 0 && args[seekIndex + 1] === '13.599';
+    },
+    ssimOutputs: ['SSIM All:0.910000 (10.0)', 'SSIM All:0.970000 (15.2)'],
+  });
+  const screenshotSha256 = await sha256File(fixture.screenshots[0]!.path);
+
+  const result = await matchScreenshotAt(process, {
+    videoPath: fixture.videoPath,
+    videoDurationMs: 13_600,
+    screenshot: {
+      ...fixture.screenshots[0]!,
+      timestampMs: 13_555,
+      sha256: screenshotSha256,
+    },
+    scratchDir,
+  });
+
+  assert.equal(result.frameMatch.videoTimestampMs, 13_555);
+  assert.equal(result.frameMatch.score, 0.97);
+});
+
 test('matchScreenshotAt scales video samples to the normalized screenshot dimensions', async (t) => {
   const fixture = await createFixture(t);
   const scratchDir = join(fixture.root, 'dimension-match');

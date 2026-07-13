@@ -205,24 +205,33 @@ export async function matchScreenshotAt(process, input) {
         ...new Set(requestedSampleTimestamps.map((timestamp) => Math.min(timestamp, maximumTimestamp))),
     ];
     let best = null;
+    let decodedFrameCount = 0;
     for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
         const framePath = join(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
         await rm(framePath, { force: true });
-        await runFrameProcess(process, [
-            '-y',
-            '-ss',
-            (timestampMs / 1000).toFixed(3),
-            '-i',
-            input.videoPath,
-            '-frames:v',
-            '1',
-            '-vf',
-            'scale=800:-2:flags=lanczos',
-            '-q:v',
-            '2',
-            framePath,
-        ]);
-        await requireNonEmptyFile(framePath, 'FRAME_PROCESS_FAILED', 'FRAME_PROCESS_FAILED');
+        try {
+            await runFrameProcess(process, [
+                '-y',
+                '-ss',
+                (timestampMs / 1000).toFixed(3),
+                '-i',
+                input.videoPath,
+                '-frames:v',
+                '1',
+                '-vf',
+                'scale=800:-2:flags=lanczos',
+                '-q:v',
+                '2',
+                framePath,
+            ]);
+            await requireNonEmptyFile(framePath, 'FRAME_PROCESS_FAILED', 'FRAME_PROCESS_FAILED');
+            decodedFrameCount += 1;
+        }
+        catch (error) {
+            if (error instanceof MediaFailure && error.reason === 'FRAME_PROCESS_FAILED')
+                continue;
+            throw error;
+        }
         const comparison = await runFrameProcess(process, [
             '-i',
             normalizedScreenshotPath,
@@ -238,6 +247,8 @@ export async function matchScreenshotAt(process, input) {
         if (!best || score > best.score)
             best = { score, timestampMs, framePath };
     }
+    if (decodedFrameCount === 0)
+        fail('FRAME_PROCESS_FAILED');
     if (!best || best.score < threshold)
         fail('FRAME_MISMATCH');
     return {

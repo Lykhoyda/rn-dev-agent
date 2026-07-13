@@ -57259,24 +57259,32 @@ async function matchScreenshotAt(process3, input) {
     ...new Set(requestedSampleTimestamps.map((timestamp) => Math.min(timestamp, maximumTimestamp)))
   ];
   let best = null;
+  let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
     const framePath = join30(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
-    await runFrameProcess(process3, [
-      "-y",
-      "-ss",
-      (timestampMs / 1e3).toFixed(3),
-      "-i",
-      input.videoPath,
-      "-frames:v",
-      "1",
-      "-vf",
-      "scale=800:-2:flags=lanczos",
-      "-q:v",
-      "2",
-      framePath
-    ]);
-    await requireNonEmptyFile(framePath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+    try {
+      await runFrameProcess(process3, [
+        "-y",
+        "-ss",
+        (timestampMs / 1e3).toFixed(3),
+        "-i",
+        input.videoPath,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=800:-2:flags=lanczos",
+        "-q:v",
+        "2",
+        framePath
+      ]);
+      await requireNonEmptyFile(framePath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+      decodedFrameCount += 1;
+    } catch (error2) {
+      if (error2 instanceof MediaFailure && error2.reason === "FRAME_PROCESS_FAILED")
+        continue;
+      throw error2;
+    }
     const comparison = await runFrameProcess(process3, [
       "-i",
       normalizedScreenshotPath,
@@ -57293,6 +57301,8 @@ ${comparison.stderr}`);
     if (!best || score > best.score)
       best = { score, timestampMs, framePath };
   }
+  if (decodedFrameCount === 0)
+    fail("FRAME_PROCESS_FAILED");
   if (!best || best.score < threshold)
     fail("FRAME_MISMATCH");
   return {
