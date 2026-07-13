@@ -1134,7 +1134,6 @@ export function createProofCaptureHandler(
       }
       if (!stillAtStart()) return proofFailure(['START_STATE_DRIFT'], active.stage);
       let startResult: ToolResult;
-      const recordingStartedAt = deps.now();
       active.mayOwnRecorder = true;
       try {
         startResult = await deps.record({
@@ -1153,7 +1152,7 @@ export function createProofCaptureHandler(
         ...(started.output !== active.context.videoPath ? ['RECORDING_PATH_MISMATCH'] : []),
       ];
       if (reasons.length > 0) return rejectCapture(active, reasons);
-      active.recordingStartedAt = recordingStartedAt;
+      active.recordingStartedAt = deps.now();
       active.stage = 'recording';
       active.invalidationReasons = [];
       deps.monitor.begin();
