@@ -87,8 +87,9 @@ absolute two-minute maximum.
    reviewer whose provider differs from the writer. Require an independent
    review with `exactFeature=true`, `irrelevantScreens=false`,
    `debuggingFriction=false`, and `personalData=false`. The review must name its
-   provider, repeat the session's `writerProvider`, and bind the reviewed output
-   with `resultHash`. Then call
+   provider, repeat the session's `writerProvider`, echo the validation result's
+   `reviewTargetSha256` as `evidenceSha256`, and bind the reviewed output with
+   `resultHash`. Then call
    `proof_capture(action="finalize", evidenceReview=...)`.
 
 ### 3. Fail closed

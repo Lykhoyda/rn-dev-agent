@@ -585,9 +585,16 @@ function validReview(overrides: Partial<EvidenceReview> = {}): EvidenceReview {
     irrelevantScreens: false,
     debuggingFriction: false,
     personalData: false,
+    evidenceSha256: HASH('unbound-review-target'),
     resultHash: HASH('vision-review'),
     ...overrides,
   };
+}
+
+function reviewTarget(result: ToolResult): string {
+  const value = (envelope(result).data as Record<string, unknown>).reviewTargetSha256;
+  assert.match(String(value), /^[0-9a-f]{64}$/);
+  return String(value);
 }
 
 test('strict action schemas reject unknown and cross-action fields', () => {
@@ -1429,13 +1436,55 @@ test('finalize rejects the writer as reviewer and every invalid vision boolean',
   }
 });
 
+test('validate exposes the exact mechanical receipt review target', async (t) => {
+  const harness = createHarness(t);
+  await stoppedCapture(harness);
+
+  const validation = envelope(await harness.handler({ action: 'validate' }));
+  const data = validation.data as Record<string, unknown>;
+
+  assert.match(String(data.reviewTargetSha256), /^[0-9a-f]{64}$/);
+});
+
+test('finalize rejects a review bound to another mechanical receipt', async (t) => {
+  const harness = createHarness(t);
+  await stoppedCapture(harness);
+  const validation = envelope(await harness.handler({ action: 'validate' }));
+  assert.equal(validation.ok, true);
+
+  const result = await harness.handler({
+    action: 'finalize',
+    evidenceReview: {
+      ...validReview(),
+      evidenceSha256: HASH('another-mechanical-receipt'),
+    } as EvidenceReview,
+  });
+
+  assert.ok(reasons(result).includes('EVIDENCE_REVIEW_TARGET_MISMATCH'), result.content[0]!.text);
+  assert.equal(harness.written.length, 0);
+});
+
+test('proof readiness binds Metro events to the live CDP connection identity', async () => {
+  const source = await readFile(resolve(CORE_ROOT, 'src/index.ts'), 'utf8');
+  const readinessStart = source.indexOf('const proofReadiness = async');
+  const readinessEnd = source.indexOf('\n};', readinessStart);
+  const readinessSource = source.slice(readinessStart, readinessEnd);
+
+  assert.match(readinessSource, /proofRuntimeAuthorityMarker/);
+  assert.match(readinessSource, /target\?\.id/);
+  assert.match(readinessSource, /current\.connectedAt/);
+});
+
 test('accepted receipt is strict, uses real observed hashes, and is written exactly once', async (t) => {
   const harness = createHarness(t);
   const evidence = await stoppedCapture(harness);
   const validation = await harness.handler({ action: 'validate' });
   assert.equal(envelope(validation).ok, true, validation.content[0]!.text);
 
-  const finalized = await harness.handler({ action: 'finalize', evidenceReview: validReview() });
+  const finalized = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
   assert.equal(envelope(finalized).ok, true, finalized.content[0]!.text);
   assert.equal(harness.written.length, 1);
   const receipt = finalProofReceiptSchema.parse(harness.written[0]);
@@ -1456,7 +1505,8 @@ test('finalize requires the receipt to be the only additional owned Git output',
   const harness = createHarness(t);
   const args = beginArgs();
   await stoppedCapture(harness, undefined, args);
-  assert.equal(envelope(await harness.handler({ action: 'validate' })).ok, true);
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true);
   harness.setWrite((path) => {
     harness.git.dirty = true;
     harness.git.changes.push(
@@ -1473,7 +1523,10 @@ test('finalize requires the receipt to be the only additional owned Git output',
     );
   });
 
-  const result = await harness.handler({ action: 'finalize', evidenceReview: validReview() });
+  const result = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
 
   assert.ok(reasons(result).includes('GIT_DIRTY'), result.content[0]!.text);
   assert.ok(harness.removed.includes(args.receiptPath));
@@ -1482,9 +1535,15 @@ test('finalize requires the receipt to be the only additional owned Git output',
 test('production receipt writer atomically persists accepted JSON with mode 0600', async (t) => {
   const harness = createHarness(t);
   await stoppedCapture(harness);
-  assert.equal(envelope(await harness.handler({ action: 'validate' })).ok, true);
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true);
   assert.equal(
-    envelope(await harness.handler({ action: 'finalize', evidenceReview: validReview() })).ok,
+    envelope(
+      await harness.handler({
+        action: 'finalize',
+        evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+      }),
+    ).ok,
     true,
   );
   const receipt = harness.written[0]!;

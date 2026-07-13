@@ -186,6 +186,7 @@ export const evidenceReviewSchema = z
     irrelevantScreens: z.literal(false),
     debuggingFriction: z.literal(false),
     personalData: z.literal(false),
+    evidenceSha256: sha256Schema,
     resultHash: sha256Schema,
 })
     .strict();

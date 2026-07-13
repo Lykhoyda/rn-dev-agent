@@ -50,6 +50,7 @@ import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.j
 import { createDeviceRecordHandler } from './tools/device-record.js';
 import { createProofCaptureHandler, proofRootHasTrackedEntries, proofCaptureInputSchema, readProofActionIdentity, readProofGitInfo, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
 import { validateMedia } from './tools/proof-media.js';
+import { proofRuntimeAuthorityMarker } from './domain/proof-capture.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
 import { createNavGraphHandler } from './tools/nav-graph.js';
@@ -1225,7 +1226,11 @@ const proofReadiness = async () => {
         metroBuildPending,
         metroBuildFailed,
         metroEventsConnected: metroEvents?.isConnected === true,
-        metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
+        metroEventMarker: proofRuntimeAuthorityMarker({
+            metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
+            targetId: target?.id ?? null,
+            connectedAt: current.connectedAt,
+        }),
         errorCount: errors.length,
         errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
         device: identity.device,

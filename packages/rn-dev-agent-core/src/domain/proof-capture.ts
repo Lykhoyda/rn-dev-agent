@@ -72,9 +72,21 @@ function canonicalizeProofValue(value: unknown): unknown {
 }
 
 export function hashProofArgs(params: Record<string, unknown>): string {
+  return hashProofValue(redact(params));
+}
+
+export function hashProofValue(value: unknown): string {
   return createHash('sha256')
-    .update(JSON.stringify(canonicalizeProofValue(redact(params))))
+    .update(JSON.stringify(canonicalizeProofValue(value)))
     .digest('hex');
+}
+
+export function proofRuntimeAuthorityMarker(input: {
+  metroEventMarker: string;
+  targetId: string | null;
+  connectedAt: number | null;
+}): string {
+  return hashProofValue(input);
 }
 
 function hashObservedValue(value: unknown): string {

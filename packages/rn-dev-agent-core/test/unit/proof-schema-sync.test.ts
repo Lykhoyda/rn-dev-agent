@@ -119,6 +119,7 @@ const acceptedReceipt = {
     irrelevantScreens: false,
     debuggingFriction: false,
     personalData: false,
+    evidenceSha256: hash,
     resultHash: hash,
   },
   verdict: 'accepted',

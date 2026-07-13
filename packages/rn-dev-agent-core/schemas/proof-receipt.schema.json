@@ -221,6 +221,10 @@
           "const": false,
           "type": "boolean"
         },
+        "evidenceSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "exactFeature": {
           "const": true,
           "type": "boolean"
@@ -258,6 +262,7 @@
         "irrelevantScreens",
         "debuggingFriction",
         "personalData",
+        "evidenceSha256",
         "resultHash"
       ],
       "type": "object"

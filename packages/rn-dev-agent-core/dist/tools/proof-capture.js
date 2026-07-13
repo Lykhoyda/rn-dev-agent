@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { actionPathFor, loadAction } from '../domain/action-store.js';
-import { hashProofArgs, validateTrace, } from '../domain/proof-capture.js';
+import { hashProofArgs, hashProofValue, validateTrace, } from '../domain/proof-capture.js';
 import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
@@ -1081,7 +1081,11 @@ export function createProofCaptureHandler(deps) {
             active.mechanicalReceipt = receipt;
             active.stage = 'mechanically_accepted';
             active.invalidationReasons = [];
-            return okResult({ stage: active.stage, receipt });
+            return okResult({
+                stage: active.stage,
+                receipt,
+                reviewTargetSha256: hashProofValue(receipt),
+            });
         }
         if (args.action === 'finalize') {
             if (active.stage !== 'mechanically_accepted' || !active.mechanicalReceipt) {
@@ -1100,6 +1104,9 @@ export function createProofCaptureHandler(deps) {
                 review.provider === review.writerProvider ||
                 review.writerProvider !== active.context.writerProvider) {
                 return proofFailure(['REVIEWER_NOT_INDEPENDENT'], active.stage);
+            }
+            if (review.evidenceSha256 !== hashProofValue(active.mechanicalReceipt)) {
+                return proofFailure(['EVIDENCE_REVIEW_TARGET_MISMATCH'], active.stage);
             }
             const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
             let finalReceipt;

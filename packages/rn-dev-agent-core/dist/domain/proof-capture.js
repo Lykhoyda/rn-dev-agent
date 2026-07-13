@@ -55,9 +55,15 @@ function canonicalizeProofValue(value) {
         .map(([key, nested]) => [key, canonicalizeProofValue(nested)]));
 }
 export function hashProofArgs(params) {
+    return hashProofValue(redact(params));
+}
+export function hashProofValue(value) {
     return createHash('sha256')
-        .update(JSON.stringify(canonicalizeProofValue(redact(params))))
+        .update(JSON.stringify(canonicalizeProofValue(value)))
         .digest('hex');
+}
+export function proofRuntimeAuthorityMarker(input) {
+    return hashProofValue(input);
 }
 function hashObservedValue(value) {
     const bytes = JSON.stringify(value) ?? String(value);

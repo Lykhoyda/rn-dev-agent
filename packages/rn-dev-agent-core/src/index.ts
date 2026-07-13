@@ -77,6 +77,7 @@ import {
   type ProofReadiness,
 } from './tools/proof-capture.js';
 import { validateMedia } from './tools/proof-media.js';
+import { proofRuntimeAuthorityMarker } from './domain/proof-capture.js';
 import {
   createDeviceAcceptSystemDialogHandler,
   createDeviceDismissSystemDialogHandler,
@@ -1725,7 +1726,11 @@ const proofReadiness = async (): Promise<ProofReadiness> => {
     metroBuildPending,
     metroBuildFailed,
     metroEventsConnected: metroEvents?.isConnected === true,
-    metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
+    metroEventMarker: proofRuntimeAuthorityMarker({
+      metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
+      targetId: target?.id ?? null,
+      connectedAt: current.connectedAt,
+    }),
     errorCount: errors.length,
     errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
     device: identity.device,

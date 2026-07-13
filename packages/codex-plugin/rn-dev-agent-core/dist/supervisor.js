@@ -57464,7 +57464,13 @@ function canonicalizeProofValue(value) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, nested]) => [key, canonicalizeProofValue(nested)]));
 }
 function hashProofArgs(params) {
-  return createHash6("sha256").update(JSON.stringify(canonicalizeProofValue(redact(params)))).digest("hex");
+  return hashProofValue(redact(params));
+}
+function hashProofValue(value) {
+  return createHash6("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+}
+function proofRuntimeAuthorityMarker(input) {
+  return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
@@ -57817,6 +57823,7 @@ var init_proof_receipt = __esm({
       irrelevantScreens: external_exports.literal(false),
       debuggingFriction: external_exports.literal(false),
       personalData: external_exports.literal(false),
+      evidenceSha256: sha256Schema,
       resultHash: sha256Schema
     }).strict();
     sharedReceiptShape = {
@@ -58749,7 +58756,11 @@ function createProofCaptureHandler(deps) {
       active.mechanicalReceipt = receipt;
       active.stage = "mechanically_accepted";
       active.invalidationReasons = [];
-      return okResult({ stage: active.stage, receipt });
+      return okResult({
+        stage: active.stage,
+        receipt,
+        reviewTargetSha256: hashProofValue(receipt)
+      });
     }
     if (args.action === "finalize") {
       if (active.stage !== "mechanically_accepted" || !active.mechanicalReceipt) {
@@ -58765,6 +58776,9 @@ function createProofCaptureHandler(deps) {
       }
       if (review.provider === active.context.writerProvider || review.provider === review.writerProvider || review.writerProvider !== active.context.writerProvider) {
         return proofFailure(["REVIEWER_NOT_INDEPENDENT"], active.stage);
+      }
+      if (review.evidenceSha256 !== hashProofValue(active.mechanicalReceipt)) {
+        return proofFailure(["EVIDENCE_REVIEW_TARGET_MISMATCH"], active.stage);
       }
       const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
       let finalReceipt;
@@ -63848,6 +63862,7 @@ var init_index = __esm({
     init_device_record();
     init_proof_capture2();
     init_proof_media();
+    init_proof_capture();
     init_device_system_dialog();
     init_device_picker();
     init_nav_graph();
@@ -64484,7 +64499,11 @@ var init_index = __esm({
         metroBuildPending,
         metroBuildFailed,
         metroEventsConnected: metroEvents?.isConnected === true,
-        metroEventMarker: metroEvents?.authorityMarker ?? "unavailable",
+        metroEventMarker: proofRuntimeAuthorityMarker({
+          metroEventMarker: metroEvents?.authorityMarker ?? "unavailable",
+          targetId: target?.id ?? null,
+          connectedAt: current.connectedAt
+        }),
         errorCount: errors.length,
         errorSha256: createHash10("sha256").update(errorBytes).digest("hex"),
         device: identity.device,
