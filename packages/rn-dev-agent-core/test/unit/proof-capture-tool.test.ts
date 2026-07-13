@@ -54,7 +54,12 @@ const git = (root: string, args: string[]): string =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8' });
 
 function actionRunArgs(): Record<string, unknown> {
-  return { actionId: 'canonical-proof', autoRepair: false };
+  return {
+    actionId: 'canonical-proof',
+    autoRepair: false,
+    forceReload: false,
+    proofReplay: true,
+  };
 }
 
 function operationArgs(index = 0): Record<string, unknown> {
@@ -247,6 +252,9 @@ interface Harness {
   setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
   setActionIdentity: (value: { id: string; version: string; sha256: string } | null) => void;
+  setActionIdentityReader: (
+    fn: (actionId: string) => { id: string; version: string; sha256: string } | null,
+  ) => void;
 }
 
 interface TestGitChange {
@@ -315,6 +323,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   let proofRootTracked = false;
   let actionIdentity: { id: string; version: string; sha256: string } | null =
     trustedActionIdentity();
+  let actionIdentityReader = () => structuredClone(actionIdentity);
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
@@ -338,7 +347,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   const deps: ProofCaptureDeps = {
     monitor,
     projectRoot: () => expectedProjectRoot,
-    readActionIdentity: () => structuredClone(actionIdentity),
+    readActionIdentity: (actionId) => actionIdentityReader(actionId),
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
@@ -398,6 +407,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     setActionIdentity: (value) => {
       actionIdentity = value;
     },
+    setActionIdentityReader: (fn) => {
+      actionIdentityReader = fn;
+    },
   };
   t.after(async () => {
     await schemaBytesPromise;
@@ -430,7 +442,7 @@ async function cleanRehearsal(
     'cdp_run_action',
     started + 100,
     okResult({ replayed: true }),
-    wrongAction ? { actionId: 'unrelated-action', autoRepair: false } : actionRunArgs(),
+    wrongAction ? { ...actionRunArgs(), actionId: 'unrelated-action' } : actionRunArgs(),
   );
   harness.clock.value = started + 16_000;
   const result = await harness.handler({ action: 'finish_rehearsal' });
@@ -1467,7 +1479,13 @@ test('status, discard, and separate handler instances keep session ownership iso
 });
 
 test('rehearsal accepts exactly one clean pinned learned-action replay', async (t) => {
-  for (const scenario of ['wrong action', 'failed action', 'extra activity'] as const) {
+  for (const scenario of [
+    'wrong action',
+    'writable mode',
+    'failed action',
+    'extra activity',
+    'extra replay',
+  ] as const) {
     await t.test(scenario, async (st) => {
       const harness = createHarness(st);
       const args = beginArgs();
@@ -1479,12 +1497,22 @@ test('rehearsal accepts exactly one clean pinned learned-action replay', async (
         started + 100,
         okResult({ replayed: true }),
         scenario === 'wrong action'
-          ? { actionId: 'unrelated-action', autoRepair: false }
-          : actionRunArgs(),
+          ? { ...actionRunArgs(), actionId: 'unrelated-action' }
+          : scenario === 'writable mode'
+            ? { actionId: 'canonical-proof', autoRepair: false, forceReload: false }
+            : actionRunArgs(),
         scenario === 'failed action' ? 'FAIL' : 'PASS',
       );
       if (scenario === 'extra activity') {
         observe(harness, 'device_press', started + 200, okResult({ pressed: true }));
+      } else if (scenario === 'extra replay') {
+        observe(
+          harness,
+          'cdp_run_action',
+          started + 200,
+          okResult({ replayed: true }),
+          actionRunArgs(),
+        );
       }
       harness.clock.value = started + 16_000;
 
@@ -1492,11 +1520,13 @@ test('rehearsal accepts exactly one clean pinned learned-action replay', async (
 
       assert.ok(
         reasons(result).includes(
-          scenario === 'wrong action'
+          scenario === 'wrong action' || scenario === 'writable mode'
             ? 'ACTION_ARGUMENT_MISMATCH'
             : scenario === 'failed action'
               ? 'OBSERVED_TOOL_FAILED'
-              : 'UNDECLARED_MUTATING_TOOL',
+              : scenario === 'extra activity'
+                ? 'UNDECLARED_MUTATING_TOOL'
+                : 'ACTION_REHEARSAL_SEQUENCE_INVALID',
         ),
         result.content[0]!.text,
       );
@@ -1607,6 +1637,186 @@ test('production action identity reads exact app-root YAML bytes and runtime rev
     sha256: HASH(ACTION_YAML_BYTES),
   });
   assert.equal(module.readProofActionIdentity(root, 'missing'), null);
+});
+
+test('real canonical action proof replay is read-only while normal replay persists', async (t) => {
+  const proofModule = await import('../../dist/tools/proof-capture.js');
+  const { createRunActionHandler } = await import('../../dist/tools/run-action.js');
+  const { addToolObserver, instrumentTool } =
+    await import('../../dist/observability/instrumentation.js');
+  const { resetActionStore } = await import('../../dist/domain/action-state-store.js');
+  const canonicalBytes = await readFile(
+    resolve(CORE_ROOT, '../../apps/proof-fixture/actions/canonical-proof.yaml'),
+    'utf8',
+  );
+
+  const createProject = async (st: TestContext) => {
+    const root = await mkdtemp(join(tmpdir(), 'strict-proof-real-action-'));
+    st.after(() => {
+      resetActionStore(root);
+      return rm(root, { recursive: true, force: true });
+    });
+    const actionPath = join(root, '.rn-agent', 'actions', 'canonical-proof.yaml');
+    await mkdir(dirname(actionPath), { recursive: true });
+    await writeFile(join(root, 'README.md'), 'base\n');
+    await writeFile(actionPath, canonicalBytes);
+    git(root, ['init', '-q']);
+    git(root, ['config', 'user.email', 'proof@example.invalid']);
+    git(root, ['config', 'user.name', 'Proof Test']);
+    git(root, ['add', 'README.md', '.rn-agent/actions/canonical-proof.yaml']);
+    git(root, ['commit', '-qm', 'canonical proof action']);
+    return { root, actionPath };
+  };
+
+  const passingMaestro = async () =>
+    okResult({ passed: true, output: 'PASS', flowFile: 'canonical-proof.yaml', platform: 'ios' });
+
+  await t.test(
+    'normal replay keeps its RunRecord, promotion, sidecar, and DB mirror',
+    async (st) => {
+      const { root } = await createProject(st);
+      const runAction = createRunActionHandler({ maestroRun: passingMaestro });
+
+      const result = await runAction({
+        actionId: 'canonical-proof',
+        projectRoot: root,
+        autoRepair: false,
+        forceReload: false,
+      });
+
+      assert.equal(envelope(result).ok, true, result.content[0]!.text);
+      assert.deepEqual(proofModule.readProofGitInfo(root).changes, [
+        {
+          path: '.rn-agent/actions/canonical-proof.yaml',
+          indexStatus: ' ',
+          worktreeStatus: 'M',
+        },
+        { path: '.rn-agent/state/actions.db', indexStatus: '?', worktreeStatus: '?' },
+        { path: '.rn-agent/state/actions.db-shm', indexStatus: '?', worktreeStatus: '?' },
+        { path: '.rn-agent/state/actions.db-wal', indexStatus: '?', worktreeStatus: '?' },
+        {
+          path: '.rn-agent/state/canonical-proof.state.json',
+          indexStatus: '?',
+          worktreeStatus: '?',
+        },
+      ]);
+    },
+  );
+
+  await t.test('proof replay reaches arm without mutating action or Git authority', async (st) => {
+    const { root } = await createProject(st);
+    const harness = createHarness(st, root);
+    const args = beginArgs(root);
+    const head = git(root, ['rev-parse', 'HEAD']).trim();
+    args.pullRequest.headSha = head;
+    args.storyboard.sourceTreeSha = head;
+    args.proofAction = proofModule.readProofActionIdentity(root, 'canonical-proof')!;
+    harness.setActionIdentityReader((actionId) =>
+      proofModule.readProofActionIdentity(root, actionId),
+    );
+    harness.setGitInfo(() => proofModule.readProofGitInfo(root));
+    harness.setRemove(async (path) => rm(path, { force: true }));
+    assert.equal(envelope(await harness.handler(args)).ok, true);
+    const realRunAction = createRunActionHandler({ maestroRun: passingMaestro });
+    const observedRunAction = instrumentTool(
+      'cdp_run_action',
+      async (params: Record<string, unknown>) =>
+        realRunAction({ ...params, projectRoot: root, platform: 'android' }),
+    );
+    const stopObserving = addToolObserver((observation) => harness.monitor.record(observation));
+    const result = await observedRunAction(actionRunArgs());
+    stopObserving();
+
+    assert.equal(envelope(result as ToolResult).ok, true, (result as ToolResult).content[0]!.text);
+    assert.deepEqual(
+      proofModule.readProofGitInfo(root).changes,
+      [],
+      'proof replay must not create action runtime persistence',
+    );
+    harness.clock.value += 16_000;
+    assert.equal(envelope(await harness.handler({ action: 'finish_rehearsal' })).ok, true);
+    await mkdir(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true });
+    await writeFile(args.storyboard.steps[0]!.screenshotPath, 'verified start');
+    observeFreshStart(harness, args);
+    const armed = await harness.handler({ action: 'arm' });
+    assert.equal(envelope(armed).ok, true, armed.content[0]!.text);
+  });
+
+  await t.test('proof replay refuses mutating flags before execution', async (st) => {
+    const { root } = await createProject(st);
+    let calls = 0;
+    const runAction = createRunActionHandler({
+      maestroRun: async () => {
+        calls += 1;
+        return passingMaestro();
+      },
+    });
+    for (const args of [
+      { actionId: 'canonical-proof', proofReplay: true, autoRepair: true, forceReload: false },
+      { actionId: 'canonical-proof', proofReplay: true, autoRepair: false, forceReload: true },
+    ]) {
+      const result = await runAction({ ...args, projectRoot: root });
+      assert.equal(envelope(result).ok, false, result.content[0]!.text);
+    }
+    assert.equal(calls, 0);
+    assert.deepEqual(proofModule.readProofGitInfo(root).changes, []);
+  });
+
+  await t.test('failed and throwing proof replays create no sidecar or DB state', async (st) => {
+    for (const scenario of ['failed', 'throwing'] as const) {
+      const { root } = await createProject(st);
+      const runAction = createRunActionHandler({
+        maestroRun: async () => {
+          if (scenario === 'throwing') throw new Error('Maestro transport failed');
+          return failResult('Maestro failed', { output: 'Assertion failed' });
+        },
+      });
+
+      const result = await runAction({ ...actionRunArgs(), projectRoot: root });
+
+      assert.equal(envelope(result).ok, false, `${scenario}: ${result.content[0]!.text}`);
+      assert.deepEqual(
+        proofModule.readProofGitInfo(root).changes,
+        [],
+        `${scenario} proof replay persisted runtime state`,
+      );
+    }
+  });
+
+  await t.test('proof replay cannot hide an action edit during execution', async (st) => {
+    const { root, actionPath } = await createProject(st);
+    const harness = createHarness(st, root);
+    const args = beginArgs(root);
+    const head = git(root, ['rev-parse', 'HEAD']).trim();
+    args.pullRequest.headSha = head;
+    args.storyboard.sourceTreeSha = head;
+    args.proofAction = proofModule.readProofActionIdentity(root, 'canonical-proof')!;
+    harness.setActionIdentityReader((actionId) =>
+      proofModule.readProofActionIdentity(root, actionId),
+    );
+    harness.setGitInfo(() => proofModule.readProofGitInfo(root));
+    assert.equal(envelope(await harness.handler(args)).ok, true);
+    const realRunAction = createRunActionHandler({
+      maestroRun: async () => {
+        await writeFile(actionPath, canonicalBytes.replace('proof-submit', 'proof-submit-raced'));
+        return passingMaestro();
+      },
+    });
+    const observedRunAction = instrumentTool(
+      'cdp_run_action',
+      async (params: Record<string, unknown>) =>
+        realRunAction({ ...params, projectRoot: root, platform: 'android' }),
+    );
+    const stopObserving = addToolObserver((observation) => harness.monitor.record(observation));
+    await observedRunAction(actionRunArgs());
+    stopObserving();
+    harness.clock.value += 16_000;
+
+    const result = await harness.handler({ action: 'finish_rehearsal' });
+
+    assert.ok(reasons(result).includes('PROOF_ACTION_IDENTITY_CHANGED'), result.content[0]!.text);
+    assert.ok(reasons(result).includes('GIT_DIRTY'), result.content[0]!.text);
+  });
 });
 
 test('arm consumes a fresh verified start assertion after rehearsal', async (t) => {
@@ -1984,7 +2194,12 @@ test('storyboard argument hashes use the monitor canonicalizer and are required'
   assert.equal(module.hashProofArgs(actionRunArgs()), argsHash(actionRunArgs()));
   assert.equal(
     module.hashProofArgs(actionRunArgs()),
-    module.hashProofArgs({ autoRepair: false, actionId: 'canonical-proof' }),
+    module.hashProofArgs({
+      proofReplay: true,
+      forceReload: false,
+      autoRepair: false,
+      actionId: 'canonical-proof',
+    }),
   );
 
   const args = beginArgs();

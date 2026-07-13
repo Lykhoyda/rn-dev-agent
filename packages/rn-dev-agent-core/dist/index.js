@@ -1745,7 +1745,7 @@ trackedTool('cdp_repair_action', 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
-trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.', {
+trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.', {
     actionId: z
         .string()
         .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
@@ -1770,6 +1770,10 @@ trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end aut
         .boolean()
         .optional()
         .describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
+    proofReplay: z
+        .boolean()
+        .optional()
+        .describe('Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state.'),
     params: z
         .record(z.string(), z.string())
         .optional()

@@ -728,15 +728,26 @@ export function createProofCaptureHandler(deps) {
                 ...(!actionObservation ? ['ACTION_REHEARSAL_SEQUENCE_INVALID'] : []),
                 ...(actionObservation &&
                     actionObservation.argsHash !==
-                        hashProofArgs({ actionId: active.context.proofAction.id, autoRepair: false })
+                        hashProofArgs({
+                            actionId: active.context.proofAction.id,
+                            autoRepair: false,
+                            forceReload: false,
+                            proofReplay: true,
+                        })
                     ? ['ACTION_ARGUMENT_MISMATCH']
                     : []),
             ];
-            if (durationMs < 0 || !trace.ok || actionReasons.length > 0) {
+            const git = readGit(active);
+            const authorityReasons = [
+                ...actionIdentityReasons(active),
+                ...(git.ok ? gitReasons(active, git.value, 'clean') : git.reasons),
+            ];
+            if (durationMs < 0 || !trace.ok || actionReasons.length > 0 || authorityReasons.length > 0) {
                 const reasons = [
                     ...(durationMs < 0 ? ['REHEARSAL_CLOCK_INVALID'] : []),
                     ...trace.reasons,
                     ...actionReasons,
+                    ...authorityReasons,
                 ];
                 beginFreshRehearsal(active, reasons);
                 return proofFailure(reasons, active.stage);
