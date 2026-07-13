@@ -869,7 +869,7 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
         .optional()
         .describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
     action: z
         .enum(['open', 'close', 'snapshot'])
         .default('snapshot')
@@ -882,6 +882,10 @@ trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots.
         .enum(['ios', 'android'])
         .optional()
         .describe('Target platform — used with action=open to select device'),
+    deviceId: z
+        .string()
+        .optional()
+        .describe('Exact iOS simulator UDID or Android adb serial to use for action=open'),
     sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
     attachOnly: z
         .boolean()

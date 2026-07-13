@@ -1219,7 +1219,7 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).',
+  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).',
   {
     action: z
       .enum(['open', 'close', 'snapshot'])
@@ -1235,6 +1235,10 @@ trackedTool(
       .enum(['ios', 'android'])
       .optional()
       .describe('Target platform — used with action=open to select device'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Exact iOS simulator UDID or Android adb serial to use for action=open'),
     sessionName: z.string().optional().describe('Session name override (default: auto-generated)'),
     attachOnly: z
       .boolean()
