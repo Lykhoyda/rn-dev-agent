@@ -1114,6 +1114,28 @@ test('record start and stop failures discard the clip and restart rehearsal', as
   }
 });
 
+test('recorded evidence timestamps include recorder startup latency', async (t) => {
+  const harness = createHarness(t);
+  await cleanRehearsal(harness);
+  await arm(harness);
+  harness.setRecord(async (args) => {
+    if (args.action === 'status') return okResult({ active: [] });
+    if (args.action === 'start') {
+      harness.clock.value += 8_000;
+      return okResult({ deviceId: 'SIM-1', output: beginArgs().videoPath });
+    }
+    return okResult({ saved: [{ path: beginArgs().videoPath, sizeBytes: 4_096 }] });
+  });
+
+  const operationsStartedAt = await startRecording(harness);
+  recordEvidence(harness, operationsStartedAt);
+  const result = await harness.handler({ action: 'stop_recording' });
+  const evidence = (envelope(result).data as { evidenceDraft: Array<{ timestampMs: number }> })
+    .evidenceDraft;
+
+  assert.equal(evidence[0]!.timestampMs, 9_000);
+});
+
 test('trace repair, reload, failed tools, and wrong order fail closed', async (t) => {
   const cases = [
     {

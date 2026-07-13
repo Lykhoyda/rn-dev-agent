@@ -897,6 +897,7 @@ export function createProofCaptureHandler(deps) {
             if (!stillAtStart())
                 return proofFailure(['START_STATE_DRIFT'], active.stage);
             let startResult;
+            const recordingStartedAt = deps.now();
             active.mayOwnRecorder = true;
             try {
                 startResult = await deps.record({
@@ -918,7 +919,7 @@ export function createProofCaptureHandler(deps) {
             ];
             if (reasons.length > 0)
                 return rejectCapture(active, reasons);
-            active.recordingStartedAt = deps.now();
+            active.recordingStartedAt = recordingStartedAt;
             active.stage = 'recording';
             active.invalidationReasons = [];
             deps.monitor.begin();
