@@ -1,6 +1,6 @@
 ---
 title: Commands
-description: 12 slash commands for React Native development, testing, and maintenance.
+description: 15 slash commands for React Native development, testing, and maintenance.
 ---
 
 ## Core commands
@@ -13,7 +13,15 @@ The primary workflow starts with `/rn-feature-dev`. Other commands are useful on
 | [`test-feature`](/rn-dev-agent/commands/test-feature/) | Test an already-implemented feature end-to-end |
 | [`build-and-test`](/rn-dev-agent/commands/build-and-test/) | Build the app first, then test |
 | [`debug-screen`](/rn-dev-agent/commands/debug-screen/) | Diagnose a broken screen — gather evidence, apply fix |
-| [`check-env`](/rn-dev-agent/commands/check-env/) | Verify Metro, CDP, and simulator are ready |
+| [`observe`](/rn-dev-agent/commands/observe/) | Watch the agent live in a web UI — timeline, device mirror, state panels, browser-run actions |
+
+## Actions & regression
+
+| Command | When to use |
+|---------|-------------|
+| [`list-learned-actions`](/rn-dev-agent/commands/list-learned-actions/) | List saved actions, flows, and feedback memories |
+| [`run-action`](/rn-dev-agent/commands/run-action/) | Replay a saved action with self-repair |
+| [`lock-e2e`](/rn-dev-agent/commands/lock-e2e/) | Promote a verified action into a frozen, locked e2e regression test |
 
 ## Proof & testing
 
@@ -21,6 +29,15 @@ The primary workflow starts with `/rn-feature-dev`. Other commands are useful on
 |---------|-------------|
 | [`proof-capture`](/rn-dev-agent/commands/proof-capture/) | Record video + screenshots for PR proof |
 | [`nav-graph`](/rn-dev-agent/commands/nav-graph/) | Map and navigate the app's screen graph |
+
+## Setup & diagnostics
+
+| Command | When to use |
+|---------|-------------|
+| [`setup`](/rn-dev-agent/commands/setup/) | Onboard a project — prerequisites, CLAUDE.md rules, bridge scaffolding |
+| [`doctor`](/rn-dev-agent/commands/doctor/) | Full diagnostic table — Node, CDP, runners, Metro, plugin version |
+| [`check-env`](/rn-dev-agent/commands/check-env/) | Verify Metro, CDP, and simulator are ready |
+| [`check-vercel-rules`](/rn-dev-agent/commands/check-vercel-rules/) | Audit the project against the bundled best-practice rules |
 
 ## Utility
 

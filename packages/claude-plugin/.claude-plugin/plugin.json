@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent",
-  "version": "0.69.0",
+  "version": "0.69.1",
   "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
   "author": {
     "name": "Anton Lykhoyda",
@@ -27,7 +27,8 @@
     "./skills/rn-debugging",
     "./skills/rn-best-practices",
     "./skills/rn-setup",
-    "./skills/creating-actions"
+    "./skills/creating-actions",
+    "./skills/capturing-proof"
   ],
   "agents": [
     "./agents/rn-tester.md",
@@ -50,7 +51,8 @@
     "./commands/list-learned-actions.md",
     "./commands/run-action.md",
     "./commands/check-vercel-rules.md",
-    "./commands/observe.md"
+    "./commands/observe.md",
+    "./commands/lock-e2e.md"
   ],
   "mcpServers": {
     "cdp": {

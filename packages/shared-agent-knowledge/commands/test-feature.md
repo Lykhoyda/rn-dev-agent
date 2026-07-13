@@ -29,10 +29,14 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
      `authenticated: true` when the task needs an authenticated session)
      is a useful **prologue** even if its intent doesn't match the full
      task. See "Hybrid composition" in CLAUDE-MD-TEMPLATE for the loop.
-   If a **full match** exists, **REPLAY IT FIRST** via:
+   If a **full match** exists, **REPLAY IT FIRST** — but call `cdp_status`
+   once before any replay (the environment gate applies to replays too, not
+   just manual walks; if it fails, route to `/rn-dev-agent:setup` instead of
+   running a doomed flow). Then:
    ```bash
-   maestro-runner --platform <ios|android> test -e KEY=VAL <flow-path>
+   maestro-runner --platform <ios|android> test -e KEY=VAL "<flow-path>"
    ```
+   (Always quote the flow path — scanned paths can contain spaces.)
    If the replay passes, you have your evidence — proceed to step 7
    (verification + generate-or-refresh artifact). If the replay fails with a
    concrete error (`Element not found`, `assertion failed`), fix the flow
@@ -41,7 +45,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    If only a **partial match** exists (an action whose `produces` covers
    part of your task's required state — e.g. login → authenticated, but
    the rest of the task is novel), use the action as a prologue: replay
-   it via `cdp_run_action({ id, params })`, re-verify state with
+   it via `cdp_run_action({ actionId, params })`, re-verify state with
    `cdp_navigation_state` + `cdp_store_state`, then continue with steps
    1–7 below for the novel part. Save the *new* action covering the full
    task at step 7. This is the hybrid-composition path — it's the
@@ -73,7 +77,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
      existing flow (don't fork a new file).
    - If step 0 found NO matching flow: prefer **auto-emission** over hand-
      authoring. Wrap the manual walk between `cdp_record_test_start` and
-     `cdp_record_test_stop`, then `cdp_record_test_save` to write
+     `cdp_record_test_stop`, then `cdp_record_test_save_as_action` to write
      `<test-app>/.rn-agent/actions/<feature-slug>.yaml` with the metadata
      header pre-populated (`id`, `intent`, `tags`, `mutates`, `status` —
      see `skills/rn-testing/SKILL.md` "Reusable Action Metadata Schema").
@@ -116,4 +120,4 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 ## Output
 
 - Pass/fail summary with evidence (screenshots, component tree snapshots, store state)
-- A `flows/<feature-name>.yaml` Maestro flow file written to the repo
+- A saved action at `<test-app>/.rn-agent/actions/<feature>.yaml` (auto-emitted on pass, Step 7)

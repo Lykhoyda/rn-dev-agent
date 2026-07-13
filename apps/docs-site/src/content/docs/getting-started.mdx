@@ -15,9 +15,11 @@ import { Steps } from '@astrojs/starlight/components';
 | iOS Simulator or Android Emulator | At least one platform |
 | Metro dev server running | `npx expo start` or `npx react-native start` |
 
-**maestro-runner** is auto-installed on first plugin load. Device control ships in-tree — the `rn-fast-runner` (iOS) and `rn-android-runner` (Android) runners build/install on first use; no external CLI is required. If anything is missing, run `/rn-dev-agent:setup` for guided diagnostics with manual fallback instructions.
+**maestro-runner** is auto-installed on first plugin load in Claude Code (via the SessionStart hook); on Codex, run `/rn-dev-agent:setup` once to install and verify it. Device control ships in-tree — the `rn-fast-runner` (iOS) and `rn-android-runner` (Android) runners build/install on first use; no external CLI is required. If anything is missing, run `/rn-dev-agent:setup` for guided diagnostics with manual fallback instructions.
 
 ## Installation
+
+Jump to your host: **[Claude Code](#claude-code)** · **[Codex](#codex)** — or [keeping up to date](#keeping-up-to-date) if it's already installed.
 
 ### Claude Code
 
@@ -91,7 +93,7 @@ After installing, navigate to your React Native project and run the setup check:
 /rn-dev-agent:setup
 ```
 
-This verifies all 9 prerequisites, retries failed installations, and gives manual instructions for anything it can't fix automatically.
+This walks all 16 prerequisite checks, retries failed installations, and gives manual instructions for anything it can't fix automatically.
 
 ### Keeping up to date
 
@@ -156,9 +158,9 @@ If you want to inspect the rules first, see [the CLAUDE.md template](https://git
 
 ## Your agent's saved flows live in `.rn-agent/`
 
-The plugin's home in your project is `.rn-agent/`. Saved actions, the UI skeleton, navigation graph, and runtime state all live there. `/setup` scaffolds the directory; [`/doctor`](commands/doctor/) reports on its health.
+The plugin's home in your project is `.rn-agent/`. Saved actions, the UI skeleton, navigation graph, and runtime state all live there. `/setup` scaffolds the directory; [`/doctor`](/rn-dev-agent/commands/doctor/) reports on its health.
 
-See the [Actions guide](actions/) for what an action is, how to record one, and how the agent uses them.
+See the [Actions guide](/rn-dev-agent/actions/) for what an action is, how to record one, and how the agent uses them.
 
 ## First run
 
@@ -175,13 +177,15 @@ On startup the plugin auto-detects your project and installs dependencies. If an
 /rn-dev-agent:setup
 ```
 
-This checks all 9 prerequisites, retries failed installations, and gives manual instructions for anything it can't fix automatically. Once everything is green:
+This walks all 16 prerequisite checks, retries failed installations, and gives manual instructions for anything it can't fix automatically. Once everything is green:
 
 ```
 /rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
 ```
 
 The plugin handles the rest — 8 phases from understanding to verified code with proof screenshots.
+
+Want to watch it work? The [observability web UI](/rn-dev-agent/commands/observe/) autostarts with the session — run `/rn-dev-agent:observe` to get the URL and follow the live tool-call timeline, device mirror, and app-state panels in your browser.
 
 ## Install from source (development)
 

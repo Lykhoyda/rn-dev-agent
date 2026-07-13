@@ -1,6 +1,6 @@
 ---
 name: creating-actions
-description: This skill should be used when the user asks to "create an action", "save this flow as an action", "make this replayable", "record a reusable action", "author a Maestro flow as an action", "add a login/setup action", or when a verified UI walk should be persisted under .rn-agent/actions/ so future sessions can replay it with maestro.
+description: This skill should be used when the user asks to "create an action", "save this flow as an action", "make this replayable", "record a reusable action", "author a Maestro flow as an action", "add a login/setup action", or when a verified UI walk should be persisted under .rn-agent/actions/ so future sessions can replay it with maestro. Also load it when a SAVED action misbehaves — "my action keeps failing", "the replay broke", "repair this flow", "why was the repair refused" — it owns the replay/repair troubleshooting protocol (Step 7).
 ---
 
 # creating-actions — Author a Reusable Maestro Action
@@ -148,6 +148,33 @@ cdp_run_action({ actionId: "<id>", params: { PRODUCT_ID: "7" }, trigger: "agent"
 - **No device available?** Leave `status: experimental` and say so explicitly — never hand-promote.
 
 After any later auto-repair or manual selector edit, **update the embedded diagram** to match — a stale diagram misleads the next repair review.
+
+## Step 7 — When a Replay Fails (repair & troubleshoot)
+
+A saved action that stops passing is usually **UI drift**, not a broken
+feature. Diagnose in this order:
+
+1. **Read the `RunRecord.autoRepair` outcome** from the `cdp_run_action`
+   result: `passed` (repaired + green — review the patched selector, update
+   the diagram), `failed` (repair tried, still red — likely a real logic
+   change, not drift), `refused` (see below), `skipped` (repair disabled).
+2. **Repair refusals are intentional** — do not force past them:
+   - `EXTERNAL_EDIT` (file mtime newer than sidecar): a human edited the
+     YAML; re-validate it (Step 5) and replay once to re-sync the sidecar.
+   - Repair budget exhausted (3 per rolling 24h): the flow is churning —
+     stop patching and re-ground the selectors (Step 2) against a fresh
+     snapshot.
+   - Snapshot infra failure: fix the device session first (`cdp_status`).
+3. **`--no-auto-repair` / strict runs** reproduce the raw failure when you
+   need to see the true error instead of a patched pass (this is also what
+   `cdp_lock_e2e_test` enforces for frozen regression tests).
+4. **Product logic changed** (button removed, screen renamed on purpose):
+   auto-repair refuses to paper over it by design. Update the flow
+   deliberately — diagram first, then YAML — or mark `status: deprecated`.
+
+The full failure taxonomy (params, appId mismatch, platform quirks like the
+iOS predictive-keyboard character drop) lives in `commands/run-action.md` —
+consult it before inventing a workaround.
 
 ## Quick Reference
 

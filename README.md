@@ -18,13 +18,19 @@ Coding agents are good at writing React Native code and bad at knowing whether i
 - **Replayable actions.** Every verified flow is saved as a parameterised Maestro action in `.rn-agent/actions/`. A 3-step wizard that took ~14 minutes as an interactive walk replays in **~4 seconds** (~210× faster). Actions self-repair when `testID`s drift.
 - **Native device control on both platforms.** In-tree XCTest (iOS) and UiAutomator (Android) runners give the agent real taps, typing, scrolling, and screenshots — with prebuilt artifacts so first use skips the multi-minute cold build.
 - **Curated best practices.** 118 indexed rules (48 React Native + 70 React/web, integrated from [Vercel's agent skills](https://github.com/vercel-labs/agent-skills)) applied during architecture and review — crash prevention, list performance, animations, state management.
-- **Watch it work.** `/rn-dev-agent:observe` serves a read-only local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels.
+- **Watch it work.** [`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/) serves a local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels — plus Actions and E2E tabs to replay saved flows straight from the browser.
+
+![The observe UI live: inspecting a failed flow, checking store state, replaying a saved action, and running the locked E2E suite — all from the browser](apps/docs-site/public/observe/observe-demo.gif)
 
 ## Quick start
 
 ### 1. Install
 
-**Claude Code** (published marketplace):
+Jump to your host: **[Claude Code](#claude-code)** · **[Codex](#codex)**
+
+#### Claude Code
+
+Published marketplace:
 
 ```bash
 /plugin marketplace add Lykhoyda/rn-dev-agent
@@ -34,7 +40,9 @@ Coding agents are good at writing React Native code and bad at knowing whether i
 
 Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json` resolves the plugin package from `packages/claude-plugin/`).
 
-**Codex** (published marketplace):
+#### Codex
+
+Published marketplace:
 
 ```bash
 codex plugin marketplace add Lykhoyda/rn-dev-agent
@@ -104,7 +112,7 @@ If auto-install fails, setup gives step-by-step manual instructions. [Full setup
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — parallel evidence from CDP + native logs + component tree |
 | `/rn-dev-agent:build-and-test <desc>` | Build the app (local or EAS), install on device, then test |
 | `/rn-dev-agent:proof-capture <desc>` | Rehearsal-gated video + screenshots + generated PR body |
-| `/rn-dev-agent:observe` | Read-only local web UI to **watch the agent live** — tool-call timeline, device mirror, route/store/component-tree panels |
+| `/rn-dev-agent:observe` | Local web UI to **watch the agent live** — tool-call timeline, device mirror, route/store/component-tree panels, browser-triggered action + E2E replays ([guide](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) |
 
 **Actions & regression:**
 
@@ -266,7 +274,7 @@ The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime w
 
 The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through your agent's permission prompts rather than trusting the tool layer.
 
-The **observability UI** (`/rn-dev-agent:observe`) is opt-in and read-only: it binds to `127.0.0.1` on a random port, rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks, and serves no mutation endpoints. Tool arguments are deep-redacted fail-closed before reaching the stream (tokens, passwords, and PII render as `[REDACTED_*]`), and the recorder keeps only a small bounded in-memory ring buffer — nothing touches disk, and nothing is exposed until you start the server.
+The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream (tokens, passwords, and PII render as `[REDACTED_*]`), and the recorder keeps only a small bounded in-memory ring buffer — the event stream itself never touches disk (replays triggered from the UI still persist their normal run records under `.rn-agent/`, same as CLI-triggered replays).
 
 ## Keeping up to date
 

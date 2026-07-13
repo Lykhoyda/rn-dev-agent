@@ -1,0 +1,37 @@
+---
+title: check-vercel-rules
+description: Run the bundled Vercel Labs agent-skills rule audit across the project, changed files, or in CI-gating mode.
+---
+
+Run the [Vercel Labs agent-skills](https://github.com/vercel-labs/agent-skills) rule checker across a broader scope than the automatic per-edit hook — the whole project, a set of changed files, or as a CI gate.
+
+## Usage
+
+```
+/rn-dev-agent:check-vercel-rules [--all | --changed [files...] | --ci | --baseline-snapshot] [--format hook|json|sarif]
+```
+
+## Modes
+
+| Argument | Behavior |
+|---|---|
+| (none) | `--all` walk of the current project; reports violations; exit 0 |
+| `--changed [files...]` | Check only the specified files (or stdin, one per line) |
+| `--all` | Walk the project for `.tsx/.jsx/.ts/.js` files (max 200) |
+| `--ci` | Same as `--all` but exits 1 on any violation — for pre-commit/CI |
+| `--baseline-snapshot` | Snapshot current violations as a baseline; later runs report only **new** ones |
+| `--format hook\|json\|sarif` | Output shape (default `hook`); SARIF 2.1.0 uploads cleanly to GitHub code scanning |
+
+## One checker, three call sites
+
+The same underlying checker runs in three places:
+
+1. **PostToolUse hook** — automatic, per edited file, during agent sessions.
+2. **This command** — manual, project- or changed-files-scoped.
+3. **CI / pre-ship gating** — `--ci` blocks on violations.
+
+Each reported violation cites a rule ID and points at the upstream rule file for the explanation and fix. Retrofitting an existing codebase? Take a `--baseline-snapshot` first so only new violations surface.
+
+## See also
+
+- [Best practices rule index](../../best-practices/) — the full 118-rule corpus the checker draws from

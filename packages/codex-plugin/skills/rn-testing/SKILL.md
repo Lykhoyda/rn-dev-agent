@@ -36,7 +36,7 @@ else
 fi
 
 # Execute flow (identical YAML syntax either way)
-$RUNNER test flows/my-flow.yaml
+$RUNNER test .maestro/my-flow.yaml
 ```
 
 ---
@@ -122,12 +122,20 @@ WRONG (race condition — gets stale state):
 2. Immediately: cdp_store_state → returns OLD state
 ```
 
-If no visual indicator exists after an action, add an explicit delay:
-```bash
-# After interaction, wait for React to settle
-# bash: sleep 0.7
-# cdp_store_state
-```
+If no visual indicator exists after an action:
+- **`device_*` path**: no manual delay for UI stability — mutating `device_*`
+  verbs already block until the UI is stable (settle engine, `meta.settle` /
+  `meta.timings_ms.settle`). A perpetually-animating screen self-bounds
+  (`meta.settle.method: "timeout"`). Note the settle proves the *screen*
+  stabilized, not that async store/network work committed — if the action
+  triggers internal state with no visible effect, poll the state predicate
+  (re-read `cdp_store_state` once or twice) or use `cdp_wait_for_network`
+  instead of assuming the first read is fresh.
+- **Maestro path**: the settle engine does NOT cover Maestro-driven taps. Prefer
+  an `assertVisible`/`extendedWaitUntil` on ANY post-action element; only if
+  truly nothing observable changes, use a bounded in-flow wait before the CDP
+  read (e.g. `extendedWaitUntil` with a short timeout) — never an unbounded or
+  repeated `sleep` loop.
 
 After code changes, Fast Refresh triggers automatically. Wait 1-2 seconds
 before querying CDP state, or call `cdp_reload` for a full reload.
@@ -235,7 +243,9 @@ maestro-runner --platform <ios|android> test /tmp/step.yaml
 
 Every reusable Maestro flow MUST declare an M7 metadata header — `# key: value`
 comment lines above the body (Maestro ignores them; the inventory and the
-`/run-action` pre-flight parse them). The 5 inventory keys:
+`/run-action` pre-flight parse them). The 5 inventory keys (summary — the
+**canonical definition** lives in the creating-actions skill's
+`references/m7-header-reference.md`; if they disagree, that reference wins):
 
 | Key | Value | Notes |
 |---|---|---|
@@ -305,8 +315,8 @@ maestro-runner --platform ios --device booted test flow.yaml
 maestro-runner --platform android --device emulator-5554 test flow.yaml
 
 # Sequential cross-platform
-maestro-runner --platform ios test flows/feature.yaml && \
-maestro-runner --platform android test flows/feature.yaml
+maestro-runner --platform ios test .maestro/feature.yaml && \
+maestro-runner --platform android test .maestro/feature.yaml
 ```
 
 ## Android-Specific Testing Rules (GH #7)
