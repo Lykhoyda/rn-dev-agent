@@ -47,9 +47,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/ajv/dist/compile/codegen/code.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/code.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
@@ -201,9 +201,9 @@ var require_code = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/codegen/scope.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/scope.js
 var require_scope = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
@@ -346,9 +346,9 @@ var require_scope = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/codegen/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/index.js
 var require_codegen = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/codegen/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
@@ -1066,9 +1066,9 @@ var require_codegen = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/util.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/util.js
 var require_util = __commonJS({
-  "node_modules/ajv/dist/compile/util.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/util.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
@@ -1233,9 +1233,9 @@ var require_util = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/names.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/names.js
 var require_names = __commonJS({
-  "node_modules/ajv/dist/compile/names.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/names.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -1272,9 +1272,9 @@ var require_names = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/errors.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/errors.js
 var require_errors = __commonJS({
-  "node_modules/ajv/dist/compile/errors.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/errors.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = void 0;
@@ -1394,9 +1394,9 @@ var require_errors = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/boolSchema.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/boolSchema.js
 var require_boolSchema = __commonJS({
-  "node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = void 0;
@@ -1445,9 +1445,9 @@ var require_boolSchema = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/rules.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/rules.js
 var require_rules = __commonJS({
-  "node_modules/ajv/dist/compile/rules.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/rules.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getRules = exports.isJSONType = void 0;
@@ -1476,9 +1476,9 @@ var require_rules = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/applicability.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/applicability.js
 var require_applicability = __commonJS({
-  "node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
@@ -1499,9 +1499,9 @@ var require_applicability = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/dataType.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/dataType.js
 var require_dataType = __commonJS({
-  "node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = void 0;
@@ -1683,9 +1683,9 @@ var require_dataType = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/defaults.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/defaults.js
 var require_defaults = __commonJS({
-  "node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.assignDefaults = void 0;
@@ -1720,9 +1720,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/code.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/code.js
 var require_code2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/code.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = void 0;
@@ -1853,9 +1853,9 @@ var require_code2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/keyword.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/keyword.js
 var require_keyword = __commonJS({
-  "node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = void 0;
@@ -1971,9 +1971,9 @@ var require_keyword = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/subschema.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/subschema.js
 var require_subschema = __commonJS({
-  "node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = void 0;
@@ -2177,9 +2177,9 @@ var require_json_schema_traverse = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/resolve.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/resolve.js
 var require_resolve = __commonJS({
-  "node_modules/ajv/dist/compile/resolve.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/resolve.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
@@ -2333,9 +2333,9 @@ var require_resolve = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/index.js
 var require_validate = __commonJS({
-  "node_modules/ajv/dist/compile/validate/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/validate/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getData = exports.KeywordCxt = exports.validateFunctionCode = void 0;
@@ -2841,9 +2841,9 @@ var require_validate = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/validation_error.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/validation_error.js
 var require_validation_error = __commonJS({
-  "node_modules/ajv/dist/runtime/validation_error.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/validation_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var ValidationError = class extends Error {
@@ -2857,9 +2857,9 @@ var require_validation_error = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/ref_error.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/ref_error.js
 var require_ref_error = __commonJS({
-  "node_modules/ajv/dist/compile/ref_error.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/ref_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var resolve_1 = require_resolve();
@@ -2874,9 +2874,9 @@ var require_ref_error = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/index.js
 var require_compile = __commonJS({
-  "node_modules/ajv/dist/compile/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = void 0;
@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve4.call(this, root, ref);
+      let _sch = resolve5.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve4(root, ref) {
+    function resolve5(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3098,9 +3098,9 @@ var require_compile = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/refs/data.json
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/data.json
 var require_data = __commonJS({
-  "node_modules/ajv/dist/refs/data.json"(exports, module) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/data.json"(exports, module) {
     module.exports = {
       $id: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
       description: "Meta-schema for $data reference (JSON AnySchema extension proposal)",
@@ -3750,55 +3750,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve4(baseURI, relativeURI, options) {
+    function resolve5(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative2, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        relative2 = parse3(serialize(relative2, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3806,7 +3806,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve4,
+      resolve: resolve5,
       resolveComponent,
       equal,
       serialize,
@@ -4019,9 +4019,9 @@ var require_fast_uri = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/uri.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/uri.js
 var require_uri = __commonJS({
-  "node_modules/ajv/dist/runtime/uri.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/uri.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var uri = require_fast_uri();
@@ -4030,9 +4030,9 @@ var require_uri = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/core.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/core.js
 var require_core = __commonJS({
-  "node_modules/ajv/dist/core.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/core.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
@@ -4457,7 +4457,7 @@ var require_core = __commonJS({
           }
         }
       }
-      _addSchema(schema, meta, baseId, validateSchema = this.opts.validateSchema, addSchema = this.opts.addUsedSchema) {
+      _addSchema(schema, meta, baseId, validateSchema2 = this.opts.validateSchema, addSchema = this.opts.addUsedSchema) {
         let id;
         const { schemaId } = this.opts;
         if (typeof schema == "object") {
@@ -4480,7 +4480,7 @@ var require_core = __commonJS({
             this._checkUnique(baseId);
           this.refs[baseId] = sch;
         }
-        if (validateSchema)
+        if (validateSchema2)
           this.validateSchema(schema, true);
         return sch;
       }
@@ -4641,9 +4641,9 @@ var require_core = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/id.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/id.js
 var require_id = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var def = {
@@ -4656,9 +4656,9 @@ var require_id = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/ref.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/ref.js
 var require_ref = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.callRef = exports.getValidate = void 0;
@@ -4778,9 +4778,9 @@ var require_ref = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/index.js
 var require_core2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var id_1 = require_id();
@@ -4799,9 +4799,9 @@ var require_core2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitNumber.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitNumber.js
 var require_limitNumber = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -4831,9 +4831,9 @@ var require_limitNumber = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/multipleOf.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/multipleOf.js
 var require_multipleOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -4859,9 +4859,9 @@ var require_multipleOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/ucs2length.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str) {
@@ -4885,9 +4885,9 @@ var require_ucs2length = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitLength.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitLength.js
 var require_limitLength = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -4917,9 +4917,9 @@ var require_limitLength = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/pattern.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/pattern.js
 var require_pattern = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -4954,9 +4954,9 @@ var require_pattern = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitProperties.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitProperties.js
 var require_limitProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -4983,9 +4983,9 @@ var require_limitProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/required.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/required.js
 var require_required = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5065,9 +5065,9 @@ var require_required = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitItems.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitItems.js
 var require_limitItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5094,9 +5094,9 @@ var require_limitItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/equal.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/equal.js
 var require_equal = __commonJS({
-  "node_modules/ajv/dist/runtime/equal.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/runtime/equal.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var equal = require_fast_deep_equal();
@@ -5105,9 +5105,9 @@ var require_equal = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
 var require_uniqueItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var dataType_1 = require_dataType();
@@ -5172,9 +5172,9 @@ var require_uniqueItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/const.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/const.js
 var require_const = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5201,9 +5201,9 @@ var require_const = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/enum.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/enum.js
 var require_enum = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5250,9 +5250,9 @@ var require_enum = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/index.js
 var require_validation = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var limitNumber_1 = require_limitNumber();
@@ -5288,9 +5288,9 @@ var require_validation = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
 var require_additionalItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateAdditionalItems = void 0;
@@ -5341,9 +5341,9 @@ var require_additionalItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/items.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/items.js
 var require_items = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateTuple = void 0;
@@ -5398,9 +5398,9 @@ var require_items = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
 var require_prefixItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var items_1 = require_items();
@@ -5415,9 +5415,9 @@ var require_prefixItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/items2020.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/items2020.js
 var require_items2020 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5450,9 +5450,9 @@ var require_items2020 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/contains.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/contains.js
 var require_contains = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5544,9 +5544,9 @@ var require_contains = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/dependencies.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/dependencies.js
 var require_dependencies = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = void 0;
@@ -5638,9 +5638,9 @@ var require_dependencies = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
 var require_propertyNames = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5681,9 +5681,9 @@ var require_propertyNames = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
 var require_additionalProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5787,9 +5787,9 @@ var require_additionalProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/properties.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/properties.js
 var require_properties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var validate_1 = require_validate();
@@ -5845,9 +5845,9 @@ var require_properties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
 var require_patternProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5919,9 +5919,9 @@ var require_patternProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/not.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/not.js
 var require_not = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -5950,9 +5950,9 @@ var require_not = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/anyOf.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/anyOf.js
 var require_anyOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5967,9 +5967,9 @@ var require_anyOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/oneOf.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/oneOf.js
 var require_oneOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6025,9 +6025,9 @@ var require_oneOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/allOf.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/allOf.js
 var require_allOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6052,9 +6052,9 @@ var require_allOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/if.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/if.js
 var require_if = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6121,9 +6121,9 @@ var require_if = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/thenElse.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/thenElse.js
 var require_thenElse = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6139,9 +6139,9 @@ var require_thenElse = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/index.js
 var require_applicator = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var additionalItems_1 = require_additionalItems();
@@ -6187,9 +6187,9 @@ var require_applicator = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/format/format.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/format/format.js
 var require_format = __commonJS({
-  "node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6277,9 +6277,9 @@ var require_format = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/format/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/format/index.js
 var require_format2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var format_1 = require_format();
@@ -6288,9 +6288,9 @@ var require_format2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/metadata.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/metadata.js
 var require_metadata = __commonJS({
-  "node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.contentVocabulary = exports.metadataVocabulary = void 0;
@@ -6311,9 +6311,9 @@ var require_metadata = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/draft7.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/draft7.js
 var require_draft7 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var core_1 = require_core2();
@@ -6333,9 +6333,9 @@ var require_draft7 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/discriminator/types.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/discriminator/types.js
 var require_types = __commonJS({
-  "node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DiscrError = void 0;
@@ -6347,9 +6347,9 @@ var require_types = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/discriminator/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/discriminator/index.js
 var require_discriminator = __commonJS({
-  "node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6452,9 +6452,9 @@ var require_discriminator = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/refs/json-schema-draft-07.json
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/json-schema-draft-07.json
 var require_json_schema_draft_07 = __commonJS({
-  "node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
     module.exports = {
       $schema: "http://json-schema.org/draft-07/schema#",
       $id: "http://json-schema.org/draft-07/schema#",
@@ -6609,9 +6609,9 @@ var require_json_schema_draft_07 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/ajv.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/ajv.js
 var require_ajv = __commonJS({
-  "node_modules/ajv/dist/ajv.js"(exports, module) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/ajv.js"(exports, module) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv = void 0;
@@ -6679,9 +6679,9 @@ var require_ajv = __commonJS({
   }
 });
 
-// node_modules/ajv-formats/dist/formats.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/formats.js
 var require_formats = __commonJS({
-  "node_modules/ajv-formats/dist/formats.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/formats.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatNames = exports.fastFormats = exports.fullFormats = void 0;
@@ -6882,9 +6882,9 @@ var require_formats = __commonJS({
   }
 });
 
-// node_modules/ajv-formats/dist/limit.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/limit.js
 var require_limit = __commonJS({
-  "node_modules/ajv-formats/dist/limit.js"(exports) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/limit.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatLimitDefinition = void 0;
@@ -6954,9 +6954,9 @@ var require_limit = __commonJS({
   }
 });
 
-// node_modules/ajv-formats/dist/index.js
+// node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/index.js
 var require_dist = __commonJS({
-  "node_modules/ajv-formats/dist/index.js"(exports, module) {
+  "node_modules/@modelcontextprotocol/sdk/node_modules/ajv-formats/dist/index.js"(exports, module) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var formats_1 = require_formats();
@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes3, createHash: createHash7 } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash11 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash7("sha1").update(key + GUID).digest("base64");
+        const digest = createHash11("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash7 } = __require("crypto");
+    var { createHash: createHash11 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash7("sha1").update(key + GUID).digest("base64");
+        const digest = createHash11("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -14722,10 +14722,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -14739,7 +14739,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep5) {
+          if (!keyProps.anchor && !keyProps.tag && !sep6) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -14763,7 +14763,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -14779,7 +14779,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -14870,7 +14870,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep5 = "";
+        let sep6 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -14884,13 +14884,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep5 + cb;
-              sep5 = "";
+                comment += sep6 + cb;
+              sep6 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep5 += source;
+                sep6 += source;
               hasSpace = true;
               break;
             default:
@@ -14933,18 +14933,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep5 && !value) {
+          if (!props.anchor && !props.tag && !sep6 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -14998,8 +14998,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep5 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
+        if (!isMap && !sep6 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -15011,7 +15011,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -15022,8 +15022,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep5)
-                for (const st of sep5) {
+              if (sep6)
+                for (const st of sep6) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -15040,7 +15040,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -15220,7 +15220,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep5 = "";
+      let sep6 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -15237,24 +15237,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep5 === " ")
-            sep5 = "\n";
-          else if (!prevMoreIndented && sep5 === "\n")
-            sep5 = "\n\n";
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          if (sep6 === " ")
+            sep6 = "\n";
+          else if (!prevMoreIndented && sep6 === "\n")
+            sep6 = "\n\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep5 === "\n")
+          if (sep6 === "\n")
             value += "\n";
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          value += sep5 + content;
-          sep5 = " ";
+          value += sep6 + content;
+          sep6 = " ";
           prevMoreIndented = false;
         }
       }
@@ -15436,25 +15436,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep5 = " ";
+      let sep6 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep5 === "\n")
-            res += sep5;
+          if (sep6 === "\n")
+            res += sep6;
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          res += sep5 + match[1];
-          sep5 = " ";
+          res += sep6 + match[1];
+          sep6 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep5 + (match?.[1] ?? "");
+      return res + sep6 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -16264,14 +16264,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep5, value }) {
+    function stringifyItem({ start, key, sep: sep6, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep5)
-        for (const st of sep5)
+      if (sep6)
+        for (const st of sep6)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -17438,18 +17438,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep5;
+          let sep6;
           if (scalar.end) {
-            sep5 = scalar.end;
-            sep5.push(this.sourceToken);
+            sep6 = scalar.end;
+            sep6.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep5 = [this.sourceToken];
+            sep6 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep5 }]
+            items: [{ start, key: scalar, sep: sep6 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -17602,15 +17602,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep5 = it.sep;
-                  sep5.push(this.sourceToken);
+                  const sep6 = it.sep;
+                  sep6.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep5 }]
+                    items: [{ start: start2, key, sep: sep6 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -17804,13 +17804,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep5 = fc.end.splice(1, fc.end.length);
-            sep5.push(this.sourceToken);
+            const sep6 = fc.end.splice(1, fc.end.length);
+            sep6.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep5 }]
+              items: [{ start, key: fc, sep: sep6 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -18119,8 +18119,8 @@ function scanForRnProject(rootDir, maxDepth) {
       continue;
     const full = join4(rootDir, name);
     try {
-      const stat = lstatSync(full);
-      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+      const stat2 = lstatSync(full);
+      if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
       continue;
@@ -18154,8 +18154,8 @@ function collectRnProjects(rootDir, maxDepth, out) {
       continue;
     const full = join4(rootDir, name);
     try {
-      const stat = lstatSync(full);
-      if (!(stat.isDirectory() || stat.isSymbolicLink()))
+      const stat2 = lstatSync(full);
+      if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
       continue;
@@ -19376,14 +19376,14 @@ var init_fast_runner_ref_map = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function isPortFree(port) {
-  return new Promise((resolve4) => {
+  return new Promise((resolve5) => {
     const srv = createServer2();
-    srv.once("error", () => resolve4(false));
-    srv.listen({ port, host: "127.0.0.1" }, () => srv.close(() => resolve4(true)));
+    srv.once("error", () => resolve5(false));
+    srv.listen({ port, host: "127.0.0.1" }, () => srv.close(() => resolve5(true)));
   });
 }
 function findFreePort(preferred) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -19399,7 +19399,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve4(chosen));
+        srv.close(() => resolve5(chosen));
       });
     };
     tryListen(preferred, true);
@@ -19542,8 +19542,8 @@ function runnerStatePath(key) {
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync2(path);
-    if (stat.isSymbolicLink())
+    const stat2 = lstatSync2(path);
+    if (stat2.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync4(path, "utf8"));
   } catch {
@@ -20367,7 +20367,7 @@ function buildRunnerPortEnv(port) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -20385,7 +20385,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve4();
+        resolve5();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -20419,7 +20419,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
     }
   }
   const launch = plan[plan.length - 1];
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -20467,7 +20467,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve4(state);
+      resolve5(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", handleChunk);
@@ -21029,7 +21029,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve4) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve5) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -21055,7 +21055,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve4(ok);
+        resolve5(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -21166,7 +21166,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync8(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve4) => setTimeout(resolve4, ms)),
+    delay: (ms) => new Promise((resolve5) => setTimeout(resolve5, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -21610,10 +21610,10 @@ function androidRunnerApksExist() {
 function _androidRunnerApkPathsForTest() {
   return RUNNER_APK_PATHS;
 }
-function invalidateAndroidRunnerApks(rm = (p) => rmSync3(p, { force: true })) {
+function invalidateAndroidRunnerApks(rm2 = (p) => rmSync3(p, { force: true })) {
   for (const apk of RUNNER_APK_PATHS) {
     try {
-      rm(apk);
+      rm2(apk);
     } catch {
     }
   }
@@ -21664,7 +21664,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     hostPort = await findFreePort(0);
     await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
   }
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     let resolved = false;
     const child = spawn3("adb", [
       ...adbSerialArgs(deviceId),
@@ -21713,7 +21713,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve4(state);
+      resolve5(state);
     };
     child.on("error", (err) => {
       if (resolved)
@@ -23944,8 +23944,8 @@ async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve4) => {
-        probeTimer = setTimeout(() => resolve4({ error: "timeout" }), timeoutMs);
+      new Promise((resolve5) => {
+        probeTimer = setTimeout(() => resolve5({ error: "timeout" }), timeoutMs);
       })
     ]);
     if (probeTimer)
@@ -23990,8 +23990,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve4) => {
-        timer = setTimeout(() => resolve4({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve5) => {
+        timer = setTimeout(() => resolve5({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -24165,7 +24165,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync13(path),
     removeFile: (path) => unlinkSync6(path),
-    delay: (ms) => new Promise((resolve4) => setTimeout(resolve4, ms)),
+    delay: (ms) => new Promise((resolve5) => setTimeout(resolve5, ms)),
     listApps: (udid) => execFileSync5("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -27080,11 +27080,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { readFileSync as readFileSync29 } from "node:fs";
+import { createHash as createHash10 } from "node:crypto";
+import { readFileSync as readFileSync30, rmSync as rmSync6 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname15, join as join43 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { dirname as dirname17, join as join45 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -39177,7 +39178,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
+        await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -39194,7 +39195,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -39272,7 +39273,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve4(parseResult.data);
+            resolve5(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -39533,12 +39534,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve4, interval);
+      const timeoutId = setTimeout(resolve5, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -40638,7 +40639,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
+      await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -41287,12 +41288,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve4();
+        resolve5();
       } else {
-        this._stdout.once("drain", resolve4);
+        this._stdout.once("drain", resolve5);
       }
     });
   }
@@ -41743,19 +41744,6 @@ function stopBackgroundPoll(ctx) {
 }
 
 // packages/rn-dev-agent-core/dist/metro/events-client.js
-function detectExpoManifestResponse(body) {
-  const trimmed = body.trim();
-  if (!trimmed || trimmed[0] !== "{")
-    return false;
-  try {
-    const parsed = JSON.parse(trimmed);
-    const hasRuntimeVersion = typeof parsed.runtimeVersion === "string";
-    const hasLaunchAsset = typeof parsed.launchAsset === "object" && parsed.launchAsset !== null && typeof parsed.launchAsset.url === "string";
-    return hasRuntimeVersion || hasLaunchAsset;
-  } catch {
-    return false;
-  }
-}
 var MetroEventsClient = class {
   opts;
   ws = null;
@@ -41764,10 +41752,8 @@ var MetroEventsClient = class {
   reconnectAttempt = 0;
   _lastBuild = null;
   _buildErrors = 0;
-  // B129 (D658): set when the /events endpoint is detected as incompatible
-  // (e.g. Expo CLI serving the manifest protocol on this path). Once set,
-  // start() is a no-op — no point opening a WS that will deliver no events.
-  _incompatibleReason = null;
+  _connectionEpoch = 0;
+  _relevantEventSequence = 0;
   events;
   constructor(options) {
     this.opts = {
@@ -41776,28 +41762,21 @@ var MetroEventsClient = class {
       bufferCapacity: options.bufferCapacity ?? 100,
       logTag: options.logTag ?? "Metro.events",
       maxReconnectAttempts: options.maxReconnectAttempts ?? 0,
-      skipIncompatibilityProbe: options.skipIncompatibilityProbe ?? false,
-      onEvent: options.onEvent,
-      fetchFn: options.fetchFn
+      onEvent: options.onEvent
     };
     this.events = new RingBuffer(this.opts.bufferCapacity);
   }
   get isConnected() {
     return this.state === "open";
   }
-  /**
-   * B129 (D658): reason the /events stream is unusable, if any. When set,
-   * `isConnected` is false and no events will ever flow. Surface this to
-   * the user via cdp_status.metro so they know why lastBuild stays null.
-   */
-  get incompatibleReason() {
-    return this._incompatibleReason;
-  }
   get lastBuild() {
     return this._lastBuild;
   }
   get buildErrors() {
     return this._buildErrors;
+  }
+  get authorityMarker() {
+    return `connection-${this._connectionEpoch}:event-${this._relevantEventSequence}`;
   }
   /** Port this client is attached to. Immutable after construction — if Metro hops ports, the caller must stop() and construct a fresh client. */
   get port() {
@@ -41817,49 +41796,11 @@ var MetroEventsClient = class {
   async start() {
     if (this.state === "open" || this.state === "connecting")
       return;
-    if (this.state === "incompatible")
-      return;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (!this.opts.skipIncompatibilityProbe) {
-      const reason = await this.probeIncompatibility();
-      if (reason) {
-        this._incompatibleReason = reason;
-        this.state = "incompatible";
-        logger.info(this.opts.logTag, `events endpoint incompatible (${reason}) \u2014 not opening WS`);
-        return;
-      }
-    }
     await this.connectOnce();
-  }
-  /**
-   * B129 (D658): HTTP GET probe to detect non-Metro /events responses.
-   * Returns the incompatibility reason if detected, null if the endpoint
-   * appears compatible or the probe itself failed (fall through to WS —
-   * connection failures will retry via existing reconnect logic).
-   */
-  async probeIncompatibility() {
-    const fetchFn = this.opts.fetchFn ?? (typeof fetch === "function" ? fetch : null);
-    if (!fetchFn)
-      return null;
-    try {
-      const url = `http://${this.opts.host}:${this.opts.port}/events`;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1500);
-      try {
-        const resp = await fetchFn(url, { signal: ctrl.signal });
-        if (!resp.ok)
-          return null;
-        const text = await resp.text();
-        return detectExpoManifestResponse(text) ? "expo-cli-incompatible" : null;
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch {
-      return null;
-    }
   }
   /**
    * Stop the client and cancel any pending reconnect. Idempotent — safe to call
@@ -41896,7 +41837,6 @@ var MetroEventsClient = class {
     }
     this.state = "stopped";
     this.reconnectAttempt = 0;
-    this._incompatibleReason = null;
   }
   /** Reset the build-error counter. Useful when the user acknowledges errors. */
   clearBuildErrors() {
@@ -41905,7 +41845,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -41916,9 +41856,10 @@ var MetroEventsClient = class {
           return;
         outcome = "open";
         this.state = "open";
+        this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve4();
+        resolve5();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -41926,7 +41867,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve4();
+        resolve5();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -41958,6 +41899,9 @@ var MetroEventsClient = class {
       payload: raw
     };
     this.events.push(event);
+    if (type.startsWith("bundle_build_") || type.toLowerCase().includes("reload")) {
+      this._relevantEventSequence += 1;
+    }
     if (type === "bundle_build_started") {
       this._lastBuild = { status: "started", timestamp: event.timestamp };
     } else if (type === "bundle_build_done") {
@@ -42101,7 +42045,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -42133,12 +42077,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve4(addr.port);
+        resolve5(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -42149,7 +42093,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve4();
+        resolve5();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -42327,8 +42271,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve4) => {
-        this.httpServer?.close(() => resolve4());
+      await new Promise((resolve5) => {
+        this.httpServer?.close(() => resolve5());
       });
       this.httpServer = null;
     }
@@ -45575,13 +45519,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve4, reject, timer });
+    pending2.set(id, { resolve: resolve5, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -45955,7 +45899,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const ws = new wrapper_default(url, {
       handshakeTimeout: 5e3,
       maxPayload: 100 * 1024 * 1024,
@@ -45977,7 +45921,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve4();
+      resolve5();
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -48077,7 +48021,6 @@ async function buildStatusResult(client2) {
       eventsConnected: metroEvents?.isConnected ?? false,
       lastBuild: metroEvents?.lastBuild ?? null,
       buildErrors: metroEvents?.buildErrors ?? 0,
-      eventsReason: metroEvents?.incompatibleReason ?? null,
       candidates,
       projectRoot,
       servingCwd,
@@ -50479,8 +50422,8 @@ function createDeviceBatchHandler() {
       let stepTimer;
       const result = await Promise.race([
         executeStep(step),
-        new Promise((resolve4) => {
-          stepTimer = setTimeout(() => resolve4(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)), stepTimeout);
+        new Promise((resolve5) => {
+          stepTimer = setTimeout(() => resolve5(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)), stepTimeout);
         })
       ]);
       if (stepTimer)
@@ -53002,7 +52945,7 @@ function firstTestId(steps) {
 async function replayFlow(steps, dispatch) {
   const trace = [];
   let lastTapped = null;
-  const fail = (i, reason) => ({
+  const fail2 = (i, reason) => ({
     passed: false,
     failedStepIndex: i,
     reason,
@@ -53023,7 +52966,7 @@ async function replayFlow(steps, dispatch) {
           break;
         case "type": {
           if (!lastTapped)
-            return fail(i, "inputText before any tapOn \u2014 no focus target");
+            return fail2(i, "inputText before any tapOn \u2014 no focus target");
           await dispatch.type(lastTapped, s.text);
           trace.push({ t: s.t, target: lastTapped, ok: true });
           break;
@@ -53032,7 +52975,7 @@ async function replayFlow(steps, dispatch) {
           const ok = await dispatch.isVisible(s.id);
           trace.push({ t: s.t, target: s.id, ok });
           if (!ok)
-            return fail(i, `assertVisible: "${s.id}" not present in CDP tree`);
+            return fail2(i, `assertVisible: "${s.id}" not present in CDP tree`);
           break;
         }
         case "wait":
@@ -53059,7 +53002,7 @@ async function replayFlow(steps, dispatch) {
       }
     } catch (e) {
       trace.push({ t: s.t, target: "id" in s ? s.id : void 0, ok: false });
-      return fail(i, e instanceof Error ? e.message : String(e));
+      return fail2(i, e instanceof Error ? e.message : String(e));
     }
   }
   return { passed: true, steps: trace };
@@ -53287,20 +53230,24 @@ function createRunActionHandler(deps = {}) {
       return failResult(`Invalid actionId "${String(args.actionId).slice(0, 80)}" \u2014 must match /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ (no "..") and be <= 64 chars`, "BAD_FILENAME");
     }
     const projectRoot = args.projectRoot ?? process.cwd();
+    const proofReplay = args.proofReplay === true;
+    if (proofReplay && (args.autoRepair !== false || args.forceReload !== false)) {
+      return failResult("cdp_run_action proofReplay requires autoRepair=false and forceReload=false", { proofReplay: true });
+    }
     const loaded = loadAction(projectRoot, args.actionId);
     if (!loaded) {
       return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml`, "NO_PROJECT_ROOT", {
         hint: "Verify with /list-learned-actions, or pass projectRoot if cdp-bridge is invoked outside the project dir."
       });
     }
-    const forceReload = args.forceReload !== false;
+    const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     const autoRepairEnabled = args.autoRepair !== false;
     const trigger = args.trigger ?? "agent";
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
     let probeDeviceId = null;
-    const persistRunWithDevice = (record2) => persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
+    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve() : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
     try {
       let atRisk = null;
       const blindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
@@ -53401,6 +53348,7 @@ function createRunActionHandler(deps = {}) {
         return okResult({
           passed: true,
           actionId: args.actionId,
+          ...proofReplay ? { proofReplay: true } : {},
           autoRepair: autoRepair2,
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
@@ -54037,7 +53985,7 @@ var SIGKILL_GRACE_MS3 = 1500;
 function collectNativeIos(durationMs, signal) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -54104,7 +54052,7 @@ function collectNativeIos(durationMs, signal) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve4(entries);
+        resolve5(entries);
       }
     });
     proc.on("error", (err) => {
@@ -54151,7 +54099,7 @@ function parseIosNdjson(line) {
 function collectNativeAndroid(durationMs, signal) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -54230,7 +54178,7 @@ function collectNativeAndroid(durationMs, signal) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve4(entries);
+        resolve5(entries);
       }
     });
     proc.on("error", (err) => {
@@ -55762,6 +55710,1694 @@ function createDeviceRecordHandler() {
   };
 }
 
+// packages/rn-dev-agent-core/dist/tools/proof-capture.js
+import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
+import { execFileSync as execFileSync6 } from "node:child_process";
+import { chmodSync, closeSync as closeSync3, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync19, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { basename as basename5, dirname as dirname13, extname, isAbsolute as isAbsolute3, join as join29, relative, resolve as resolve3, sep as sep5 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// packages/rn-dev-agent-core/dist/domain/proof-capture.js
+import { createHash as createHash5 } from "node:crypto";
+var StrictProofMonitor = class {
+  now;
+  events = [];
+  observedResults = [];
+  active = false;
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  begin() {
+    this.events = [];
+    this.observedResults = [];
+    this.active = true;
+  }
+  record(event) {
+    if (!this.active || event.tool === "proof_capture")
+      return;
+    const ts = this.now();
+    this.events.push({
+      tool: event.tool,
+      ok: event.status === "PASS",
+      ts,
+      durationMs: event.latencyMs,
+      argsHash: hashProofArgs(event.params)
+    });
+    this.observedResults.push({
+      tool: event.tool,
+      ok: event.status === "PASS",
+      ts,
+      argsHash: hashProofArgs(event.params),
+      resultHash: hashObservedValue(event.result),
+      screenshotPath: observedScreenshotPath(event),
+      assertionPassed: observedAssertionPassed(event)
+    });
+  }
+  snapshot() {
+    return structuredClone(this.events);
+  }
+  stop() {
+    this.active = false;
+    return this.snapshot();
+  }
+  observations() {
+    return structuredClone(this.observedResults);
+  }
+};
+function canonicalizeProofValue(value) {
+  if (Array.isArray(value))
+    return value.map(canonicalizeProofValue);
+  if (!value || typeof value !== "object")
+    return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, nested]) => [key, canonicalizeProofValue(nested)]));
+}
+function hashProofArgs(params) {
+  return createHash5("sha256").update(JSON.stringify(canonicalizeProofValue(redact(params)))).digest("hex");
+}
+function hashObservedValue(value) {
+  const bytes = JSON.stringify(value) ?? String(value);
+  return createHash5("sha256").update(bytes).digest("hex");
+}
+function resultEnvelopeData(result) {
+  if (!result || typeof result !== "object")
+    return null;
+  const content = result.content;
+  if (!Array.isArray(content))
+    return result;
+  const text = content[0]?.text;
+  if (typeof text !== "string")
+    return result;
+  try {
+    const envelope = JSON.parse(text);
+    return envelope.data ?? envelope;
+  } catch {
+    return result;
+  }
+}
+function stringField(value, fields) {
+  if (!value || typeof value !== "object")
+    return null;
+  for (const field of fields) {
+    const candidate = value[field];
+    if (typeof candidate === "string" && candidate.length > 0)
+      return candidate;
+  }
+  return null;
+}
+function observedScreenshotPath(event) {
+  return stringField(resultEnvelopeData(event.result), ["screenshotPath", "path", "output"]);
+}
+function observedAssertionPassed(event) {
+  if (event.status !== "PASS")
+    return false;
+  const tool = event.tool.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replaceAll("-", "_");
+  const data = resultEnvelopeData(event.result);
+  if (!data || typeof data !== "object")
+    return !tool.endsWith("proof_step");
+  const record2 = data;
+  if (tool.endsWith("proof_step") && record2.verified !== true)
+    return false;
+  if (record2.verified === false || record2.ok === false)
+    return false;
+  return !Array.isArray(record2.errors) || record2.errors.length === 0;
+}
+var readOnlyTools = /* @__PURE__ */ new Set([
+  "cdp_status",
+  "cdp_targets",
+  "device_list",
+  "cdp_component_tree",
+  "cdp_component_state",
+  "cdp_diagnostic_renderers",
+  "cdp_navigation_state",
+  "cdp_nav_graph",
+  "cdp_store_state",
+  "cdp_network_log",
+  "cdp_network_body",
+  "cdp_wait_for_network",
+  "cdp_console_log",
+  "cdp_error_log",
+  "cdp_native_errors",
+  "cdp_metro_events",
+  "cdp_heap_usage",
+  "cdp_cpu_profile",
+  "cdp_object_inspect",
+  "collect_logs",
+  "expect_redux",
+  "expect_route",
+  "expect_visible_by_testid",
+  "expect_text"
+]);
+function normalizeToolName(tool) {
+  const bare = tool.startsWith("mcp__") ? tool.split("__").at(-1) ?? tool : tool;
+  return bare.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replaceAll("-", "_");
+}
+function isReadOnlyTool(tool) {
+  return readOnlyTools.has(tool) || tool.startsWith("expect_");
+}
+function forbiddenReason(tool) {
+  const tokens = tool.split("_");
+  if (tokens.includes("action") && tokens.includes("repair")) {
+    return "ACTION_REPAIR_DURING_RECORDING";
+  }
+  if (tool === "cdp_reload" || tool === "reload")
+    return "RELOAD_DURING_RECORDING";
+  if (tool === "cdp_restart" || tool === "restart")
+    return "RESTART_DURING_RECORDING";
+  if (tool === "cdp_dismiss_dev_client_picker" || tool === "dismiss_dev_client_picker" || tool === "dev_client_picker_dismiss") {
+    return "DEV_CLIENT_DISMISSAL_DURING_RECORDING";
+  }
+  if (tool === "device_reset_state" || tool === "cdp_reset_state" || tool === "reset_state") {
+    return "STATE_RESET_DURING_RECORDING";
+  }
+  return null;
+}
+function durationBounds(expectedMs) {
+  return {
+    minimumMs: Math.floor(expectedMs * 0.8),
+    maximumMs: Math.min(Math.ceil(expectedMs * 1.35 + 3e3), 6e4)
+  };
+}
+function validateTrace(allowedTools, observed) {
+  const normalizedAllowed = allowedTools.map(normalizeToolName);
+  const allowed = new Set(normalizedAllowed);
+  const orderedOperations = normalizedAllowed.filter((tool) => !isReadOnlyTool(tool));
+  const reasons = [];
+  let expectedIndex = 0;
+  const reject = (reason) => {
+    if (!reasons.includes(reason))
+      reasons.push(reason);
+  };
+  for (const event of observed) {
+    const tool = normalizeToolName(event.tool);
+    if (!event.ok)
+      reject("OBSERVED_TOOL_FAILED");
+    const forbidden = forbiddenReason(tool);
+    if (forbidden) {
+      reject(forbidden);
+      continue;
+    }
+    if (isReadOnlyTool(tool)) {
+      if (!allowed.has(tool))
+        reject("UNDECLARED_READ_ONLY_TOOL");
+      continue;
+    }
+    if (!allowed.has(tool)) {
+      reject("UNDECLARED_MUTATING_TOOL");
+      continue;
+    }
+    if (orderedOperations[expectedIndex] === tool) {
+      expectedIndex += 1;
+      continue;
+    }
+    reject("STORYBOARD_ORDER_VIOLATION");
+    const laterIndex = orderedOperations.indexOf(tool, expectedIndex + 1);
+    if (laterIndex >= 0)
+      expectedIndex = laterIndex + 1;
+  }
+  if (reasons.length === 0 && expectedIndex < orderedOperations.length) {
+    reject("STORYBOARD_OPERATION_MISSING");
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+// packages/rn-dev-agent-core/dist/domain/proof-receipt.js
+var gitShaSchema = external_exports.string().regex(/^[0-9a-f]{7,64}$/);
+var sha256Schema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var kebabIdSchema = external_exports.string().regex(/^[a-z0-9-]+$/);
+var stableReasonCodeSchema = external_exports.string().regex(/^[A-Z0-9_]+$/);
+var proofClassSchema = external_exports.enum(["feature", "tooling", "regression"]);
+var proofStageSchema = external_exports.enum([
+  "idle",
+  "rehearsing",
+  "rehearsed",
+  "armed",
+  "recording",
+  "validating",
+  "mechanically_accepted",
+  "accepted",
+  "rejected"
+]);
+var storyboardStepSchema = external_exports.object({
+  id: kebabIdSchema,
+  criterion: external_exports.string().min(1),
+  expectedTool: external_exports.string().min(1),
+  assertionTool: external_exports.string().min(1),
+  expectedArgsSha256: sha256Schema,
+  assertionArgsSha256: sha256Schema,
+  verifyTestID: external_exports.string().min(1),
+  screenshotPath: external_exports.string().min(1),
+  expectedDwellMs: external_exports.number().int().nonnegative(),
+  maximumDwellMs: external_exports.number().int().positive()
+}).strict();
+var storyboardSchema = external_exports.object({
+  schemaVersion: external_exports.literal(1),
+  id: external_exports.string().min(1),
+  proofClass: proofClassSchema,
+  actionId: external_exports.string().min(1),
+  sourceTreeSha: gitShaSchema,
+  allowedTools: external_exports.array(external_exports.string().min(1)).min(1),
+  steps: external_exports.array(storyboardStepSchema).min(3)
+}).strict();
+var proofEventSchema = external_exports.object({
+  tool: external_exports.string(),
+  ok: external_exports.boolean(),
+  ts: external_exports.number().int(),
+  durationMs: external_exports.number().nonnegative(),
+  argsHash: external_exports.string().optional()
+}).strict();
+var proofIssueSchema = external_exports.object({
+  repository: external_exports.string().min(1),
+  number: external_exports.number().int().positive()
+}).strict();
+var proofPullRequestSchema = external_exports.object({
+  number: external_exports.number().int().positive(),
+  headSha: gitShaSchema
+}).strict();
+var acceptanceMappingSchema = external_exports.object({
+  criterion: external_exports.string().min(1),
+  storyboardStepIds: external_exports.array(kebabIdSchema).min(1)
+}).strict();
+var proofGitSchema = external_exports.object({
+  sourceTreeSha: gitShaSchema,
+  proofHeadSha: gitShaSchema,
+  dirty: external_exports.boolean()
+}).strict();
+var proofDeviceSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  platform: external_exports.enum(["ios", "android"]),
+  model: external_exports.string().min(1),
+  osVersion: external_exports.string().min(1)
+}).strict();
+var proofRuntimeSchema = external_exports.object({
+  bundleId: external_exports.string().min(1),
+  metroPort: external_exports.number().int().positive().max(65535),
+  metroReady: external_exports.boolean(),
+  pluginVersion: external_exports.string().min(1)
+}).strict();
+var proofFixtureSchema = external_exports.object({
+  name: external_exports.string().min(1),
+  version: external_exports.string().min(1)
+}).strict();
+var proofActionSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  version: external_exports.string().min(1),
+  sha256: sha256Schema
+}).strict();
+var proofStoryboardIdentitySchema = external_exports.object({
+  id: external_exports.string().min(1),
+  sha256: sha256Schema
+}).strict();
+var proofRehearsalSchema = external_exports.object({
+  startedAt: external_exports.string().datetime(),
+  finishedAt: external_exports.string().datetime(),
+  durationMs: external_exports.number().nonnegative(),
+  clean: external_exports.boolean()
+}).strict();
+var proofVideoSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  sha256: sha256Schema,
+  durationMs: external_exports.number().nonnegative(),
+  sizeBytes: external_exports.number().int().positive(),
+  codec: external_exports.string().min(1),
+  width: external_exports.number().int().positive(),
+  height: external_exports.number().int().positive()
+}).strict();
+var proofScreenshotSchema = external_exports.object({
+  stepId: kebabIdSchema,
+  path: external_exports.string().min(1),
+  timestampMs: external_exports.number().nonnegative(),
+  sha256: sha256Schema
+}).strict();
+var proofAssertionSchema = external_exports.object({
+  stepId: kebabIdSchema,
+  tool: external_exports.string().min(1),
+  ok: external_exports.boolean(),
+  resultHash: sha256Schema
+}).strict();
+var acceptedProofAssertionSchema = proofAssertionSchema.extend({ ok: external_exports.literal(true) }).strict();
+var proofEventTraceSchema = external_exports.object({
+  allowedTools: external_exports.array(external_exports.string().min(1)).min(1),
+  observed: external_exports.array(proofEventSchema)
+}).strict();
+var proofFrameMatchSchema = external_exports.object({
+  stepId: kebabIdSchema,
+  screenshotSha256: sha256Schema,
+  videoTimestampMs: external_exports.number().nonnegative(),
+  score: external_exports.number().min(0).max(1)
+}).strict();
+var proofContactSheetSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  sha256: sha256Schema
+}).strict();
+var proofErrorBaselineSchema = external_exports.object({
+  beforeSha256: sha256Schema,
+  afterSha256: sha256Schema,
+  beforeCount: external_exports.number().int().nonnegative(),
+  afterCount: external_exports.number().int().nonnegative(),
+  clean: external_exports.boolean()
+}).strict();
+var evidenceReviewSchema = external_exports.object({
+  provider: external_exports.string().min(1),
+  writerProvider: external_exports.string().min(1),
+  independent: external_exports.literal(true),
+  exactFeature: external_exports.literal(true),
+  irrelevantScreens: external_exports.literal(false),
+  debuggingFriction: external_exports.literal(false),
+  personalData: external_exports.literal(false),
+  resultHash: sha256Schema
+}).strict();
+var sharedReceiptShape = {
+  schemaVersion: external_exports.literal(1),
+  runId: external_exports.string().min(1),
+  issue: proofIssueSchema,
+  pullRequest: proofPullRequestSchema,
+  proofClass: proofClassSchema,
+  acceptanceMappings: external_exports.array(acceptanceMappingSchema).min(1),
+  git: proofGitSchema,
+  device: proofDeviceSchema,
+  runtime: proofRuntimeSchema,
+  fixture: proofFixtureSchema,
+  action: proofActionSchema,
+  storyboard: proofStoryboardIdentitySchema
+};
+var acceptedEvidenceShape = {
+  ...sharedReceiptShape,
+  rehearsal: proofRehearsalSchema.extend({ clean: external_exports.literal(true) }).strict(),
+  video: proofVideoSchema,
+  screenshots: external_exports.array(proofScreenshotSchema).min(3),
+  assertions: external_exports.array(acceptedProofAssertionSchema).min(3),
+  eventTrace: proofEventTraceSchema,
+  frameMatches: external_exports.array(proofFrameMatchSchema).min(3),
+  contactSheet: proofContactSheetSchema,
+  errorBaseline: proofErrorBaselineSchema.extend({ clean: external_exports.literal(true) }).strict(),
+  invalidationReasons: external_exports.array(stableReasonCodeSchema).length(0)
+};
+var mechanicallyAcceptedProofReceiptSchema = external_exports.object({
+  ...acceptedEvidenceShape,
+  verdict: external_exports.literal("mechanically_accepted")
+}).strict();
+var rejectedProofReceiptSchema = external_exports.object({
+  ...sharedReceiptShape,
+  rehearsal: proofRehearsalSchema,
+  video: proofVideoSchema.nullable(),
+  screenshots: external_exports.array(proofScreenshotSchema),
+  assertions: external_exports.array(proofAssertionSchema),
+  eventTrace: proofEventTraceSchema,
+  frameMatches: external_exports.array(proofFrameMatchSchema),
+  contactSheet: proofContactSheetSchema.nullable(),
+  errorBaseline: proofErrorBaselineSchema,
+  invalidationReasons: external_exports.array(stableReasonCodeSchema).min(1),
+  verdict: external_exports.literal("rejected")
+}).strict();
+var mechanicalProofReceiptSchema = external_exports.discriminatedUnion("verdict", [
+  mechanicallyAcceptedProofReceiptSchema,
+  rejectedProofReceiptSchema
+]);
+var finalProofReceiptSchema = external_exports.object({
+  ...acceptedEvidenceShape,
+  evidenceReview: evidenceReviewSchema,
+  verdict: external_exports.literal("accepted")
+}).strict();
+
+// packages/rn-dev-agent-core/dist/tools/proof-capture.js
+init_utils();
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute3, "path must be absolute");
+var beginRehearsalSchema = external_exports.object({
+  action: external_exports.literal("begin_rehearsal"),
+  projectRoot: absolutePathSchema,
+  receiptPath: absolutePathSchema,
+  videoPath: absolutePathSchema,
+  contactSheetPath: absolutePathSchema,
+  writerProvider: external_exports.string().min(1),
+  runId: external_exports.string().min(1),
+  issue: proofIssueSchema,
+  pullRequest: proofPullRequestSchema,
+  proofClass: proofClassSchema,
+  acceptanceMappings: external_exports.array(acceptanceMappingSchema).min(1),
+  fixture: proofFixtureSchema,
+  proofAction: proofActionSchema,
+  storyboard: storyboardSchema
+}).strict();
+var sessionActionSchema = (action) => external_exports.object({ action: external_exports.literal(action) }).strict();
+var validateSchema = sessionActionSchema("validate");
+var finalizeSchema = external_exports.object({
+  action: external_exports.literal("finalize"),
+  evidenceReview: evidenceReviewSchema
+}).strict();
+var proofCaptureInputSchema = external_exports.discriminatedUnion("action", [
+  beginRehearsalSchema,
+  sessionActionSchema("finish_rehearsal"),
+  sessionActionSchema("arm"),
+  sessionActionSchema("start_recording"),
+  sessionActionSchema("stop_recording"),
+  validateSchema,
+  finalizeSchema,
+  sessionActionSchema("status"),
+  sessionActionSchema("discard"),
+  sessionActionSchema("contract")
+]);
+var readinessSchema = external_exports.object({
+  cdpAttached: external_exports.boolean(),
+  helpersAttached: external_exports.boolean(),
+  metroReady: external_exports.boolean(),
+  metroBuildPending: external_exports.boolean(),
+  metroBuildFailed: external_exports.boolean(),
+  metroEventsConnected: external_exports.boolean(),
+  metroEventMarker: external_exports.string().min(1),
+  errorCount: external_exports.number().int().nonnegative(),
+  errorSha256: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  device: proofDeviceSchema,
+  runtime: proofRuntimeSchema
+}).strict();
+function hashBytes(bytes) {
+  return createHash6("sha256").update(bytes).digest("hex");
+}
+function sameProofAction(left, right) {
+  return left.id === right.id && left.version === right.version && left.sha256 === right.sha256;
+}
+function readProofActionIdentity(appProjectRoot, actionId) {
+  try {
+    const path = actionPathFor(appProjectRoot, actionId);
+    const bytesBefore = readFileSync19(path);
+    const action = loadAction(appProjectRoot, actionId);
+    const bytesAfter = readFileSync19(path);
+    if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
+      return null;
+    }
+    return {
+      id: actionId,
+      version: String(action.state.revision),
+      sha256: createHash6("sha256").update(bytesAfter).digest("hex")
+    };
+  } catch {
+    return null;
+  }
+}
+function isNormalizedDescendant(root, path) {
+  if (!isAbsolute3(root) || !isAbsolute3(path) || resolve3(root) !== root || resolve3(path) !== path) {
+    return false;
+  }
+  const fromRoot = relative(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep5}`) && !isAbsolute3(fromRoot);
+}
+function hasExistingSymlink(root, path) {
+  const parts = relative(root, path).split(sep5);
+  for (let length = 0; length <= parts.length; length += 1) {
+    const candidate = resolve3(root, ...parts.slice(0, length));
+    try {
+      if (lstatSync3(candidate).isSymbolicLink())
+        return true;
+    } catch {
+    }
+  }
+  return false;
+}
+function validCaptureContext(args, expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve3(expectedRoot) !== expectedRoot) {
+    return false;
+  }
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
+    return false;
+  const proofRoot = join29(expectedRoot, "docs", "proof", args.runId);
+  const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
+  const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
+  if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
+    return false;
+  }
+  const imageExtensions = /* @__PURE__ */ new Set([".jpg", ".jpeg", ".png"]);
+  return basename5(args.receiptPath) === "proof-receipt.json" && extname(args.videoPath).toLowerCase() === ".mp4" && [".jpg", ".jpeg"].includes(extname(args.contactSheetPath).toLowerCase()) && screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())) && args.storyboard.steps.every((step) => step.assertionArgsSha256 === hashProofArgs({
+    verifyTestID: step.verifyTestID,
+    screenshotPath: step.screenshotPath,
+    waitMs: 0
+  }));
+}
+function proofRootExists(args) {
+  const proofRoot = join29(args.projectRoot, "docs", "proof", args.runId);
+  try {
+    lstatSync3(proofRoot);
+    return true;
+  } catch (error2) {
+    return error2.code !== "ENOENT";
+  }
+}
+function resolveProofWorktreeRoot(detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute3(detectedProjectRoot) || resolve3(detectedProjectRoot) !== detectedProjectRoot) {
+    return null;
+  }
+  try {
+    const root = execFileSync6("git", ["rev-parse", "--show-toplevel"], {
+      cwd: detectedProjectRoot,
+      encoding: "utf8"
+    }).trim();
+    return root && isAbsolute3(root) && resolve3(root) === root ? root : null;
+  } catch {
+    return null;
+  }
+}
+function parseProofGitChanges(porcelain) {
+  const records = porcelain.split("\0");
+  const changes = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record2 = records[index];
+    if (!record2 || record2.length < 4)
+      continue;
+    const change = {
+      path: record2.slice(3).replaceAll("\\", "/"),
+      indexStatus: record2[0],
+      worktreeStatus: record2[1]
+    };
+    if (/[RC]/.test(record2.slice(0, 2))) {
+      const sourcePath = records[index + 1];
+      if (sourcePath)
+        change.sourcePath = sourcePath.replaceAll("\\", "/");
+      index += 1;
+    }
+    changes.push(change);
+  }
+  return changes;
+}
+function readProofGitInfo(root) {
+  const sha = execFileSync6("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync6("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  const changes = parseProofGitChanges(status);
+  return { sha: sha || null, dirty: changes.length > 0, changes };
+}
+function proofRootHasTrackedEntries(root, proofRoot) {
+  if (!isNormalizedDescendant(root, proofRoot))
+    throw new Error("INVALID_PROOF_ROOT");
+  const path = relative(root, proofRoot).replaceAll(sep5, "/");
+  return execFileSync6("git", ["ls-files", "-z", "--", path], {
+    cwd: root,
+    encoding: "utf8"
+  }).length > 0;
+}
+function resolveProofIdentity(input) {
+  const { session, target, nativeDevice } = input;
+  if (!session?.deviceId || !session.appId || session.platform !== "ios" && session.platform !== "android" || !target || target.platform !== session.platform || target.description !== session.appId || !target.deviceName || !nativeDevice || nativeDevice.id !== session.deviceId || nativeDevice.osVersion.length === 0) {
+    return null;
+  }
+  const normalizeIdentity = (value) => value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  if (session.platform === "ios") {
+    if (normalizeIdentity(target.deviceName) !== normalizeIdentity(nativeDevice.name))
+      return null;
+  } else {
+    const match = target.deviceName.match(/^(.+?)\s+-\s+(.+?)\s+-\s+API\s+(\d+)$/i);
+    if (!match || normalizeIdentity(match[1]) !== normalizeIdentity(nativeDevice.name) || normalizeIdentity(match[2]) !== normalizeIdentity(nativeDevice.osVersion)) {
+      return null;
+    }
+  }
+  return {
+    device: {
+      id: session.deviceId,
+      platform: session.platform,
+      model: nativeDevice.name,
+      osVersion: nativeDevice.osVersion
+    },
+    runtime: {
+      bundleId: session.appId,
+      metroPort: input.metroPort,
+      metroReady: input.metroReady,
+      pluginVersion: input.pluginVersion
+    }
+  };
+}
+function normalizeTool(tool) {
+  const bare = tool.startsWith("mcp__") ? tool.split("__").at(-1) ?? tool : tool;
+  return bare.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replaceAll("-", "_");
+}
+function toolData(result) {
+  try {
+    const parsed = JSON.parse(result.content[0]?.text ?? "");
+    return parsed.ok === true && parsed.data && typeof parsed.data === "object" ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+function proofFailure(reasons, stage) {
+  return failResult("Strict proof capture rejected.", {
+    reasons: [...new Set(reasons)],
+    stage
+  });
+}
+function requiredToolSequence(storyboard) {
+  return storyboard.steps.flatMap((step) => [step.expectedTool, step.assertionTool]);
+}
+function sequenceObservations(storyboard, observations) {
+  const required2 = requiredToolSequence(storyboard).map(normalizeTool);
+  const relevant = observations.filter((observation) => required2.includes(normalizeTool(observation.tool)));
+  if (relevant.length !== required2.length)
+    return null;
+  if (relevant.some((observation, index) => normalizeTool(observation.tool) !== required2[index])) {
+    return null;
+  }
+  return storyboard.steps.map((_, index) => ({
+    expected: relevant[index * 2],
+    assertion: relevant[index * 2 + 1]
+  }));
+}
+function traceFor(storyboard, events) {
+  const required2 = requiredToolSequence(storyboard);
+  const allowedExtras = storyboard.allowedTools.filter((tool) => !required2.map(normalizeTool).includes(normalizeTool(tool)));
+  return validateTrace([...required2, ...allowedExtras], events);
+}
+function readProofContractAt(moduleUrl = import.meta.url) {
+  const moduleDir = dirname13(fileURLToPath2(moduleUrl));
+  const candidates = [
+    resolve3(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve3(moduleDir, "../schemas/proof-receipt.schema.json")
+  ];
+  for (const path of candidates) {
+    try {
+      const bytes = readFileSync19(path, "utf8");
+      return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
+    } catch {
+    }
+  }
+  throw new Error("PROOF_CONTRACT_MISSING");
+}
+function writeProofReceiptAtomic(path, receipt) {
+  const directory = dirname13(path);
+  mkdirSync13(directory, { recursive: true, mode: 448 });
+  const temporary = resolve3(directory, `.${randomUUID2()}.proof-receipt.tmp`);
+  let descriptor = null;
+  try {
+    descriptor = openSync3(temporary, "wx", 384);
+    writeFileSync13(descriptor, `${JSON.stringify(receipt, null, 2)}
+`, "utf8");
+    fsyncSync(descriptor);
+    closeSync3(descriptor);
+    descriptor = null;
+    renameSync5(temporary, path);
+    chmodSync(path, 384);
+  } catch (error2) {
+    if (descriptor !== null)
+      closeSync3(descriptor);
+    try {
+      unlinkSync9(temporary);
+    } catch {
+    }
+    throw error2;
+  }
+}
+function createProofCaptureHandler(deps) {
+  let session = null;
+  const contextIsCurrent = (active) => {
+    try {
+      return validCaptureContext(active.context, deps.projectRoot());
+    } catch {
+      return false;
+    }
+  };
+  const rejectPathDrift = (active) => {
+    active.stage = "rejected";
+    active.invalidationReasons = ["PROOF_PATH_DRIFT"];
+    return proofFailure(active.invalidationReasons, active.stage);
+  };
+  const artifactPaths = (active) => [
+    active.context.receiptPath,
+    active.context.videoPath,
+    active.context.contactSheetPath,
+    ...active.context.storyboard.steps.map((step) => step.screenshotPath)
+  ];
+  const removeArtifacts = async (active) => {
+    if (!contextIsCurrent(active))
+      return ["PROOF_PATH_DRIFT"];
+    const reasons = [];
+    for (const path of artifactPaths(active)) {
+      if (!contextIsCurrent(active)) {
+        reasons.push("PROOF_PATH_DRIFT");
+        break;
+      }
+      try {
+        await deps.removeArtifact(path);
+      } catch {
+        reasons.push("ARTIFACT_CLEANUP_FAILED");
+      }
+      if (!contextIsCurrent(active)) {
+        reasons.push("PROOF_PATH_DRIFT");
+        break;
+      }
+    }
+    return [...new Set(reasons)];
+  };
+  const shutdownRecorder = async (active) => {
+    if (!active.mayOwnRecorder)
+      return { confirmed: true, reasons: [], stopData: null };
+    const reasons = [];
+    let stopData = null;
+    try {
+      stopData = toolData(await deps.record({ action: "stop" }));
+      if (!stopData)
+        reasons.push("RECORDING_STOP_FAILED");
+    } catch {
+      reasons.push("RECORDING_STOP_FAILED");
+    }
+    let confirmed = false;
+    try {
+      const status = toolData(await deps.record({ action: "status" }));
+      confirmed = Array.isArray(status?.active) && status.active.length === 0;
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed)
+      reasons.push("RECORDING_SHUTDOWN_FAILED");
+    if (confirmed)
+      active.mayOwnRecorder = false;
+    return { confirmed, reasons: [...new Set(reasons)], stopData };
+  };
+  const beginFreshRehearsal = (active, reasons) => {
+    active.stage = "rehearsing";
+    active.invalidationReasons = [...new Set(reasons)];
+    active.rehearsalStartedAt = deps.now();
+    active.rehearsalFinishedAt = null;
+    active.rehearsalDurationMs = null;
+    active.rehearsalEvents = [];
+    active.rehearsalObservations = [];
+    active.recordingStartedAt = null;
+    active.recordingEvents = [];
+    active.recordingObservations = [];
+    active.evidenceDraft = null;
+    active.armedObservationCount = null;
+    active.freshStartAssertion = null;
+    active.mayOwnRecorder = false;
+    active.baseline = null;
+    active.mechanicalReceipt = null;
+    deps.monitor.begin();
+  };
+  const rejectCapture = async (active, reasons) => {
+    deps.monitor.stop();
+    const shutdown2 = await shutdownRecorder(active);
+    const pathCurrent = contextIsCurrent(active);
+    const removalReasons = pathCurrent ? await removeArtifacts(active) : ["PROOF_PATH_DRIFT"];
+    const allReasons = [.../* @__PURE__ */ new Set([...reasons, ...shutdown2.reasons, ...removalReasons])];
+    if (!shutdown2.confirmed || removalReasons.length > 0) {
+      active.stage = "rejected";
+      active.invalidationReasons = allReasons;
+      return proofFailure(allReasons, active.stage);
+    }
+    beginFreshRehearsal(active, allReasons);
+    return proofFailure(allReasons, active.stage);
+  };
+  const readGit = (active) => {
+    try {
+      const value = deps.getGitInfo(active.context.projectRoot);
+      if (!Array.isArray(value.changes))
+        return { ok: false, reasons: ["GIT_READ_FAILED"] };
+      return { ok: true, value };
+    } catch {
+      return { ok: false, reasons: ["GIT_READ_FAILED"] };
+    }
+  };
+  const readCurrentActionIdentity = (active) => {
+    try {
+      const value = deps.readActionIdentity(active.context.proofAction.id);
+      if (!value)
+        return { ok: false, reasons: ["PROOF_ACTION_MISSING"] };
+      return { ok: true, value };
+    } catch {
+      return { ok: false, reasons: ["PROOF_ACTION_READ_FAILED"] };
+    }
+  };
+  const actionIdentityReasons = (active) => {
+    const current = readCurrentActionIdentity(active);
+    if (!current.ok)
+      return current.reasons;
+    return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
+  };
+  const repositoryPath = (active, path) => relative(active.context.projectRoot, path).replaceAll(sep5, "/");
+  const observedSetupScreenshots = (active) => {
+    const owned = /* @__PURE__ */ new Set();
+    for (const observation of deps.monitor.observations()) {
+      const step = active.context.storyboard.steps.find((candidate) => normalizeTool(candidate.assertionTool) === normalizeTool(observation.tool) && candidate.screenshotPath === observation.screenshotPath && candidate.assertionArgsSha256 === observation.argsHash);
+      if (step && observation.ok && observation.assertionPassed) {
+        owned.add(repositoryPath(active, step.screenshotPath));
+      }
+    }
+    return owned;
+  };
+  const gitReasons = (active, git, phase) => {
+    const proofOutputs = [
+      active.context.videoPath,
+      active.context.contactSheetPath,
+      ...active.context.storyboard.steps.map((step) => step.screenshotPath)
+    ].map((path) => repositoryPath(active, path));
+    const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
+    const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
+    const invalidChange = git.changes.some((change) => isAbsolute3(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
+    const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
+    const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
+    return [
+      ...invalidChange || unrelated || git.dirty !== git.changes.length > 0 ? ["GIT_DIRTY"] : [],
+      ...missing ? ["PROOF_OUTPUT_MISSING"] : [],
+      ...git.sha !== active.context.storyboard.sourceTreeSha || git.sha !== active.context.pullRequest.headSha ? ["SOURCE_SHA_MISMATCH"] : []
+    ];
+  };
+  const readReadiness = async () => {
+    let raw;
+    try {
+      raw = await deps.readiness();
+    } catch {
+      return { ok: false, reasons: ["READINESS_FAILED"] };
+    }
+    const parsed = readinessSchema.safeParse(raw);
+    return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reasons: ["READINESS_INVALID"] };
+  };
+  const readinessReasons = (readiness, baseline) => [
+    ...!readiness.cdpAttached ? ["CDP_DETACHED"] : [],
+    ...!readiness.helpersAttached ? ["HELPERS_DETACHED"] : [],
+    ...!readiness.metroReady || !readiness.runtime.metroReady ? ["METRO_NOT_READY"] : [],
+    ...!readiness.metroEventsConnected ? ["METRO_EVENTS_UNAVAILABLE"] : [],
+    ...readiness.metroBuildPending ? ["METRO_BUILD_PENDING"] : [],
+    ...readiness.metroBuildFailed ? ["METRO_BUILD_FAILED"] : [],
+    ...baseline ? readiness.errorCount !== baseline.errorCount || readiness.errorSha256 !== baseline.errorSha256 || readiness.errorCount !== 0 ? ["ERROR_BASELINE_CHANGED"] : [] : readiness.errorCount !== 0 ? ["ERROR_BASELINE_DIRTY"] : [],
+    ...baseline && JSON.stringify(readiness.device) !== JSON.stringify(baseline.device) ? ["DEVICE_IDENTITY_CHANGED"] : [],
+    ...baseline && JSON.stringify(readiness.runtime) !== JSON.stringify(baseline.runtime) ? ["RUNTIME_IDENTITY_CHANGED"] : [],
+    ...baseline && readiness.metroEventMarker !== baseline.metroEventMarker ? ["METRO_ACTIVITY_CHANGED"] : []
+  ];
+  const deriveEvidence = (active) => {
+    if (!active.recordingStartedAt)
+      return { evidence: null, reasons: ["INVALID_PROOF_STAGE"] };
+    const bound = sequenceObservations(active.context.storyboard, active.recordingObservations);
+    if (!bound)
+      return { evidence: null, reasons: ["STORYBOARD_ORDER_VIOLATION"] };
+    const reasons = [];
+    const evidence = active.context.storyboard.steps.map((step, index) => {
+      const operation = bound[index].expected;
+      const observed = bound[index].assertion;
+      if (operation.argsHash !== step.expectedArgsSha256) {
+        reasons.push("OPERATION_ARGUMENT_MISMATCH");
+      }
+      if (observed.argsHash !== step.assertionArgsSha256) {
+        reasons.push("ASSERTION_ARGUMENT_MISMATCH");
+      }
+      if (!observed.ok || !observed.assertionPassed) {
+        reasons.push("ASSERTION_FAILED");
+        if (index === active.context.storyboard.steps.length - 1) {
+          reasons.push("FINAL_ASSERTION_FAILED");
+        }
+      }
+      if (observed.screenshotPath !== step.screenshotPath) {
+        reasons.push("SCREENSHOT_PATH_MISMATCH");
+      }
+      return {
+        stepId: step.id,
+        screenshotPath: observed.screenshotPath ?? "",
+        timestampMs: observed.ts - active.recordingStartedAt.getTime(),
+        assertion: {
+          stepId: step.id,
+          tool: step.assertionTool,
+          ok: true,
+          resultHash: observed.resultHash
+        }
+      };
+    });
+    return { evidence, reasons: [...new Set(reasons)] };
+  };
+  return async (unparsedArgs) => {
+    const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
+    if (!parsed.success) {
+      const action = unparsedArgs?.action;
+      const reason = action === "finalize" ? "EVIDENCE_REVIEW_INVALID" : "INVALID_PROOF_INPUT";
+      return proofFailure([reason], session?.stage ?? "idle");
+    }
+    const args = parsed.data;
+    if (args.action === "contract") {
+      try {
+        const contract = (deps.readContract ?? readProofContractAt)();
+        if (hashBytes(contract.bytes) !== contract.sha256) {
+          return proofFailure(["CONTRACT_DIGEST_MISMATCH"], session?.stage ?? "idle");
+        }
+        return okResult({ schema: contract.schema, sha256: contract.sha256 });
+      } catch {
+        return proofFailure(["CONTRACT_READ_FAILED"], session?.stage ?? "idle");
+      }
+    }
+    if (args.action === "status") {
+      return okResult({
+        stage: session?.stage ?? "idle",
+        runId: session?.context.runId ?? null,
+        invalidationReasons: session?.invalidationReasons ?? []
+      });
+    }
+    if (args.action === "discard") {
+      if (!session)
+        return okResult({ stage: "idle", discarded: false });
+      deps.monitor.stop();
+      const shutdown2 = await shutdownRecorder(session);
+      const pathCurrent = contextIsCurrent(session);
+      const removalReasons = pathCurrent ? await removeArtifacts(session) : ["PROOF_PATH_DRIFT"];
+      const cleanupReasons = [.../* @__PURE__ */ new Set([...shutdown2.reasons, ...removalReasons])];
+      if (!shutdown2.confirmed || cleanupReasons.length > 0) {
+        session.stage = "rejected";
+        session.invalidationReasons = cleanupReasons;
+        return proofFailure(cleanupReasons, session.stage);
+      }
+      session = null;
+      return okResult({ stage: "idle", discarded: true });
+    }
+    if (args.action === "begin_rehearsal") {
+      if (session && session.stage !== "accepted") {
+        return proofFailure(["PROOF_SESSION_ACTIVE"], session.stage);
+      }
+      let expectedRoot = null;
+      try {
+        expectedRoot = deps.projectRoot();
+      } catch {
+      }
+      if (!validCaptureContext(args, expectedRoot) || args.storyboard.proofClass !== args.proofClass || args.storyboard.actionId !== args.proofAction.id) {
+        return proofFailure(["INVALID_PROOF_CONTEXT"], "idle");
+      }
+      let actionIdentity = null;
+      try {
+        actionIdentity = deps.readActionIdentity(args.proofAction.id);
+      } catch {
+        return proofFailure(["PROOF_ACTION_READ_FAILED"], "idle");
+      }
+      if (!actionIdentity)
+        return proofFailure(["PROOF_ACTION_MISSING"], "idle");
+      if (!sameProofAction(actionIdentity, args.proofAction)) {
+        return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
+      }
+      try {
+        const proofRoot = join29(args.projectRoot, "docs", "proof", args.runId);
+        if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
+          return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
+        }
+      } catch {
+        return proofFailure(["PROOF_ROOT_TRACKED_CHECK_FAILED"], "idle");
+      }
+      if (proofRootExists(args)) {
+        return proofFailure(["PROOF_ROOT_NOT_FRESH"], "idle");
+      }
+      const startedAt = deps.now();
+      session = {
+        context: args,
+        actionIdentity,
+        stage: "rehearsing",
+        invalidationReasons: [],
+        rehearsalStartedAt: startedAt,
+        rehearsalFinishedAt: null,
+        rehearsalDurationMs: null,
+        rehearsalEvents: [],
+        rehearsalObservations: [],
+        recordingStartedAt: null,
+        recordingEvents: [],
+        recordingObservations: [],
+        evidenceDraft: null,
+        armedObservationCount: null,
+        freshStartAssertion: null,
+        mayOwnRecorder: false,
+        baseline: null,
+        mechanicalReceipt: null
+      };
+      deps.monitor.begin();
+      return okResult({ stage: session.stage, runId: args.runId });
+    }
+    if (!session)
+      return proofFailure(["INVALID_PROOF_STAGE"], "idle");
+    const active = session;
+    if (args.action === "finish_rehearsal") {
+      if (active.stage !== "rehearsing")
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      active.rehearsalEvents = deps.monitor.stop();
+      active.rehearsalObservations = deps.monitor.observations();
+      const finishedAt = deps.now();
+      const durationMs = finishedAt.getTime() - active.rehearsalStartedAt.getTime();
+      const trace = validateTrace(["cdp_run_action"], active.rehearsalEvents);
+      const actionObservation = active.rehearsalObservations.length === 1 && normalizeTool(active.rehearsalObservations[0].tool) === "cdp_run_action" ? active.rehearsalObservations[0] : null;
+      const actionReasons = [
+        ...!actionObservation ? ["ACTION_REHEARSAL_SEQUENCE_INVALID"] : [],
+        ...actionObservation && actionObservation.argsHash !== hashProofArgs({
+          actionId: active.context.proofAction.id,
+          autoRepair: false,
+          forceReload: false,
+          proofReplay: true
+        }) ? ["ACTION_ARGUMENT_MISMATCH"] : []
+      ];
+      const git = readGit(active);
+      const authorityReasons = [
+        ...actionIdentityReasons(active),
+        ...git.ok ? gitReasons(active, git.value, "clean") : git.reasons
+      ];
+      if (durationMs < 0 || !trace.ok || actionReasons.length > 0 || authorityReasons.length > 0) {
+        const reasons = [
+          ...durationMs < 0 ? ["REHEARSAL_CLOCK_INVALID"] : [],
+          ...trace.reasons,
+          ...actionReasons,
+          ...authorityReasons
+        ];
+        beginFreshRehearsal(active, reasons);
+        return proofFailure(reasons, active.stage);
+      }
+      active.rehearsalFinishedAt = finishedAt;
+      active.rehearsalDurationMs = durationMs;
+      active.stage = "rehearsed";
+      active.invalidationReasons = [];
+      active.armedObservationCount = null;
+      active.freshStartAssertion = null;
+      deps.monitor.begin();
+      return okResult({ stage: active.stage, durationMs });
+    }
+    if (args.action === "arm") {
+      if (active.stage !== "rehearsed")
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      const setupObservations = deps.monitor.observations();
+      const firstStep = active.context.storyboard.steps[0];
+      const assertions = setupObservations.filter((observation) => normalizeTool(observation.tool) === normalizeTool(firstStep.assertionTool));
+      const startAssertion = assertions.at(-1) ?? null;
+      const git = readGit(active);
+      const ready = await readReadiness();
+      const armReasons = [
+        ...actionIdentityReasons(active),
+        ...!startAssertion ? ["START_ASSERTION_MISSING"] : [],
+        ...startAssertion && (!startAssertion.ok || !startAssertion.assertionPassed || startAssertion.screenshotPath !== firstStep.screenshotPath) ? ["START_ASSERTION_FAILED"] : [],
+        ...startAssertion && startAssertion.argsHash !== firstStep.assertionArgsSha256 ? ["START_ASSERTION_ARGUMENT_MISMATCH"] : [],
+        ...startAssertion && setupObservations.at(-1) !== startAssertion ? ["START_STATE_DRIFT"] : [],
+        ...git.ok ? gitReasons(active, git.value, "setup") : git.reasons,
+        ...ready.ok ? readinessReasons(ready.value, null) : ready.reasons
+      ];
+      if (armReasons.length > 0) {
+        active.invalidationReasons = [...new Set(armReasons)];
+        return proofFailure(armReasons, active.stage);
+      }
+      if (!ready.ok)
+        return proofFailure(ready.reasons, active.stage);
+      active.baseline = ready.value;
+      active.armedObservationCount = setupObservations.length;
+      active.freshStartAssertion = startAssertion;
+      active.stage = "armed";
+      active.invalidationReasons = [];
+      return okResult({
+        stage: active.stage,
+        device: ready.value.device,
+        runtime: ready.value.runtime
+      });
+    }
+    if (args.action === "start_recording") {
+      if (active.stage !== "armed" || !active.baseline || active.armedObservationCount === null || !active.freshStartAssertion) {
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      }
+      if (!contextIsCurrent(active))
+        return rejectPathDrift(active);
+      const actionReasons = actionIdentityReasons(active);
+      if (actionReasons.length > 0)
+        return proofFailure(actionReasons, active.stage);
+      const firstStep = active.context.storyboard.steps[0];
+      const setupObservations = deps.monitor.observations();
+      const postArmAssertion = setupObservations[active.armedObservationCount] ?? null;
+      const postArmReasons = [
+        ...!postArmAssertion ? ["START_ASSERTION_MISSING"] : [],
+        ...postArmAssertion && normalizeTool(postArmAssertion.tool) !== normalizeTool(firstStep.assertionTool) ? ["START_ASSERTION_MISSING", "START_STATE_DRIFT"] : [],
+        ...postArmAssertion && (!postArmAssertion.ok || !postArmAssertion.assertionPassed || postArmAssertion.screenshotPath !== firstStep.screenshotPath) ? ["START_ASSERTION_FAILED"] : [],
+        ...postArmAssertion && postArmAssertion.argsHash !== firstStep.assertionArgsSha256 ? ["START_ASSERTION_ARGUMENT_MISMATCH"] : [],
+        ...setupObservations.length !== active.armedObservationCount + 1 ? ["START_STATE_DRIFT"] : []
+      ];
+      if (postArmReasons.length > 0)
+        return proofFailure(postArmReasons, active.stage);
+      active.freshStartAssertion = postArmAssertion;
+      active.armedObservationCount = setupObservations.length;
+      const stillAtStart = () => {
+        const observations = deps.monitor.observations();
+        return observations.length === active.armedObservationCount && observations.at(-1)?.resultHash === active.freshStartAssertion?.resultHash && observations.at(-1)?.ts === active.freshStartAssertion?.ts;
+      };
+      if (!stillAtStart())
+        return proofFailure(["START_STATE_DRIFT"], active.stage);
+      const git = readGit(active);
+      const ready = await readReadiness();
+      const startReasons = [
+        ...git.ok ? gitReasons(active, git.value, "setup") : git.reasons,
+        ...ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons
+      ];
+      if (startReasons.length > 0)
+        return proofFailure(startReasons, active.stage);
+      const cleanupReasons = await removeArtifacts(active);
+      if (cleanupReasons.length > 0) {
+        active.stage = "rejected";
+        active.invalidationReasons = cleanupReasons;
+        return proofFailure(cleanupReasons, active.stage);
+      }
+      const cleanedGit = readGit(active);
+      const cleanedGitReasons = cleanedGit.ok ? gitReasons(active, cleanedGit.value, "clean") : cleanedGit.reasons;
+      if (cleanedGitReasons.length > 0) {
+        active.stage = "rejected";
+        active.invalidationReasons = cleanedGitReasons;
+        return proofFailure(cleanedGitReasons, active.stage);
+      }
+      if (!stillAtStart())
+        return proofFailure(["START_STATE_DRIFT"], active.stage);
+      let statusResult;
+      try {
+        statusResult = await deps.record({ action: "status" });
+      } catch {
+        return proofFailure(["RECORDING_STATUS_FAILED"], active.stage);
+      }
+      const status = toolData(statusResult);
+      const recordings = status?.active;
+      if (!Array.isArray(recordings))
+        return proofFailure(["RECORDING_STATUS_FAILED"], active.stage);
+      if (recordings.length > 0) {
+        return proofFailure(["RECORDING_ALREADY_ACTIVE"], active.stage);
+      }
+      if (!stillAtStart())
+        return proofFailure(["START_STATE_DRIFT"], active.stage);
+      let startResult;
+      active.mayOwnRecorder = true;
+      try {
+        startResult = await deps.record({
+          action: "start",
+          platform: active.baseline.device.platform,
+          deviceId: active.baseline.device.id,
+          outputPath: active.context.videoPath
+        });
+      } catch {
+        return rejectCapture(active, ["RECORDING_START_FAILED"]);
+      }
+      const started = toolData(startResult);
+      if (!started)
+        return rejectCapture(active, ["RECORDING_START_FAILED"]);
+      const reasons = [
+        ...started.deviceId !== active.baseline.device.id ? ["RECORDING_DEVICE_MISMATCH"] : [],
+        ...started.output !== active.context.videoPath ? ["RECORDING_PATH_MISMATCH"] : []
+      ];
+      if (reasons.length > 0)
+        return rejectCapture(active, reasons);
+      active.recordingStartedAt = deps.now();
+      active.stage = "recording";
+      active.invalidationReasons = [];
+      deps.monitor.begin();
+      return okResult({ stage: active.stage, deviceId: started.deviceId, output: started.output });
+    }
+    if (args.action === "stop_recording") {
+      if (active.stage !== "recording")
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      active.recordingEvents = deps.monitor.stop();
+      active.recordingObservations = deps.monitor.observations();
+      const pathDrifted = !contextIsCurrent(active);
+      const shutdown2 = await shutdownRecorder(active);
+      if (pathDrifted) {
+        active.stage = "rejected";
+        active.invalidationReasons = [.../* @__PURE__ */ new Set(["PROOF_PATH_DRIFT", ...shutdown2.reasons])];
+        return proofFailure(active.invalidationReasons, active.stage);
+      }
+      if (!shutdown2.confirmed || shutdown2.reasons.length > 0) {
+        return rejectCapture(active, shutdown2.reasons);
+      }
+      const saved = shutdown2.stopData?.saved;
+      if (!Array.isArray(saved))
+        return rejectCapture(active, ["RECORDING_STOP_FAILED"]);
+      if (saved.length !== 1)
+        return rejectCapture(active, ["RECORDING_AMBIGUOUS"]);
+      const savedPath = saved[0].path;
+      if (savedPath !== active.context.videoPath) {
+        return rejectCapture(active, ["RECORDING_PATH_MISMATCH"]);
+      }
+      const derived = deriveEvidence(active);
+      active.evidenceDraft = derived.evidence;
+      active.stage = "validating";
+      active.invalidationReasons = [];
+      return okResult({
+        stage: active.stage,
+        videoPath: savedPath,
+        evidenceDraft: derived.evidence,
+        evidenceReasons: derived.reasons
+      });
+    }
+    if (args.action === "validate") {
+      if (active.stage !== "validating" || !active.baseline || !active.recordingStartedAt || active.rehearsalDurationMs === null || !active.rehearsalFinishedAt) {
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      }
+      if (!contextIsCurrent(active))
+        return rejectPathDrift(active);
+      const actionReasons = actionIdentityReasons(active);
+      if (actionReasons.length > 0)
+        return rejectCapture(active, actionReasons);
+      const derived = deriveEvidence(active);
+      const evidence = derived.evidence ?? [];
+      const steps = active.context.storyboard.steps;
+      const evidenceReasons = [...derived.reasons];
+      const trace = traceFor(active.context.storyboard, active.recordingEvents);
+      evidenceReasons.push(...trace.reasons);
+      if (!derived.evidence)
+        evidenceReasons.push("STEP_EVIDENCE_MISSING");
+      const mediaInput = {
+        videoPath: active.context.videoPath,
+        rehearsalDurationMs: active.rehearsalDurationMs,
+        screenshots: evidence.map((item) => ({
+          stepId: item.stepId,
+          path: item.screenshotPath,
+          timestampMs: item.timestampMs
+        })),
+        contactSheetPath: active.context.contactSheetPath
+      };
+      let media;
+      try {
+        media = await deps.validateMedia(deps.mediaProcess, mediaInput);
+      } catch {
+        return rejectCapture(active, ["MEDIA_VALIDATION_FAILED"]);
+      }
+      if (!contextIsCurrent(active))
+        return rejectPathDrift(active);
+      if (!media.ok)
+        evidenceReasons.push(...media.reasons);
+      if (media.ok) {
+        const timestamps = evidence.map((item) => item.timestampMs);
+        const increasing = timestamps.every((timestamp, index) => timestamp >= 0 && timestamp <= media.video.durationMs && (index === 0 || timestamp > timestamps[index - 1]));
+        if (!increasing)
+          evidenceReasons.push("SCREENSHOT_TIMESTAMPS_INVALID");
+        for (const [index, step] of steps.entries()) {
+          const dwellEnd = timestamps[index + 1] ?? media.video.durationMs;
+          const dwell = dwellEnd - (timestamps[index] ?? 0);
+          if (dwell < step.expectedDwellMs || dwell > step.maximumDwellMs) {
+            evidenceReasons.push("STEP_DWELL_OUT_OF_BOUNDS");
+          }
+        }
+        if (media.screenshots.length !== evidence.length || media.screenshots.some((screenshot, index) => screenshot.stepId !== evidence[index]?.stepId || screenshot.path !== evidence[index]?.screenshotPath || screenshot.timestampMs !== evidence[index]?.timestampMs)) {
+          evidenceReasons.push("MEDIA_EVIDENCE_MISMATCH");
+        }
+      }
+      const git = readGit(active);
+      const ready = await readReadiness();
+      evidenceReasons.push(...git.ok ? gitReasons(active, git.value, "validation") : git.reasons);
+      evidenceReasons.push(...ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons);
+      if (evidenceReasons.length > 0 || !media.ok || !ready.ok || !git.ok) {
+        return rejectCapture(active, evidenceReasons);
+      }
+      const storyboardBytes = JSON.stringify(active.context.storyboard);
+      let receipt;
+      try {
+        receipt = mechanicallyAcceptedProofReceiptSchema.parse({
+          schemaVersion: 1,
+          runId: active.context.runId,
+          issue: active.context.issue,
+          pullRequest: active.context.pullRequest,
+          proofClass: active.context.proofClass,
+          acceptanceMappings: active.context.acceptanceMappings,
+          git: {
+            sourceTreeSha: active.context.storyboard.sourceTreeSha,
+            proofHeadSha: git.value.sha,
+            dirty: false
+          },
+          device: ready.value.device,
+          runtime: ready.value.runtime,
+          fixture: active.context.fixture,
+          action: active.context.proofAction,
+          storyboard: { id: active.context.storyboard.id, sha256: hashBytes(storyboardBytes) },
+          rehearsal: {
+            startedAt: active.rehearsalStartedAt.toISOString(),
+            finishedAt: active.rehearsalFinishedAt.toISOString(),
+            durationMs: active.rehearsalDurationMs,
+            clean: true
+          },
+          video: media.video,
+          screenshots: media.screenshots,
+          assertions: evidence.map((item) => item.assertion),
+          eventTrace: {
+            allowedTools: active.context.storyboard.allowedTools,
+            observed: active.recordingEvents
+          },
+          frameMatches: media.frameMatches,
+          contactSheet: media.contactSheet,
+          errorBaseline: {
+            beforeSha256: active.baseline.errorSha256,
+            afterSha256: ready.value.errorSha256,
+            beforeCount: active.baseline.errorCount,
+            afterCount: ready.value.errorCount,
+            clean: true
+          },
+          invalidationReasons: [],
+          verdict: "mechanically_accepted"
+        });
+      } catch {
+        return rejectCapture(active, ["RECEIPT_CONSTRUCTION_FAILED"]);
+      }
+      active.mechanicalReceipt = receipt;
+      active.stage = "mechanically_accepted";
+      active.invalidationReasons = [];
+      return okResult({ stage: active.stage, receipt });
+    }
+    if (args.action === "finalize") {
+      if (active.stage !== "mechanically_accepted" || !active.mechanicalReceipt) {
+        return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+      }
+      if (!contextIsCurrent(active))
+        return rejectPathDrift(active);
+      let review;
+      try {
+        review = evidenceReviewSchema.parse(args.evidenceReview);
+      } catch {
+        return proofFailure(["EVIDENCE_REVIEW_INVALID"], active.stage);
+      }
+      if (review.provider === active.context.writerProvider || review.provider === review.writerProvider || review.writerProvider !== active.context.writerProvider) {
+        return proofFailure(["REVIEWER_NOT_INDEPENDENT"], active.stage);
+      }
+      const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
+      let finalReceipt;
+      try {
+        finalReceipt = finalProofReceiptSchema.parse({
+          ...acceptedEvidence,
+          evidenceReview: review,
+          verdict: "accepted"
+        });
+      } catch {
+        return proofFailure(["RECEIPT_CONSTRUCTION_FAILED"], active.stage);
+      }
+      if (!contextIsCurrent(active))
+        return rejectPathDrift(active);
+      try {
+        deps.writeReceipt(active.context.receiptPath, finalReceipt);
+      } catch {
+        return proofFailure(["RECEIPT_WRITE_FAILED"], active.stage);
+      }
+      const finalizedGit = readGit(active);
+      const finalizedGitReasons = finalizedGit.ok ? gitReasons(active, finalizedGit.value, "finalized") : finalizedGit.reasons;
+      if (finalizedGitReasons.length > 0) {
+        return rejectCapture(active, finalizedGitReasons);
+      }
+      active.stage = "accepted";
+      return okResult({
+        stage: active.stage,
+        receiptPath: active.context.receiptPath,
+        receipt: finalReceipt
+      });
+    }
+    return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
+  };
+}
+
+// packages/rn-dev-agent-core/dist/tools/proof-media.js
+import { createHash as createHash7 } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir as tmpdir8 } from "node:os";
+import { dirname as dirname14, join as join30 } from "node:path";
+var MediaFailure = class extends Error {
+  reason;
+  constructor(reason) {
+    super(reason);
+    this.name = "MediaFailure";
+    this.reason = reason;
+  }
+};
+function fail(reason) {
+  throw new MediaFailure(reason);
+}
+function isNodeError(error2) {
+  return error2 instanceof Error && "code" in error2;
+}
+async function requireNonEmptyFile(path, missingReason, emptyReason) {
+  try {
+    const details = await stat(path);
+    if (!details.isFile())
+      fail(missingReason);
+    if (details.size <= 0)
+      fail(emptyReason);
+    return { size: details.size };
+  } catch (error2) {
+    if (error2 instanceof MediaFailure)
+      throw error2;
+    if (isNodeError(error2) && error2.code === "ENOENT")
+      fail(missingReason);
+    fail("MEDIA_IO_FAILED");
+  }
+}
+async function hashAcceptedFile(path) {
+  try {
+    return await sha256File2(path);
+  } catch {
+    fail("HASH_FAILED");
+  }
+}
+async function sha256File2(path) {
+  const hash = createHash7("sha256");
+  const stream = createReadStream(path);
+  for await (const chunk of stream)
+    hash.update(chunk);
+  return hash.digest("hex");
+}
+function readVideoMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object")
+    fail("VIDEO_METADATA_INVALID");
+  const format = "format" in metadata ? metadata.format : null;
+  const streams = "streams" in metadata ? metadata.streams : null;
+  if (!format || typeof format !== "object" || !Array.isArray(streams)) {
+    fail("VIDEO_METADATA_INVALID");
+  }
+  const rawDuration = "duration" in format ? format.duration : void 0;
+  const durationSeconds = typeof rawDuration === "string" || typeof rawDuration === "number" ? Number(rawDuration) : Number.NaN;
+  const videoStream = streams.find((stream) => stream !== null && typeof stream === "object" && "codec_name" in stream && typeof stream.codec_name === "string" && stream.codec_name.length > 0 && "width" in stream && Number.isInteger(stream.width) && Number(stream.width) > 0 && "height" in stream && Number.isInteger(stream.height) && Number(stream.height) > 0);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !videoStream) {
+    fail("VIDEO_METADATA_INVALID");
+  }
+  return {
+    durationMs: Math.round(durationSeconds * 1e3),
+    codec: String(videoStream.codec_name),
+    width: Number(videoStream.width),
+    height: Number(videoStream.height)
+  };
+}
+async function probeVideo(process3, videoPath) {
+  const file = await requireNonEmptyFile(videoPath, "VIDEO_MISSING", "VIDEO_EMPTY");
+  let stdout;
+  try {
+    ({ stdout } = await process3.run("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration,size:stream=codec_name,width,height",
+      "-of",
+      "json",
+      videoPath
+    ]));
+  } catch {
+    fail("VIDEO_PROBE_FAILED");
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(stdout);
+  } catch {
+    fail("VIDEO_METADATA_INVALID");
+  }
+  const decoded = readVideoMetadata(metadata);
+  return {
+    path: videoPath,
+    sha256: await hashAcceptedFile(videoPath),
+    durationMs: decoded.durationMs,
+    sizeBytes: file.size,
+    codec: decoded.codec,
+    width: decoded.width,
+    height: decoded.height
+  };
+}
+function validateThreshold(threshold) {
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    fail("INVALID_MEDIA_INPUT");
+  }
+}
+async function runFrameProcess(process3, args) {
+  try {
+    return await process3.run("ffmpeg", args);
+  } catch {
+    fail("FRAME_PROCESS_FAILED");
+  }
+}
+function parseSsim(output) {
+  const tokens = [...output.matchAll(/\bAll:([^\s]+)/g)];
+  const token = tokens.at(-1)?.[1];
+  if (!token || !/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(token))
+    fail("FRAME_MISMATCH");
+  return Number(token);
+}
+async function matchScreenshotAt(process3, input) {
+  const threshold = input.threshold ?? 0.9;
+  validateThreshold(threshold);
+  await requireNonEmptyFile(input.screenshot.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
+  try {
+    await mkdir2(input.scratchDir, { recursive: true });
+  } catch {
+    fail("MEDIA_IO_FAILED");
+  }
+  const index = input.index ?? 0;
+  if (!Number.isInteger(index) || index < 0)
+    fail("INVALID_MEDIA_INPUT");
+  const sampleRadiusMs = input.sampleRadiusMs ?? 500;
+  if (!Number.isInteger(sampleRadiusMs) || sampleRadiusMs < 0 || sampleRadiusMs > 500) {
+    fail("INVALID_MEDIA_INPUT");
+  }
+  const normalizedScreenshotPath = join30(input.scratchDir, `screenshot-${index}.png`);
+  await rm(normalizedScreenshotPath, { force: true });
+  await runFrameProcess(process3, [
+    "-y",
+    "-i",
+    input.screenshot.path,
+    "-vf",
+    "scale=800:-2:flags=lanczos",
+    "-frames:v",
+    "1",
+    normalizedScreenshotPath
+  ]);
+  await requireNonEmptyFile(normalizedScreenshotPath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+  const sampleTimestamps = sampleRadiusMs === 0 ? [input.screenshot.timestampMs] : [
+    Math.max(0, input.screenshot.timestampMs - sampleRadiusMs),
+    input.screenshot.timestampMs,
+    input.screenshot.timestampMs + sampleRadiusMs
+  ];
+  let best = null;
+  for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
+    const framePath = join30(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    await rm(framePath, { force: true });
+    await runFrameProcess(process3, [
+      "-y",
+      "-ss",
+      (timestampMs / 1e3).toFixed(3),
+      "-i",
+      input.videoPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "scale=800:-2:flags=lanczos",
+      "-q:v",
+      "2",
+      framePath
+    ]);
+    await requireNonEmptyFile(framePath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+    const comparison = await runFrameProcess(process3, [
+      "-i",
+      normalizedScreenshotPath,
+      "-i",
+      framePath,
+      "-lavfi",
+      "ssim",
+      "-f",
+      "null",
+      "-"
+    ]);
+    const score = parseSsim(`${comparison.stdout}
+${comparison.stderr}`);
+    if (!best || score > best.score)
+      best = { score, timestampMs, framePath };
+  }
+  if (!best || best.score < threshold)
+    fail("FRAME_MISMATCH");
+  return {
+    frameMatch: {
+      stepId: input.screenshot.stepId,
+      screenshotSha256: input.screenshot.sha256,
+      videoTimestampMs: best.timestampMs,
+      score: best.score
+    },
+    selectedFramePath: best.framePath
+  };
+}
+function contactSheetLayout(frameCount) {
+  const columns = Math.ceil(Math.sqrt(frameCount));
+  return Array.from({ length: frameCount }, (_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = column === 0 ? "0" : Array.from({ length: column }, (_2, i) => `w${i}`).join("+");
+    const y = row === 0 ? "0" : Array.from({ length: row }, (_2, i) => `h${i * columns}`).join("+");
+    return `${x}_${y}`;
+  }).join("|");
+}
+async function buildContactSheet(process3, selectedFramePaths, contactSheetPath) {
+  if (selectedFramePaths.length === 0 || contactSheetPath.length === 0) {
+    fail("INVALID_MEDIA_INPUT");
+  }
+  for (const path of selectedFramePaths) {
+    await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+  }
+  try {
+    await mkdir2(dirname14(contactSheetPath), { recursive: true });
+    await rm(contactSheetPath, { force: true });
+  } catch {
+    fail("MEDIA_IO_FAILED");
+  }
+  const inputs = selectedFramePaths.flatMap((path) => ["-i", path]);
+  const labels = selectedFramePaths.map((_, index) => `[${index}:v]`).join("");
+  const filter = `${labels}xstack=inputs=${selectedFramePaths.length}:layout=${contactSheetLayout(selectedFramePaths.length)}:fill=black[out]`;
+  try {
+    await process3.run("ffmpeg", [
+      "-y",
+      ...inputs,
+      "-filter_complex",
+      filter,
+      "-map",
+      "[out]",
+      "-frames:v",
+      "1",
+      "-c:v",
+      "mjpeg",
+      "-q:v",
+      "2",
+      contactSheetPath
+    ]);
+  } catch {
+    fail("CONTACT_SHEET_PROCESS_FAILED");
+  }
+  await requireNonEmptyFile(contactSheetPath, "CONTACT_SHEET_MISSING", "CONTACT_SHEET_EMPTY");
+  return { path: contactSheetPath, sha256: await hashAcceptedFile(contactSheetPath) };
+}
+function validateInput(input, threshold) {
+  validateThreshold(threshold);
+  if (input.videoPath.length === 0 || input.contactSheetPath.length === 0 || !Number.isFinite(input.rehearsalDurationMs) || input.rehearsalDurationMs < 0 || input.screenshots.some((screenshot) => screenshot.stepId.length === 0 || screenshot.path.length === 0 || !Number.isFinite(screenshot.timestampMs) || screenshot.timestampMs < 0)) {
+    fail("INVALID_MEDIA_INPUT");
+  }
+  if (input.screenshots.length < 3)
+    fail("INSUFFICIENT_SCREENSHOTS");
+}
+async function validateMedia(process3, input) {
+  let scratchDir = null;
+  try {
+    const threshold = input.threshold ?? 0.9;
+    validateInput(input, threshold);
+    const video = await probeVideo(process3, input.videoPath);
+    const bounds = durationBounds(input.rehearsalDurationMs);
+    if (video.durationMs < bounds.minimumMs)
+      fail("VIDEO_TOO_SHORT");
+    if (video.durationMs > bounds.maximumMs)
+      fail("VIDEO_TOO_LONG");
+    const scratchRoot = input.scratchRoot ?? tmpdir8();
+    try {
+      await mkdir2(scratchRoot, { recursive: true });
+      scratchDir = await mkdtemp(join30(scratchRoot, "proof-media-"));
+    } catch {
+      fail("MEDIA_IO_FAILED");
+    }
+    const screenshots = [];
+    const frameMatches = [];
+    const selectedFramePaths = [];
+    for (const [index, milestone] of input.screenshots.entries()) {
+      await requireNonEmptyFile(milestone.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
+      const screenshot = {
+        ...milestone,
+        sha256: await hashAcceptedFile(milestone.path)
+      };
+      const match = await matchScreenshotAt(process3, {
+        videoPath: input.videoPath,
+        screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
+        threshold,
+        scratchDir,
+        index,
+        sampleRadiusMs: index === 0 ? 0 : 500
+      });
+      screenshots.push(screenshot);
+      frameMatches.push(match.frameMatch);
+      selectedFramePaths.push(match.selectedFramePath);
+    }
+    const contactSheet = await buildContactSheet(process3, selectedFramePaths, input.contactSheetPath);
+    return { ok: true, video, screenshots, frameMatches, contactSheet };
+  } catch (error2) {
+    const reason = error2 instanceof MediaFailure ? error2.reason : "MEDIA_IO_FAILED";
+    return { ok: false, reasons: [reason] };
+  } finally {
+    if (scratchDir)
+      await rm(scratchDir, { recursive: true, force: true }).catch(() => void 0);
+  }
+}
+
 // packages/rn-dev-agent-core/dist/tools/device-picker.js
 init_utils();
 init_maestro_invoke();
@@ -56152,10 +57788,10 @@ function buildNavigationPlan(graph, targetScreen, fromScreen) {
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
 init_storage();
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync6("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync7("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -56890,8 +58526,8 @@ init_project_config();
 init_maestro_validator();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync23, readFileSync as readFileSync19, writeFileSync as writeFileSync13, readdirSync as readdirSync7 } from "node:fs";
-import { join as join29 } from "node:path";
+import { existsSync as existsSync23, readFileSync as readFileSync20, writeFileSync as writeFileSync14, readdirSync as readdirSync7 } from "node:fs";
+import { join as join31 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 var execFile24 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
@@ -56953,7 +58589,7 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join29(projectRoot, ".maestro", "subflows"), join29(projectRoot, ".maestro")];
+  const searchDirs = [join31(projectRoot, ".maestro", "subflows"), join31(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
     if (!existsSync23(dir))
       continue;
@@ -56965,12 +58601,12 @@ function findLoginFlow(projectRoot) {
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join29(dir, candidate);
+        return join31(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join29(dir, authFile);
+      return join31(dir, authFile);
   }
   return null;
 }
@@ -57006,7 +58642,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync19(flowPath, "utf-8");
+  const originalContent = readFileSync20(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -57042,8 +58678,8 @@ async function handleAutoLogin(client2, opts = {}) {
     throw err;
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
-  writeFileSync13(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join29(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  writeFileSync14(wrapperPath, wrapperContent, "utf-8");
+  const runnerPath = join31(homedir10(), ".maestro-runner", "bin", "maestro-runner");
   if (!existsSync23(runnerPath)) {
     return {
       loggedIn: false,
@@ -57493,10 +59129,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve4) => {
+    const timeout = new Promise((resolve5) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve4();
+        resolve5();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -57507,11 +59143,11 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash5 } from "node:crypto";
-import { execFileSync as execFileSync7 } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync24, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync20, statSync as statSync8, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14, writeSync as writeSync2 } from "node:fs";
-import { tmpdir as tmpdir8, userInfo as userInfo2 } from "node:os";
-import { join as join30, resolve as resolve3 } from "node:path";
+import { createHash as createHash8 } from "node:crypto";
+import { execFileSync as execFileSync8 } from "node:child_process";
+import { closeSync as closeSync4, existsSync as existsSync24, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync21, statSync as statSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15, writeSync as writeSync2 } from "node:fs";
+import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
+import { join as join32, resolve as resolve4 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var DEFAULT_STALE_MS2 = 9e4;
@@ -57528,7 +59164,7 @@ function defaultProcessAlive4(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync7("ps", ["-p", String(pid), "-o", "args="], {
+    const out = execFileSync8("ps", ["-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -57540,7 +59176,7 @@ function defaultProcessName(pid) {
 }
 function defaultProcessParent(pid) {
   try {
-    const out = execFileSync7("ps", ["-p", String(pid), "-o", "ppid="], {
+    const out = execFileSync8("ps", ["-p", String(pid), "-o", "ppid="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -57555,7 +59191,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash5("md5").update(resolve3(projectRoot)).digest("hex").slice(0, 8);
+  return createHash8("md5").update(resolve4(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -57564,7 +59200,7 @@ var Lockfile = class {
   constructor(opts = {}) {
     const projectRoot = opts.projectRoot ?? defaultProjectRoot();
     const uid = opts.uid ?? userInfo2().uid;
-    const tmpDir = opts.tmpDir ?? tmpdir8();
+    const tmpDir = opts.tmpDir ?? tmpdir9();
     const hash = hashProjectRoot(projectRoot);
     this.opts = {
       projectRoot,
@@ -57581,7 +59217,7 @@ var Lockfile = class {
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS2
     };
-    this.lockPath = join30(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
+    this.lockPath = join32(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
   // GH#251: acquire via atomic exclusive-create (same pattern as DeviceLock).
   // The previous read-then-writeFileSync let two bridges starting in the same
@@ -57608,7 +59244,7 @@ var Lockfile = class {
       return this.conflictOf(before);
     }
     try {
-      unlinkSync9(this.lockPath);
+      unlinkSync10(this.lockPath);
     } catch {
     }
     try {
@@ -57641,7 +59277,7 @@ var Lockfile = class {
       if (existsSync24(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
-          unlinkSync9(this.lockPath);
+          unlinkSync10(this.lockPath);
         }
       }
     } catch {
@@ -57666,7 +59302,7 @@ var Lockfile = class {
       return false;
     body.lastHeartbeat = this.opts.clock();
     try {
-      writeFileSync14(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      writeFileSync15(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
     } catch {
     }
     return true;
@@ -57675,7 +59311,7 @@ var Lockfile = class {
     if (!existsSync24(this.lockPath))
       return null;
     try {
-      const raw = readFileSync20(this.lockPath, "utf8");
+      const raw = readFileSync21(this.lockPath, "utf8");
       const parsed = JSON.parse(raw);
       if (!isValidLockBody(parsed))
         return null;
@@ -57727,13 +59363,13 @@ var Lockfile = class {
     };
     const dir = this.opts.tmpDir;
     if (!existsSync24(dir)) {
-      mkdirSync13(dir, { recursive: true });
+      mkdirSync14(dir, { recursive: true });
     }
-    const fd = openSync3(this.lockPath, "wx");
+    const fd = openSync4(this.lockPath, "wx");
     try {
       writeSync2(fd, JSON.stringify(body, null, 2));
     } finally {
-      closeSync3(fd);
+      closeSync4(fd);
     }
   }
 };
@@ -57801,8 +59437,8 @@ init_agent_device_wrapper();
 init_utils();
 init_storage();
 init_maestro_validator();
-import { existsSync as existsSync25, mkdirSync as mkdirSync14, writeFileSync as writeFileSync15 } from "node:fs";
-import { join as join31 } from "node:path";
+import { existsSync as existsSync25, mkdirSync as mkdirSync15, writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join33 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -57858,16 +59494,16 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join31(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join33(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
     if (!existsSync25(outputDir)) {
-      mkdirSync14(outputDir, { recursive: true });
+      mkdirSync15(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join31(outputDir, fileName);
+    const filePath = join33(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -57886,7 +59522,7 @@ function createMaestroGenerateHandler() {
       }
       throw err;
     }
-    writeFileSync15(filePath, content, "utf-8");
+    writeFileSync16(filePath, content, "utf-8");
     return okResult({
       generated: true,
       path: filePath,
@@ -57904,9 +59540,9 @@ init_maestro_dispatch();
 init_maestro_validator();
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
-import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync21, writeFileSync as writeFileSync16 } from "node:fs";
-import { join as join32 } from "node:path";
-import { tmpdir as tmpdir9 } from "node:os";
+import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync22, writeFileSync as writeFileSync17 } from "node:fs";
+import { join as join34 } from "node:path";
+import { tmpdir as tmpdir10 } from "node:os";
 init_maestro_error_parser();
 init_resolve_ios_app_file();
 var execFile25 = promisify27(execFileCb21);
@@ -57914,7 +59550,7 @@ function discoverFlows(dir, pattern) {
   if (!existsSync26(dir))
     return [];
   const files = readdirSync8(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join32(dir, f)).sort();
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join34(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -57940,7 +59576,7 @@ function createMaestroTestAllHandler() {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join32(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join34(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -57960,12 +59596,12 @@ function createMaestroTestAllHandler() {
       let appFile;
       let flowHasHideKeyboard = false;
       try {
-        const yamlText = readFileSync21(flow, "utf-8");
+        const yamlText = readFileSync22(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsed.appId !== void 0 ? { appId: parsed.appId } : {}, parsed.commands);
-        safeFlowFile = join32(tmpdir9(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-        writeFileSync16(safeFlowFile, canonical, "utf-8");
+        safeFlowFile = join34(tmpdir10(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        writeFileSync17(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, void 0);
         if (!appFileResolution.ok) {
           results.push({
@@ -58061,8 +59697,8 @@ function createMaestroTestAllHandler() {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync22, readdirSync as readdirSync9, lstatSync as lstatSync3 } from "node:fs";
-import { join as join33, extname } from "node:path";
+import { readFileSync as readFileSync23, readdirSync as readdirSync9, lstatSync as lstatSync4 } from "node:fs";
+import { join as join35, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -58087,18 +59723,18 @@ function discoverTestIDs(dir) {
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join33(d, entry);
+      const full = join35(d, entry);
       try {
-        const st = lstatSync3(full);
+        const st = lstatSync4(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
           walk(full);
           continue;
         }
-        if (!SCAN_EXTENSIONS.has(extname(entry)))
+        if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync22(full, "utf8");
+        const src = readFileSync23(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -58279,17 +59915,6 @@ function createMetroEventsHandler(getClient2) {
         hint: "Metro events client has not started. This should attach automatically when CDP connects. If you see this, the events WS may have failed to open (port mismatch, Metro not serving /events on this version)."
       });
     }
-    if (metroEvents.incompatibleReason === "expo-cli-incompatible") {
-      return okResult({
-        eventsConnected: false,
-        eventsReason: "expo-cli-incompatible",
-        lastBuild: null,
-        buildErrors: 0,
-        count: 0,
-        events: [],
-        hint: "Metro /events endpoint is serving the Expo manifest protocol, not Metro's reporter stream. This is expected on Expo-managed projects \u2014 bundler events are not currently observable via this path. Workaround: watch cdp_console_log for reload/error messages, or use bare Metro (`npx react-native start`) if you need the reporter stream."
-      });
-    }
     if (args.clearErrors) {
       metroEvents.clearBuildErrors();
       return okResult({
@@ -58322,16 +59947,19 @@ init_rn_fast_runner_client();
 init_ensure_single_runner();
 
 // packages/rn-dev-agent-core/dist/observability/instrumentation.js
-var toolObserver = null;
-function setToolObserver(fn) {
-  toolObserver = fn;
+var toolObservers = /* @__PURE__ */ new Set();
+function addToolObserver(fn) {
+  toolObservers.add(fn);
+  return () => {
+    toolObservers.delete(fn);
+  };
 }
 function notifyObserver(o) {
-  if (!toolObserver)
-    return;
-  try {
-    toolObserver(o);
-  } catch {
+  for (const observer of toolObservers) {
+    try {
+      observer(o);
+    } catch {
+    }
   }
 }
 function classifyResult(result) {
@@ -58419,8 +60047,8 @@ function instrumentTool(toolName, handler) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join34 } from "node:path";
-import { tmpdir as tmpdir10 } from "node:os";
+import { join as join36 } from "node:path";
+import { tmpdir as tmpdir11 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
     return true;
@@ -58562,7 +60190,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join34(tmpdir10(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join36(tmpdir11(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -58576,9 +60204,9 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync23 } from "node:fs";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname13, join as join35 } from "node:path";
+import { readFileSync as readFileSync24 } from "node:fs";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname as dirname15, join as join37 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
 import { randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
@@ -58610,7 +60238,7 @@ function isPostAllowed(req, token) {
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 var HOST = "127.0.0.1";
-var __dir = dirname13(fileURLToPath2(import.meta.url));
+var __dir = dirname15(fileURLToPath3(import.meta.url));
 var ObservabilityServer = class {
   recorder;
   e2e;
@@ -58783,7 +60411,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync23(join35(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync24(join37(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -58799,20 +60427,20 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve4(null);
+          resolve5(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve4(body));
-      req.on("error", () => resolve4(null));
+      req.on("end", () => resolve5(body));
+      req.on("error", () => resolve5(null));
     });
   }
   json(res, status, obj) {
@@ -58940,7 +60568,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -58949,7 +60577,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve4(typeof addr === "object" && addr ? addr.port : port);
+      resolve5(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -58960,10 +60588,10 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
 init_secure_state_file();
 init_storage();
-import { join as join36 } from "node:path";
+import { join as join38 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join36(getStateDir(), "observe", `${safe}.json`);
+  return join38(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -59086,8 +60714,8 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
 import { spawn as spawn5, execFile as execFile26 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
-import { tmpdir as tmpdir11 } from "node:os";
-import { join as join37 } from "node:path";
+import { tmpdir as tmpdir12 } from "node:os";
+import { join as join39 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
 var MAX_FRAME_BYTES = 8e6;
@@ -59140,7 +60768,7 @@ var RestartGate = class {
 var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
 var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-var sleep5 = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+var sleep5 = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
 var scheduleAfter = (fn, delayMs) => {
   if (delayMs <= 0)
     setImmediate(fn);
@@ -59149,8 +60777,8 @@ var scheduleAfter = (fn, delayMs) => {
 };
 var defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 async function detectIdb(execFileFn = execFile26) {
-  return new Promise((resolve4) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve4(!err));
+  return new Promise((resolve5) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve5(!err));
   });
 }
 function isEnoent(err) {
@@ -59243,7 +60871,7 @@ var IosSimctlLoopSource = class {
     this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
     this.idleDelayMs = opts.idleDelayMs ?? 25;
     this.failurePauseMs = opts.failurePauseMs ?? 500;
-    this.tmpPath = opts.tmpPath ?? (() => join37(tmpdir11(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+    this.tmpPath = opts.tmpPath ?? (() => join39(tmpdir12(), "rn-mirror-simctl-" + process.pid + ".jpg"));
   }
   start(sink) {
     this.active = true;
@@ -59281,7 +60909,7 @@ var IosSimctlLoopSource = class {
 };
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -59290,7 +60918,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve4(buf);
+        resolve5(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -59678,20 +61306,20 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname14, join as join38 } from "node:path";
-import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync17, renameSync as renameSync5, readFileSync as readFileSync24, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
-import { createHash as createHash6 } from "node:crypto";
+import { dirname as dirname16, join as join40 } from "node:path";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync25, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
+import { createHash as createHash9 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
-  return join38(projectRoot, ".rn-agent", "e2e");
+  return join40(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join38(dir, `${id}.yaml`);
+  const file = join40(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -59715,11 +61343,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash6("sha256").update(s).digest("hex");
+  return createHash9("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync15(dirname14(filePath), { recursive: true });
+  mkdirSync16(dirname16(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -59733,15 +61361,15 @@ function freezeLockedTest(projectRoot, source, ctx) {
     flow: source.flow
   };
   const tmp = `${filePath}.tmp`;
-  writeFileSync17(tmp, serializeLockedTest(meta), "utf8");
-  renameSync5(tmp, filePath);
+  writeFileSync18(tmp, serializeLockedTest(meta), "utf8");
+  renameSync6(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync27(filePath))
     return null;
-  return parseLockedTest(readFileSync24(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync25(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -59784,12 +61412,12 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync25 } from "node:fs";
-import { join as join39 } from "node:path";
+import { readFileSync as readFileSync26 } from "node:fs";
+import { join as join41 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join39(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join41(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync25(filePath, "utf8");
+    const raw = readFileSync26(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -59826,8 +61454,8 @@ function redactSecrets(text, secretValues) {
 }
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync8 } from "node:child_process";
-var defaultExec3 = (cmd, args) => execFileSync8(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+import { execFileSync as execFileSync9 } from "node:child_process";
+var defaultExec3 = (cmd, args) => execFileSync9(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -59856,7 +61484,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync26(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync27(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -59914,8 +61542,8 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
-import { join as join40 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync27, existsSync as existsSync28 } from "node:fs";
+import { join as join42 } from "node:path";
+import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync28, existsSync as existsSync28 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -59970,20 +61598,20 @@ function diffNewlyFailing(current, previousGreen) {
 }
 var INDEX_MAX = 100;
 function e2eRunsDirFor(projectRoot) {
-  return join40(projectRoot, ".rn-agent", "state", "e2e-runs");
+  return join42(projectRoot, ".rn-agent", "state", "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync16(join40(file, ".."), { recursive: true });
+  mkdirSync17(join42(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync18(tmp, JSON.stringify(value, null, 2), "utf8");
-  renameSync6(tmp, file);
+  writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
+  renameSync7(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join40(e2eRunsDirFor(projectRoot), "index.json");
+  const file = join42(e2eRunsDirFor(projectRoot), "index.json");
   if (!existsSync28(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync27(file, "utf8"));
+    const parsed = JSON.parse(readFileSync28(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -59992,7 +61620,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join40(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join42(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -60000,15 +61628,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join40(dir, "index.json"), next);
+  writeJsonAtomic(join42(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join40(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  const file = join42(e2eRunsDirFor(projectRoot), `${runId}.json`);
   if (!existsSync28(file))
     return null;
   try {
-    return JSON.parse(readFileSync27(file, "utf8"));
+    return JSON.parse(readFileSync28(file, "utf8"));
   } catch {
     return null;
   }
@@ -60023,8 +61651,8 @@ init_storage();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join41 } from "node:path";
-import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync28, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
+import { join as join43 } from "node:path";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync20, renameSync as renameSync8, readFileSync as readFileSync29, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -60032,25 +61660,25 @@ var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "interrupted"
 ]);
 function requestsDir(projectRoot) {
-  return join41(e2eRunsDirFor(projectRoot), "requests");
+  return join43(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join41(requestsDir(projectRoot), `${runId}.json`);
+  return join43(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
-  mkdirSync17(requestsDir(projectRoot), { recursive: true });
+  mkdirSync18(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync19(tmp, JSON.stringify(req, null, 2), "utf8");
-  renameSync7(tmp, file);
+  writeFileSync20(tmp, JSON.stringify(req, null, 2), "utf8");
+  renameSync8(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
   if (!existsSync29(file))
     return null;
   try {
-    return JSON.parse(readFileSync28(file, "utf8"));
+    return JSON.parse(readFileSync29(file, "utf8"));
   } catch {
     return null;
   }
@@ -60330,15 +61958,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve4) => {
+  return new Promise((resolve5) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve4((res.statusCode ?? 500) < 500);
+      resolve5((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve4(false));
+    req.on("error", () => resolve5(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve4(false);
+      resolve5(false);
     });
     req.end();
   });
@@ -60351,9 +61979,9 @@ init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync12 } from "node:fs";
-import { join as join42 } from "node:path";
+import { join as join44 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join42(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join44(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync12(actionsDir);
@@ -60390,8 +62018,8 @@ async function listActions(projectRoot) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join43(dirname15(fileURLToPath3(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync29(pkgPath, "utf8")).version;
+var pkgPath = join45(dirname17(fileURLToPath4(import.meta.url)), "..", "package.json");
+var pkgVersion = JSON.parse(readFileSync30(pkgPath, "utf8")).version;
 var lockfile = null;
 var noLock = process.argv.includes("--no-lock");
 if (!noLock) {
@@ -60476,7 +62104,9 @@ var server2 = new McpServer({
   name: "rn-dev-agent-cdp-bridge",
   version: pkgVersion
 });
-setToolObserver((o) => recorder.record(o));
+var strictProofMonitor = new StrictProofMonitor();
+addToolObserver((o) => recorder.record(o));
+addToolObserver((o) => strictProofMonitor.record(o));
 setForeignGateUdidProvider(() => {
   const s = getActiveSession();
   return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
@@ -60529,7 +62159,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync29(path);
+      const buf = readFileSync30(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {
@@ -60557,7 +62187,11 @@ function trackedTool(name, desc, schema, handler) {
     }
     return result;
   };
-  server2.tool(name, desc, schema, wrapped);
+  if (schema instanceof external_exports.ZodType) {
+    server2.registerTool(name, { description: desc, inputSchema: schema }, wrapped);
+  } else {
+    server2.tool(name, desc, schema, wrapped);
+  }
 }
 trackedTool("cdp_status", "Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.", {
   metroPort: external_exports.number().optional().describe("Override Metro port (default: auto-detect 8081/8082/19000/19006)"),
@@ -60921,6 +62555,110 @@ trackedTool("device_dismiss_system_dialog", 'Tap an OS-level system dialog dismi
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
   timeoutMs: external_exports.number().int().min(1e3).max(6e4).optional().describe("Maestro invocation timeout (default 15000ms).")
 }, createDeviceDismissSystemDialogHandler());
+var resolveNativeProofDevice = async () => {
+  const session = getActiveSession();
+  if (!session?.deviceId)
+    return null;
+  if (session.platform === "ios") {
+    try {
+      const { stdout } = await execFileP("xcrun", ["simctl", "list", "-j", "devices", "booted"]);
+      const payload = JSON.parse(String(stdout));
+      for (const [runtime, devices] of Object.entries(payload.devices ?? {})) {
+        const device = devices.find((candidate) => candidate.udid === session.deviceId && candidate.state === "Booted" && typeof candidate.name === "string");
+        if (device?.name) {
+          const version2 = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll("-", ".");
+          if (version2)
+            return { id: session.deviceId, name: device.name, osVersion: version2 };
+        }
+      }
+    } catch {
+      return null;
+    }
+  }
+  if (session.platform === "android") {
+    try {
+      const [{ stdout: model }, { stdout: version2 }] = await Promise.all([
+        execFileP("adb", ["-s", session.deviceId, "shell", "getprop", "ro.product.model"]),
+        execFileP("adb", ["-s", session.deviceId, "shell", "getprop", "ro.build.version.release"])
+      ]);
+      const name = String(model).trim();
+      const osVersion = String(version2).trim();
+      if (name && osVersion)
+        return { id: session.deviceId, name, osVersion };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+var proofReadiness = async () => {
+  const current = getClient();
+  const target = current.connectedTarget;
+  const session = getActiveSession();
+  const metroEvents = current.metroEventsClient;
+  let errors = [{ unavailable: true }];
+  if (current.isConnected && current.helpersInjected) {
+    const errorResult = await current.evaluate(current.helperExpr("getErrors()"));
+    try {
+      const parsed = typeof errorResult.value === "string" ? JSON.parse(errorResult.value) : null;
+      if (Array.isArray(parsed))
+        errors = parsed;
+    } catch {
+    }
+  }
+  const metroBuildPending = metroEvents?.lastBuild?.status === "started";
+  const metroBuildFailed = metroEvents?.lastBuild?.status === "failed" || (metroEvents?.buildErrors ?? 0) > 0;
+  const metroReady = current.isConnected && await probeMetro(current.metroPort) && !metroBuildPending && !metroBuildFailed;
+  const errorBytes = JSON.stringify(errors);
+  const identity = resolveProofIdentity({
+    session,
+    target,
+    nativeDevice: await resolveNativeProofDevice(),
+    metroPort: current.metroPort,
+    pluginVersion: pkgVersion,
+    metroReady
+  });
+  if (!identity)
+    throw new Error("PROOF_DEVICE_IDENTITY_UNRESOLVED");
+  return {
+    cdpAttached: current.isConnected,
+    helpersAttached: current.helpersInjected,
+    metroReady,
+    metroBuildPending,
+    metroBuildFailed,
+    metroEventsConnected: metroEvents?.isConnected === true,
+    metroEventMarker: metroEvents?.authorityMarker ?? "unavailable",
+    errorCount: errors.length,
+    errorSha256: createHash10("sha256").update(errorBytes).digest("hex"),
+    device: identity.device,
+    runtime: identity.runtime
+  };
+};
+var proofCaptureHandler = createProofCaptureHandler({
+  monitor: strictProofMonitor,
+  projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
+  readActionIdentity: (actionId) => {
+    const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+    return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
+  },
+  getGitInfo: readProofGitInfo,
+  proofRootTracked: proofRootHasTrackedEntries,
+  readiness: proofReadiness,
+  record: createDeviceRecordHandler(),
+  mediaProcess: {
+    run: async (command, args) => {
+      const { stdout, stderr } = await execFileP(command, args, {
+        maxBuffer: 16 * 1024 * 1024
+      });
+      return { stdout: String(stdout), stderr: String(stderr) };
+    }
+  },
+  validateMedia,
+  now: () => /* @__PURE__ */ new Date(),
+  writeReceipt: writeProofReceiptAtomic,
+  removeArtifact: (path) => rmSync6(path, { force: true })
+});
+trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCaptureInputSchema, proofCaptureHandler);
 trackedTool("device_record", 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device \u2014 pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.', {
   action: external_exports.enum(["start", "stop", "status"]).describe("start: begin recording. stop: finalize and save (all active recordings). status: list active recordings."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("(start only) Force platform. Auto-detected from booted devices if omitted."),
@@ -61125,7 +62863,7 @@ trackedTool("cdp_repair_action", 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 trackedTool(
   "cdp_run_action",
-  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.`,
+  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.`,
   {
     actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
     projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
@@ -61134,6 +62872,7 @@ trackedTool(
     timeoutMs: external_exports.number().optional().describe("Maestro execution timeout per attempt (ms). Default 120_000."),
     trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
     forceReload: external_exports.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
+    proofReplay: external_exports.boolean().optional().describe("Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state."),
     params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
   },
   // GH #186: supply a CDP-backed live-route reader so the route-drift guard is
@@ -61348,3 +63087,6 @@ main().catch((err) => {
   stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });
+export {
+  strictProofMonitor
+};
