@@ -221,6 +221,32 @@ test('matchScreenshotAt clamps its final sample inside the decoded video duratio
   assert.deepEqual(sampleTimes, ['13.055', '13.555', '13.599']);
 });
 
+test('matchScreenshotAt scales video samples to the normalized screenshot dimensions', async (t) => {
+  const fixture = await createFixture(t);
+  const scratchDir = join(fixture.root, 'dimension-match');
+  await mkdir(scratchDir);
+  const process = new FakeMediaProcess();
+  const screenshotSha256 = await sha256File(fixture.screenshots[0]!.path);
+
+  await matchScreenshotAt(process, {
+    videoPath: fixture.videoPath,
+    screenshot: { ...fixture.screenshots[0]!, sha256: screenshotSha256 },
+    scratchDir,
+  });
+
+  const comparisons = process.calls.filter(
+    (call) => call.command === 'ffmpeg' && call.args.some((arg) => arg.includes('ssim')),
+  );
+  assert.equal(comparisons.length, 3);
+  assert.ok(
+    comparisons.every((call) =>
+      call.args.includes(
+        '[1:v][0:v]scale2ref=w=rw:h=rh:flags=lanczos[frame][reference];[reference][frame]ssim',
+      ),
+    ),
+  );
+});
+
 test('buildContactSheet creates and hashes a tiled JPEG', async (t) => {
   const fixture = await createFixture(t);
   const process = new FakeMediaProcess();
