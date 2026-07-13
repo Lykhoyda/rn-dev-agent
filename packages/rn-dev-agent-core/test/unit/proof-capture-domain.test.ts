@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   durationBounds,
+  hashProofArgs,
   StrictProofMonitor,
   transitionProofStage,
   validateTrace,
@@ -145,15 +146,11 @@ test('strict proof monitor normalizes events and hashes only redacted arguments'
     latencyMs: 42,
   });
 
-  const argsHash = createHash('sha256')
-    .update(
-      JSON.stringify({
-        password: '[REDACTED:string]',
-        email: '[PII_REDACTED]',
-        label: 'profile',
-      }),
-    )
-    .digest('hex');
+  const argsHash = hashProofArgs({
+    password: 'raw-password-value',
+    email: 'person@example.com',
+    label: 'profile',
+  });
   assert.deepEqual(monitor.snapshot(), [
     {
       tool: 'proof_step',
@@ -234,6 +231,7 @@ test('strict proof monitor binds assertion results and screenshot paths to obser
       tool: 'proof_step',
       ok: true,
       ts: clock.value,
+      argsHash: hashProofArgs({ screenshotPath: '/tmp/state-one.png' }),
       resultHash: createHash('sha256').update(JSON.stringify(result)).digest('hex'),
       screenshotPath: '/tmp/state-one.png',
       assertionPassed: true,

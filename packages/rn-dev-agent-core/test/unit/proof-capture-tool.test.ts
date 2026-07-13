@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -23,12 +24,37 @@ import {
 import type { MediaValidationResult } from '../../dist/tools/proof-media.js';
 import type { MediaProcess, MediaValidationInput } from '../../dist/tools/proof-media.js';
 import type { DeviceRecordArgs } from '../../dist/tools/device-record.js';
+import { redact } from '../../dist/util/redact.js';
 import { failResult, okResult, type ToolResult } from '../../dist/utils.js';
 
 const CORE_ROOT = resolve(import.meta.dirname, '../..');
 const SCHEMA_PATH = resolve(CORE_ROOT, 'schemas/proof-receipt.schema.json');
 const SOURCE_SHA = 'a'.repeat(40);
 const HASH = (value: string): string => createHash('sha256').update(value).digest('hex');
+const stable = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stable);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, stable(nested)]),
+  );
+};
+const argsHash = (value: Record<string, unknown>): string =>
+  HASH(JSON.stringify(stable(redact(value))));
+const git = (root: string, args: string[]): string =>
+  execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+
+function operationArgs(): Record<string, unknown> {
+  return { actionId: 'M7', autoRepair: false };
+}
+
+function assertionArgs(
+  step: { id: string; screenshotPath: string; verifyTestID: string },
+  verifyTestID = step.verifyTestID,
+): Record<string, unknown> {
+  return { verifyTestID, screenshotPath: step.screenshotPath, waitMs: 0 };
+}
 
 function envelope(result: ToolResult): Record<string, unknown> {
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
@@ -58,6 +84,8 @@ function baseReadiness(): ProofReadiness {
     metroReady: true,
     metroBuildPending: false,
     metroBuildFailed: false,
+    metroEventsConnected: true,
+    metroEventMarker: 'connection-1:event-0',
     errorCount: 0,
     errorSha256: HASH('clean-errors'),
     device: {
@@ -111,6 +139,13 @@ function beginArgs(
           criterion: 'First state',
           expectedTool: 'cdp_run_action',
           assertionTool: 'proof_step',
+          expectedArgsSha256: argsHash(operationArgs()),
+          assertionArgsSha256: argsHash({
+            verifyTestID: 'proof-one',
+            screenshotPath: join(proofRoot, 'one.png'),
+            waitMs: 0,
+          }),
+          verifyTestID: 'proof-one',
           screenshotPath: join(proofRoot, 'one.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
@@ -120,6 +155,13 @@ function beginArgs(
           criterion: 'Second state',
           expectedTool: 'cdp_run_action',
           assertionTool: 'proof_step',
+          expectedArgsSha256: argsHash(operationArgs()),
+          assertionArgsSha256: argsHash({
+            verifyTestID: 'proof-two',
+            screenshotPath: join(proofRoot, 'two.png'),
+            waitMs: 0,
+          }),
+          verifyTestID: 'proof-two',
           screenshotPath: join(proofRoot, 'two.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
@@ -129,6 +171,13 @@ function beginArgs(
           criterion: 'Final state',
           expectedTool: 'cdp_run_action',
           assertionTool: 'proof_step',
+          expectedArgsSha256: argsHash(operationArgs()),
+          assertionArgsSha256: argsHash({
+            verifyTestID: 'proof-three',
+            screenshotPath: join(proofRoot, 'three.png'),
+            waitMs: 0,
+          }),
+          verifyTestID: 'proof-three',
           screenshotPath: join(proofRoot, 'three.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
@@ -143,7 +192,7 @@ interface Harness {
   monitor: StrictProofMonitor;
   clock: { value: number };
   readiness: ProofReadiness;
-  git: { sha: string | null; dirty: boolean; changedPaths: string[] };
+  git: { sha: string | null; dirty: boolean; changes: TestGitChange[] };
   recordCalls: DeviceRecordArgs[];
   removed: string[];
   written: FinalProofReceipt[];
@@ -154,8 +203,16 @@ interface Harness {
     fn: (process: MediaProcess, input: MediaValidationInput) => Promise<MediaValidationResult>,
   ) => void;
   setRemove: (fn: (path: string) => Promise<void>) => void;
-  setGitInfo: (fn: () => { sha: string | null; dirty: boolean; changedPaths: string[] }) => void;
+  setGitInfo: (fn: () => { sha: string | null; dirty: boolean; changes: TestGitChange[] }) => void;
+  setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
+}
+
+interface TestGitChange {
+  path: string;
+  indexStatus: string;
+  worktreeStatus: string;
+  sourcePath?: string;
 }
 
 function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { ok: true }> {
@@ -180,7 +237,7 @@ function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { o
     frameMatches: args.storyboard.steps.map((step, index) => ({
       stepId: step.id,
       screenshotSha256: HASH(`screenshot-${step.id}`),
-      videoTimestampMs: timestamps[index]!,
+      videoTimestampMs: index === 0 ? 0 : timestamps[index]!,
       score: 0.96,
     })),
     contactSheet: { path: args.contactSheetPath, sha256: HASH('contact-sheet') },
@@ -191,7 +248,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   const clock = { value: 1_800_000_000_000 };
   const monitor = new StrictProofMonitor(() => clock.value);
   const readiness = baseReadiness();
-  const git = { sha: SOURCE_SHA as string | null, dirty: false, changedPaths: [] as string[] };
+  const git = { sha: SOURCE_SHA as string | null, dirty: false, changes: [] as TestGitChange[] };
   const recordCalls: DeviceRecordArgs[] = [];
   const removed: string[] = [];
   const written: FinalProofReceipt[] = [];
@@ -202,9 +259,11 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   let mediaResult: MediaValidationResult = successfulMedia(beginArgs(expectedProjectRoot));
   let mediaImpl = async (): Promise<MediaValidationResult> => structuredClone(mediaResult);
   let removeImpl = async (): Promise<void> => undefined;
-  let gitImpl = (): { sha: string | null; dirty: boolean; changedPaths: string[] } => ({
+  let gitImpl = (): { sha: string | null; dirty: boolean; changes: TestGitChange[] } => ({
     ...git,
+    changes: structuredClone(git.changes),
   });
+  let proofRootTracked = false;
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
@@ -229,6 +288,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     monitor,
     projectRoot: () => expectedProjectRoot,
     getGitInfo: () => gitImpl(),
+    proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
     record: async (args) => {
       recordCalls.push(structuredClone(args));
@@ -274,6 +334,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     setGitInfo: (fn) => {
       gitImpl = fn;
     },
+    setProofRootTracked: (value) => {
+      proofRootTracked = value;
+    },
     setReadiness: (fn) => {
       readinessImpl = fn;
     },
@@ -305,13 +368,19 @@ async function cleanRehearsal(
   const started = harness.clock.value;
   assert.equal(envelope(await harness.handler(args)).ok, true);
   for (const [index, step] of args.storyboard.steps.entries()) {
-    observe(harness, step.expectedTool, started + 100 + index * 100, okResult({ replayed: true }));
+    observe(
+      harness,
+      step.expectedTool,
+      started + 100 + index * 100,
+      okResult({ replayed: true }),
+      operationArgs(),
+    );
     observe(
       harness,
       step.assertionTool,
       started + 150 + index * 100,
       assertionResult(step.screenshotPath, !(wrongFirstAssertion && index === 0)),
-      { screenshotPath: step.screenshotPath, label: step.id },
+      assertionArgs(step),
     );
   }
   harness.clock.value = started + 12_000;
@@ -329,10 +398,7 @@ function observeFreshStart(
     args.storyboard.steps[0]!.assertionTool,
     harness.clock.value + 100,
     result,
-    {
-      screenshotPath: args.storyboard.steps[0]!.screenshotPath,
-      label: args.storyboard.steps[0]!.id,
-    },
+    assertionArgs(args.storyboard.steps[0]!),
   );
 }
 
@@ -342,7 +408,8 @@ async function arm(harness: Harness, args = beginArgs()): Promise<void> {
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
 }
 
-async function startRecording(harness: Harness): Promise<number> {
+async function startRecording(harness: Harness, args = beginArgs()): Promise<number> {
+  observeFreshStart(harness, args);
   const result = await harness.handler({ action: 'start_recording' });
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
   return harness.clock.value;
@@ -357,6 +424,8 @@ function recordEvidence(
     extraTool?: string;
     timestampOverrides?: number[];
     resultPathOverrides?: Array<string | undefined>;
+    operationArgsOverrides?: Array<Record<string, unknown> | undefined>;
+    assertionArgsOverrides?: Array<Record<string, unknown> | undefined>;
   } = {},
   args = beginArgs(),
 ): Array<{
@@ -389,13 +458,14 @@ function recordEvidence(
       step.expectedTool,
       recordingStart + item.timestampMs - 100,
       okResult({ replayed: true }),
+      options.operationArgsOverrides?.[index] ?? operationArgs(),
     );
     observe(
       harness,
       step.assertionTool,
       recordingStart + item.timestampMs,
       item.assertionResult,
-      { screenshotPath: step.screenshotPath, label: step.id },
+      options.assertionArgsOverrides?.[index] ?? assertionArgs(step),
       options.failedStep === index ? 'FAIL' : 'PASS',
     );
   }
@@ -405,6 +475,19 @@ function recordEvidence(
   return evidence.map(({ assertionResult: _ignored, ...item }) => item);
 }
 
+function markProofOutputs(harness: Harness, args = beginArgs()): void {
+  harness.git.dirty = true;
+  harness.git.changes = [
+    args.videoPath,
+    args.contactSheetPath,
+    ...args.storyboard.steps.map((step) => step.screenshotPath),
+  ].map((path) => ({
+    path: path.slice(args.projectRoot.length + 1),
+    indexStatus: '?',
+    worktreeStatus: '?',
+  }));
+}
+
 async function stoppedCapture(
   harness: Harness,
   options?: Parameters<typeof recordEvidence>[2],
@@ -412,10 +495,11 @@ async function stoppedCapture(
 ): Promise<ReturnType<typeof recordEvidence>> {
   await cleanRehearsal(harness, false, args);
   await arm(harness, args);
-  const recordingStart = await startRecording(harness);
+  const recordingStart = await startRecording(harness, args);
   const evidence = recordEvidence(harness, recordingStart, options, args);
   const stopped = await harness.handler({ action: 'stop_recording' });
   assert.equal(envelope(stopped).ok, true, stopped.content[0]!.text);
+  markProofOutputs(harness, args);
   return evidence;
 }
 
@@ -611,6 +695,7 @@ test('later symlink swaps are rejected at every filesystem boundary', async (t) 
         await symlink(outside, videoDirectory);
       }
     });
+    observeFreshStart(harness, args);
 
     const result = await harness.handler({ action: 'start_recording' });
 
@@ -646,7 +731,7 @@ test('later symlink swaps are rejected at every filesystem boundary', async (t) 
       args.videoPath = join(videoDirectory, 'proof.mp4');
       await cleanRehearsal(harness, false, args);
       await arm(harness, args);
-      await startRecording(harness);
+      await startRecording(harness, args);
       const removalsBeforeDrift = harness.removed.length;
       await mkdir(videoDirectory, { recursive: true });
       await rm(videoDirectory, { recursive: true, force: true });
@@ -759,7 +844,16 @@ test('arm refuses every untrusted readiness condition and a wrong observed start
     mutate: (harness: Harness) => void;
     wrongAssertion?: boolean;
   }> = [
-    { name: 'dirty Git', expected: 'GIT_DIRTY', mutate: (h) => void (h.git.dirty = true) },
+    {
+      name: 'dirty Git',
+      expected: 'GIT_DIRTY',
+      mutate: (h) =>
+        void h.git.changes.push({
+          path: 'packages/core/src/index.ts',
+          indexStatus: '?',
+          worktreeStatus: '?',
+        }),
+    },
     {
       name: 'wrong source SHA',
       expected: 'SOURCE_SHA_MISMATCH',
@@ -833,6 +927,7 @@ test('start refuses a pre-existing recording without claiming or stopping it', a
       ? okResult({ active: [{ platform: 'ios', deviceId: 'OTHER', output: '/tmp/other.mp4' }] })
       : failResult('must not be called'),
   );
+  observeFreshStart(harness);
 
   const result = await harness.handler({ action: 'start_recording' });
   assert.deepEqual(reasons(result), ['RECORDING_ALREADY_ACTIVE']);
@@ -853,6 +948,7 @@ test('a thrown recording status probe fails closed without attempting start', as
   harness.setRecord(async () => {
     throw new Error('status transport failed');
   });
+  observeFreshStart(harness);
 
   const result = await harness.handler({ action: 'start_recording' });
   assert.deepEqual(reasons(result), ['RECORDING_STATUS_FAILED']);
@@ -878,6 +974,7 @@ test('wrong recording device or output path is discarded and starts a fresh rehe
         }
         return okResult({ saved: [] });
       });
+      observeFreshStart(harness);
       const result = await harness.handler({ action: 'start_recording' });
       assert.ok(
         reasons(result).includes(
@@ -910,6 +1007,8 @@ test('record start and stop failures discard the clip and restart rehearsal', as
       if (phase === 'stop') {
         const recordingStart = await startRecording(harness);
         recordEvidence(harness, recordingStart);
+      } else {
+        observeFreshStart(harness);
       }
       const result = await harness.handler({
         action: phase === 'start' ? 'start_recording' : 'stop_recording',
@@ -1118,7 +1217,16 @@ test('validate invokes Task 4 with the injected process and bound capture input'
 
 test('validate rechecks Git, CDP, helpers, and Metro after recording', async (t) => {
   const cases: Array<{ name: string; expected: string; mutate: (h: Harness) => void }> = [
-    { name: 'dirty Git', expected: 'GIT_DIRTY', mutate: (h) => void (h.git.dirty = true) },
+    {
+      name: 'dirty Git',
+      expected: 'GIT_DIRTY',
+      mutate: (h) =>
+        void h.git.changes.push({
+          path: 'packages/core/src/index.ts',
+          indexStatus: '?',
+          worktreeStatus: '?',
+        }),
+    },
     {
       name: 'source changed',
       expected: 'SOURCE_SHA_MISMATCH',
@@ -1351,6 +1459,7 @@ test('arm consumes a fresh verified start assertion after rehearsal', async (t) 
     await arm(harness);
     harness.git.sha = 'b'.repeat(40);
     harness.readiness.errorCount = 1;
+    observeFreshStart(harness);
     const result = await harness.handler({ action: 'start_recording' });
     assert.ok(reasons(result).includes('SOURCE_SHA_MISMATCH'), result.content[0]!.text);
     assert.ok(reasons(result).includes('ERROR_BASELINE_CHANGED'), result.content[0]!.text);
@@ -1386,6 +1495,7 @@ test('cleanup failures preserve a rejected session and discard retries them', as
     harness.setRemove(async (path) => {
       if (path.endsWith('proof.mp4')) throw new Error('unlink failed');
     });
+    observeFreshStart(harness);
 
     const result = await harness.handler({ action: 'start_recording' });
 
@@ -1418,6 +1528,7 @@ test('cleanup failures preserve a rejected session and discard retries them', as
       if (args.action === 'start') return failResult('start response lost');
       return failResult('stop failed');
     });
+    observeFreshStart(harness);
 
     const result = await harness.handler({ action: 'start_recording' });
 
@@ -1442,6 +1553,7 @@ test('validate is action-only and derives evidence from recorded results', async
   const observed = recordEvidence(harness, recordingStart);
   const stopped = envelope(await harness.handler({ action: 'stop_recording' }));
   assert.equal(stopped.ok, true);
+  markProofOutputs(harness);
   const draft = (stopped.data as { evidenceDraft: typeof observed }).evidenceDraft;
   assert.deepEqual(draft, observed);
   assert.equal(proofCaptureInputSchema.safeParse({ action: 'validate' }).success, true);
@@ -1470,7 +1582,11 @@ test('proof artifacts are allowed Git changes but any unrelated change is dirty'
     ...args.storyboard.steps.map((step) => step.screenshotPath),
   ].map((path) => path.slice(args.projectRoot.length + 1));
   harness.git.dirty = true;
-  harness.git.changedPaths = ownedPaths;
+  harness.git.changes = ownedPaths.map((path) => ({
+    path,
+    indexStatus: '?',
+    worktreeStatus: '?',
+  }));
   assert.equal(
     envelope(await harness.handler({ action: 'validate' } as ProofCaptureArgs)).ok,
     true,
@@ -1484,7 +1600,11 @@ test('proof artifacts are allowed Git changes but any unrelated change is dirty'
   recordEvidence(second, secondStart);
   assert.equal(envelope(await second.handler({ action: 'stop_recording' })).ok, true);
   second.git.dirty = true;
-  second.git.changedPaths = [...ownedPaths, 'packages/rn-dev-agent-core/src/index.ts'];
+  second.git.changes = [...ownedPaths, 'packages/rn-dev-agent-core/src/index.ts'].map((path) => ({
+    path,
+    indexStatus: '?',
+    worktreeStatus: '?',
+  }));
   const rejected = await second.handler({ action: 'validate' } as ProofCaptureArgs);
   assert.ok(reasons(rejected).includes('GIT_DIRTY'), rejected.content[0]!.text);
 });
@@ -1525,43 +1645,70 @@ test('proof root must be fresh, dedicated, and confined to docs/proof/run slug',
   );
 });
 
-test('production identity rejects stale or mismatched device sessions without target-id fallback', async () => {
+test('production identity canonically binds iOS and Android target presentation', async () => {
   const module = await import('../../dist/tools/proof-capture.js');
-  const valid = {
+  const ios = {
     session: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.fixture' },
-    target: { platform: 'ios', description: 'dev.fixture', deviceName: 'iPhone 16 Pro' },
+    target: { platform: 'ios', description: 'dev.fixture', deviceName: ' iPhone   16 Pro ' },
     nativeDevice: { id: 'SIM-1', name: 'iPhone 16 Pro', osVersion: '18.5' },
     metroPort: 8081,
     pluginVersion: '0.69.0',
     metroReady: true,
   };
-  assert.equal(module.resolveProofIdentity(valid)?.device.id, 'SIM-1');
-  assert.equal(module.resolveProofIdentity({ ...valid, session: null }), null);
+  assert.equal(module.resolveProofIdentity(ios)?.device.id, 'SIM-1');
+  assert.equal(module.resolveProofIdentity({ ...ios, session: null }), null);
   assert.equal(
-    module.resolveProofIdentity({ ...valid, session: { ...valid.session, deviceId: undefined } }),
+    module.resolveProofIdentity({ ...ios, session: { ...ios.session, deviceId: undefined } }),
     null,
   );
   assert.equal(
     module.resolveProofIdentity({
-      ...valid,
-      target: { ...valid.target, deviceName: 'iPhone 15' },
+      ...ios,
+      target: { ...ios.target, deviceName: 'iPhone 15' },
     }),
     null,
   );
   assert.equal(
     module.resolveProofIdentity({
-      ...valid,
-      session: { ...valid.session, appId: 'dev.other' },
+      ...ios,
+      session: { ...ios.session, appId: 'dev.other' },
     }),
     null,
   );
   assert.equal(
     module.resolveProofIdentity({
-      ...valid,
-      target: { ...valid.target, platform: 'android' },
+      ...ios,
+      target: { ...ios.target, platform: 'android' },
     }),
     null,
   );
+
+  const android = {
+    ...ios,
+    session: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.fixture' },
+    target: {
+      platform: 'android',
+      description: 'dev.fixture',
+      deviceName: 'sdk_gphone16k_arm64 - 17 - API 37',
+    },
+    nativeDevice: {
+      id: 'emulator-5554',
+      name: 'sdk_gphone16k_arm64',
+      osVersion: '17',
+    },
+  };
+  assert.equal(module.resolveProofIdentity(android)?.device.model, 'sdk_gphone16k_arm64');
+  for (const deviceName of [
+    'sdk_gphone16k_arm6 - 17 - API 37',
+    'sdk_gphone16k_arm64 - 16 - API 37',
+    'sdk_gphone16k_arm64 - 17',
+  ]) {
+    assert.equal(
+      module.resolveProofIdentity({ ...android, target: { ...android.target, deviceName } }),
+      null,
+      deviceName,
+    );
+  }
 });
 
 test('bundled contract lookup and host builder use the package-owned schema', async (t) => {
@@ -1632,6 +1779,7 @@ test('Git, readiness, media, and receipt construction exceptions fail closed', a
     const recordingStart = await startRecording(harness);
     recordEvidence(harness, recordingStart);
     assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+    markProofOutputs(harness);
     const malformed = successfulMedia();
     malformed.video.sha256 = 'not-a-hash';
     harness.setMedia(malformed);
@@ -1639,6 +1787,308 @@ test('Git, readiness, media, and receipt construction exceptions fail closed', a
     assert.ok(reasons(result).includes('RECEIPT_CONSTRUCTION_FAILED'), result.content[0]!.text);
     assert.equal(harness.written.length, 0);
   });
+});
+
+test('storyboard argument hashes use the monitor canonicalizer and are required', async () => {
+  const module = await import('../../dist/domain/proof-capture.js');
+  assert.equal(typeof module.hashProofArgs, 'function');
+  assert.equal(module.hashProofArgs(operationArgs()), argsHash(operationArgs()));
+  assert.equal(
+    module.hashProofArgs(operationArgs()),
+    module.hashProofArgs({ autoRepair: false, actionId: 'M7' }),
+  );
+
+  const args = beginArgs();
+  assert.equal(proofCaptureInputSchema.safeParse(args).success, true);
+  const missing = structuredClone(args) as unknown as {
+    storyboard: { steps: Array<{ expectedArgsSha256?: string }> };
+  };
+  delete missing.storyboard.steps[0]!.expectedArgsSha256;
+  assert.equal(proofCaptureInputSchema.safeParse(missing).success, false);
+});
+
+test('strict proof observations bind the canonical semantic argument hash', async () => {
+  const monitor = new StrictProofMonitor(() => 123);
+  monitor.begin();
+  monitor.record({
+    tool: 'cdp_run_action',
+    params: operationArgs(),
+    status: 'PASS',
+    latencyMs: 1,
+    result: okResult({ replayed: true }),
+  });
+  assert.equal(monitor.observations()[0]?.argsHash, argsHash(operationArgs()));
+});
+
+test('rehearsal rejects semantically different operation and assertion arguments', async (t) => {
+  for (const scenario of ['wrong action', 'wrong assertion target'] as const) {
+    await t.test(scenario, async (st) => {
+      const harness = createHarness(st);
+      const args = beginArgs();
+      const started = harness.clock.value;
+      const begun = await harness.handler(args);
+      assert.equal(envelope(begun).ok, true, begun.content[0]!.text);
+      for (const [index, step] of args.storyboard.steps.entries()) {
+        observe(
+          harness,
+          step.expectedTool,
+          started + 100 + index * 100,
+          okResult({ replayed: true }),
+          scenario === 'wrong action' && index === 0
+            ? { actionId: 'unrelated-action', autoRepair: false }
+            : operationArgs(),
+        );
+        observe(
+          harness,
+          step.assertionTool,
+          started + 150 + index * 100,
+          assertionResult(step.screenshotPath),
+          scenario === 'wrong assertion target' && index === 0
+            ? assertionArgs(step, 'unrelated-but-visible')
+            : assertionArgs(step),
+        );
+      }
+      harness.clock.value = started + 12_000;
+
+      const result = await harness.handler({ action: 'finish_rehearsal' });
+
+      assert.ok(
+        reasons(result).includes(
+          scenario === 'wrong action'
+            ? 'OPERATION_ARGUMENT_MISMATCH'
+            : 'ASSERTION_ARGUMENT_MISMATCH',
+        ),
+        result.content[0]!.text,
+      );
+    });
+  }
+});
+
+test('recording rejects semantically different operation and assertion arguments', async (t) => {
+  for (const scenario of ['wrong action', 'wrong assertion target'] as const) {
+    await t.test(scenario, async (st) => {
+      const harness = createHarness(st);
+      const args = beginArgs();
+      await cleanRehearsal(harness);
+      await arm(harness);
+      const recordingStart = await startRecording(harness);
+      recordEvidence(harness, recordingStart, {
+        operationArgsOverrides:
+          scenario === 'wrong action'
+            ? [{ actionId: 'unrelated-action', autoRepair: false }]
+            : undefined,
+        assertionArgsOverrides:
+          scenario === 'wrong assertion target'
+            ? [assertionArgs(args.storyboard.steps[0]!, 'unrelated-but-visible')]
+            : undefined,
+      });
+      assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+      markProofOutputs(harness);
+
+      const result = await harness.handler({ action: 'validate' });
+
+      assert.ok(
+        reasons(result).includes(
+          scenario === 'wrong action'
+            ? 'OPERATION_ARGUMENT_MISMATCH'
+            : 'ASSERTION_ARGUMENT_MISMATCH',
+        ),
+        result.content[0]!.text,
+      );
+    });
+  }
+});
+
+test('start consumes one post-arm zero-wait typed assertion and rejects drift', async (t) => {
+  await t.test('missing post-arm assertion', async (st) => {
+    const harness = createHarness(st);
+    await cleanRehearsal(harness);
+    await arm(harness);
+    const result = await harness.handler({ action: 'start_recording' });
+    assert.ok(reasons(result).includes('START_ASSERTION_MISSING'), result.content[0]!.text);
+    assert.deepEqual(harness.recordCalls, []);
+  });
+
+  await t.test('unrelated verified target', async (st) => {
+    const harness = createHarness(st);
+    const args = beginArgs();
+    await cleanRehearsal(harness);
+    await arm(harness, args);
+    const first = args.storyboard.steps[0]!;
+    observe(
+      harness,
+      first.assertionTool,
+      harness.clock.value + 1,
+      assertionResult(first.screenshotPath),
+      assertionArgs(first, 'unrelated-but-visible'),
+    );
+    const result = await harness.handler({ action: 'start_recording' });
+    assert.ok(
+      reasons(result).includes('START_ASSERTION_ARGUMENT_MISMATCH'),
+      result.content[0]!.text,
+    );
+    assert.deepEqual(harness.recordCalls, []);
+  });
+
+  await t.test('activity after the post-arm assertion', async (st) => {
+    const harness = createHarness(st);
+    await cleanRehearsal(harness);
+    await arm(harness);
+    observeFreshStart(harness);
+    observe(harness, 'device_press', harness.clock.value + 1, okResult({ pressed: true }));
+    const result = await harness.handler({ action: 'start_recording' });
+    assert.ok(reasons(result).includes('START_STATE_DRIFT'), result.content[0]!.text);
+    assert.deepEqual(harness.recordCalls, []);
+  });
+});
+
+test('tracked proof roots are rejected even when their indexed files are deleted', async (t) => {
+  const harness = createHarness(t);
+  harness.setProofRootTracked(true);
+
+  const result = await harness.handler(beginArgs());
+
+  assert.ok(reasons(result).includes('PROOF_ROOT_TRACKED'), result.content[0]!.text);
+  assert.deepEqual(harness.removed, []);
+});
+
+test('production Git authority preserves index/worktree status and deleted tracked roots', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-git-authority-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'proof@example.invalid']);
+  git(root, ['config', 'user.name', 'Proof Test']);
+  await writeFile(join(root, 'README.md'), 'base\n');
+  git(root, ['add', 'README.md']);
+  git(root, ['commit', '-qm', 'base']);
+
+  const trackedRoot = join(root, 'docs', 'proof', 'tracked-run');
+  await mkdir(trackedRoot, { recursive: true });
+  await writeFile(join(trackedRoot, 'proof.mp4'), 'tracked');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-qm', 'tracked proof']);
+  await rm(trackedRoot, { recursive: true, force: true });
+
+  const module = await import('../../dist/tools/proof-capture.js');
+  assert.equal(typeof module.proofRootHasTrackedEntries, 'function');
+  assert.equal(module.proofRootHasTrackedEntries(root, trackedRoot), true);
+  assert.deepEqual(module.readProofGitInfo(root).changes, [
+    {
+      path: 'docs/proof/tracked-run/proof.mp4',
+      indexStatus: ' ',
+      worktreeStatus: 'D',
+    },
+  ]);
+
+  await mkdir(trackedRoot, { recursive: true });
+  await writeFile(join(trackedRoot, 'proof.mp4'), 'tracked');
+  const stagedPath = join(root, 'docs', 'proof', 'staged-run', 'proof.mp4');
+  await mkdir(dirname(stagedPath), { recursive: true });
+  await writeFile(stagedPath, 'staged');
+  git(root, ['add', 'docs/proof/staged-run/proof.mp4']);
+  assert.deepEqual(
+    module
+      .readProofGitInfo(root)
+      .changes.find((change: TestGitChange) => change.path === 'docs/proof/staged-run/proof.mp4'),
+    {
+      path: 'docs/proof/staged-run/proof.mp4',
+      indexStatus: 'A',
+      worktreeStatus: ' ',
+    },
+  );
+
+  git(root, ['commit', '-qm', 'staged fixture']);
+  const untrackedPath = join(root, 'docs', 'proof', 'new-run', 'proof.mp4');
+  await mkdir(dirname(untrackedPath), { recursive: true });
+  await writeFile(untrackedPath, 'untracked');
+  await writeFile(join(root, 'unrelated.txt'), 'unrelated');
+  assert.deepEqual(module.readProofGitInfo(root).changes, [
+    { path: 'docs/proof/new-run/proof.mp4', indexStatus: '?', worktreeStatus: '?' },
+    { path: 'unrelated.txt', indexStatus: '?', worktreeStatus: '?' },
+  ]);
+});
+
+test('validation allows only the complete exact untracked proof output set', async (t) => {
+  const args = beginArgs();
+  const expectedPaths = [
+    args.videoPath,
+    args.contactSheetPath,
+    ...args.storyboard.steps.map((step) => step.screenshotPath),
+  ].map((path) => path.slice(args.projectRoot.length + 1));
+  const untracked = (path: string): TestGitChange => ({
+    path,
+    indexStatus: '?',
+    worktreeStatus: '?',
+  });
+
+  for (const scenario of ['complete', 'staged', 'missing', 'unrelated'] as const) {
+    await t.test(scenario, async (st) => {
+      const harness = createHarness(st);
+      await stoppedCapture(harness);
+      harness.git.dirty = true;
+      harness.git.changes = expectedPaths.map(untracked);
+      if (scenario === 'staged') {
+        harness.git.changes[0] = {
+          path: expectedPaths[0]!,
+          indexStatus: 'A',
+          worktreeStatus: ' ',
+        };
+      } else if (scenario === 'missing') {
+        harness.git.changes.pop();
+      } else if (scenario === 'unrelated') {
+        harness.git.changes.push(untracked('packages/core/src/index.ts'));
+      }
+
+      const result = await harness.handler({ action: 'validate' });
+
+      if (scenario === 'complete') {
+        assert.equal(envelope(result).ok, true, result.content[0]!.text);
+      } else {
+        assert.ok(
+          reasons(result).includes(scenario === 'missing' ? 'PROOF_OUTPUT_MISSING' : 'GIT_DIRTY'),
+          result.content[0]!.text,
+        );
+      }
+    });
+  }
+});
+
+test('Metro reporter authority must stay connected and event-stable through capture', async (t) => {
+  await t.test('absent at arm', async (st) => {
+    const harness = createHarness(st);
+    await cleanRehearsal(harness);
+    observeFreshStart(harness);
+    harness.readiness.metroEventsConnected = false;
+    const result = await harness.handler({ action: 'arm' });
+    assert.ok(reasons(result).includes('METRO_EVENTS_UNAVAILABLE'), result.content[0]!.text);
+  });
+
+  for (const phase of ['start', 'validate'] as const) {
+    for (const change of ['reconnected', 'build-start-done', 'reload'] as const) {
+      await t.test(`${phase}: ${change}`, async (st) => {
+        const harness = createHarness(st);
+        if (phase === 'start') {
+          await cleanRehearsal(harness);
+          await arm(harness);
+        } else {
+          await stoppedCapture(harness);
+        }
+        harness.readiness.metroEventMarker =
+          change === 'reconnected'
+            ? 'connection-2:event-0'
+            : change === 'build-start-done'
+              ? 'connection-1:event-2'
+              : 'connection-1:event-1';
+        if (phase === 'start') observeFreshStart(harness);
+
+        const result = await harness.handler({
+          action: phase === 'start' ? 'start_recording' : 'validate',
+        });
+
+        assert.ok(reasons(result).includes('METRO_ACTIVITY_CHANGED'), result.content[0]!.text);
+      });
+    }
+  }
 });
 
 test('tool registry contains proof_capture exactly once', async () => {

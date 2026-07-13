@@ -90,13 +90,6 @@ export interface StatusResult {
     lastBuild?: { status: 'started' | 'done' | 'failed'; timestamp: string } | null;
     /** M5 (D656): count of bundle_build_failed events observed since MCP connected. */
     buildErrors?: number;
-    /**
-     * B129 (D658): reason the events stream is unusable on this Metro, if any.
-     * `"expo-cli-incompatible"` means Expo CLI is serving the manifest
-     * protocol at /events instead of Metro's reporter stream. When present,
-     * `eventsConnected` will be false and no events will ever arrive.
-     */
-    eventsReason?: 'expo-cli-incompatible' | null;
     // GH #303: worktree disambiguation diagnostics.
     candidates?: MetroCandidate[];
     projectRoot?: string;

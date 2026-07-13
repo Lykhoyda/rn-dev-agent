@@ -52,10 +52,8 @@ export class MetroEventsClient {
     reconnectAttempt = 0;
     _lastBuild = null;
     _buildErrors = 0;
-    // B129 (D658): set when the /events endpoint is detected as incompatible
-    // (e.g. Expo CLI serving the manifest protocol on this path). Once set,
-    // start() is a no-op — no point opening a WS that will deliver no events.
-    _incompatibleReason = null;
+    _connectionEpoch = 0;
+    _relevantEventSequence = 0;
     events;
     constructor(options) {
         this.opts = {
@@ -64,28 +62,21 @@ export class MetroEventsClient {
             bufferCapacity: options.bufferCapacity ?? 100,
             logTag: options.logTag ?? 'Metro.events',
             maxReconnectAttempts: options.maxReconnectAttempts ?? 0,
-            skipIncompatibilityProbe: options.skipIncompatibilityProbe ?? false,
             onEvent: options.onEvent,
-            fetchFn: options.fetchFn,
         };
         this.events = new RingBuffer(this.opts.bufferCapacity);
     }
     get isConnected() {
         return this.state === 'open';
     }
-    /**
-     * B129 (D658): reason the /events stream is unusable, if any. When set,
-     * `isConnected` is false and no events will ever flow. Surface this to
-     * the user via cdp_status.metro so they know why lastBuild stays null.
-     */
-    get incompatibleReason() {
-        return this._incompatibleReason;
-    }
     get lastBuild() {
         return this._lastBuild;
     }
     get buildErrors() {
         return this._buildErrors;
+    }
+    get authorityMarker() {
+        return `connection-${this._connectionEpoch}:event-${this._relevantEventSequence}`;
     }
     /** Port this client is attached to. Immutable after construction — if Metro hops ports, the caller must stop() and construct a fresh client. */
     get port() {
@@ -105,59 +96,11 @@ export class MetroEventsClient {
     async start() {
         if (this.state === 'open' || this.state === 'connecting')
             return;
-        if (this.state === 'incompatible')
-            return; // B129: don't retry incompatible endpoints
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
-        // B129 (D658): probe /events via HTTP GET BEFORE opening the WS. On Expo
-        // CLI projects, /events serves the Expo manifest protocol instead of
-        // Metro's ReporterEvent stream — the WS handshake succeeds but no
-        // reporter events ever arrive. Detect this shape up front and short-
-        // circuit with an actionable state.
-        if (!this.opts.skipIncompatibilityProbe) {
-            const reason = await this.probeIncompatibility();
-            if (reason) {
-                this._incompatibleReason = reason;
-                this.state = 'incompatible';
-                logger.info(this.opts.logTag, `events endpoint incompatible (${reason}) — not opening WS`);
-                return;
-            }
-        }
         await this.connectOnce();
-    }
-    /**
-     * B129 (D658): HTTP GET probe to detect non-Metro /events responses.
-     * Returns the incompatibility reason if detected, null if the endpoint
-     * appears compatible or the probe itself failed (fall through to WS —
-     * connection failures will retry via existing reconnect logic).
-     */
-    async probeIncompatibility() {
-        const fetchFn = this.opts.fetchFn ?? (typeof fetch === 'function' ? fetch : null);
-        if (!fetchFn)
-            return null; // no fetch in runtime; skip probe rather than fail
-        try {
-            const url = `http://${this.opts.host}:${this.opts.port}/events`;
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 1500);
-            try {
-                const resp = await fetchFn(url, { signal: ctrl.signal });
-                if (!resp.ok)
-                    return null; // non-200 — probably bare Metro or unreachable; let WS attempt
-                const text = await resp.text();
-                return detectExpoManifestResponse(text) ? 'expo-cli-incompatible' : null;
-            }
-            finally {
-                clearTimeout(timer);
-            }
-        }
-        catch {
-            // Probe failed (timeout, network error, CORS). Don't mark incompatible —
-            // a bare-Metro /events HTTP GET may also error out (WS-only upgrade);
-            // falling through to WS handshake is the safe default.
-            return null;
-        }
     }
     /**
      * Stop the client and cancel any pending reconnect. Idempotent — safe to call
@@ -201,12 +144,6 @@ export class MetroEventsClient {
         }
         this.state = 'stopped';
         this.reconnectAttempt = 0;
-        // B129/D658 multi-review follow-up (L1): also clear the incompatibility
-        // flag so `stop()` + `start()` on the same instance re-probes. The
-        // incompatibility is a property of the endpoint at probe time; if the
-        // caller stops and restarts us (e.g. after switching Metro from Expo to
-        // bare), they should get a fresh probe, not a stale result.
-        this._incompatibleReason = null;
     }
     /** Reset the build-error counter. Useful when the user acknowledges errors. */
     clearBuildErrors() {
@@ -233,6 +170,7 @@ export class MetroEventsClient {
                     return;
                 outcome = 'open';
                 this.state = 'open';
+                this._connectionEpoch += 1;
                 this.reconnectAttempt = 0;
                 logger.info(this.opts.logTag, `connected to ${url}`);
                 resolve();
@@ -281,6 +219,9 @@ export class MetroEventsClient {
             payload: raw,
         };
         this.events.push(event);
+        if (type.startsWith('bundle_build_') || type.toLowerCase().includes('reload')) {
+            this._relevantEventSequence += 1;
+        }
         // Update convenience accessors for build state — these power cdp_status.metro
         if (type === 'bundle_build_started') {
             this._lastBuild = { status: 'started', timestamp: event.timestamp };

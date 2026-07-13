@@ -71,6 +71,7 @@ export interface MatchScreenshotInput {
   threshold?: number;
   scratchDir: string;
   index?: number;
+  sampleRadiusMs?: number;
 }
 
 export interface ScreenshotMatchResult {
@@ -248,6 +249,10 @@ export async function matchScreenshotAt(
 
   const index = input.index ?? 0;
   if (!Number.isInteger(index) || index < 0) fail('INVALID_MEDIA_INPUT');
+  const sampleRadiusMs = input.sampleRadiusMs ?? 500;
+  if (!Number.isInteger(sampleRadiusMs) || sampleRadiusMs < 0 || sampleRadiusMs > 500) {
+    fail('INVALID_MEDIA_INPUT');
+  }
   const normalizedScreenshotPath = join(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process, [
@@ -266,11 +271,14 @@ export async function matchScreenshotAt(
     'FRAME_PROCESS_FAILED',
   );
 
-  const sampleTimestamps = [
-    Math.max(0, input.screenshot.timestampMs - 500),
-    input.screenshot.timestampMs,
-    input.screenshot.timestampMs + 500,
-  ];
+  const sampleTimestamps =
+    sampleRadiusMs === 0
+      ? [input.screenshot.timestampMs]
+      : [
+          Math.max(0, input.screenshot.timestampMs - sampleRadiusMs),
+          input.screenshot.timestampMs,
+          input.screenshot.timestampMs + sampleRadiusMs,
+        ];
   let best: { score: number; timestampMs: number; framePath: string } | null = null;
 
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
@@ -428,10 +436,11 @@ export async function validateMedia(
       };
       const match = await matchScreenshotAt(process, {
         videoPath: input.videoPath,
-        screenshot,
+        screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
         threshold,
         scratchDir,
         index,
+        sampleRadiusMs: index === 0 ? 0 : 500,
       });
       screenshots.push(screenshot);
       frameMatches.push(match.frameMatch);

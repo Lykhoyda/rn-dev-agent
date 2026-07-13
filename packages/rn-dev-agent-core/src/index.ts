@@ -1,7 +1,7 @@
 import './env-setup.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -67,8 +67,9 @@ import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.j
 import { createDeviceRecordHandler } from './tools/device-record.js';
 import {
   createProofCaptureHandler,
-  parseProofGitChangedPaths,
+  proofRootHasTrackedEntries,
   proofCaptureInputSchema,
+  readProofGitInfo,
   resolveProofIdentity,
   resolveProofWorktreeRoot,
   writeProofReceiptAtomic,
@@ -1628,29 +1629,6 @@ trackedTool(
   createDeviceDismissSystemDialogHandler(),
 );
 
-const getProofGitInfo = (
-  root: string,
-): { sha: string | null; dirty: boolean; changedPaths: string[] } => {
-  try {
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: root,
-      encoding: 'utf8',
-    }).trim();
-    const status = execFileSync(
-      'git',
-      ['status', '--porcelain=v1', '--untracked-files=all', '-z'],
-      {
-        cwd: root,
-        encoding: 'utf8',
-      },
-    );
-    const changedPaths = parseProofGitChangedPaths(status);
-    return { sha: sha || null, dirty: changedPaths.length > 0, changedPaths };
-  } catch {
-    return { sha: null, dirty: true, changedPaths: [] };
-  }
-};
-
 const resolveNativeProofDevice = async (): Promise<{
   id: string;
   name: string;
@@ -1735,6 +1713,8 @@ const proofReadiness = async (): Promise<ProofReadiness> => {
     metroReady,
     metroBuildPending,
     metroBuildFailed,
+    metroEventsConnected: metroEvents?.isConnected === true,
+    metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
     errorCount: errors.length,
     errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
     device: identity.device,
@@ -1746,7 +1726,8 @@ const proofCaptureHandler = createProofCaptureHandler({
   monitor: strictProofMonitor,
   projectRoot: () =>
     resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
-  getGitInfo: getProofGitInfo,
+  getGitInfo: readProofGitInfo,
+  proofRootTracked: proofRootHasTrackedEntries,
   readiness: proofReadiness,
   record: createDeviceRecordHandler(),
   mediaProcess: {

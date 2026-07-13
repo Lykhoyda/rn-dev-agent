@@ -22,14 +22,13 @@ export class StrictProofMonitor {
             ok: event.status === 'PASS',
             ts,
             durationMs: event.latencyMs,
-            argsHash: createHash('sha256')
-                .update(JSON.stringify(redact(event.params)))
-                .digest('hex'),
+            argsHash: hashProofArgs(event.params),
         });
         this.observedResults.push({
             tool: event.tool,
             ok: event.status === 'PASS',
             ts,
+            argsHash: hashProofArgs(event.params),
             resultHash: hashObservedValue(event.result),
             screenshotPath: observedScreenshotPath(event),
             assertionPassed: observedAssertionPassed(event),
@@ -45,6 +44,20 @@ export class StrictProofMonitor {
     observations() {
         return structuredClone(this.observedResults);
     }
+}
+function canonicalizeProofValue(value) {
+    if (Array.isArray(value))
+        return value.map(canonicalizeProofValue);
+    if (!value || typeof value !== 'object')
+        return value;
+    return Object.fromEntries(Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalizeProofValue(nested)]));
+}
+export function hashProofArgs(params) {
+    return createHash('sha256')
+        .update(JSON.stringify(canonicalizeProofValue(redact(params))))
+        .digest('hex');
 }
 function hashObservedValue(value) {
     const bytes = JSON.stringify(value) ?? String(value);

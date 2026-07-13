@@ -274,13 +274,33 @@ test('validateMedia returns no partial artifacts when final-frame SSIM is missin
   assertFailure(result, 'FRAME_MISMATCH');
 });
 
+test('validateMedia rejects a wrong frame zero even when the later first-state window matches', async (t) => {
+  const fixture = await createFixture(t);
+  const result = await validateMedia(
+    new FakeMediaProcess({
+      ssimOutputs: [
+        'SSIM All:0.50 (1)',
+        'SSIM All:0.99 (20)',
+        'SSIM All:0.99 (20)',
+        'SSIM All:0.95 (12)',
+        'SSIM All:0.95 (12)',
+        'SSIM All:0.95 (12)',
+        'SSIM All:0.95 (12)',
+        'SSIM All:0.95 (12)',
+        'SSIM All:0.95 (12)',
+      ],
+    }),
+    inputFor(fixture),
+  );
+
+  assertFailure(result, 'FRAME_MISMATCH');
+});
+
 test('validateMedia hashes every accepted artifact with SHA-256', async (t) => {
   const fixture = await createFixture(t);
   const process = new FakeMediaProcess({
     ssimOutputs: [
-      'SSIM All:0.91 (10)',
       'SSIM All:0.96 (14)',
-      'SSIM All:0.93 (11)',
       'SSIM All:0.94 (12)',
       'SSIM All:0.92 (10)',
       'SSIM All:0.91 (9)',
@@ -312,7 +332,7 @@ test('validateMedia hashes every accepted artifact with SHA-256', async (t) => {
   assert.deepEqual(
     result.frameMatches.map(({ videoTimestampMs, score }) => ({ videoTimestampMs, score })),
     [
-      { videoTimestampMs: 4_000, score: 0.96 },
+      { videoTimestampMs: 0, score: 0.96 },
       { videoTimestampMs: 9_500, score: 0.94 },
       { videoTimestampMs: 16_500, score: 0.97 },
     ],

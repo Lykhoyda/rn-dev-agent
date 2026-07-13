@@ -1,7 +1,7 @@
 import './env-setup.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -48,7 +48,7 @@ import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
-import { createProofCaptureHandler, parseProofGitChangedPaths, proofCaptureInputSchema, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
+import { createProofCaptureHandler, proofRootHasTrackedEntries, proofCaptureInputSchema, readProofGitInfo, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
 import { validateMedia } from './tools/proof-media.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
@@ -1134,23 +1134,6 @@ trackedTool('device_dismiss_system_dialog', 'Tap an OS-level system dialog dismi
         .optional()
         .describe('Maestro invocation timeout (default 15000ms).'),
 }, createDeviceDismissSystemDialogHandler());
-const getProofGitInfo = (root) => {
-    try {
-        const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
-            cwd: root,
-            encoding: 'utf8',
-        }).trim();
-        const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
-            cwd: root,
-            encoding: 'utf8',
-        });
-        const changedPaths = parseProofGitChangedPaths(status);
-        return { sha: sha || null, dirty: changedPaths.length > 0, changedPaths };
-    }
-    catch {
-        return { sha: null, dirty: true, changedPaths: [] };
-    }
-};
 const resolveNativeProofDevice = async () => {
     const session = getActiveSession();
     if (!session?.deviceId)
@@ -1231,6 +1214,8 @@ const proofReadiness = async () => {
         metroReady,
         metroBuildPending,
         metroBuildFailed,
+        metroEventsConnected: metroEvents?.isConnected === true,
+        metroEventMarker: metroEvents?.authorityMarker ?? 'unavailable',
         errorCount: errors.length,
         errorSha256: createHash('sha256').update(errorBytes).digest('hex'),
         device: identity.device,
@@ -1240,7 +1225,8 @@ const proofReadiness = async () => {
 const proofCaptureHandler = createProofCaptureHandler({
     monitor: strictProofMonitor,
     projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
-    getGitInfo: getProofGitInfo,
+    getGitInfo: readProofGitInfo,
+    proofRootTracked: proofRootHasTrackedEntries,
     readiness: proofReadiness,
     record: createDeviceRecordHandler(),
     mediaProcess: {
