@@ -31,6 +31,14 @@ const CORE_ROOT = resolve(import.meta.dirname, '../..');
 const SCHEMA_PATH = resolve(CORE_ROOT, 'schemas/proof-receipt.schema.json');
 const SOURCE_SHA = 'a'.repeat(40);
 const HASH = (value: string): string => createHash('sha256').update(value).digest('hex');
+const ACTION_YAML_BYTES = `appId: dev.rnproof.fixture
+---
+# id: canonical-proof
+# intent: Create a task through the proof fixture
+# status: active
+- tapOn:
+    id: open-task-form
+`;
 const stable = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(stable);
   if (!value || typeof value !== 'object') return value;
@@ -45,8 +53,23 @@ const argsHash = (value: Record<string, unknown>): string =>
 const git = (root: string, args: string[]): string =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8' });
 
-function operationArgs(): Record<string, unknown> {
-  return { actionId: 'M7', autoRepair: false };
+function actionRunArgs(): Record<string, unknown> {
+  return { actionId: 'canonical-proof', autoRepair: false };
+}
+
+function operationArgs(index = 0): Record<string, unknown> {
+  return [
+    { interactiveOnly: true },
+    { action: 'tap', testID: 'open-task-form' },
+    { testID: 'task-title-input', text: 'Proof task' },
+    { action: 'tap', testID: 'submit-task' },
+  ][index]!;
+}
+
+function trustedActionIdentity(
+  overrides: Partial<{ id: string; version: string; sha256: string }> = {},
+): { id: string; version: string; sha256: string } {
+  return { id: 'canonical-proof', version: '1', sha256: HASH(ACTION_YAML_BYTES), ...overrides };
 }
 
 function assertionArgs(
@@ -120,65 +143,81 @@ function beginArgs(
     proofClass: 'feature',
     acceptanceMappings: [
       {
-        criterion: 'Shows all three exact feature states',
-        storyboardStepIds: ['one', 'two', 'three'],
+        criterion: 'Shows the exact task creation behavior',
+        storyboardStepIds: ['start-state', 'open-form', 'fill-form', 'submit-form'],
       },
     ],
     fixture: { name: 'proof-fixture', version: '1' },
-    proofAction: { id: 'M7', version: '1', sha256: HASH('M7') },
+    proofAction: trustedActionIdentity(),
     storyboard: {
       schemaVersion: 1,
-      id: 'strict-three-state-flow',
+      id: 'strict-task-creation-flow',
       proofClass: 'feature',
-      actionId: 'M7',
+      actionId: 'canonical-proof',
       sourceTreeSha: SOURCE_SHA,
-      allowedTools: ['cdp_run_action', 'proof_step'],
+      allowedTools: ['device_snapshot', 'cdp_interact', 'device_fill', 'proof_step'],
       steps: [
         {
-          id: 'one',
-          criterion: 'First state',
-          expectedTool: 'cdp_run_action',
+          id: 'start-state',
+          criterion: 'Start state is visible',
+          expectedTool: 'device_snapshot',
           assertionTool: 'proof_step',
-          expectedArgsSha256: argsHash(operationArgs()),
+          expectedArgsSha256: argsHash(operationArgs(0)),
           assertionArgsSha256: argsHash({
-            verifyTestID: 'proof-one',
-            screenshotPath: join(proofRoot, 'one.png'),
+            verifyTestID: 'task-list',
+            screenshotPath: join(proofRoot, 'start-state.png'),
             waitMs: 0,
           }),
-          verifyTestID: 'proof-one',
-          screenshotPath: join(proofRoot, 'one.png'),
+          verifyTestID: 'task-list',
+          screenshotPath: join(proofRoot, 'start-state.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
         {
-          id: 'two',
-          criterion: 'Second state',
-          expectedTool: 'cdp_run_action',
+          id: 'open-form',
+          criterion: 'Task form opens',
+          expectedTool: 'cdp_interact',
           assertionTool: 'proof_step',
-          expectedArgsSha256: argsHash(operationArgs()),
+          expectedArgsSha256: argsHash(operationArgs(1)),
           assertionArgsSha256: argsHash({
-            verifyTestID: 'proof-two',
-            screenshotPath: join(proofRoot, 'two.png'),
+            verifyTestID: 'task-title-input',
+            screenshotPath: join(proofRoot, 'open-form.png'),
             waitMs: 0,
           }),
-          verifyTestID: 'proof-two',
-          screenshotPath: join(proofRoot, 'two.png'),
+          verifyTestID: 'task-title-input',
+          screenshotPath: join(proofRoot, 'open-form.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
         {
-          id: 'three',
-          criterion: 'Final state',
-          expectedTool: 'cdp_run_action',
+          id: 'fill-form',
+          criterion: 'Task title is filled',
+          expectedTool: 'device_fill',
           assertionTool: 'proof_step',
-          expectedArgsSha256: argsHash(operationArgs()),
+          expectedArgsSha256: argsHash(operationArgs(2)),
           assertionArgsSha256: argsHash({
-            verifyTestID: 'proof-three',
-            screenshotPath: join(proofRoot, 'three.png'),
+            verifyTestID: 'submit-task',
+            screenshotPath: join(proofRoot, 'fill-form.png'),
             waitMs: 0,
           }),
-          verifyTestID: 'proof-three',
-          screenshotPath: join(proofRoot, 'three.png'),
+          verifyTestID: 'submit-task',
+          screenshotPath: join(proofRoot, 'fill-form.png'),
+          expectedDwellMs: 3_000,
+          maximumDwellMs: 5_000,
+        },
+        {
+          id: 'submit-form',
+          criterion: 'Created task is visible',
+          expectedTool: 'cdp_interact',
+          assertionTool: 'proof_step',
+          expectedArgsSha256: argsHash(operationArgs(3)),
+          assertionArgsSha256: argsHash({
+            verifyTestID: 'task-proof-task',
+            screenshotPath: join(proofRoot, 'submit-form.png'),
+            waitMs: 0,
+          }),
+          verifyTestID: 'task-proof-task',
+          screenshotPath: join(proofRoot, 'submit-form.png'),
           expectedDwellMs: 3_000,
           maximumDwellMs: 5_000,
         },
@@ -203,9 +242,11 @@ interface Harness {
     fn: (process: MediaProcess, input: MediaValidationInput) => Promise<MediaValidationResult>,
   ) => void;
   setRemove: (fn: (path: string) => Promise<void>) => void;
+  setWrite: (fn: (path: string, receipt: FinalProofReceipt) => void) => void;
   setGitInfo: (fn: () => { sha: string | null; dirty: boolean; changes: TestGitChange[] }) => void;
   setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
+  setActionIdentity: (value: { id: string; version: string; sha256: string } | null) => void;
 }
 
 interface TestGitChange {
@@ -216,13 +257,13 @@ interface TestGitChange {
 }
 
 function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { ok: true }> {
-  const timestamps = [1_000, 5_000, 9_000];
+  const timestamps = [1_000, 5_000, 9_000, 13_000];
   return {
     ok: true,
     video: {
       path: args.videoPath,
       sha256: HASH('video'),
-      durationMs: 12_000,
+      durationMs: 16_000,
       sizeBytes: 4_096,
       codec: 'h264',
       width: 1_080,
@@ -259,11 +300,21 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   let mediaResult: MediaValidationResult = successfulMedia(beginArgs(expectedProjectRoot));
   let mediaImpl = async (): Promise<MediaValidationResult> => structuredClone(mediaResult);
   let removeImpl = async (): Promise<void> => undefined;
+  let writeImpl = (path: string, receipt: FinalProofReceipt): void => {
+    written.push(structuredClone(receipt));
+    const repositoryPath = path.slice(expectedProjectRoot.length + 1);
+    if (!git.changes.some((change) => change.path === repositoryPath)) {
+      git.changes.push({ path: repositoryPath, indexStatus: '?', worktreeStatus: '?' });
+      git.dirty = true;
+    }
+  };
   let gitImpl = (): { sha: string | null; dirty: boolean; changes: TestGitChange[] } => ({
     ...git,
     changes: structuredClone(git.changes),
   });
   let proofRootTracked = false;
+  let actionIdentity: { id: string; version: string; sha256: string } | null =
+    trustedActionIdentity();
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
@@ -287,6 +338,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   const deps: ProofCaptureDeps = {
     monitor,
     projectRoot: () => expectedProjectRoot,
+    readActionIdentity: () => structuredClone(actionIdentity),
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
@@ -300,7 +352,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
       return mediaImpl(process, input);
     },
     now: () => new Date(clock.value),
-    writeReceipt: (_path, receipt) => written.push(structuredClone(receipt)),
+    writeReceipt: (path, receipt) => writeImpl(path, receipt),
     removeArtifact: async (path) => {
       removed.push(path);
       await removeImpl(path);
@@ -331,6 +383,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     setRemove: (fn) => {
       removeImpl = fn;
     },
+    setWrite: (fn) => {
+      writeImpl = fn;
+    },
     setGitInfo: (fn) => {
       gitImpl = fn;
     },
@@ -339,6 +394,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     },
     setReadiness: (fn) => {
       readinessImpl = fn;
+    },
+    setActionIdentity: (value) => {
+      actionIdentity = value;
     },
   };
   t.after(async () => {
@@ -362,28 +420,19 @@ function observe(
 
 async function cleanRehearsal(
   harness: Harness,
-  wrongFirstAssertion = false,
+  wrongAction = false,
   args = beginArgs(),
 ): Promise<void> {
   const started = harness.clock.value;
   assert.equal(envelope(await harness.handler(args)).ok, true);
-  for (const [index, step] of args.storyboard.steps.entries()) {
-    observe(
-      harness,
-      step.expectedTool,
-      started + 100 + index * 100,
-      okResult({ replayed: true }),
-      operationArgs(),
-    );
-    observe(
-      harness,
-      step.assertionTool,
-      started + 150 + index * 100,
-      assertionResult(step.screenshotPath, !(wrongFirstAssertion && index === 0)),
-      assertionArgs(step),
-    );
-  }
-  harness.clock.value = started + 12_000;
+  observe(
+    harness,
+    'cdp_run_action',
+    started + 100,
+    okResult({ replayed: true }),
+    wrongAction ? { actionId: 'unrelated-action', autoRepair: false } : actionRunArgs(),
+  );
+  harness.clock.value = started + 16_000;
   const result = await harness.handler({ action: 'finish_rehearsal' });
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
 }
@@ -434,7 +483,7 @@ function recordEvidence(
   timestampMs: number;
   assertion: { stepId: string; tool: string; ok: true; resultHash: string };
 }> {
-  const timestamps = options.timestampOverrides ?? [1_000, 5_000, 9_000];
+  const timestamps = options.timestampOverrides ?? [1_000, 5_000, 9_000, 13_000];
   const evidence = args.storyboard.steps.map((step, index) => {
     const assertion = assertionResult(options.resultPathOverrides?.[index] ?? step.screenshotPath);
     return {
@@ -450,7 +499,7 @@ function recordEvidence(
       assertionResult: assertion,
     };
   });
-  for (const index of options.order ?? [0, 1, 2]) {
+  for (const index of options.order ?? args.storyboard.steps.map((_, index) => index)) {
     const step = args.storyboard.steps[index]!;
     const item = evidence[index]!;
     observe(
@@ -458,7 +507,7 @@ function recordEvidence(
       step.expectedTool,
       recordingStart + item.timestampMs - 100,
       okResult({ replayed: true }),
-      options.operationArgsOverrides?.[index] ?? operationArgs(),
+      options.operationArgsOverrides?.[index] ?? operationArgs(index),
     );
     observe(
       harness,
@@ -801,6 +850,9 @@ test('contract is sessionless and returns the exact package schema bytes and dig
     projectRoot: () => {
       throw new Error('contract must not resolve a project');
     },
+    readActionIdentity: () => {
+      throw new Error('contract must not read an action');
+    },
     getGitInfo: () => {
       throw new Error('contract must not read Git');
     },
@@ -1036,7 +1088,11 @@ test('trace repair, reload, failed tools, and wrong order fail closed', async (t
     },
     { name: 'reload', options: { extraTool: 'cdp_reload' }, expected: 'RELOAD_DURING_RECORDING' },
     { name: 'failed', options: { failedStep: 1 }, expected: 'OBSERVED_TOOL_FAILED' },
-    { name: 'wrong order', options: { order: [1, 0, 2] }, expected: 'STORYBOARD_ORDER_VIOLATION' },
+    {
+      name: 'wrong order',
+      options: { order: [1, 0, 2, 3] },
+      expected: 'STORYBOARD_ORDER_VIOLATION',
+    },
   ] as const;
   for (const scenario of cases) {
     await t.test(scenario.name, async (st) => {
@@ -1047,10 +1103,11 @@ test('trace repair, reload, failed tools, and wrong order fail closed', async (t
           'cdp_action_one',
           'cdp_action_two',
           'cdp_action_three',
+          'cdp_action_four',
           'proof_step',
         ];
         args.storyboard.steps.forEach((step, index) => {
-          step.expectedTool = `cdp_action_${['one', 'two', 'three'][index]}`;
+          step.expectedTool = `cdp_action_${['one', 'two', 'three', 'four'][index]}`;
         });
       }
       await stoppedCapture(harness, scenario.options, args);
@@ -1119,22 +1176,22 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
   const cases = [
     {
       name: 'not increasing',
-      timestamps: [1_000, 1_000, 9_000],
+      timestamps: [1_000, 1_000, 9_000, 13_000],
       expected: 'SCREENSHOT_TIMESTAMPS_INVALID',
     },
     {
       name: 'outside video',
-      timestamps: [1_000, 5_000, 12_001],
+      timestamps: [1_000, 5_000, 9_000, 16_001],
       expected: 'SCREENSHOT_TIMESTAMPS_INVALID',
     },
     {
       name: 'dwell below',
-      timestamps: [1_000, 3_000, 9_000],
+      timestamps: [1_000, 3_000, 9_000, 13_000],
       expected: 'STEP_DWELL_OUT_OF_BOUNDS',
     },
     {
       name: 'dwell above',
-      timestamps: [1_000, 7_000, 9_000],
+      timestamps: [1_000, 7_000, 9_000, 13_000],
       expected: 'STEP_DWELL_OUT_OF_BOUNDS',
     },
   ];
@@ -1143,7 +1200,7 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
       const harness = createHarness(st);
       await stoppedCapture(harness, { timestampOverrides: scenario.timestamps });
       const media = successfulMedia();
-      media.video.durationMs = 12_000;
+      media.video.durationMs = 16_000;
       media.screenshots.forEach(
         (shot, index) => void (shot.timestampMs = scenario.timestamps[index]!),
       );
@@ -1189,7 +1246,7 @@ test('media, post-readiness, and final-state failures write no final receipt', a
   }
   await t.test('final state', async (st) => {
     const harness = createHarness(st);
-    await stoppedCapture(harness, { failedStep: 2 });
+    await stoppedCapture(harness, { failedStep: 3 });
     const result = await harness.handler({ action: 'validate' });
     assert.ok(reasons(result).includes('FINAL_ASSERTION_FAILED'), result.content[0]!.text);
     assert.equal(harness.written.length, 0);
@@ -1205,7 +1262,7 @@ test('validate invokes Task 4 with the injected process and bound capture input'
   assert.equal(typeof harness.mediaCalls[0]!.process.run, 'function');
   assert.deepEqual(harness.mediaCalls[0]!.input, {
     videoPath: beginArgs().videoPath,
-    rehearsalDurationMs: 12_000,
+    rehearsalDurationMs: 16_000,
     screenshots: evidence.map((item) => ({
       stepId: item.stepId,
       path: item.screenshotPath,
@@ -1338,6 +1395,33 @@ test('accepted receipt is strict, uses real observed hashes, and is written exac
   assert.equal(harness.written.length, 1);
 });
 
+test('finalize requires the receipt to be the only additional owned Git output', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  await stoppedCapture(harness, undefined, args);
+  assert.equal(envelope(await harness.handler({ action: 'validate' })).ok, true);
+  harness.setWrite((path) => {
+    harness.git.dirty = true;
+    harness.git.changes.push(
+      {
+        path: path.slice(args.projectRoot.length + 1),
+        indexStatus: '?',
+        worktreeStatus: '?',
+      },
+      {
+        path: 'unrelated-after-receipt.txt',
+        indexStatus: '?',
+        worktreeStatus: '?',
+      },
+    );
+  });
+
+  const result = await harness.handler({ action: 'finalize', evidenceReview: validReview() });
+
+  assert.ok(reasons(result).includes('GIT_DIRTY'), result.content[0]!.text);
+  assert.ok(harness.removed.includes(args.receiptPath));
+});
+
 test('production receipt writer atomically persists accepted JSON with mode 0600', async (t) => {
   const harness = createHarness(t);
   await stoppedCapture(harness);
@@ -1382,42 +1466,147 @@ test('status, discard, and separate handler instances keep session ownership iso
   );
 });
 
-test('finish rehearsal rejects failed or path-mismatched assertions', async (t) => {
-  for (const scenario of ['failed', 'path'] as const) {
+test('rehearsal accepts exactly one clean pinned learned-action replay', async (t) => {
+  for (const scenario of ['wrong action', 'failed action', 'extra activity'] as const) {
     await t.test(scenario, async (st) => {
       const harness = createHarness(st);
       const args = beginArgs();
       const started = harness.clock.value;
       assert.equal(envelope(await harness.handler(args)).ok, true);
-      for (const [index, step] of args.storyboard.steps.entries()) {
-        observe(
-          harness,
-          step.expectedTool,
-          started + 100 + index * 100,
-          okResult({ replayed: true }),
-        );
-        const resultPath =
-          scenario === 'path' && index === 1 ? '/tmp/substituted.png' : step.screenshotPath;
-        observe(
-          harness,
-          step.assertionTool,
-          started + 150 + index * 100,
-          assertionResult(resultPath, !(scenario === 'failed' && index === 1)),
-          { screenshotPath: step.screenshotPath },
-        );
+      observe(
+        harness,
+        'cdp_run_action',
+        started + 100,
+        okResult({ replayed: true }),
+        scenario === 'wrong action'
+          ? { actionId: 'unrelated-action', autoRepair: false }
+          : actionRunArgs(),
+        scenario === 'failed action' ? 'FAIL' : 'PASS',
+      );
+      if (scenario === 'extra activity') {
+        observe(harness, 'device_press', started + 200, okResult({ pressed: true }));
       }
-      harness.clock.value = started + 12_000;
+      harness.clock.value = started + 16_000;
 
       const result = await harness.handler({ action: 'finish_rehearsal' });
 
       assert.ok(
         reasons(result).includes(
-          scenario === 'failed' ? 'REHEARSAL_ASSERTION_FAILED' : 'SCREENSHOT_PATH_MISMATCH',
+          scenario === 'wrong action'
+            ? 'ACTION_ARGUMENT_MISMATCH'
+            : scenario === 'failed action'
+              ? 'OBSERVED_TOOL_FAILED'
+              : 'UNDECLARED_MUTATING_TOOL',
         ),
         result.content[0]!.text,
       );
     });
   }
+});
+
+test('trusted action identity rejects caller fiction and drift at every authority boundary', async (t) => {
+  for (const scenario of ['missing', 'wrong hash', 'wrong revision'] as const) {
+    await t.test(`begin: ${scenario}`, async (st) => {
+      const harness = createHarness(st);
+      const args = beginArgs();
+      if (scenario === 'missing') harness.setActionIdentity(null);
+      if (scenario === 'wrong hash') args.proofAction.sha256 = HASH('caller-fiction');
+      if (scenario === 'wrong revision') args.proofAction.version = '999';
+
+      const result = await harness.handler(args);
+
+      assert.ok(
+        reasons(result).includes(
+          scenario === 'missing' ? 'PROOF_ACTION_MISSING' : 'PROOF_ACTION_IDENTITY_MISMATCH',
+        ),
+        result.content[0]!.text,
+      );
+    });
+  }
+
+  for (const phase of ['arm', 'start', 'validate'] as const) {
+    await t.test(`mutation before ${phase}`, async (st) => {
+      const harness = createHarness(st);
+      const args = beginArgs();
+      if (phase === 'arm') {
+        await cleanRehearsal(harness, false, args);
+        observeFreshStart(harness, args);
+      } else if (phase === 'start') {
+        await cleanRehearsal(harness, false, args);
+        await arm(harness, args);
+        observeFreshStart(harness, args);
+      } else {
+        await stoppedCapture(harness, undefined, args);
+      }
+      harness.setActionIdentity(trustedActionIdentity({ sha256: HASH('mutated-yaml') }));
+
+      const result = await harness.handler({
+        action: phase === 'start' ? 'start_recording' : phase,
+      });
+
+      assert.ok(reasons(result).includes('PROOF_ACTION_IDENTITY_CHANGED'), result.content[0]!.text);
+    });
+  }
+});
+
+test('live contract rehearses the canonical action once and records distinct typed operations', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  const started = harness.clock.value;
+  assert.equal(envelope(await harness.handler(args)).ok, true);
+  observe(harness, 'cdp_run_action', started + 100, okResult({ replayed: true }), actionRunArgs());
+  assert.deepEqual(
+    harness.monitor.observations().map((observation) => observation.tool),
+    ['cdp_run_action'],
+  );
+  harness.clock.value = started + 16_000;
+  assert.equal(envelope(await harness.handler({ action: 'finish_rehearsal' })).ok, true);
+  await arm(harness, args);
+  const recordingStart = await startRecording(harness, args);
+  recordEvidence(harness, recordingStart, {}, args);
+  assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+  markProofOutputs(harness, args);
+
+  const validated = envelope(await harness.handler({ action: 'validate' }));
+
+  assert.equal(validated.ok, true, JSON.stringify(validated));
+  const receipt = (validated.data as { receipt: FinalProofReceipt }).receipt;
+  assert.deepEqual(
+    receipt.eventTrace.observed.map((event) => event.tool),
+    args.storyboard.steps.flatMap((step) => [step.expectedTool, step.assertionTool]),
+  );
+  assert.equal(
+    receipt.eventTrace.observed.some((event) => event.tool === 'cdp_run_action'),
+    false,
+  );
+});
+
+test('production action identity reads exact app-root YAML bytes and runtime revision', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-action-identity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.rn-agent', 'actions'), { recursive: true });
+  await mkdir(join(root, '.rn-agent', 'state'), { recursive: true });
+  await writeFile(join(root, '.rn-agent', 'actions', 'canonical-proof.yaml'), ACTION_YAML_BYTES);
+  await writeFile(
+    join(root, '.rn-agent', 'state', 'canonical-proof.state.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      revision: 7,
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      lastSeenMtimeMs: 0,
+      runHistory: [],
+      repairHistory: [],
+      stats: { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 },
+    })}\n`,
+  );
+  const module = await import('../../dist/tools/proof-capture.js');
+
+  assert.deepEqual(module.readProofActionIdentity(root, 'canonical-proof'), {
+    id: 'canonical-proof',
+    version: '7',
+    sha256: HASH(ACTION_YAML_BYTES),
+  });
+  assert.equal(module.readProofActionIdentity(root, 'missing'), null);
 });
 
 test('arm consumes a fresh verified start assertion after rehearsal', async (t) => {
@@ -1792,10 +1981,10 @@ test('Git, readiness, media, and receipt construction exceptions fail closed', a
 test('storyboard argument hashes use the monitor canonicalizer and are required', async () => {
   const module = await import('../../dist/domain/proof-capture.js');
   assert.equal(typeof module.hashProofArgs, 'function');
-  assert.equal(module.hashProofArgs(operationArgs()), argsHash(operationArgs()));
+  assert.equal(module.hashProofArgs(actionRunArgs()), argsHash(actionRunArgs()));
   assert.equal(
-    module.hashProofArgs(operationArgs()),
-    module.hashProofArgs({ autoRepair: false, actionId: 'M7' }),
+    module.hashProofArgs(actionRunArgs()),
+    module.hashProofArgs({ autoRepair: false, actionId: 'canonical-proof' }),
   );
 
   const args = beginArgs();
@@ -1812,60 +2001,16 @@ test('strict proof observations bind the canonical semantic argument hash', asyn
   monitor.begin();
   monitor.record({
     tool: 'cdp_run_action',
-    params: operationArgs(),
+    params: actionRunArgs(),
     status: 'PASS',
     latencyMs: 1,
     result: okResult({ replayed: true }),
   });
-  assert.equal(monitor.observations()[0]?.argsHash, argsHash(operationArgs()));
-});
-
-test('rehearsal rejects semantically different operation and assertion arguments', async (t) => {
-  for (const scenario of ['wrong action', 'wrong assertion target'] as const) {
-    await t.test(scenario, async (st) => {
-      const harness = createHarness(st);
-      const args = beginArgs();
-      const started = harness.clock.value;
-      const begun = await harness.handler(args);
-      assert.equal(envelope(begun).ok, true, begun.content[0]!.text);
-      for (const [index, step] of args.storyboard.steps.entries()) {
-        observe(
-          harness,
-          step.expectedTool,
-          started + 100 + index * 100,
-          okResult({ replayed: true }),
-          scenario === 'wrong action' && index === 0
-            ? { actionId: 'unrelated-action', autoRepair: false }
-            : operationArgs(),
-        );
-        observe(
-          harness,
-          step.assertionTool,
-          started + 150 + index * 100,
-          assertionResult(step.screenshotPath),
-          scenario === 'wrong assertion target' && index === 0
-            ? assertionArgs(step, 'unrelated-but-visible')
-            : assertionArgs(step),
-        );
-      }
-      harness.clock.value = started + 12_000;
-
-      const result = await harness.handler({ action: 'finish_rehearsal' });
-
-      assert.ok(
-        reasons(result).includes(
-          scenario === 'wrong action'
-            ? 'OPERATION_ARGUMENT_MISMATCH'
-            : 'ASSERTION_ARGUMENT_MISMATCH',
-        ),
-        result.content[0]!.text,
-      );
-    });
-  }
+  assert.equal(monitor.observations()[0]?.argsHash, argsHash(actionRunArgs()));
 });
 
 test('recording rejects semantically different operation and assertion arguments', async (t) => {
-  for (const scenario of ['wrong action', 'wrong assertion target'] as const) {
+  for (const scenario of ['wrong operation', 'wrong assertion target'] as const) {
     await t.test(scenario, async (st) => {
       const harness = createHarness(st);
       const args = beginArgs();
@@ -1874,9 +2019,7 @@ test('recording rejects semantically different operation and assertion arguments
       const recordingStart = await startRecording(harness);
       recordEvidence(harness, recordingStart, {
         operationArgsOverrides:
-          scenario === 'wrong action'
-            ? [{ actionId: 'unrelated-action', autoRepair: false }]
-            : undefined,
+          scenario === 'wrong operation' ? [{ interactiveOnly: false }] : undefined,
         assertionArgsOverrides:
           scenario === 'wrong assertion target'
             ? [assertionArgs(args.storyboard.steps[0]!, 'unrelated-but-visible')]
@@ -1889,7 +2032,7 @@ test('recording rejects semantically different operation and assertion arguments
 
       assert.ok(
         reasons(result).includes(
-          scenario === 'wrong action'
+          scenario === 'wrong operation'
             ? 'OPERATION_ARGUMENT_MISMATCH'
             : 'ASSERTION_ARGUMENT_MISMATCH',
         ),
@@ -2051,6 +2194,143 @@ test('validation allows only the complete exact untracked proof output set', asy
       }
     });
   }
+});
+
+test('real Git allows observed setup screenshots, cleans before recording, and validates full outputs', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-live-git-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'proof@example.invalid']);
+  git(root, ['config', 'user.name', 'Proof Test']);
+  await writeFile(join(root, 'README.md'), 'base\n');
+  git(root, ['add', 'README.md']);
+  git(root, ['commit', '-qm', 'base']);
+  const sourceSha = git(root, ['rev-parse', 'HEAD']).trim();
+  const module = await import('../../dist/tools/proof-capture.js');
+  const harness = createHarness(t, root);
+  const args = beginArgs(root);
+  args.pullRequest.headSha = sourceSha;
+  args.storyboard.sourceTreeSha = sourceSha;
+  harness.setGitInfo(() => module.readProofGitInfo(root));
+  harness.setRemove(async (path) => rm(path, { force: true }));
+
+  await cleanRehearsal(harness, false, args);
+  await mkdir(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true });
+  await writeFile(args.storyboard.steps[0]!.screenshotPath, 'pre-arm start state');
+  await arm(harness, args);
+  assert.deepEqual(module.readProofGitInfo(root).changes, [
+    {
+      path: `docs/proof/${args.runId}/start-state.png`,
+      indexStatus: '?',
+      worktreeStatus: '?',
+    },
+  ]);
+
+  const recordingStart = await startRecording(harness, args);
+  assert.deepEqual(module.readProofGitInfo(root).changes, []);
+  recordEvidence(harness, recordingStart, {}, args);
+  assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+  await mkdir(dirname(args.videoPath), { recursive: true });
+  await Promise.all([
+    writeFile(args.videoPath, 'video'),
+    writeFile(args.contactSheetPath, 'contact'),
+    ...args.storyboard.steps.map((step) => writeFile(step.screenshotPath, step.id)),
+  ]);
+
+  const validated = await harness.handler({ action: 'validate' });
+
+  assert.equal(envelope(validated).ok, true, validated.content[0]!.text);
+  assert.deepEqual(
+    module.readProofGitInfo(root).changes.map((change: TestGitChange) => change.path),
+    [
+      `docs/proof/${args.runId}/fill-form.png`,
+      `docs/proof/${args.runId}/open-form.png`,
+      `docs/proof/${args.runId}/proof-contact-sheet.jpg`,
+      `docs/proof/${args.runId}/proof.mp4`,
+      `docs/proof/${args.runId}/start-state.png`,
+      `docs/proof/${args.runId}/submit-form.png`,
+    ],
+  );
+});
+
+test('real Git rejects tracked, staged, unrelated, early, and missing proof outputs', async (t) => {
+  const module = await import('../../dist/tools/proof-capture.js');
+  const createRealHarness = async (st: TestContext) => {
+    const root = await mkdtemp(join(tmpdir(), 'strict-proof-live-git-negative-'));
+    st.after(() => rm(root, { recursive: true, force: true }));
+    git(root, ['init', '-q']);
+    git(root, ['config', 'user.email', 'proof@example.invalid']);
+    git(root, ['config', 'user.name', 'Proof Test']);
+    await writeFile(join(root, 'README.md'), 'base\n');
+    git(root, ['add', 'README.md']);
+    git(root, ['commit', '-qm', 'base']);
+    const harness = createHarness(st, root);
+    const args = beginArgs(root);
+    const sourceSha = git(root, ['rev-parse', 'HEAD']).trim();
+    args.pullRequest.headSha = sourceSha;
+    args.storyboard.sourceTreeSha = sourceSha;
+    harness.setGitInfo(() => module.readProofGitInfo(root));
+    harness.setRemove(async (path) => rm(path, { force: true }));
+    return { root, harness, args };
+  };
+
+  await t.test('tracked root', async (st) => {
+    const { root, harness, args } = await createRealHarness(st);
+    await mkdir(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true });
+    await writeFile(args.storyboard.steps[0]!.screenshotPath, 'tracked');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'tracked proof root']);
+    await rm(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true, force: true });
+    harness.setProofRootTracked(
+      module.proofRootHasTrackedEntries(root, dirname(args.storyboard.steps[0]!.screenshotPath)),
+    );
+
+    const result = await harness.handler(args);
+
+    assert.ok(reasons(result).includes('PROOF_ROOT_TRACKED'), result.content[0]!.text);
+  });
+
+  for (const scenario of ['staged screenshot', 'unrelated path', 'early video'] as const) {
+    await t.test(scenario, async (st) => {
+      const { root, harness, args } = await createRealHarness(st);
+      await cleanRehearsal(harness, false, args);
+      await mkdir(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true });
+      await writeFile(args.storyboard.steps[0]!.screenshotPath, 'observed start');
+      observeFreshStart(harness, args);
+      if (scenario === 'staged screenshot') {
+        git(root, ['add', args.storyboard.steps[0]!.screenshotPath]);
+      } else if (scenario === 'unrelated path') {
+        await writeFile(join(root, 'unrelated.txt'), 'unrelated');
+      } else {
+        await writeFile(args.videoPath, 'too early');
+      }
+
+      const result = await harness.handler({ action: 'arm' });
+
+      assert.ok(reasons(result).includes('GIT_DIRTY'), result.content[0]!.text);
+    });
+  }
+
+  await t.test('missing validation output', async (st) => {
+    const { harness, args } = await createRealHarness(st);
+    await cleanRehearsal(harness, false, args);
+    await mkdir(dirname(args.storyboard.steps[0]!.screenshotPath), { recursive: true });
+    await writeFile(args.storyboard.steps[0]!.screenshotPath, 'observed start');
+    await arm(harness, args);
+    const recordingStart = await startRecording(harness, args);
+    recordEvidence(harness, recordingStart, {}, args);
+    assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+    await mkdir(dirname(args.videoPath), { recursive: true });
+    await Promise.all([
+      writeFile(args.videoPath, 'video'),
+      writeFile(args.contactSheetPath, 'contact'),
+      ...args.storyboard.steps.slice(0, -1).map((step) => writeFile(step.screenshotPath, step.id)),
+    ]);
+
+    const result = await harness.handler({ action: 'validate' });
+
+    assert.ok(reasons(result).includes('PROOF_OUTPUT_MISSING'), result.content[0]!.text);
+  });
 });
 
 test('Metro reporter authority must stay connected and event-stable through capture', async (t) => {

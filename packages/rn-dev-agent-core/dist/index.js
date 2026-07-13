@@ -48,7 +48,7 @@ import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
 import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
-import { createProofCaptureHandler, proofRootHasTrackedEntries, proofCaptureInputSchema, readProofGitInfo, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
+import { createProofCaptureHandler, proofRootHasTrackedEntries, proofCaptureInputSchema, readProofActionIdentity, readProofGitInfo, resolveProofIdentity, resolveProofWorktreeRoot, writeProofReceiptAtomic, } from './tools/proof-capture.js';
 import { validateMedia } from './tools/proof-media.js';
 import { createDeviceAcceptSystemDialogHandler, createDeviceDismissSystemDialogHandler, } from './tools/device-system-dialog.js';
 import { createDevicePickValueHandler, createDevicePickDateHandler, } from './tools/device-picker.js';
@@ -1225,6 +1225,10 @@ const proofReadiness = async () => {
 const proofCaptureHandler = createProofCaptureHandler({
     monitor: strictProofMonitor,
     projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
+    readActionIdentity: (actionId) => {
+        const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+        return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
+    },
     getGitInfo: readProofGitInfo,
     proofRootTracked: proofRootHasTrackedEntries,
     readiness: proofReadiness,
@@ -1242,7 +1246,7 @@ const proofCaptureHandler = createProofCaptureHandler({
     writeReceipt: writeProofReceiptAtomic,
     removeArtifact: (path) => rmSync(path, { force: true }),
 });
-trackedTool('proof_capture', 'Strict, stateful proof capture. Rehearses the exact storyboard, owns one device recording, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.', proofCaptureInputSchema, proofCaptureHandler);
+trackedTool('proof_capture', 'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.', proofCaptureInputSchema, proofCaptureHandler);
 trackedTool('device_record', 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device — pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.', {
     action: z
         .enum(['start', 'stop', 'status'])

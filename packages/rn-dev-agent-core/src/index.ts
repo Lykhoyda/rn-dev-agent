@@ -69,6 +69,7 @@ import {
   createProofCaptureHandler,
   proofRootHasTrackedEntries,
   proofCaptureInputSchema,
+  readProofActionIdentity,
   readProofGitInfo,
   resolveProofIdentity,
   resolveProofWorktreeRoot,
@@ -1726,6 +1727,10 @@ const proofCaptureHandler = createProofCaptureHandler({
   monitor: strictProofMonitor,
   projectRoot: () =>
     resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
+  readActionIdentity: (actionId) => {
+    const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+    return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
+  },
   getGitInfo: readProofGitInfo,
   proofRootTracked: proofRootHasTrackedEntries,
   readiness: proofReadiness,
@@ -1746,7 +1751,7 @@ const proofCaptureHandler = createProofCaptureHandler({
 
 trackedTool(
   'proof_capture',
-  'Strict, stateful proof capture. Rehearses the exact storyboard, owns one device recording, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
+  'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
   proofCaptureInputSchema,
   proofCaptureHandler,
 );

@@ -15,6 +15,7 @@ import {
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { actionPathFor, loadAction } from '../domain/action-store.js';
 import {
   hashProofArgs,
   StrictProofMonitor,
@@ -37,6 +38,7 @@ import {
   type EvidenceReview,
   type FinalProofReceipt,
   type MechanicallyAcceptedProofReceipt,
+  type ProofAction,
   type ProofDevice,
   type ProofRuntime,
   type ProofStage,
@@ -125,6 +127,7 @@ export interface ProofGitInfo {
 export interface ProofCaptureDeps {
   monitor: StrictProofMonitor;
   projectRoot: () => string | null;
+  readActionIdentity: (actionId: string) => ProofAction | null;
   getGitInfo: (root: string) => ProofGitInfo;
   proofRootTracked: (root: string, proofRoot: string) => boolean;
   readiness: () => Promise<ProofReadiness>;
@@ -139,6 +142,7 @@ export interface ProofCaptureDeps {
 
 interface Session {
   context: BeginRehearsalArgs;
+  actionIdentity: ProofAction;
   stage: ProofStage;
   invalidationReasons: string[];
   rehearsalStartedAt: Date;
@@ -187,6 +191,38 @@ const readinessSchema = z
 
 function hashBytes(bytes: string): string {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function sameProofAction(left: ProofAction, right: ProofAction): boolean {
+  return left.id === right.id && left.version === right.version && left.sha256 === right.sha256;
+}
+
+export function readProofActionIdentity(
+  appProjectRoot: string,
+  actionId: string,
+): ProofAction | null {
+  try {
+    const path = actionPathFor(appProjectRoot, actionId);
+    const bytesBefore = readFileSync(path);
+    const action = loadAction(appProjectRoot, actionId);
+    const bytesAfter = readFileSync(path);
+    if (
+      !action ||
+      action.metadata.id !== actionId ||
+      !bytesBefore.equals(bytesAfter) ||
+      !Number.isInteger(action.state.revision) ||
+      action.state.revision < 1
+    ) {
+      return null;
+    }
+    return {
+      id: actionId,
+      version: String(action.state.revision),
+      sha256: createHash('sha256').update(bytesAfter).digest('hex'),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isNormalizedDescendant(root: string, path: string): boolean {
@@ -243,14 +279,12 @@ function validCaptureContext(args: BeginRehearsalArgs, expectedRoot: string | nu
     screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())) &&
     args.storyboard.steps.every(
       (step) =>
-        step.expectedArgsSha256 ===
-          hashProofArgs({ actionId: args.storyboard.actionId, autoRepair: false }) &&
         step.assertionArgsSha256 ===
-          hashProofArgs({
-            verifyTestID: step.verifyTestID,
-            screenshotPath: step.screenshotPath,
-            waitMs: 0,
-          }),
+        hashProofArgs({
+          verifyTestID: step.verifyTestID,
+          screenshotPath: step.screenshotPath,
+          waitMs: 0,
+        }),
     )
   );
 }
@@ -635,14 +669,66 @@ export function createProofCaptureHandler(
     }
   };
 
-  const gitReasons = (active: Session, git: ProofGitInfo): string[] => {
-    const expectedOutputs = new Set(
-      [
-        active.context.videoPath,
-        active.context.contactSheetPath,
-        ...active.context.storyboard.steps.map((step) => step.screenshotPath),
-      ].map((path) => relative(active.context.projectRoot, path).replaceAll(sep, '/')),
+  const readCurrentActionIdentity = (
+    active: Session,
+  ): { ok: true; value: ProofAction } | { ok: false; reasons: string[] } => {
+    try {
+      const value = deps.readActionIdentity(active.context.proofAction.id);
+      if (!value) return { ok: false, reasons: ['PROOF_ACTION_MISSING'] };
+      return { ok: true, value };
+    } catch {
+      return { ok: false, reasons: ['PROOF_ACTION_READ_FAILED'] };
+    }
+  };
+
+  const actionIdentityReasons = (active: Session): string[] => {
+    const current = readCurrentActionIdentity(active);
+    if (!current.ok) return current.reasons;
+    return sameProofAction(current.value, active.actionIdentity)
+      ? []
+      : ['PROOF_ACTION_IDENTITY_CHANGED'];
+  };
+
+  const repositoryPath = (active: Session, path: string): string =>
+    relative(active.context.projectRoot, path).replaceAll(sep, '/');
+
+  const observedSetupScreenshots = (active: Session): Set<string> => {
+    const owned = new Set<string>();
+    for (const observation of deps.monitor.observations()) {
+      const step = active.context.storyboard.steps.find(
+        (candidate) =>
+          normalizeTool(candidate.assertionTool) === normalizeTool(observation.tool) &&
+          candidate.screenshotPath === observation.screenshotPath &&
+          candidate.assertionArgsSha256 === observation.argsHash,
+      );
+      if (step && observation.ok && observation.assertionPassed) {
+        owned.add(repositoryPath(active, step.screenshotPath));
+      }
+    }
+    return owned;
+  };
+
+  const gitReasons = (
+    active: Session,
+    git: ProofGitInfo,
+    phase: 'setup' | 'clean' | 'validation' | 'finalized',
+  ): string[] => {
+    const proofOutputs = [
+      active.context.videoPath,
+      active.context.contactSheetPath,
+      ...active.context.storyboard.steps.map((step) => step.screenshotPath),
+    ].map((path) => repositoryPath(active, path));
+    const requiredOutputs = new Set(
+      phase === 'finalized'
+        ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)]
+        : proofOutputs,
     );
+    const allowedOutputs =
+      phase === 'setup'
+        ? observedSetupScreenshots(active)
+        : phase === 'clean'
+          ? new Set<string>()
+          : requiredOutputs;
     const invalidChange = git.changes.some(
       (change) =>
         isAbsolute(change.path) ||
@@ -653,17 +739,12 @@ export function createProofCaptureHandler(
         change.sourcePath !== undefined,
     );
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll('\\', '/')));
-    const validating = active.stage === 'validating';
-    const unrelated = [...changedPaths].some((path) => !expectedOutputs.has(path));
-    const missing = validating && [...expectedOutputs].some((path) => !changedPaths.has(path));
-    const unexpectedBeforeValidation = !validating && git.changes.length > 0;
+    const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
+    const missing =
+      (phase === 'validation' || phase === 'finalized') &&
+      [...requiredOutputs].some((path) => !changedPaths.has(path));
     return [
-      ...(invalidChange ||
-      unrelated ||
-      unexpectedBeforeValidation ||
-      git.dirty !== git.changes.length > 0
-        ? ['GIT_DIRTY']
-        : []),
+      ...(invalidChange || unrelated || git.dirty !== git.changes.length > 0 ? ['GIT_DIRTY'] : []),
       ...(missing ? ['PROOF_OUTPUT_MISSING'] : []),
       ...(git.sha !== active.context.storyboard.sourceTreeSha ||
       git.sha !== active.context.pullRequest.headSha
@@ -819,6 +900,16 @@ export function createProofCaptureHandler(
       ) {
         return proofFailure(['INVALID_PROOF_CONTEXT'], 'idle');
       }
+      let actionIdentity: ProofAction | null = null;
+      try {
+        actionIdentity = deps.readActionIdentity(args.proofAction.id);
+      } catch {
+        return proofFailure(['PROOF_ACTION_READ_FAILED'], 'idle');
+      }
+      if (!actionIdentity) return proofFailure(['PROOF_ACTION_MISSING'], 'idle');
+      if (!sameProofAction(actionIdentity, args.proofAction)) {
+        return proofFailure(['PROOF_ACTION_IDENTITY_MISMATCH'], 'idle');
+      }
       try {
         const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
@@ -833,6 +924,7 @@ export function createProofCaptureHandler(
       const startedAt = deps.now();
       session = {
         context: args,
+        actionIdentity,
         stage: 'rehearsing',
         invalidationReasons: [],
         rehearsalStartedAt: startedAt,
@@ -863,37 +955,25 @@ export function createProofCaptureHandler(
       active.rehearsalObservations = deps.monitor.observations();
       const finishedAt = deps.now();
       const durationMs = finishedAt.getTime() - active.rehearsalStartedAt.getTime();
-      const trace = traceFor(active.context.storyboard, active.rehearsalEvents);
-      const sequence = sequenceObservations(
-        active.context.storyboard,
-        active.rehearsalObservations,
-      );
-      const assertionReasons = sequence
-        ? active.context.storyboard.steps.flatMap((step, index) => {
-            const operation = sequence[index]!.expected;
-            const assertion = sequence[index]!.assertion;
-            return [
-              ...(operation.argsHash !== step.expectedArgsSha256
-                ? ['OPERATION_ARGUMENT_MISMATCH']
-                : []),
-              ...(assertion.argsHash !== step.assertionArgsSha256
-                ? ['ASSERTION_ARGUMENT_MISMATCH']
-                : []),
-              ...(!assertion.ok || !assertion.assertionPassed
-                ? ['REHEARSAL_ASSERTION_FAILED']
-                : []),
-              ...(assertion.screenshotPath !== step.screenshotPath
-                ? ['SCREENSHOT_PATH_MISMATCH']
-                : []),
-            ];
-          })
-        : [];
-      if (durationMs < 0 || !trace.ok || !sequence || assertionReasons.length > 0) {
+      const trace = validateTrace(['cdp_run_action'], active.rehearsalEvents);
+      const actionObservation =
+        active.rehearsalObservations.length === 1 &&
+        normalizeTool(active.rehearsalObservations[0]!.tool) === 'cdp_run_action'
+          ? active.rehearsalObservations[0]!
+          : null;
+      const actionReasons = [
+        ...(!actionObservation ? ['ACTION_REHEARSAL_SEQUENCE_INVALID'] : []),
+        ...(actionObservation &&
+        actionObservation.argsHash !==
+          hashProofArgs({ actionId: active.context.proofAction.id, autoRepair: false })
+          ? ['ACTION_ARGUMENT_MISMATCH']
+          : []),
+      ];
+      if (durationMs < 0 || !trace.ok || actionReasons.length > 0) {
         const reasons = [
           ...(durationMs < 0 ? ['REHEARSAL_CLOCK_INVALID'] : []),
           ...trace.reasons,
-          ...(sequence ? [] : ['STORYBOARD_ORDER_VIOLATION']),
-          ...assertionReasons,
+          ...actionReasons,
         ];
         beginFreshRehearsal(active, reasons);
         return proofFailure(reasons, active.stage);
@@ -919,6 +999,7 @@ export function createProofCaptureHandler(
       const git = readGit(active);
       const ready = await readReadiness();
       const armReasons = [
+        ...actionIdentityReasons(active),
         ...(!startAssertion ? ['START_ASSERTION_MISSING'] : []),
         ...(startAssertion &&
         (!startAssertion.ok ||
@@ -932,7 +1013,7 @@ export function createProofCaptureHandler(
         ...(startAssertion && setupObservations.at(-1) !== startAssertion
           ? ['START_STATE_DRIFT']
           : []),
-        ...(git.ok ? gitReasons(active, git.value) : git.reasons),
+        ...(git.ok ? gitReasons(active, git.value, 'setup') : git.reasons),
         ...(ready.ok ? readinessReasons(ready.value, null) : ready.reasons),
       ];
       if (armReasons.length > 0) {
@@ -962,6 +1043,8 @@ export function createProofCaptureHandler(
         return proofFailure(['INVALID_PROOF_STAGE'], active.stage);
       }
       if (!contextIsCurrent(active)) return rejectPathDrift(active);
+      const actionReasons = actionIdentityReasons(active);
+      if (actionReasons.length > 0) return proofFailure(actionReasons, active.stage);
       const firstStep = active.context.storyboard.steps[0]!;
       const setupObservations = deps.monitor.observations();
       const postArmAssertion = setupObservations[active.armedObservationCount] ?? null;
@@ -999,7 +1082,7 @@ export function createProofCaptureHandler(
       const git = readGit(active);
       const ready = await readReadiness();
       const startReasons = [
-        ...(git.ok ? gitReasons(active, git.value) : git.reasons),
+        ...(git.ok ? gitReasons(active, git.value, 'setup') : git.reasons),
         ...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons),
       ];
       if (startReasons.length > 0) return proofFailure(startReasons, active.stage);
@@ -1008,6 +1091,15 @@ export function createProofCaptureHandler(
         active.stage = 'rejected';
         active.invalidationReasons = cleanupReasons;
         return proofFailure(cleanupReasons, active.stage);
+      }
+      const cleanedGit = readGit(active);
+      const cleanedGitReasons = cleanedGit.ok
+        ? gitReasons(active, cleanedGit.value, 'clean')
+        : cleanedGit.reasons;
+      if (cleanedGitReasons.length > 0) {
+        active.stage = 'rejected';
+        active.invalidationReasons = cleanedGitReasons;
+        return proofFailure(cleanedGitReasons, active.stage);
       }
       if (!stillAtStart()) return proofFailure(['START_STATE_DRIFT'], active.stage);
       let statusResult: ToolResult;
@@ -1094,6 +1186,8 @@ export function createProofCaptureHandler(
         return proofFailure(['INVALID_PROOF_STAGE'], active.stage);
       }
       if (!contextIsCurrent(active)) return rejectPathDrift(active);
+      const actionReasons = actionIdentityReasons(active);
+      if (actionReasons.length > 0) return rejectCapture(active, actionReasons);
       const derived = deriveEvidence(active);
       const evidence = derived.evidence ?? [];
       const steps = active.context.storyboard.steps;
@@ -1152,7 +1246,7 @@ export function createProofCaptureHandler(
 
       const git = readGit(active);
       const ready = await readReadiness();
-      evidenceReasons.push(...(git.ok ? gitReasons(active, git.value) : git.reasons));
+      evidenceReasons.push(...(git.ok ? gitReasons(active, git.value, 'validation') : git.reasons));
       evidenceReasons.push(
         ...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons),
       );
@@ -1249,6 +1343,13 @@ export function createProofCaptureHandler(
         deps.writeReceipt(active.context.receiptPath, finalReceipt);
       } catch {
         return proofFailure(['RECEIPT_WRITE_FAILED'], active.stage);
+      }
+      const finalizedGit = readGit(active);
+      const finalizedGitReasons = finalizedGit.ok
+        ? gitReasons(active, finalizedGit.value, 'finalized')
+        : finalizedGit.reasons;
+      if (finalizedGitReasons.length > 0) {
+        return rejectCapture(active, finalizedGitReasons);
       }
       active.stage = 'accepted';
       return okResult({
