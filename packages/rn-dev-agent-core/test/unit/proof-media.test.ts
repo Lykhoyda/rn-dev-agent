@@ -197,6 +197,30 @@ test('matchScreenshotAt samples three normalized frames and selects the highest 
   assert.ok(imageCommands.every((call) => call.args.some((arg) => /scale=800/.test(arg))));
 });
 
+test('matchScreenshotAt clamps its final sample inside the decoded video duration', async (t) => {
+  const fixture = await createFixture(t);
+  const scratchDir = join(fixture.root, 'end-match');
+  await mkdir(scratchDir);
+  const process = new FakeMediaProcess();
+  const screenshotSha256 = await sha256File(fixture.screenshots[0]!.path);
+
+  await matchScreenshotAt(process, {
+    videoPath: fixture.videoPath,
+    videoDurationMs: 13_600,
+    screenshot: {
+      ...fixture.screenshots[0]!,
+      timestampMs: 13_555,
+      sha256: screenshotSha256,
+    },
+    scratchDir,
+  });
+
+  const sampleTimes = process.calls
+    .filter((call) => call.command === 'ffmpeg' && call.args.includes('-ss'))
+    .map((call) => call.args[call.args.indexOf('-ss') + 1]);
+  assert.deepEqual(sampleTimes, ['13.055', '13.555', '13.599']);
+});
+
 test('buildContactSheet creates and hashes a tiled JPEG', async (t) => {
   const fixture = await createFixture(t);
   const process = new FakeMediaProcess();

@@ -67,6 +67,7 @@ export type MediaValidationResult =
 
 export interface MatchScreenshotInput {
   videoPath: string;
+  videoDurationMs?: number;
   screenshot: ProofScreenshot;
   threshold?: number;
   scratchDir: string;
@@ -253,6 +254,12 @@ export async function matchScreenshotAt(
   if (!Number.isInteger(sampleRadiusMs) || sampleRadiusMs < 0 || sampleRadiusMs > 500) {
     fail('INVALID_MEDIA_INPUT');
   }
+  if (
+    input.videoDurationMs !== undefined &&
+    (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)
+  ) {
+    fail('INVALID_MEDIA_INPUT');
+  }
   const normalizedScreenshotPath = join(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process, [
@@ -271,7 +278,7 @@ export async function matchScreenshotAt(
     'FRAME_PROCESS_FAILED',
   );
 
-  const sampleTimestamps =
+  const requestedSampleTimestamps =
     sampleRadiusMs === 0
       ? [input.screenshot.timestampMs]
       : [
@@ -279,6 +286,13 @@ export async function matchScreenshotAt(
           input.screenshot.timestampMs,
           input.screenshot.timestampMs + sampleRadiusMs,
         ];
+  const maximumTimestamp =
+    input.videoDurationMs === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, input.videoDurationMs - 1);
+  const sampleTimestamps = [
+    ...new Set(requestedSampleTimestamps.map((timestamp) => Math.min(timestamp, maximumTimestamp))),
+  ];
   let best: { score: number; timestampMs: number; framePath: string } | null = null;
 
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
@@ -436,6 +450,7 @@ export async function validateMedia(
       };
       const match = await matchScreenshotAt(process, {
         videoPath: input.videoPath,
+        videoDurationMs: video.durationMs,
         screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
         threshold,
         scratchDir,
