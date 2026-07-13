@@ -29,4 +29,22 @@ test('canonical proof action carries reusable-action metadata and assertions', (
   assert.match(flow, /^# status: experimental/m);
   assert.match(flow, /proof-result/);
   assert.match(flow, /Feature accepted/);
+  assert.doesNotMatch(flow, /clearState:\s*true/);
+});
+
+test('proof fixture uses a development client for deterministic Metro routing', () => {
+  const packageJson = JSON.parse(read('apps/proof-fixture/package.json')) as {
+    dependencies?: Record<string, string>;
+  };
+  const appJson = JSON.parse(read('apps/proof-fixture/app.json')) as {
+    expo?: { plugins?: Array<[string, Record<string, unknown>]> };
+  };
+
+  assert.equal(packageJson.dependencies?.['expo-dev-client'], '~57.0.5');
+  assert.deepEqual(appJson.expo?.plugins, [
+    [
+      'expo-dev-client',
+      { launchMode: 'most-recent', skipOnboarding: true, showMenuAtLaunch: false },
+    ],
+  ]);
 });

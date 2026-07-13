@@ -5,6 +5,16 @@
     "scheme": "rndevagentproof",
     "version": "1.0.0",
     "orientation": "portrait",
+    "plugins": [
+      [
+        "expo-dev-client",
+        {
+          "launchMode": "most-recent",
+          "skipOnboarding": true,
+          "showMenuAtLaunch": false
+        }
+      ]
+    ],
     "ios": {
       "bundleIdentifier": "dev.lykhoyda.rndevagent.proof"
     },

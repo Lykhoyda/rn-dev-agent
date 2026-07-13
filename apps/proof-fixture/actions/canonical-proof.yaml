@@ -10,7 +10,6 @@ appId: dev.lykhoyda.rndevagent.proof
 # expectedRouteSequence: [ProofHome, ProofForm, ProofResult]
 - launchApp:
     appId: dev.lykhoyda.rndevagent.proof
-    clearState: true
 - assertVisible:
     id: proof-start
 - tapOn:
