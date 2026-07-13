@@ -216,12 +216,16 @@ export function proofRootHasTrackedEntries(root, proofRoot) {
 }
 export function resolveProofIdentity(input) {
     const { session, target, nativeDevice } = input;
+    const appIdMatchesTarget = session?.appId !== undefined &&
+        (target?.description === session.appId ||
+            target?.title === session.appId ||
+            target?.title?.startsWith(`${session.appId} (`));
     if (!session?.deviceId ||
         !session.appId ||
         (session.platform !== 'ios' && session.platform !== 'android') ||
         !target ||
         target.platform !== session.platform ||
-        target.description !== session.appId ||
+        !appIdMatchesTarget ||
         !target.deviceName ||
         !nativeDevice ||
         nativeDevice.id !== session.deviceId ||

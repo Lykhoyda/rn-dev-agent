@@ -56299,7 +56299,8 @@ function proofRootHasTrackedEntries(root, proofRoot) {
 }
 function resolveProofIdentity(input) {
   const { session, target, nativeDevice } = input;
-  if (!session?.deviceId || !session.appId || session.platform !== "ios" && session.platform !== "android" || !target || target.platform !== session.platform || target.description !== session.appId || !target.deviceName || !nativeDevice || nativeDevice.id !== session.deviceId || nativeDevice.osVersion.length === 0) {
+  const appIdMatchesTarget = session?.appId !== void 0 && (target?.description === session.appId || target?.title === session.appId || target?.title?.startsWith(`${session.appId} (`));
+  if (!session?.deviceId || !session.appId || session.platform !== "ios" && session.platform !== "android" || !target || target.platform !== session.platform || !appIdMatchesTarget || !target.deviceName || !nativeDevice || nativeDevice.id !== session.deviceId || nativeDevice.osVersion.length === 0) {
     return null;
   }
   const normalizeIdentity = (value) => value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();

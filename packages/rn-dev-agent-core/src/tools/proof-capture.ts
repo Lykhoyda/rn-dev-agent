@@ -378,6 +378,7 @@ export interface ProofIdentityInput {
   } | null;
   target: {
     platform?: string;
+    title?: string;
     description?: string;
     deviceName?: string;
   } | null;
@@ -395,13 +396,18 @@ export function resolveProofIdentity(
   input: ProofIdentityInput,
 ): { device: ProofDevice; runtime: ProofRuntime } | null {
   const { session, target, nativeDevice } = input;
+  const appIdMatchesTarget =
+    session?.appId !== undefined &&
+    (target?.description === session.appId ||
+      target?.title === session.appId ||
+      target?.title?.startsWith(`${session.appId} (`));
   if (
     !session?.deviceId ||
     !session.appId ||
     (session.platform !== 'ios' && session.platform !== 'android') ||
     !target ||
     target.platform !== session.platform ||
-    target.description !== session.appId ||
+    !appIdMatchesTarget ||
     !target.deviceName ||
     !nativeDevice ||
     nativeDevice.id !== session.deviceId ||

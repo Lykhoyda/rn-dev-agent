@@ -2058,6 +2058,28 @@ test('production identity canonically binds iOS and Android target presentation'
     metroReady: true,
   };
   assert.equal(module.resolveProofIdentity(ios)?.device.id, 'SIM-1');
+  assert.equal(
+    module.resolveProofIdentity({
+      ...ios,
+      target: {
+        ...ios.target,
+        title: 'dev.fixture (iPhone 16 Pro)',
+        description: 'React Native Bridgeless [C++ connection]',
+      },
+    })?.device.id,
+    'SIM-1',
+  );
+  assert.equal(
+    module.resolveProofIdentity({
+      ...ios,
+      target: {
+        ...ios.target,
+        title: 'dev.fixture.other (iPhone 16 Pro)',
+        description: 'React Native Bridgeless [C++ connection]',
+      },
+    }),
+    null,
+  );
   assert.equal(module.resolveProofIdentity({ ...ios, session: null }), null);
   assert.equal(
     module.resolveProofIdentity({ ...ios, session: { ...ios.session, deviceId: undefined } }),
