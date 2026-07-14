@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Ajv from 'ajv';
@@ -230,13 +230,17 @@ test('strict receipt schemas reject unknown fields at every object boundary', ()
 });
 
 test('proof schema regeneration is byte-identical and reports its digest', () => {
+  const typescriptSource = resolve(coreRoot, 'src/scripts/export-proof-schema.ts');
+  const legacySource = resolve(coreRoot, 'scripts', 'export-proof-schema.mjs');
   const bytes = readFileSync(schemaPath);
   const digest = createHash('sha256').update(bytes).digest('hex');
-  const result = spawnSync(process.execPath, ['scripts/export-proof-schema.mjs', '--check'], {
+  const result = spawnSync(process.execPath, ['dist/scripts/export-proof-schema.js', '--check'], {
     cwd: coreRoot,
     encoding: 'utf8',
   });
 
+  assert.equal(existsSync(typescriptSource), true);
+  assert.equal(existsSync(legacySource), false);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), digest);
   assert.deepEqual(readFileSync(schemaPath), bytes);
