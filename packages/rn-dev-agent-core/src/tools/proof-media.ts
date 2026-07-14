@@ -65,6 +65,8 @@ export type MediaValidationResult =
       reasons: MediaReasonCode[];
     };
 
+type ProbedVideo = Omit<ProofVideo, 'durationToleranceUsed'>;
+
 export interface MatchScreenshotInput {
   videoPath: string;
   videoDurationMs?: number;
@@ -175,7 +177,7 @@ function readVideoMetadata(metadata: unknown): {
   };
 }
 
-export async function probeVideo(process: MediaProcess, videoPath: string): Promise<ProofVideo> {
+export async function probeVideo(process: MediaProcess, videoPath: string): Promise<ProbedVideo> {
   const file = await requireNonEmptyFile(videoPath, 'VIDEO_MISSING', 'VIDEO_EMPTY');
   let stdout: string;
   try {
@@ -434,10 +436,10 @@ export async function validateMedia(
   try {
     const threshold = input.threshold ?? 0.9;
     validateInput(input, threshold);
-    const video = await probeVideo(process, input.videoPath);
+    const probedVideo = await probeVideo(process, input.videoPath);
     const bounds = durationBounds(input.rehearsalDurationMs);
-    if (video.durationMs < bounds.minimumMs) fail('VIDEO_TOO_SHORT');
-    if (video.durationMs > bounds.maximumMs) fail('VIDEO_TOO_LONG');
+    if (probedVideo.durationMs < bounds.minimumMs) fail('VIDEO_TOO_SHORT');
+    if (probedVideo.durationMs > bounds.hardMaximumMs) fail('VIDEO_TOO_LONG');
 
     const scratchRoot = input.scratchRoot ?? tmpdir();
     try {
@@ -458,7 +460,7 @@ export async function validateMedia(
       };
       const match = await matchScreenshotAt(process, {
         videoPath: input.videoPath,
-        videoDurationMs: video.durationMs,
+        videoDurationMs: probedVideo.durationMs,
         screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
         threshold,
         scratchDir,
@@ -475,6 +477,10 @@ export async function validateMedia(
       selectedFramePaths,
       input.contactSheetPath,
     );
+    const video: ProofVideo = {
+      ...probedVideo,
+      durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs,
+    };
     return { ok: true, video, screenshots, frameMatches, contactSheet };
   } catch (error) {
     const reason = error instanceof MediaFailure ? error.reason : 'MEDIA_IO_FAILED';

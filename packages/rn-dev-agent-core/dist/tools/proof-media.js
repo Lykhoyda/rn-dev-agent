@@ -331,11 +331,11 @@ export async function validateMedia(process, input) {
     try {
         const threshold = input.threshold ?? 0.9;
         validateInput(input, threshold);
-        const video = await probeVideo(process, input.videoPath);
+        const probedVideo = await probeVideo(process, input.videoPath);
         const bounds = durationBounds(input.rehearsalDurationMs);
-        if (video.durationMs < bounds.minimumMs)
+        if (probedVideo.durationMs < bounds.minimumMs)
             fail('VIDEO_TOO_SHORT');
-        if (video.durationMs > bounds.maximumMs)
+        if (probedVideo.durationMs > bounds.hardMaximumMs)
             fail('VIDEO_TOO_LONG');
         const scratchRoot = input.scratchRoot ?? tmpdir();
         try {
@@ -356,7 +356,7 @@ export async function validateMedia(process, input) {
             };
             const match = await matchScreenshotAt(process, {
                 videoPath: input.videoPath,
-                videoDurationMs: video.durationMs,
+                videoDurationMs: probedVideo.durationMs,
                 screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
                 threshold,
                 scratchDir,
@@ -368,6 +368,10 @@ export async function validateMedia(process, input) {
             selectedFramePaths.push(match.selectedFramePath);
         }
         const contactSheet = await buildContactSheet(process, selectedFramePaths, input.contactSheetPath);
+        const video = {
+            ...probedVideo,
+            durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs,
+        };
         return { ok: true, video, screenshots, frameMatches, contactSheet };
     }
     catch (error) {

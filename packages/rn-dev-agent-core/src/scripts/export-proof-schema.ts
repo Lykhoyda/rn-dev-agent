@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { datetimeRegex } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import { finalProofReceiptSchema } from '../dist/domain/proof-receipt.js';
+import { zodToJsonSchema, type JsonSchema7Type } from 'zod-to-json-schema';
+import { finalProofReceiptSchema } from '../domain/proof-receipt.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const schemaPath = resolve(scriptDir, '../schemas/proof-receipt.schema.json');
+const schemaPath = resolve(scriptDir, '../../schemas/proof-receipt.schema.json');
 
-function sortJson(value) {
+function sortJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortJson);
   if (value === null || typeof value !== 'object') return value;
 
@@ -20,11 +20,13 @@ function sortJson(value) {
   );
 }
 
-function externalizeDateTime(jsonSchema) {
-  if (jsonSchema?.format !== 'date-time') return jsonSchema;
-  const converted = { ...jsonSchema, pattern: datetimeRegex({}).source };
-  delete converted.format;
-  return converted;
+function externalizeDateTime(jsonSchema: JsonSchema7Type | undefined) {
+  if (!jsonSchema || !('format' in jsonSchema) || jsonSchema.format !== 'date-time') {
+    return jsonSchema;
+  }
+
+  const { format: _format, ...converted } = jsonSchema;
+  return { ...converted, pattern: datetimeRegex({}).source } as JsonSchema7Type;
 }
 
 const schema = zodToJsonSchema(finalProofReceiptSchema, {

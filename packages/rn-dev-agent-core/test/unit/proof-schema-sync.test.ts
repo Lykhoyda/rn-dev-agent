@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Ajv from 'ajv';
@@ -40,14 +40,14 @@ const acceptedReceipt = {
     osVersion: '26.0',
   },
   runtime: {
-    bundleId: 'dev.lykhoyda.rndevagent.proof',
+    bundleId: 'com.example.proof',
     metroPort: 8_081,
     metroReady: true,
-    pluginVersion: '0.64.0',
+    pluginVersion: '0.70.0',
   },
   fixture: {
-    name: 'rn-dev-agent-proof-fixture',
-    version: '1.0.0',
+    name: 'external-consumer-app',
+    version: '1',
   },
   action: {
     id: 'canonical-proof',
@@ -68,6 +68,7 @@ const acceptedReceipt = {
     path: 'flow-ios.mp4',
     sha256: hash,
     durationMs: 22_000,
+    durationToleranceUsed: false,
     sizeBytes: 20_000,
     codec: 'h264',
     width: 1_179,
@@ -187,6 +188,21 @@ test('accepted receipts reject failed assertions in Zod and JSON Schema', () => 
   );
 });
 
+test('accepted receipts require an explicit duration tolerance decision', () => {
+  const validate = loadValidator();
+  const { durationToleranceUsed: _durationToleranceUsed, ...video } = acceptedReceipt.video;
+  const missingToleranceReceipt = { ...acceptedReceipt, video };
+
+  assert.deepEqual(
+    {
+      zod: finalProofReceiptSchema.safeParse(missingToleranceReceipt).success,
+      jsonSchema: validate(missingToleranceReceipt),
+    },
+    { zod: false, jsonSchema: false },
+    JSON.stringify(validate.errors),
+  );
+});
+
 test('mechanical acceptance enforces clean evidence while rejection requires stable reasons', () => {
   assert.equal(
     mechanicalProofReceiptSchema.safeParse({
@@ -230,13 +246,17 @@ test('strict receipt schemas reject unknown fields at every object boundary', ()
 });
 
 test('proof schema regeneration is byte-identical and reports its digest', () => {
+  const typescriptSource = resolve(coreRoot, 'src/scripts/export-proof-schema.ts');
+  const legacySource = resolve(coreRoot, 'scripts', 'export-proof-schema.mjs');
   const bytes = readFileSync(schemaPath);
   const digest = createHash('sha256').update(bytes).digest('hex');
-  const result = spawnSync(process.execPath, ['scripts/export-proof-schema.mjs', '--check'], {
+  const result = spawnSync(process.execPath, ['dist/scripts/export-proof-schema.js', '--check'], {
     cwd: coreRoot,
     encoding: 'utf8',
   });
 
+  assert.equal(existsSync(typescriptSource), true);
+  assert.equal(existsSync(legacySource), false);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), digest);
   assert.deepEqual(readFileSync(schemaPath), bytes);

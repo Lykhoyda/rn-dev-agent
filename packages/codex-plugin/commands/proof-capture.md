@@ -58,11 +58,13 @@ video time or label ranges manually:
 
 ```text
 minimum = floor(rehearsalDurationMs * 0.8)
-maximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)
+targetMaximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)
+hardMaximum = targetMaximum + 5000
 ```
 
-The duration window includes a 10-second API/device timing grace and has an
-absolute two-minute maximum.
+The adaptive target includes a 10-second API/device timing grace and is capped at two minutes.
+A clip above `targetMaximum` is accepted only when every frame, semantic, timing, Git/runtime/error, and final evidence-review gate passes.
+The five-second tolerance is not an independent bypass, and any clip above `hardMaximum` fails with `VIDEO_TOO_LONG`.
 
 ### 2. Execute every strict transition
 

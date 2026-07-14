@@ -205,11 +205,14 @@ export function transitionProofStage(stage, action) {
 }
 const PROOF_DURATION_VARIANCE_FACTOR = 1.5;
 const PROOF_DURATION_GRACE_MS = 10_000;
-const PROOF_DURATION_MAXIMUM_MS = 120_000;
+const PROOF_DURATION_TARGET_MAXIMUM_MS = 120_000;
+const PROOF_DURATION_TOLERANCE_MS = 5_000;
 export function durationBounds(expectedMs) {
+    const targetMaximumMs = Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_TARGET_MAXIMUM_MS);
     return {
         minimumMs: Math.floor(expectedMs * 0.8),
-        maximumMs: Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_MAXIMUM_MS),
+        targetMaximumMs,
+        hardMaximumMs: targetMaximumMs + PROOF_DURATION_TOLERANCE_MS,
     };
 }
 export function validateTrace(allowedTools, observed) {

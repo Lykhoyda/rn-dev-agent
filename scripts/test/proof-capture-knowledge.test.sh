@@ -139,8 +139,16 @@ require_text \
   "strict workflow documents adaptive minimum duration"
 require_text \
   "$COMMAND_STRICT" \
-  'maximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)' \
-  "strict workflow documents API timing grace and two-minute ceiling"
+  'targetMaximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)' \
+  "strict workflow documents the adaptive target maximum"
+require_text \
+  "$COMMAND_STRICT" \
+  'hardMaximum = targetMaximum + 5000' \
+  "strict workflow documents bounded duration tolerance"
+require_text \
+  "$COMMAND_STRICT" \
+  'A clip above `targetMaximum` is accepted only when every frame, semantic, timing, Git/runtime/error, and final evidence-review gate passes.' \
+  "strict workflow makes duration tolerance conditional"
 require_text \
   "$COMMAND_STRICT" \
   'autoRepair=false, forceReload=false, proofReplay=true' \
@@ -167,8 +175,12 @@ require_text \
   "docs describe accepted strict receipt"
 require_text \
   "$DOCS_STRICT" \
-  'The duration window adds a 10-second API and device timing grace and is capped at two minutes.' \
-  "docs describe adaptive duration ceiling"
+  'The adaptive target adds a 10-second API and device timing grace and is capped at two minutes; the hard maximum is five seconds beyond that target.' \
+  "docs describe adaptive target and hard maximum"
+require_text \
+  "$DOCS_STRICT" \
+  'A clip inside that tolerance is accepted only when every frame, semantic, timing, Git/runtime/error, and final evidence-review gate passes.' \
+  "docs make duration tolerance conditional"
 require_text \
   "$DOCS_STRICT" \
   'At least three result-bound screenshots are required; they cannot replace the video.' \

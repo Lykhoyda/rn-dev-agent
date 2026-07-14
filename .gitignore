@@ -72,9 +72,3 @@ test-fixtures/android-fixture/**/build/
 
 # Story 06 Phase C (#387) eval-run results (regenerated per run)
 packages/rn-dev-agent-core/test/evals/results/
-
-apps/proof-fixture/ios/
-apps/proof-fixture/android/
-apps/proof-fixture/.expo/
-apps/proof-fixture/docs/proof/
-apps/proof-fixture/.rn-agent/

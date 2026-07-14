@@ -522,6 +522,9 @@
           "minimum": 0,
           "type": "number"
         },
+        "durationToleranceUsed": {
+          "type": "boolean"
+        },
         "height": {
           "exclusiveMinimum": 0,
           "type": "integer"
@@ -547,6 +550,7 @@
         "path",
         "sha256",
         "durationMs",
+        "durationToleranceUsed",
         "sizeBytes",
         "codec",
         "width",

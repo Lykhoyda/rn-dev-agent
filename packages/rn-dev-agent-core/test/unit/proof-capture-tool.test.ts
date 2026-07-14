@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -284,6 +284,7 @@ function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { o
       path: args.videoPath,
       sha256: HASH('video'),
       durationMs: 16_000,
+      durationToleranceUsed: false,
       sizeBytes: 4_096,
       codec: 'h264',
       width: 1_080,
@@ -446,6 +447,7 @@ async function cleanRehearsal(
   harness: Harness,
   wrongAction = false,
   args = beginArgs(),
+  durationMs = 16_000,
 ): Promise<void> {
   const started = harness.clock.value;
   assert.equal(envelope(await harness.handler(args)).ok, true);
@@ -456,7 +458,7 @@ async function cleanRehearsal(
     okResult({ replayed: true }),
     wrongAction ? { ...actionRunArgs(), actionId: 'unrelated-action' } : actionRunArgs(),
   );
-  harness.clock.value = started + 16_000;
+  harness.clock.value = started + durationMs;
   const result = await harness.handler({ action: 'finish_rehearsal' });
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
 }
@@ -565,8 +567,9 @@ async function stoppedCapture(
   harness: Harness,
   options?: Parameters<typeof recordEvidence>[2],
   args = beginArgs(),
+  rehearsalDurationMs = 16_000,
 ): Promise<ReturnType<typeof recordEvidence>> {
-  await cleanRehearsal(harness, false, args);
+  await cleanRehearsal(harness, false, args, rehearsalDurationMs);
   await arm(harness, args);
   const recordingStart = await startRecording(harness, args);
   const evidence = recordEvidence(harness, recordingStart, options, args);
@@ -729,13 +732,21 @@ test('begin refuses an existing symlink parent below the project root', async (t
   assert.deepEqual(harness.removed, []);
 });
 
-test('canonical nested fixture resolves proof ownership to the Git worktree root', async () => {
+test('nested consumer project resolves proof ownership to its Git root', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-consumer-root-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const consumerRoot = join(root, 'packages', 'test-app');
+  await mkdir(consumerRoot, { recursive: true });
+  await writeFile(join(root, 'README.md'), 'consumer\n');
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'proof@example.invalid']);
+  git(root, ['config', 'user.name', 'Proof Test']);
+  git(root, ['add', 'README.md']);
+  git(root, ['commit', '-qm', 'consumer baseline']);
+
   const module = await import('../../dist/tools/proof-capture.js');
-  assert.equal(typeof module.resolveProofWorktreeRoot, 'function');
-  const repositoryRoot = resolve(CORE_ROOT, '../..');
-  const fixtureRoot = join(repositoryRoot, 'apps/proof-fixture');
-  assert.equal(module.resolveProofWorktreeRoot(fixtureRoot), repositoryRoot);
-  assert.ok(join(repositoryRoot, 'docs/proof/strict-factory-proof').startsWith(repositoryRoot));
+  assert.equal(module.resolveProofWorktreeRoot(consumerRoot), await realpath(root));
 });
 
 test('later symlink swaps are rejected at every filesystem boundary', async (t) => {
@@ -1276,6 +1287,43 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
   }
 });
 
+test('bounded duration tolerance reaches an accepted receipt only with clean timing', async (t) => {
+  const harness = createHarness(t);
+  const timestamps = [1_000, 5_000, 9_000, 13_000];
+  await stoppedCapture(harness, { timestampOverrides: timestamps }, beginArgs(), 4_000);
+  const media = successfulMedia();
+  media.video.durationMs = 18_000;
+  media.video.durationToleranceUsed = true;
+  media.screenshots.forEach((shot, index) => void (shot.timestampMs = timestamps[index]!));
+  harness.setMedia(media);
+
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true, validation.content[0]!.text);
+  const finalized = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
+
+  assert.equal(envelope(finalized).ok, true, finalized.content[0]!.text);
+  assert.equal(harness.written[0]!.video.durationToleranceUsed, true);
+});
+
+test('bounded duration tolerance does not excuse an unexplained pause', async (t) => {
+  const harness = createHarness(t);
+  const timestamps = [1_000, 5_000, 9_000, 17_000];
+  await stoppedCapture(harness, { timestampOverrides: timestamps }, beginArgs(), 4_000);
+  const media = successfulMedia();
+  media.video.durationMs = 18_000;
+  media.video.durationToleranceUsed = true;
+  media.screenshots.forEach((shot, index) => void (shot.timestampMs = timestamps[index]!));
+  harness.setMedia(media);
+
+  const result = await harness.handler({ action: 'validate' });
+
+  assert.ok(reasons(result).includes('STEP_DWELL_OUT_OF_BOUNDS'), result.content[0]!.text);
+  assert.equal(harness.written.length, 0);
+});
+
 test('media, post-readiness, and final-state failures write no final receipt', async (t) => {
   const cases: Array<{
     name: string;
@@ -1750,9 +1798,10 @@ test('real canonical action proof replay is read-only while normal replay persis
     await import('../../dist/observability/instrumentation.js');
   const { resetActionStore } = await import('../../dist/domain/action-state-store.js');
   const canonicalBytes = await readFile(
-    resolve(CORE_ROOT, '../../apps/proof-fixture/actions/canonical-proof.yaml'),
+    resolve(CORE_ROOT, 'test/fixtures/proof-actions/canonical.yaml'),
     'utf8',
   );
+  const replayActionBytes = canonicalBytes.replace('# status: active', '# status: experimental');
 
   const createProject = async (st: TestContext) => {
     const root = await mkdtemp(join(tmpdir(), 'strict-proof-real-action-'));
@@ -1763,7 +1812,7 @@ test('real canonical action proof replay is read-only while normal replay persis
     const actionPath = join(root, '.rn-agent', 'actions', 'canonical-proof.yaml');
     await mkdir(dirname(actionPath), { recursive: true });
     await writeFile(join(root, 'README.md'), 'base\n');
-    await writeFile(actionPath, canonicalBytes);
+    await writeFile(actionPath, replayActionBytes);
     git(root, ['init', '-q']);
     git(root, ['config', 'user.email', 'proof@example.invalid']);
     git(root, ['config', 'user.name', 'Proof Test']);
@@ -1902,7 +1951,10 @@ test('real canonical action proof replay is read-only while normal replay persis
     assert.equal(envelope(await harness.handler(args)).ok, true);
     const realRunAction = createRunActionHandler({
       maestroRun: async () => {
-        await writeFile(actionPath, canonicalBytes.replace('proof-submit', 'proof-submit-raced'));
+        await writeFile(
+          actionPath,
+          replayActionBytes.replace('proof-continue', 'proof-continue-raced'),
+        );
         return passingMaestro();
       },
     });

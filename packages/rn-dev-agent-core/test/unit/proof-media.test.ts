@@ -305,32 +305,35 @@ test('validateMedia rejects video below 80 percent of rehearsal duration', async
   assertFailure(result, 'VIDEO_TOO_SHORT');
 });
 
-test('validateMedia rejects video above the adaptive maximum', async (t) => {
+test('validateMedia accepts the adaptive target boundary without tolerance', async (t) => {
   const fixture = await createFixture(t);
   const result = await validateMedia(
-    new FakeMediaProcess({ durationSeconds: 40.001 }),
-    inputFor(fixture),
-  );
-
-  assertFailure(result, 'VIDEO_TOO_LONG');
-});
-
-test('validateMedia accepts a replay a few seconds beyond the old adaptive maximum', async (t) => {
-  const fixture = await createFixture(t);
-  const result = await validateMedia(
-    new FakeMediaProcess({ durationSeconds: 32 }),
+    new FakeMediaProcess({ durationSeconds: 40 }),
     inputFor(fixture),
   );
 
   assert.equal(result.ok, true);
+  if (!result.ok) assert.fail('expected media validation to pass');
+  assert.equal(result.video.durationToleranceUsed, false);
 });
 
-test('validateMedia enforces the absolute two minute ceiling', async (t) => {
+test('validateMedia accepts up to five seconds of tolerance after frame validation', async (t) => {
   const fixture = await createFixture(t);
-  const result = await validateMedia(new FakeMediaProcess({ durationSeconds: 120.001 }), {
-    ...inputFor(fixture),
-    rehearsalDurationMs: 90_000,
-  });
+  const process = new FakeMediaProcess({ durationSeconds: 45 });
+  const result = await validateMedia(process, inputFor(fixture));
+
+  assert.equal(result.ok, true);
+  if (!result.ok) assert.fail('expected media validation to pass');
+  assert.equal(result.video.durationToleranceUsed, true);
+  assert.ok(process.calls.some((call) => call.args.some((arg) => arg.includes('ssim'))));
+});
+
+test('validateMedia rejects one millisecond beyond the bounded tolerance', async (t) => {
+  const fixture = await createFixture(t);
+  const result = await validateMedia(
+    new FakeMediaProcess({ durationSeconds: 45.001 }),
+    inputFor(fixture),
+  );
 
   assertFailure(result, 'VIDEO_TOO_LONG');
 });
