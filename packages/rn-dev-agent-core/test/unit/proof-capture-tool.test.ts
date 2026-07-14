@@ -284,6 +284,7 @@ function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { o
       path: args.videoPath,
       sha256: HASH('video'),
       durationMs: 16_000,
+      durationToleranceUsed: false,
       sizeBytes: 4_096,
       codec: 'h264',
       width: 1_080,
@@ -446,6 +447,7 @@ async function cleanRehearsal(
   harness: Harness,
   wrongAction = false,
   args = beginArgs(),
+  durationMs = 16_000,
 ): Promise<void> {
   const started = harness.clock.value;
   assert.equal(envelope(await harness.handler(args)).ok, true);
@@ -456,7 +458,7 @@ async function cleanRehearsal(
     okResult({ replayed: true }),
     wrongAction ? { ...actionRunArgs(), actionId: 'unrelated-action' } : actionRunArgs(),
   );
-  harness.clock.value = started + 16_000;
+  harness.clock.value = started + durationMs;
   const result = await harness.handler({ action: 'finish_rehearsal' });
   assert.equal(envelope(result).ok, true, result.content[0]!.text);
 }
@@ -565,8 +567,9 @@ async function stoppedCapture(
   harness: Harness,
   options?: Parameters<typeof recordEvidence>[2],
   args = beginArgs(),
+  rehearsalDurationMs = 16_000,
 ): Promise<ReturnType<typeof recordEvidence>> {
-  await cleanRehearsal(harness, false, args);
+  await cleanRehearsal(harness, false, args, rehearsalDurationMs);
   await arm(harness, args);
   const recordingStart = await startRecording(harness, args);
   const evidence = recordEvidence(harness, recordingStart, options, args);
@@ -1282,6 +1285,43 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
       assert.equal(harness.written.length, 0);
     });
   }
+});
+
+test('bounded duration tolerance reaches an accepted receipt only with clean timing', async (t) => {
+  const harness = createHarness(t);
+  const timestamps = [1_000, 5_000, 9_000, 13_000];
+  await stoppedCapture(harness, { timestampOverrides: timestamps }, beginArgs(), 4_000);
+  const media = successfulMedia();
+  media.video.durationMs = 18_000;
+  media.video.durationToleranceUsed = true;
+  media.screenshots.forEach((shot, index) => void (shot.timestampMs = timestamps[index]!));
+  harness.setMedia(media);
+
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true, validation.content[0]!.text);
+  const finalized = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
+
+  assert.equal(envelope(finalized).ok, true, finalized.content[0]!.text);
+  assert.equal(harness.written[0]!.video.durationToleranceUsed, true);
+});
+
+test('bounded duration tolerance does not excuse an unexplained pause', async (t) => {
+  const harness = createHarness(t);
+  const timestamps = [1_000, 5_000, 9_000, 17_000];
+  await stoppedCapture(harness, { timestampOverrides: timestamps }, beginArgs(), 4_000);
+  const media = successfulMedia();
+  media.video.durationMs = 18_000;
+  media.video.durationToleranceUsed = true;
+  media.screenshots.forEach((shot, index) => void (shot.timestampMs = timestamps[index]!));
+  harness.setMedia(media);
+
+  const result = await harness.handler({ action: 'validate' });
+
+  assert.ok(reasons(result).includes('STEP_DWELL_OUT_OF_BOUNDS'), result.content[0]!.text);
+  assert.equal(harness.written.length, 0);
 });
 
 test('media, post-readiness, and final-state failures write no final receipt', async (t) => {

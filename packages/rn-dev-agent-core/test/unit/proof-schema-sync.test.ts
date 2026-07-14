@@ -68,6 +68,7 @@ const acceptedReceipt = {
     path: 'flow-ios.mp4',
     sha256: hash,
     durationMs: 22_000,
+    durationToleranceUsed: false,
     sizeBytes: 20_000,
     codec: 'h264',
     width: 1_179,
@@ -181,6 +182,21 @@ test('accepted receipts reject failed assertions in Zod and JSON Schema', () => 
     {
       zod: finalProofReceiptSchema.safeParse(failedAssertionReceipt).success,
       jsonSchema: validate(failedAssertionReceipt),
+    },
+    { zod: false, jsonSchema: false },
+    JSON.stringify(validate.errors),
+  );
+});
+
+test('accepted receipts require an explicit duration tolerance decision', () => {
+  const validate = loadValidator();
+  const { durationToleranceUsed: _durationToleranceUsed, ...video } = acceptedReceipt.video;
+  const missingToleranceReceipt = { ...acceptedReceipt, video };
+
+  assert.deepEqual(
+    {
+      zod: finalProofReceiptSchema.safeParse(missingToleranceReceipt).success,
+      jsonSchema: validate(missingToleranceReceipt),
     },
     { zod: false, jsonSchema: false },
     JSON.stringify(validate.errors),

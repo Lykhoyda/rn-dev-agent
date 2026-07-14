@@ -55893,11 +55893,14 @@ function forbiddenReason(tool) {
 }
 var PROOF_DURATION_VARIANCE_FACTOR = 1.5;
 var PROOF_DURATION_GRACE_MS = 1e4;
-var PROOF_DURATION_MAXIMUM_MS = 12e4;
+var PROOF_DURATION_TARGET_MAXIMUM_MS = 12e4;
+var PROOF_DURATION_TOLERANCE_MS = 5e3;
 function durationBounds(expectedMs) {
+  const targetMaximumMs = Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_TARGET_MAXIMUM_MS);
   return {
     minimumMs: Math.floor(expectedMs * 0.8),
-    maximumMs: Math.min(Math.ceil(expectedMs * PROOF_DURATION_VARIANCE_FACTOR + PROOF_DURATION_GRACE_MS), PROOF_DURATION_MAXIMUM_MS)
+    targetMaximumMs,
+    hardMaximumMs: targetMaximumMs + PROOF_DURATION_TOLERANCE_MS
   };
 }
 function validateTrace(allowedTools, observed) {
@@ -56041,6 +56044,7 @@ var proofVideoSchema = external_exports.object({
   path: external_exports.string().min(1),
   sha256: sha256Schema,
   durationMs: external_exports.number().nonnegative(),
+  durationToleranceUsed: external_exports.boolean(),
   sizeBytes: external_exports.number().int().positive(),
   codec: external_exports.string().min(1),
   width: external_exports.number().int().positive(),
@@ -57403,11 +57407,11 @@ async function validateMedia(process3, input) {
   try {
     const threshold = input.threshold ?? 0.9;
     validateInput(input, threshold);
-    const video = await probeVideo(process3, input.videoPath);
+    const probedVideo = await probeVideo(process3, input.videoPath);
     const bounds = durationBounds(input.rehearsalDurationMs);
-    if (video.durationMs < bounds.minimumMs)
+    if (probedVideo.durationMs < bounds.minimumMs)
       fail("VIDEO_TOO_SHORT");
-    if (video.durationMs > bounds.maximumMs)
+    if (probedVideo.durationMs > bounds.hardMaximumMs)
       fail("VIDEO_TOO_LONG");
     const scratchRoot = input.scratchRoot ?? tmpdir8();
     try {
@@ -57427,7 +57431,7 @@ async function validateMedia(process3, input) {
       };
       const match = await matchScreenshotAt(process3, {
         videoPath: input.videoPath,
-        videoDurationMs: video.durationMs,
+        videoDurationMs: probedVideo.durationMs,
         screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
         threshold,
         scratchDir,
@@ -57439,6 +57443,10 @@ async function validateMedia(process3, input) {
       selectedFramePaths.push(match.selectedFramePath);
     }
     const contactSheet = await buildContactSheet(process3, selectedFramePaths, input.contactSheetPath);
+    const video = {
+      ...probedVideo,
+      durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs
+    };
     return { ok: true, video, screenshots, frameMatches, contactSheet };
   } catch (error2) {
     const reason = error2 instanceof MediaFailure ? error2.reason : "MEDIA_IO_FAILED";

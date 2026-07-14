@@ -123,6 +123,7 @@ export const proofVideoSchema = z
     path: z.string().min(1),
     sha256: sha256Schema,
     durationMs: z.number().nonnegative(),
+    durationToleranceUsed: z.boolean(),
     sizeBytes: z.number().int().positive(),
     codec: z.string().min(1),
     width: z.number().int().positive(),
