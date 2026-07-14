@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.65.1
+
+### Patch Changes
+
+- fdfa8bb: Make strict proof portable, TypeScript-native, and tolerant of clean recordings up to five seconds beyond the adaptive target.
+
 ## 0.65.0
 
 ### Minor Changes
