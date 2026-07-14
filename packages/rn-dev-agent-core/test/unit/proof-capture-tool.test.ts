@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -729,13 +729,21 @@ test('begin refuses an existing symlink parent below the project root', async (t
   assert.deepEqual(harness.removed, []);
 });
 
-test('canonical nested fixture resolves proof ownership to the Git worktree root', async () => {
+test('nested consumer project resolves proof ownership to its Git root', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'strict-proof-consumer-root-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const consumerRoot = join(root, 'packages', 'test-app');
+  await mkdir(consumerRoot, { recursive: true });
+  await writeFile(join(root, 'README.md'), 'consumer\n');
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'proof@example.invalid']);
+  git(root, ['config', 'user.name', 'Proof Test']);
+  git(root, ['add', 'README.md']);
+  git(root, ['commit', '-qm', 'consumer baseline']);
+
   const module = await import('../../dist/tools/proof-capture.js');
-  assert.equal(typeof module.resolveProofWorktreeRoot, 'function');
-  const repositoryRoot = resolve(CORE_ROOT, '../..');
-  const fixtureRoot = join(repositoryRoot, 'apps/proof-fixture');
-  assert.equal(module.resolveProofWorktreeRoot(fixtureRoot), repositoryRoot);
-  assert.ok(join(repositoryRoot, 'docs/proof/strict-factory-proof').startsWith(repositoryRoot));
+  assert.equal(module.resolveProofWorktreeRoot(consumerRoot), await realpath(root));
 });
 
 test('later symlink swaps are rejected at every filesystem boundary', async (t) => {
@@ -1750,9 +1758,10 @@ test('real canonical action proof replay is read-only while normal replay persis
     await import('../../dist/observability/instrumentation.js');
   const { resetActionStore } = await import('../../dist/domain/action-state-store.js');
   const canonicalBytes = await readFile(
-    resolve(CORE_ROOT, '../../apps/proof-fixture/actions/canonical-proof.yaml'),
+    resolve(CORE_ROOT, 'test/fixtures/proof-actions/canonical.yaml'),
     'utf8',
   );
+  const replayActionBytes = canonicalBytes.replace('# status: active', '# status: experimental');
 
   const createProject = async (st: TestContext) => {
     const root = await mkdtemp(join(tmpdir(), 'strict-proof-real-action-'));
@@ -1763,7 +1772,7 @@ test('real canonical action proof replay is read-only while normal replay persis
     const actionPath = join(root, '.rn-agent', 'actions', 'canonical-proof.yaml');
     await mkdir(dirname(actionPath), { recursive: true });
     await writeFile(join(root, 'README.md'), 'base\n');
-    await writeFile(actionPath, canonicalBytes);
+    await writeFile(actionPath, replayActionBytes);
     git(root, ['init', '-q']);
     git(root, ['config', 'user.email', 'proof@example.invalid']);
     git(root, ['config', 'user.name', 'Proof Test']);
@@ -1902,7 +1911,10 @@ test('real canonical action proof replay is read-only while normal replay persis
     assert.equal(envelope(await harness.handler(args)).ok, true);
     const realRunAction = createRunActionHandler({
       maestroRun: async () => {
-        await writeFile(actionPath, canonicalBytes.replace('proof-submit', 'proof-submit-raced'));
+        await writeFile(
+          actionPath,
+          replayActionBytes.replace('proof-continue', 'proof-continue-raced'),
+        );
         return passingMaestro();
       },
     });

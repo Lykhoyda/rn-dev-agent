@@ -40,14 +40,14 @@ const acceptedReceipt = {
     osVersion: '26.0',
   },
   runtime: {
-    bundleId: 'dev.lykhoyda.rndevagent.proof',
+    bundleId: 'com.example.proof',
     metroPort: 8_081,
     metroReady: true,
-    pluginVersion: '0.64.0',
+    pluginVersion: '0.70.0',
   },
   fixture: {
-    name: 'rn-dev-agent-proof-fixture',
-    version: '1.0.0',
+    name: 'external-consumer-app',
+    version: '1',
   },
   action: {
     id: 'canonical-proof',
