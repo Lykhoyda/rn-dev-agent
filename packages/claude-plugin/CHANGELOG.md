@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.70.2
+
+### Patch Changes
+
+- 619c5fe: Accept a visually matched final proof screenshot when iOS video metadata ends up to two seconds before the assertion timestamp.
+- Updated dependencies [619c5fe]
+  - rn-dev-agent-core@0.65.2
+
 ## 0.70.1
 
 ### Patch Changes
