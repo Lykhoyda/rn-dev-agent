@@ -329,7 +329,7 @@ export async function matchScreenshotAt(
       '-i',
       framePath,
       '-lavfi',
-      '[1:v][0:v]scale2ref=w=rw:h=rh:flags=lanczos[frame][reference];[reference][frame]ssim',
+      '[0:v][1:v]ssim',
       '-f',
       'null',
       '-',

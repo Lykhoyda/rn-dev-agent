@@ -249,7 +249,7 @@ test('matchScreenshotAt skips an undecodable VFR tail when an earlier sample mat
   assert.equal(result.frameMatch.score, 0.97);
 });
 
-test('matchScreenshotAt scales video samples to the normalized screenshot dimensions', async (t) => {
+test('matchScreenshotAt compares independently normalized media without version-specific filters', async (t) => {
   const fixture = await createFixture(t);
   const scratchDir = join(fixture.root, 'dimension-match');
   await mkdir(scratchDir);
@@ -266,13 +266,7 @@ test('matchScreenshotAt scales video samples to the normalized screenshot dimens
     (call) => call.command === 'ffmpeg' && call.args.some((arg) => arg.includes('ssim')),
   );
   assert.equal(comparisons.length, 3);
-  assert.ok(
-    comparisons.every((call) =>
-      call.args.includes(
-        '[1:v][0:v]scale2ref=w=rw:h=rh:flags=lanczos[frame][reference];[reference][frame]ssim',
-      ),
-    ),
-  );
+  assert.ok(comparisons.every((call) => call.args.includes('[0:v][1:v]ssim')));
 });
 
 test('buildContactSheet creates and hashes a tiled JPEG', async (t) => {
