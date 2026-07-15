@@ -9,18 +9,27 @@ import { evidenceTimingReasons } from '../../dist/tools/proof-capture.js';
 import { validateMedia, type MediaProcess } from '../../dist/tools/proof-media.js';
 
 const execFileAsync = promisify(execFile);
+const mediaFailures: string[] = [];
 
 const mediaProcess: MediaProcess = {
   async run(command, args) {
-    const { stdout, stderr } = await execFileAsync(command, args, {
-      encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return { stdout, stderr };
+    try {
+      const { stdout, stderr } = await execFileAsync(command, args, {
+        encoding: 'utf8',
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      return { stdout, stderr };
+    } catch (error) {
+      const stderr =
+        error && typeof error === 'object' && 'stderr' in error ? String(error.stderr) : '';
+      mediaFailures.push(`${command} ${args.join(' ')}\n${stderr.slice(-2_000)}`);
+      throw error;
+    }
   },
 };
 
 test('accepts a visually matched final screenshot within the encoded video tail tolerance', async (t) => {
+  mediaFailures.length = 0;
   const root = await mkdtemp(join(tmpdir(), 'proof-tail-tolerance-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const videoPath = join(root, 'proof.mp4');
@@ -73,7 +82,7 @@ test('accepts a visually matched final screenshot within the encoded video tail 
     scratchRoot: root,
   });
 
-  if (!media.ok) assert.fail(media.reasons.join(', '));
+  if (!media.ok) assert.fail(`${media.reasons.join(', ')}\n${mediaFailures.join('\n---\n')}`);
   assert.equal(media.ok, true);
   assert.ok(timestamps.at(-1)! > media.video.durationMs);
   assert.deepEqual(
