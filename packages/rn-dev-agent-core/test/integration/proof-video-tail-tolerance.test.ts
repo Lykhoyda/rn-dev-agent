@@ -48,7 +48,19 @@ test('accepts a visually matched final screenshot within the encoded video tail 
     screenshotPath,
   ]);
 
-  const timestamps = [1_000, 3_000, 6_325];
+  const probe = await mediaProcess.run('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'json',
+    videoPath,
+  ]);
+  const encodedDurationMs = Math.round(
+    Number((JSON.parse(probe.stdout) as { format: { duration: string } }).format.duration) * 1_000,
+  );
+  const timestamps = [1_000, 3_000, encodedDurationMs + 325];
   const media = await validateMedia(mediaProcess, {
     videoPath,
     rehearsalDurationMs: 7_000,
@@ -61,8 +73,8 @@ test('accepts a visually matched final screenshot within the encoded video tail 
     scratchRoot: root,
   });
 
-  assert.equal(media.ok, true);
   if (!media.ok) assert.fail(media.reasons.join(', '));
+  assert.equal(media.ok, true);
   assert.ok(timestamps.at(-1)! > media.video.durationMs);
   assert.deepEqual(
     evidenceTimingReasons(
