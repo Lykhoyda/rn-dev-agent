@@ -52,6 +52,9 @@ jobs:
       - name: Unit tests (with coverage report)
         run: corepack yarn test:coverage
 
+      - name: Install proof-media integration dependency
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
       - name: Integration tests
         run: corepack yarn test:integration
 
