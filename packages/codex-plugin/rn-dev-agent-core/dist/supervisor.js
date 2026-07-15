@@ -57891,6 +57891,27 @@ import { execFileSync as execFileSync7 } from "node:child_process";
 import { chmodSync, closeSync as closeSync4, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync20, renameSync as renameSync5, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename5, dirname as dirname13, extname, isAbsolute as isAbsolute3, join as join30, relative, resolve as resolve4, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
+  if (timestamps.length !== steps.length)
+    return ["SCREENSHOT_TIMESTAMPS_INVALID"];
+  const lastIndex = timestamps.length - 1;
+  const increasing = timestamps.every((timestamp, index) => {
+    const withinVideo = timestamp <= videoDurationMs;
+    const withinEncodedTail = index === lastIndex && timestamp <= videoDurationMs + PROOF_VIDEO_TAIL_TOLERANCE_MS;
+    return timestamp >= 0 && (withinVideo || withinEncodedTail) && (index === 0 || timestamp > timestamps[index - 1]);
+  });
+  const reasons = increasing ? [] : ["SCREENSHOT_TIMESTAMPS_INVALID"];
+  for (const [index, step] of steps.entries()) {
+    const timestamp = timestamps[index] ?? 0;
+    const dwellEnd = timestamps[index + 1] ?? Math.max(videoDurationMs, timestamp);
+    const dwell = dwellEnd - timestamp;
+    if (dwell < step.expectedDwellMs || dwell > step.maximumDwellMs) {
+      reasons.push("STEP_DWELL_OUT_OF_BOUNDS");
+      break;
+    }
+  }
+  return reasons;
+}
 function hashBytes(bytes) {
   return createHash7("sha256").update(bytes).digest("hex");
 }
@@ -58688,16 +58709,7 @@ function createProofCaptureHandler(deps) {
         evidenceReasons.push(...media.reasons);
       if (media.ok) {
         const timestamps = evidence.map((item) => item.timestampMs);
-        const increasing = timestamps.every((timestamp, index) => timestamp >= 0 && timestamp <= media.video.durationMs && (index === 0 || timestamp > timestamps[index - 1]));
-        if (!increasing)
-          evidenceReasons.push("SCREENSHOT_TIMESTAMPS_INVALID");
-        for (const [index, step] of steps.entries()) {
-          const dwellEnd = timestamps[index + 1] ?? media.video.durationMs;
-          const dwell = dwellEnd - (timestamps[index] ?? 0);
-          if (dwell < step.expectedDwellMs || dwell > step.maximumDwellMs) {
-            evidenceReasons.push("STEP_DWELL_OUT_OF_BOUNDS");
-          }
-        }
+        evidenceReasons.push(...evidenceTimingReasons(timestamps, media.video.durationMs, steps));
         if (media.screenshots.length !== evidence.length || media.screenshots.some((screenshot, index) => screenshot.stepId !== evidence[index]?.stepId || screenshot.path !== evidence[index]?.screenshotPath || screenshot.timestampMs !== evidence[index]?.timestampMs)) {
           evidenceReasons.push("MEDIA_EVIDENCE_MISMATCH");
         }
@@ -58817,7 +58829,7 @@ function createProofCaptureHandler(deps) {
     return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
   };
 }
-var absolutePathSchema, beginRehearsalSchema, sessionActionSchema, validateSchema, finalizeSchema, proofCaptureInputSchema, readinessSchema;
+var absolutePathSchema, beginRehearsalSchema, sessionActionSchema, validateSchema, finalizeSchema, proofCaptureInputSchema, PROOF_VIDEO_TAIL_TOLERANCE_MS, readinessSchema;
 var init_proof_capture2 = __esm({
   "packages/rn-dev-agent-core/dist/tools/proof-capture.js"() {
     "use strict";
@@ -58861,6 +58873,7 @@ var init_proof_capture2 = __esm({
       sessionActionSchema("discard"),
       sessionActionSchema("contract")
     ]);
+    PROOF_VIDEO_TAIL_TOLERANCE_MS = 2e3;
     readinessSchema = external_exports.object({
       cdpAttached: external_exports.boolean(),
       helpersAttached: external_exports.boolean(),

@@ -47,6 +47,30 @@ export const proofCaptureInputSchema = z.discriminatedUnion('action', [
     sessionActionSchema('discard'),
     sessionActionSchema('contract'),
 ]);
+const PROOF_VIDEO_TAIL_TOLERANCE_MS = 2_000;
+export function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
+    if (timestamps.length !== steps.length)
+        return ['SCREENSHOT_TIMESTAMPS_INVALID'];
+    const lastIndex = timestamps.length - 1;
+    const increasing = timestamps.every((timestamp, index) => {
+        const withinVideo = timestamp <= videoDurationMs;
+        const withinEncodedTail = index === lastIndex && timestamp <= videoDurationMs + PROOF_VIDEO_TAIL_TOLERANCE_MS;
+        return (timestamp >= 0 &&
+            (withinVideo || withinEncodedTail) &&
+            (index === 0 || timestamp > timestamps[index - 1]));
+    });
+    const reasons = increasing ? [] : ['SCREENSHOT_TIMESTAMPS_INVALID'];
+    for (const [index, step] of steps.entries()) {
+        const timestamp = timestamps[index] ?? 0;
+        const dwellEnd = timestamps[index + 1] ?? Math.max(videoDurationMs, timestamp);
+        const dwell = dwellEnd - timestamp;
+        if (dwell < step.expectedDwellMs || dwell > step.maximumDwellMs) {
+            reasons.push('STEP_DWELL_OUT_OF_BOUNDS');
+            break;
+        }
+    }
+    return reasons;
+}
 const readinessSchema = z
     .object({
     cdpAttached: z.boolean(),
@@ -1003,18 +1027,7 @@ export function createProofCaptureHandler(deps) {
                 evidenceReasons.push(...media.reasons);
             if (media.ok) {
                 const timestamps = evidence.map((item) => item.timestampMs);
-                const increasing = timestamps.every((timestamp, index) => timestamp >= 0 &&
-                    timestamp <= media.video.durationMs &&
-                    (index === 0 || timestamp > timestamps[index - 1]));
-                if (!increasing)
-                    evidenceReasons.push('SCREENSHOT_TIMESTAMPS_INVALID');
-                for (const [index, step] of steps.entries()) {
-                    const dwellEnd = timestamps[index + 1] ?? media.video.durationMs;
-                    const dwell = dwellEnd - (timestamps[index] ?? 0);
-                    if (dwell < step.expectedDwellMs || dwell > step.maximumDwellMs) {
-                        evidenceReasons.push('STEP_DWELL_OUT_OF_BOUNDS');
-                    }
-                }
+                evidenceReasons.push(...evidenceTimingReasons(timestamps, media.video.durationMs, steps));
                 if (media.screenshots.length !== evidence.length ||
                     media.screenshots.some((screenshot, index) => screenshot.stepId !== evidence[index]?.stepId ||
                         screenshot.path !== evidence[index]?.screenshotPath ||

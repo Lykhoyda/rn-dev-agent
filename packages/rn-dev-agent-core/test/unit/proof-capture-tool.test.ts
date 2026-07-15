@@ -1256,7 +1256,7 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
     },
     {
       name: 'outside video',
-      timestamps: [1_000, 5_000, 9_000, 16_001],
+      timestamps: [1_000, 5_000, 9_000, 18_001],
       expected: 'SCREENSHOT_TIMESTAMPS_INVALID',
     },
     {
@@ -1285,6 +1285,23 @@ test('screenshot timestamp and per-state dwell constraints are enforced', async 
       assert.equal(harness.written.length, 0);
     });
   }
+});
+
+test('mechanical validation accepts a matched final screenshot inside the encoded tail', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  args.storyboard.steps.at(-1)!.expectedDwellMs = 0;
+  const timestamps = [1_000, 5_000, 9_000, 13_000];
+  await stoppedCapture(harness, { timestampOverrides: timestamps }, args);
+  const media = successfulMedia();
+  media.video.durationMs = 12_675;
+  media.screenshots.forEach((shot, index) => void (shot.timestampMs = timestamps[index]!));
+  harness.setMedia(media);
+
+  const validation = await harness.handler({ action: 'validate' });
+
+  assert.equal(envelope(validation).ok, true, validation.content[0]!.text);
+  assert.equal(harness.written.length, 0);
 });
 
 test('bounded duration tolerance reaches an accepted receipt only with clean timing', async (t) => {
