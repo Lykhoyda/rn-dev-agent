@@ -119,7 +119,21 @@ export async function startFixture(): Promise<Fixture> {
     },
   };
 
-  const server = new ObservabilityServer(recorder, e2eStub);
+  // GH #579: live state reads for the Route/Store/Tree panels. Values are
+  // deliberately distinct from the seeded recorder events so specs can tell a
+  // live read apart from event-derived data.
+  const stateStub = {
+    read: async (kind: string) =>
+      kind === 'route'
+        ? { ok: true, data: { routeName: 'LiveHome', routes: [{ name: 'LiveHome' }], index: 0 } }
+        : kind === 'store'
+          ? { ok: true, data: { cart: { items: 3, live: true } } }
+          : kind === 'tree'
+            ? { ok: true, data: { name: 'App', children: [{ name: 'LiveTree' }] } }
+            : null,
+  };
+
+  const server = new ObservabilityServer(recorder, e2eStub, undefined, stateStub);
   const { url } = await server.start(0);
   return { url, recorder, stop: () => server.stop() };
 }

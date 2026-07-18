@@ -81,7 +81,8 @@ import { StrictProofMonitor } from './domain/proof-capture.js';
 import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
 import { invalidateLastSnapshotHash } from './fast-runner-ref-map.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
-import { observeHandler, observeSchema, setObserveE2eDeps, setObserveMirror, startObserveServer, } from './tools/observe.js';
+import { observeHandler, observeSchema, setObserveE2eDeps, setObserveMirror, setObserveStateDeps, startObserveServer, } from './tools/observe.js';
+import { buildStateRead } from './observability/state-read.js';
 import { autostartObserve } from './observability/autostart.js';
 import { removeObserveState } from './observability/observe-state.js';
 import { resolveObserveAutostart, resolveMirrorConfig } from './project-config.js';
@@ -1912,6 +1913,21 @@ setObserveE2eDeps({
             arbiter.release(L.lease);
         }
     },
+});
+// GH #579: fresh handler instances (not the trackedTool-wrapped ones) on
+// purpose — a UI-triggered read must not emit recorder/strict-proof events,
+// and resolving getClient() per call is what lets the panels recover after a
+// target replacement. Unscoped args mirror the tools' no-arg defaults; the
+// store handler's 30KB truncation and the depth cap bound the payloads.
+setObserveStateDeps({
+    read: buildStateRead({
+        isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
+        handlers: {
+            route: () => createNavigationStateHandler(getClient)({}),
+            store: () => createStoreStateHandler(getClient)({}),
+            tree: () => createComponentTreeHandler(getClient)({ depth: 4 }),
+        },
+    }),
 });
 // B76/D644: unified process-lifecycle shutdown. All termination signals + stdin.end
 // funnel into this graceful path so the 5s background-poll setInterval in

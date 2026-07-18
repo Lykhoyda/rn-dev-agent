@@ -17,6 +17,12 @@ export interface E2eServerDeps {
   listActions: () => Promise<unknown[]>;
   runAction: (actionId: string, params?: Record<string, string>) => Promise<ActionRunResult>;
 }
+
+/** GH #579: live state reader for the Route/Store/Tree panels. Returns the
+ * parsed tool envelope, or null for an unknown kind (mapped to 404). */
+export interface StateServerDeps {
+  read: (kind: string) => Promise<unknown | null>;
+}
 const __dir = dirname(fileURLToPath(import.meta.url));
 
 export class ObservabilityServer {
@@ -27,6 +33,7 @@ export class ObservabilityServer {
     private readonly recorder: Recorder,
     private readonly e2e?: E2eServerDeps,
     private readonly mirror?: MirrorManager,
+    private readonly state?: StateServerDeps,
   ) {}
 
   async start(preferredPort?: number): Promise<{ url: string; port: number }> {
@@ -92,6 +99,8 @@ export class ObservabilityServer {
       }
       return this.mirrorStream(res);
     }
+    const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(url);
+    if (stateKind) return void this.stateRead(stateKind[1], req, res);
     if (url === '/api/e2e/run') return void this.e2eRun(req, res);
     if (url === '/api/e2e/runs') return void this.e2eListRuns(res);
     const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
@@ -199,6 +208,27 @@ export class ObservabilityServer {
       /* client socket reset mid-stream — manager cleanup runs on 'close' */
     });
     this.mirror.attach(res);
+  }
+
+  private async stateRead(kind: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method?.toUpperCase() !== 'GET') {
+      this.json(res, 405, { error: 'method not allowed' });
+      return;
+    }
+    if (!this.state) {
+      this.json(res, 501, { error: 'state read not configured' });
+      return;
+    }
+    try {
+      const out = await this.state.read(kind);
+      if (out === null) {
+        this.json(res, 404, { error: `unknown state kind: ${kind}` });
+        return;
+      }
+      this.json(res, 200, out);
+    } catch (err) {
+      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   private index(res: ServerResponse): void {

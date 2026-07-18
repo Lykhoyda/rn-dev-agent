@@ -4,7 +4,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { startFixture, type Fixture } from './fixture-server';
 
-let fx: Fixture;
+let fx: Fixture | undefined;
 
 test.beforeEach(async ({ page }) => {
   fx = await startFixture();
@@ -12,7 +12,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async () => {
-  await fx.stop();
+  await fx?.stop();
+  fx = undefined;
 });
 
 async function openTab(page: Page, tab: string): Promise<void> {
@@ -69,6 +70,37 @@ test('SSE live update appends a new timeline row without reload', async ({ page 
   fx.recorder.record({ tool: 'cdp_reload', params: {}, status: 'PASS', latencyMs: 60 });
   await expect(page.getByTestId('timeline-row')).toHaveCount(6);
   await expect(page.getByTestId('timeline-row').filter({ hasText: 'cdp_reload' })).toBeVisible();
+});
+
+// GH #579 — the panels must not depend on the agent having run the
+// introspection tools: an empty payload tab auto-reads /api/state/<kind>.
+test('tree tab auto-populates from the live state endpoint', async ({ page }) => {
+  await openTab(page, 'tree');
+  await expect(page.getByTestId('state-live-payload')).toContainText('LiveTree');
+  await expect(page.getByTestId('state-live-at')).toBeVisible();
+});
+
+test('route panel shows the freshest data — a live read wins over older events', async ({
+  page,
+}) => {
+  // The route tab mounts before the SSE snapshot delivers the seeded
+  // cdp_navigate event, so the empty-panel auto-fetch always fires; its
+  // request timestamp postdates the seeded event, so the live read wins.
+  await expect(page.getByTestId('state-live-payload')).toContainText('LiveHome');
+});
+
+test('refresh button re-reads live state over an existing tool event', async ({ page }) => {
+  // Wait for the SSE snapshot to land before opening the store tab —
+  // otherwise the tab opens empty and the auto-read fires, racing the
+  // event-then-refresh path this test exercises.
+  await expect(page.getByTestId('timeline-row')).toHaveCount(5);
+  await openTab(page, 'store');
+  // The seeded cdp_store_state event renders first — no auto-fetch happens
+  // when event data exists.
+  await expect(page.locator('.state pre')).toContainText('"items": 2');
+  await page.getByTestId('state-refresh').click();
+  await expect(page.getByTestId('state-live-payload')).toContainText('"items": 3');
+  await expect(page.getByTestId('state-live-at')).toBeVisible();
 });
 
 test('regression tab lists run history and drills into a run detail', async ({ page }) => {

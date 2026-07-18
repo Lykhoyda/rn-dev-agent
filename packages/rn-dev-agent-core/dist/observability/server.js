@@ -9,13 +9,15 @@ export class ObservabilityServer {
     recorder;
     e2e;
     mirror;
+    state;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder, e2e, mirror) {
+    constructor(recorder, e2e, mirror, state) {
         this.recorder = recorder;
         this.e2e = e2e;
         this.mirror = mirror;
+        this.state = state;
     }
     async start(preferredPort) {
         if (this.server)
@@ -85,6 +87,9 @@ export class ObservabilityServer {
             }
             return this.mirrorStream(res);
         }
+        const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(url);
+        if (stateKind)
+            return void this.stateRead(stateKind[1], req, res);
         if (url === '/api/e2e/run')
             return void this.e2eRun(req, res);
         if (url === '/api/e2e/runs')
@@ -194,6 +199,27 @@ export class ObservabilityServer {
             /* client socket reset mid-stream — manager cleanup runs on 'close' */
         });
         this.mirror.attach(res);
+    }
+    async stateRead(kind, req, res) {
+        if (req.method?.toUpperCase() !== 'GET') {
+            this.json(res, 405, { error: 'method not allowed' });
+            return;
+        }
+        if (!this.state) {
+            this.json(res, 501, { error: 'state read not configured' });
+            return;
+        }
+        try {
+            const out = await this.state.read(kind);
+            if (out === null) {
+                this.json(res, 404, { error: `unknown state kind: ${kind}` });
+                return;
+            }
+            this.json(res, 200, out);
+        }
+        catch (err) {
+            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
     }
     index(res) {
         try {
