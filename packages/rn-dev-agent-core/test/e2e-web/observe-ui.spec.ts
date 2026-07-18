@@ -67,7 +67,7 @@ test('device pane shows the hero screenshot from the seeded capture', async ({ p
 
 test('SSE live update appends a new timeline row without reload', async ({ page }) => {
   await expect(page.getByTestId('timeline-row')).toHaveCount(5);
-  fx.recorder.record({ tool: 'cdp_reload', params: {}, status: 'PASS', latencyMs: 60 });
+  fx!.recorder.record({ tool: 'cdp_reload', params: {}, status: 'PASS', latencyMs: 60 });
   await expect(page.getByTestId('timeline-row')).toHaveCount(6);
   await expect(page.getByTestId('timeline-row').filter({ hasText: 'cdp_reload' })).toBeVisible();
 });
