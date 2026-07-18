@@ -97,7 +97,11 @@ describe('CDPClient lifecycle', () => {
     }
   });
 
-  test('autoConnect reports empty Metro unless another default Metro has an attached target', async () => {
+  // GH #577: the empty-Metro cases must own their entire discovery surface.
+  // RN_CDP_DISCOVERY_PORTS replaces the built-in default ports (8081/8082/…),
+  // so a developer's live Metro on a default port can never leak into these
+  // tests — neither as a false connect nor as pending reconnect work.
+  async function startEmptyMetro() {
     const { createServer } = await import('node:http');
     const srv = createServer((req, res) => {
       if (req.url === '/status') {
@@ -119,33 +123,70 @@ describe('CDPClient lifecycle', () => {
       srv.once('error', reject);
     });
 
-    const { port: emptyPort } = srv.address();
-    const client = new CDPClient(emptyPort);
+    return srv;
+  }
+
+  async function withEnv(overrides, fn) {
+    const saved = {};
+    for (const [key, value] of Object.entries(overrides)) {
+      saved[key] = process.env[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     try {
+      return await fn();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
+  test('empty Metro rejects deterministically when discovery is isolated (GH #577)', async () => {
+    const srv = await startEmptyMetro();
+    const { port: emptyPort } = srv.address();
+    // Hostile condition: simulate a developer's live Metro with an attached
+    // target on a "default" port (the shared fake CDP server). The isolation
+    // override must make it invisible to discovery.
+    await withEnv({ RN_CDP_DISCOVERY_PORTS: '', RN_METRO_PORT: String(server.port) }, async () => {
+      const client = new CDPClient(emptyPort);
+      try {
+        await assert.rejects(
+          client.autoConnect(emptyPort),
+          // GH #208 (RC2): the hinted Metro is up with 0 targets, so the only
+          // correct outcome is the typed AppDetachedError. "Metro not found"
+          // would mean discovery failed to probe the hinted server at all —
+          // exactly the regression class this test exists to catch.
+          (err) => err instanceof Error && err.name === 'AppDetachedError',
+          'isolated discovery must reject with AppDetachedError — it may never select a host-environment Metro',
+        );
+        assert.equal(client.isConnected, false, 'failed connect must leave the client down');
+      } finally {
+        await client.disconnect();
+      }
+    }).finally(() => new Promise((resolve) => srv.close(resolve)));
+  });
+
+  test('attached Metro on a default port is preferred over an empty hinted Metro (GH #303 via #577 seam)', async () => {
+    const srv = await startEmptyMetro();
+    const { port: emptyPort } = srv.address();
+    // Deterministic re-creation of the GH #303 scenario the old tolerant test
+    // could only observe by accident: the "default" list contains a live,
+    // attached Metro (the fake CDP server), which must win over the empty hint.
+    await withEnv({ RN_CDP_DISCOVERY_PORTS: String(server.port) }, async () => {
+      const client = new CDPClient(emptyPort);
       try {
         const message = await client.autoConnect(emptyPort);
-        // GH #303: discovery intentionally scans default Metro ports too. A
-        // developer running a real app on :8081 should not make this integration
-        // test fail just because the empty test Metro was not selected.
-        assert.notEqual(
+        assert.equal(
           client.metroPort,
-          emptyPort,
-          'success is only valid when discovery selected a different attached Metro',
+          server.port,
+          'discovery must select the attached default-port Metro',
         );
         assert.match(message, /Connected to/);
-      } catch (err) {
-        assert.ok(err instanceof Error);
-        // GH #208 (RC2): a Metro-up-but-0-targets autoConnect now rejects with the
-        // typed AppDetachedError ("…advertises 0 Hermes debug targets…"); the
-        // genuine no-Metro case still surfaces "Metro not found".
-        assert.ok(
-          err.name === 'AppDetachedError' || err.message.includes('Metro not found'),
-          `Unexpected error: ${err.message}`,
-        );
+      } finally {
+        await client.disconnect();
       }
-    } finally {
-      await client.disconnect();
-      await new Promise((resolve) => srv.close(resolve));
-    }
+    }).finally(() => new Promise((resolve) => srv.close(resolve)));
   });
 });

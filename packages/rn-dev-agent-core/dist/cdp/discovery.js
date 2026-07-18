@@ -29,16 +29,33 @@ export class AppDetachedError extends Error {
     }
 }
 export const DISCOVERY_TIMEOUT_MS = 1500;
-export const USER_METRO_PORT = process.env.RN_METRO_PORT
-    ? parseInt(process.env.RN_METRO_PORT, 10)
-    : null;
-export const DEFAULT_PORTS = [
-    ...(USER_METRO_PORT && !isNaN(USER_METRO_PORT) ? [USER_METRO_PORT] : []),
-    8081,
-    8082,
-    19000,
-    19006,
-];
+/**
+ * GH #577: default discovery ports, resolved lazily at call time. When
+ * RN_CDP_DISCOVERY_PORTS is set it REPLACES the built-in defaults (including
+ * the RN_METRO_PORT entry) — an empty value yields no defaults, so discovery
+ * probes only the caller-supplied current/hint port. This lets integration
+ * tests own their entire discovery surface; production behavior is unchanged
+ * when the variable is unset.
+ */
+export function resolveDefaultPorts() {
+    const override = process.env.RN_CDP_DISCOVERY_PORTS;
+    if (override !== undefined) {
+        return (override
+            .split(',')
+            // Whole-value parse — parseInt would accept "9123abc"/"8081.5" as
+            // 9123/8081 and silently probe an unintended Metro after a typo.
+            .map((entry) => (entry.trim() === '' ? NaN : Number(entry.trim())))
+            .filter((port) => Number.isInteger(port) && port > 0));
+    }
+    const userPort = process.env.RN_METRO_PORT ? parseInt(process.env.RN_METRO_PORT, 10) : NaN;
+    return [
+        ...(Number.isInteger(userPort) && userPort > 0 ? [userPort] : []),
+        8081,
+        8082,
+        19000,
+        19006,
+    ];
+}
 /**
  * GH #303: probe ALL candidate ports in parallel and return every one that is a
  * running Metro. The caller then prefers a port with an attached Hermes target
@@ -341,7 +358,7 @@ export async function discover(currentPort, platformFilterOrFilters) {
     const filters = typeof platformFilterOrFilters === 'string'
         ? { platform: platformFilterOrFilters }
         : (platformFilterOrFilters ?? {});
-    const ports = [...new Set([currentPort, ...DEFAULT_PORTS])];
+    const ports = [...new Set([currentPort, ...resolveDefaultPorts()])];
     const hints = [];
     if (filters.platform)
         hints.push(`platform=${filters.platform}`);
@@ -396,7 +413,7 @@ export async function discover(currentPort, platformFilterOrFilters) {
     return { port: metroPort, targets: sorted, warning };
 }
 export async function discoverForList(currentPort, portHint) {
-    const ports = [...new Set([portHint ?? currentPort, ...DEFAULT_PORTS])];
+    const ports = [...new Set([portHint ?? currentPort, ...resolveDefaultPorts()])];
     // GH #303: prefer a running port that actually has targets over the first
     // running one, so cdp_targets can't inspect a different Metro than discover()
     // selected. No cwd auto-pick needed here — just attached-preference.
@@ -431,7 +448,7 @@ export async function discoverForList(currentPort, portHint) {
  */
 export async function enumerateMetroCandidates(connectedPort, projectRoot) {
     const t0 = performance.now();
-    const ports = [...new Set([connectedPort, ...DEFAULT_PORTS])];
+    const ports = [...new Set([connectedPort, ...resolveDefaultPorts()])];
     const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
     const tProbe = performance.now();
     if (running.length <= 1) {
