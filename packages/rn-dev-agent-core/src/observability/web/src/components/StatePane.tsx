@@ -89,13 +89,20 @@ export function StatePane({
   const evOk = tabEv?.ok ? tabEv : undefined;
 
   // Auto-read when the tab has no usable data, and on re-activation when the data is stale.
+  // A recent FAILED read defers the retry to the next activation — never an immediate loop.
   const lastTabRef = useRef<Tab | null>(null);
   useEffect(() => {
     const activated = lastTabRef.current !== tab;
     lastTabRef.current = tab;
     if (!isPayloadTab(tab) || loading === tab) return;
-    const newestAt = Math.max(evOk?.ts ?? 0, fetched[tab]?.at ?? 0);
-    if (newestAt === 0 || (activated && Date.now() - newestAt > STALE_MS)) void refresh(tab);
+    const f = fetched[tab];
+    const newestOkAt = Math.max(evOk?.ts ?? 0, f?.ok ? f.at : 0);
+    const failedRecently = f !== undefined && !f.ok && Date.now() - f.at < STALE_MS;
+    if (newestOkAt === 0) {
+      if (activated || !failedRecently) void refresh(tab);
+    } else if (activated && Date.now() - newestOkAt > STALE_MS) {
+      void refresh(tab);
+    }
   }, [tab, evOk, fetched, loading, refresh]);
 
   useEffect(() => {
