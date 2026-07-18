@@ -2695,9 +2695,14 @@ setObserveE2eDeps({
 // GH #579: raw handlers on purpose — UI reads must not emit recorder/strict-proof events.
 setObserveStateDeps({
   read: buildStateRead({
-    isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
+    acquire: () => {
+      const r = arbiter.tryAcquire('introspection', 'observe-state-read');
+      return r.ok
+        ? { ok: true, release: () => arbiter.release(r.lease) }
+        : { ok: false, code: r.code };
+    },
     handlers: {
-      route: () => createNavigationStateHandler(getClient)({}),
+      route: () => createNavigationStateHandler(getClient, { annotate: false })({}),
       store: () => createStoreStateHandler(getClient)({}),
       tree: () => createComponentTreeHandler(getClient)({ depth: 4 }),
     },

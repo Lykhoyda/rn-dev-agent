@@ -49759,7 +49759,7 @@ async function readLiveRoute(client2) {
     return null;
   }
 }
-function createNavigationStateHandler(getClient2) {
+function createNavigationStateHandler(getClient2, opts = {}) {
   return withConnection(getClient2, async (_args, client2) => {
     const result = await client2.evaluate(client2.helperExpr("getNavState()"));
     if (result.error) {
@@ -49777,6 +49777,8 @@ function createNavigationStateHandler(getClient2) {
     if (parsed.error) {
       return failResult(`Navigation state error: ${parsed.error}`);
     }
+    if (opts.annotate === false)
+      return okResult(parsed);
     const cfg = loadVerificationConfig(getCachedProjectRoot());
     return annotateMutationAbsence(okResult(parsed), {
       client: client2,
@@ -62388,14 +62390,20 @@ function buildStateRead(input) {
   return async (kind) => {
     if (!isStateKind(kind))
       return null;
+    let gate;
     try {
-      if (input.isFlowActive()) {
-        return {
-          ok: false,
-          code: "BUSY_FLOW_ACTIVE",
-          error: "a flow is running \u2014 live state read skipped"
-        };
-      }
+      gate = input.acquire();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (!gate.ok) {
+      return {
+        ok: false,
+        code: gate.code ?? "BUSY_FLOW_ACTIVE",
+        error: "device is busy \u2014 live state read skipped"
+      };
+    }
+    try {
       const result = await input.handlers[kind]();
       const text = result?.content?.[0]?.text;
       if (typeof text !== "string")
@@ -62407,6 +62415,11 @@ function buildStateRead(input) {
       }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      try {
+        gate.release();
+      } catch {
+      }
     }
   };
 }
@@ -64953,9 +64966,12 @@ var init_index = __esm({
     });
     setObserveStateDeps({
       read: buildStateRead({
-        isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
+        acquire: () => {
+          const r = arbiter.tryAcquire("introspection", "observe-state-read");
+          return r.ok ? { ok: true, release: () => arbiter.release(r.lease) } : { ok: false, code: r.code };
+        },
         handlers: {
-          route: () => createNavigationStateHandler(getClient)({}),
+          route: () => createNavigationStateHandler(getClient, { annotate: false })({}),
           store: () => createStoreStateHandler(getClient)({}),
           tree: () => createComponentTreeHandler(getClient)({ depth: 4 })
         }

@@ -44,7 +44,8 @@ export async function readLiveRoute(client) {
         return null;
     }
 }
-export function createNavigationStateHandler(getClient) {
+// annotate:false = observationally pure read that never consumes the mutation-absence baseline.
+export function createNavigationStateHandler(getClient, opts = {}) {
     return withConnection(getClient, async (_args, client) => {
         const result = await client.evaluate(client.helperExpr('getNavState()'));
         if (result.error) {
@@ -63,6 +64,8 @@ export function createNavigationStateHandler(getClient) {
         if (parsed.error) {
             return failResult(`Navigation state error: ${parsed.error}`);
         }
+        if (opts.annotate === false)
+            return okResult(parsed);
         const cfg = loadVerificationConfig(getCachedProjectRoot());
         return annotateMutationAbsence(okResult(parsed), {
             client,

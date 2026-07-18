@@ -1,12 +1,13 @@
 import type { ToolResult } from '../utils.js';
 
-// GH #579: kind → parsed-envelope reader for the observe UI panels; resolves the client per call so reads recover after target replacement like the tool path.
 export const STATE_KINDS = ['route', 'store', 'tree'] as const;
 export type StateKind = (typeof STATE_KINDS)[number];
 
+export type StateReadGate = { ok: true; release: () => void } | { ok: false; code?: string };
+
 export interface StateReadInput {
-  /** Refuse while a flow runs — a UI read must not interleave CDP evaluates with a driving flow. */
-  isFlowActive: () => boolean;
+  /** Acquires the device lease; on ok the lease is held until release() after the read. */
+  acquire: () => StateReadGate;
   handlers: Record<StateKind, () => Promise<ToolResult>>;
 }
 
@@ -20,14 +21,20 @@ function isStateKind(kind: string): kind is StateKind {
 export function buildStateRead(input: StateReadInput): StateReadFn {
   return async (kind: string): Promise<unknown | null> => {
     if (!isStateKind(kind)) return null;
+    let gate: StateReadGate;
     try {
-      if (input.isFlowActive()) {
-        return {
-          ok: false,
-          code: 'BUSY_FLOW_ACTIVE',
-          error: 'a flow is running — live state read skipped',
-        };
-      }
+      gate = input.acquire();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (!gate.ok) {
+      return {
+        ok: false,
+        code: gate.code ?? 'BUSY_FLOW_ACTIVE',
+        error: 'device is busy — live state read skipped',
+      };
+    }
+    try {
       const result = await input.handlers[kind]();
       const text = result?.content?.[0]?.text;
       if (typeof text !== 'string') return { ok: false, error: 'empty tool result' };
@@ -38,6 +45,12 @@ export function buildStateRead(input: StateReadInput): StateReadFn {
       }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      try {
+        gate.release();
+      } catch {
+        /* release is best-effort */
+      }
     }
   };
 }

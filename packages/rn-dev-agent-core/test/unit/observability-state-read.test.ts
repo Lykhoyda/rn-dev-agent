@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStateRead, STATE_KINDS } from '../../dist/observability/state-read.js';
+import type { StateReadGate } from '../../dist/observability/state-read.js';
+import { createNavigationStateHandler } from '../../dist/tools/navigation-state.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
 import type { ToolResult } from '../../dist/utils.js';
 
 interface Envelope {
@@ -8,10 +11,15 @@ interface Envelope {
   data?: unknown;
   error?: string;
   code?: string;
+  meta?: unknown;
 }
 
 const envelope = (obj: Envelope): ToolResult =>
   ({ content: [{ type: 'text', text: JSON.stringify(obj) }] }) as ToolResult;
+
+const openGate = (released: string[] = []): (() => StateReadGate) => {
+  return () => ({ ok: true, release: () => released.push('released') });
+};
 
 type Handlers = Record<'route' | 'store' | 'tree', () => Promise<ToolResult>>;
 
@@ -27,23 +35,23 @@ test('exposes exactly the three panel kinds', () => {
 });
 
 test('returns the parsed tool envelope for each known kind', async () => {
-  const read = buildStateRead({ isFlowActive: () => false, handlers: HANDLERS() });
+  const read = buildStateRead({ acquire: openGate(), handlers: HANDLERS() });
   assert.deepEqual(await read('route'), { ok: true, data: { routeName: 'Home' } });
   assert.deepEqual(await read('store'), { ok: true, data: { cart: { items: 2 } } });
   assert.deepEqual(await read('tree'), { ok: true, data: { components: [] } });
 });
 
 test('unknown kind returns null (server maps to 404)', async () => {
-  const read = buildStateRead({ isFlowActive: () => false, handlers: HANDLERS() });
+  const read = buildStateRead({ acquire: openGate(), handlers: HANDLERS() });
   assert.equal(await read('nav'), null);
   assert.equal(await read(''), null);
   assert.equal(await read('__proto__'), null);
 });
 
-test('refuses while a flow is active — never interleaves CDP evaluates', async () => {
+test('refuses when the arbiter lease is denied — handler never runs', async () => {
   let called = false;
   const read = buildStateRead({
-    isFlowActive: () => true,
+    acquire: () => ({ ok: false, code: 'BUSY_FLOW_ACTIVE' }),
     handlers: HANDLERS({
       route: async () => {
         called = true;
@@ -57,9 +65,17 @@ test('refuses while a flow is active — never interleaves CDP evaluates', async
   assert.equal(called, false);
 });
 
-test('a throwing handler becomes an ok:false envelope, never a rejection', async () => {
+test('the lease is released after a successful read', async () => {
+  const released: string[] = [];
+  const read = buildStateRead({ acquire: openGate(released), handlers: HANDLERS() });
+  await read('route');
+  assert.deepEqual(released, ['released']);
+});
+
+test('the lease is released even when the handler throws', async () => {
+  const released: string[] = [];
   const read = buildStateRead({
-    isFlowActive: () => false,
+    acquire: openGate(released),
     handlers: HANDLERS({
       store: async () => {
         throw new Error('socket hung up');
@@ -69,11 +85,12 @@ test('a throwing handler becomes an ok:false envelope, never a rejection', async
   const out = (await read('store')) as Envelope;
   assert.equal(out.ok, false);
   assert.match(out.error ?? '', /socket hung up/);
+  assert.deepEqual(released, ['released']);
 });
 
 test('fail envelopes from the handler pass through verbatim', async () => {
   const read = buildStateRead({
-    isFlowActive: () => false,
+    acquire: openGate(),
     handlers: HANDLERS({
       tree: async () => envelope({ ok: false, error: 'Not connected', code: 'NOT_CONNECTED' }),
     }),
@@ -87,7 +104,7 @@ test('fail envelopes from the handler pass through verbatim', async () => {
 
 test('non-JSON or empty tool results become ok:false envelopes', async () => {
   const read = buildStateRead({
-    isFlowActive: () => false,
+    acquire: openGate(),
     handlers: HANDLERS({
       route: async () => ({ content: [{ type: 'text', text: 'not-json{' }] }) as ToolResult,
       store: async () => ({ content: [] }) as unknown as ToolResult,
@@ -97,13 +114,25 @@ test('non-JSON or empty tool results become ok:false envelopes', async () => {
   assert.equal(((await read('store')) as Envelope).ok, false);
 });
 
-test('a throwing isFlowActive fails safe to an ok:false envelope', async () => {
+test('a throwing acquire fails safe to an ok:false envelope', async () => {
   const read = buildStateRead({
-    isFlowActive: () => {
+    acquire: () => {
       throw new Error('gate exploded');
     },
     handlers: HANDLERS(),
   });
   const out = (await read('route')) as Envelope;
   assert.equal(out.ok, false);
+});
+
+test('annotate:false route read returns nav state without mutation-absence meta', async () => {
+  const navState = { routeName: 'Home', index: 0, routes: [{ name: 'Home' }] };
+  const client = createMockClient({
+    evaluate: async () => ({ value: JSON.stringify(navState) }),
+  });
+  const handler = createNavigationStateHandler(() => client, { annotate: false });
+  const out = JSON.parse((await handler({})).content[0].text) as Envelope;
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.data, navState);
+  assert.equal(out.meta, undefined);
 });
