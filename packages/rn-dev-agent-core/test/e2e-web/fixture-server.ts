@@ -119,7 +119,19 @@ export async function startFixture(): Promise<Fixture> {
     },
   };
 
-  const server = new ObservabilityServer(recorder, e2eStub);
+  // GH #579: values deliberately differ from seeded events so specs can tell the source apart.
+  const stateStub = {
+    read: async (kind: string) =>
+      kind === 'route'
+        ? { ok: true, data: { routeName: 'LiveHome', routes: [{ name: 'LiveHome' }], index: 0 } }
+        : kind === 'store'
+          ? { ok: true, data: { cart: { items: 3, live: true } } }
+          : kind === 'tree'
+            ? { ok: true, data: { name: 'App', children: [{ name: 'LiveTree' }] } }
+            : null,
+  };
+
+  const server = new ObservabilityServer(recorder, e2eStub, undefined, stateStub);
   const { url } = await server.start(0);
   return { url, recorder, stop: () => server.stop() };
 }

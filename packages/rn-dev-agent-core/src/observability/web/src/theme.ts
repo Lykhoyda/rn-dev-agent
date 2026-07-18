@@ -161,6 +161,15 @@ button { font: inherit; }
 .state-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .trunc { color: #e0af68; font-size: 11px; margin-bottom: 6px; }
 .liveroute { color: #9ece6a; font-weight: 600; margin-bottom: 8px; word-break: break-all; }
+.state-live-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.state-refresh-btn {
+  background: #283457; color: #c0caf5; border: 1px solid #7aa2f7; border-radius: 6px;
+  padding: 3px 10px; cursor: pointer; font-size: 12px;
+}
+.state-refresh-btn:hover:not(:disabled) { background: #3b4261; }
+.state-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.state-live-at { color: #9ece6a; font-size: 11px; }
+.state-live-err { color: #f7768e; font-size: 12px; margin-top: 8px; }
 .mirror-hint { color: #e0af68; }
 
 /* ── Empty states ───────────────────────────────────────── */

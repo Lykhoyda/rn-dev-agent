@@ -48344,7 +48344,7 @@ async function readLiveRoute(client2) {
     return null;
   }
 }
-function createNavigationStateHandler(getClient2) {
+function createNavigationStateHandler(getClient2, opts = {}) {
   return withConnection(getClient2, async (_args, client2) => {
     const result = await client2.evaluate(client2.helperExpr("getNavState()"));
     if (result.error) {
@@ -48362,6 +48362,8 @@ function createNavigationStateHandler(getClient2) {
     if (parsed.error) {
       return failResult(`Navigation state error: ${parsed.error}`);
     }
+    if (opts.annotate === false)
+      return okResult(parsed);
     const cfg = loadVerificationConfig(getCachedProjectRoot());
     return annotateMutationAbsence(okResult(parsed), {
       client: client2,
@@ -60326,13 +60328,15 @@ var ObservabilityServer = class {
   recorder;
   e2e;
   mirror;
+  state;
   server = null;
   port = 0;
   streams = /* @__PURE__ */ new Set();
-  constructor(recorder2, e2e, mirror) {
+  constructor(recorder2, e2e, mirror, state) {
     this.recorder = recorder2;
     this.e2e = e2e;
     this.mirror = mirror;
+    this.state = state;
   }
   async start(preferredPort) {
     if (this.server)
@@ -60390,6 +60394,9 @@ var ObservabilityServer = class {
       }
       return this.mirrorStream(res);
     }
+    const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(url);
+    if (stateKind)
+      return void this.stateRead(stateKind[1], req, res);
     if (url === "/api/e2e/run")
       return void this.e2eRun(req, res);
     if (url === "/api/e2e/runs")
@@ -60491,6 +60498,26 @@ var ObservabilityServer = class {
     res.on("error", () => {
     });
     this.mirror.attach(res);
+  }
+  async stateRead(kind, req, res) {
+    if (req.method?.toUpperCase() !== "GET") {
+      this.json(res, 405, { error: "method not allowed" });
+      return;
+    }
+    if (!this.state) {
+      this.json(res, 501, { error: "state read not configured" });
+      return;
+    }
+    try {
+      const out = await this.state.read(kind);
+      if (out === null) {
+        this.json(res, 404, { error: `unknown state kind: ${kind}` });
+        return;
+      }
+      this.json(res, 200, out);
+    } catch (err) {
+      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
   }
   index(res) {
     try {
@@ -60712,8 +60739,12 @@ var observeSchema = {
 var server = null;
 var e2eDeps;
 var mirrorManager;
+var stateDeps;
 function setObserveE2eDeps(d) {
   e2eDeps = d;
+}
+function setObserveStateDeps(d) {
+  stateDeps = d;
 }
 function setObserveMirror(m) {
   mirrorManager = m;
@@ -60724,7 +60755,7 @@ async function startObserveServer() {
     return starting;
   starting = (async () => {
     if (!server)
-      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager);
+      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
     const { port } = resolveObservePort();
     const res = await server.start(port);
     writeObserveState(res.url, res.port);
@@ -60770,6 +60801,49 @@ async function observeHandler(args) {
   } catch (e) {
     return failResult(e instanceof Error ? e.message : String(e));
   }
+}
+
+// packages/rn-dev-agent-core/dist/observability/state-read.js
+var STATE_KINDS = ["route", "store", "tree"];
+function isStateKind(kind) {
+  return STATE_KINDS.includes(kind);
+}
+function buildStateRead(input) {
+  return async (kind) => {
+    if (!isStateKind(kind))
+      return null;
+    let gate;
+    try {
+      gate = input.acquire();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (!gate.ok) {
+      return {
+        ok: false,
+        code: gate.code ?? "BUSY_FLOW_ACTIVE",
+        error: "device is busy \u2014 live state read skipped"
+      };
+    }
+    try {
+      const result = await input.handlers[kind]();
+      const text = result?.content?.[0]?.text;
+      if (typeof text !== "string")
+        return { ok: false, error: "empty tool result" };
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { ok: false, error: "non-JSON tool result" };
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      try {
+        gate.release();
+      } catch {
+      }
+    }
+  };
 }
 
 // packages/rn-dev-agent-core/dist/observability/autostart.js
@@ -63075,6 +63149,19 @@ setObserveE2eDeps({
       arbiter.release(L.lease);
     }
   }
+});
+setObserveStateDeps({
+  read: buildStateRead({
+    acquire: () => {
+      const r = arbiter.tryAcquire("introspection", "observe-state-read");
+      return r.ok ? { ok: true, release: () => arbiter.release(r.lease) } : { ok: false, code: r.code };
+    },
+    handlers: {
+      route: () => createNavigationStateHandler(getClient, { annotate: false })({}),
+      store: () => createStoreStateHandler(getClient)({}),
+      tree: () => createComponentTreeHandler(getClient)({ depth: 4 })
+    }
+  })
 });
 var shutdown = buildGracefulShutdown({
   getClient,

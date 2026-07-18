@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { ObservabilityServer } from '../observability/server.js';
-import type { E2eServerDeps } from '../observability/server.js';
+import type { E2eServerDeps, StateServerDeps } from '../observability/server.js';
 import type { MirrorManager } from '../observability/mirror/manager.js';
 import { recorder } from '../observability/recorder.js';
 import { resolveObservePort } from '../project-config.js';
@@ -28,9 +28,14 @@ export interface ObserveArgs {
 let server: ObservabilityServer | null = null;
 let e2eDeps: E2eServerDeps | undefined;
 let mirrorManager: MirrorManager | undefined;
+let stateDeps: StateServerDeps | undefined;
 
 export function setObserveE2eDeps(d: E2eServerDeps): void {
   e2eDeps = d;
+}
+
+export function setObserveStateDeps(d: StateServerDeps): void {
+  stateDeps = d;
 }
 
 export function setObserveMirror(m: MirrorManager): void {
@@ -50,7 +55,7 @@ let starting: Promise<{ url: string; port: number }> | null = null;
 export async function startObserveServer(): Promise<{ url: string; port: number }> {
   if (starting) return starting;
   starting = (async () => {
-    if (!server) server = new ObservabilityServer(recorder, e2eDeps, mirrorManager);
+    if (!server) server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
     const { port } = resolveObservePort();
     const res = await server.start(port);
     writeObserveState(res.url, res.port);

@@ -4,7 +4,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { startFixture, type Fixture } from './fixture-server';
 
-let fx: Fixture;
+let fx: Fixture | undefined;
 
 test.beforeEach(async ({ page }) => {
   fx = await startFixture();
@@ -12,7 +12,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async () => {
-  await fx.stop();
+  await fx?.stop();
+  fx = undefined;
 });
 
 async function openTab(page: Page, tab: string): Promise<void> {
@@ -66,9 +67,33 @@ test('device pane shows the hero screenshot from the seeded capture', async ({ p
 
 test('SSE live update appends a new timeline row without reload', async ({ page }) => {
   await expect(page.getByTestId('timeline-row')).toHaveCount(5);
-  fx.recorder.record({ tool: 'cdp_reload', params: {}, status: 'PASS', latencyMs: 60 });
+  fx!.recorder.record({ tool: 'cdp_reload', params: {}, status: 'PASS', latencyMs: 60 });
   await expect(page.getByTestId('timeline-row')).toHaveCount(6);
   await expect(page.getByTestId('timeline-row').filter({ hasText: 'cdp_reload' })).toBeVisible();
+});
+
+// GH #579 — an empty payload tab auto-reads /api/state/<kind>.
+test('tree tab auto-populates from the live state endpoint', async ({ page }) => {
+  await openTab(page, 'tree');
+  await expect(page.getByTestId('state-live-payload')).toContainText('LiveTree');
+  await expect(page.getByTestId('state-live-at')).toBeVisible();
+});
+
+test('route panel shows the freshest data — a live read wins over older events', async ({
+  page,
+}) => {
+  // The seeded cdp_navigate action event is no nav-state snapshot, so the auto-read fires.
+  await expect(page.getByTestId('state-live-payload')).toContainText('LiveHome');
+});
+
+test('refresh button re-reads live state over an existing tool event', async ({ page }) => {
+  // Snapshot must land first, else the tab opens empty and the auto-read races this path.
+  await expect(page.getByTestId('timeline-row')).toHaveCount(5);
+  await openTab(page, 'store');
+  await expect(page.locator('.state pre')).toContainText('"items": 2');
+  await page.getByTestId('state-refresh').click();
+  await expect(page.getByTestId('state-live-payload')).toContainText('"items": 3');
+  await expect(page.getByTestId('state-live-at')).toBeVisible();
 });
 
 test('regression tab lists run history and drills into a run detail', async ({ page }) => {
