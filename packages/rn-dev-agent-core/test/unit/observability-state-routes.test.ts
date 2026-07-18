@@ -1,5 +1,3 @@
-// GH #579: GET /api/state/(route|store|tree) serves live app state to the
-// observe UI panels through the injected state reader.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ObservabilityServer } from '../../dist/observability/server.js';

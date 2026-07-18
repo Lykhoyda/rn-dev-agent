@@ -119,9 +119,7 @@ export async function startFixture(): Promise<Fixture> {
     },
   };
 
-  // GH #579: live state reads for the Route/Store/Tree panels. Values are
-  // deliberately distinct from the seeded recorder events so specs can tell a
-  // live read apart from event-derived data.
+  // GH #579: values deliberately differ from seeded events so specs can tell the source apart.
   const stateStub = {
     read: async (kind: string) =>
       kind === 'route'

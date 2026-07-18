@@ -1,27 +1,16 @@
 import type { ToolResult } from '../utils.js';
 
-/**
- * GH #579: live data path for the observe UI Route/Store/Tree panels. The
- * panels used to render only past cdp_navigation_state / cdp_store_state /
- * cdp_component_tree tool events, so a healthy session in which the agent
- * never ran those tools showed empty panels forever — and nothing recovered
- * them after a CDP target replacement. buildStateRead adapts the same
- * withConnection-wrapped tool handlers the MCP tools use into a
- * kind → parsed-envelope reader: every call resolves the current client, so
- * the panels recover exactly like the tool path does.
- */
+// GH #579: kind → parsed-envelope reader for the observe UI panels; resolves the client per call so reads recover after target replacement like the tool path.
 export const STATE_KINDS = ['route', 'store', 'tree'] as const;
 export type StateKind = (typeof STATE_KINDS)[number];
 
 export interface StateReadInput {
-  /** Refuse reads while a flow runs — a UI poll must never interleave CDP
-   * evaluates with maestro_run / cdp_run_action driving the device. */
+  /** Refuse while a flow runs — a UI read must not interleave CDP evaluates with a driving flow. */
   isFlowActive: () => boolean;
   handlers: Record<StateKind, () => Promise<ToolResult>>;
 }
 
-/** Parsed tool envelope ({ok:true,data,…} | {ok:false,error,…}), or null for
- * an unknown kind (the server maps null to 404). Never rejects. */
+/** Returns the parsed tool envelope, or null for an unknown kind (mapped to 404). Never rejects. */
 export type StateReadFn = (kind: string) => Promise<unknown | null>;
 
 function isStateKind(kind: string): kind is StateKind {

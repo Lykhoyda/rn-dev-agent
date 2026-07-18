@@ -18,8 +18,7 @@ export interface E2eServerDeps {
   runAction: (actionId: string, params?: Record<string, string>) => Promise<ActionRunResult>;
 }
 
-/** GH #579: live state reader for the Route/Store/Tree panels. Returns the
- * parsed tool envelope, or null for an unknown kind (mapped to 404). */
+/** GH #579: live state reader for the panels — parsed tool envelope, or null → 404. */
 export interface StateServerDeps {
   read: (kind: string) => Promise<unknown | null>;
 }

@@ -2692,11 +2692,7 @@ setObserveE2eDeps({
   },
 });
 
-// GH #579: fresh handler instances (not the trackedTool-wrapped ones) on
-// purpose — a UI-triggered read must not emit recorder/strict-proof events,
-// and resolving getClient() per call is what lets the panels recover after a
-// target replacement. Unscoped args mirror the tools' no-arg defaults; the
-// store handler's 30KB truncation and the depth cap bound the payloads.
+// GH #579: raw handlers on purpose — UI reads must not emit recorder/strict-proof events.
 setObserveStateDeps({
   read: buildStateRead({
     isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,

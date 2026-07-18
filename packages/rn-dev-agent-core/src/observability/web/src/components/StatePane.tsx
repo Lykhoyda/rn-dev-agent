@@ -19,7 +19,6 @@ function isPayloadTab(t: Tab): t is PayloadTab {
   return (PAYLOAD_TABS as readonly Tab[]).includes(t);
 }
 
-/** GH #579: client-side record of a GET /api/state/<kind> live read. */
 interface FetchedState {
   at: number;
   ok: boolean;
@@ -48,20 +47,14 @@ export function StatePane({
 }: StatePaneProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('route');
   const [actions, setActions] = useState<ActionSummary[]>([]);
-  // GH #579: the panels used to render ONLY past tool events, so a healthy
-  // session where the agent never ran the introspection tools showed empty
-  // panels forever. Each payload tab now auto-fetches a live read the first
-  // time it is shown empty, and a refresh button re-reads on demand (also the
-  // recovery path after a reload/reconnect leaves event data stale).
+  // GH #579: payload tabs auto-read live state when shown empty; refresh re-reads on demand.
   const [fetched, setFetched] = useState<Partial<Record<PayloadTab, FetchedState>>>({});
   const [loading, setLoading] = useState<PayloadTab | null>(null);
   const tabEv =
     tab === 'route' ? navEv : tab === 'store' ? storeEv : tab === 'tree' ? treeEv : undefined;
 
   const refresh = useCallback(async (t: PayloadTab): Promise<void> => {
-    // Stamp with the REQUEST time, not the response time: a slow live read
-    // that started before a newer tool event lands must not outrank it in the
-    // freshness comparison below.
+    // Request-time stamp: a slow read must not outrank a tool event that landed mid-flight.
     const at = Date.now();
     setLoading(t);
     try {
@@ -88,10 +81,7 @@ export function StatePane({
     }
   }, []);
 
-  // Full emptiness inputs in the deps: if the active tab LOSES its event data
-  // later (stream reset, ring-buffer churn) the auto-read must re-arm, not
-  // wait for a manual refresh. No loop: a completed read — ok or failed —
-  // lands in `fetched[tab]` and disarms the effect.
+  // Re-arms if the tab loses its event data; any completed read lands in `fetched` and disarms it.
   useEffect(() => {
     if (!isPayloadTab(tab) || tabEv || fetched[tab] || loading === tab) return;
     void refresh(tab);
@@ -109,9 +99,7 @@ export function StatePane({
     void fetchActions();
   }, [e2eDoneCount]);
 
-  // A successful live read wins over an older (or absent) tool event; a FAILED
-  // live read never hides existing event data — its error only shows when
-  // there is nothing else to render.
+  // Newest successful read wins; a failed read never hides existing event data.
   const f = isPayloadTab(tab) ? fetched[tab] : undefined;
   const liveWins = f?.ok === true && (!tabEv || f.at > tabEv.ts);
   const liveError = f && !f.ok && !tabEv ? (f.error ?? 'live read failed') : undefined;

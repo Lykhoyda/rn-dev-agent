@@ -1,13 +1,4 @@
-/**
- * GH #579: live data path for the observe UI Route/Store/Tree panels. The
- * panels used to render only past cdp_navigation_state / cdp_store_state /
- * cdp_component_tree tool events, so a healthy session in which the agent
- * never ran those tools showed empty panels forever — and nothing recovered
- * them after a CDP target replacement. buildStateRead adapts the same
- * withConnection-wrapped tool handlers the MCP tools use into a
- * kind → parsed-envelope reader: every call resolves the current client, so
- * the panels recover exactly like the tool path does.
- */
+// GH #579: kind → parsed-envelope reader for the observe UI panels; resolves the client per call so reads recover after target replacement like the tool path.
 export const STATE_KINDS = ['route', 'store', 'tree'];
 function isStateKind(kind) {
     return STATE_KINDS.includes(kind);
