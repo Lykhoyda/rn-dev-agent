@@ -1,6 +1,6 @@
 {
   "name": "rn-dev-agent",
-  "version": "0.70.2",
+  "version": "0.70.3",
   "description": "React Native development and testing plugin for live CDP introspection, device control, Maestro action replay, and proof capture.",
   "author": {
     "name": "Anton Lykhoyda",
