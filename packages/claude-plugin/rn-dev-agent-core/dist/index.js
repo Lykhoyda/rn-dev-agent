@@ -18628,6 +18628,20 @@ var init_metro_cwd = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/discovery.js
 import { execFileSync as execFileSync2 } from "node:child_process";
+function resolveDefaultPorts() {
+  const override = process.env.RN_CDP_DISCOVERY_PORTS;
+  if (override !== void 0) {
+    return override.split(",").map((entry) => entry.trim() === "" ? NaN : Number(entry.trim())).filter((port) => Number.isInteger(port) && port > 0);
+  }
+  const userPort = process.env.RN_METRO_PORT ? parseInt(process.env.RN_METRO_PORT, 10) : NaN;
+  return [
+    ...Number.isInteger(userPort) && userPort > 0 ? [userPort] : [],
+    8081,
+    8082,
+    19e3,
+    19006
+  ];
+}
 async function discoverAllMetroPorts(ports, timeout) {
   const checks = await Promise.all(ports.map(async (p) => {
     const ctrl = new AbortController();
@@ -18826,7 +18840,7 @@ function selectMetroPort(attached, runningPorts, ctx) {
 }
 async function discover(currentPort, platformFilterOrFilters) {
   const filters = typeof platformFilterOrFilters === "string" ? { platform: platformFilterOrFilters } : platformFilterOrFilters ?? {};
-  const ports = [.../* @__PURE__ */ new Set([currentPort, ...DEFAULT_PORTS])];
+  const ports = [.../* @__PURE__ */ new Set([currentPort, ...resolveDefaultPorts()])];
   const hints = [];
   if (filters.platform)
     hints.push(`platform=${filters.platform}`);
@@ -18873,7 +18887,7 @@ async function discover(currentPort, platformFilterOrFilters) {
   return { port: metroPort, targets: sorted, warning };
 }
 async function discoverForList(currentPort, portHint) {
-  const ports = [.../* @__PURE__ */ new Set([portHint ?? currentPort, ...DEFAULT_PORTS])];
+  const ports = [.../* @__PURE__ */ new Set([portHint ?? currentPort, ...resolveDefaultPorts()])];
   const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (running.length === 0) {
     throw new Error("Metro not found on ports " + ports.join(", "));
@@ -18896,7 +18910,7 @@ async function discoverForList(currentPort, portHint) {
 }
 async function enumerateMetroCandidates(connectedPort, projectRoot) {
   const t0 = performance.now();
-  const ports = [.../* @__PURE__ */ new Set([connectedPort, ...DEFAULT_PORTS])];
+  const ports = [.../* @__PURE__ */ new Set([connectedPort, ...resolveDefaultPorts()])];
   const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   const tProbe = performance.now();
   if (running.length <= 1) {
@@ -18930,7 +18944,7 @@ async function enumerateMetroCandidates(connectedPort, projectRoot) {
     timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
   };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, USER_METRO_PORT, DEFAULT_PORTS;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -18952,14 +18966,6 @@ var init_discovery = __esm({
       }
     };
     DISCOVERY_TIMEOUT_MS = 1500;
-    USER_METRO_PORT = process.env.RN_METRO_PORT ? parseInt(process.env.RN_METRO_PORT, 10) : null;
-    DEFAULT_PORTS = [
-      ...USER_METRO_PORT && !isNaN(USER_METRO_PORT) ? [USER_METRO_PORT] : [],
-      8081,
-      8082,
-      19e3,
-      19006
-    ];
   }
 });
 
