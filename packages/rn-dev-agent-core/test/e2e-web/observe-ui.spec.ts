@@ -82,7 +82,7 @@ test('tree tab auto-populates from the live state endpoint', async ({ page }) =>
 test('route panel shows the freshest data — a live read wins over older events', async ({
   page,
 }) => {
-  // Mount precedes the SSE snapshot, so the auto-read always fires and postdates the seed.
+  // The seeded cdp_navigate action event is no nav-state snapshot, so the auto-read fires.
   await expect(page.getByTestId('state-live-payload')).toContainText('LiveHome');
 });
 

@@ -48,8 +48,10 @@ function App(): JSX.Element {
     return out.length > RENDER_ROWS ? out.slice(out.length - RENDER_ROWS) : out;
   }, [events, activeFamilies, search, errorsOnly]);
 
-  const navEv =
-    latestByTool(events, ['cdp_navigation_state']) ?? latestByFamily(events, 'navigation');
+  // Only cdp_navigation_state carries a nav-state payload; the family fallback
+  // (cdp_navigate/cdp_nav_graph) is for header route derivation, not the panel.
+  const navStateEv = latestByTool(events, ['cdp_navigation_state']);
+  const navEv = navStateEv ?? latestByFamily(events, 'navigation');
   const storeEv = latestByTool(events, ['cdp_store_state']);
   const treeEv = latestByTool(events, ['cdp_component_tree']);
   const shotEv = latestByTool(events, ['device_screenshot']);
@@ -84,7 +86,7 @@ function App(): JSX.Element {
           route={route}
         />
         <StatePane
-          navEv={navEv}
+          navEv={navStateEv}
           storeEv={storeEv}
           treeEv={treeEv}
           liveRoute={liveRoute}
