@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import type { ActionSummary, AgentEvent, E2eProgress } from '../types';
 import { fmtClock, pretty } from '../derive';
 import { ActionsPanel } from './ActionsPanel';
@@ -18,6 +18,9 @@ const EMPTY_HINT: Record<PayloadTab, string> = {
 function isPayloadTab(t: Tab): t is PayloadTab {
   return (PAYLOAD_TABS as readonly Tab[]).includes(t);
 }
+
+/** Re-activating a payload tab re-reads live state when the shown data is older than this. */
+const STALE_MS = 15_000;
 
 interface FetchedState {
   at: number;
@@ -65,27 +68,35 @@ export function StatePane({
         error?: string;
         truncated?: boolean;
       };
-      setFetched((prev) => ({
-        ...prev,
-        [t]: env.ok
-          ? { at, ok: true, payload: env.data, truncated: env.truncated }
-          : { at, ok: false, error: env.error ?? `HTTP ${r.status}` },
-      }));
+      const next: FetchedState = env.ok
+        ? { at, ok: true, payload: env.data, truncated: env.truncated }
+        : { at, ok: false, error: env.error ?? `HTTP ${r.status}` };
+      // A completion older than the stored result never overwrites it.
+      setFetched((prev) => ((prev[t]?.at ?? 0) > at ? prev : { ...prev, [t]: next }));
     } catch (e) {
-      setFetched((prev) => ({
-        ...prev,
-        [t]: { at, ok: false, error: e instanceof Error ? e.message : String(e) },
-      }));
+      const next: FetchedState = {
+        at,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+      setFetched((prev) => ((prev[t]?.at ?? 0) > at ? prev : { ...prev, [t]: next }));
     } finally {
       setLoading((cur) => (cur === t ? null : cur));
     }
   }, []);
 
-  // Re-arms if the tab loses its event data; any completed read lands in `fetched` and disarms it.
+  // Only a SUCCESSFUL event suppresses the auto-read or renders as data.
+  const evOk = tabEv?.ok ? tabEv : undefined;
+
+  // Auto-read when the tab has no usable data, and on re-activation when the data is stale.
+  const lastTabRef = useRef<Tab | null>(null);
   useEffect(() => {
-    if (!isPayloadTab(tab) || tabEv || fetched[tab] || loading === tab) return;
-    void refresh(tab);
-  }, [tab, tabEv, fetched, loading, refresh]);
+    const activated = lastTabRef.current !== tab;
+    lastTabRef.current = tab;
+    if (!isPayloadTab(tab) || loading === tab) return;
+    const newestAt = Math.max(evOk?.ts ?? 0, fetched[tab]?.at ?? 0);
+    if (newestAt === 0 || (activated && Date.now() - newestAt > STALE_MS)) void refresh(tab);
+  }, [tab, evOk, fetched, loading, refresh]);
 
   useEffect(() => {
     const fetchActions = async (): Promise<void> => {
@@ -101,8 +112,8 @@ export function StatePane({
 
   // Newest successful read wins; a failed read never hides existing event data.
   const f = isPayloadTab(tab) ? fetched[tab] : undefined;
-  const liveWins = f?.ok === true && (!tabEv || f.at > tabEv.ts);
-  const liveError = f && !f.ok && !tabEv ? (f.error ?? 'live read failed') : undefined;
+  const liveWins = f?.ok === true && (!evOk || f.at > evOk.ts);
+  const liveError = f && !f.ok && !evOk ? (f.error ?? 'live read failed') : undefined;
 
   return (
     <div className="pane right" data-testid="state-pane">
@@ -151,10 +162,10 @@ export function StatePane({
               {f.truncated && <div className="trunc">payload truncated</div>}
               <pre data-testid="state-live-payload">{pretty(f.payload)}</pre>
             </>
-          ) : tabEv ? (
+          ) : evOk ? (
             <>
-              {tabEv.truncated && <div className="trunc">payload truncated</div>}
-              <pre>{pretty(tabEv.payload)}</pre>
+              {evOk.truncated && <div className="trunc">payload truncated</div>}
+              <pre>{pretty(evOk.payload)}</pre>
             </>
           ) : tab === 'route' && liveRoute ? null : isPayloadTab(tab) ? (
             <div className="empty">
