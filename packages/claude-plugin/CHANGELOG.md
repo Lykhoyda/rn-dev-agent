@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.70.4
+
+### Patch Changes
+
+- f66eb3f: Isolate the empty-Metro lifecycle integration tests from live default-port Hermes targets (#577): CDP discovery's default port list (8081/8082/19000/19006 + `RN_METRO_PORT`) is now resolved lazily per call, and a new `RN_CDP_DISCOVERY_PORTS` override replaces it entirely — so the integration suite owns its whole discovery surface and stays deterministic while a real React Native app is running on the host. Production discovery is unchanged when the variable is unset.
+- Updated dependencies [f66eb3f]
+  - rn-dev-agent-core@0.65.4
+
 ## 0.70.3
 
 ### Patch Changes
