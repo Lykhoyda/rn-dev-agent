@@ -22,13 +22,22 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT="$SCRIPT_DIR/ensure-idb.sh"
+SCRIPT="${SCRIPT_UNDER_TEST:-$SCRIPT_DIR/ensure-idb.sh}"
+RECOVERY_COMMAND='brew install python@3.13 && pipx install --python "$(brew --prefix python@3.13)/bin/python3.13" --force fb-idb'
 
 fail=0
 ok() { echo "ok: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 
-TMP="$(mktemp -d)"
+if [ -n "${RN_AGENT_TEST_TMP_ROOT:-}" ]; then
+  mkdir -p "$RN_AGENT_TEST_TMP_ROOT"
+  TMP="$(mktemp -d "$RN_AGENT_TEST_TMP_ROOT/ensure-idb.XXXXXX")"
+elif [ -n "${TMPDIR:-}" ]; then
+  mkdir -p "$TMPDIR"
+  TMP="$(mktemp -d "${TMPDIR%/}/ensure-idb.XXXXXX")"
+else
+  TMP="$(mktemp -d)"
+fi
 trap 'rm -rf "$TMP"' EXIT
 
 mkstubs() { # $1 = space-separated binary names to stub as present
@@ -64,16 +73,46 @@ OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "idb available"; then ok "hyphen: idb-companion accepted"; else bad "hyphen: expected available, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "hyphen: no spawn" || bad "hyphen: unexpected spawn"
 
-# 1c. B269: client on PATH but BROKEN (crashes on invocation) -> not treated
-#     as present; prints the broken notice and spawns the repair worker.
+# 1bb. A healthy client with a missing companion needs companion installation,
+#      but must not be misreported as a broken client.
+STATE="$TMP/state1bb"
+STUBS="$(mkstubs "idb brew")"
+OUT="$(run_script "$STUBS")"
+if ! echo "$OUT" | grep -qi "broken"; then ok "healthy-client: missing companion is not a client failure"; else bad "healthy-client: incorrectly reported broken, got: $OUT"; fi
+[ -f "$STATE/spawn.log" ] && ok "healthy-client: missing companion starts repair" || bad "healthy-client: missing companion did not start repair"
+
+# 1c. A Python 3.14 client on PATH that crashes is classified as incompatible,
+#     receives an actionable recovery command, and never spawns a worker.
 STATE="$TMP/state1c"
 STUBS="$(mkstubs "idb_companion brew")"
-printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+printf '#!/bin/sh\necho "  File /pipx/venvs/fb-idb/lib/python3.14/site-packages/idb/cli/main.py" >&2\necho "RuntimeError: There is no current event loop" >&2\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
 OUT="$(run_script "$STUBS")"
-if echo "$OUT" | grep -qi "broken"; then ok "broken-client: prints broken notice"; else bad "broken-client: expected broken notice, got: $OUT"; fi
-if [ -f "$STATE/spawn.log" ] && [ "$(wc -l < "$STATE/spawn.log")" -eq 1 ]; then
-  ok "broken-client: spawns repair worker"
-else bad "broken-client: expected one spawn record"; fi
+if echo "$OUT" | grep -q "installed but incompatible with Python 3.14"; then ok "incompatible-client: reports interpreter incompatibility"; else bad "incompatible-client: expected incompatibility notice, got: $OUT"; fi
+if ! echo "$OUT" | grep -qi "idb not installed"; then ok "incompatible-client: does not report idb as missing"; else bad "incompatible-client: incorrectly reported idb as missing, got: $OUT"; fi
+if echo "$OUT" | grep -Fq "$RECOVERY_COMMAND"; then ok "incompatible-client: prints pinned Python 3.13 recovery"; else bad "incompatible-client: missing recovery command, got: $OUT"; fi
+[ ! -f "$STATE/spawn.log" ] && ok "incompatible-client: no repair spawn" || bad "incompatible-client: unexpectedly spawned repair"
+FINGERPRINT_BEFORE="$(cat "$STATE/incompatible-environment" 2>/dev/null)"
+OUT_REPEAT="$(run_script "$STUBS")"
+[ ! -f "$STATE/spawn.log" ] && ok "incompatible-client: unchanged environment remains suppressed" || bad "incompatible-client: unchanged environment spawned repair"
+[ "$(cat "$STATE/incompatible-environment" 2>/dev/null)" = "$FINGERPRINT_BEFORE" ] && ok "incompatible-client: stable environment fingerprint" || bad "incompatible-client: fingerprint changed unexpectedly"
+printf '#!/bin/sh\necho "  File /changed/fb-idb/lib/python3.14/site-packages/idb/cli/main.py" >&2\necho "RuntimeError: There is no current event loop" >&2\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+OUT_CHANGED="$(run_script "$STUBS")"
+[ "$(cat "$STATE/incompatible-environment" 2>/dev/null)" != "$FINGERPRINT_BEFORE" ] && ok "incompatible-client: environment change is re-evaluated" || bad "incompatible-client: environment change was not recorded"
+[ ! -f "$STATE/spawn.log" ] && ok "incompatible-client: changed but still-incompatible environment stays suppressed" || bad "incompatible-client: still-incompatible environment spawned repair"
+printf '#!/bin/sh\necho "new non-interpreter client failure" >&2\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+echo "failed $(date +%s)" > "$STATE/last-attempt"
+OUT_RECOVERABLE="$(run_script "$STUBS")"
+[ -f "$STATE/spawn.log" ] && ok "incompatible-client: changed verdict re-enables repair" || bad "incompatible-client: environment change did not re-enable repair"
+[ ! -f "$STATE/incompatible-environment" ] && ok "incompatible-client: changed verdict clears fingerprint" || bad "incompatible-client: stale fingerprint survived environment change"
+[ ! -f "$STATE/last-attempt" ] && ok "incompatible-client: changed verdict clears stale backoff" || bad "incompatible-client: stale backoff survived environment change"
+
+# 1d. A non-Python-3.14 crash retains the generic background repair path.
+STATE="$TMP/state1d"
+STUBS="$(mkstubs "idb_companion brew")"
+printf '#!/bin/sh\necho "  File /pipx/venvs/fb-idb/lib/python3.14/site-packages/idb/cli/main.py" >&2\necho "unexpected client failure" >&2\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "broken"; then ok "broken-client: prints generic broken notice"; else bad "broken-client: expected broken notice, got: $OUT"; fi
+[ -f "$STATE/spawn.log" ] && ok "broken-client: spawns generic repair worker" || bad "broken-client: expected repair spawn"
 
 # 2. Non-macOS -> silent success, no spawn.
 STATE="$TMP/state2"
@@ -86,7 +125,7 @@ OUT="$(FAKE_UNAME=Linux run_script "$STUBS")"
 STATE="$TMP/state3"
 STUBS="$(mkstubs "")"
 OUT="$(run_script "$STUBS")"
-if echo "$OUT" | grep -q "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb"; then
+if echo "$OUT" | grep -Fq "$RECOVERY_COMMAND"; then
   ok "no-brew: prints manual command"
 else bad "no-brew: missing manual command, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "no-brew: no spawn" || bad "no-brew: unexpected spawn"
@@ -135,11 +174,18 @@ mkdir -p "$STATE"
 STUBS="$(mkstubs "idb_companion brew")"
 printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
 printf '#!/bin/sh\necho "$@" >> "%s/pipx.log"\nexit 0\n' "$STATE" > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
+PYTHON_PREFIX="$TMP/python-3.13"
+mkdir -p "$PYTHON_PREFIX/bin"
+printf '#!/bin/sh\nexit 0\n' > "$PYTHON_PREFIX/bin/python3.13"; chmod +x "$PYTHON_PREFIX/bin/python3.13"
+printf '#!/bin/sh\nif [ "$1" = "--prefix" ]; then echo "%s"; fi\nexit 0\n' "$PYTHON_PREFIX" > "$STUBS/brew"; chmod +x "$STUBS/brew"
 env PATH="$STUBS:/usr/bin:/bin" RN_AGENT_IDB_STATE_DIR="$STATE" RN_AGENT_IDB_UNAME=Darwin \
   bash "$SCRIPT" --install-worker > "$TMP/worker7b.out" 2>&1
 if grep -q "uninstall fb-idb" "$STATE/pipx.log" 2>/dev/null; then
   ok "worker: broken client uninstalled (never left on PATH)"
 else bad "worker: expected pipx uninstall fb-idb, got: $(cat "$STATE/pipx.log" 2>/dev/null)"; fi
+if grep -Fq "install --python $PYTHON_PREFIX/bin/python3.13 --force fb-idb" "$STATE/pipx.log" 2>/dev/null; then
+  ok "worker: install is pinned to Python 3.13"
+else bad "worker: expected pinned pipx install, got: $(cat "$STATE/pipx.log" 2>/dev/null)"; fi
 if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
   ok "worker: broken client marks attempt failed (backoff engages)"
 else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi

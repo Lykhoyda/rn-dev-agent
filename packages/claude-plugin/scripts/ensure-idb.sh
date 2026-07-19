@@ -5,7 +5,9 @@
 # idb it degrades to a ~6fps `simctl screenshot` loop. idb needs two pieces
 # (idb-companion lives in the facebook/fb tap, not homebrew-core):
 #   brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion   (the macOS daemon)
-#   pipx install fb-idb                                   (the Python CLI client)
+#   brew install python@3.13 && pipx install --python
+#     "$(brew --prefix python@3.13)/bin/python3.13" --force fb-idb
+#                                                        (the Python CLI client)
 #
 # SessionStart contract (GH#252/B196: session start must be BOUNDED): this
 # script's foreground path only does `command -v` checks and (at most) spawns
@@ -17,6 +19,8 @@
 #   - pidfile:      a live worker is never duplicated across session starts
 #   - last-attempt: a failed install is not retried for 24h (brew failures
 #     are usually environmental; hammering it every session start is noise)
+#   - incompatible-environment: Python 3.14 client crashes never start the
+#     worker; the fingerprint is refreshed only when that environment changes
 #
 # Test seams (scripts/test/ensure-idb.test.sh):
 #   RN_AGENT_IDB_STATE_DIR   state dir      (default: ~/.rn-dev-agent/idb)
@@ -31,8 +35,10 @@ set -uo pipefail
 STATE_DIR="${RN_AGENT_IDB_STATE_DIR:-$HOME/.rn-dev-agent/idb}"
 PIDFILE="$STATE_DIR/install.pid"
 MARKER="$STATE_DIR/last-attempt"
+INCOMPATIBLE_MARKER="$STATE_DIR/incompatible-environment"
 LOG="$STATE_DIR/install.log"
 BACKOFF_SECS=86400
+RECOVERY_COMMAND='brew install python@3.13 && pipx install --python "$(brew --prefix python@3.13)/bin/python3.13" --force fb-idb'
 
 OS="${RN_AGENT_IDB_UNAME:-$(uname -s)}"
 [ "$OS" = "Darwin" ] || exit 0
@@ -50,8 +56,28 @@ has_companion() {
 # mirror's tier selection (B263). `idb --help` initializes the CLI without
 # contacting a companion, so it exits 0 for a healthy client and non-zero
 # for a broken one.
+probe_idb_client() {
+  IDB_PATH="$(command -v idb 2>/dev/null || true)"
+  IDB_PROBE_OUTPUT=""
+  IDB_PROBE_STATUS=127
+  [ -n "$IDB_PATH" ] || return 1
+  IDB_PROBE_OUTPUT="$(idb --help 2>&1)"
+  IDB_PROBE_STATUS=$?
+  [ "$IDB_PROBE_STATUS" -eq 0 ]
+}
+
 idb_client_healthy() {
-  command -v idb >/dev/null 2>&1 && idb --help >/dev/null 2>&1
+  probe_idb_client
+}
+
+idb_python_314_incompatible() {
+  [ "${IDB_PROBE_STATUS:-0}" -ne 0 ] &&
+    printf '%s\n' "${IDB_PROBE_OUTPUT:-}" | grep -Eqi 'python([ /]|/)?3\.14|python3\.14' &&
+    printf '%s\n' "${IDB_PROBE_OUTPUT:-}" | grep -Eqi 'There is no current event loop|asyncio\.get_event_loop'
+}
+
+incompatible_fingerprint() {
+  printf '%s\n%s\n' "${IDB_PATH:-}" "${IDB_PROBE_OUTPUT:-}" | cksum | awk '{print $1 ":" $2}'
 }
 
 # --install-worker: the detached background job (never reached at SessionStart).
@@ -70,7 +96,18 @@ if [ "${1:-}" = "--install-worker" ]; then
       if command -v idb >/dev/null 2>&1; then
         pipx uninstall fb-idb >/dev/null 2>&1 || true
       fi
-      pipx install fb-idb || status=failed
+      python_313_prefix="$(brew --prefix python@3.13 2>/dev/null || true)"
+      python_313="$python_313_prefix/bin/python3.13"
+      if [ ! -x "$python_313" ]; then
+        brew install python@3.13 || status=failed
+        python_313_prefix="$(brew --prefix python@3.13 2>/dev/null || true)"
+        python_313="$python_313_prefix/bin/python3.13"
+      fi
+      if [ -x "$python_313" ]; then
+        pipx install --python "$python_313" --force fb-idb || status=failed
+      else
+        status=failed
+      fi
       if ! idb_client_healthy; then
         # Never leave a crash-on-invocation client on PATH: it provides
         # nothing and re-arms the B263 mirror failure. Uninstall and let the
@@ -92,18 +129,43 @@ fi
 # Foreground path — bounded: checks + at most one detached spawn. The client
 # check is a health probe (one `idb --help` invocation, no daemon contact),
 # not a PATH check — see idb_client_healthy (B269).
-if idb_client_healthy && has_companion; then
-  echo "idb available: screen mirroring uses the fast path (idb video-stream)"
+IDB_CLIENT_HEALTHY=0
+if probe_idb_client; then
+  IDB_CLIENT_HEALTHY=1
+  if has_companion; then
+    rm -f "$INCOMPATIBLE_MARKER" "$MARKER"
+    echo "idb available: screen mirroring uses the fast path (idb video-stream)"
+    exit 0
+  fi
+fi
+
+if [ "$IDB_CLIENT_HEALTHY" -eq 0 ] && [ -n "${IDB_PATH:-}" ] && idb_python_314_incompatible; then
+  mkdir -p "$STATE_DIR"
+  FINGERPRINT="$(incompatible_fingerprint)"
+  PREVIOUS_FINGERPRINT="$(cat "$INCOMPATIBLE_MARKER" 2>/dev/null || true)"
+  if [ "$FINGERPRINT" != "$PREVIOUS_FINGERPRINT" ]; then
+    printf '%s\n' "$FINGERPRINT" > "$INCOMPATIBLE_MARKER"
+  fi
+  echo "fb-idb is installed but incompatible with Python 3.14; screen mirroring stays on the simctl fallback."
+  echo "Reinstall with a compatible interpreter: $RECOVERY_COMMAND"
   exit 0
 fi
 
-if command -v idb >/dev/null 2>&1 && ! idb_client_healthy; then
+if [ -f "$INCOMPATIBLE_MARKER" ]; then
+  # The persisted incompatibility verdict is valid only for the fingerprint
+  # that produced it. Once the probe changes to a repairable verdict, an old
+  # worker backoff must not prevent the newly changed environment from being
+  # evaluated immediately.
+  rm -f "$INCOMPATIBLE_MARKER" "$MARKER"
+fi
+
+if [ "$IDB_CLIENT_HEALTHY" -eq 0 ] && [ -n "${IDB_PATH:-}" ]; then
   echo "idb client on PATH is broken (crashes on invocation) — the background worker will replace or remove it (B269)"
 fi
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "idb not installed (optional — enables 20-30fps screen mirroring instead of ~6fps)."
-  echo "Install manually: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb"
+  echo "Install manually: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && $RECOVERY_COMMAND"
   exit 0
 fi
 
@@ -125,14 +187,14 @@ if [ -f "$MARKER" ]; then
   read -r LAST_STATUS LAST_TS < "$MARKER" 2>/dev/null || LAST_STATUS=""
   NOW="$(date +%s)"
   if [ "$LAST_STATUS" = "failed" ] && [ -n "${LAST_TS:-}" ] && [ $((NOW - LAST_TS)) -lt "$BACKOFF_SECS" ]; then
-    echo "idb install failed recently — retrying after backoff (manual: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb, log: $LOG)"
+    echo "idb install failed recently — retrying after backoff (manual: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && $RECOVERY_COMMAND, log: $LOG)"
     exit 0
   fi
 fi
 
 if [ "${RN_AGENT_IDB_DRY_SPAWN:-}" = "1" ]; then
   echo "spawn --install-worker" >> "$STATE_DIR/spawn.log"
-  echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
+  echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && $RECOVERY_COMMAND). Log: $LOG"
   exit 0
 fi
 
@@ -140,5 +202,5 @@ nohup bash "$0" --install-worker >> "$LOG" 2>&1 < /dev/null &
 WORKER_PID=$!
 disown "$WORKER_PID" 2>/dev/null || true
 echo "$WORKER_PID" > "$PIDFILE"
-echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb). Log: $LOG"
+echo "idb missing — installing in background (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && $RECOVERY_COMMAND). Log: $LOG"
 exit 0
