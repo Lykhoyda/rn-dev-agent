@@ -30371,12 +30371,22 @@ var init_injected_helpers = __esm({
     REACT_READY_PROBE_JS = `(function() {
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || typeof h.getFiberRoots !== 'function') return false;
-  // Scan the same legacy 1..20 rendererID range as findActiveRenderer and
-  // iterateAllRoots' fallback. Root-union scans can additionally enumerate the
-  // hook registry; this standalone readiness probe remains bounded.
-  for (var i = 1; i <= 20; i++) {
+  var ids = [];
+  try {
+    if (h.renderers && typeof h.renderers.keys === 'function') {
+      var iterator = h.renderers.keys();
+      var step;
+      while (iterator && typeof iterator.next === 'function' && !(step = iterator.next()).done) {
+        if (typeof step.value === 'number' && ids.indexOf(step.value) === -1) ids.push(step.value);
+      }
+    }
+  } catch (_) { ids = []; }
+  if (ids.length === 0) {
+    for (var fallbackId = 1; fallbackId <= 20; fallbackId++) ids.push(fallbackId);
+  }
+  for (var i = 0; i < ids.length; i++) {
     try {
-      var r = h.getFiberRoots(i);
+      var r = h.getFiberRoots(ids[i]);
       if (r && r.size > 0) return true;
     } catch (_) { /* one throwing renderer must not abort the readiness scan */ }
   }

@@ -256,9 +256,9 @@ test('M8: findActiveRenderer returns null when hook.getFiberRoots is missing', (
   assert.equal(sandbox.__RN_AGENT.isReady(), false);
 });
 
-// ── M8: REACT_READY_PROBE_JS for waitForReact ──────────────────────
-// Mirrors findActiveRenderer's probe shape so setup.ts's readiness gate
-// stops timing out on apps where hook.renderers is empty.
+// ── M8 + GH #597: REACT_READY_PROBE_JS for waitForReact ────────────
+// Uses registered renderer IDs when available, with M8's numeric fallback for
+// hook shims whose renderer registry is empty or malformed.
 
 function evalProbe(hook) {
   const sandbox = { __REACT_DEVTOOLS_GLOBAL_HOOK__: hook };
@@ -287,7 +287,36 @@ test('M8 probe: returns true when fiber roots only at renderer ID 4 (renderers m
   );
 });
 
-test('M8 probe: returns false when no renderer 1..5 has fiber roots', () => {
+test('GH #597 probe: returns true for a registered renderer above the numeric fallback cap', () => {
+  assert.equal(
+    evalProbe({
+      renderers: new Map([
+        [1, {}],
+        [21, {}],
+      ]),
+      getFiberRoots: (i) => (i === 21 ? new Set([{}]) : new Set()),
+    }),
+    true,
+  );
+});
+
+test('GH #597 probe: a throwing registered renderer does not mask a later live renderer', () => {
+  assert.equal(
+    evalProbe({
+      renderers: new Map([
+        [1, {}],
+        [2, {}],
+      ]),
+      getFiberRoots(i) {
+        if (i === 1) throw new Error('renderer teardown');
+        return i === 2 ? new Set([{}]) : new Set();
+      },
+    }),
+    true,
+  );
+});
+
+test('M8 probe: returns false when no renderer has fiber roots', () => {
   assert.equal(
     evalProbe({
       renderers: new Map(),
