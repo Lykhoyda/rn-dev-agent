@@ -286,7 +286,7 @@ export function createStatusHandler(
         const wrong = client.connectedTarget;
         await client.disconnect();
         throw new TargetSelectionError(
-          connectFilters.platform ? 'PLATFORM_TARGET_NOT_FOUND' : 'TARGET_PLATFORM_CONFLICT',
+          connectFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND',
           `Connected target failed post-connect affinity validation for platform=${connectFilters.platform ?? 'unspecified'} bundleId=${connectFilters.bundleId ?? 'unspecified'}. The socket was disconnected; run cdp_targets and relaunch the requested app.`,
           wrong ? [wrong] : [],
         );
@@ -586,7 +586,7 @@ export function createStatusHandler(
                 await retryClient.disconnect();
                 return failResult(
                   'Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.',
-                  retryFilters.platform ? 'PLATFORM_TARGET_NOT_FOUND' : 'TARGET_PLATFORM_CONFLICT',
+                  retryFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND',
                   { target: wrong, affinity: 'cross-platform-only; not iOS UDID identity' },
                 );
               }
