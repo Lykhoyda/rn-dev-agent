@@ -164,13 +164,16 @@ The runner build predates a newer command verb. Re-open the device session
 automatically (one multi-minute build on iOS). If a cold build still
 reports missing commands, update the plugin checkout.
 
-### KEYBOARD_OCCLUDED
+### KEYBOARD_DISMISS_FAILED
 
-A tap target sits under the software keyboard and the safe dismiss control
-isn't available (iPhone standard QWERTY). Dismiss the keyboard first (e.g.
-`cdp_evaluate` → `Keyboard.dismiss()`) or fill via `device_fill`, which is
-JS-first and needs no keyboard. Opt the guard off with
-`RN_KEYBOARD_GUARD=0`.
+A visible software keyboard could not be proven dismissed — native swipe,
+then a native dismiss control, then (when CDP is connected) injected
+`Keyboard.dismiss()` all failed — so the guarded tap was refused before
+touching the screen. Older protocol-v1 runners surfaced this as
+`KEYBOARD_OCCLUDED`. Dismiss the keyboard yourself (e.g. `cdp_evaluate` →
+`Keyboard.dismiss()`) or fill via `device_fill`, which is JS-first and
+needs no keyboard, then retry from a fresh snapshot/ref. Opt the guard off
+with `RN_KEYBOARD_GUARD=0`.
 
 ### DEVICE_BUSY
 

@@ -75,20 +75,21 @@ Decision table for build workflows:
 
 ### Keyboard-occlusion guard
 
-`device_press` and `device_longpress` guard against tapping through a software keyboard by default. Before the tap lands, the runner checks whether a visible keyboard's frame contains the tap point (a sanity-checked rect — min height 120pt iOS / 150px Android, so a predictive-text accessory bar doesn't count) and dismisses it first if so.
+`device_press` and `device_longpress` guard against tapping through a software keyboard by default. Before the tap lands, the runner checks whether a visible keyboard's frame (a sanity-checked rect — min height 120pt iOS / 150px Android, so a predictive-text accessory bar doesn't count) collides with the target and dismisses it first if so.
 
 | `meta.keyboardGuard` | Meaning |
 |---|---|
 | `off` | Guard disabled (`RN_KEYBOARD_GUARD=0`) |
 | `no_keyboard` | No keyboard was visible |
-| `not_occluded` | Keyboard visible but the tap point was clear of it |
-| `dismissed` | Keyboard was occluding the tap point and was dismissed first |
+| `not_occluded` | Keyboard visible but the fresh target rectangle was clear of it |
+| `dismissed` | Android: keyboard was occluding the tap point and was dismissed first |
+| `auto_dismissed` | iOS: keyboard was dismissed before the tap (`meta.via` records the tier) |
 
-Platform behavior differs because the safe dismissal mechanism differs:
-- **Android** — `pressBack` + a bounded wait for the UI to settle (~3.6s measured). Only fires when a real input-method window with sane bounds contains the tap point, so it never triggers an unrelated back-navigation.
-- **iOS** — verify-or-refuse. The runner only ever taps a genuine dismiss control ("Hide keyboard" / "Dismiss keyboard" / "Done") and re-verifies the keyboard is gone. On the standard iPhone QWERTY keyboard, which has no such control, the tap is **refused** with a `KEYBOARD_OCCLUDED` error (`keyboardGuard=dismiss_failed`) instead of swiping the keyboard closed — a swipe-based dismiss triggers QuickPath slide-typing and corrupts whatever the keyboard was over.
+Platform behavior differs because the dismissal mechanism differs:
+- **Android** — point containment + `pressBack` with a bounded wait for the UI to settle (~3.6s measured). Only fires when a real input-method window with sane bounds contains the tap point, so it never triggers an unrelated back-navigation.
+- **iOS** — fresh-geometry, dismiss-first. The keyboard frame is intersected with the target's **fresh** rectangle (validated against the current `snapshotGeneration`). If the geometry is stale or unknown while a keyboard is visible, the keyboard is always dismissed first, the snapshot/ref is refreshed, and the tap is retried once. Dismissal tiers are native swipe, native dismiss control, then injected `Keyboard.dismiss()` when CDP is connected; only when every tier fails is the tap **refused** with `KEYBOARD_DISMISS_FAILED` — no blind tap is ever dispatched under a visible keyboard.
 
-If you hit `KEYBOARD_OCCLUDED` on iOS: dismiss the keyboard yourself first (`device_fill`/`cdp_interact` type through the JS path and don't require the keyboard to be down, or tap a non-input area of the screen) and then retry the tap.
+If you hit `KEYBOARD_DISMISS_FAILED` on iOS: dismiss the keyboard yourself first (`device_fill`/`cdp_interact` type through the JS path and don't require the keyboard to be down, or tap a non-input area of the screen) and then retry the tap from a fresh snapshot.
 
 Opt out entirely with `RN_KEYBOARD_GUARD=0` (or `false`) if the guard gets in the way of a flow you control precisely.
 
