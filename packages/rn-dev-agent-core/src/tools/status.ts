@@ -11,7 +11,11 @@ import { recoverDetached } from '../cdp/recover-detached.js';
 import type { DetachedRecoveryResult, RecoverDetachedDeps } from '../cdp/recover-detached.js';
 import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
-import { AppDetachedError, enumerateMetroCandidates } from '../cdp/discovery.js';
+import {
+  AppDetachedError,
+  androidTargetMatchesKind,
+  enumerateMetroCandidates,
+} from '../cdp/discovery.js';
 import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
@@ -47,12 +51,11 @@ export function targetMatchesSession(
   ) {
     return false;
   }
-  if (filters.deviceKind) {
-    if (!target.deviceName) return false;
-    const targetKind = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName)
-      ? 'emulator'
-      : 'physical';
-    if (targetKind !== filters.deviceKind) return false;
+  if (
+    filters.deviceKind === 'physical' &&
+    !androidTargetMatchesKind(target.deviceName, filters.deviceKind)
+  ) {
+    return false;
   }
   return true;
 }

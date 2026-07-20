@@ -125,6 +125,48 @@ test('GH #589: physical Android session filters out an emulator CDP target', () 
   );
 });
 
+test('GH #589: emulator session degrades to a warning instead of failing closed', () => {
+  const filters = sessionConnectFilters({
+    name: 'emulator',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'dev.fixture',
+    openedAt: new Date().toISOString(),
+  });
+  assert.equal(filters!.deviceKind, 'emulator');
+
+  const identityLess = {
+    id: 'unknown',
+    title: 'React Native',
+    vm: 'Hermes',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/unknown',
+    platform: 'android' as const,
+    description: 'dev.fixture',
+  };
+  const regexMissed = {
+    ...identityLess,
+    id: 'legacy-avd',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/legacy-avd',
+    deviceName: 'Android SDK built for x86',
+  };
+
+  const identityLessResult = selectTarget([identityLess], filters!);
+  assert.deepEqual(
+    identityLessResult.targets.map((target) => target.id),
+    ['unknown'],
+  );
+
+  const regexMissedResult = selectTarget([regexMissed], filters!);
+  assert.deepEqual(
+    regexMissedResult.targets.map((target) => target.id),
+    ['legacy-avd'],
+  );
+  assert.match(regexMissedResult.warning!, /best available target/);
+
+  assert.equal(targetMatchesSession(identityLess, filters!), true);
+  assert.equal(targetMatchesSession(regexMissed, filters!), true);
+});
+
 test('GH #589: cdp_status refuses an explicit platform that conflicts with the active session', async () => {
   setActiveSession({
     name: 'physical',

@@ -267,6 +267,27 @@ export interface SelectTargetResult {
   warning?: string;
 }
 
+export type AndroidDeviceKind = 'emulator' | 'physical';
+
+export function classifyAndroidDeviceKind(
+  deviceName: string | undefined,
+): AndroidDeviceKind | 'unknown' {
+  if (!deviceName) return 'unknown';
+  return /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(deviceName) ? 'emulator' : 'physical';
+}
+
+// deviceName classification is best-effort: it can miss an emulator (older
+// AVD names, Genymotion) but essentially never labels a physical phone as an
+// emulator. So 'physical' enforcement is hard (silent emulator binding is the
+// GH #589 bug), while 'emulator' enforcement must stay soft.
+export function androidTargetMatchesKind(
+  deviceName: string | undefined,
+  kind: AndroidDeviceKind,
+): boolean {
+  const targetKind = classifyAndroidDeviceKind(deviceName);
+  return kind === 'physical' ? targetKind === 'physical' : targetKind !== 'physical';
+}
+
 export interface SelectTargetFilters {
   platform?: string;
   /** Bind Android discovery to the active session's physical/emulator class. */
@@ -293,20 +314,27 @@ export function selectTarget(
   const warnings: string[] = [];
 
   if (filters.deviceKind) {
-    const deviceMatched = filteredTargets.filter((target) => {
-      if (!target.deviceName) return false;
-      const emulator = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName);
-      return filters.deviceKind === (emulator ? 'emulator' : 'physical');
-    });
-    if (deviceMatched.length === 0) {
+    const kind = filters.deviceKind;
+    const deviceMatched = filteredTargets.filter((target) =>
+      androidTargetMatchesKind(target.deviceName, kind),
+    );
+    const availableDevices = filteredTargets
+      .map((target) => target.deviceName ?? '<identity unavailable>')
+      .join(', ');
+    if (deviceMatched.length > 0) {
+      filteredTargets = deviceMatched;
+    } else if (kind === 'physical') {
       return {
         targets: [],
         warning:
-          `No ${filters.deviceKind} CDP target matched the active Android session. ` +
-          `Available devices: ${filteredTargets.map((target) => target.deviceName ?? '<identity unavailable>').join(', ')}`,
+          `No physical CDP target matched the active Android session. ` +
+          `Available devices: ${availableDevices}`,
       };
+    } else {
+      warnings.push(
+        `No CDP target was positively identified as an emulator for the active Android session (devices: ${availableDevices}). Connecting to best available target.`,
+      );
     }
-    filteredTargets = deviceMatched;
   }
 
   // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
