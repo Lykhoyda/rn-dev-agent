@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.65.5
+
+### Patch Changes
+
+- 2bf6d4f: Discover React Navigation refs and state across every renderer ID registered with the React DevTools hook, while preserving the bounded numeric renderer probe so partial registries keep legacy coverage.
+
 ## 0.65.4
 
 ### Patch Changes
