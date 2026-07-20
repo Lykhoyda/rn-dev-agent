@@ -49,21 +49,15 @@ test('Codex launcher bypasses the process-wide bridge lock without changing app 
 });
 
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {
-  const [
-    canonicalSkill,
-    codexSkill,
-    canonicalCollector,
-    codexCollector,
-    claudeCollector,
-    command,
-  ] = await Promise.all([
-    text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
-    text('packages/codex-plugin/skills/sending-feedback/SKILL.md'),
-    text('scripts/collect-feedback.sh'),
-    text('packages/codex-plugin/scripts/collect-feedback.sh'),
-    text('packages/claude-plugin/scripts/collect-feedback.sh'),
-    text('packages/codex-plugin/commands/send-feedback.md'),
-  ]);
+  const [canonicalSkill, codexSkill, canonicalCollector, codexCollector, claudeCollector, command] =
+    await Promise.all([
+      text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
+      text('packages/codex-plugin/skills/sending-feedback/SKILL.md'),
+      text('scripts/collect-feedback.sh'),
+      text('packages/codex-plugin/scripts/collect-feedback.sh'),
+      text('packages/claude-plugin/scripts/collect-feedback.sh'),
+      text('packages/codex-plugin/commands/send-feedback.md'),
+    ]);
 
   assert.equal(codexSkill, canonicalSkill);
   assert.equal(codexCollector, canonicalCollector);

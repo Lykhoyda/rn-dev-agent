@@ -6,7 +6,7 @@
 
 A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
 
-**78 MCP tools** · **5 agents** · **15 commands** · **8 skills** · **118 best-practice rules** · **2,976 unit tests** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**79 MCP tools** · **5 agents** · **15 commands** · **10 skills** · **118 best-practice rules** · **2,976 unit tests** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -153,7 +153,7 @@ An **action** is a saved Maestro flow the agent **emits** when verification pass
 
 ## MCP tools
 
-The plugin exposes **78 MCP tools** across five families ([full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)):
+The plugin exposes **79 MCP tools** across five families ([full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)):
 
 | Family | What it's for | Examples |
 |---|---|---|
@@ -207,7 +207,7 @@ Claude Code / Codex
   ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
-  │   78 tools: component tree, store state, profiling, network,
+  │   79 tools: component tree, store state, profiling, network,
   │   interaction, recording, self-healing replay
   │
   └── Device interaction
