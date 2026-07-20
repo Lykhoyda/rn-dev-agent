@@ -56,6 +56,57 @@ for (const connected of [false, true]) {
   });
 }
 
+test('GH-588 Slice A: an affinity refusal recreates the client so the next cdp_connect works', async () => {
+  const target = {
+    id: 'android-only',
+    title: 'Pixel 9',
+    vm: 'Hermes',
+    description: 'dev.fixture',
+    platform: 'android' as const,
+    platformInference: 'probed' as const,
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8081/android-only',
+  };
+  const makeFake = (port: number) => {
+    const fake = {
+      isConnected: false,
+      disposed: false,
+      metroPort: port,
+      connectedTarget: null as typeof target | null,
+      disconnect: async () => {
+        fake.disposed = true;
+        fake.isConnected = false;
+      },
+      autoConnect: async () => {
+        if (fake.disposed) throw new Error('Client is disposed. Create a new CDPClient instance.');
+        fake.isConnected = true;
+        fake.connectedTarget = target;
+        return 'connected';
+      },
+    };
+    return fake;
+  };
+  let current = makeFake(8081);
+  const handler = createConnectHandler(
+    () => current as never,
+    (c) => {
+      current = c as never;
+    },
+    (port) => makeFake(port) as never,
+  );
+
+  const refusal = envelope(await handler({ platform: 'ios' }));
+  assert.equal(refusal.code, 'PLATFORM_TARGET_NOT_FOUND');
+  assert.equal(current.disposed, false, 'refusal must leave a fresh (non-disposed) client behind');
+  assert.equal(current.metroPort, 8081);
+
+  const retry = envelope(await handler({ platform: 'android' }));
+  assert.equal(
+    (retry.data as { connected?: boolean } | undefined)?.connected,
+    true,
+    'the retry prescribed by the refusal message must work',
+  );
+});
+
 test('GH-588 Slice A: defaulted iOS identity is unproven; filterless Android remains best-available', () => {
   const unproven = selectTarget(
     [

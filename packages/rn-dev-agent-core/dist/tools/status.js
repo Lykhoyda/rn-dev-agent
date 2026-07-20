@@ -399,9 +399,12 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             // Affinity refusals never fall into picker auto-repair: a picker/device
             // action could mask the wrong-platform causal boundary.
             if (err instanceof TargetSelectionError) {
-                await getClient()
-                    .disconnect()
-                    .catch(() => undefined);
+                // Refusal must not wedge the session: disconnect() disposes the shared
+                // client, so recreate it or every later call fails "Client is disposed".
+                const stale = getClient();
+                const stalePort = stale.metroPort;
+                await stale.disconnect().catch(() => undefined);
+                setClient(createClient(stalePort));
                 return failResult(message, err.code, {
                     candidates: err.candidates.map((target) => ({
                         id: target.id,
@@ -486,7 +489,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                             await retryClient.autoConnect(args.metroPort, retryFilters, 'status');
                             if (!targetMatchesSession(retryClient.connectedTarget, retryFilters)) {
                                 const wrong = retryClient.connectedTarget;
+                                const retryPort = retryClient.metroPort;
                                 await retryClient.disconnect();
+                                setClient(createClient(retryPort));
                                 return failResult('Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.', retryFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND', { target: wrong, affinity: 'cross-platform-only; not iOS UDID identity' });
                             }
                         }

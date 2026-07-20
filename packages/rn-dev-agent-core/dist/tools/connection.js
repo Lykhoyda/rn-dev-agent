@@ -109,7 +109,12 @@ export function createConnectHandler(getClient, setClient, createClient) {
         }
         catch (err) {
             if (err instanceof TargetSelectionError) {
+                // Refusal must not wedge the session: disconnect() disposes the shared
+                // client, so recreate it (mirrors createDisconnectHandler) or every
+                // later cdp_connect/cdp_status fails with "Client is disposed".
+                const port = client.metroPort;
                 await client.disconnect().catch(() => undefined);
+                setClient(createClient(port));
                 return failResult(err.message, err.code, {
                     candidates: err.candidates.map((target) => ({
                         id: target.id,

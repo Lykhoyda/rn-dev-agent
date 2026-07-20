@@ -48628,7 +48628,10 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof TargetSelectionError) {
-        await getClient2().disconnect().catch(() => void 0);
+        const stale = getClient2();
+        const stalePort = stale.metroPort;
+        await stale.disconnect().catch(() => void 0);
+        setClient2(createClient2(stalePort));
         return failResult(message, err.code, {
           candidates: err.candidates.map((target) => ({
             id: target.id,
@@ -48680,7 +48683,9 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
               await retryClient.autoConnect(args.metroPort, retryFilters, "status");
               if (!targetMatchesSession(retryClient.connectedTarget, retryFilters)) {
                 const wrong = retryClient.connectedTarget;
+                const retryPort = retryClient.metroPort;
                 await retryClient.disconnect();
+                setClient2(createClient2(retryPort));
                 return failResult("Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.", retryFilters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND", { target: wrong, affinity: "cross-platform-only; not iOS UDID identity" });
               }
             }
@@ -59639,7 +59644,9 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
       });
     } catch (err) {
       if (err instanceof TargetSelectionError) {
+        const port = client2.metroPort;
         await client2.disconnect().catch(() => void 0);
+        setClient2(createClient2(port));
         return failResult(err.message, err.code, {
           candidates: err.candidates.map((target) => ({
             id: target.id,
