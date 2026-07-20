@@ -300,6 +300,16 @@ test('GH #597 probe: returns true for a registered renderer above the numeric fa
   );
 });
 
+test('GH #597 probe: a partial renderer registry retains numeric-probe coverage', () => {
+  assert.equal(
+    evalProbe({
+      renderers: new Map([[1, {}]]),
+      getFiberRoots: (i) => (i === 2 ? new Set([{}]) : new Set()),
+    }),
+    true,
+  );
+});
+
 test('GH #597 probe: a throwing registered renderer does not mask a later live renderer', () => {
   assert.equal(
     evalProbe({

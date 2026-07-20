@@ -10,10 +10,10 @@ export const INJECTED_HELPERS = `
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
-  // Issue #126 — legacy renderer iteration cap. Hooks without an enumerable
-  // renderers registry still fall back to numeric probing with this bound and
-  // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
-  // sparse or higher IDs are not missed (GH #597).
+  // Issue #126 — legacy renderer iteration cap. Root-union scans combine this
+  // numeric range with the hook's registered IDs so sparse/higher IDs are not
+  // missed and partially implemented hook registries retain legacy coverage
+  // (GH #597). The early-exit heuristic applies only when no registry is usable.
   var MAX_RENDERER_IDS = 20;
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
@@ -34,10 +34,10 @@ export const INJECTED_HELPERS = `
     } catch (_) { return []; }
   }
 
-  // Read the renderer IDs React DevTools actually registered. Returning an
-  // empty list intentionally selects the legacy numeric-probe fallback: some
-  // hook shims expose getFiberRoots() but omit or incompletely implement the
-  // renderers Map. A malformed iterator is isolated from root discovery.
+  // Read the renderer IDs React DevTools actually registered. A malformed or
+  // overflowing iterator returns an empty list and is isolated from discovery.
+  // Callers union successful results with the legacy numeric range so partial
+  // hook-shim registries cannot hide otherwise discoverable roots.
   function getRegisteredRendererIds(hook) {
     try {
       if (!hook || !hook.renderers || typeof hook.renderers.keys !== 'function') return [];
@@ -97,10 +97,8 @@ export const INJECTED_HELPERS = `
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
       var usingRegisteredIds = rendererIds.length > 0;
-      if (!usingRegisteredIds) {
-        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
-          rendererIds.push(fallbackId);
-        }
+      for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+        if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
       }
       var emptyStreak = 0;
       for (var rii = 0; rii < rendererIds.length; rii++) {
@@ -3025,10 +3023,9 @@ export const NETWORK_CB_BUFFERED_SCRIPT = `
 })();
 `;
 
-// M8 + GH #597: readiness probe for waitForReact. Prefer renderer IDs from
-// the DevTools registry so setup recognizes the same sparse/high renderers as
-// root-union discovery. Hook shims with an empty or malformed registry retain
-// the bounded numeric fallback that fixed the original M8 timeout.
+// M8 + GH #597: readiness probe for waitForReact. Combine renderer IDs from
+// the DevTools registry with M8's bounded numeric range so setup recognizes
+// sparse/high renderers without regressing empty, malformed, or partial shims.
 export const REACT_READY_PROBE_JS = `(function() {
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || typeof h.getFiberRoots !== 'function') return false;
@@ -3044,8 +3041,8 @@ export const REACT_READY_PROBE_JS = `(function() {
       }
     }
   } catch (_) { ids = []; }
-  if (ids.length === 0) {
-    for (var fallbackId = 1; fallbackId <= 20; fallbackId++) ids.push(fallbackId);
+  for (var fallbackId = 1; fallbackId <= 20; fallbackId++) {
+    if (ids.indexOf(fallbackId) === -1) ids.push(fallbackId);
   }
   for (var i = 0; i < ids.length; i++) {
     try {
@@ -3061,9 +3058,9 @@ export const REACT_READY_PROBE_JS = `(function() {
 // Tests exercise this mirror; the IIFE version runs in Hermes as pure JS.
 // See test/unit/component-tree-multi-renderer.test.js for the contract.
 //
-// GH #597: enumerate hook.renderers when available so every registered root is
-// considered. Hook shims without an enumerable registry retain Issue #126's
-// bounded numeric probe and early-exit heuristic.
+// GH #597: union hook.renderers with Issue #126's bounded numeric range so
+// every registered root is considered without regressing partial hook shims.
+// The early-exit heuristic remains for scans with no usable registry.
 export interface FiberLike {
   current?: unknown;
 }
@@ -3105,8 +3102,8 @@ export function findAllRootFibersForTest(
     rendererIds = [];
   }
   const usingRegisteredIds = rendererIds.length > 0;
-  if (!usingRegisteredIds) {
-    rendererIds = Array.from({ length: MAX_RENDERER_IDS }, (_, index) => index + 1);
+  for (let fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+    if (!rendererIds.includes(fallbackId)) rendererIds.push(fallbackId);
   }
   let emptyStreak = 0;
   for (const ri of rendererIds) {

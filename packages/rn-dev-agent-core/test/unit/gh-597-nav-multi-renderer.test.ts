@@ -123,6 +123,16 @@ test('GH #597: registered renderer IDs are used instead of a bounded numeric gue
   assertNavigationDiscovered(hook, navigated);
 });
 
+test('GH #597: a partial renderer registry retains numeric-probe coverage', () => {
+  const { fiber, navigated } = createNavigationFixture();
+  const hook: RendererHook = {
+    renderers: new Map([[1, {}]]),
+    getFiberRoots: (rendererId) => (rendererId === 2 ? new Set([{ current: fiber }]) : new Set()),
+  };
+
+  assertNavigationDiscovered(hook, navigated);
+});
+
 test('GH #597: an unusable renderer does not abort a later live renderer', () => {
   const { fiber, navigated } = createNavigationFixture();
   const hook: RendererHook = {

@@ -27366,10 +27366,10 @@ var init_injected_helpers = __esm({
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
-  // Issue #126 \u2014 legacy renderer iteration cap. Hooks without an enumerable
-  // renderers registry still fall back to numeric probing with this bound and
-  // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
-  // sparse or higher IDs are not missed (GH #597).
+  // Issue #126 \u2014 legacy renderer iteration cap. Root-union scans combine this
+  // numeric range with the hook's registered IDs so sparse/higher IDs are not
+  // missed and partially implemented hook registries retain legacy coverage
+  // (GH #597). The early-exit heuristic applies only when no registry is usable.
   var MAX_RENDERER_IDS = 20;
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
@@ -27390,10 +27390,10 @@ var init_injected_helpers = __esm({
     } catch (_) { return []; }
   }
 
-  // Read the renderer IDs React DevTools actually registered. Returning an
-  // empty list intentionally selects the legacy numeric-probe fallback: some
-  // hook shims expose getFiberRoots() but omit or incompletely implement the
-  // renderers Map. A malformed iterator is isolated from root discovery.
+  // Read the renderer IDs React DevTools actually registered. A malformed or
+  // overflowing iterator returns an empty list and is isolated from discovery.
+  // Callers union successful results with the legacy numeric range so partial
+  // hook-shim registries cannot hide otherwise discoverable roots.
   function getRegisteredRendererIds(hook) {
     try {
       if (!hook || !hook.renderers || typeof hook.renderers.keys !== 'function') return [];
@@ -27453,10 +27453,8 @@ var init_injected_helpers = __esm({
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
       var usingRegisteredIds = rendererIds.length > 0;
-      if (!usingRegisteredIds) {
-        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
-          rendererIds.push(fallbackId);
-        }
+      for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+        if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
       }
       var emptyStreak = 0;
       for (var rii = 0; rii < rendererIds.length; rii++) {
@@ -30386,8 +30384,8 @@ var init_injected_helpers = __esm({
       }
     }
   } catch (_) { ids = []; }
-  if (ids.length === 0) {
-    for (var fallbackId = 1; fallbackId <= 20; fallbackId++) ids.push(fallbackId);
+  for (var fallbackId = 1; fallbackId <= 20; fallbackId++) {
+    if (ids.indexOf(fallbackId) === -1) ids.push(fallbackId);
   }
   for (var i = 0; i < ids.length; i++) {
     try {
