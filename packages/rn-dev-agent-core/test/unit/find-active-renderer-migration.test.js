@@ -34,7 +34,7 @@ test('B145 + Issue #126: forEachRootFiber helper is defined in the IIFE', () => 
   );
 });
 
-test('GH #126 Gap B: iterateAllRoots primitive owns the renderer-loop invariants', () => {
+test('GH #126 + #597: iterateAllRoots primitive owns the renderer-loop invariants', () => {
   // Both forEachRootFiber and findAllRootFibers delegate here. This is the
   // single source of truth for renderer iteration semantics.
   assert.match(
@@ -43,11 +43,19 @@ test('GH #126 Gap B: iterateAllRoots primitive owns the renderer-loop invariants
     'iterateAllRoots primitive missing',
   );
   const slice = INJECTED_HELPERS.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
-  // Issue #126: cap bumped from 5 → 20 with early-exit-after-3-empty.
+  // GH #597: registered IDs are authoritative. Issue #126's bounded probe is
+  // retained only as fallback for hook shims without an enumerable registry.
+  assert.match(
+    INJECTED_HELPERS,
+    /function getRegisteredRendererIds\(hook\)/,
+    'registered renderer ID helper missing',
+  );
+  assert.match(slice, /getRegisteredRendererIds\(hook\)/, 'registered IDs are not consulted');
+  assert.match(slice, /fallbackId <= MAX_RENDERER_IDS/, 'bounded numeric fallback is missing');
   assert.match(
     slice,
-    /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/,
-    'iterateAllRoots missing renderer loop',
+    /for \(var rii = 0; rii < rendererIds\.length; rii\+\+\)/,
+    'root loop missing',
   );
   assert.match(slice, /try \{/, 'iterateAllRoots missing try guard');
   assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');

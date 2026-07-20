@@ -27359,19 +27359,17 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 35;
+    HELPERS_VERSION = 36;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
-  // Issue #126 \u2014 renderer iteration cap. Was hard-coded 5; bumped to 20
-  // with an early-exit-after-3-empty heuristic so the common case (1-3
-  // renderers) still exits fast. Each getFiberRoots(N) call is a Map
-  // lookup so iteration cost is negligible. Kept as a single constant
-  // so all call sites stay in sync (multi-LLM review of issue #126
-  // identified 5 hard-coded sites that previously drifted).
+  // Issue #126 \u2014 legacy renderer iteration cap. Hooks without an enumerable
+  // renderers registry still fall back to numeric probing with this bound and
+  // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
+  // sparse or higher IDs are not missed (GH #597).
   var MAX_RENDERER_IDS = 20;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
@@ -27389,6 +27387,27 @@ var init_injected_helpers = __esm({
       });
       return out;
     } catch (_) { return []; }
+  }
+
+  // Read the renderer IDs React DevTools actually registered. Returning an
+  // empty list intentionally selects the legacy numeric-probe fallback: some
+  // hook shims expose getFiberRoots() but omit or incompletely implement the
+  // renderers Map. A malformed iterator is isolated from root discovery.
+  function getRegisteredRendererIds(hook) {
+    try {
+      if (!hook || !hook.renderers || typeof hook.renderers.keys !== 'function') return [];
+      var iterator = hook.renderers.keys();
+      if (!iterator || typeof iterator.next !== 'function') return [];
+      var ids = [];
+      var step;
+      while (!(step = iterator.next()).done) {
+        var id = step.value;
+        if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id);
+      }
+      return ids;
+    } catch (_) {
+      return [];
+    }
   }
 
   function findActiveRenderer() {
@@ -27429,9 +27448,17 @@ var init_injected_helpers = __esm({
     lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
+      var rendererIds = getRegisteredRendererIds(hook);
+      var usingRegisteredIds = rendererIds.length > 0;
+      if (!usingRegisteredIds) {
+        for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+          rendererIds.push(fallbackId);
+        }
+      }
       var emptyStreak = 0;
-      for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-        lastRootScan.probedUpTo = ri;
+      for (var rii = 0; rii < rendererIds.length; rii++) {
+        var ri = rendererIds[rii];
+        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -27444,12 +27471,12 @@ var init_injected_helpers = __esm({
                 if (result) return result;
               }
             }
-          } else {
+          } else if (!usingRegisteredIds) {
             emptyStreak++;
             if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) break;
           }
         } catch (_) {
-          emptyStreak++;
+          if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
         }
       }
@@ -30344,9 +30371,9 @@ var init_injected_helpers = __esm({
     REACT_READY_PROBE_JS = `(function() {
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || typeof h.getFiberRoots !== 'function') return false;
-  // Scan the same 1..20 rendererID range as findActiveRenderer/findAllRootFibers
-  // so the readiness gate can't miss a late-registered renderer (Bridgeless +
-  // Reanimated register secondary renderers above id 5).
+  // Scan the same legacy 1..20 rendererID range as findActiveRenderer and
+  // iterateAllRoots' fallback. Root-union scans can additionally enumerate the
+  // hook registry; this standalone readiness probe remains bounded.
   for (var i = 1; i <= 20; i++) {
     try {
       var r = h.getFiberRoots(i);
